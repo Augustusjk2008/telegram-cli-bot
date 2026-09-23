@@ -54,6 +54,7 @@ from bot.native_agent.pi_session_runtime import (
 from bot.native_agent.pi_workspace_history import PiWorkspaceHistory, WorkspaceHistoryStatus
 from bot.native_agent.run_events import extract_native_context_usage, extract_native_session_id, native_json_to_events
 from bot.native_agent.turn_state import NativeAgentTurnState
+from bot.remote_workspace.chat import prepare_remote_chat, remote_chat_prompt, remote_workspace_fingerprint
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_translation import (
     ChatInputCancelled, cancel_input_preparation, check_chat_stopped,
@@ -364,6 +365,8 @@ class NativeAgentService:
             await self._runtime_registry.evict_idle()
 
     async def _persist_runtime_before_close(self, runtime: PiSessionRuntime) -> None:
+        if runtime.state.binding_invalidated:
+            return
         owner_parts = str(runtime.state.owner_key or "").split(":")
         if len(owner_parts) < 2:
             return
@@ -454,6 +457,7 @@ class NativeAgentService:
             for part in (
                 child_prompt,
                 SOLO_NATIVE_AGENT_SYSTEM_PROMPT if solo_mode else "",
+                remote_chat_prompt(profile) if getattr(profile, "remote_workspace", None) else "",
             )
             if part
         ]
@@ -509,6 +513,48 @@ class NativeAgentService:
         runtime.state.workspace_history_head = current_head
         runtime.state.linear_index = max(0, int(record.linear_index or 0))
 
+    async def _resolve_pi_binding(
+        self, *, session: UserSession, user_id: int, conversation_id: str,
+        history_service: ChatHistoryService, desired_meta: dict[str, str],
+    ) -> tuple[str, PiSessionRecord, bool]:
+        conversation_native = history_service.store.get_conversation_native_session(conversation_id) or {}
+        requested_id = str(conversation_native.get("session_id") or "").strip()
+        stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
+        key = self._pi_record_key(session, user_id, conversation_id)
+        record = self._pi_session_store.get(key)
+        invalidated = bool(
+            ((requested_id or stored_meta) and _native_session_meta_mismatch(stored_meta, desired_meta))
+            or (record is not None and (record.pi_session_id or record.workspace_history_head)
+                and _native_session_meta_mismatch(record.session_meta, desired_meta))
+        )
+        if invalidated:
+            await self._runtime_registry.invalidate_binding(build_pi_runtime_key(
+                bot_id=int(session.bot_id or 0), user_id=user_id, conversation_id=conversation_id,
+                agent_id=getattr(session, "agent_id", ""),
+            ))
+            history_service.store.set_conversation_native_session(conversation_id, None, None)
+            history_service.store.invalidate_conversation_workspace_history(conversation_id)
+            keys = {key}
+            if stored_meta.get("cwd"):
+                keys.add(pi_session_key(cwd=stored_meta["cwd"], bot_id=int(session.bot_id or 0),
+                                        user_id=user_id, conversation_id=conversation_id))
+            for old_key in keys:
+                if self._pi_session_store.get(old_key) is not None:
+                    self._pi_session_store.invalidate_binding(old_key, "session configuration changed")
+            requested_id = ""
+        record = self._load_or_create_pi_record(
+            key=key, session=session, conversation_id=conversation_id,
+            pi_session_id=requested_id, session_meta=desired_meta,
+        )
+        if record.session_meta != desired_meta:
+            record.session_meta = dict(desired_meta)
+            record = self._pi_session_store.upsert(record)
+        session_id = str(record.pi_session_id or requested_id or "")
+        with session._lock:
+            session.native_agent_session_id = session_id or None
+        session.persist()
+        return session_id, record, invalidated
+
     def _workspace_meta(self, record: PiSessionRecord | None, runtime: PiSessionRuntime | None = None) -> dict[str, Any]:
         head = str((record.workspace_history_head if record else "") or "").strip()
         linear_index = int((record.linear_index if record else 0) or 0)
@@ -538,12 +584,29 @@ class NativeAgentService:
         target_head: str,
         native_session_id: str = "",
     ) -> WorkspaceHistoryStatus:
+        if getattr(profile, "remote_workspace", None):
+            raise ValueError("Local workspace history is disabled for remote SSH workspaces")
         self._ensure_runtime_eviction_task()
         model_id, agent_id, reasoning_effort, system_prompt = self._prompt_options(profile)
-        append_system_prompt, _child_prompt_hash = self._append_system_prompt(profile, session, solo_mode=False)
+        append_system_prompt, child_prompt_hash = self._append_system_prompt(profile, session, solo_mode=False)
         native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
         config_fingerprint = self._runtime_config_fingerprint()
         user_id = chat_session_user_id(session.user_id)
+        key = self._pi_record_key(session, user_id, conversation_id)
+        record = self._pi_session_store.get(key)
+        desired_meta = _native_session_meta(
+            cwd=session.working_dir, model_id=model_id, pi_agent=agent_id, reasoning_effort=reasoning_effort,
+            system_prompt_hash=hash_agent_prompt(system_prompt), child_agent_prompt_hash=child_prompt_hash,
+            prompt_profile=str((record.session_meta if record else {}).get("prompt_profile") or ""),
+        )
+        if record is None or _native_session_meta_mismatch(record.session_meta, desired_meta):
+            await self._runtime_registry.invalidate_binding(build_pi_runtime_key(
+                bot_id=int(session.bot_id or 0), user_id=user_id, conversation_id=conversation_id,
+                agent_id=getattr(session, "agent_id", ""),
+            ))
+            if record is not None:
+                self._pi_session_store.invalidate_binding(key, "session configuration changed")
+            raise ValueError("Workspace history binding no longer matches the agent configuration")
         runtime = await self._runtime_registry.open_or_create(
             PiSessionRuntimeRequest(
                 runtime_key=build_pi_runtime_key(
@@ -570,8 +633,6 @@ class NativeAgentService:
                 env=self._pi_runtime_env(),
             )
         )
-        key = self._pi_record_key(session, user_id, conversation_id)
-        record = self._pi_session_store.get(key)
         if record is not None:
             self._seed_runtime_from_record(runtime, record)
         return await self._workspace_history.rollback(
@@ -728,7 +789,10 @@ class NativeAgentService:
                 suppress_agent_prompt=suppress_agent_prompt,
             )
             native_agent_config = effective_native_agent_config(getattr(profile, "native_agent", {}))
-            workspace_history_enabled = bool(native_agent_config.get("workspace_history_enabled", True))
+            remote_chat = prepare_remote_chat(profile) if getattr(profile, "remote_workspace", None) else None
+            if remote_chat is not None:
+                pi_runtime_env = {**(pi_runtime_env or {}), **remote_chat.env}
+            workspace_history_enabled = remote_chat is None and bool(native_agent_config.get("workspace_history_enabled", True))
             pi_command = str(
                 native_agent_config.get("pi_command")
                 or config.NATIVE_AGENT_PI_COMMAND
@@ -750,41 +814,17 @@ class NativeAgentService:
                 system_prompt_hash=hash_agent_prompt(system_prompt),
                 prompt_profile="solo" if solo_mode else "",
                 child_agent_prompt_hash=child_agent_prompt_hash,
+                remote_workspace_fingerprint=remote_workspace_fingerprint(profile),
             )
-            try:
-                conversation_native = history_service.store.get_conversation_native_session(turn_handle.conversation_id)
-            except Exception:
-                conversation_native = {}
-            requested_session_id = str(conversation_native.get("session_id") or "").strip()
-            stored_meta = conversation_native.get("meta") if isinstance(conversation_native.get("meta"), dict) else {}
-            if requested_session_id:
-                native_session_id = requested_session_id
-                with session._lock:
-                    session.native_agent_session_id = native_session_id
-                session.persist()
-                if _native_session_meta_mismatch(stored_meta, desired_meta):
-                    history_service.store.set_conversation_native_session(
-                        turn_handle.conversation_id,
-                        requested_session_id,
-                        desired_meta,
-                    )
-
             pi_record_key = self._pi_record_key(session, user_id, turn_handle.conversation_id)
-            pi_record = self._load_or_create_pi_record(
-                key=pi_record_key,
-                session=session,
+            native_session_id, pi_record, binding_invalidated = await self._resolve_pi_binding(
+                session=session, user_id=user_id,
                 conversation_id=turn_handle.conversation_id,
-                pi_session_id=native_session_id,
-                session_meta=desired_meta,
+                history_service=history_service, desired_meta=desired_meta,
             )
-            if pi_record.session_meta != desired_meta:
-                pi_record.session_meta = dict(desired_meta)
-                pi_record = self._pi_session_store.upsert(pi_record)
-            if pi_record.pi_session_id:
-                native_session_id = pi_record.pi_session_id
-                with session._lock:
-                    session.native_agent_session_id = native_session_id
-                session.persist()
+            requested_session_id = native_session_id
+            if binding_invalidated:
+                prompt_text = str(fresh_session_prompt_text or prompt_text)
 
             aggregator = NativeAgentAggregator(user_message_id=f"msg_{uuid.uuid4().hex[:12]}")
             turn_state = NativeAgentTurnState(
@@ -889,7 +929,7 @@ class NativeAgentService:
                 system_prompt=system_prompt,
                 append_system_prompt=append_system_prompt,
                 native_session_id=native_session_id,
-                config_fingerprint=self._runtime_config_fingerprint(),
+                config_fingerprint=self._runtime_config_fingerprint() + (remote_chat.fingerprint if remote_chat else ""),
                 env=pi_runtime_env,
             )
             try:
@@ -1385,12 +1425,14 @@ def _native_session_meta(
     system_prompt_hash: str = "",
     prompt_profile: str = "",
     child_agent_prompt_hash: str = "",
+    remote_workspace_fingerprint: str = "",
 ) -> dict[str, str]:
     return {
         "cwd": str(cwd or ""),
         "model_id": str(model_id or ""),
         "pi_agent": str(pi_agent or ""),
         "reasoning_effort": str(reasoning_effort or ""),
+        **({"remote_workspace_fingerprint": remote_workspace_fingerprint} if remote_workspace_fingerprint else {}),
         **({"system_prompt_hash": str(system_prompt_hash or "")} if str(system_prompt_hash or "").strip() else {}),
         **({"prompt_profile": str(prompt_profile or "")} if str(prompt_profile or "").strip() else {}),
         **({"child_agent_prompt_hash": str(child_agent_prompt_hash or "")} if str(child_agent_prompt_hash or "").strip() else {}),
@@ -1405,7 +1447,8 @@ def _native_session_meta_mismatch(stored_meta: dict[str, Any], desired_meta: dic
     desired_prompt_profile = str(desired_meta.get("prompt_profile") or "").strip()
     if stored_prompt_profile != desired_prompt_profile:
         return True
-    for key, desired_value in desired_meta.items():
+    for key in desired_meta.keys() | {"system_prompt_hash", "child_agent_prompt_hash", "remote_workspace_fingerprint"}:
+        desired_value = desired_meta.get(key, "")
         normalized_desired = str(desired_value or "").strip()
         stored_value = str(stored_meta.get(key) or "").strip()
         if stored_value != normalized_desired:

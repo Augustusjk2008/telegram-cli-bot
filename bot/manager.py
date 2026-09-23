@@ -73,6 +73,7 @@ def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] |
 class MultiBotManager:
     def __init__(self, main_profile: BotProfile, storage_file: str):
         self.main_profile = main_profile
+        self.remote_bridge_url = ""
         self.storage_file = Path(storage_file)
         self.repo_root = self.storage_file.resolve().parent
         self.app_settings_file = app_settings.APP_SETTINGS_FILE
@@ -301,6 +302,7 @@ class MultiBotManager:
         default_execution_mode: Any = None,
         native_agent: Any = None,
         bypass_approval_and_sandbox: bool = False,
+        remote_workspace: Any = None,
     ) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
         self._validate_alias(normalized_alias)
@@ -318,9 +320,17 @@ class MultiBotManager:
         )
         resolved_native_agent = _normalize_bot_native_agent_config(native_agent)
 
+        remote_config = {}
+        if remote_workspace:
+            from bot.remote_workspace.transport import normalize_remote_workspace
+            from bot.runtime_paths import get_app_data_root
+            from uuid import uuid4
+            remote_config = normalize_remote_workspace(remote_workspace)
+            working_dir = str(get_app_data_root() / "remote-workspaces" / uuid4().hex)
+
         resolved_working_dir = os.path.abspath(os.path.expanduser((working_dir or WORKING_DIR).strip()))
 
-        if not os.path.isdir(resolved_working_dir):
+        if not remote_config and not os.path.isdir(resolved_working_dir):
             raise ValueError(f"工作目录不存在: {resolved_working_dir}")
         if (
             resolved_default_execution_mode != EXECUTION_MODE_NATIVE_AGENT
@@ -343,6 +353,7 @@ class MultiBotManager:
                 supported_execution_modes=resolved_supported_execution_modes,
                 default_execution_mode=resolved_default_execution_mode,
                 native_agent=resolved_native_agent,
+                remote_workspace=remote_config,
             )
             if bypass_approval_and_sandbox:
                 profile.cli_params.set_param(
@@ -351,8 +362,23 @@ class MultiBotManager:
                     coerce_param_value(resolved_cli_type, "yolo", True),
                 )
 
-            self.managed_profiles[normalized_alias] = profile
-            self._save_profiles()
+            if remote_config:
+                from bot.remote_workspace.chat import ensure_remote_chat_instructions
+                control_dir = Path(resolved_working_dir)
+                control_dir.mkdir(parents=True, exist_ok=False)
+                try:
+                    ensure_remote_chat_instructions(profile)
+                    self.managed_profiles[normalized_alias] = profile
+                    self._save_profiles()
+                except BaseException:
+                    self.managed_profiles.pop(normalized_alias, None)
+                    for filename in ("AGENTS.md", "CLAUDE.md"):
+                        (control_dir / filename).unlink(missing_ok=True)
+                    control_dir.rmdir()
+                    raise
+            else:
+                self.managed_profiles[normalized_alias] = profile
+                self._save_profiles()
             return profile
 
     async def set_bot_chat_translation(self, alias: str, enabled: bool) -> None:
@@ -390,7 +416,7 @@ class MultiBotManager:
             raise ValueError(f"无法移除主 Bot `{normalized_alias}`")
 
         async with self._lock:
-            self.get_management_profile(normalized_alias)
+            removed_profile = self.get_management_profile(normalized_alias)
             profile = self.managed_profiles.pop(normalized_alias, None)
             try:
                 self._save_profiles(removed_alias=normalized_alias)
@@ -398,6 +424,9 @@ class MultiBotManager:
                 if profile is not None:
                     self.managed_profiles[normalized_alias] = profile
                 raise
+            if removed_profile.remote_workspace:
+                from bot.remote_workspace.chat import revoke_remote_chat
+                revoke_remote_chat(removed_profile)
 
     async def start_bot(self, alias: str) -> None:
         normalized_alias = str(alias or "").strip().lower()
@@ -588,6 +617,8 @@ class MultiBotManager:
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
+            if profile.remote_workspace:
+                raise ValueError("远程智能体的工作区已绑定；请新建智能体以使用其他远程目录")
             profile.working_dir = resolved_working_dir
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()

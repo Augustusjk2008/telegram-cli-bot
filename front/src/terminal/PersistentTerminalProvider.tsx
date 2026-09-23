@@ -16,6 +16,7 @@ type CreateTerminalTabOptions = {
   title?: string;
   cwd?: string;
   shell?: string;
+  botAlias?: string;
   start?: boolean;
   activate?: boolean;
   terminalActionBotAlias?: string;
@@ -38,6 +39,7 @@ type PersistentTerminalContextValue = {
   selectTab: (tabId: string) => void;
   updateTab: (tabId: string, patch: Partial<Pick<PersistentTerminalTab, "title" | "cwd" | "shell">>) => void;
   closeTab: (tabId: string) => Promise<void>;
+  restartTab: (tabId: string) => Promise<void>;
   create: (cwd: string, shell?: string) => Promise<void>;
   rebuild: (cwd: string, shell?: string) => Promise<void>;
   close: () => Promise<void>;
@@ -162,13 +164,27 @@ export function PersistentTerminalProvider({ client, children }: Props) {
       return tab;
     }
     try {
-      const next = await client.createTerminalSession(tab.ownerId, tab.cwd, tab.shell);
+      const next = await client.createTerminalSession(tab.ownerId, tab.cwd, tab.shell, ...(tab.botAlias ? [tab.botAlias] : []));
       setSnapshotFor(tab.ownerId, next);
     } catch (err) {
       const message = err instanceof Error ? err.message : "新建终端失败";
       setErrors((current) => ({ ...current, [tab.ownerId]: message }));
     }
     return tab;
+  }, [client, setSnapshotFor]);
+
+  const restartTab = useCallback(async (tabId: string) => {
+    const tab = tabsRef.current.find((item) => item.id === tabId);
+    if (!tab) return;
+    setSnapshotFor(tab.ownerId, { ...DEFAULT_SNAPSHOT, cwd: tab.cwd });
+    delete clientRecoveryStatesRef.current[tab.ownerId];
+    try {
+      const next = await client.createTerminalSession(tab.ownerId, tab.cwd, tab.shell, ...(tab.botAlias ? [tab.botAlias] : []));
+      setSnapshotFor(tab.ownerId, next);
+      setAttachNonce((value) => value + 1);
+    } catch (err) {
+      setErrors((current) => ({ ...current, [tab.ownerId]: err instanceof Error ? err.message : "重新连接终端失败" }));
+    }
   }, [client, setSnapshotFor]);
 
   const selectTab = useCallback((tabId: string) => {
@@ -250,6 +266,7 @@ export function PersistentTerminalProvider({ client, children }: Props) {
     selectTab,
     updateTab,
     closeTab,
+    restartTab,
     create,
     rebuild,
     close,
@@ -260,6 +277,7 @@ export function PersistentTerminalProvider({ client, children }: Props) {
     attachNonce,
     close,
     closeTab,
+    restartTab,
     create,
     createTab,
     error,

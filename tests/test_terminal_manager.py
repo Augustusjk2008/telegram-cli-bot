@@ -341,6 +341,7 @@ async def test_terminal_close_waits_for_inflight_create_before_releasing_session
         shell_type,
         cols,
         rows,
+        process_factory=None,
     ):
         create_started.set()
         await allow_create.wait()
@@ -373,6 +374,45 @@ async def test_terminal_close_waits_for_inflight_create_before_releasing_session
 
     assert closed["closed"] is True
     assert manager.diagnostics()["sessions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_remote_terminal_factories_create_independent_channels():
+    from bot.platform.terminal import PtyWrapper
+    from bot.web.terminal_manager import TerminalSessionManager
+
+    class Channel:
+        pid = 0
+
+        def __init__(self):
+            self.closed = threading.Event()
+
+        def read(self, timeout=20):
+            self.closed.wait(timeout / 1000)
+            return b""
+
+        def isalive(self):
+            return not self.closed.is_set()
+
+        def terminate(self):
+            self.closed.set()
+
+        close = terminate
+
+    manager = TerminalSessionManager()
+    first, second = Channel(), Channel()
+    try:
+        for owner, channel in (("one", first), ("two", second)):
+            await manager.create(
+                1, owner, cwd="/srv/project", shell_type="ssh", cols=80, rows=24,
+                process_factory=lambda channel=channel: PtyWrapper(channel, is_pty=True, read_timeout_supported=True),
+            )
+        await manager.close(1, "one")
+        assert first.closed.is_set()
+        assert second.isalive()
+        assert (await manager.get_snapshot(1, "two"))["started"] is True
+    finally:
+        await manager.shutdown()
 
 
 def test_terminal_v2_binary_header_carries_version_flags_and_sequence():

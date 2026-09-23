@@ -86,6 +86,8 @@ def load_managed_profiles(storage_file: Path, *, archived: bool = False) -> dict
             )
         if "native_agent" in item or "nativeAgent" in item:
             profile_data["native_agent"] = item.get("native_agent", item.get("nativeAgent"))
+        if "remote_workspace" in item:
+            profile_data["remote_workspace"] = item["remote_workspace"]
         profiles[alias] = BotProfile.from_dict(profile_data)
 
     return profiles

@@ -1,3 +1,5 @@
+import { workspaceLabel } from "../services/remoteWorkspace";
+import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
 import { AlertTriangle, Bell, LogOut, Save, SlidersHorizontal, Square } from "lucide-react";
@@ -226,7 +228,7 @@ export function SettingsScreen({
         setCliPathDraft(overviewData.cliPath || "");
         setRuntimeBackendDraft(getRuntimeBackend(overviewData));
         setNativeAgentDraft(nativeAgentDraftFromOverview(overviewData));
-        setWorkdirDraft(normalizePathInput(prefilledWorkdir || overviewData.workingDir));
+        setWorkdirDraft(overviewData.remoteWorkspace ? workspaceLabel(overviewData) : normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setNotificationPermission(getBrowserNotificationPermission());
         setLoading(false);
       })
@@ -611,12 +613,12 @@ export function SettingsScreen({
           </div>
         </div>
 
-        <LanguageServicesPanel
+        {!loading && overview && !overview.remoteWorkspace && <LanguageServicesPanel
           botAlias={botAlias}
           client={client}
           canManage={canManageLanguageServices}
           onCatalogChanged={onLanguageServerCatalogChanged}
-        />
+        />}
 
         {overview ? (
           showBotRuntimeSettings ? (
@@ -656,7 +658,7 @@ export function SettingsScreen({
                 ) : null}
                 {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Pi agent:</span> {overview.nativeAgent?.piAgent || "未设置"}</p> : null}
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
-                <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {overview.workingDir}</p>
+                <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {workspaceLabel(overview)}</p>
               </div>
 
               {nativeRuntime && onOpenBotManager ? (
@@ -795,6 +797,7 @@ export function SettingsScreen({
 
               <div className="space-y-3 border-t border-[var(--border)] pt-3">
                 <div>
+                  {overview?.remoteWorkspace && <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} />}
                   <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
                 </div>
                 <div>
@@ -809,7 +812,7 @@ export function SettingsScreen({
                         setPendingWorkdirConflict(null);
                       }
                     }}
-                    readOnly={!canManageBotRuntime}
+                    readOnly={!canManageBotRuntime || Boolean(overview?.remoteWorkspace)}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                   />
                 </div>
@@ -818,7 +821,7 @@ export function SettingsScreen({
                     type="button"
                     aria-label="浏览工作目录"
                     onClick={() => setShowWorkdirPicker(true)}
-                    disabled={!canManageBotRuntime || savingWorkdir}
+                    disabled={!canManageBotRuntime || savingWorkdir || Boolean(overview?.remoteWorkspace)}
                     className={settingsButtonClass("plain")}
                   >
                     浏览目录
@@ -826,7 +829,7 @@ export function SettingsScreen({
                   <button
                     type="button"
                     onClick={() => void saveWorkdir()}
-                    disabled={!canManageBotRuntime || savingWorkdir}
+                    disabled={!canManageBotRuntime || savingWorkdir || Boolean(overview?.remoteWorkspace)}
                     className={settingsButtonClass("primary")}
                   >
                     <Save className="h-4 w-4" />

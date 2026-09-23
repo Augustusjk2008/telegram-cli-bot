@@ -1,4 +1,5 @@
 import { mapChatTranslation, mapUserTranslationUpdate } from "../utils/chatTranslation";
+import { mapRemoteWorkspace, remoteConnectionBody } from "./remoteWorkspace";
 import {
   WebApiClientError,
 } from "./types";
@@ -340,6 +341,7 @@ function mapWorkspaceDocumentCloseResult(raw: RawWorkspaceDocumentSyncResult | n
 }
 
 type RawBotSummary = {
+  remote_workspace?: import("./remoteWorkspace").RawRemoteWorkspace;
   alias: string;
   cli_type: CliType;
   cli_path?: string;
@@ -1567,6 +1569,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     busyAgentNames: resolvedBusyAgentNames,
     busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,
     workingDir: raw.working_dir,
+    ...(raw.remote_workspace ? { remoteWorkspace: mapRemoteWorkspace(raw.remote_workspace) } : {}),
     lastActiveText: mapStatusText(status),
     archived: Boolean(raw.archived ?? raw.is_archived ?? raw.isArchived),
   };
@@ -5293,7 +5296,24 @@ export class RealWebBotClient implements WebBotClient {
     return mapPersistentTerminalSnapshot(data);
   }
 
-  async createTerminalSession(ownerId: string, cwd: string, shell = "auto"): Promise<PersistentTerminalSnapshot> {
+  async connectRemote(input: import("./types").RemoteConnectionInput, botAlias?: string): Promise<import("./types").RemoteWorkspace> {
+    const path = botAlias ? `/api/bots/${encodeURIComponent(botAlias)}/remote/connect` : "/api/remote/connections";
+    const data = await this.requestJson<import("./remoteWorkspace").RawRemoteWorkspace>(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(remoteConnectionBody(input, Boolean(botAlias))),
+    });
+    return mapRemoteWorkspace(data);
+  }
+
+  async listRemoteDirectories(connectionId: string, path: string): Promise<DirectoryListing> {
+    const query = new URLSearchParams({ path });
+    const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[] }>(
+      `/api/remote/connections/${encodeURIComponent(connectionId)}/directories?${query}`,
+    );
+    return { workingDir: data.working_dir, entries: data.entries.map(mapFileEntry) };
+  }
+
+  async createTerminalSession(ownerId: string, cwd: string, shell = "auto", botAlias?: string): Promise<PersistentTerminalSnapshot> {
     const data = await this.requestJson<RawPersistentTerminalSnapshot>("/api/terminal/session/create", {
       method: "POST",
       headers: {
@@ -5303,6 +5323,7 @@ export class RealWebBotClient implements WebBotClient {
         owner_id: ownerId,
         cwd,
         shell,
+        ...(botAlias ? { bot_alias: botAlias } : {}),
       }),
     });
     return mapPersistentTerminalSnapshot(data);
@@ -6545,7 +6566,9 @@ export class RealWebBotClient implements WebBotClient {
         alias: input.alias,
         cli_type: input.cliType,
         cli_path: input.cliPath,
-        working_dir: input.workingDir,
+        ...(input.remoteWorkspace ? {
+          remote_workspace: { connection_id: input.remoteWorkspace.connectionId, root: input.remoteWorkspace.root },
+        } : { working_dir: input.workingDir }),
         bypass_approval_and_sandbox: Boolean(input.bypassApprovalAndSandbox),
         ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),

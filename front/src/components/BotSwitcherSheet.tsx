@@ -1,3 +1,4 @@
+import { workspaceLabel } from "../services/remoteWorkspace";
 import { BotSummary } from "../services/types";
 import { clsx } from "clsx";
 import { Settings2, ShieldCheck, X } from "lucide-react";
@@ -164,9 +165,9 @@ export function BotSwitcherSheet({
                   <span aria-hidden="true" className="shrink-0 text-[var(--border)]">·</span>
                   <span
                     className="min-w-0 flex-1 truncate"
-                    title={bot.workingDir}
+                    title={workspaceLabel(bot)}
                   >
-                    {bot.workingDir || "未设置"}
+                    {workspaceLabel(bot) || "未设置"}
                   </span>
                   {!isOffline ? <BotActivitySummary bot={bot} className="min-h-0 shrink-0" showLatestAnswerTime /> : null}
                 </div>

@@ -17,7 +17,7 @@ type ComposerAttachment = {
 
 type Props = {
   onSend: (text: string) => void;
-  onAttachFiles: (files: File[]) => void;
+  onAttachFiles?: (files: File[]) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   attachments: ComposerAttachment[];
   disabled?: boolean;
@@ -120,7 +120,7 @@ export function ChatComposer({
   const compactSelectClassName = "h-8 w-full appearance-none rounded-md border-0 bg-transparent py-0 pl-1.5 pr-4 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
   const presetMenuClassName = "absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
   const attachmentControl = (
-    <label className={attachmentButtonClassName} title="上传附件">
+    <label className={attachmentButtonClassName} title={onAttachFiles ? "上传附件" : "远程工作区暂不支持上传附件"}>
       <Plus className="h-4 w-4" />
       <span className="sr-only">上传附件</span>
       <input
@@ -128,11 +128,11 @@ export function ChatComposer({
         data-testid="chat-attachment-input"
         type="file"
         multiple
-        disabled={inputDisabled}
+        disabled={inputDisabled || !onAttachFiles}
         className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
         onChange={(event) => {
           const nextFiles = Array.from(event.currentTarget.files || []);
-          if (nextFiles.length > 0) onAttachFiles(nextFiles);
+          if (nextFiles.length > 0) onAttachFiles?.(nextFiles);
           event.currentTarget.value = "";
         }}
       />

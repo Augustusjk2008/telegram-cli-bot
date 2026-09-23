@@ -120,6 +120,9 @@ class PiRpcClient:
             append_system_prompt=request.append_system_prompt,
             session_id=request.session_id,
         )
+        if (request.env or {}).get("TCB_REMOTE_MCP_CONFIG"):
+            extension = Path(__file__).resolve().parents[1] / "remote_workspace" / "pi_extension.ts"
+            args.extend(["--no-builtin-tools", "--extension", str(extension)])
         env = _base_env(request.env)
         try:
             process = subprocess.Popen(

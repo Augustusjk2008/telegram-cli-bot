@@ -1,6 +1,7 @@
 python-dotenv>=1.0.0
 tomli>=2.0; python_version < "3.11"
 aiohttp>=3.10.0
+paramiko>=3.4.0
 qrcode>=8.0
 pygdbmi>=0.11
 pypdf>=5.4.0

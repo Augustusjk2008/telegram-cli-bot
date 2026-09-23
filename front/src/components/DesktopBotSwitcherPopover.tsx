@@ -1,3 +1,4 @@
+import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { clsx } from "clsx";
 import { CheckCircle2, Copy, LogIn, Search, Settings, ShieldCheck, X } from "lucide-react";
@@ -56,7 +57,7 @@ function botMatchesQuery(bot: BotSummary, query: string) {
   }
   const haystack = [
     bot.alias,
-    bot.workingDir,
+    workspaceLabel(bot),
     bot.cliType,
     ...(bot.busyAgentNames || []),
   ].join(" ").toLowerCase();
@@ -192,10 +193,10 @@ export function DesktopBotSwitcherPopover({
   }
 
   function copyWorkdir() {
-    if (!focusedBot?.workingDir) {
+    if (!focusedBot || !workspaceLabel(focusedBot)) {
       return;
     }
-    void navigator.clipboard?.writeText(focusedBot.workingDir);
+    void navigator.clipboard?.writeText(workspaceLabel(focusedBot));
   }
 
   const filteredCountText = query || statusFilter !== "all"
@@ -308,7 +309,7 @@ export function DesktopBotSwitcherPopover({
                       current ? "text-[var(--text)]" : "text-[var(--muted)]",
                     )}>
                       <span className="shrink-0 font-medium">{getBotRuntimeLabel(bot)}</span>
-                      <span className="min-w-0 truncate" title={bot.workingDir}>{bot.workingDir}</span>
+                      <span className="min-w-0 truncate" title={workspaceLabel(bot)}>{workspaceLabel(bot)}</span>
                     </span>
                     <BotActivitySummary bot={bot} className="mt-1" showLatestAnswerTime />
                   </span>
@@ -355,7 +356,7 @@ export function DesktopBotSwitcherPopover({
 
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
                       <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
-                      <div className="mt-1 break-all font-mono text-xs text-[var(--text)]">{focusedBot.workingDir}</div>
+                      <div className="mt-1 break-all font-mono text-xs text-[var(--text)]">{workspaceLabel(focusedBot)}</div>
                     </div>
 
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">

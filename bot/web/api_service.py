@@ -630,6 +630,7 @@ def build_bot_summary(
         "native_agent": public_native_agent_config(effective_native_agent_config(profile.native_agent)),
         "working_dir": working_dir,
         "archived": profile.archived,
+        **({"remote_workspace": dict(profile.remote_workspace)} if profile.remote_workspace else {}),
         "prompt_presets": [dict(item) for item in profile.prompt_presets],
         "global_prompt_presets": app_settings.get_global_prompt_presets(manager.app_settings_file),
         "is_main": alias == manager.main_profile.alias,
@@ -3219,6 +3220,22 @@ def _effective_cli_params(
     params = clamp_unsafe_cli_params(params, allow_unsafe_cli=allow_unsafe_cli)
     if cluster_run_id:
         params = _cluster_mcp_injected_params(profile, params)
+    if getattr(profile, "remote_workspace", None):
+        from bot.remote_workspace.chat import prepare_remote_chat
+        remote = prepare_remote_chat(profile)
+        values = params.to_dict()
+        cli_type = normalize_cli_type(profile.cli_type)
+        cli_values = values.setdefault(cli_type, {})
+        extra_args = list(cli_values.get("extra_args") or [])
+        injection = remote.cli_args(cli_type)
+        if cli_type == "claude" and "--mcp-config" in extra_args:
+            # Claude accepts multiple configurations as values of one option.
+            index = extra_args.index("--mcp-config") + 1
+            extra_args.insert(index, injection[1])
+        else:
+            extra_args.extend(injection)
+        cli_values["extra_args"] = extra_args
+        params = CliParamsConfig.from_dict(values)
     return params
 
 
@@ -4980,6 +4997,9 @@ async def _stream_cli_chat(
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
 
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
+    if getattr(profile, "remote_workspace", None):
+        from bot.remote_workspace.chat import prepare_remote_chat
+        prepare_remote_chat(profile, getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url())
     text = (visible_input or "").strip()
     if not text:
         _raise(400, "empty_message", "消息不能为空")
@@ -5001,6 +5021,9 @@ async def _stream_cli_chat(
         )
         if agent.id != "main" and not suppress_agent_prompt:
             prepared = _apply_agent_prompt_if_needed(prepared, agent, session, cli_type)
+        if getattr(profile, "remote_workspace", None):
+            from bot.remote_workspace.chat import remote_chat_prompt
+            prepared = remote_chat_prompt(profile) + "\n" + prepared
         prepared_done_session = None
         if cli_type == "claude":
             prepared_done_session = build_claude_done_session(prepared, cli_type=cli_type)
@@ -5855,6 +5878,9 @@ async def _run_native_agent_chat(
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
 
     effective_task_mode = request.task_mode if request is not None else task_mode
+    if getattr(profile, "remote_workspace", None):
+        from bot.remote_workspace.chat import prepare_remote_chat
+        prepare_remote_chat(profile, getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url())
     effective_task_payload = request.task_payload if request is not None else task_payload
     text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
     request_obj = request or _build_chat_run_request(
@@ -5962,6 +5988,9 @@ async def _stream_native_agent_chat(
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
 
     service = get_native_agent_service()
+    if getattr(profile, "remote_workspace", None):
+        from bot.remote_workspace.chat import prepare_remote_chat
+        prepare_remote_chat(profile, getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url())
     normalized_resume_stream_id = str(resume_stream_id or "").strip()
     if normalized_resume_stream_id:
         channel = service.resume_turn_channel(
@@ -6475,6 +6504,7 @@ async def add_managed_bot(
     default_execution_mode: Any = None,
     native_agent: Any = None,
     bypass_approval_and_sandbox: bool = False,
+    remote_workspace: Any = None,
 ) -> dict[str, Any]:
     try:
         profile = await manager.add_bot(
@@ -6486,6 +6516,7 @@ async def add_managed_bot(
             default_execution_mode=default_execution_mode,
             native_agent=native_agent,
             bypass_approval_and_sandbox=bypass_approval_and_sandbox,
+            remote_workspace=remote_workspace,
         )
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))
@@ -6656,6 +6687,8 @@ async def update_bot_workdir(
     force_reset: bool = False,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
+    if profile.remote_workspace:
+        _raise(409, "remote_workspace_bound", "远程智能体的工作区已绑定；请新建智能体以使用其他远程目录")
     resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir or "").strip()))
     if not os.path.isdir(resolved_working_dir):
         _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")

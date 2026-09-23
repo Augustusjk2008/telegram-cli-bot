@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 from weakref import WeakValueDictionary
@@ -560,6 +561,7 @@ class TerminalSessionManager:
         shell_type: str,
         cols: int | None,
         rows: int | None,
+        process_factory: Callable[[], PtyWrapper] | None = None,
     ) -> dict[str, Any]:
         key = self._key(user_id, owner_id)
         async with self._lock:
@@ -572,6 +574,7 @@ class TerminalSessionManager:
                 shell_type=shell_type,
                 cols=cols,
                 rows=rows,
+                process_factory=process_factory,
             )
 
     async def _rebuild_locked(
@@ -583,13 +586,18 @@ class TerminalSessionManager:
         shell_type: str,
         cols: int | None,
         rows: int | None,
+        process_factory: Callable[[], PtyWrapper] | None = None,
     ) -> dict[str, Any]:
         async with self._lock:
             session = self._get_or_create_locked(user_id, owner_id)
 
         await self._terminate_process(session)
 
-        process = create_shell_process(shell_type, cwd, use_pty=True, cols=cols, rows=rows)
+        process = (
+            await asyncio.to_thread(process_factory)
+            if process_factory is not None
+            else create_shell_process(shell_type, cwd, use_pty=True, cols=cols, rows=rows)
+        )
         output_pump = _TerminalOutputPump(process)
         output_pump.start(asyncio.get_running_loop())
         async with self._lock:

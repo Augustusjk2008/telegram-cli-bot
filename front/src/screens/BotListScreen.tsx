@@ -1,3 +1,6 @@
+import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
+import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
+import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { BotActivitySummary } from "../components/BotActivitySummary";
@@ -31,6 +34,7 @@ type Props = {
 function DeleteBotDialog({
   botAlias,
   workspacePath,
+  remote = false,
   deleteHistory,
   deleteWorkspace,
   workspaceConfirmText,
@@ -43,6 +47,7 @@ function DeleteBotDialog({
 }: {
   botAlias: string;
   workspacePath: string;
+  remote?: boolean;
   deleteHistory: boolean;
   deleteWorkspace: boolean;
   workspaceConfirmText: string;
@@ -78,10 +83,10 @@ function DeleteBotDialog({
             type="checkbox"
             checked={deleteWorkspace}
             onChange={(event) => onDeleteWorkspaceChange(event.target.checked)}
-            disabled={busy}
+            disabled={busy || remote}
             className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
           />
-          <span>同时删除工作区和所有记录</span>
+          <span>{remote ? "远程工作区不支持从此处删除" : "同时删除工作区和所有记录"}</span>
         </label>
         {deleteWorkspace ? (
           <div className="mt-3 space-y-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -153,6 +158,7 @@ export function BotListScreen({
     renameBot,
     deleteBot,
   } = useBotManager({ client, onBotsChange, includeArchived: canManage });
+  const [remoteCreate, setRemoteCreate] = useState(false);
   const [createDraft, setCreateDraft] = useState<CreateDraft>(() => buildCreateDraft());
 
   const directoryBrowserAlias = bots.find((bot) => bot.isMain || bot.alias === "main")?.alias || bots[0]?.alias || "main";
@@ -207,6 +213,7 @@ export function BotListScreen({
     const created = await createBot(createDraft);
     if (created) {
       setCreateDraft(buildCreateDraft(createDraft.cliType, bots));
+      setRemoteCreate(false);
     }
   }
 
@@ -373,6 +380,8 @@ export function BotListScreen({
               }))}
             />
           ) : null}
+          <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setCreateDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote">远程 SSH（Linux）</option></select></label>
+          {remoteCreate ? <RemoteWorkspacePicker client={client} onPick={(remote) => setCreateDraft((prev) => ({ ...prev, remoteWorkspace: { connectionId: remote.connectionId, root: remote.root } }))} /> : (
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
               aria-label="新智能体工作目录"
@@ -392,11 +401,12 @@ export function BotListScreen({
               浏览目录
             </button>
           </div>
+          )}
         </div>
         <button
           type="button"
           onClick={() => void handleCreateBot()}
-          disabled={savingAction !== ""}
+          disabled={savingAction !== "" || (remoteCreate && !createDraft.remoteWorkspace)}
           className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
         >
           {savingAction === "create" ? "创建中..." : "创建智能体"}
@@ -449,9 +459,10 @@ export function BotListScreen({
                     <div className="truncate text-xs font-medium text-[var(--muted)]">
                       {getRuntimeBackend(bot) === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
                     </div>
-                    <div className="truncate font-mono text-xs text-[var(--muted)]" title={bot.workingDir}>
-                      {bot.workingDir || "未设置"}
+                    <div className="truncate font-mono text-xs text-[var(--muted)]" title={workspaceLabel(bot)}>
+                      {workspaceLabel(bot) || "未设置"}
                     </div>
+                    {bot.remoteWorkspace && <RemoteReconnectButton client={client} botAlias={bot.alias} remote={bot.remoteWorkspace} disabled={bot.canOperate === false} />}
                     <BotActivitySummary bot={bot} />
                   </div>
                 </div>
@@ -573,6 +584,7 @@ export function BotListScreen({
       {pendingDeleteAlias ? (
         <DeleteBotDialog
           botAlias={pendingDeleteAlias}
+          remote={Boolean(bots.find((item) => item.alias === pendingDeleteAlias)?.remoteWorkspace)}
           workspacePath={bots.find((item) => item.alias === pendingDeleteAlias)?.workingDir || ""}
           deleteHistory={deleteHistory}
           deleteWorkspace={deleteWorkspace}

@@ -23,6 +23,7 @@ import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
 type Props = {
   authToken: string;
   botAlias: string;
+  remote?: boolean;
   client?: WebBotClient;
   isVisible: boolean;
   pendingWorkingDir?: string;
@@ -102,6 +103,7 @@ function getTerminalFontSize() {
 export function TerminalScreen({
   authToken,
   botAlias,
+  remote = false,
   client = new MockWebBotClient(),
   isVisible,
   pendingWorkingDir,
@@ -162,6 +164,7 @@ export function TerminalScreen({
 
   useEffect(() => {
     let cancelled = false;
+    if (remote) { setActionsConfig(null); setActionsError(""); return; }
     client.getTerminalActionsConfig(botAlias)
       .then((next) => {
         if (cancelled) return;
@@ -176,7 +179,7 @@ export function TerminalScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client]);
+  }, [botAlias, client, remote]);
 
   function setFollowing(nextValue: boolean) {
     isFollowingRef.current = nextValue;

@@ -136,6 +136,14 @@ bash install.sh
 - Codex 与 Claude 普通 CLI 保留流式正文、状态、trace 和完成态。
 - Pi 原生 Agent 保留 session、工具调用、权限请求、上下文用量和过程详情。
 
+### SSH 远程工作区
+
+创建智能体时选择「远程 SSH（Linux）」，填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，无需安装 Codex、Claude 或 Pi。
+
+Agent 仍在运行 Orbit 的电脑上执行。本地控制目录默认位于 `~/.tcb/orbit-safe-claw/remote-workspaces/`（遵循 `TCB_DATA_DIR`），自动生成 `AGENTS.md` 和 `CLAUDE.md`。项目文件留在远程主机；聊天工具、文件操作和终端复用 SSH 连接。Agent 可批量运行命令、读取指定行范围及精确替换文本，减少反复登录和大段内容传输。
+
+密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供 Git 面板、语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
+
 ### Desktop Workbench
 
 - **Chat**：普通 CLI 与原生 Agent 对话、历史恢复、过程详情和上下文状态。

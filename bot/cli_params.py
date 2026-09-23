@@ -560,7 +560,8 @@ def _build_codex_args(
     if params.get("json_output"):
         exec_options.append("--json")
     
-    # 额外参数属于 codex exec，恢复会话时必须位于嵌套的 resume 子命令之前。
+    # Keep all options at the exec level: Codex replaces global -c values when
+    # they also appear after resume, dropping earlier MCP configuration.
     extra_args = [str(arg) for arg in (params.get("extra_args") or [])]
     
     # 构建完整命令
@@ -568,9 +569,9 @@ def _build_codex_args(
         cmd = [
             *cli_invocation,
             "exec",
+            *exec_options,
             *extra_args,
             "resume",
-            *exec_options,
             session_id,
             "-",
         ]

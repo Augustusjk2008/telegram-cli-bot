@@ -136,6 +136,14 @@ bash install.sh
 - Regular Codex and Claude CLI sessions retain streaming text, status events, traces, and completion events.
 - The native Pi agent retains sessions, tool calls, permission requests, context usage, and execution details.
 
+### SSH remote workspaces
+
+When creating an agent, select **Remote SSH (Linux)**, enter the SSH connection details, verify the first connection's host key fingerprint, and browse to a remote directory. Remote agents support chat, a file tree, UTF-8 text editing, and independent SSH terminal tabs. The remote host needs SSH/SFTP; Codex, Claude, and Pi run on the Orbit host.
+
+Local control directories default to `~/.tcb/orbit-safe-claw/remote-workspaces/` (respecting `TCB_DATA_DIR`) and contain generated `AGENTS.md` and `CLAUDE.md` instructions. Project files stay remote. Agent tools, file operations, and terminals reuse SSH connections; tools support command batches, bounded file ranges, and exact text edits.
+
+Passwords and key passphrases remain in service memory; use **SSH sign in again** after restarting the service. Private key paths refer to the Orbit host. Text files are limited to 2 MiB. Remote workspaces currently omit Git panels, language services, plugins, debugging, and workspace rollback. Create another agent to use a different remote directory. File APIs stay within the selected root; commands and terminals use the SSH account's permissions, and local CLI tools retain their existing permission settings.
+
 ### Desktop Workbench
 
 - **Chat**: regular CLI and native-agent conversations, history recovery, execution details, and context status.

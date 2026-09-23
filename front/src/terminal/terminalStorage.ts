@@ -8,6 +8,7 @@ export type StoredTerminalTab = {
   title: string;
   cwd: string;
   shell: string;
+  botAlias?: string;
   terminalActionBotAlias?: string;
   terminalActionId?: string;
 };
@@ -62,6 +63,7 @@ function normalizeStoredTab(value: unknown, index: number): StoredTerminalTab | 
     title,
     cwd,
     shell,
+    ...(typeof candidate.botAlias === "string" && candidate.botAlias.trim() ? { botAlias: candidate.botAlias.trim() } : {}),
     ...(terminalActionBotAlias && terminalActionId
       ? { terminalActionBotAlias, terminalActionId }
       : {}),
@@ -74,6 +76,7 @@ export function createStoredTerminalTab(
     title?: string;
     cwd?: string;
     shell?: string;
+    botAlias?: string;
     terminalActionBotAlias?: string;
     terminalActionId?: string;
   } = {},
@@ -96,6 +99,7 @@ export function createStoredTerminalTab(
     title,
     cwd: options.cwd?.trim() || "",
     shell: options.shell?.trim() || "auto",
+    ...(options.botAlias?.trim() ? { botAlias: options.botAlias.trim() } : {}),
     ...(terminalActionBotAlias && terminalActionId
       ? { terminalActionBotAlias, terminalActionId }
       : {}),

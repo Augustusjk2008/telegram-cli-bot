@@ -15,6 +15,7 @@ type Props = {
   client: WebBotClient;
   isVisible: boolean;
   preferredWorkingDir: string;
+  remote?: boolean;
   pendingWorkingDir?: string;
   themeName?: UiThemeName;
   isImmersive?: boolean;
@@ -43,6 +44,7 @@ export function TerminalTabsScreen({
   client,
   isVisible,
   preferredWorkingDir,
+  remote = false,
   pendingWorkingDir,
   themeName = DEFAULT_UI_THEME,
   isImmersive = false,
@@ -57,8 +59,11 @@ export function TerminalTabsScreen({
 }: Props) {
   const terminal = usePersistentTerminal();
   const [creating, setCreating] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectVersions, setReconnectVersions] = useState<Record<string, number>>({});
   const [closingTabId, setClosingTabId] = useState("");
   const [toolbarHost, setToolbarHost] = useState<HTMLDivElement | null>(null);
+  const visibleTabs = terminal.tabs.filter((tab) => remote ? tab.botAlias === botAlias : !tab.botAlias);
 
   const createTerminal = useCallback(async () => {
     if (disabledReason || creating) {
@@ -67,12 +72,13 @@ export function TerminalTabsScreen({
     setCreating(true);
     try {
       await terminal.createTab({
-        cwd: terminal.activeTab?.cwd || preferredWorkingDir,
+        cwd: remote ? preferredWorkingDir : (terminal.activeTab?.botAlias ? preferredWorkingDir : terminal.activeTab?.cwd || preferredWorkingDir),
+        ...(remote ? { botAlias, title: `SSH ${botAlias}` } : {}),
       });
     } finally {
       setCreating(false);
     }
-  }, [creating, disabledReason, preferredWorkingDir, terminal]);
+  }, [creating, disabledReason, preferredWorkingDir, terminal, remote, botAlias]);
 
   const closeTerminalTab = useCallback(async (tabId: string) => {
     if (closingTabId || disabledReason) {
@@ -86,7 +92,11 @@ export function TerminalTabsScreen({
     }
   }, [closingTabId, disabledReason, terminal]);
 
-  const activeTab = terminal.activeTab;
+  const activeTab = visibleTabs.find((tab) => tab.id === terminal.activeTabId);
+
+  useEffect(() => {
+    if (!activeTab && visibleTabs[0]) terminal.selectTab(visibleTabs[0].id);
+  }, [activeTab, visibleTabs, terminal]);
 
   useEffect(() => {
     if (activeTab || !onWorkbenchStatusChange) {
@@ -107,7 +117,7 @@ export function TerminalTabsScreen({
           aria-label="终端选项卡"
           className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
         >
-          {terminal.tabs.map((tab) => {
+          {visibleTabs.map((tab) => {
             const active = tab.id === terminal.activeTabId;
             const closing = closingTabId === tab.id;
             return (
@@ -146,6 +156,13 @@ export function TerminalTabsScreen({
             <Plus className="h-4 w-4" />
           </button>
         </div>
+        {activeTab?.botAlias && <button type="button" className="px-3 text-xs" disabled={Boolean(disabledReason) || reconnecting} onClick={async () => {
+          setReconnecting(true);
+          try {
+            await terminal.restartTab(activeTab.id);
+            setReconnectVersions((prev) => ({ ...prev, [activeTab.id]: (prev[activeTab.id] || 0) + 1 }));
+          } finally { setReconnecting(false); }
+        }}>{reconnecting ? "连接中…" : "重新连接终端"}</button>}
         {embedded ? (
           <div
             ref={setToolbarHost}
@@ -157,10 +174,11 @@ export function TerminalTabsScreen({
 
       <div id={`terminal-panel-${activeTab?.id || "empty"}`} role="tabpanel" className="min-h-0 flex-1">
         <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>
-          <TerminalScreen
-            key={activeTab?.id || "empty-terminal"}
+          {activeTab || (!remote && !terminal.activeTab?.botAlias) ? <TerminalScreen
+            key={activeTab ? `${activeTab.id}:${reconnectVersions[activeTab.id] || 0}` : "empty-terminal"}
             authToken={authToken}
             botAlias={botAlias}
+            remote={Boolean(activeTab?.botAlias)}
             client={client}
             isVisible={isVisible}
             pendingWorkingDir={pendingWorkingDir}
@@ -175,7 +193,7 @@ export function TerminalTabsScreen({
             onAcceptPendingWorkingDir={onAcceptPendingWorkingDir}
             onCancelPendingWorkingDir={onCancelPendingWorkingDir}
             onWorkbenchStatusChange={onWorkbenchStatusChange}
-          />
+          /> : <div className="p-4 text-sm text-[var(--muted)]">{remote ? "点击 + 新建 SSH 终端" : "点击 + 新建终端"}</div>}
         </Suspense>
       </div>
     </main>

@@ -454,7 +454,28 @@ export type BotExecutionConfigInput = {
   nativeAgent: NativeAgentConfigInput;
 };
 
+export type RemoteWorkspace = {
+  connectionId: string;
+  host: string;
+  port: number;
+  username: string;
+  root: string;
+  hostKeyFingerprint: string;
+  keyFilename?: string;
+};
+
+export type RemoteConnectionInput = {
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  keyFilename?: string;
+  passphrase?: string;
+  hostKeyFingerprint?: string;
+};
+
 export type BotSummary = {
+  remoteWorkspace?: RemoteWorkspace;
   alias: string;
   cliType: CliType;
   status: BotStatus;
@@ -863,6 +884,7 @@ export type RunningReply = {
 };
 
 export type BotOverview = {
+  remoteWorkspace?: RemoteWorkspace;
   alias: string;
   cliType: CliType;
   status: BotStatus;
@@ -2334,7 +2356,8 @@ export type CreateBotInput = {
   alias: string;
   cliType: CliType;
   cliPath: string;
-  workingDir: string;
+  workingDir?: string;
+  remoteWorkspace?: Pick<RemoteWorkspace, "connectionId" | "root">;
   bypassApprovalAndSandbox?: boolean;
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;

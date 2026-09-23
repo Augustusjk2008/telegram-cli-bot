@@ -1,3 +1,6 @@
+import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
+import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
+import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { clsx } from "clsx";
 import {
@@ -132,6 +135,7 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
+    remoteWorkspace: draft.remoteWorkspace,
     bypassApprovalAndSandbox: draft.runtimeBackend === "cli" ? Boolean(draft.bypassApprovalAndSandbox) : false,
     runtimeBackend: draft.runtimeBackend,
     supportedExecutionModes: executionConfig.supportedExecutionModes,
@@ -282,6 +286,7 @@ function CreatePanel({
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const baseDraft = useMemo(() => buildCreateDraft("codex", manager.bots), [manager.bots]);
+  const [remoteCreate, setRemoteCreate] = useState(false);
   const [draft, setDraft] = useState<CreateDraft>(() => buildCreateDraft());
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const dirty = !createDraftEquals(draft, baseDraft);
@@ -325,6 +330,7 @@ function CreatePanel({
     const created = await manager.createBot(draft);
     if (created) {
       setDraft(buildCreateDraft(draft.cliType, manager.bots));
+      setRemoteCreate(false);
       onCreated(created.alias);
     }
   }
@@ -435,6 +441,8 @@ function CreatePanel({
           }))}
         />
       ) : null}
+      <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote">远程 SSH（Linux）</option></select></label>
+      {remoteCreate ? <RemoteWorkspacePicker client={manager.client} onPick={(remote) => setDraft((prev) => ({ ...prev, remoteWorkspace: { connectionId: remote.connectionId, root: remote.root } }))} /> : (
       <label className="block space-y-1 text-sm">
         <span className="text-[var(--muted)]">工作目录</span>
         <div className="flex gap-2">
@@ -457,11 +465,12 @@ function CreatePanel({
           </button>
         </div>
       </label>
+      )}
       <div className="flex justify-end">
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={!canManage || manager.savingAction !== ""}
+          disabled={!canManage || manager.savingAction !== "" || (remoteCreate && !draft.remoteWorkspace)}
           className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:opacity-60"
         >
           <Plus className="h-4 w-4" />
@@ -772,8 +781,8 @@ function EditPanel({
         <div className="flex gap-2">
           <input
             aria-label="智能体工作目录"
-            value={draft.workingDir}
-            disabled={!canManage}
+            value={bot.remoteWorkspace ? workspaceLabel(bot) : draft.workingDir}
+            disabled={!canManage || Boolean(bot.remoteWorkspace)}
             onChange={(event) => setDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
             className="h-9 min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           />
@@ -781,7 +790,7 @@ function EditPanel({
             type="button"
             aria-label="浏览智能体工作目录"
             onClick={() => setShowWorkdirPicker(true)}
-            disabled={!canManage || manager.savingAction !== ""}
+            disabled={!canManage || manager.savingAction !== "" || Boolean(bot.remoteWorkspace)}
             className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
           >
             <FolderOpen className="h-4 w-4" />
@@ -1680,9 +1689,9 @@ export function DesktopBotManagerScreen({
                           "truncate px-2 py-2 align-middle font-mono text-xs",
                           focused ? "text-[var(--text)]" : "text-[var(--muted)]",
                         )}
-                        title={bot.workingDir}
+                        title={workspaceLabel(bot)}
                       >
-                        {bot.workingDir || "未设置"}
+                        {workspaceLabel(bot) || "未设置"}
                       </td>
                       <td className="px-2 py-2 align-middle">
                         <div className="flex justify-end gap-1">
@@ -1824,7 +1833,8 @@ export function DesktopBotManagerScreen({
 
                   <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
                     <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
-                    <div className="mt-1 break-all font-mono text-xs">{focusedBot.workingDir}</div>
+                    <div className="mt-1 break-all font-mono text-xs">{workspaceLabel(focusedBot)}</div>
+                    {focusedBot.remoteWorkspace && <RemoteReconnectButton client={manager.client} botAlias={focusedBot.alias} remote={focusedBot.remoteWorkspace} disabled={focusedBot.canOperate === false} />}
                   </div>
 
                   <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
@@ -1939,7 +1949,7 @@ export function DesktopBotManagerScreen({
           deleteWorkspace={pendingDeleteAlias ? deleteWorkspace : false}
           workspacePath={manager.bots.find((item) => item.alias === pendingDeleteAlias)?.workingDir || ""}
           workspaceConfirmText={deleteWorkspaceConfirmText}
-          allowWorkspaceDelete={Boolean(pendingDeleteAlias)}
+          allowWorkspaceDelete={Boolean(pendingDeleteAlias) && !manager.bots.find((item) => item.alias === pendingDeleteAlias)?.remoteWorkspace}
           busy={pendingDeleteAlias ? manager.savingAction === `${pendingDeleteAlias}:delete` : false}
           onDeleteHistoryChange={setDeleteHistory}
           onDeleteWorkspaceChange={(value) => {

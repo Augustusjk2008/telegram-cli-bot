@@ -25,6 +25,7 @@ import {
 } from "./botManagerModel";
 
 export type CreateDraft = CreateBotInput & {
+  workingDir: string;
   runtimeBackend: ChatExecutionMode;
 };
 export type { EditDraft } from "./botManagerModel";
@@ -167,7 +168,7 @@ export function useBotManager({
         ...executionConfig,
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
-        workingDir: normalizePathInput(draft.workingDir),
+        workingDir: draft.remoteWorkspace ? undefined : normalizePathInput(draft.workingDir),
         bypassApprovalAndSandbox: runtimeBackend === "cli" ? Boolean(draft.bypassApprovalAndSandbox) : false,
         nativeAgent: normalizeNativeAgentInput(draft.nativeAgent),
       });
@@ -336,6 +337,7 @@ export function useBotManager({
     workingDir: string,
     options: UpdateBotWorkdirOptions = {},
   ) {
+    if (bot.remoteWorkspace) return { ok: true, bot } as const;
     const nextWorkdir = normalizePathInput(workingDir);
     if (!nextWorkdir) {
       setError("工作目录不能为空");

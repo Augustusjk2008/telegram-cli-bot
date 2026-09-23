@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +60,7 @@ class PiSessionRuntimeState:
     workspace_history_head: str = ""
     processing: bool = False
     pending_permission_ids: set[str] = field(default_factory=set)
+    binding_invalidated: bool = False
 
 
 class PiSessionRuntime:
@@ -105,9 +106,26 @@ class PiSessionRuntime:
             self.is_running()
             and self.state.runtime_key == request.runtime_key
             and self.state.owner_key == request.owner_key
-            and str(Path(self.state.cwd or ".").expanduser().resolve()) == str(Path(request.cwd or ".").expanduser().resolve())
+            and self.binding_matches(request)
+            and self.state.config_fingerprint == request.config_fingerprint
             and _normalize_env(self.state.env) == _normalize_env(request.env)
         )
+
+    def binding_matches(self, request: PiSessionRuntimeRequest) -> bool:
+        return (
+            not self.state.binding_invalidated
+            and str(Path(self.state.cwd or ".").expanduser().resolve()) == str(Path(request.cwd or ".").expanduser().resolve())
+            and self.state.model == request.model
+            and self.state.agent_id == request.agent_id
+            and self.state.reasoning_effort == request.reasoning_effort
+            and (self.state.env or {}).get("TCB_REMOTE_MCP_CONFIG") == (request.env or {}).get("TCB_REMOTE_MCP_CONFIG")
+        )
+
+    def invalidate_binding(self) -> None:
+        self.state.binding_invalidated = True
+        self.state.native_session_id = ""
+        self.state.workspace_history_head = ""
+        self.state.linear_index = 0
 
     def refresh_from_request(self, request: PiSessionRuntimeRequest) -> None:
         self.state.command = str(request.command or "").strip()
@@ -363,6 +381,10 @@ class PiSessionRuntimeRegistry:
                 if len(self._by_runtime_id) + len(self._start_reservations) >= PI_RUNTIME_MAX_COUNT:
                     raise RuntimeError("Pi runtime 数量已达上限，请稍后重试")
                 self._start_reservations.add(task)
+            for previous in stale:
+                if previous.state.runtime_key == normalized.runtime_key and not previous.binding_matches(normalized):
+                    previous.invalidate_binding()
+                    normalized = replace(normalized, native_session_id="")
         await self._close_many(stale)
         if matched is not None:
             return matched
@@ -480,6 +502,16 @@ class PiSessionRuntimeRegistry:
 
     def get_by_runtime_id(self, runtime_id: str) -> PiSessionRuntime | None:
         return self._by_runtime_id.get(str(runtime_id or "").strip())
+
+    async def invalidate_binding(self, runtime_key: str) -> None:
+        async with self._lock:
+            current = self._by_key.get(runtime_key)
+            if current is None:
+                return
+            current.invalidate_binding()
+            detached = self._detach_locked(current)
+        if detached is not None:
+            await self._persist_and_close_runtime(detached)
 
     async def close_runtime(self, runtime: PiSessionRuntime) -> None:
         async with self._lock:

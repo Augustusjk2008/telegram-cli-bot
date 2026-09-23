@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { workspaceLabel } from "../services/remoteWorkspace";
+import { RemoteFilesPane } from "../components/RemoteFilesPane";
+import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
@@ -69,6 +72,7 @@ import {
   LazyBotListScreen as BotListScreen,
   LazyDesktopBotManagerScreen as DesktopBotManagerScreen,
   LazyDesktopWorkbench as DesktopWorkbench,
+  LazyRemoteWorkbench as RemoteWorkbench,
   LazyFilesScreen as FilesScreen,
   LazyGitScreen as GitScreen,
   LazyMobileDebugScreen as MobileDebugScreen,
@@ -324,6 +328,7 @@ export function App() {
     }
     return botSummaryByAlias.get(currentBot) || bots.find((bot) => bot.alias === currentBot) || null;
   }, [botSummaryByAlias, bots, currentBot]);
+  const remoteWorkspace = currentBotSummary?.remoteWorkspace;
   const canOperateCurrentBot = currentBotSummary?.canOperate !== false;
   const canUseSettings = canUseHostSettings || Boolean(currentBotSummary && canOperateCurrentBot);
   const canReadCurrentBotFiles = canOperateCurrentBot && hasCapability(session, "read_file_content");
@@ -364,7 +369,7 @@ export function App() {
     );
   const soloSessionSnapshot = currentBot ? soloSessionSnapshotByBot[currentBot] || null : null;
   const soloHistoryRevision = currentBot ? soloHistoryRevisionByBot[currentBot] || 0 : 0;
-  const currentWorkspaceName = currentBotSummary?.workingDir.split(/[\\/]+/).filter(Boolean).pop()
+  const currentWorkspaceName = (currentBotSummary?.remoteWorkspace ? workspaceLabel(currentBotSummary) : "") || currentBotSummary?.workingDir.split(/[\\/]+/).filter(Boolean).pop()
     || currentBotSummary?.workingDir
     || "";
   const visibleChatBotAlias = currentBot
@@ -372,7 +377,7 @@ export function App() {
     && !showAdminCenter
     && (
       effectiveLayoutMode === "desktop"
-        ? (productMode === "solo" || desktopChatPaneVisible)
+        ? (Boolean(remoteWorkspace) || productMode === "solo" || desktopChatPaneVisible)
         : currentTab === "chat"
     )
     ? currentBot
@@ -395,7 +400,7 @@ export function App() {
   }
 
   function requestBotSelection(alias: string | null) {
-    if (effectiveLayoutMode === "desktop" && desktopHasDirtyTabs) {
+    if (desktopHasDirtyTabs && (effectiveLayoutMode === "desktop" || remoteWorkspace)) {
       const confirmed = window.confirm("当前桌面工作台有未保存文件，切换智能体会丢失这些修改。确定继续吗？");
       if (!confirmed) {
         return false;
@@ -495,23 +500,23 @@ export function App() {
 
   const allowedTabs = useMemo(() => {
     const nextTabs: AppTab[] = ["chat", "files"];
-    if (canUseDebug) {
+    if (canUseDebug && !remoteWorkspace) {
       nextTabs.push("debug");
     }
     if (canUseTerminal) {
       nextTabs.push("terminal");
     }
-    if (canUseGit) {
+    if (canUseGit && !remoteWorkspace) {
       nextTabs.push("git");
     }
-    if (canViewPlugins) {
+    if (canViewPlugins && !remoteWorkspace) {
       nextTabs.push("plugins");
     }
     if (canUseSettings) {
       nextTabs.push("settings");
     }
     return nextTabs;
-  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, canViewPlugins]);
+  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, canViewPlugins, remoteWorkspace]);
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -1083,7 +1088,7 @@ export function App() {
   } else if (currentTab === "files") {
     activeScreen = (
       <div className="absolute inset-0">
-        <FilesScreen
+        {remoteWorkspace ? <RemoteFilesPane key={`remote-files-${currentBot}`} client={client} botAlias={currentBot} remote={remoteWorkspace} canWrite={canWriteCurrentBotFiles} canReconnect={canOperateCurrentBot} structureOnly={structureOnly} onDirtyChange={setDesktopHasDirtyTabs} /> : <FilesScreen
           key={`files-${currentBot}`}
           botAlias={currentBot}
           client={client}
@@ -1092,10 +1097,10 @@ export function App() {
           canBrowseExternalPaths={hasCapability(session, "admin_ops") && canOperateCurrentBot}
           canOpenSystemFolder={Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
           canUseInlineCompletion={canOperateCurrentBot && canUseInlineCompletion}
-        />
+        />}
       </div>
     );
-  } else if (currentTab === "debug" && canUseDebug) {
+  } else if (currentTab === "debug" && canUseDebug && !remoteWorkspace) {
     activeScreen = (
       <div className="absolute inset-0">
         <MobileDebugScreen
@@ -1114,7 +1119,8 @@ export function App() {
             botAlias={currentBot}
             client={client}
             isVisible
-            preferredWorkingDir={currentBotSummary?.workingDir || ""}
+            preferredWorkingDir={remoteWorkspace?.root || currentBotSummary?.workingDir || ""}
+            remote={Boolean(remoteWorkspace)}
             themeName={themeName}
             isImmersive={isTerminalImmersive}
             disabledReason={terminalDisabledReason}
@@ -1123,7 +1129,7 @@ export function App() {
         </Suspense>
       </div>
     );
-  } else if (currentTab === "git" && canUseGit) {
+  } else if (currentTab === "git" && canUseGit && !remoteWorkspace) {
     activeScreen = (
       <div className="absolute inset-0">
         <GitScreen
@@ -1134,7 +1140,7 @@ export function App() {
         />
       </div>
     );
-  } else if (currentTab === "plugins" && canViewPlugins) {
+  } else if (currentTab === "plugins" && canViewPlugins && !remoteWorkspace) {
     activeScreen = (
       <div className="absolute inset-0">
         <PluginsScreen
@@ -1224,7 +1230,9 @@ export function App() {
       <>
         <PersistentTerminalProvider client={client}>
           <Suspense fallback={lazyFallback}>
-          {productMode === "solo" ? (
+          {remoteWorkspace && currentBotSummary ? (
+            <RemoteWorkbench key={currentBot} bot={currentBotSummary} client={client} authToken={session?.token || ""} chat={renderDesktopChatStack({ currentVisible: true })} canWrite={canWriteCurrentBotFiles} structureOnly={structureOnly} terminalDisabledReason={terminalDisabledReason} themeName={themeName} viewMode={viewMode} onViewModeChange={setViewMode} onOpenBotSwitcher={(rect) => { void openBotSwitcher(rect); }} onLogout={handleLogout} onDirtyChange={setDesktopHasDirtyTabs} announcementAction={announcementButton} />
+          ) : productMode === "solo" ? (
             <SoloWorkbench
               botAlias={currentBot}
               client={client}
@@ -1337,7 +1345,7 @@ export function App() {
           currentTab={currentTab}
           allowedTabs={allowedTabs}
           hideOuterChrome={hideOuterChrome}
-          activeScreen={<Suspense fallback={lazyFallback}>{activeScreen}</Suspense>}
+          activeScreen={<div className="flex h-full min-h-0 flex-col">{remoteWorkspace && <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] p-2 text-xs"><span className="min-w-0 flex-1 break-all">SSH {remoteWorkspace.host}:{remoteWorkspace.root} · 仅聊天、文件、终端</span><RemoteReconnectButton client={client} botAlias={currentBot} remote={remoteWorkspace} disabled={!canOperateCurrentBot} /></div>}<div className="relative min-h-0 flex-1"><Suspense fallback={lazyFallback}>{activeScreen}</Suspense></div></div>}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           announcementAction={announcementButton}
@@ -1346,6 +1354,7 @@ export function App() {
           }}
           onViewModeChange={setViewMode}
           onTabChange={(tab) => {
+            if (remoteWorkspace && desktopHasDirtyTabs && tab !== currentTab && !window.confirm("当前远程文件有未保存修改，确定离开？")) return;
             setCurrentTab(tab);
             if (tab === "chat" && currentBot) {
               markBotRead(currentBot);

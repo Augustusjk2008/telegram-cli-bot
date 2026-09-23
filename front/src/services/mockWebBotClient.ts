@@ -4141,7 +4141,15 @@ export class MockWebBotClient implements WebBotClient {
     return readMockPersistentTerminalSnapshot(ownerId);
   }
 
-  async createTerminalSession(ownerId: string, cwd: string, _shell = "auto"): Promise<PersistentTerminalSnapshot> {
+  async connectRemote(_input: import("./types").RemoteConnectionInput, _botAlias?: string): Promise<import("./types").RemoteWorkspace> {
+    throw new Error("SSH 连接需要连接真实服务");
+  }
+
+  async listRemoteDirectories(_connectionId: string, _path: string): Promise<DirectoryListing> {
+    throw new Error("SSH 目录浏览需要连接真实服务");
+  }
+
+  async createTerminalSession(ownerId: string, cwd: string, _shell = "auto", _botAlias?: string): Promise<PersistentTerminalSnapshot> {
     const snapshot: PersistentTerminalSnapshot = {
       started: true,
       closed: false,
@@ -6401,7 +6409,7 @@ export class MockWebBotClient implements WebBotClient {
       cliType: input.cliType,
       cliPath: input.cliPath.trim() || defaultCliPathForType(input.cliType),
       status: "running",
-      workingDir: input.workingDir.trim(),
+      workingDir: input.workingDir?.trim() || "",
       lastActiveText: "运行中",
       enabled: true,
       archived: false,

@@ -2352,7 +2352,7 @@ export function ChatScreen({
           }
 
           setBotOverview(overview);
-          setWorkingDir(overview.workingDir || "");
+          setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
           restoreClusterRunFromOverview(overview);
 
           const previousItems = itemsRef.current;
@@ -2452,7 +2452,7 @@ export function ChatScreen({
       }
 
       setBotOverview(overview);
-      setWorkingDir(overview.workingDir || "");
+      setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
       restoreClusterRunFromOverview(overview);
       const previousItems = itemsRef.current;
       const previousCount = countPersistedHistoryItems(itemsRef.current);
@@ -2666,7 +2666,7 @@ export function ChatScreen({
         setAgents(nextAgents);
         setConversations(conversationData.items);
         setBotOverview(overview);
-        setWorkingDir(overview.workingDir || "");
+        setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
         const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
         setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
@@ -3500,7 +3500,7 @@ export function ChatScreen({
   }, []);
 
   const handleConfirmSoloRollback = useCallback(async () => {
-    if (!soloRollbackTarget || soloRollbacking) {
+    if (botOverviewRef.current?.remoteWorkspace || !soloRollbackTarget || soloRollbacking) {
       return;
     }
     const conversationId = soloRollbackTarget.conversationId || resolveActiveConversationId(conversations, itemsRef.current);
@@ -3805,7 +3805,7 @@ export function ChatScreen({
         );
         setBotOverview(overview);
         setConversations(conversationData.items);
-        setWorkingDir(overview.workingDir || "");
+        setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
@@ -3840,7 +3840,7 @@ export function ChatScreen({
   }, [activeAgentId, botOverview?.cluster?.enabled, clearClusterTaskState, handleSelectAgent]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0) {
+    if (botOverviewRef.current?.remoteWorkspace || files.length === 0) {
       return;
     }
 
@@ -4579,7 +4579,7 @@ export function ChatScreen({
         );
         setBotOverview(overview);
         setConversations(conversationData.items);
-        setWorkingDir(overview.workingDir || "");
+        setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
@@ -4828,10 +4828,10 @@ export function ChatScreen({
   }, [chatMutationsDisabled, isStreaming, loading, nativePermissionPending, visibleItems]);
   const favoriteAnswerByMessageKey = useMemo(() => favoriteItemsByMessageKey(favoriteItems), [favoriteItems]);
   const soloRollbackTargets = useMemo(() => (
-    nativeExecutionMode && !isStreaming && !loading && !readOnly
+    !botOverview?.remoteWorkspace && nativeExecutionMode && !isStreaming && !loading && !readOnly
       ? buildSoloRollbackTargets(items)
       : new Map<string, SoloRollbackTarget>()
-  ), [items, loading, nativeExecutionMode, readOnly, isStreaming]);
+  ), [items, loading, nativeExecutionMode, readOnly, isStreaming, botOverview?.remoteWorkspace]);
   const displayContextUsage = useMemo(() => buildDisplayContextUsage(items), [items]);
   const messageRowModels = useMemo<ChatMessageRowModel[]>(() => visibleItems.map((item) => {
     const messageClientStateKey = getMessageClientStateKey(item);
@@ -5169,7 +5169,7 @@ export function ChatScreen({
           <ChatComposer
             key={`composer-${composerPulseKey}`}
             onSend={handleSend}
-            onAttachFiles={handleAttachFiles}
+            onAttachFiles={botOverview?.remoteWorkspace ? undefined : handleAttachFiles}
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}
             pulse={composerPulseKey > 0}

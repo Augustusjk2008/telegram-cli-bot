@@ -492,6 +492,7 @@ class BotProfile:
     native_agent: Dict[str, Any] = field(default_factory=dict)
     archived: bool = False
     chat_translation_enabled: bool = True
+    remote_workspace: Dict[str, Any] = field(default_factory=dict)
 
     def ensure_cluster_slots(self) -> list[ClusterSlotStatus]:
         child_agents = [agent for agent in self.agents if agent.id != "main"]
@@ -534,6 +535,9 @@ class BotProfile:
             "default_execution_mode": default_execution_mode,
             "native_agent": normalize_native_agent_config(self.native_agent),
         }
+        if self.remote_workspace:
+            from bot.remote_workspace.transport import normalize_remote_workspace
+            result["remote_workspace"] = normalize_remote_workspace(self.remote_workspace)
         # 添加 CLI 参数配置（如果有非默认配置）
         params_dict = self.cli_params.to_dict()
         # 检查是否有自定义配置
@@ -601,6 +605,9 @@ class BotProfile:
             default_execution_mode=default_execution_mode,
             native_agent=normalize_native_agent_config(data.get("native_agent", data.get("nativeAgent"))),
         )
+        if data.get("remote_workspace"):
+            from bot.remote_workspace.transport import normalize_remote_workspace
+            profile.remote_workspace = normalize_remote_workspace(data["remote_workspace"])
         if profile.cluster.enabled:
             profile.ensure_cluster_slots()
         return profile

@@ -27,6 +27,31 @@ from bot.cli_params import (
 class TestBuildCliCommand:
     """测试 build_cli_command"""
 
+    def test_codex_resume_keeps_mcp_and_builtin_config_in_one_argument_scope(self, tmp_path):
+        params_config = CliParamsConfig()
+        params_config.codex.update({
+            "reasoning_effort": "high",
+            "model": "test-model",
+            "json_output": True,
+            "extra_args": [
+                "--sandbox", "workspace-write",
+                "-c", 'mcp_servers.tcb-remote.command="python"',
+                "-c", 'mcp_servers.tcb-remote.args=["remote.py"]',
+                "-c", 'mcp_servers.tcb-cluster.command="cluster"',
+            ],
+        })
+        kwargs = dict(cli_type="codex", resolved_cli="codex", user_text="hello", env={},
+                      params_config=params_config, working_dir=str(tmp_path))
+        fresh, _ = build_cli_command(**kwargs)
+        resumed, use_stdin = build_cli_command(**kwargs, session_id="saved-thread", resume_session=True)
+
+        # Codex replaces global -c values across subcommand levels instead of
+        # merging them. A resumed turn must retain the fresh turn's option scope.
+        resume_index = resumed.index("resume")
+        assert resumed[:resume_index] == fresh[:-1]
+        assert resumed[resume_index + 1:] == ["saved-thread", "-"]
+        assert use_stdin
+
     def test_claude_plan_mode_overrides_native_plan_permission_mode(self):
         params_config = CliParamsConfig()
         params_config.claude["extra_args"] = [

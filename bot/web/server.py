@@ -173,6 +173,7 @@ from .routes import (
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
+    remote_routes,
     translation_routes,
 )
 from .api_service import (
@@ -1002,6 +1003,9 @@ class WebApiServer:
         self.manager = manager
         self._host = str(host or WEB_HOST or "").strip() or "0.0.0.0"
         self._port = int(port if port is not None else WEB_PORT)
+        if hasattr(manager, "remote_bridge_url"):
+            bridge_host = "[::1]" if self._host in {"::", "::1"} else "127.0.0.1"
+            manager.remote_bridge_url = f"http://{bridge_host}:{self._port}"
         self._instance_id = str(instance_id or "").strip() or uuid.uuid4().hex
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -1385,6 +1389,7 @@ class WebApiServer:
         for key in (
             "cli_path",
             "working_dir",
+            "remote_workspace",
             "prompt_presets",
             "global_prompt_presets",
             "cluster",
@@ -2431,6 +2436,9 @@ class WebApiServer:
     async def post_terminal_create(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_TERMINAL_EXEC)
         body = await self._parse_json(request)
+        remote_response = await remote_routes.create_terminal(self, request, auth, body, _parse_terminal_size(body))
+        if remote_response is not None:
+            return remote_response
         owner_id = self._resolve_terminal_owner_id(body.get("owner_id"))
         shell_type = self._resolve_terminal_shell(body.get("shell"))
         raw_cwd = str(body.get("cwd") or os.getcwd()).strip() or os.getcwd()
@@ -4400,6 +4408,9 @@ class WebApiServer:
             _BOT_PERMISSION_STORE.assert_can_create_bot(auth.account_id, is_local_admin=self._is_local_admin(auth))
         except ValueError as exc:
             raise WebApiError(403, "bot_quota_exceeded", str(exc)) from exc
+        remote_workspace = None
+        if body.get("remote_workspace") is not None:
+            remote_workspace = await remote_routes.prepare_create(self, auth, body["remote_workspace"])
         data = await add_managed_bot(
             self.manager,
             alias=body.get("alias", ""),
@@ -4410,6 +4421,7 @@ class WebApiServer:
             default_execution_mode=body.get("default_execution_mode", body.get("defaultExecutionMode")),
             native_agent=body.get("native_agent", body.get("nativeAgent")),
             bypass_approval_and_sandbox=bypass_approval_and_sandbox,
+            remote_workspace=remote_workspace,
         )
         alias = data["bot"]["alias"]
         if not self._is_local_admin(auth):
@@ -4859,7 +4871,7 @@ class WebApiServer:
 
     def _build_app(self) -> web.Application:
         app = web.Application(
-            middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware],
+            middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware, remote_routes.middleware(self)],
             client_max_size=25 * 1024 * 1024,
         )
         self._register_app_routes(app)
@@ -4885,6 +4897,7 @@ class WebApiServer:
             codex_usage_routes,
             chat_routes,
             terminal_routes,
+            remote_routes,
             debug_routes,
             files_routes,
             plugin_routes,
@@ -5166,6 +5179,7 @@ class WebApiServer:
             except Exception:
                 pass
         await self._terminal_manager.shutdown()
+        await asyncio.to_thread(remote_routes.get_remote_workspace_service().close_all)
         debug_tasks = list(self._debug_tasks)
         self._debug_tasks.clear()
         for task in debug_tasks:
