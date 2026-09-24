@@ -263,7 +263,17 @@ def register(app: web.Application, server) -> None:
         )
         return _response(result)
 
+    async def disconnect(request):
+        await server._with_capability(request, CAP_MANAGE_BOTS)
+        profile = get_profile_or_raise(server.manager, server._manager_alias(request))
+        if not profile.remote_workspace:
+            raise WebApiError(400, "not_remote_workspace", "当前智能体没有远程工作区")
+        connection = get_remote_workspace_service().get(profile.remote_workspace)
+        await asyncio.to_thread(connection.close)
+        return _response({"disconnected": True})
+
     app.router.add_post("/api/remote/connections", connect)
     app.router.add_get("/api/remote/connections/{connection_id}/directories", directories)
     app.router.add_post("/api/bots/{alias}/remote/connect", reconnect)
+    app.router.add_post("/api/bots/{alias}/remote/disconnect", disconnect)
     app.router.add_post("/api/remote/agent-tools", agent_tools)

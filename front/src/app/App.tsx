@@ -4,7 +4,7 @@
  */
 
 import { workspaceLabel } from "../services/remoteWorkspace";
-import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
+import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
@@ -1284,6 +1284,7 @@ export function App() {
               chatReadOnly={chatReadOnly || !canOperateCurrentBot}
               chatDisabledReason={chatDisabledReason}
               botCanOperate={canOperateCurrentBot}
+              canManageRemoteConnection={canManageBots}
               terminalDisabledReason={terminalDisabledReason}
               allowTrace={allowTrace}
               allowCodeJump={!remoteWorkspace && !structureOnly && !isGuest(session)}
@@ -1346,10 +1347,11 @@ export function App() {
           currentTab={currentTab}
           allowedTabs={allowedTabs}
           hideOuterChrome={hideOuterChrome}
-          activeScreen={<div className="flex h-full min-h-0 flex-col">{remoteWorkspace && <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] p-2 text-xs"><span className="min-w-0 flex-1 break-all">SSH {remoteWorkspace.host}:{remoteWorkspace.root} · 仅聊天、文件、终端</span><RemoteReconnectButton client={client} botAlias={currentBot} remote={remoteWorkspace} disabled={!canOperateCurrentBot} onConnected={() => setRemoteReconnectRevision((revision) => revision + 1)} /></div>}<div className="relative min-h-0 flex-1"><Suspense fallback={lazyFallback}>{activeScreen}</Suspense></div></div>}
+          activeScreen={<Suspense fallback={lazyFallback}>{activeScreen}</Suspense>}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           announcementAction={announcementButton}
+          remoteAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={currentBot} remote={remoteWorkspace} compact disabled={!canManageBots || !canOperateCurrentBot} onConnected={() => setRemoteReconnectRevision((revision) => revision + 1)} /> : undefined}
           onOpenBotSwitcher={() => {
             void openBotSwitcher();
           }}

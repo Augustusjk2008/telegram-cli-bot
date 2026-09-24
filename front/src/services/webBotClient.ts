@@ -276,6 +276,7 @@ export interface WebBotClient {
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
   createTerminalSession(ownerId: string, cwd: string, shell?: string, botAlias?: string): Promise<PersistentTerminalSnapshot>;
   connectRemote(input: import("./types").RemoteConnectionInput, botAlias?: string): Promise<import("./types").RemoteWorkspace>;
+  disconnectRemote(botAlias: string): Promise<void>;
   listRemoteDirectories(connectionId: string, path: string): Promise<DirectoryListing>;
   rebuildTerminalSession(ownerId: string, cwd: string, shell?: string): Promise<PersistentTerminalSnapshot>;
   closeTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;

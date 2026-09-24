@@ -35,6 +35,7 @@ type Props = {
   viewMode: ViewMode;
   hasUnreadOtherBots?: boolean;
   announcementAction?: ReactNode;
+  remoteAction?: ReactNode;
   onOpenBotSwitcher: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onTabChange: (tab: AppTab) => void;
@@ -50,6 +51,7 @@ export function MobileShell({
   viewMode,
   hasUnreadOtherBots = false,
   announcementAction,
+  remoteAction,
   onOpenBotSwitcher,
   onViewModeChange,
   onTabChange,
@@ -117,6 +119,7 @@ export function MobileShell({
             <Menu className="h-4 w-4 shrink-0 text-[var(--muted)]" />
           </button>
           <div ref={viewModeRootRef} className="relative flex min-w-0 items-center gap-1">
+            {remoteAction}
             {announcementAction}
             <button
               ref={viewModeTriggerRef}

@@ -5305,6 +5305,10 @@ export class RealWebBotClient implements WebBotClient {
     return mapRemoteWorkspace(data);
   }
 
+  async disconnectRemote(botAlias: string): Promise<void> {
+    await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/remote/disconnect`, { method: "POST" });
+  }
+
   async listRemoteDirectories(connectionId: string, path: string): Promise<DirectoryListing> {
     const query = new URLSearchParams({ path });
     const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[] }>(

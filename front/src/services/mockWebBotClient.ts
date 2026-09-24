@@ -4145,6 +4145,10 @@ export class MockWebBotClient implements WebBotClient {
     throw new Error("SSH 连接需要连接真实服务");
   }
 
+  async disconnectRemote(_botAlias: string): Promise<void> {
+    throw new Error("SSH 断开需要连接真实服务");
+  }
+
   async listRemoteDirectories(_connectionId: string, _path: string): Promise<DirectoryListing> {
     throw new Error("SSH 目录浏览需要连接真实服务");
   }

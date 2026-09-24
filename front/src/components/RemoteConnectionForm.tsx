@@ -96,11 +96,19 @@ export function RemoteReconnectButton({ client, botAlias, remote, onConnected, d
   const [connected, setConnected] = useState(false);
   return <>
     <button type="button" className={remoteButtonClass} disabled={disabled} onClick={() => setOpen(true)}>{connected ? "SSH 已连接 · 重新登录" : "SSH 重新登录"}</button>
-    {open && <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={(e) => e.stopPropagation()}>
-      <section role="dialog" aria-modal="true" aria-label="SSH 重新登录" className="max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl bg-[var(--bg)] p-5 text-[var(--text)]">
-        <div className="flex items-center justify-between"><h2 className="font-semibold">SSH 重新登录 · {botAlias}</h2><button type="button" className={remoteButtonClass} onClick={() => setOpen(false)}>关闭</button></div>
-        <RemoteConnectionForm client={client} botAlias={botAlias} initial={remote} onConnected={(next) => { setConnected(true); setOpen(false); onConnected?.(next); }} />
-      </section>
-    </div>}
+    {open && <RemoteReconnectDialog client={client} botAlias={botAlias} remote={remote} onClose={() => setOpen(false)} onConnected={(next) => { setConnected(true); setOpen(false); onConnected?.(next); }} />}
   </>;
+}
+
+export function RemoteReconnectDialog({ client, botAlias, remote, onClose, onConnected }: {
+  client: WebBotClient; botAlias: string; remote: RemoteWorkspace;
+  onClose: () => void;
+  onConnected: (remote: RemoteWorkspace) => void;
+}) {
+  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={(e) => e.stopPropagation()}>
+    <section role="dialog" aria-modal="true" aria-label="SSH 重新登录" className="max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl bg-[var(--bg)] p-5 text-[var(--text)]">
+      <div className="flex items-center justify-between"><h2 className="font-semibold">SSH 重新登录 · {botAlias}</h2><button type="button" className={remoteButtonClass} onClick={onClose}>关闭</button></div>
+      <RemoteConnectionForm client={client} botAlias={botAlias} initial={remote} onConnected={onConnected} />
+    </section>
+  </div>;
 }

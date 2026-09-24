@@ -320,6 +320,19 @@ def test_password_key_passphrase_are_memory_only_and_pool_is_reused(ssh):
         connection.list_directory(root=ROOT)
 
 
+def test_manual_disconnect_closes_pool_until_reauthentication(ssh):
+    config, connection = connected(ssh, password="secret")
+    connection.close()
+    assert ssh.clients[0].closed and ssh.clients[0].sftp.closed
+    assert connection._password is None
+    with error_code("remote_connection_closed"):
+        ssh.service.get(config).list_directory(root=ROOT)
+
+    restored = ssh.service.connect(7, {**config, "password": "fresh"}, connection_id=config["connection_id"])
+    assert restored == config
+    assert ssh.service.get(config).list_directory(root=ROOT)["entries"]
+
+
 def test_draft_ownership_and_connection_identity(ssh):
     config, connection = connected(ssh)
     assert ssh.service.connection_config(config["connection_id"], 7) == config

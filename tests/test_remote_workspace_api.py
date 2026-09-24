@@ -167,6 +167,24 @@ async def test_ssh_login_confirmation_and_remote_creation_contract(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_disconnect_remote_closes_only_an_authorized_bot_connection(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    service = Mock()
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post("/api/bots/MAIN/remote/disconnect")
+        assert response.status == 200
+        assert (await response.json())["data"] == {"disconnected": True}
+        service.get.assert_called_once_with(CONFIG)
+        service.get.return_value.close.assert_called_once_with()
+
+        auth.capabilities.remove(CAP_MANAGE_BOTS)
+        response = await client.post("/api/bots/main/remote/disconnect")
+        assert response.status == 403
+        service.get.return_value.close.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_agent_bridge_scopes_tokens_and_rejects_changed_workspaces(tmp_path, monkeypatch):
     from bot.remote_workspace.chat import prepare_remote_chat
     from bot.remote_workspace import tools

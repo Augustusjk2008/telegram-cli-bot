@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } fr
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
+import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { getExternalSourceErrorMessage } from "../services/types";
 import type {
   CodeLocation,
@@ -152,6 +152,7 @@ type Props = {
   chatReadOnlyReason?: string;
   chatDisabledReason?: string;
   botCanOperate?: boolean;
+  canManageRemoteConnection?: boolean;
   terminalDisabledReason?: string;
   allowTrace?: boolean;
   allowCodeJump?: boolean;
@@ -200,6 +201,7 @@ export function DesktopWorkbench({
   chatReadOnlyReason,
   chatDisabledReason,
   botCanOperate = true,
+  canManageRemoteConnection = true,
   terminalDisabledReason = "",
   allowTrace = true,
   allowCodeJump = true,
@@ -1399,7 +1401,7 @@ export function DesktopWorkbench({
       data-focused-pane={focusedPane || "none"}
       data-resizing={isResizingPane ? "true" : "false"}
       className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full"
-      style={{ gridTemplateRows: remoteWorkspace ? "auto auto minmax(0,1fr) auto" : "auto minmax(0,1fr) auto" }}
+      style={{ gridTemplateRows: "auto minmax(0,1fr) auto" }}
     >
       {focusedPane ? (
         <button
@@ -1418,6 +1420,7 @@ export function DesktopWorkbench({
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
         announcementAction={announcementAction}
+        workspaceAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate || !canManageRemoteConnection} onConnected={() => { void fileTree.refreshRoot({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root }); }} /> : undefined}
         sidebarVisible={!layoutState.sidebarCollapsed}
         editorVisible={!structureOnly && !layoutState.editorCollapsed}
         terminalVisible={!structureOnly && !layoutState.terminalCollapsed}
@@ -1434,11 +1437,6 @@ export function DesktopWorkbench({
         onOpenBotSwitcher={(anchorRect) => onOpenBotSwitcher?.(anchorRect)}
         onLogout={() => onLogout?.()}
       />
-
-      {remoteWorkspace ? <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
-        <span className="min-w-0 flex-1 truncate" title={`${remoteWorkspace.host}:${remoteWorkspace.root}`}>SSH {remoteWorkspace.host}:{remoteWorkspace.root}</span>
-        <RemoteReconnectButton client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate} onConnected={() => { void fileTree.refreshRoot({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root }); }} />
-      </div> : null}
 
       <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
         <div

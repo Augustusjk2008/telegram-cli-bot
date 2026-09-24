@@ -36,6 +36,7 @@ type Props = {
   branchName?: string;
   hasUnreadOtherBots?: boolean;
   announcementAction?: ReactNode;
+  workspaceAction?: ReactNode;
   sidebarVisible: boolean;
   editorVisible: boolean;
   terminalVisible: boolean;
@@ -60,6 +61,7 @@ export function WorkbenchHeader({
   branchName = "",
   hasUnreadOtherBots = false,
   announcementAction,
+  workspaceAction,
   sidebarVisible,
   editorVisible,
   terminalVisible,
@@ -189,10 +191,10 @@ export function WorkbenchHeader({
             </motion.span>
           </AnimatePresence>
         </button>
-        <span className="workbench-status-chip min-w-0 max-w-[22rem] text-[var(--muted)]">
+        {workspaceAction || <span className="workbench-status-chip min-w-0 max-w-[22rem] text-[var(--muted)]">
           <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-[var(--accent-strong)]" />
           <span className="truncate">{workspaceName}</span>
-        </span>
+        </span>}
         {branchName ? (
           <span className="workbench-status-chip max-w-[14rem] font-mono text-[var(--muted)]">
             <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />

@@ -2,6 +2,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-li
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BotListScreen } from "../screens/BotListScreen";
 import { RemoteConnectionForm } from "../components/RemoteConnectionForm";
+import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
@@ -67,6 +68,9 @@ test("maps public remote config and exact wire payloads, preserving local runtim
   await client.connectRemote({ ...remote, password: "temporary" }, "remote/name");
   expect(fetch.mock.lastCall![0]).toBe("/api/bots/remote%2Fname/remote/connect");
   expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({ password: "temporary", host_key_fingerprint: "SHA256:abc" });
+  await client.disconnectRemote("remote/name");
+  expect(fetch.mock.lastCall![0]).toBe("/api/bots/remote%2Fname/remote/disconnect");
+  expect(fetch.mock.lastCall![1].method).toBe("POST");
   fetch.mockResolvedValue(ok({ bot: rawBot }));
   const created = await client.addBot({ alias: "remote", cliType: "codex", cliPath: "codex", remoteWorkspace: { connectionId: "ssh-1", root: "/srv/project" } });
   const body = JSON.parse(fetch.mock.lastCall![1].body);
@@ -95,6 +99,28 @@ test("SSH key login clears passphrase after connecting", async () => {
   await waitFor(() => expect(done).toHaveBeenCalled());
   expect(connect).toHaveBeenCalledWith(expect.objectContaining({ keyFilename: "C:/keys/id", passphrase: "passphrase" }), "remote");
   expect(screen.getByLabelText("私钥口令（可选）")).toHaveValue("");
+});
+
+test("compact SSH control shows the remote path and disconnects until re-login", async () => {
+  const client = new MockWebBotClient();
+  const disconnect = vi.spyOn(client, "disconnectRemote").mockResolvedValue();
+  const connect = vi.spyOn(client, "connectRemote").mockResolvedValue(remote);
+  const onConnected = vi.fn();
+  render(<RemoteSshMenu client={client} botAlias="remote" remote={remote} compact onConnected={onConnected} />);
+  fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
+  expect(screen.getByText("dev@linux.test:22")).toBeInTheDocument();
+  expect(screen.getByText("/home/dev")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "断开 SSH" }));
+  await waitFor(() => expect(disconnect).toHaveBeenCalledWith("remote"));
+  expect(screen.getByRole("status")).toHaveTextContent("SSH 已断开");
+  expect(screen.getByRole("button", { name: "断开 SSH" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "SSH 重新登录" }));
+  fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh" } });
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
+  expect(connect).toHaveBeenCalledWith(expect.objectContaining({ password: "fresh" }), "remote");
+  fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
+  expect(screen.getByRole("button", { name: "断开 SSH" })).toBeEnabled();
 });
 
 function TerminalHarness() {
@@ -163,7 +189,10 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
   expect(screen.getByTestId("desktop-workbench-root")).toBeInTheDocument();
   expect(screen.getByText("Remote chat")).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-root")).toHaveStyle({ gridTemplateRows: "auto minmax(0,1fr) auto" });
+  fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
   expect(screen.getByRole("button", { name: "SSH 重新登录" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
   fireEvent.click(await screen.findByRole("button", { name: "打开 README.md" }));
   await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "README.md"));
   const posixFile = await screen.findByRole("button", { name: "打开 Case\\Name.txt" });
