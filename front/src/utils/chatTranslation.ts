@@ -27,12 +27,12 @@ export function mapChatTranslation(value: unknown): ChatTranslation | null {
   };
 }
 
-export function mergeTranslation(previous: ChatMessage["translation"], next: ChatMessage["translation"]) {
+export function mergeTranslation(previous: ChatMessage["translation"], next: ChatMessage["translation"], allowRetry = false) {
   if (next === undefined) return previous;
   if (next === null && previous?.status === "completed") return previous;
   if (previous && next && previous.source_digest === next.source_digest
     && previous.target_language === next.target_language
-    && (previous.status === "completed" || (previous.status === "failed" && next.status === "pending"))) {
+    && (previous.status === "completed" || (!allowRetry && previous.status === "failed" && next.status === "pending"))) {
     return previous;
   }
   return next;
@@ -41,7 +41,7 @@ export function mergeTranslation(previous: ChatMessage["translation"], next: Cha
 export function mergeMessageTranslation(previous: ChatMessage, next: ChatMessage): Partial<ChatMessage> {
   const sameSource = previous.text === next.text;
   return {
-    translation: sameSource ? mergeTranslation(previous.translation, next.translation) : next.translation,
+    translation: sameSource ? mergeTranslation(previous.translation, next.translation, previous.role === "assistant") : next.translation,
     agentInputText: next.agentInputText === undefined && sameSource ? previous.agentInputText : next.agentInputText,
     translationView: previous.translationView ?? next.translationView,
   };

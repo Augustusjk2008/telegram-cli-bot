@@ -1341,6 +1341,7 @@ type ChatMessageRowProps = {
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
   onFileLinkClick: (href: string) => void;
   onTranslationViewChange: (id: string, view: "original" | "translated") => void;
+  onRetryAnswerTranslation: (id: string) => Promise<void>;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   onContinueFinalAnswer?: () => void;
   onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
@@ -1367,6 +1368,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onFileLinkClick,
   onCopyFinalAnswer,
   onTranslationViewChange,
+  onRetryAnswerTranslation,
   onContinueFinalAnswer,
   onToggleFavoriteAnswer,
   onReplyNativePermission,
@@ -1400,7 +1402,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
       questionCopyFeedbackTimerRef.current = null;
     }, 2000);
   };
-  const translationControl = <ChatTranslationControl item={item} onChange={(view) => onTranslationViewChange(item.id, view)} />;
+  const translationControl = <ChatTranslationControl item={item} onChange={(view) => onTranslationViewChange(item.id, view)} onRetry={() => onRetryAnswerTranslation(item.id)} />;
   const handleLoadMessageTrace = useCallback(() => {
     onLoadMessageTrace(item.id);
   }, [item.id, onLoadMessageTrace]);
@@ -1635,6 +1637,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
   handleTranslationViewChange: (id: string, view: "original" | "translated") => void;
+  handleRetryAnswerTranslation: (id: string) => Promise<void>;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   handleContinueFinalAnswer: () => void;
   handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
@@ -1656,6 +1659,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleFileLinkClick,
   handleCopyFinalAnswer,
   handleTranslationViewChange,
+  handleRetryAnswerTranslation,
   handleContinueFinalAnswer,
   handleToggleFavoriteAnswer,
   handleReplyNativePermission,
@@ -1682,6 +1686,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         onFileLinkClick={handleFileLinkClick}
         onCopyFinalAnswer={handleCopyFinalAnswer}
         onTranslationViewChange={handleTranslationViewChange}
+        onRetryAnswerTranslation={handleRetryAnswerTranslation}
         onContinueFinalAnswer={handleContinueFinalAnswer}
         onToggleFavoriteAnswer={handleToggleFavoriteAnswer}
         onReplyNativePermission={handleReplyNativePermission}
@@ -1713,6 +1718,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     handleContinueFinalAnswer,
     handleCopyFinalAnswer,
     handleTranslationViewChange,
+    handleRetryAnswerTranslation,
     handleDeleteAttachment,
     handleExecutePlan,
     handleFileLinkClick,
@@ -3155,6 +3161,20 @@ export function ChatScreen({
   const handleTranslationViewChange = useCallback((id: string, view: "original" | "translated") => {
     setItems((current) => updateMessageById(current, id, (item) => ({ ...item, translationView: view })));
   }, []);
+
+  const handleRetryAnswerTranslation = useCallback(async (id: string) => {
+    try {
+      const translation = await client.retryAnswerTranslation(botAlias, id, {
+        agentId: activeAgentId,
+        executionMode,
+      });
+      setItems((current) => updateMessageById(current, id, (item) => (
+        item.translation?.status === "failed" ? { ...item, translation } : item
+      )));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "重试翻译失败");
+    }
+  }, [client, botAlias, activeAgentId, executionMode]);
 
   const handleCopyFinalAnswer = useCallback(async (text: string) => {
     try {
@@ -5040,6 +5060,7 @@ export function ChatScreen({
             handleFileLinkClick={handleFileLinkClick}
             handleCopyFinalAnswer={handleCopyFinalAnswer}
             handleTranslationViewChange={handleTranslationViewChange}
+            handleRetryAnswerTranslation={handleRetryAnswerTranslation}
             handleContinueFinalAnswer={handleContinueFinalAnswer}
             handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
             handleReplyNativePermission={handleReplyNativePermission}

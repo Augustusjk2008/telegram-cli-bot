@@ -9,6 +9,7 @@ import type {
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
+  ChatTranslation,
   AdminUser,
   AdminUserUpdateInput,
   AccountRole,
@@ -5303,6 +5304,17 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify(remoteConnectionBody(input, Boolean(botAlias))),
     });
     return mapRemoteWorkspace(data);
+  }
+
+  async retryAnswerTranslation(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTranslation> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    appendExecutionModeParam(params, options.executionMode);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return this.requestJson<ChatTranslation>(
+      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/translation/retry${suffix}`,
+      { method: "POST", headers: this.headers() },
+    );
   }
 
   async disconnectRemote(botAlias: string): Promise<void> {

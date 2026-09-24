@@ -13,6 +13,7 @@ import type {
   AgentListResult,
   AgentScopedOptions,
   ChatMessage,
+  ChatTranslation,
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
@@ -242,6 +243,7 @@ export interface WebBotClient {
   executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult>;
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<HistorySnapshotResult>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: HistoryDeltaOptions): Promise<HistoryDeltaResult>;
+  retryAnswerTranslation(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTranslation>;
   getMessageTrace(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTraceDetails>;
   sendMessage(
     botAlias: string,

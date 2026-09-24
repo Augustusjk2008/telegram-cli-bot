@@ -127,6 +127,32 @@ def test_cancelled_translation_rejects_late_pending_write(tmp_path: Path):
     assert store.get_conversation_revision(handle.conversation_id) == revision
 
 
+def test_only_failed_answer_can_be_reopened_for_manual_retry(tmp_path: Path):
+    store = ChatStore(tmp_path)
+    handle = _begin(store)
+    store.complete_turn(handle, content="回答", completion_state="completed")
+    answer_failed = _translation("回答", "failed")
+    question_failed = _translation("原始提问", "failed")
+    assert _save(store, handle.assistant_message_id, answer_failed)
+    assert _save(store, handle.user_message_id, question_failed)
+    assert not _save(store, handle.assistant_message_id, _translation("回答", "pending"))
+    assert not _save(store, handle.user_message_id, _translation("原始提问", "pending"), retry_failed_answer=True)
+    assert _save(store, handle.assistant_message_id, _translation("回答", "pending"), retry_failed_answer=True)
+    assert _save(store, handle.assistant_message_id, _translation("回答"))
+    assert not _save(store, handle.assistant_message_id, _translation("回答", "pending"), retry_failed_answer=True)
+
+
+def test_retry_target_is_limited_to_active_session_conversation(tmp_path: Path):
+    store = ChatStore(tmp_path)
+    first = _begin(store)
+    store.complete_turn(first, content="回答", completion_state="completed")
+    scoped = dict(bot_id=1, user_id=2, agent_id="main", working_dir=str(tmp_path),
+                  session_epoch=0, conversation_id=first.conversation_id)
+    assert store.get_scoped_message(first.assistant_message_id, **scoped)["id"] == first.assistant_message_id
+    assert store.get_scoped_message(first.assistant_message_id, **{**scoped, "user_id": 3}) is None
+    assert store.get_scoped_message(first.assistant_message_id, **{**scoped, "conversation_id": "elsewhere"}) is None
+
+
 def test_untranslated_input_and_failed_translation_are_persisted(tmp_path: Path):
     store = ChatStore(tmp_path)
     handle = _begin(store, text="//help")

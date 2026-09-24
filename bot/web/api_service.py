@@ -2684,6 +2684,16 @@ def get_history_trace(
     return data
 
 
+def get_answer_translation_retry_target(
+    manager: MultiBotManager, alias: str, user_id: int, message_id: str,
+    agent_id: str = "main", execution_mode: str = "",
+) -> tuple[ChatHistoryService, dict[str, Any] | None]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    mode = _resolve_requested_execution_mode(execution_mode, profile)
+    history = _history_service_for_execution_mode(session, mode)
+    return history, history.get_scoped_message(session, message_id)
+
+
 def _require_native_history_turn(
     manager: MultiBotManager,
     alias: str,

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
 
 from bot.web.api_common import AuthContext, WebApiError, _require_capability
-from bot.web.auth_store import CAP_ADMIN_OPS, CAP_VIEW_CHAT_HISTORY
+from bot.web.auth_store import CAP_ADMIN_OPS, CAP_CHAT_SEND, CAP_VIEW_CHAT_HISTORY
 from bot.web.routes.translation_routes import register
 from bot.web.translation_config import TranslationConfigStore
 
@@ -127,3 +127,35 @@ async def test_guest_can_read_bot_translation_but_cannot_edit(tmp_path, monkeypa
     handlers, _, _ = build_bot_routes(tmp_path, monkeypatch, auth)
     response = await handlers["GET"](bot_request("GET"))
     assert json.loads(response.text)["data"]["can_edit"] is False
+
+
+@pytest.mark.asyncio
+async def test_retry_route_accepts_only_failed_answer_in_current_chat(tmp_path, monkeypatch):
+    from bot.web import api_service
+    from tests.test_guest_access import _build_manager, _build_server
+
+    server = _build_server(_build_manager(tmp_path), monkeypatch, tmp_path)
+    auth = AuthContext(user_id=1, token_used=True, is_local_admin=True, capabilities={CAP_CHAT_SEND})
+    server._with_auth = AsyncMock(return_value=auth)
+    store = TranslationConfigStore(tmp_path / "translation.json")
+    store.update({"base_url": "https://provider.test/v1", "api_key": "secret", "model": "translator", "translate_assistant_enabled": True})
+    submit = Mock(return_value=True)
+    app = web.Application()
+    register(app, server, service=SimpleNamespace(config_store=store, submit_answer=submit))
+    handler = next(route.handler for route in app.router.routes()
+                   if route.method == "POST" and route.resource.canonical.endswith("/translation/retry"))
+    message = {"role": "assistant", "state": "done", "content": "回答", "translation": {"status": "failed"}}
+    history = SimpleNamespace(update_message_translation=Mock())
+    monkeypatch.setattr(api_service, "get_answer_translation_retry_target", lambda *args, **kwargs: (history, message))
+    request = make_mocked_request("POST", "/api/bots/main/history/answer/translation/retry",
+                                  match_info={"alias": "main", "message_id": "answer"})
+    response = await handler(request)
+    assert response.status == 200
+    assert json.loads(response.text)["data"]["status"] == "pending"
+    assert submit.call_args.kwargs["retry"] is True
+    for invalid in (None, {**message, "role": "user"}, {**message, "translation": {"status": "completed"}}):
+        monkeypatch.setattr(api_service, "get_answer_translation_retry_target", lambda *args, value=invalid, **kwargs: (history, value))
+        with pytest.raises(WebApiError) as caught:
+            await handler(request)
+        assert caught.value.status == (404 if invalid is None else 409)
+    assert submit.call_count == 1

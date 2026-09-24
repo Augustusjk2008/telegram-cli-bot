@@ -364,12 +364,24 @@ class ChatHistoryService:
         source_digest: str,
         translation: dict[str, Any] | None,
         agent_input_text: str | None = None,
+        retry_failed_answer: bool = False,
     ) -> bool:
         return self.store.update_message_translation(
             message_id,
             source_digest=source_digest,
             translation=translation,
             agent_input_text=agent_input_text,
+            retry_failed_answer=retry_failed_answer,
+        )
+
+    def get_scoped_message(self, session: UserSession, message_id: str) -> dict[str, Any] | None:
+        return self.store.get_scoped_message(
+            message_id, bot_id=session.bot_id, user_id=session.user_id,
+            agent_id=session.agent_id, working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
         )
 
     async def update_message_translation_async(

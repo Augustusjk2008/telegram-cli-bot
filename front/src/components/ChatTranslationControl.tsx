@@ -1,4 +1,5 @@
-import { Languages, LoaderCircle } from "lucide-react";
+import { useState } from "react";
+import { Languages, LoaderCircle, RotateCcw } from "lucide-react";
 import type { ChatMessage } from "../services/types";
 
 const translationFailureReasons: Record<string, string> = {
@@ -20,13 +21,16 @@ const translationFailureReasons: Record<string, string> = {
   translation_error: "翻译服务发生内部错误",
 };
 
-export function ChatTranslationControl({ item, onChange }: {
+export function ChatTranslationControl({ item, onChange, onRetry }: {
   item: ChatMessage;
   onChange: (view: "original" | "translated") => void;
+  onRetry?: () => Promise<void>;
 }) {
+  const [retrying, setRetrying] = useState(false);
   const translation = item.translation;
   if (!translation) return null;
   const available = translation.status === "completed" && Boolean(translation.text?.trim());
+  const canRetry = item.role === "assistant" && translation.status === "failed" && Boolean(onRetry);
   const translated = available && item.translationView !== "original";
   const label = available
     ? translated ? "显示原文" : "显示译文"
@@ -35,22 +39,30 @@ export function ChatTranslationControl({ item, onChange }: {
     ? "翻译正在进行中"
     : translationFailureReasons[translation.error ?? ""]
       ?? (translation.status === "completed" ? "翻译服务未返回译文" : "未提供具体原因");
-  const tooltip = available ? label : `${label}：${reason}`;
+  const tooltip = canRetry ? `重试翻译：${reason}` : available ? label : `${label}：${reason}`;
   return (
-    <span title={tooltip} className={`inline-flex ${available ? "" : "cursor-not-allowed"}`}>
+    <span title={tooltip} className={`inline-flex ${available || canRetry ? "" : "cursor-not-allowed"}`}>
       <button
         type="button"
         aria-label={tooltip}
         title={tooltip}
         aria-pressed={translated}
-        disabled={!available}
-        onClick={() => onChange(translated ? "original" : "translated")}
+        disabled={(!available && !canRetry) || retrying}
+        onClick={() => {
+          if (canRetry && onRetry) {
+            setRetrying(true);
+            void onRetry().finally(() => setRetrying(false));
+          } else {
+            onChange(translated ? "original" : "translated");
+          }
+        }}
         className={`inline-flex h-6 w-6 items-center justify-center rounded-md border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 ${translated
           ? "border-[var(--accent-outline)] bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)]"
           : "border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}`}
       >
-        {translation.status === "pending"
+        {translation.status === "pending" || retrying
           ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+          : canRetry ? <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
           : <Languages aria-hidden="true" className="h-3.5 w-3.5" />}
       </button>
     </span>

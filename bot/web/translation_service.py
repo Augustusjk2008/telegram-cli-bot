@@ -198,7 +198,7 @@ class TranslationService:
 
     def submit_answer(
         self, *, text: str, config: TranslationConfig, message_id: str,
-        update: TranslationUpdate,
+        update: TranslationUpdate, retry: bool = False,
     ) -> bool:
         if (
             self._closed or not config.translate_assistant_enabled or not config.configured
@@ -207,7 +207,7 @@ class TranslationService:
         ):
             return False
         key = (str(message_id), source_digest(text))
-        if key in self._answer_tasks or key in self._recent_answers:
+        if key in self._answer_tasks or (not retry and key in self._recent_answers):
             return False
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._run_answer(

@@ -1878,6 +1878,7 @@ class ChatStore:
         source_digest: str,
         translation: dict[str, Any] | None,
         agent_input_text: str | None = None,
+        retry_failed_answer: bool = False,
     ) -> bool:
         if translation is not None:
             if (
@@ -1900,7 +1901,7 @@ class ChatStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
-                SELECT m.conversation_id, m.content, m.translation_json, m.agent_input_text
+                SELECT m.conversation_id, m.role, m.content, m.translation_json, m.agent_input_text
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
                 WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
@@ -1914,7 +1915,9 @@ class ChatStore:
                 translation = previous or None
             if previous.get("status") == "completed" and (translation or {}).get("status") != "completed":
                 return False
-            if previous.get("status") == "failed" and (translation or {}).get("status") == "pending":
+            if previous.get("status") == "failed" and (translation or {}).get("status") == "pending" and not (
+                retry_failed_answer and row["role"] == "assistant"
+            ):
                 return False
             input_text = row["agent_input_text"] if agent_input_text is None else agent_input_text
             if (previous or None) == translation and input_text == row["agent_input_text"]:
@@ -2945,6 +2948,34 @@ class ChatStore:
                 if row is None:
                     raise KeyError(message_id)
                 return self._messages_from_rows(conn, [row])[0]
+
+    def get_scoped_message(
+        self, message_id: str, *, bot_id: int, user_id: int, agent_id: str,
+        working_dir: str, session_epoch: int, conversation_id: str | None,
+        native_provider: str | None = None, native_provider_exclude: str | None = None,
+    ) -> dict[str, Any] | None:
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with closing(conn):
+            with conn:
+                scoped_id = self._get_scoped_conversation_id(
+                    conn, conversation_id=conversation_id, bot_id=bot_id, user_id=user_id,
+                    agent_id=agent_id, working_dir=working_dir, session_epoch=session_epoch,
+                    native_provider=native_provider, native_provider_exclude=native_provider_exclude,
+                )
+                if scoped_id is None:
+                    return None
+                row = conn.execute(
+                    "SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?",
+                    (message_id, scoped_id),
+                ).fetchone()
+                if row is None:
+                    return None
+        try:
+            return self.get_message(message_id)
+        except KeyError:
+            return None
 
     def list_messages(self, conversation_id: str, *, limit: int | None = None) -> list[dict[str, Any]]:
         conn = self._connect(create=False)

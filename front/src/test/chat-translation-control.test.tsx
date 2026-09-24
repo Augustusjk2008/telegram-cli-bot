@@ -22,3 +22,18 @@ test.each([
   fireEvent.click(button);
   expect(onChange).not.toHaveBeenCalled();
 });
+
+test("failed answers offer retry while failed questions remain read-only", async () => {
+  const translation = { status: "failed" as const, target_language: "en", source_digest: "digest", error: "timeout" };
+  const onRetry = vi.fn(async () => {});
+  const onChange = vi.fn();
+  const item: ChatMessage = { id: "answer", role: "assistant", text: "Original", createdAt: "2026-09-17", translation };
+  const view = render(<ChatTranslationControl item={item} onChange={onChange} onRetry={onRetry} />);
+  const retry = screen.getByRole("button", { name: "重试翻译：翻译请求超时" });
+  expect(retry).toBeEnabled();
+  fireEvent.click(retry);
+  expect(onRetry).toHaveBeenCalledOnce();
+  expect(onChange).not.toHaveBeenCalled();
+  view.rerender(<ChatTranslationControl item={{ ...item, role: "user" }} onChange={onChange} onRetry={onRetry} />);
+  expect(screen.getByRole("button", { name: "翻译未完成，显示原文：翻译请求超时" })).toBeDisabled();
+});

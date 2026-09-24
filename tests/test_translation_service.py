@@ -281,6 +281,7 @@ async def test_answer_submission_is_nonblocking_bounded_and_deduplicated(tmp_pat
     assert updates == []
     service.client.post_chat_completion.assert_not_awaited()
     assert service.submit_answer(**args) is False
+    assert service.submit_answer(**args, retry=True) is False
     assert service.submit_answer(**{**args, "message_id": "answer-2"}) is True
     assert service.submit_answer(**{**args, "message_id": "answer-3"}) is False
     await asyncio.wait_for(entered.wait(), 1)
@@ -293,6 +294,8 @@ async def test_answer_submission_is_nonblocking_bounded_and_deduplicated(tmp_pat
     assert service.client.post_chat_completion.call_args.kwargs["body"]["messages"][0]["content"] == CONFIG.assistant_prompt
     assert not service._answer_tasks
     assert service.submit_answer(**args) is False
+    assert service.submit_answer(**args, retry=True) is True
+    await asyncio.gather(*service._answer_tasks.values())
     assert service.submit_answer(**{**args, "text": "修改后的回答"}) is True
     await asyncio.gather(*service._answer_tasks.values())
     await service.close()

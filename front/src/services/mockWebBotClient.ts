@@ -4,6 +4,7 @@ import type {
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
+  ChatTranslation,
   AdminUser,
   AdminUserUpdateInput,
   CreateAnnouncementInput,
@@ -3985,6 +3986,16 @@ export class MockWebBotClient implements WebBotClient {
       reset: false,
       reason: "",
     };
+  }
+
+  async retryAnswerTranslation(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTranslation> {
+    const item = this.getAgentMessages(botAlias, options.agentId || "main").find((message) => message.id === messageId);
+    if (item?.role !== "assistant" || item.translation?.status !== "failed") {
+      throw new WebApiClientError("仅可重试翻译失败的最终回答", { status: 409, code: "translation_not_failed" });
+    }
+    const pending: ChatTranslation = { ...item.translation, status: "pending", text: undefined, error: undefined };
+    item.translation = pending;
+    return pending;
   }
 
   async getMessageTrace(_botAlias: string, _messageId: string): Promise<ChatTraceDetails> {

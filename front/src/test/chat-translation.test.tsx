@@ -163,6 +163,18 @@ test("history translation merges keep selection and current streaming text, reje
   expect(replaced[0].translation).toBeNull();
 });
 
+test("history accepts a retried answer pending state but ignores late question pending state", () => {
+  const failed = { ...translation, status: "failed" as const, text: undefined };
+  const pending = { ...translation, status: "pending" as const, text: undefined };
+  const answer: ChatMessage = { ...original, translation: failed };
+  const question: ChatMessage = { ...original, id: "question", role: "user", translation: failed };
+  const merged = mergeMessagesPreservingClientState([answer, question], [
+    { ...answer, translation: pending }, { ...question, translation: pending },
+  ]);
+  expect(merged[0].translation?.status).toBe("pending");
+  expect(merged[1].translation?.status).toBe("failed");
+});
+
 test("translation delta updates the prior answer during a new stream without resetting its version choice", async () => {
   let finish!: (value: ChatMessage) => void;
   const pending = { ...original, translation: { ...translation, status: "pending" as const, text: undefined } };
