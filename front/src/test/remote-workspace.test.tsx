@@ -184,7 +184,11 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   const read = vi.spyOn(client, "readFileFull").mockResolvedValue({ mode: "cat", content: "remote text", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" });
   const create = vi.spyOn(client, "createTextFile").mockResolvedValue({ path: "/home/dev/new.txt", fileSizeBytes: 0, lastModifiedNs: "sha256:new" });
   const resolve = vi.spyOn(client, "resolveFileOpenTarget");
-  const git = vi.spyOn(client, "getGitOverview");
+  const git = vi.spyOn(client, "getGitOverview").mockResolvedValue({
+    repoFound: true, canInit: false, workingDir: remote.root, repoPath: remote.root, repoName: "dev",
+    currentBranch: "main", isClean: true, aheadCount: 0, behindCount: 0, changedFiles: [], recentCommits: [],
+  });
+  const decorations = vi.spyOn(client, "getGitTreeStatus");
   const sync = vi.spyOn(client, "syncWorkspaceDocuments");
   render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
   expect(screen.getByTestId("desktop-workbench-root")).toBeInTheDocument();
@@ -208,6 +212,12 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   fireEvent.click(screen.getByRole("button", { name: "创建" }));
   await waitFor(() => expect(create).toHaveBeenCalledWith("remote", "new.txt", "", remote.root));
   expect(await screen.findByRole("tab", { name: "new.txt" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Git" }));
+  expect(await screen.findByRole("heading", { name: "最近提交" })).toBeInTheDocument();
+  expect(git).toHaveBeenCalledWith("remote");
+  fireEvent.click(screen.getByRole("button", { name: "文件" }));
+  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
+  expect(decorations).not.toHaveBeenCalled();
 });
 
 test("desktop tree preserves a trailing backslash in the remote root", async () => {

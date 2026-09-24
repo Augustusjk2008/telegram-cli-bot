@@ -505,7 +505,7 @@ export function App() {
     if (canUseTerminal) {
       nextTabs.push("terminal");
     }
-    if (canUseGit && !remoteWorkspace) {
+    if (canUseGit) {
       nextTabs.push("git");
     }
     if (canViewPlugins && !remoteWorkspace) {
@@ -1131,13 +1131,14 @@ export function App() {
         </Suspense>
       </div>
     );
-  } else if (currentTab === "git" && canUseGit && !remoteWorkspace) {
+  } else if (currentTab === "git" && canUseGit) {
     activeScreen = (
       <div className="absolute inset-0">
         <GitScreen
           key={`git-${currentBot}`}
           botAlias={currentBot}
           client={client}
+          remote={Boolean(remoteWorkspace)}
           sessionCapabilities={session?.capabilities}
         />
       </div>
@@ -1300,7 +1301,7 @@ export function App() {
               onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
               chatEnterToSend={chatEnterToSend}
               onChatEnterToSendChange={handleChatEnterToSendChange}
-              sessionCapabilities={remoteWorkspace ? [] : session?.capabilities}
+              sessionCapabilities={session?.capabilities}
               viewMode={viewMode}
               hasUnreadOtherBots={hasUnreadOtherBots}
               announcementAction={announcementButton}

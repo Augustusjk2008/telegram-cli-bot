@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { GitScreen } from "../screens/GitScreen";
+import { WebApiClientError } from "../services/types";
 import type {
   GitActionResult,
   GitBranchList,
@@ -152,6 +153,7 @@ function createGitScreenClient() {
     stageGitPaths: vi.fn(async () => createActionResult()),
     unstageGitPaths: vi.fn(async () => createActionResult()),
     discardGitPaths: vi.fn(async () => createActionResult()),
+    commitGitChanges: vi.fn(async () => createActionResult()),
   };
   return {
     client: client as unknown as WebBotClient,
@@ -160,6 +162,92 @@ function createGitScreenClient() {
     getGitCommitGraph,
   };
 }
+
+test("remote Git supports overview, all three diffs, individual staging and manual commit without local-only requests", async () => {
+  const { client, getGitOverview, getGitDiff } = createGitScreenClient();
+  const recentCommit = { hash: "abc1234", shortHash: "abc1234", subject: "Remote commit", authorName: "Dev", authoredAt: "2026-09-24" };
+  getGitOverview.mockResolvedValue({ ...cloneOverview(), recentCommits: [recentCommit] });
+  const committed = { ...cloneOverview(), changedFiles: [], isClean: true, recentCommits: [{ ...recentCommit, hash: "def5678", shortHash: "def5678", subject: "Manual change" }] };
+  vi.mocked(client.commitGitChanges).mockResolvedValue({ message: "已提交", overview: committed });
+  render(<GitScreen botAlias="remote" client={client} remote />);
+
+  expect(await screen.findByText("Remote commit")).toBeInTheDocument();
+  expect(screen.getByText("main")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();
+  for (const [path, staged] of [["docs/same.ts", true], ["src/deep/same.ts", false], ["new/folder/file.txt", false]] as const) {
+    fireEvent.click(screen.getByRole("button", { name: `打开 diff ${path}` }));
+    await waitFor(() => expect(getGitDiff).toHaveBeenLastCalledWith("remote", path, staged));
+    expect(await screen.findByTestId("git-diff-content")).toHaveTextContent("new line");
+  }
+  for (const path of ["src/deep/same.ts", "new/folder/file.txt"]) {
+    fireEvent.click(screen.getByRole("button", { name: `暂存 ${path}` }));
+    await waitFor(() => expect(client.stageGitPaths).toHaveBeenLastCalledWith("remote", [path]));
+    await waitFor(() => expect(screen.getByRole("button", { name: `暂存 ${path}` })).toBeEnabled());
+  }
+  fireEvent.click(screen.getByRole("button", { name: "取消暂存 docs/same.ts" }));
+  await waitFor(() => expect(client.unstageGitPaths).toHaveBeenCalledWith("remote", ["docs/same.ts"]));
+  fireEvent.change(screen.getByRole("textbox", { name: "commit message" }), { target: { value: "Manual change" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "提交更改" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "提交更改" }));
+  expect(await screen.findByText("Manual change")).toBeInTheDocument();
+  expect(client.commitGitChanges).toHaveBeenCalledExactlyOnceWith("remote", "Manual change");
+  expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("");
+  expect(screen.getByText("工作区干净")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "刷新 Git 状态" }));
+  await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(2));
+  await screen.findByText("Remote commit");
+
+  expect(screen.queryByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|切换|Fetch|Pull|Push|智能提交|生成|重置/ })).not.toBeInTheDocument();
+  expect(screen.queryByTestId("git-version-tree-panel")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("git-identity-panel")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("git-commit-cli-panel")).not.toBeInTheDocument();
+  for (const request of [client.getGitCommitGraph, client.getGitIdentityConfig, client.getActiveGitSmartCommit, client.listGitBranches, client.listGitStashes, client.getGitCommitMessageConfig]) {
+    expect(request).not.toHaveBeenCalled();
+  }
+});
+
+test("remote missing Git shows installation and SSH PATH guidance and retries only overview", async () => {
+  const { client, getGitOverview } = createGitScreenClient();
+  getGitOverview.mockRejectedValueOnce(new WebApiClientError("Git is unavailable", { status: 503, code: "remote_git_not_found" }));
+  render(<GitScreen botAlias="remote" client={client} remote embedded />);
+  const guidance = await screen.findByRole("alert");
+  expect(guidance).toHaveTextContent("非交互式 PATH");
+  expect(within(guidance).getByRole("link", { name: "Linux 官方安装指南" })).toHaveAttribute("href", "https://git-scm.com/install/linux");
+  expect(within(guidance).getByRole("link", { name: "Windows 官方安装指南" })).toHaveAttribute("href", "https://git-scm.com/install/windows");
+  fireEvent.click(within(guidance).getByRole("button", { name: "重试" }));
+  await screen.findByTestId("git-changes-panel");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(getGitOverview).toHaveBeenCalledTimes(2);
+  expect(client.getGitIdentityConfig).not.toHaveBeenCalled();
+});
+
+test("remote SSH errors remain distinct from missing Git", async () => {
+  const { client, getGitOverview } = createGitScreenClient();
+  getGitOverview.mockRejectedValue(new WebApiClientError("SSH authentication failed", { status: 401, code: "remote_auth_failed" }));
+  render(<GitScreen botAlias="remote" client={client} remote />);
+  expect(await screen.findByText("SSH authentication failed")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /官方安装指南/ })).not.toBeInTheDocument();
+});
+
+test("remote non-repository requires an existing repository root and never offers init", async () => {
+  const { client, getGitOverview } = createGitScreenClient();
+  getGitOverview.mockResolvedValue({ ...cloneOverview(), repoFound: false, canInit: true });
+  render(<GitScreen botAlias="remote" client={client} remote />);
+  expect(await screen.findByText("请选择已有 Git 仓库的根目录作为远程工作区。")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "初始化 Git 仓库" })).not.toBeInTheDocument();
+});
+
+test("a failed remote commit preserves the draft and does not retry the mutation", async () => {
+  const { client } = createGitScreenClient();
+  vi.mocked(client.commitGitChanges).mockRejectedValue(new Error("SSH command timed out"));
+  render(<GitScreen botAlias="remote" client={client} remote />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "commit message" }), { target: { value: "Keep this draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "提交更改" }));
+  expect(await screen.findByText("SSH command timed out")).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("Keep this draft");
+  expect(client.commitGitChanges).toHaveBeenCalledOnce();
+  expect(client.getGitOverview).toHaveBeenCalledOnce();
+});
 
 test("allows git users to manage commit message cli config", async () => {
   const { client } = createGitScreenClient();

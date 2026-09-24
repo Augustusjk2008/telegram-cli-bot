@@ -10,7 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_common import AuthContext, WebApiError
-from bot.web.auth_store import CAP_MANAGE_BOTS, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
+from bot.web.auth_store import CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
 from bot.web.routes import remote_routes
 from bot.web.server import WebApiServer
 
@@ -70,6 +70,99 @@ async def test_remote_files_use_ssh_root_and_enforce_file_permissions(tmp_path, 
         response = await client.get("/api/bots/main/workspace/search?query=local-only")
         assert response.status == 409
         assert (await response.json())["error"]["code"] == "remote_feature_unavailable"
+
+
+def _forbid_local_git(server, monkeypatch):
+    for name in dir(server):
+        if name.startswith(("get_git_", "post_git_", "put_git_", "patch_git_")):
+            monkeypatch.setattr(server, name, AsyncMock(side_effect=AssertionError("remote request reached local Git")))
+    monkeypatch.setattr("bot.web.git_service._run_git", Mock(side_effect=AssertionError("local Git executed")))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,suffix,body,operation,args,kwargs", [
+    ("GET", "git", None, "overview", (), {}),
+    ("GET", "git/diff?path=a%20b.txt&staged=true", None, "diff", ("a b.txt",), {"staged": True}),
+    ("POST", "git/stage", {"paths": ["a b.txt"]}, "stage", (["a b.txt"],), {}),
+    ("POST", "git/unstage", {"paths": ["a b.txt"]}, "unstage", (["a b.txt"],), {}),
+    ("POST", "git/commit", {"message": "remote commit"}, "commit", ("remote commit",), {}),
+])
+async def test_remote_git_allowlist_permissions_and_local_isolation(
+    tmp_path, monkeypatch, method, suffix, body, operation, args, kwargs,
+):
+    server, auth = _server(tmp_path, monkeypatch)
+    _forbid_local_git(server, monkeypatch)
+    local = Path(server.manager.main_profile.working_dir)
+    before = {path.relative_to(local): path.read_bytes() for path in local.rglob("*") if path.is_file()}
+    service, connection, git = Mock(), Mock(), Mock()
+    service.get.return_value = connection
+    payload = {"path": "a b.txt", "diff": "remote diff", "staged": True, "truncated": False} if operation == "diff" else {
+        "repo_found": True, "working_dir": CONFIG["root"],
+    }
+    messages = {"stage": "已暂存所选文件", "unstage": "已取消暂存所选文件", "commit": "已创建提交"}
+    expected = {"message": messages[operation], "overview": payload} if operation in messages else payload
+    getattr(git, operation).return_value = payload
+    factory = Mock(return_value=git)
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    monkeypatch.setattr(remote_routes, "RemoteGitService", factory)
+    async with TestClient(TestServer(server._build_app())) as client:
+        url = f"/api/bots/MAIN/{suffix}"
+        response = await client.request(method, url, json=body)
+        assert response.status == 403
+        service.get.assert_not_called()
+        auth.capabilities.add(CAP_GIT_OPS)
+        # Git access does not require file-tree permission.
+        auth.capabilities.remove(CAP_VIEW_FILE_TREE)
+        response = await client.request(method, url, json=body)
+        assert response.status == 200, await response.text()
+        assert (await response.json())["data"] == expected
+        factory.assert_called_once_with(connection, CONFIG["root"])
+        getattr(git, operation).assert_called_once_with(*args, **kwargs)
+        monkeypatch.setattr(server, "_can_operate_bot", lambda auth, alias: False)
+        response = await client.request(method, url, json=body)
+        assert response.status == 403
+        assert getattr(git, operation).call_count == 1
+    assert {path.relative_to(local): path.read_bytes() for path in local.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.asyncio
+async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_GIT_OPS)
+    _forbid_local_git(server, monkeypatch)
+    service = Mock()
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    app = server._build_app()
+    allowed = {("GET", "git"), ("GET", "git/diff"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
+    routes = [(route.method, route.resource.canonical) for route in app.router.routes()
+              if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]
+    async with TestClient(TestServer(app)) as client:
+        for method, path in routes:
+            suffix = path.removeprefix("/api/bots/{alias}/")
+            if (method, suffix) in allowed:
+                continue
+            url = path.replace("{alias}", "main").replace("{job_id}", "test-job")
+            response = await client.request(method, url, json={})
+            assert response.status == 409, (method, path, await response.text())
+            assert (await response.json())["error"]["code"] == "remote_feature_unavailable"
+        auth.capabilities.remove(CAP_GIT_OPS)
+        response = await client.post("/api/bots/main/git/init", json={})
+        assert response.status == 403
+    service.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(409, "remote_git_not_found"), (401, "remote_auth_failed"), (502, "remote_connection_failed")])
+async def test_remote_git_preserves_error_codes(tmp_path, monkeypatch, status, code):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_GIT_OPS)
+    service = Mock()
+    service.get.side_effect = remote_routes.RemoteWorkspaceError(status, code, "remote failure")
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get("/api/bots/main/git")
+        assert response.status == status
+        assert (await response.json())["error"]["code"] == code
 
 
 @pytest.mark.asyncio

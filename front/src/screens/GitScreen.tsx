@@ -30,6 +30,7 @@ import { TouchHint } from "../components/TouchHint";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { WebApiClientError } from "../services/types";
 import type {
   GitBranchList,
   GitChangedFile,
@@ -52,6 +53,7 @@ type Props = {
   botAlias: string;
   client?: WebBotClient;
   embedded?: boolean;
+  remote?: boolean;
   onOpenDiff?: (path: string, staged: boolean) => void | Promise<void>;
   onOverviewChange?: (overview: GitOverview | null) => void;
   sessionCapabilities?: string[];
@@ -431,6 +433,7 @@ export function GitScreen({
   botAlias,
   client = new MockWebBotClient(),
   embedded = false,
+  remote = false,
   onOpenDiff,
   onOverviewChange,
   sessionCapabilities = [],
@@ -438,6 +441,7 @@ export function GitScreen({
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [remoteGitMissing, setRemoteGitMissing] = useState(false);
   const [notice, setNotice] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -504,11 +508,13 @@ export function GitScreen({
   async function loadOverview() {
     setLoading(true);
     setError("");
+    setRemoteGitMissing(false);
     try {
       const next = await client.getGitOverview(botAlias);
       syncOverview(next);
     } catch (err) {
       syncOverview(null);
+      setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
       setError(err instanceof Error ? err.message : "加载 Git 状态失败");
     } finally {
       setLoading(false);
@@ -547,6 +553,7 @@ export function GitScreen({
 
   async function refreshGitWorkspace(options: { graph?: boolean } = {}) {
     await refreshOverviewQuietly();
+    if (remote) return;
     await loadBranches();
     if (options.graph !== false) {
       await loadGitGraph({ scope: graphScope });
@@ -555,17 +562,17 @@ export function GitScreen({
 
   useEffect(() => {
     void loadOverview();
-    void loadIdentityConfig("global");
-  }, [botAlias, client]);
+    if (!remote) void loadIdentityConfig("global");
+  }, [botAlias, client, remote]);
 
   useEffect(() => {
-    if (overview?.repoFound) {
+    if (!remote && overview?.repoFound) {
       void loadGitGraph({ scope: graphScope });
     } else {
       setGraphPayload(null);
       setSelectedGraphHash("");
     }
-  }, [botAlias, client, overview?.repoFound, graphScope]);
+  }, [botAlias, client, overview?.repoFound, graphScope, remote]);
 
   async function applySmartCommitJob(job: GitSmartCommitJob, options?: { refreshOverview?: boolean }) {
     setSmartCommitJob(job);
@@ -606,6 +613,7 @@ export function GitScreen({
   useEffect(() => {
     let cancelled = false;
     setSmartCommitJob(null);
+    if (remote) return;
     async function restoreSmartCommit() {
       try {
         const job = await client.getActiveGitSmartCommit(botAlias);
@@ -624,10 +632,10 @@ export function GitScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client]);
+  }, [botAlias, client, remote]);
 
   useEffect(() => {
-    if (overview?.repoFound) {
+    if (!remote && overview?.repoFound) {
       void loadBranches();
       void loadStashes();
     } else {
@@ -637,10 +645,10 @@ export function GitScreen({
       setSelectedDiff(null);
       setDiffError("");
     }
-  }, [botAlias, client, overview?.repoFound]);
+  }, [botAlias, client, overview?.repoFound, remote]);
 
   useEffect(() => {
-    if (!smartCommitJob?.jobId || !isSmartCommitRunning) {
+    if (remote || !smartCommitJob?.jobId || !isSmartCommitRunning) {
       return;
     }
     let cancelled = false;
@@ -663,7 +671,7 @@ export function GitScreen({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [botAlias, client, isSmartCommitRunning, smartCommitJob]);
+  }, [botAlias, client, isSmartCommitRunning, smartCommitJob, remote]);
 
   function applyIdentityDraft(config: GitIdentityConfig, scope: GitIdentityScope) {
     const nextScope = scope === "local" && !config.repoFound ? "global" : scope;
@@ -700,11 +708,12 @@ export function GitScreen({
   ) {
     setActionLoading(key);
     setError("");
+    setRemoteGitMissing(false);
     setNotice("");
     try {
       const result = await fn();
       syncOverview(result.overview);
-      if (options.refreshWorkspace) {
+      if (!remote && options.refreshWorkspace) {
         await loadBranches();
         await loadGitGraph({ scope: graphScope });
       }
@@ -713,6 +722,7 @@ export function GitScreen({
         setCommitMessage("");
       }
     } catch (err) {
+      setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
       setError(err instanceof Error ? err.message : "Git 操作失败");
     } finally {
       setActionLoading("");
@@ -870,6 +880,7 @@ export function GitScreen({
       try {
         await onOpenDiff(path, staged);
       } catch (err) {
+        setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
         setError(err instanceof Error ? err.message : "打开 diff 失败");
       }
       return;
@@ -882,6 +893,7 @@ export function GitScreen({
       setSelectedDiff({ ...diff, label: displayGitPath(diff.path || path) });
     } catch (err) {
       setSelectedDiff(null);
+      setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
       setDiffError(err instanceof Error ? err.message : "加载 diff 失败");
     } finally {
       setDiffLoadingPath("");
@@ -1004,7 +1016,7 @@ export function GitScreen({
               <Minus className="h-3 w-3" />
             </button>
           ) : null}
-          <button
+          {!remote ? <button
             type="button"
             aria-label={`丢弃 ${item.path}`}
             title={`丢弃 ${item.path}`}
@@ -1018,11 +1030,11 @@ export function GitScreen({
             className={iconButtonClass()}
           >
             <Trash2 className="h-3 w-3" />
-          </button>
+          </button> : null}
         </div>
       </div>
     );
-  }, [botAlias, client, diffLoadingPath, mutationBusy]);
+  }, [botAlias, client, diffLoadingPath, mutationBusy, remote]);
 
   return (
     <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
@@ -1066,6 +1078,20 @@ export function GitScreen({
               {error}
             </div>
           ) : null}
+          {remote && remoteGitMissing ? (
+            <section role="alert" className={sectionClass()}>
+              <div className={sectionBodyClass("space-y-2 text-sm")}>
+                <h2 className="font-semibold">远程 Git 不可用</h2>
+                <p>请在远程主机安装 Git，并确保 SSH 账号的非交互式 PATH 中可以运行 git --version。交互式终端可用并不代表 SSH 命令可用。</p>
+                <div className="flex flex-wrap gap-3">
+                  <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/linux" target="_blank" rel="noreferrer">Linux 官方安装指南</a>
+                  <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/windows" target="_blank" rel="noreferrer">Windows 官方安装指南</a>
+                </div>
+                <p>安装或更新 PATH 后，可重新连接 SSH，再重试检查。</p>
+                <button type="button" onClick={() => void loadOverview()} disabled={loading} className={buttonClass()}>重试</button>
+              </div>
+            </section>
+          ) : null}
           {notice ? (
             <div className="rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)] shadow-[var(--shadow-surface)]">
               {notice}
@@ -1078,7 +1104,7 @@ export function GitScreen({
                 <h2 className="text-lg font-semibold">当前目录不在 Git 仓库中</h2>
                 <p className="break-all text-sm text-[var(--muted)]">{overview.workingDir}</p>
               </div>
-              <button
+              {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>请选择已有 Git 仓库的根目录作为远程工作区。</p> : <button
                 type="button"
                 onClick={async () => {
                   setActionLoading("init");
@@ -1097,7 +1123,7 @@ export function GitScreen({
                 className={clsx("ml-3 mt-4", buttonClass("primary"))}
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
-              </button>
+              </button>}
             </section>
           ) : null}
 
@@ -1232,18 +1258,19 @@ export function GitScreen({
                       {overview.isClean ? "工作区干净" : "存在改动"}
                     </StateBadge>
                   </div>
-                  <div className={sectionBodyClass("grid grid-cols-2 gap-2 text-xs")}>
+                  <div className={sectionBodyClass(clsx("grid gap-2 text-xs", !remote && "grid-cols-2"))}>
                     <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
                       <div className="text-[var(--muted)]">当前分支</div>
                       <div className="mt-1 truncate font-medium">{overview.currentBranch || "-"}</div>
                     </div>
-                    <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
+                    {!remote ? <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
                       <div className="text-[var(--muted)]">Ahead / Behind</div>
                       <div className="mt-1 font-medium">{overview.aheadCount} / {overview.behindCount}</div>
-                    </div>
+                    </div> : null}
                   </div>
                 </section>
 
+                {!remote ? <>
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">分支</h2>
@@ -1418,10 +1445,11 @@ export function GitScreen({
                   )}
                 </section>
 
+                </> : null}
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">提交更改</h2>
-                    <button
+                    {!remote ? <button
                       type="button"
                       aria-label="生成 commit message"
                       title="生成 commit message"
@@ -1435,7 +1463,7 @@ export function GitScreen({
                         <Sparkles className="h-3.5 w-3.5" />
                       )}
                       生成
-                    </button>
+                    </button> : null}
                   </div>
                   <div className={sectionBodyClass()}>
                     <textarea
@@ -1448,7 +1476,7 @@ export function GitScreen({
                       className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
                   </div>
-                  {smartCommitJob ? (
+                  {!remote && smartCommitJob ? (
                     <div className={sectionBodyClass("mx-3 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-xs")} data-testid="git-smart-commit-status">
                       <div className="font-medium text-[var(--text)]">{gitSmartCommitStatusText(smartCommitJob, overview)}</div>
                       {smartCommitJob.message && smartCommitJob.status !== "succeeded" ? (
@@ -1460,6 +1488,7 @@ export function GitScreen({
                     </div>
                   ) : null}
                   <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                    {!remote ? <>
                     <button
                       type="button"
                       onClick={() => void runAction("stage-all", async () => {
@@ -1489,16 +1518,17 @@ export function GitScreen({
                       <Trash2 className="h-3.5 w-3.5" />
                       丢弃全部
                     </button>
+                    </> : null}
                     <button
                       type="button"
                       onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage))}
-                      disabled={mutationBusy || overview.isClean}
+                      disabled={mutationBusy || overview.isClean || (remote && (!groups.staged.length || !commitMessage.trim()))}
                       className={buttonClass("primary")}
                     >
                       <SendHorizontal className="h-3.5 w-3.5" />
                       {actionLoading === "commit" ? "提交中..." : "提交更改"}
                     </button>
-                    <button
+                    {!remote ? <button
                       type="button"
                       onClick={() => void startSmartCommit()}
                       disabled={mutationBusy || overview.isClean}
@@ -1510,11 +1540,23 @@ export function GitScreen({
                         <Sparkles className="h-3.5 w-3.5" />
                       )}
                       智能提交
-                    </button>
+                    </button> : null}
                   </div>
                 </section>
 
-                <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
+                {remote ? (
+                  <section className={sectionClass()}>
+                    <div className={sectionHeaderClass()}><h2 className="text-sm font-semibold">最近提交</h2></div>
+                    <div className={sectionBodyClass(listClass())}>
+                      {overview.recentCommits.length === 0 ? <div className={emptyStateClass()}>暂无提交</div> : overview.recentCommits.map((commit) => (
+                        <div key={commit.hash} className={listRowClass("block text-xs")}>
+                          <div className="break-words font-medium">{commit.subject}</div>
+                          <div className="mt-1 break-words text-[var(--muted)]">{commit.shortHash} · {commit.authorName} · {commit.authoredAt}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass("flex-wrap")}>
                     <div>
                       <h2 className="text-sm font-semibold">提交图</h2>
@@ -1661,12 +1703,12 @@ export function GitScreen({
                       ) : null}
                     </div>
                   ) : null}
-                </section>
+                </section>}
               </div>
             </div>
           ) : null}
 
-          {!loading ? (
+          {!loading && !remote ? (
             <div className={sectionStackClass()}>
               <section
                 data-testid="git-identity-panel"

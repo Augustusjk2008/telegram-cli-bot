@@ -315,6 +315,36 @@ test("guest session exposes browsing but withholds member and admin entry points
   expect(screen.queryByRole("button", { name: "智能体管理" })).not.toBeInTheDocument();
 });
 
+test("mobile remote workspace exposes Files and Git with the remote Git request boundary", async () => {
+  localStorage.setItem("web-view-mode", "mobile");
+  const user = userEvent.setup();
+  const remoteWorkspace = { connectionId: "ssh-1", host: "linux.test", port: 22, username: "dev", root: "/srv/project", hostKeyFingerprint: "SHA256:test" };
+  const listBots = MockWebBotClient.prototype.listBots;
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockImplementation(async function (this: MockWebBotClient) {
+    return (await listBots.call(this)).map((bot) => ({ ...bot, remoteWorkspace }));
+  });
+  const getBotOverview = MockWebBotClient.prototype.getBotOverview;
+  vi.spyOn(MockWebBotClient.prototype, "getBotOverview").mockImplementation(async function (this: MockWebBotClient, alias) {
+    return { ...await getBotOverview.call(this, alias), remoteWorkspace };
+  });
+  const git = vi.spyOn(MockWebBotClient.prototype, "getGitOverview");
+  const graph = vi.spyOn(MockWebBotClient.prototype, "getGitCommitGraph");
+  render(<App />);
+  await user.type(screen.getByLabelText("访问口令"), "member");
+  await user.type(screen.getByLabelText("密码"), "password");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  const closeAnnouncement = screen.queryByRole("button", { name: "关闭公告" });
+  if (closeAnnouncement) await user.click(closeAnnouncement);
+  await screen.findByRole("button", { name: "SSH 连接" });
+  expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Git" }));
+  expect(await screen.findByRole("heading", { name: "最近提交" })).toBeInTheDocument();
+  expect(git).toHaveBeenCalledWith("main");
+  expect(graph).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "文件" }));
+  expect(await screen.findByRole("button", { name: "Home" })).toBeInTheDocument();
+});
+
 test("without unsafe CLI permission, create form disables bypass and submits false", async () => {
   const user = userEvent.setup();
   const originalLogin = MockWebBotClient.prototype.login;

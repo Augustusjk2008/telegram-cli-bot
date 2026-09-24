@@ -9,13 +9,23 @@ from typing import Any
 from aiohttp import web
 
 from bot.platform.terminal import PtyWrapper
+from bot.remote_workspace.git_service import RemoteGitService
 from bot.remote_workspace.transport import RemoteWorkspaceError, get_remote_workspace_service, join_remote_path
 from bot.remote_workspace.tools import resolve_remote_directory
 from bot.web.api_common import WebApiError, _require_capability, get_profile_or_raise
 from bot.web.auth_store import (
-    CAP_MANAGE_BOTS, CAP_MUTATE_BROWSE_STATE, CAP_READ_FILE_CONTENT,
+    CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_MUTATE_BROWSE_STATE, CAP_READ_FILE_CONTENT,
     CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES,
 )
+
+
+_REMOTE_GIT_OPERATIONS = {
+    ("GET", "git"): "overview",
+    ("GET", "git/diff"): "diff",
+    ("POST", "git/stage"): "stage",
+    ("POST", "git/unstage"): "unstage",
+    ("POST", "git/commit"): "commit",
+}
 
 
 def _response(data: dict[str, Any]) -> web.Response:
@@ -108,6 +118,7 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         ("POST", "files/create"): CAP_WRITE_FILES,
         ("POST", "files/mkdir"): CAP_WRITE_FILES,
         ("POST", "exec"): CAP_TERMINAL_EXEC,
+        **{operation: CAP_GIT_OPS for operation in _REMOTE_GIT_OPERATIONS},
     }
     capability = operations.get((request.method, suffix))
     if capability is None:
@@ -118,8 +129,8 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
             "native-agent/history/", "workdir", "chat/attachments",
         )) or suffix in {"git", "debug", "plugins"}
         if unsupported:
-            await server._with_capability(request, CAP_VIEW_FILE_TREE)
-            raise WebApiError(409, "remote_feature_unavailable", "远程工作区当前支持聊天、文件树、文本读写和终端")
+            await server._with_capability(request, CAP_GIT_OPS if suffix == "git" or suffix.startswith("git/") else CAP_VIEW_FILE_TREE)
+            raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
         return None
     auth = await server._with_capability(request, capability)
     config = profile.remote_workspace
@@ -131,6 +142,19 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         return _response({"working_dir": root})
     service = get_remote_workspace_service()
     connection = await asyncio.to_thread(service.get, config)
+    git_operation = _REMOTE_GIT_OPERATIONS.get((request.method, suffix))
+    if git_operation:
+        git = RemoteGitService(connection, root)
+        if git_operation == "overview":
+            return _response(await asyncio.to_thread(git.overview))
+        if git_operation == "diff":
+            staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
+            return _response(await asyncio.to_thread(git.diff, request.query.get("path", ""), staged=staged))
+        body = await server._parse_json(request)
+        value = body.get("message", "") if git_operation == "commit" else body.get("paths", [])
+        overview = await asyncio.to_thread(getattr(git, git_operation), value)
+        message = {"stage": "已暂存所选文件", "unstage": "已取消暂存所选文件", "commit": "已创建提交"}[git_operation]
+        return _response({"message": message, "overview": overview})
     if suffix == "ls":
         return _response(await asyncio.to_thread(
             connection.list_directory, _relative_target(request.query.get("path"), current, platform), root=root,

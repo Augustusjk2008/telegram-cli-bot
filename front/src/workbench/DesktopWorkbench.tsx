@@ -393,7 +393,11 @@ export function DesktopWorkbench({
   const canViewPlugins = sessionCapabilities.includes("view_plugins");
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
-  const activeSidebarView = remoteWorkspace || (!canViewPlugins && layoutState.sidebarView === "plugins")
+  const canUseRemoteGit = sessionCapabilities.length === 0 || sessionCapabilities.includes("git_ops");
+  const remoteSidebarUnavailable = Boolean(remoteWorkspace)
+    && layoutState.sidebarView !== "files"
+    && (layoutState.sidebarView !== "git" || !canUseRemoteGit);
+  const activeSidebarView = remoteSidebarUnavailable || (!canViewPlugins && layoutState.sidebarView === "plugins")
     ? "files"
     : layoutState.sidebarView;
   const activeActivityItem: WorkbenchActivityId = activeSidebarView;
@@ -469,8 +473,10 @@ export function DesktopWorkbench({
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
-  const availableActivityItems: WorkbenchActivityId[] = remoteWorkspace || structureOnly
+  const availableActivityItems: WorkbenchActivityId[] = structureOnly
     ? ["files"]
+    : remoteWorkspace
+      ? ["files", ...(canUseRemoteGit ? ["git" as const] : [])]
     : [
         "files",
         "search",
@@ -612,7 +618,7 @@ export function DesktopWorkbench({
       try {
         const restoredSession = session.restoredSession;
         if (restoredSession) {
-          restoreSidebarView(remoteWorkspace ? "files" : restoredSession.sidebarView);
+          restoreSidebarView(remoteWorkspace && restoredSession.sidebarView !== "git" ? "files" : restoredSession.sidebarView);
           setFocusedPane(restoredSession.focusedPane ?? null);
           setTerminalOverride(restoredSession.terminalOverrideCwd
             ? { cwd: restoredSession.terminalOverrideCwd, source: "manual" }
@@ -689,10 +695,10 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, terminalStatus.currentCwd]);
 
   useEffect(() => {
-    if ((structureOnly || remoteWorkspace) && layoutState.sidebarView !== "files") {
+    if ((structureOnly && layoutState.sidebarView !== "files") || remoteSidebarUnavailable) {
       setSidebarView("files");
     }
-  }, [layoutState.sidebarView, setSidebarView, structureOnly, remoteWorkspace]);
+  }, [layoutState.sidebarView, setSidebarView, structureOnly, remoteSidebarUnavailable]);
 
 
   useEffect(() => {
@@ -731,7 +737,7 @@ export function DesktopWorkbench({
   }
 
   function selectActivityItem(item: WorkbenchActivityId) {
-    if (remoteWorkspace && item !== "files") return;
+    if (remoteWorkspace && item !== "files" && (item !== "git" || !canUseRemoteGit)) return;
     setSidebarView(item);
   }
 
@@ -1324,6 +1330,7 @@ export function DesktopWorkbench({
         <GitScreen
           botAlias={botAlias}
           client={client}
+          remote={Boolean(remoteWorkspace)}
           embedded
           sessionCapabilities={sessionCapabilities}
           onOpenDiff={openGitDiffInEditor}

@@ -142,7 +142,11 @@ bash install.sh
 
 Agent 仍在运行 Orbit 的电脑上执行。本地控制目录默认位于 `~/.tcb/orbit-safe-claw/remote-workspaces/`（遵循 `TCB_DATA_DIR`），自动生成 `AGENTS.md` 和 `CLAUDE.md`。项目文件留在远程主机；聊天工具、文件操作和终端复用 SSH 连接。Agent 可批量运行命令、读取指定行范围及精确替换文本，减少反复登录和大段内容传输。
 
-密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供 Git 面板、语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
+密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
+
+远程 Git 面板支持 Linux 和 Windows 上的已有仓库，所选远程目录必须是仓库顶层目录。可查看状态、当前分支、近期提交和文件差异（包括未跟踪文件），逐文件暂存、取消暂存并手动提交。提交使用远程 SSH 账号的 Git 用户身份；请在远程端配置 `user.name` 和 `user.email`。此阶段不提供初始化、丢弃改动、全部暂存、分支或 stash 管理、fetch/pull/push、生成提交信息、智能提交和工作区回滚。
+
+Git 必须在远程 SSH 账号的**非交互会话 PATH** 中可用；本地安装 Git 不会提供远程 Git 能力。缺少 Git 时，面板显示安装 / PATH 指引和重试入口，应用不会通过 SSH 安装软件。请按官方 [Linux 安装指引](https://git-scm.com/install/linux) 或 [Windows 安装指引](https://git-scm.com/install/windows) 准备与远程系统兼容的 Git，确认该账号通过 SSH 能执行 `git --version`，再重试。写操作超时或断线后应先刷新状态核对结果，再决定是否重试。
 
 Windows 远程端需要启用 SSH/SFTP，并能通过 SSH 执行 `powershell.exe`（Windows PowerShell 5.1）；无需 PowerShell 7。命令与终端显式使用 Windows PowerShell，批量命令遇到失败会停止并返回退出码。Git、rg、编译器等项目工具需要在远程账号的 PATH 中。可输入 `C:\Projects\demo`、`C:/Projects/demo` 或 `/C:/Projects/demo`，浏览器统一显示 `/C:/Projects/demo`；切换盘符时直接输入另一个盘符的路径。文件 API 支持本地盘符，拒绝 UNC、设备路径、备用数据流及路径中的 junction / symlink；路径应保持所选根目录的大小写。Windows 7 长路径不在兼容范围内。
 
