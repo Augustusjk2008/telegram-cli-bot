@@ -9,6 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.remote_workspace import RemoteWorkspaceError
 from bot.web.api_common import AuthContext, WebApiError
 from bot.web.api_common import get_session_for_alias
 from bot.web.auth_store import CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
@@ -42,6 +43,37 @@ def _server(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_auth_context", lambda request: auth)
     monkeypatch.setattr(server, "_can_operate_bot", lambda auth, alias: alias == "main")
     return server, auth
+
+
+@pytest.mark.asyncio
+async def test_execute_plan_saves_in_remote_workspace_before_creating_conversation(tmp_path, monkeypatch):
+    server, _auth = _server(tmp_path, monkeypatch)
+    connection = Mock()
+    connection.mkdir.side_effect = [RemoteWorkspaceError(409, "path_exists", "Exists"), None]
+    connection.create_file.side_effect = [RemoteWorkspaceError(409, "path_exists", "Exists"), None]
+    service = Mock()
+    service.get.return_value = connection
+    monkeypatch.setattr("bot.remote_workspace.get_remote_workspace_service", lambda: service)
+    create_conversation = AsyncMock(return_value={"conversation": {"id": "new"}, "messages": []})
+    monkeypatch.setattr(api_service, "create_conversation", create_conversation)
+
+    result = await api_service.execute_plan(server.manager, "main", 42, "# Ship\nDo it", title="Ship")
+
+    service.get.assert_called_once_with(CONFIG)
+    assert connection.mkdir.call_args_list == [
+        (("docs",), {"root": CONFIG["root"]}),
+        (("docs/plan",), {"root": CONFIG["root"]}),
+    ]
+    first_path = connection.create_file.call_args_list[0].args[0]
+    second_path = connection.create_file.call_args_list[1].args[0]
+    assert first_path.startswith("docs/plan/") and first_path.endswith("-ship.md")
+    assert second_path == first_path.removesuffix(".md") + "-2.md"
+    assert connection.create_file.call_args_list[1].args[1:] == ("# Ship\nDo it\n",)
+    assert connection.create_file.call_args_list[1].kwargs == {"root": CONFIG["root"]}
+    assert result["plan_path"] == second_path
+    assert second_path in result["execution_message"]
+    create_conversation.assert_awaited_once()
+    assert not (Path(server.manager.main_profile.working_dir) / "docs" / "plan").exists()
 
 
 @pytest.mark.asyncio

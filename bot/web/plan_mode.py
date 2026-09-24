@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 
 from bot.prompts import render_prompt
+from bot.remote_workspace.transport import RemoteConnection, RemoteWorkspaceError
 
 PLAN_MODE_TASK_MODE = "plan"
 PLAN_DRAFT_OPEN = "<PLAN_DRAFT>"
@@ -16,7 +17,7 @@ _LEGACY_PLAN_EXECUTION_PROMPT_PREFIX = "请按方案执行。方案文件："
 
 @dataclass(frozen=True)
 class SavedPlan:
-    path: Path
+    path: PurePath
     relative_path: str
 
 
@@ -55,17 +56,44 @@ def save_execution_plan(working_dir: str | Path, content: str, *, title: str = "
     root = Path(working_dir).resolve()
     plan_dir = root / "docs" / "plan"
     plan_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
-    slug = slugify_plan_title(title or _derive_title(content))
-    filename = f"{stamp}-{slug}.md"
-    path = plan_dir / filename
+    basename = _plan_basename(content, title)
+    path = plan_dir / f"{basename}.md"
     suffix = 2
     while path.exists():
-        path = plan_dir / f"{stamp}-{slug}-{suffix}.md"
+        path = plan_dir / f"{basename}-{suffix}.md"
         suffix += 1
     normalized = str(content or "").strip() + "\n"
     path.write_text(normalized, encoding="utf-8")
     return SavedPlan(path=path, relative_path=path.relative_to(root).as_posix())
+
+
+def save_remote_execution_plan(connection: RemoteConnection, root: str, content: str, *, title: str = "") -> SavedPlan:
+    for directory in ("docs", "docs/plan"):
+        try:
+            connection.mkdir(directory, root=root)
+        except RemoteWorkspaceError as exc:
+            if exc.code != "path_exists":
+                raise
+    basename = _plan_basename(content, title)
+    normalized = str(content or "").strip() + "\n"
+    suffix = 1
+    while True:
+        name = f"{basename}{f'-{suffix}' if suffix > 1 else ''}.md"
+        relative_path = f"docs/plan/{name}"
+        try:
+            connection.create_file(relative_path, normalized, root=root)
+        except RemoteWorkspaceError as exc:
+            if exc.code != "path_exists":
+                raise
+            suffix += 1
+            continue
+        return SavedPlan(path=PurePosixPath(root) / relative_path, relative_path=relative_path)
+
+
+def _plan_basename(content: str, title: str) -> str:
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+    slug = slugify_plan_title(title or _derive_title(content))
+    return f"{stamp}-{slug}"
 
 
 def build_plan_execution_prompt(relative_plan_path: str) -> str:

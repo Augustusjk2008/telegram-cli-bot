@@ -157,6 +157,7 @@ from bot.web.plan_mode import (
     build_plan_mode_prompt,
     is_plan_execution_prompt,
     save_execution_plan,
+    save_remote_execution_plan,
 )
 from bot.web.api_common import (
     AuthContext,
@@ -6365,8 +6366,16 @@ async def execute_plan(
     plan_text = str(content or "").strip()
     if not plan_text:
         _raise(400, "empty_plan", "方案不能为空")
-    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    saved = save_execution_plan(session.working_dir, plan_text, title=title)
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    if profile.remote_workspace:
+        from bot.remote_workspace import get_remote_workspace_service
+
+        connection = get_remote_workspace_service().get(profile.remote_workspace)
+        saved = await asyncio.to_thread(
+            save_remote_execution_plan, connection, profile.remote_workspace["root"], plan_text, title=title,
+        )
+    else:
+        saved = save_execution_plan(session.working_dir, plan_text, title=title)
     conversation_data = await create_conversation(
         manager,
         alias,
