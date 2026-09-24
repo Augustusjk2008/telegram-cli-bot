@@ -6542,6 +6542,10 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({
         working_dir: workingDir,
         force_reset: Boolean(options.forceReset),
+        ...(options.remoteWorkspace ? { remote_workspace: {
+          connection_id: options.remoteWorkspace.connectionId,
+          root: options.remoteWorkspace.root,
+        } } : {}),
       }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));

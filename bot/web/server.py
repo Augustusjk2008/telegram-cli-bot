@@ -4508,12 +4508,16 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
+        remote_workspace = None
+        if "remote_workspace" in body:
+            remote_workspace = await remote_routes.prepare_create(self, auth, body["remote_workspace"])
         data = await update_bot_workdir(
             self.manager,
             alias,
             body.get("working_dir", ""),
             self._chat_user_id(auth),
             force_reset=bool(body.get("force_reset")),
+            remote_workspace=remote_workspace,
         )
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 

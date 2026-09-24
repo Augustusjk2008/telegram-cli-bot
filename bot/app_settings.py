@@ -214,6 +214,10 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
             value.get("native_agent", value.get("nativeAgent"))
         )
 
+    if value.get("remote_workspace"):
+        from bot.remote_workspace.transport import normalize_remote_workspace
+        normalized["remote_workspace"] = normalize_remote_workspace(value["remote_workspace"])
+
     return normalized
 
 

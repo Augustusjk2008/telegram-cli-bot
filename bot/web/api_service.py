@@ -6695,14 +6695,21 @@ async def update_bot_workdir(
     working_dir: str,
     user_id: Optional[int] = None,
     force_reset: bool = False,
+    remote_workspace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
-    if profile.remote_workspace:
-        _raise(409, "remote_workspace_bound", "远程智能体的工作区已绑定；请新建智能体以使用其他远程目录")
-    resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir or "").strip()))
-    if not os.path.isdir(resolved_working_dir):
-        _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")
-    target_changed = resolved_working_dir != profile.working_dir
+    if remote_workspace is not None:
+        if not profile.remote_workspace:
+            _raise(400, "not_remote_workspace", "当前智能体没有远程工作区")
+        resolved_working_dir = profile.working_dir
+        target_changed = remote_workspace != profile.remote_workspace
+    else:
+        if profile.remote_workspace:
+            _raise(409, "remote_workspace_bound", "远程智能体的工作区已绑定；请提供远程工作区连接")
+        resolved_working_dir = os.path.abspath(os.path.expanduser(str(working_dir or "").strip()))
+        if not os.path.isdir(resolved_working_dir):
+            _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")
+        target_changed = resolved_working_dir != profile.working_dir
     target_sessions = _get_bot_sessions_for_workdir_change(manager, alias) if target_changed or force_reset else []
     if target_changed:
         for target_session in target_sessions:
@@ -6718,7 +6725,9 @@ async def update_bot_workdir(
                 )
             if service.has_active_conversation(target_session) and not force_reset:
                 summary = service.summarize_active_conversation(target_session)
-                summary["requested_working_dir"] = resolved_working_dir
+                if remote_workspace is not None:
+                    summary["current_working_dir"] = profile.remote_workspace["root"]
+                summary["requested_working_dir"] = remote_workspace["root"] if remote_workspace is not None else resolved_working_dir
                 _raise(
                     409,
                     WORKDIR_CHANGE_REQUIRES_RESET,
@@ -6735,7 +6744,10 @@ async def update_bot_workdir(
         for target_session in target_sessions:
             _reset_session_for_workdir_change(target_session, resolved_working_dir)
 
-    await manager.set_bot_workdir(alias, resolved_working_dir, update_sessions=False)
+    if remote_workspace is not None:
+        await manager.set_bot_remote_workspace(alias, remote_workspace)
+    else:
+        await manager.set_bot_workdir(alias, resolved_working_dir, update_sessions=False)
     return {"bot": build_bot_summary(manager, alias, user_id, profile=profile, session=session)}
 
 

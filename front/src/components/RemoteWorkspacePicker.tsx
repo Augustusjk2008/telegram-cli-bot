@@ -4,8 +4,8 @@ import type { WebBotClient } from "../services/webBotClient";
 import { joinRemotePath, normalizeRemotePath, parentRemotePath } from "../services/remoteWorkspace";
 import { RemoteConnectionForm, remoteButtonClass, remoteInputClass } from "./RemoteConnectionForm";
 
-export function RemoteWorkspacePicker({ client, onPick }: {
-  client: WebBotClient; onPick: (remote: RemoteWorkspace) => void;
+export function RemoteWorkspacePicker({ client, initial, onPick }: {
+  client: WebBotClient; initial?: RemoteWorkspace; onPick: (remote: RemoteWorkspace) => void;
 }) {
   const [remote, setRemote] = useState<RemoteWorkspace>();
   const [listing, setListing] = useState<DirectoryListing>();
@@ -22,9 +22,12 @@ export function RemoteWorkspacePicker({ client, onPick }: {
     } catch (err) { setError(err instanceof Error ? err.message : "读取远程目录失败"); }
     finally { setBusy(false); }
   }
-  if (!remote) return <RemoteConnectionForm client={client} onConnected={(next) => { setRemote(next); setPath(next.root); void browse(next, next.root); }} />;
+  if (!remote) return <RemoteConnectionForm client={client} initial={initial} onConnected={(next) => { setRemote(next); setPath(next.root); void browse(next, next.root); }} />;
   return <section className="space-y-3 rounded-md border border-[var(--border)] p-3">
-    <p className="break-all text-sm">SSH 已连接：{remote.username}@{remote.host}:{remote.port}</p>
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <p className="break-all text-sm">SSH 已连接：{remote.username}@{remote.host}:{remote.port}</p>
+      {initial && <button type="button" className={remoteButtonClass} onClick={() => { setRemote(undefined); setListing(undefined); setPath(""); setSelected(""); setError(""); }}>更换 SSH 地址</button>}
+    </div>
     <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void browse(remote, path); }}>
       <input aria-label="远程目录路径" className={remoteInputClass} value={path} onChange={(e) => setPath(e.target.value)} />
       <button className={remoteButtonClass} disabled={busy}>打开</button>

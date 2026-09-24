@@ -337,13 +337,19 @@ export function useBotManager({
     workingDir: string,
     options: UpdateBotWorkdirOptions = {},
   ) {
-    if (bot.remoteWorkspace) return { ok: true, bot } as const;
-    const nextWorkdir = normalizePathInput(workingDir);
+    const remote = options.remoteWorkspace;
+    if (bot.remoteWorkspace && !remote) {
+      setError("请选择远程工作目录");
+      return { ok: false } as const;
+    }
+    const nextWorkdir = remote ? remote.root : normalizePathInput(workingDir);
     if (!nextWorkdir) {
       setError("工作目录不能为空");
       return { ok: false } as const;
     }
-    if (bot.workingDir === nextWorkdir) {
+    if (remote
+      ? bot.remoteWorkspace?.connectionId === remote.connectionId && bot.remoteWorkspace.root === remote.root
+      : bot.workingDir === nextWorkdir) {
       return { ok: true, bot } as const;
     }
 
@@ -351,7 +357,7 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      const updated = await client.updateBotWorkdir(bot.alias, nextWorkdir, options);
+      const updated = await client.updateBotWorkdir(bot.alias, remote ? workingDir : nextWorkdir, options);
       setNotice("工作目录已更新");
       await loadBots();
       return { ok: true, bot: updated } as const;
@@ -417,7 +423,10 @@ export function useBotManager({
       await loadBots();
     }
 
-    const workdirResult = await updateBotWorkdir(nextBot, draft.workingDir, options);
+    const workdirResult = await updateBotWorkdir(nextBot, draft.workingDir, {
+      ...options,
+      ...(draft.remoteWorkspace ? { remoteWorkspace: draft.remoteWorkspace } : {}),
+    });
     if (!workdirResult.ok) {
       return {
         ok: false,

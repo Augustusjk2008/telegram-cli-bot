@@ -618,7 +618,7 @@ class MultiBotManager:
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
             if profile.remote_workspace:
-                raise ValueError("远程智能体的工作区已绑定；请新建智能体以使用其他远程目录")
+                raise ValueError("远程智能体的工作区已绑定；请通过编辑智能体更换远程连接")
             profile.working_dir = resolved_working_dir
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()
@@ -626,6 +626,34 @@ class MultiBotManager:
                 self._save_profiles()
             if update_sessions:
                 update_bot_working_dir(normalized_alias, resolved_working_dir)
+
+    async def set_bot_remote_workspace(self, alias: str, remote_workspace: dict) -> None:
+        from bot.remote_workspace.chat import ensure_remote_chat_instructions, revoke_remote_chat
+        from bot.remote_workspace.transport import normalize_remote_workspace
+
+        config = normalize_remote_workspace(remote_workspace)
+        if not config:
+            raise ValueError("远程工作区不能为空")
+        normalized_alias = str(alias or "").strip().lower()
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            if not profile.remote_workspace:
+                raise ValueError("当前智能体没有远程工作区")
+            if config == profile.remote_workspace:
+                return
+            previous = profile.remote_workspace
+            profile.remote_workspace = config
+            try:
+                ensure_remote_chat_instructions(profile)
+                if normalized_alias == self.main_profile.alias:
+                    self._persist_main_profile()
+                else:
+                    self._save_profiles()
+            except BaseException:
+                profile.remote_workspace = previous
+                ensure_remote_chat_instructions(profile)
+                raise
+            revoke_remote_chat(profile)
 
     async def get_bot_cli_params(self, alias: str, cli_type: Optional[str] = None) -> dict:
         normalized_alias = str(alias or "").strip().lower()

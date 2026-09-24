@@ -153,6 +153,7 @@ function normalizeEditDraft(draft: EditDraft): EditDraft {
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
+    remoteWorkspace: draft.remoteWorkspace,
     runtimeBackend: draft.runtimeBackend,
     nativeAgent: {
       ...DEFAULT_NATIVE_AGENT_DRAFT,
@@ -244,7 +245,7 @@ function WorkdirConflictNotice({
 }) {
   return (
     <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-      <div>切换工作目录会清空 {conflict.historyCount} 条聊天消息。</div>
+      <div>切换工作区会清空 {conflict.historyCount} 条聊天消息。</div>
       <div className="mt-1 break-all text-xs text-amber-700">
         {conflict.currentWorkingDir} {"->"} {conflict.requestedWorkingDir}
       </div>
@@ -519,6 +520,7 @@ function EditPanel({
 }) {
   const [draft, setDraft] = useState<EditDraft>(draftFromBot(bot));
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
+  const [showRemotePicker, setShowRemotePicker] = useState(false);
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null);
   const [clusterConfig, setClusterConfig] = useState<BotClusterConfig>(() => clusterConfigFromBot(bot));
@@ -534,6 +536,7 @@ function EditPanel({
 
   useEffect(() => {
     setDraft(draftFromBot(bot));
+    setShowRemotePicker(false);
     setPendingWorkdirConflict(null);
     setClusterResizeBlocked(null);
   }, [bot.alias]);
@@ -776,28 +779,26 @@ function EditPanel({
           }))}
         />
       ) : null}
-      <label className="block space-y-1 text-sm">
-        <span className="text-[var(--muted)]">工作目录</span>
-        <div className="flex gap-2">
-          <input
-            aria-label="智能体工作目录"
-            value={bot.remoteWorkspace ? workspaceLabel(bot) : draft.workingDir}
-            disabled={!canManage || Boolean(bot.remoteWorkspace)}
-            onChange={(event) => setDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
-            className="h-9 min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
-          />
-          <button
-            type="button"
-            aria-label="浏览智能体工作目录"
-            onClick={() => setShowWorkdirPicker(true)}
-            disabled={!canManage || manager.savingAction !== "" || Boolean(bot.remoteWorkspace)}
-            className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-          >
-            <FolderOpen className="h-4 w-4" />
-            浏览目录
-          </button>
+      {bot.remoteWorkspace ? (
+        <div className="space-y-2 text-sm">
+          <span className="text-[var(--muted)]">远程地址和工作目录</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-0 flex-1 break-all">{workspaceLabel({ workingDir: draft.workingDir, remoteWorkspace: draft.remoteWorkspace })}</span>
+            <button type="button" onClick={() => setShowRemotePicker((open) => !open)} disabled={!canManage || manager.savingAction !== ""} className="rounded-md border border-[var(--border)] px-3 py-2 hover:bg-[var(--surface-strong)] disabled:opacity-60">
+              {showRemotePicker ? "取消更换" : "更换远程地址或工作目录"}
+            </button>
+          </div>
+          {showRemotePicker && <RemoteWorkspacePicker client={manager.client} initial={draft.remoteWorkspace} onPick={(remote) => { setDraft((prev) => ({ ...prev, remoteWorkspace: remote })); setShowRemotePicker(false); }} />}
         </div>
-      </label>
+      ) : (
+        <label className="block space-y-1 text-sm">
+          <span className="text-[var(--muted)]">工作目录</span>
+          <div className="flex gap-2">
+            <input aria-label="智能体工作目录" value={draft.workingDir} disabled={!canManage} onChange={(event) => setDraft((prev) => ({ ...prev, workingDir: event.target.value }))} className="h-9 min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60" />
+            <button type="button" aria-label="浏览智能体工作目录" onClick={() => setShowWorkdirPicker(true)} disabled={!canManage || manager.savingAction !== ""} className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"><FolderOpen className="h-4 w-4" />浏览目录</button>
+          </div>
+        </label>
+      )}
       <div className="flex justify-end gap-2">
         <button
           type="button"
@@ -810,7 +811,7 @@ function EditPanel({
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={!canManage || manager.savingAction !== ""}
+          disabled={!canManage || manager.savingAction !== "" || showRemotePicker}
           className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:opacity-60"
         >
           <Save className="h-4 w-4" />

@@ -169,6 +169,10 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
             profile_data.get("native_agent", profile_data.get("nativeAgent"))
         )
 
+    if profile_data.get("remote_workspace"):
+        from bot.remote_workspace.transport import normalize_remote_workspace
+        main_profile.remote_workspace = normalize_remote_workspace(profile_data["remote_workspace"])
+
 
 def persist_main_profile(main_profile: BotProfile, app_settings_file: Path) -> None:
     app_settings.update_main_bot_profile(main_profile.to_dict(), app_settings_file)

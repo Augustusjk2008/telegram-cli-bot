@@ -10,7 +10,9 @@ from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_common import AuthContext, WebApiError
+from bot.web.api_common import get_session_for_alias
 from bot.web.auth_store import CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
+from bot.web import api_service
 from bot.web.routes import remote_routes
 from bot.web.server import WebApiServer
 
@@ -20,6 +22,7 @@ CONFIG = {
     "host": "remote.example", "port": 22, "username": "developer", "root": "/srv/project",
     "host_key_fingerprint": "SHA256:" + "a" * 43, "key_filename": "",
 }
+NEW_CONFIG = {**CONFIG, "connection_id": "b" * 32, "host": "new.example", "root": "/srv/new-project"}
 
 
 def _server(tmp_path, monkeypatch):
@@ -221,6 +224,132 @@ async def test_remote_draft_connection_is_checked_before_binding_root():
         with pytest.raises(WebApiError):
             await remote_routes.prepare_create(SimpleNamespace(), SimpleNamespace(user_id=42), {"connection_id": "other", "root": "/etc"})
     service.bind_root.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_existing_remote_bot_update_checks_draft_owner_and_resets_session(tmp_path, monkeypatch):
+    from bot.remote_workspace.chat import prepare_remote_chat, resolve_remote_chat_token
+
+    server, auth = _server(tmp_path, monkeypatch)
+    profile = server.manager.main_profile
+    control_dir = profile.working_dir
+    session = get_session_for_alias(server.manager, "main", auth.user_id)
+    session.codex_session_id = "codex-old"
+    session.native_agent_session_id = "native-old"
+    session.active_conversation_id = "conversation-old"
+    prior_epoch = session.session_epoch
+    old_bridge = prepare_remote_chat(profile, "http://127.0.0.1:8765")
+    import json
+    old_token = json.loads(old_bridge.config_path.read_text(encoding="utf-8"))["token"]
+
+    service = Mock()
+    service.connection_config.return_value = NEW_CONFIG
+    service.bind_root.return_value = NEW_CONFIG
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    history = Mock()
+    history.has_active_conversation.return_value = True
+    history.summarize_active_conversation.return_value = {"history_count": 1}
+    monkeypatch.setattr(api_service, "_get_chat_history_service", lambda _session: history)
+    body = {"remote_workspace": {
+        "connection_id": NEW_CONFIG["connection_id"], "root": NEW_CONFIG["root"],
+        "host": "forged.example", "password": "must-not-persist",
+    }}
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        session.is_processing = True
+        response = await client.patch("/api/admin/bots/main/workdir", json={**body, "force_reset": True})
+        assert response.status == 409
+        assert (await response.json())["error"]["code"] == "workdir_change_blocked_processing"
+        session.is_processing = False
+
+        response = await client.patch("/api/admin/bots/main/workdir", json=body)
+        payload = await response.json()
+        assert response.status == 409
+        assert payload["error"]["code"] == "workdir_change_requires_reset"
+        assert payload["error"]["data"]["current_working_dir"] == CONFIG["root"]
+        assert payload["error"]["data"]["requested_working_dir"] == NEW_CONFIG["root"]
+        assert profile.remote_workspace == CONFIG
+        assert session.codex_session_id == "codex-old"
+
+        service.connection_config.side_effect = remote_routes.RemoteWorkspaceError(404, "remote_connection_not_found", "Remote connection not found")
+        response = await client.patch("/api/admin/bots/main/workdir", json={**body, "force_reset": True})
+        assert response.status == 404
+        assert profile.remote_workspace == CONFIG
+        service.connection_config.side_effect = None
+
+        auth.capabilities.remove(CAP_MANAGE_BOTS)
+        response = await client.patch("/api/admin/bots/main/workdir", json={**body, "force_reset": True})
+        assert response.status == 403
+        assert profile.remote_workspace == CONFIG
+        auth.capabilities.add(CAP_MANAGE_BOTS)
+
+        checked_connections = service.connection_config.call_count
+        monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: False)
+        response = await client.patch("/api/admin/bots/main/workdir", json={**body, "force_reset": True})
+        assert response.status == 403
+        assert service.connection_config.call_count == checked_connections
+        monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, alias: alias == "main")
+
+        response = await client.patch("/api/admin/bots/main/workdir", json={**body, "force_reset": True})
+        payload = await response.json()
+        assert response.status == 200, payload
+        assert payload["data"]["bot"]["remote_workspace"] == NEW_CONFIG
+
+    service.connection_config.assert_called_with(NEW_CONFIG["connection_id"], auth.user_id)
+    service.bind_root.assert_called_with(NEW_CONFIG, NEW_CONFIG["root"])
+    history.reset_active_conversation.assert_called_once_with(session)
+    assert profile.working_dir == control_dir
+    assert profile.remote_workspace == NEW_CONFIG
+    assert session.codex_session_id is None
+    assert session.native_agent_session_id is None
+    assert session.active_conversation_id is None
+    assert session.session_epoch == prior_epoch + 1
+    assert NEW_CONFIG["host"] in (Path(control_dir) / "AGENTS.md").read_text(encoding="utf-8")
+    assert resolve_remote_chat_token(old_token) is None
+    reloaded = MultiBotManager(BotProfile(alias="main", working_dir=control_dir), str(server.manager.storage_file))
+    assert reloaded.main_profile.remote_workspace == NEW_CONFIG
+    assert "must-not-persist" not in server.manager.app_settings_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_managed_remote_bot_update_persists_same_control_directory(tmp_path):
+    storage = tmp_path / "bots.json"
+    storage.write_text('{"bots": []}', encoding="utf-8")
+    manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
+    profile = await manager.add_bot(
+        "remote", supported_execution_modes=["native_agent"], default_execution_mode="native_agent",
+        remote_workspace=CONFIG,
+    )
+    control_dir = profile.working_dir
+
+    await manager.set_bot_remote_workspace("remote", NEW_CONFIG)
+
+    assert profile.working_dir == control_dir
+    assert NEW_CONFIG["root"] in (Path(control_dir) / "CLAUDE.md").read_text(encoding="utf-8")
+    reloaded = MultiBotManager(manager.main_profile, str(storage)).managed_profiles["remote"]
+    assert reloaded.remote_workspace == NEW_CONFIG
+    assert reloaded.working_dir == control_dir
+
+
+@pytest.mark.asyncio
+async def test_failed_remote_bot_save_restores_profile_and_instructions(tmp_path, monkeypatch):
+    storage = tmp_path / "bots.json"
+    storage.write_text('{"bots": []}', encoding="utf-8")
+    manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
+    profile = await manager.add_bot(
+        "remote", supported_execution_modes=["native_agent"], default_execution_mode="native_agent",
+        remote_workspace=CONFIG,
+    )
+    instructions = Path(profile.working_dir) / "AGENTS.md"
+    before = instructions.read_text(encoding="utf-8")
+    monkeypatch.setattr(manager, "_save_profiles", Mock(side_effect=OSError("save failed")))
+
+    with pytest.raises(OSError, match="save failed"):
+        await manager.set_bot_remote_workspace("remote", NEW_CONFIG)
+
+    assert profile.remote_workspace == CONFIG
+    assert instructions.read_text(encoding="utf-8") == before
+    assert MultiBotManager(manager.main_profile, str(storage)).managed_profiles["remote"].remote_workspace == CONFIG
 
 
 @pytest.mark.asyncio

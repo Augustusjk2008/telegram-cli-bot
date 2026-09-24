@@ -1,12 +1,15 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BotListScreen } from "../screens/BotListScreen";
+import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
+import { draftFromBot } from "../screens/botManagerModel";
+import { useBotManager } from "../screens/useBotManager";
 import { RemoteConnectionForm } from "../components/RemoteConnectionForm";
 import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import { WebApiClientError, type RemoteWorkspace } from "../services/types";
+import { WebApiClientError, type BotSummary, type RemoteWorkspace } from "../services/types";
 import { PersistentTerminalProvider, usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
 import { readTerminalTabs } from "../terminal/terminalStorage";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
@@ -23,6 +26,74 @@ const ok = (data: unknown) => ({ ok: true, json: async () => ({ ok: true, data }
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+test("existing remote workspace can browse a new root or connect to a different SSH address", async () => {
+  const client = new MockWebBotClient();
+  const reconnected = { ...remote, connectionId: "ssh-2" };
+  const next = { ...remote, connectionId: "ssh-3", host: "new.test", root: "/srv" };
+  vi.spyOn(client, "listRemoteDirectories").mockImplementation(async (_id, path) => ({ workingDir: path, entries: [] }));
+  const connect = vi.spyOn(client, "connectRemote").mockResolvedValueOnce(reconnected).mockResolvedValueOnce(next);
+  const pick = vi.fn();
+  render(<RemoteWorkspacePicker client={client} initial={remote} onPick={pick} />);
+  expect(screen.getByLabelText("SSH 主机")).toHaveValue("linux.test");
+  fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh" } });
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(screen.getByLabelText("远程目录路径")).toHaveValue(remote.root));
+  fireEvent.change(screen.getByLabelText("远程目录路径"), { target: { value: "/home/other" } });
+  fireEvent.click(screen.getByRole("button", { name: "打开" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "选择此远程工作目录" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "选择此远程工作目录" }));
+  expect(pick).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "ssh-2", root: "/home/other" }));
+
+  fireEvent.click(screen.getByRole("button", { name: "更换 SSH 地址" }));
+  fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: "new.test" } });
+  fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh" } });
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(connect).toHaveBeenCalledWith(expect.objectContaining({ host: "new.test", password: "fresh" }), undefined));
+  await waitFor(() => expect(screen.getByLabelText("远程目录路径")).toHaveValue("/srv"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "选择此远程工作目录" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "选择此远程工作目录" }));
+  expect(pick).toHaveBeenLastCalledWith(expect.objectContaining({ connectionId: "ssh-3", host: "new.test", root: "/srv" }));
+});
+
+test("saving a changed remote workspace sends its connection and root through the workdir update", async () => {
+  const bot: BotSummary = { alias: "remote", cliType: "codex", cliPath: "codex", status: "running", workingDir: "C:/control/remote", remoteWorkspace: remote, lastActiveText: "" };
+  const next = { ...remote, connectionId: "ssh-2", host: "new.test", root: "/srv/project" };
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listBots").mockResolvedValue([bot]);
+  const update = vi.spyOn(client, "updateBotWorkdir").mockResolvedValue({ ...bot, remoteWorkspace: next });
+  const { result } = renderHook(() => useBotManager({ client }));
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  await act(async () => {
+    expect(await result.current.saveBotEdits(bot, { ...draftFromBot(bot), remoteWorkspace: next })).toMatchObject({ ok: true });
+  });
+  expect(update).toHaveBeenCalledWith("remote", bot.workingDir, { remoteWorkspace: next });
+});
+
+test("desktop bot editor exposes remote address and workspace changes", async () => {
+  const bot: BotSummary = { alias: "remote", cliType: "codex", cliPath: "codex", status: "running", workingDir: "C:/control/remote", remoteWorkspace: remote, lastActiveText: "", canOperate: true };
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listBots").mockResolvedValue([bot]);
+  vi.spyOn(client, "listRemoteDirectories").mockImplementation(async (_id, path) => ({ workingDir: path, entries: [] }));
+  render(<DesktopBotManagerScreen client={client} currentAlias="remote" onSelect={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "配置" }));
+  expect(screen.getAllByText("dev@linux.test:/home/dev").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "更换远程地址或工作目录" }));
+  expect(screen.getByLabelText("SSH 主机")).toHaveValue("linux.test");
+  expect(screen.getByRole("button", { name: "保存智能体" })).toBeDisabled();
+});
+
+test("remote workdir update serializes the selected connection without SSH credentials", async () => {
+  const fetch = vi.fn().mockResolvedValue(ok({ bot: rawBot }));
+  vi.stubGlobal("fetch", fetch);
+  await new RealWebBotClient().updateBotWorkdir("remote", "C:/control/remote", {
+    remoteWorkspace: { connectionId: "ssh-2", root: "/srv/project" }, forceReset: true,
+  });
+  expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({
+    working_dir: "C:/control/remote", force_reset: true,
+    remote_workspace: { connection_id: "ssh-2", root: "/srv/project" },
+  });
+});
 
 test.each([remote, windowsRemote])("remote create on $host requires explicit host key trust and a chosen directory, without local workingDir or secrets", async (target) => {
   const selectedRoot = target.platform === "windows" ? "/D:/Project" : "/srv/project";

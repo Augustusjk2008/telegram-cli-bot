@@ -7,6 +7,7 @@ import type {
   EnvConfigSnapshot,
   NativeAgentConfig,
   NativeAgentDraft,
+  RemoteWorkspace,
 } from "../services/types";
 
 export { getErrorMessage } from "../utils/errorMessage";
@@ -21,6 +22,7 @@ export type EditDraft = {
   cliType: CliType;
   cliPath: string;
   workingDir: string;
+  remoteWorkspace?: RemoteWorkspace;
   runtimeBackend: ChatExecutionMode;
   nativeAgent: NativeAgentDraft;
 };
@@ -223,6 +225,7 @@ export function draftFromBot(bot: BotSummary): EditDraft {
     cliType: bot.cliType,
     cliPath: bot.cliPath || bot.cliType,
     workingDir: bot.workingDir,
+    remoteWorkspace: bot.remoteWorkspace,
     runtimeBackend: getRuntimeBackend(bot),
     nativeAgent: nativeAgentDraftFromBot(bot),
   };

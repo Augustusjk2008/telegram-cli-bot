@@ -272,12 +272,11 @@ def register(app: web.Application, server) -> None:
         if not profile.remote_workspace:
             raise WebApiError(400, "not_remote_workspace", "当前智能体没有远程工作区")
         body = await server._parse_json(request)
-        # Reauthentication cannot silently change the host, identity, or root
-        # of an existing conversation. Changing targets requires a new agent.
+        # Reauthentication keeps the saved target; target changes go through bot editing.
         config = {**profile.remote_workspace}
         for field in ("key_filename", "host_key_fingerprint", "platform"):
             if field in body and body[field] != config.get(field, "posix" if field == "platform" else ""):
-                raise WebApiError(409, "remote_connection_bound", "重新登录使用已绑定的主机密钥和私钥路径；更换连接配置请新建智能体")
+                raise WebApiError(409, "remote_connection_bound", "重新登录使用已绑定的主机密钥和私钥路径；更换连接配置请编辑智能体")
         for field in ("password", "passphrase"):
             if field in body:
                 config[field] = body[field]

@@ -791,6 +791,7 @@ export type WorkdirChangeConflict = {
 
 export type UpdateBotWorkdirOptions = {
   forceReset?: boolean;
+  remoteWorkspace?: Pick<RemoteWorkspace, "connectionId" | "root">;
 };
 
 export type RemoveBotOptions = {
