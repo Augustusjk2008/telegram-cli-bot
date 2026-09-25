@@ -297,6 +297,9 @@ export function DesktopBotSwitcherPopover({
                       {bot.isMain || bot.alias === "main" ? (
                         <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
                       ) : null}
+                      {bot.remoteWorkspace ? (
+                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
+                      ) : null}
                       {current ? (
                         <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
                       ) : null}

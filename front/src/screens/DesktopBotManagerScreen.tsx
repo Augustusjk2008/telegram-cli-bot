@@ -1655,6 +1655,7 @@ export function DesktopBotManagerScreen({
                             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                               <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
                               {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
+                              {bot.remoteWorkspace ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span> : null}
                               {isBotArchived(bot) ? <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span> : null}
                               {current ? <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span> : null}
                               {bot.canOperate === false ? (

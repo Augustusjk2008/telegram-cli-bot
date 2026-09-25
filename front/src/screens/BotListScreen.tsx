@@ -447,6 +447,9 @@ export function BotListScreen({
                       {isMain ? (
                         <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
                       ) : null}
+                      {bot.remoteWorkspace ? (
+                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
+                      ) : null}
                       {isArchived ? (
                         <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span>
                       ) : null}

@@ -66,6 +66,21 @@ test("desktop manager exposes archive lifecycle actions", async () => {
   await waitFor(() => expect(unarchiveBot).toHaveBeenCalledWith("team2"));
 });
 
+test("desktop agent list labels remote workspaces", async () => {
+  const client = new MockWebBotClient();
+  const listBots = client.listBots.bind(client);
+  vi.spyOn(client, "listBots").mockImplementation(async () => (await listBots()).map((bot) => (
+    bot.alias === "team2"
+      ? { ...bot, remoteWorkspace: { connectionId: "ssh-1", host: "remote.test", port: 22, username: "dev", root: "/work", hostKeyFingerprint: "SHA256:test" } }
+      : bot
+  )));
+
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+
+  expect(within(await screen.findByRole("button", { name: "聚焦 team2" })).getByText("远程")).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: "聚焦 main" })).queryByText("远程")).not.toBeInTheDocument();
+});
+
 test("desktop bulk delete does not expose workspace delete", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

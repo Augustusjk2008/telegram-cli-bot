@@ -136,6 +136,9 @@ export function BotSwitcherSheet({
                         主
                       </span>
                     ) : null}
+                    {bot.remoteWorkspace ? (
+                      <span className="shrink-0 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
+                    ) : null}
                     {currentAlias === bot.alias ? (
                       <span className="shrink-0 rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">
                         当前
