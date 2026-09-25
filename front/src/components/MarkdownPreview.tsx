@@ -10,6 +10,7 @@ import remarkMath from "remark-math";
 import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
+import { remarkPunctuationStrong } from "../markdown/punctuationStrong";
 import { getCachedMermaidRender, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
 
 type Props = {
@@ -30,7 +31,7 @@ function safeUrlTransform(url: string) {
   return isSafeMarkdownHref(url) ? url : "";
 }
 
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath, remarkPunctuationStrong];
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
 const MARKDOWN_PREVIEW_REHYPE_PLUGINS = [rehypeRaw, rehypeSanitize, rehypeKatex];
 

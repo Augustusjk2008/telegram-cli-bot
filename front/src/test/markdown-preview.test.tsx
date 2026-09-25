@@ -5,6 +5,30 @@ import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
 
 
 describe("MarkdownContent", () => {
+  it("renders bold ending in punctuation before adjacent Chinese text", () => {
+    const { container } = render(
+      <MarkdownContent
+        content={[
+          "**有实质进展，但这版仍不能直接作为报价或验收定稿。**新图已把",
+          "",
+          "1. **电池接线疑似画错。**原电池接口",
+          "",
+          "`**代码。**后文`",
+          "",
+          "\\*\\*字面。\\*\\*后文",
+        ].join("\n")}
+        variant="chat"
+      />,
+    );
+
+    expect(Array.from(container.querySelectorAll("strong")).map((node) => node.textContent)).toEqual([
+      "有实质进展，但这版仍不能直接作为报价或验收定稿。",
+      "电池接线疑似画错。",
+    ]);
+    expect(container.querySelector("code")).toHaveTextContent("**代码。**后文");
+    expect(container).toHaveTextContent("**字面。**后文");
+  });
+
   it("renders embedded README HTML in file previews", () => {
     const resolveImageSrc = vi.fn((src: string) => `/resolved/${src}`);
     const { container } = render(
