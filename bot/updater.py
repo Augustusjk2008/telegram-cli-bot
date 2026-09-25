@@ -823,20 +823,11 @@ def _emit_download_log(
     )
 
 
-def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
-    if not (repo_root / "front").exists():
-        return True, "未检测到前端目录，跳过构建"
-
-    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
-    script_path = (repo_root / "scripts" / script_name).resolve()
-    if not script_path.exists():
-        return False, f"未找到前端构建脚本: {script_path}"
-
-    command = [str(script_path)] if os.name == "nt" else ["bash", str(script_path)]
+def _run_frontend_build_command(command: list[str], cwd: Path) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             command,
-            cwd=repo_root,
+            cwd=cwd,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -850,6 +841,32 @@ def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
     if result.returncode != 0:
         return False, output or f"前端构建失败，退出码 {result.returncode}"
     return True, output or "Web 前端构建完成"
+
+
+def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
+    front_root = repo_root / "front"
+    if not front_root.exists():
+        return True, "未检测到前端目录，跳过构建"
+
+    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
+    script_path = (repo_root / "scripts" / script_name).resolve()
+    if script_path.exists():
+        command = [str(script_path)] if os.name == "nt" else ["bash", str(script_path)]
+        return _run_frontend_build_command(command, repo_root)
+
+    npm_path = shutil.which("npm")
+    if not npm_path:
+        return False, "未找到前端构建脚本，且系统中没有 npm，无法重建前端资源"
+
+    build_command = [npm_path, "run", "build"]
+    success, output = _run_frontend_build_command(build_command, front_root)
+    if success:
+        return success, output
+
+    installed, install_output = _run_frontend_build_command([npm_path, "install"], front_root)
+    if not installed:
+        return installed, install_output
+    return _run_frontend_build_command(build_command, front_root)
 
 
 def _list_package_entry_paths(package_path: Path) -> list[str]:

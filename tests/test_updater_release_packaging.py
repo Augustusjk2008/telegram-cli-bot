@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -194,3 +195,69 @@ def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_
     assert "WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)" in portable
     assert 'print(f"{key}={value}")' not in portable
     assert "print(f'{key}={value}')" in portable
+
+
+def test_updated_frontend_build_uses_npm_without_legacy_script(monkeypatch, tmp_path: Path) -> None:
+    front_root = tmp_path / "front"
+    front_root.mkdir()
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs["cwd"]))
+        return subprocess.CompletedProcess(command, 0, stdout="built", stderr="")
+
+    monkeypatch.setattr(updater.shutil, "which", lambda name: "npm" if name == "npm" else None)
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    assert updater._build_updated_frontend(tmp_path) == (True, "built")
+    assert commands == [(["npm", "run", "build"], front_root)]
+
+
+def test_updated_frontend_build_installs_dependencies_then_retries(monkeypatch, tmp_path: Path) -> None:
+    front_root = tmp_path / "front"
+    front_root.mkdir()
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs["cwd"]))
+        return subprocess.CompletedProcess(command, 1 if len(commands) == 1 else 0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    assert updater._build_updated_frontend(tmp_path)[0] is True
+    assert commands == [
+        (["npm", "run", "build"], front_root),
+        (["npm", "install"], front_root),
+        (["npm", "run", "build"], front_root),
+    ]
+
+
+def test_updated_frontend_build_reports_missing_npm(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "front").mkdir()
+    monkeypatch.setattr(updater.shutil, "which", lambda _name: None)
+
+    success, message = updater._build_updated_frontend(tmp_path)
+
+    assert success is False
+    assert "npm" in message
+
+
+def test_updated_frontend_build_keeps_legacy_script_precedence(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "front").mkdir()
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
+    script_path = scripts_dir / script_name
+    script_path.write_text("stub", encoding="utf-8")
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs["cwd"]))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+
+    assert updater._build_updated_frontend(tmp_path)[0] is True
+    expected = [str(script_path.resolve())] if os.name == "nt" else ["bash", str(script_path.resolve())]
+    assert commands == [(expected, tmp_path)]
