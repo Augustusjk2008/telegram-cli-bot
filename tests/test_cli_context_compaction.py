@@ -161,6 +161,7 @@ async def test_stream_cli_chat_switches_compaction_baseline_when_session_changes
     web_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    web_manager.main_profile.cli_params.set_param("codex", "model", "test-model")
     readings = [
         _codex_context_usage(20),
         _codex_context_usage(80),
@@ -193,4 +194,4 @@ async def test_stream_cli_chat_switches_compaction_baseline_when_session_changes
     assert context_usage["session_id"] == "thread-2"
     assert context_usage["context_left_percent"] == 90
     assert context_usage["compaction_count"] == 1
-    assert context_usage["model"] == "gpt-5.4"
+    assert context_usage["model"] == "test-model"

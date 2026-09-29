@@ -5,7 +5,7 @@
       "id": "codex",
       "label": "Codex",
       "icon": "SquareTerminal",
-      "windowsCommand": "codex",
+      "windowsCommand": "codex --no-daemon",
       "linuxCommand": "codex",
       "macosCommand": "",
       "cwd": ".",

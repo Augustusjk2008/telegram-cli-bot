@@ -542,9 +542,9 @@ class BotProfile:
         params_dict = self.cli_params.to_dict()
         # 检查是否有自定义配置
         has_custom = False
-        from bot.cli_params import DEFAULT_PARAMS_MAP
+        from bot.cli_params import get_default_params
         for cli_type, params in params_dict.items():
-            default = DEFAULT_PARAMS_MAP.get(cli_type, {})
+            default = get_default_params(cli_type)
             if params != default:
                 has_custom = True
                 break

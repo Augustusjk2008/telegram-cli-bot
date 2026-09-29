@@ -70,21 +70,24 @@ class TestManagerLoadSave:
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
     @pytest.mark.asyncio
-    async def test_add_bot_defaults_yolo_false_without_persisting_cli_params(self, temp_dir: Path):
+    @pytest.mark.parametrize("cli_type", ["codex", "claude"])
+    async def test_add_bot_defaults_without_persisting_cli_params(self, temp_dir: Path, monkeypatch, cli_type):
+        monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", ["first-model", "second-model", "none"])
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main"), str(storage))
 
-        with patch("bot.manager.resolve_cli_executable", return_value="codex"):
+        with patch("bot.manager.resolve_cli_executable", return_value=cli_type):
             profile = await manager.add_bot(
                 "safe1",
-                "codex",
-                "codex",
+                cli_type,
+                cli_type,
                 str(temp_dir),
             )
 
         data = json.loads(storage.read_text(encoding="utf-8"))
-        assert profile.cli_params.get_param("codex", "yolo") is False
+        assert profile.cli_params.get_param(cli_type, "yolo") is False
+        assert profile.cli_params.get_param(cli_type, "model") == "first-model"
         assert "cli_params" not in data["bots"][0]
 
     @pytest.mark.asyncio

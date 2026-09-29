@@ -22,7 +22,42 @@ from bot.cli_params import (
     CliParamsConfig,
     clamp_unsafe_cli_params,
     get_cli_output_limits,
+    get_default_params,
 )
+
+
+@pytest.mark.parametrize("cli_type", ["codex", "claude"])
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        (["first-model", "second-model", "none"], "first-model"),
+        (["none", "first-model"], None),
+        ([], None),
+    ],
+)
+def test_cli_model_defaults_follow_configured_order(monkeypatch, cli_type, options, expected):
+    monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", options)
+    config = CliParamsConfig.from_dict({cli_type: {"yolo": True}})
+    assert config.get_param(cli_type, "model") == expected
+    assert get_default_params(cli_type)["model"] == expected
+    config.set_param(cli_type, "model", "custom-model")
+    config.reset_to_default(cli_type)
+    assert config.get_param(cli_type, "model") == expected
+    config.set_param(cli_type, "model", "custom-model")
+    config.reset_to_default()
+    assert config.get_param(cli_type, "model") == expected
+
+
+@pytest.mark.parametrize("cli_type", ["codex", "claude"])
+@pytest.mark.parametrize("model", ["saved-model", None])
+def test_cli_model_defaults_preserve_explicit_saved_choice(monkeypatch, cli_type, model):
+    from bot.models import BotProfile
+
+    monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", ["first-model", "none"])
+    profile = BotProfile.from_dict({"alias": "saved", "cli_params": {cli_type: {"model": model}}})
+    restored = BotProfile.from_dict(profile.to_dict())
+    assert restored.cli_params.get_param(cli_type, "model") == model
+
 
 class TestBuildCliCommand:
     """测试 build_cli_command"""

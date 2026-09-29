@@ -100,7 +100,7 @@ DEFAULT_CODEX_PARAMS = {
     "reasoning_effort": "xhigh",     # -c model_reasoning_effort
     # 可选参数
     "json_output": True,             # --json: JSON格式输出
-    "model": "gpt-5.4",              # --model: 模型选择
+    "model": None,                   # --model: 模型选择
     # 高级参数
     "extra_args": [],                # 额外参数列表
 }
@@ -147,8 +147,8 @@ PARAM_SCHEMA_MAP = {
 class CliParamsConfig:
     """CLI 参数配置类"""
     
-    claude: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CLAUDE_PARAMS))
-    codex: Dict[str, Any] = field(default_factory=lambda: copy.deepcopy(DEFAULT_CODEX_PARAMS))
+    claude: Dict[str, Any] = field(default_factory=lambda: get_default_params("claude"))
+    codex: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex"))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
@@ -168,7 +168,7 @@ class CliParamsConfig:
             cli_data = data.get(cli_type)
             if isinstance(cli_data, dict):
                 # 合并配置，保留默认值中不存在的键
-                default = DEFAULT_PARAMS_MAP[cli_type].copy()
+                default = config.get_params(cli_type)
                 default.update(cli_data)
                 setattr(config, cli_type, default)
         
@@ -195,21 +195,27 @@ class CliParamsConfig:
         """重置为默认配置"""
         if cli_type is None:
             # 重置所有
-            self.claude = copy.deepcopy(DEFAULT_CLAUDE_PARAMS)
-            self.codex = copy.deepcopy(DEFAULT_CODEX_PARAMS)
+            self.claude = get_default_params("claude")
+            self.codex = get_default_params("codex")
         else:
             cli_type = cli_type.lower().strip()
             if cli_type not in SUPPORTED_CLI_TYPES:
                 raise ValueError(f"不支持的 CLI 类型: {cli_type}")
-            setattr(self, cli_type, copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type]))
+            setattr(self, cli_type, get_default_params(cli_type))
 
 
 def get_default_params(cli_type: str) -> Dict[str, Any]:
     """获取指定 CLI 类型的默认参数。"""
+    # 延迟导入，避免 config 加载模型选项时的循环依赖。
+    from bot.config import CLI_MODEL_OPTIONS
+
     cli_type = cli_type.lower().strip()
     if cli_type not in SUPPORTED_CLI_TYPES:
         raise ValueError(f"不支持的 CLI 类型: {cli_type}")
-    return copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type])
+    params = copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type])
+    model = normalize_cli_model_options(CLI_MODEL_OPTIONS)[0]
+    params["model"] = None if model.lower() == MODEL_OPTION_NONE else model
+    return params
 
 
 def get_params_schema(cli_type: str) -> Dict[str, Dict[str, Any]]:
