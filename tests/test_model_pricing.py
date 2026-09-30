@@ -144,6 +144,7 @@ def test_default_csv_is_usable_and_small_charges_remain_visible(monkeypatch):
 
 
 @pytest.mark.parametrize(("model", "expected"), [
+    ("gpt-6.1-sol", (2, 0.1, 2.5, 10)),
     ("gpt-6-sol", (2, 0.2, 2.5, 10)),
     ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5)),
 ])
