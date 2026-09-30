@@ -70,6 +70,7 @@ from bot.cli import (
     ClaudeJsonStreamParser,
     CodexJsonStreamParser,
     build_cli_command,
+    cli_data_provider,
     normalize_cli_type,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
@@ -404,6 +405,7 @@ def _clear_native_agent_session_locked(session: UserSession) -> bool:
 
 
 def _clear_all_native_sessions_locked(session: UserSession) -> bool:
+    _release_codex_server(session)
     changed = bool(
         session.codex_session_id
         or session.claude_session_id
@@ -733,7 +735,7 @@ def _cluster_cli_path(profile: BotProfile, cli_type: str) -> str:
         active_cli_type = normalize_cli_type(profile.cli_type)
     except ValueError:
         active_cli_type = ""
-    return profile.cli_path if active_cli_type == cli_type and profile.cli_path else cli_type
+    return profile.cli_path if cli_data_provider(active_cli_type) == cli_data_provider(cli_type) and profile.cli_path else cli_data_provider(cli_type)
 
 
 def _cluster_runtime_mcp_status() -> dict[str, str]:
@@ -759,7 +761,7 @@ def _cluster_inactive_target_status() -> dict[str, str]:
 
 
 def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, str]:
-    if cli_type != active_cli_type:
+    if cli_data_provider(cli_type) != cli_data_provider(active_cli_type):
         return _cluster_inactive_target_status()
     cli_path = _cluster_cli_path(profile, cli_type)
     command = build_cli_verify_command(cli_type, cli_path)
@@ -896,7 +898,7 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
             "pi_extension_name": "tcb-cluster.ts",
             "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
         }
-    cli_type = active_cli_type if active_cli_type in {"codex", "claude"} else profile.cli_type
+    cli_type = active_cli_type if active_cli_type in {"codex", "codex_server", "claude"} else profile.cli_type
     return {
         **launcher.to_dict(),
         "install_command": build_cli_install_command(
@@ -1741,7 +1743,7 @@ def _create_agent_conversation(
 ) -> tuple[ChatStore, str]:
     store = _get_chat_store(session)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
-    native_provider = NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else normalize_cli_type(profile.cli_type)
+    native_provider = NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else cli_data_provider(profile.cli_type)
     conversation_id = store.create_conversation(
         bot_id=session.bot_id,
         bot_alias=session.bot_alias,
@@ -2015,7 +2017,7 @@ def _select_conversation_locked(
     if str(conversation.get("archived_at") or "").strip():
         _raise(404, "conversation_not_found", "未找到会话")
 
-    native_provider = normalize_cli_type(str(conversation.get("native_provider") or profile.cli_type))
+    native_provider = cli_data_provider(str(conversation.get("native_provider") or profile.cli_type))
     if str(conversation.get("native_provider") or "").strip().lower() == NATIVE_AGENT_PROVIDER:
         native_provider = NATIVE_AGENT_PROVIDER
     conversation_execution_mode = _ensure_conversation_execution_mode(conversation, requested_execution_mode)
@@ -2144,7 +2146,7 @@ def _delete_conversation_locked(
 
     native_cleared = False
     is_active = str(session.active_conversation_id or "") == str(conversation_id or "")
-    native_provider = normalize_cli_type(str(conversation.get("native_provider") or profile.cli_type))
+    native_provider = cli_data_provider(str(conversation.get("native_provider") or profile.cli_type))
     if str(conversation.get("native_provider") or "").strip().lower() == NATIVE_AGENT_PROVIDER:
         native_provider = NATIVE_AGENT_PROVIDER
     _ensure_conversation_execution_mode(conversation, requested_execution_mode)
@@ -2170,6 +2172,7 @@ def _delete_conversation_locked(
         )
     with session._lock:
         if is_active:
+            _release_codex_server(session)
             session.active_conversation_id = None
             if native_provider == NATIVE_AGENT_PROVIDER and session.native_agent_session_id:
                 _clear_native_agent_session_locked(session)
@@ -2544,6 +2547,7 @@ def delete_all_conversations(
     native_cleared = False
     with session._lock:
         if _active_conversation_matches_execution_mode(store, active_conversation_id, resolved_execution_mode):
+            _release_codex_server(session)
             session.active_conversation_id = None
             session.message_count = 0
         if delete_native_session:
@@ -3069,6 +3073,17 @@ async def kill_user_process(
         return result
 
     try:
+        if resolved_execution_mode == EXECUTION_MODE_CLI and profile.cli_type == "codex_server":
+            # The stream owns the interrupt and waits for turn/completed before clearing busy state.
+            with session._lock:
+                session.stop_requested = True
+            if input_is_preparing(session):
+                cancel_input_preparation(session)
+            result = {"killed": True, "message": "已请求停止", "stop_requested": True}
+            if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
+                await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
+                result["cluster_run_cancelled"] = cluster_run.run_id
+            return result
         if process is None and (input_is_preparing(session) or (not native_agent_server_key and (session.running_user_text is not None or session.native_agent_run_id))):
             cancel_input_preparation(session)
             return {"killed": True, "message": "已请求停止", "stop_requested": True}
@@ -3142,7 +3157,7 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     if sys.platform == "win32":
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
-    if cli_type == "codex":
+    if cli_data_provider(cli_type) == "codex":
         env["CI"] = "true"
     apply_git_fsmonitor_disabled_env(env)
     return env
@@ -3159,7 +3174,7 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     if model:
         params[cli_type]["model"] = model
     if reasoning_effort:
-        parameter_name = "reasoning_effort" if cli_type == "codex" else "effort"
+        parameter_name = "reasoning_effort" if cli_data_provider(cli_type) == "codex" else "effort"
         params[cli_type][parameter_name] = reasoning_effort
     return CliParamsConfig.from_dict(params)
 
@@ -3204,7 +3219,7 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
     params = params_config.to_dict()
     cli_params = params.setdefault(cli_type, {})
     extra_args = [str(item) for item in cli_params.get("extra_args", []) if str(item).strip()]
-    if cli_type == "codex":
+    if cli_data_provider(cli_type) == "codex":
         injection = ["-c", f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.command={_quote_toml_string(str(launcher_path))}"]
     elif cli_type == "claude":
         extra_args = _filter_claude_host_cluster_extra_args(extra_args)
@@ -3719,7 +3734,7 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     if str(cli_type or "").strip().lower() == NATIVE_AGENT_PROVIDER:
         return str(session.native_agent_session_id or "").strip()
     normalized = normalize_cli_type(cli_type)
-    if normalized == "codex":
+    if cli_data_provider(normalized) == "codex":
         return str(session.codex_session_id or "").strip()
     if normalized == "claude":
         return str(session.claude_session_id or "").strip()
@@ -3742,7 +3757,7 @@ def _status_context_session_id(
     thread_id: Optional[str] = None,
 ) -> str:
     normalized = normalize_cli_type(cli_type)
-    if normalized == "codex":
+    if cli_data_provider(normalized) == "codex":
         candidate = str(thread_id or attempt.cli_session_id or "").strip()
         if candidate:
             return candidate
@@ -3797,11 +3812,16 @@ def _with_compaction_count(
     *,
     previous_left_percent: int | None,
     compaction_count: int,
+    observed_count: int | None = None,
 ) -> tuple[dict[str, Any] | None, int | None, int]:
     if not isinstance(context_usage, dict) or not context_usage:
         return context_usage, previous_left_percent, compaction_count
 
     current_left_percent = _context_left_percent(context_usage)
+    if observed_count is not None:
+        next_usage = dict(context_usage)
+        next_usage["compaction_count"] = max(0, observed_count)
+        return next_usage, current_left_percent, max(0, observed_count)
     if current_left_percent is None:
         return dict(context_usage), previous_left_percent, compaction_count
 
@@ -3840,7 +3860,7 @@ async def _resolve_cli_context_usage_bounded(
     normalized_session_id = str(session_id or "").strip()
     if not normalized_session_id:
         return None
-    normalized_cli_type = normalize_cli_type(cli_type)
+    normalized_cli_type = cli_data_provider(cli_type)
     loop = asyncio.get_running_loop()
     task = loop.run_in_executor(
         _CLI_CONTEXT_USAGE_EXECUTOR,
@@ -3893,7 +3913,7 @@ def _apply_agent_prompt_if_needed(prompt_text: str, agent: AgentProfile, session
 
 def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemptState:
     with session._lock:
-        if cli_type == "codex":
+        if cli_data_provider(cli_type) == "codex":
             return CliAttemptState(
                 cli_session_id=session.codex_session_id,
                 resume_session=bool(session.codex_session_id),
@@ -3912,7 +3932,7 @@ def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemp
 
 def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
     with session._lock:
-        if cli_type == "codex":
+        if cli_data_provider(cli_type) == "codex":
             if session.codex_session_id is None:
                 return False
             session.codex_session_id = None
@@ -4062,7 +4082,7 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
 class _StreamPreviewState:
     def __init__(self, cli_type: str):
         self.cli_type = cli_type
-        parser_type = CodexJsonStreamParser if cli_type == "codex" else ClaudeJsonStreamParser
+        parser_type = CodexJsonStreamParser if cli_data_provider(cli_type) == "codex" else ClaudeJsonStreamParser
         self._parser = parser_type(
             raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
             final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
@@ -4080,6 +4100,68 @@ class _StreamPreviewState:
 
     def result(self):
         return self._parser.result()
+
+
+def _codex_server_owner(session: UserSession) -> tuple[int, int, str]:
+    return (session.bot_id, chat_session_user_id(session.user_id), session.agent_id)
+
+
+def _release_codex_server(session: UserSession) -> None:
+    from bot.codex_server.runtime import get_codex_server_registry
+    get_codex_server_registry().release_owner(_codex_server_owner(session))
+
+
+class _CodexServerOutputReader:
+    """Feed one app-server turn into the shared CLI persistence and SSE loop."""
+
+    def __init__(self, runtime: Any, prompt: str, output_queue: queue.Queue[Any]):
+        self.runtime = runtime
+        self.output_queue = output_queue
+        self.done = threading.Event()
+        self.returncode = 0
+        self._closing = False
+        self.task = asyncio.create_task(self._read(prompt))
+
+    async def _put(self, value: Any) -> None:
+        while not self._closing:
+            try:
+                self.output_queue.put_nowait(value)
+                return
+            except queue.Full:
+                await asyncio.sleep(0.01)
+
+    async def _read(self, prompt: str) -> None:
+        try:
+            async for event in self.runtime.stream_turn(prompt):
+                await self._put(json.dumps(event, ensure_ascii=False) + "\n")
+            self.returncode = int(self.runtime.returncode or 0)
+        except asyncio.CancelledError:
+            self.returncode = -1
+            raise
+        except Exception as exc:
+            self.returncode = -1
+            await self._put(json.dumps({"type": "turn.failed", "error": {"message": str(exc)}}) + "\n")
+        finally:
+            await self._put(_PROCESS_STDOUT_EOF)
+            self.done.set()
+
+    async def close(self, *, abort: bool) -> None:
+        if abort:
+            self._closing = True
+            try:
+                await self.runtime.interrupt()
+            finally:
+                if not self.task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(self.task), timeout=5.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        self.task.cancel()
+                        await self.runtime.close()
+                        await asyncio.gather(self.task, return_exceptions=True)
+        if not self.task.done():
+            await self.task
+        elif not self.task.cancelled():
+            self.task.result()
 
 
 @dataclass(frozen=True)
@@ -5065,7 +5147,10 @@ async def _stream_cli_chat(
     completion_state_for_diag = ""
     normal_return_for_diag = False
     active_lifecycle: _CliProcessLifecycle | None = None
+    active_server_reader: _CodexServerOutputReader | None = None
     turn_handle = None
+    turn_completed = False
+    persistence_buffer = None
     try:
         translation_config = translation_snapshot(enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main")
         session.touch()
@@ -5080,7 +5165,7 @@ async def _stream_cli_chat(
             profile=profile,
             session=session,
             user_text=text,
-            native_provider=cli_type,
+            native_provider=cli_data_provider(cli_type),
             actor=_actor_from_request(request),
         )
         pending_translation = input_translation_pending(text, translation_config)
@@ -5099,19 +5184,21 @@ async def _stream_cli_chat(
         compaction_session_id: str | None = None
         session_context_left_percent: int | None = None
         session_compaction_count = 0
+        session_compaction_baseline = 0
 
         async def load_compaction_session(session_id: str | None) -> None:
-            nonlocal compaction_session_id, session_context_left_percent, session_compaction_count
+            nonlocal compaction_session_id, session_context_left_percent, session_compaction_count, session_compaction_baseline
             normalized_session_id = str(session_id or "").strip()
             if normalized_session_id == compaction_session_id:
                 return
             previous_usage = await service.get_latest_native_session_context_usage_async(
-                native_provider=cli_type,
+                native_provider=cli_data_provider(cli_type),
                 native_session_id=normalized_session_id,
             )
             compaction_session_id = normalized_session_id
             session_context_left_percent = _context_left_percent(previous_usage)
             session_compaction_count = _context_compaction_count(previous_usage)
+            session_compaction_baseline = session_compaction_count
 
         for attempt_index in range(max_attempts):
             check_chat_stopped(session)
@@ -5123,92 +5210,127 @@ async def _stream_cli_chat(
                 allow_unsafe_cli=allow_unsafe_cli,
             )
             turn_model = str(params_for_attempt.get_param(cli_type, "model") or "").strip()
-            try:
-                cmd, use_stdin = build_cli_command(
-                    cli_type=cli_type,
-                    resolved_cli=resolved_cli,
-                    user_text=prompt_text,
-                    env=env,
-                    session_id=attempt.cli_session_id,
-                    resume_session=attempt.resume_session,
-                    json_output=(cli_type in ("codex", "claude")),
-                    params_config=params_for_attempt,
-                    working_dir=session.working_dir,
-                    task_mode=request.task_mode if request is not None else "standard",
-                )
-            except ValueError as exc:
-                _raise(400, "invalid_cli_command", str(exc))
-
+            output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
+            server_reader = None
+            server_runtime = None
+            process = None
+            process_lifecycle = None
             quota_capture = None
-            if cli_type == "codex":
-                quota_capture = await _start_codex_rate_limit_capture(env=env, command=cmd)
-
-            turn_cost = CliTurnCost(cli_type, turn_model)
-            try:
-                check_chat_stopped(session)
-                spawn_started_at = time.perf_counter()
-                process = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE if use_stdin else None,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
+            turn_cost = CliTurnCost(cli_data_provider(cli_type), turn_model)
+            if cli_type == "codex_server":
+                from bot.codex_server.runtime import CodexServerRuntimeRequest, get_codex_server_registry
+                server_env = dict(env)
+                if cluster_run_id:
+                    from bot.cluster.setup import get_cluster_mcp_config_path
+                    server_env["TCB_CLUSTER_MCP_CONFIG"] = str(get_cluster_mcp_config_path())
+                if getattr(profile, "remote_workspace", None):
+                    from bot.remote_workspace.chat import prepare_remote_chat
+                    server_env.update(prepare_remote_chat(profile).env)
+                quota_capture = await _start_codex_rate_limit_capture(
+                    env=server_env,
+                    command=[resolved_cli, "app-server", "--stdio", *params_for_attempt.get_params(cli_type).get("extra_args", [])],
+                )
+                server_runtime = await get_codex_server_registry().open_or_create(CodexServerRuntimeRequest(
+                    owner_key=_codex_server_owner(session),
+                    conversation_id=turn_handle.conversation_id,
+                    command=resolved_cli,
                     cwd=session.working_dir,
-                    env=env,
-                    encoding="utf-8",
-                    errors="replace",
-                    **build_chat_cli_process_kwargs(suspended=True),
-                )
-                process_lifecycle = _create_cli_process_lifecycle(process)
-                active_lifecycle = process_lifecycle
-                with session._lock:
-                    session.process = process
-                try:
-                    await asyncio.to_thread(
-                        resume_suspended_process,
-                        process,
-                        process_lifecycle.process_tree,
-                    )
-                except Exception as exc:
-                    await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
-                    active_lifecycle = None
-                    check_chat_stopped(session)
-                    _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
-                process_pid = int(getattr(process, "pid", 0) or 0)
-                diag_log_event(
-                    logger,
-                    "cli_stream_start",
-                    alias=alias,
-                    agent=session.agent_id,
-                    cli_type=cli_type,
-                    pid=process_pid,
-                    cluster_run_id=cluster_run_id,
-                    resume_session=attempt.resume_session,
-                    attempt=attempt_index + 1,
-                )
-                diag_log_slow(
-                    logger,
-                    "cli_spawn",
-                    int(round((time.perf_counter() - spawn_started_at) * 1000)),
-                    alias=alias,
-                    agent=session.agent_id,
-                    cli_type=cli_type,
-                    pid=process_pid,
-                    cluster_run_id=cluster_run_id,
-                )
-            except FileNotFoundError:
-                _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
-
-            if use_stdin:
+                    env=server_env,
+                    params_config=params_for_attempt,
+                    thread_id=str(attempt.cli_session_id or ""),
+                ))
                 check_chat_stopped(session)
+                server_reader = _CodexServerOutputReader(server_runtime, prompt_text, output_queue)
+                active_server_reader = server_reader
+            else:
+                if cli_type == "codex":
+                    from bot.codex_server.runtime import get_codex_server_registry
+                    await get_codex_server_registry().close_owner(_codex_server_owner(session))
                 try:
-                    assert process.stdin is not None
-                    process.stdin.write(prompt_text + "\n")
-                    process.stdin.flush()
-                    process.stdin.close()
-                except (BrokenPipeError, OSError) as exc:
-                    _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
+                    cmd, use_stdin = build_cli_command(
+                        cli_type=cli_type,
+                        resolved_cli=resolved_cli,
+                        user_text=prompt_text,
+                        env=env,
+                        session_id=attempt.cli_session_id,
+                        resume_session=attempt.resume_session,
+                        json_output=(cli_type in ("codex", "claude")),
+                        params_config=params_for_attempt,
+                        working_dir=session.working_dir,
+                        task_mode=request.task_mode if request is not None else "standard",
+                    )
+                except ValueError as exc:
+                    _raise(400, "invalid_cli_command", str(exc))
+
+                quota_capture = None
+                if cli_type == "codex":
+                    quota_capture = await _start_codex_rate_limit_capture(env=env, command=cmd)
+
+                try:
+                    check_chat_stopped(session)
+                    spawn_started_at = time.perf_counter()
+                    process = subprocess.Popen(
+                        cmd,
+                        stdin=subprocess.PIPE if use_stdin else None,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        cwd=session.working_dir,
+                        env=env,
+                        encoding="utf-8",
+                        errors="replace",
+                        **build_chat_cli_process_kwargs(suspended=True),
+                    )
+                    process_lifecycle = _create_cli_process_lifecycle(process)
+                    active_lifecycle = process_lifecycle
+                    with session._lock:
+                        session.process = process
+                    try:
+                        await asyncio.to_thread(
+                            resume_suspended_process,
+                            process,
+                            process_lifecycle.process_tree,
+                        )
+                    except Exception as exc:
+                        await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
+                        active_lifecycle = None
+                        check_chat_stopped(session)
+                        _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
+                    process_pid = int(getattr(process, "pid", 0) or 0)
+                    diag_log_event(
+                        logger,
+                        "cli_stream_start",
+                        alias=alias,
+                        agent=session.agent_id,
+                        cli_type=cli_type,
+                        pid=process_pid,
+                        cluster_run_id=cluster_run_id,
+                        resume_session=attempt.resume_session,
+                        attempt=attempt_index + 1,
+                    )
+                    diag_log_slow(
+                        logger,
+                        "cli_spawn",
+                        int(round((time.perf_counter() - spawn_started_at) * 1000)),
+                        alias=alias,
+                        agent=session.agent_id,
+                        cli_type=cli_type,
+                        pid=process_pid,
+                        cluster_run_id=cluster_run_id,
+                    )
+                except FileNotFoundError:
+                    _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+
+                if use_stdin:
+                    check_chat_stopped(session)
+                    try:
+                        assert process.stdin is not None
+                        process.stdin.write(prompt_text + "\n")
+                        process.stdin.flush()
+                        process.stdin.close()
+                    except (BrokenPipeError, OSError) as exc:
+                        _raise(500, "cli_write_failed", msg("chat", "cli_failed") + f": {exc}")
 
             turn_event_ids = {
                 "turn_id": turn_handle.turn_id,
@@ -5230,9 +5352,11 @@ async def _stream_cli_chat(
                 }
                 meta_sent = True
 
-            output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
-            stdout_reader = _start_process_stdout_reader(process, output_queue)
-            process_lifecycle.reader = stdout_reader
+            if server_reader is not None:
+                stdout_reader = server_reader
+            else:
+                stdout_reader = _start_process_stdout_reader(process, output_queue)
+                process_lifecycle.reader = stdout_reader
             preview_state = _StreamPreviewState(cli_type)
             persistence_buffer = StreamingPersistenceBuffer(
                 service,
@@ -5257,7 +5381,7 @@ async def _stream_cli_chat(
             stdout_exit_seen_at: float | None = None
             codex_done_candidate: Optional[str] = None
             codex_done_seen_at: Optional[float] = None
-            trace_state = create_stream_trace_state(cli_type)
+            trace_state = create_stream_trace_state(cli_data_provider(cli_type))
             live_trace_events: list[dict[str, Any]] = []
             live_trace_event_keys: set[tuple[str, str, str, str]] = set()
             live_trace_truncated = False
@@ -5271,7 +5395,7 @@ async def _stream_cli_chat(
                 estimated_cost = None
                 if cost_model and parsed.terminal_usage is not None:
                     estimated_cost = estimate_usage_cost(
-                        cost_model, parsed.terminal_usage, protocol=cli_type, scope="turn",
+                        cost_model, parsed.terminal_usage, protocol=cli_data_provider(cli_type), scope="turn",
                     )
                 elif parsed.terminal_usage is None:
                     try:
@@ -5283,6 +5407,8 @@ async def _stream_cli_chat(
                         logger.debug("读取本轮 CLI 部分费用失败", exc_info=True)
                 if estimated_cost is None:
                     return context_usage
+                if server_reader is not None and (cleanup_abort or server_reader.returncode != 0):
+                    estimated_cost = {**estimated_cost, "is_partial": True}
                 return {
                     **(context_usage or {
                         "provider": cli_type,
@@ -5358,12 +5484,19 @@ async def _stream_cli_chat(
                         output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
                         preview_state.consume(text_chunk)
                         turn_cost.observe(text_chunk)
-                        for trace_event in consume_stream_trace_chunk(cli_type, text_chunk, trace_state):
+                        for trace_event in consume_stream_trace_chunk(cli_data_provider(cli_type), text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None and include_trace:
                                 yield {"type": "trace", **turn_event_ids, "event": appended_trace}
 
-                        if cli_type == "codex":
+                        if cli_data_provider(cli_type) == "codex":
+                            if cli_type == "codex_server":
+                                received_thread_id = preview_state.result().session_id
+                                if received_thread_id and received_thread_id != session.codex_session_id:
+                                    with session._lock:
+                                        session.codex_session_id = received_thread_id
+                                    session.persist()
+                                    service.store.set_conversation_native_session(turn_handle.conversation_id, received_thread_id)
                             now = loop.time()
                             thread_id, codex_done_candidate, codex_done_seen_at = _advance_codex_done_candidate(
                                 text_chunk,
@@ -5381,57 +5514,65 @@ async def _stream_cli_chat(
                     with session._lock:
                         stop_requested = bool(session.stop_requested)
 
-                    if (
-                        stop_requested
-                        and done_terminate_started_at is None
-                    ):
-                        if process.poll() is None:
+                    if server_reader is not None:
+                        if stop_requested and done_terminate_started_at is None:
                             done_terminate_started_at = loop.time()
-                        await _terminate_cli_process_lifecycle(process_lifecycle)
-                    elif (
-                        claude_detector is not None
-                        and done_terminate_started_at is None
-                        and claude_detector.poll(now=loop.time())
-                        and process.poll() is None
-                    ):
-                        done_terminate_started_at = loop.time()
-                        await _terminate_cli_process_lifecycle(process_lifecycle)
-                    elif (
-                        cli_type == "codex"
-                        and codex_done_seen_at is not None
-                        and done_terminate_started_at is None
-                        and process.poll() is None
-                        and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
-                        and output_queue.empty()
-                    ):
-                        done_terminate_started_at = loop.time()
-                        await _terminate_cli_process_lifecycle(process_lifecycle)
-                    elif (
-                        done_terminate_started_at is not None
-                        and not done_force_killed
-                        and process.poll() is None
-                        and (loop.time() - done_terminate_started_at) >= CODEX_TERMINATE_GRACE_SECONDS
-                    ):
-                        done_force_killed = True
-                        await _terminate_cli_process_lifecycle(process_lifecycle)
+                            try:
+                                await server_runtime.interrupt()
+                            except Exception:
+                                await server_runtime.close()
+                    else:
+                        if (
+                            stop_requested
+                            and done_terminate_started_at is None
+                        ):
+                            if process.poll() is None:
+                                done_terminate_started_at = loop.time()
+                            await _terminate_cli_process_lifecycle(process_lifecycle)
+                        elif (
+                            claude_detector is not None
+                            and done_terminate_started_at is None
+                            and claude_detector.poll(now=loop.time())
+                            and process.poll() is None
+                        ):
+                            done_terminate_started_at = loop.time()
+                            await _terminate_cli_process_lifecycle(process_lifecycle)
+                        elif (
+                            cli_type == "codex"
+                            and codex_done_seen_at is not None
+                            and done_terminate_started_at is None
+                            and process.poll() is None
+                            and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
+                            and output_queue.empty()
+                        ):
+                            done_terminate_started_at = loop.time()
+                            await _terminate_cli_process_lifecycle(process_lifecycle)
+                        elif (
+                            done_terminate_started_at is not None
+                            and not done_force_killed
+                            and process.poll() is None
+                            and (loop.time() - done_terminate_started_at) >= CODEX_TERMINATE_GRACE_SECONDS
+                        ):
+                            done_force_killed = True
+                            await _terminate_cli_process_lifecycle(process_lifecycle)
 
-                    if (
-                        cli_type == "codex"
-                        and codex_done_seen_at is not None
-                        and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
-                        and process.poll() is not None
-                        and output_queue.empty()
-                    ):
-                        await _terminate_cli_process_lifecycle(process_lifecycle)
+                        if (
+                            cli_type == "codex"
+                            and codex_done_seen_at is not None
+                            and (loop.time() - codex_done_seen_at) >= CODEX_DONE_QUIET_SECONDS
+                            and process.poll() is not None
+                            and output_queue.empty()
+                        ):
+                            await _terminate_cli_process_lifecycle(process_lifecycle)
 
-                    stop_waiting, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
-                        process,
-                        stdout_reader,
-                        output_queue,
-                        stdout_exit_seen_at,
-                    )
-                    if stop_waiting:
-                        await _terminate_cli_process_lifecycle(process_lifecycle)
+                        stop_waiting, stdout_exit_seen_at = _maybe_stop_waiting_for_stdout_after_exit(
+                            process,
+                            stdout_reader,
+                            output_queue,
+                            stdout_exit_seen_at,
+                        )
+                        if stop_waiting:
+                            await _terminate_cli_process_lifecycle(process_lifecycle)
 
                     status_event = preview_state.status_event(elapsed_seconds=int(loop.time() - started_at))
                     status_event.update(turn_event_ids)
@@ -5457,6 +5598,8 @@ async def _stream_cli_chat(
                             status_session_id,
                             cwd_hint=session.working_dir,
                         )
+                        if server_runtime is not None and server_runtime.context_usage:
+                            status_context_usage = server_runtime.context_usage
                         last_context_usage_resolved_at = now
                         last_context_usage_resolved_session_id = status_session_id
                     elif status_session_id and status_session_id == last_context_usage_session_id:
@@ -5472,6 +5615,8 @@ async def _stream_cli_chat(
                             status_context_usage,
                             previous_left_percent=session_context_left_percent,
                             compaction_count=session_compaction_count,
+                            observed_count=(session_compaction_baseline + _context_compaction_count(server_runtime.context_usage))
+                            if server_runtime is not None else None,
                         )
                         status_event["context_usage"] = status_context_usage
                         context_usage_signature = _context_usage_signature(status_context_usage)
@@ -5509,10 +5654,14 @@ async def _stream_cli_chat(
                     else:
                         await asyncio.sleep(0.1)
 
-                waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
-                returncode = _resolve_process_returncode(process, waited_returncode)
-                if done_terminate_started_at is not None:
-                    returncode = 0
+                if server_reader is not None:
+                    await server_reader.task
+                    returncode = server_reader.returncode
+                else:
+                    waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
+                    returncode = _resolve_process_returncode(process, waited_returncode)
+                    if done_terminate_started_at is not None:
+                        returncode = 0
             except asyncio.CancelledError:
                 cleanup_abort = True
                 await persistence_buffer.close()
@@ -5527,11 +5676,15 @@ async def _stream_cli_chat(
             finally:
                 parsed_result = preview_state.result()
                 try:
-                    if cli_type == "codex":
+                    if cli_data_provider(cli_type) == "codex":
                         await _record_codex_rate_limit_capture(quota_capture, parsed_result)
                 finally:
                     try:
-                        await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
+                        if server_reader is not None:
+                            await server_reader.close(abort=cleanup_abort)
+                            active_server_reader = None
+                        else:
+                            await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
                     finally:
                         with session._lock:
                             session.process = None
@@ -5548,12 +5701,17 @@ async def _stream_cli_chat(
 
             parsed_result = preview_state.result()
             error_detail = ""
-            if cli_type == "codex":
+            if cli_data_provider(cli_type) == "codex":
                 thread_id = thread_id or parsed_result.session_id
                 response = codex_done_candidate or parsed_result.final_text
                 if returncode != 0:
                     error_detail = parsed_result.error_text or ""
-                    response = error_detail or response
+                    if error_detail:
+                        response = (
+                            error_detail
+                            if cli_type != "codex_server" or response == "(无输出)"
+                            else f"{error_detail}\n\n{response}"
+                        )
             elif cli_type == "claude":
                 response = strip_claude_done_sentinel(
                     parsed_result.final_text,
@@ -5581,7 +5739,7 @@ async def _stream_cli_chat(
                 prompt_text, done_session = prepare_prompt(force_full_cluster_prompt=True)
                 continue
 
-            if cli_type == "codex":
+            if cli_data_provider(cli_type) == "codex":
                 with session._lock:
                     if thread_id:
                         if session.codex_session_id != thread_id:
@@ -5602,7 +5760,7 @@ async def _stream_cli_chat(
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
-            if cli_type == "codex":
+            if cli_data_provider(cli_type) == "codex":
                 response, should_force_error_output = _decorate_codex_resume_error(
                     response,
                     session_id=attempt.codex_session_id,
@@ -5630,7 +5788,7 @@ async def _stream_cli_chat(
                 live_trace=live_trace_events,
                 stop_requested=stop_requested,
                 returncode=returncode,
-                error_detail=response if completion_state == "error" else error_detail,
+                error_detail=(error_detail or response) if completion_state == "error" else error_detail,
             )
             final_trace_count = len(final_trace)
             for trace_event in final_trace[len(live_trace_events):]:
@@ -5660,6 +5818,8 @@ async def _stream_cli_chat(
                 native_session_id,
                 cwd_hint=session.working_dir,
             )
+            if server_runtime is not None and server_runtime.context_usage:
+                context_usage = server_runtime.context_usage
             if context_usage is None and native_session_id == last_context_usage_session_id:
                 context_usage = last_context_usage
             context_usage = _with_turn_model(context_usage, turn_model)
@@ -5672,6 +5832,8 @@ async def _stream_cli_chat(
                 context_usage,
                 previous_left_percent=session_context_left_percent,
                 compaction_count=session_compaction_count,
+                observed_count=(session_compaction_baseline + _context_compaction_count(server_runtime.context_usage))
+                if server_runtime is not None else None,
             )
             context_usage = await with_estimated_cost(context_usage)
             complete_started_at = time.perf_counter()
@@ -5682,9 +5844,10 @@ async def _stream_cli_chat(
                 content=fallback_output,
                 native_session_id=native_session_id,
                 error_code=None if completion_state == "completed" else completion_state,
-                error_message=None if completion_state == "completed" else response,
+                error_message=None if completion_state == "completed" else (error_detail or response),
                 context_usage=context_usage,
             )
+            turn_completed = True
             stage_durations["db_ms"] += max(
                 0,
                 int(round((time.perf_counter() - complete_started_at) * 1000)),
@@ -5748,6 +5911,27 @@ async def _stream_cli_chat(
             yield {"type": "done", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
                    "output": "", "message": done_message, "returncode": -1, "elapsed_seconds": 0,
                    "session": build_session_snapshot(profile, session)}
+    except Exception as exc:
+        if cli_type != "codex_server" or turn_handle is None or turn_completed:
+            raise
+        if active_server_reader is not None:
+            await active_server_reader.close(abort=True)
+            active_server_reader = None
+        if persistence_buffer is not None:
+            await persistence_buffer.close()
+        done_message = service.complete_turn(
+            turn_handle, content=str(exc), completion_state="error",
+            native_session_id=session.codex_session_id,
+            error_code="codex_server_failed", error_message=str(exc),
+        )
+        with session._lock:
+            session.is_processing = False
+        normal_return_for_diag = True
+        yield {"type": "done", "turn_id": turn_handle.turn_id,
+               "assistant_message_id": turn_handle.assistant_message_id,
+               "output": str(exc), "message": done_message, "returncode": -1,
+               "elapsed_seconds": _calculate_elapsed_seconds(loop, started_at),
+               "session": build_session_snapshot(profile, session)}
     finally:
         elapsed_ms = int(round((time.perf_counter() - total_started_at) * 1000))
         if not normal_return_for_diag:
@@ -5770,6 +5954,8 @@ async def _stream_cli_chat(
             lingering_process = session.process
         lingering_lifecycle = _get_cli_process_lifecycle(lingering_process) or active_lifecycle
         try:
+            if active_server_reader is not None:
+                await active_server_reader.close(abort=True)
             if lingering_lifecycle is not None:
                 await _cleanup_cli_process_lifecycle(lingering_lifecycle, abort=True)
             elif lingering_process is not None:

@@ -2064,51 +2064,72 @@ async def _generate_git_commit_message_from_context(
     prompt_text = build_commit_message_prompt(**context)
     env = _build_git_commit_cli_env()
     params_config = with_global_extra_args(cli_config.cli_params, config.CLI_GLOBAL_EXTRA_ARGS)
-    try:
-        cmd, use_stdin = build_cli_command(
-            cli_type=cli_type,
-            resolved_cli=resolved_cli,
-            user_text=prompt_text,
+    if cli_type == "codex_server":
+        from bot.web.git_commit_message import run_codex_server_commit_message
+        quota_capture = await start_codex_rate_limit_capture(
             env=env,
-            params_config=params_config,
-            session_id=None,
-            resume_session=False,
-            json_output=True,
-            working_dir=repo_root,
+            command=[resolved_cli, "app-server", "--stdio", *params_config.get_params(cli_type).get("extra_args", [])],
         )
-    except ValueError as exc:
-        _raise(400, "invalid_git_commit_cli_command", str(exc))
+        try:
+            raw_output, returncode = await asyncio.wait_for(
+                run_codex_server_commit_message(
+                    resolved_cli=resolved_cli, prompt_text=prompt_text, repo_root=repo_root,
+                    env=env, params_config=params_config,
+                ),
+                timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
+        except ValueError as exc:
+            _raise(400, "invalid_git_commit_cli_command", str(exc))
+        except Exception as exc:
+            _raise(400, "git_commit_message_failed", str(exc))
+    else:
+        try:
+            cmd, use_stdin = build_cli_command(
+                cli_type=cli_type,
+                resolved_cli=resolved_cli,
+                user_text=prompt_text,
+                env=env,
+                params_config=params_config,
+                session_id=None,
+                resume_session=False,
+                json_output=True,
+                working_dir=repo_root,
+            )
+        except ValueError as exc:
+            _raise(400, "invalid_git_commit_cli_command", str(exc))
 
-    quota_capture = None
-    if cli_type == "codex":
-        quota_capture = await start_codex_rate_limit_capture(env=env, command=cmd)
+        quota_capture = None
+        if cli_type == "codex":
+            quota_capture = await start_codex_rate_limit_capture(env=env, command=cmd)
 
-    try:
-        process = _start_cli_process(
-            cmd,
-            use_stdin=use_stdin,
-            cwd=repo_root,
-            env=env,
-        )
-    except FileNotFoundError:
-        _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
+        try:
+            process = _start_cli_process(
+                cmd,
+                use_stdin=use_stdin,
+                cwd=repo_root,
+                env=env,
+            )
+        except FileNotFoundError:
+            _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
 
-    try:
-        raw_output, returncode = await asyncio.wait_for(
-            _communicate_process(process, input_text=prompt_text + "\n" if use_stdin else None),
-            timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
-        )
-    except TimeoutError:
-        _terminate_process_sync(process)
-        close_process_streams(process)
-        _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
-    except (BrokenPipeError, OSError) as exc:
-        close_process_streams(process)
-        _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
-    finally:
-        close_process_streams(process)
+        try:
+            raw_output, returncode = await asyncio.wait_for(
+                _communicate_process(process, input_text=prompt_text + "\n" if use_stdin else None),
+                timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _terminate_process_sync(process)
+            close_process_streams(process)
+            _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
+        except (BrokenPipeError, OSError) as exc:
+            close_process_streams(process)
+            _raise(500, "git_commit_message_failed", f"写入 CLI 失败: {exc}")
+        finally:
+            close_process_streams(process)
 
-    if cli_type == "codex":
+    if cli_type in {"codex", "codex_server"}:
         await record_codex_rate_limit_capture(
             quota_capture,
             parse_codex_json_output_result(raw_output),

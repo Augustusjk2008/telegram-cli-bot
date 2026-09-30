@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import threading
@@ -117,7 +118,7 @@ def locate_codex_transcript(
     *,
     codex_home: Path | None = None,
 ) -> LocatedTranscript | None:
-    home = codex_home or (Path.home() / ".codex")
+    home = codex_home or Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
     cached = _get_cached_transcript("codex", session_id, None, home)
     if cached is not None:
         return cached

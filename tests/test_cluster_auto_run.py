@@ -1029,12 +1029,14 @@ async def test_new_main_conversation_does_not_precreate_child_conversations(monk
 
 
 @pytest.mark.asyncio
-async def test_cluster_task_lazily_prepares_child_and_injects_dynamic_role(monkeypatch) -> None:
+@pytest.mark.parametrize("cli_type", ["codex", "codex_server"])
+async def test_cluster_task_lazily_prepares_child_and_injects_dynamic_role(monkeypatch, cli_type) -> None:
     import bot.web.api_service as api_service
 
     profile = BotProfile(
         alias="main",
         working_dir=".",
+        cli_type=cli_type,
         agents=[AgentProfile(id="one", name="Legacy", system_prompt="legacy prompt")],
         cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
     )
@@ -2310,6 +2312,8 @@ def test_cluster_child_cleanup_only_clears_matching_idle_child_after_cluster_is_
     for agent_id in ("related", "manual", "busy"):
         session = SimpleNamespace(
             agent_id=agent_id,
+            bot_id=-1,
+            user_id=1,
             active_conversation_id=f"conv_{agent_id}",
             is_processing=agent_id == "busy",
             codex_session_id=f"codex-{agent_id}",

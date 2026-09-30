@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR
+from bot.config import CLI_TYPE, CLI_PATH, WORKING_DIR, default_cli_path
 from bot.cli_params import CliParamsConfig, SUPPORTED_CLI_TYPES
 from bot.cluster.config import (
     AgentClusterConfig,
@@ -429,9 +429,10 @@ class GitCommitMessageCliConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GitCommitMessageCliConfig":
+        cli_type = normalize_cli_type_config(data.get("cli_type", CLI_TYPE))
         return cls(
-            cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
-            cli_path=str(data.get("cli_path", CLI_PATH) or CLI_PATH),
+            cli_type=cli_type,
+            cli_path=str(data.get("cli_path") or default_cli_path(cli_type)),
             cli_params=CliParamsConfig.from_dict(data.get("cli_params")),
         )
 
@@ -588,11 +589,12 @@ class BotProfile:
             data.get("default_execution_mode", data.get("defaultExecutionMode", "cli")),
         )
         archived = bool(data.get("archived", False))
+        cli_type = normalize_cli_type_config(data.get("cli_type", CLI_TYPE))
         
         profile = cls(
             alias=data["alias"],
-            cli_type=normalize_cli_type_config(data.get("cli_type", CLI_TYPE)),
-            cli_path=data.get("cli_path", CLI_PATH),
+            cli_type=cli_type,
+            cli_path=data.get("cli_path") or default_cli_path(cli_type),
             working_dir=data.get("working_dir", WORKING_DIR),
             enabled=bool(data.get("enabled", True)) and not archived,
             archived=archived,

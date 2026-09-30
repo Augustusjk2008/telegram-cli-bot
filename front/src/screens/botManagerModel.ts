@@ -1,3 +1,4 @@
+import { defaultCliPathForType } from "../utils/cliType";
 import type {
   BotOverview,
   BotStatus,
@@ -223,7 +224,7 @@ export function draftFromBot(bot: BotSummary): EditDraft {
   return {
     alias: bot.alias,
     cliType: bot.cliType,
-    cliPath: bot.cliPath || bot.cliType,
+    cliPath: bot.cliPath || defaultCliPathForType(bot.cliType),
     workingDir: bot.workingDir,
     remoteWorkspace: bot.remoteWorkspace,
     runtimeBackend: getRuntimeBackend(bot),

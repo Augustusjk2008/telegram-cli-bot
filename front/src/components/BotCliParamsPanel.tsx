@@ -1,3 +1,4 @@
+import { cliTypeLabel } from "../utils/cliType";
 import { useEffect, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -182,7 +183,7 @@ export function BotCliParamsPanel({
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-[var(--text)]">CLI 参数</h2>
-          <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams?.cliType || "加载中"}</p>
+          <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams ? cliTypeLabel(cliParams.cliType) : "加载中"}</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button

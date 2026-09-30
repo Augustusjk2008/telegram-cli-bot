@@ -58,6 +58,7 @@ def test_capability_is_stable_scoped_revocable_and_never_retargets(remote_profil
     assert chat.resolve_remote_chat_token(token) is None
     changed = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
     assert changed.config_path != first.config_path
+    assert changed.cli_args("codex_server") != first.cli_args("codex_server")
     assert _token(changed) != token
     assert chat.resolve_remote_chat_token(token) is None
     chat.revoke_remote_chat(remote_profile)
@@ -74,6 +75,7 @@ def test_instructions_and_cli_config_keep_secrets_out_of_prompt(remote_profile):
     for secret in (remote_profile.remote_workspace["key_filename"], remote_profile.remote_workspace["host_key_fingerprint"], _token(prepared)):
         assert secret not in prompt
         assert secret not in " ".join(prepared.cli_args("codex"))
+        assert secret not in " ".join(prepared.cli_args("codex_server"))
         assert secret not in " ".join(prepared.cli_args("claude"))
     control = Path(remote_profile.working_dir)
     assert (control / "AGENTS.md").read_text(encoding="utf-8").endswith(prompt)
@@ -84,6 +86,7 @@ def test_instructions_and_cli_config_keep_secrets_out_of_prompt(remote_profile):
     assert server["command"] == sys.executable
     assert server["args"][-1] == str(prepared.config_path)
     assert prepared.env == {"TCB_REMOTE_MCP_CONFIG": str(prepared.config_path)}
+    assert prepared.cli_args("codex_server") == prepared.cli_args("codex")
 
 
 @pytest.mark.parametrize("tool,args", [

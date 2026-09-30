@@ -5219,6 +5219,8 @@ class WebApiServer:
             await self._tunnel_service.stop()
         await self._fixed_forward_service.stop()
         await self._runner.cleanup()
+        from bot.codex_server.runtime import get_codex_server_registry
+        await get_codex_server_registry().aclose()
         await asyncio.to_thread(close_codex_usage_service_sync)
         await asyncio.to_thread(close_session_store)
         self._runner = None

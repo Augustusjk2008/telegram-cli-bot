@@ -14,21 +14,22 @@ from bot.cluster.runtime import (
 from bot.models import AgentProfile, BotProfile, UserSession
 
 
-def _profile() -> BotProfile:
+def _profile(cli_type="codex") -> BotProfile:
     return BotProfile(
         alias="main",
         working_dir=".",
+        cli_type=cli_type,
         agents=[AgentProfile(id="worker", name="Worker")],
         cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
     )
 
 
-def _run_with_task(runtime: ClusterRuntime):
+def _run_with_task(runtime: ClusterRuntime, cli_type="codex"):
     run = runtime.start_run(
         ClusterRunRequest(
             bot_alias="main",
             user_id=1,
-            profile=_profile(),
+            profile=_profile(cli_type),
             execution_mode="cli",
         )
     )
@@ -121,13 +122,14 @@ async def test_cancel_cluster_run_cancels_running_background_tasks(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypatch) -> None:
+@pytest.mark.parametrize("cli_type", ["codex", "codex_server"])
+async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypatch, cli_type) -> None:
     import bot.web.api_service as api_service
 
     runtime = ClusterRuntime()
     monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
     api_service._CLUSTER_RUN_CONTROLS.clear()
-    run, task = _run_with_task(runtime)
+    run, task = _run_with_task(runtime, cli_type)
     run.execution_mode = "native_agent"
     run.allow_unsafe_cli = True
 

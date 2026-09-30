@@ -1,3 +1,4 @@
+import { cliTypeLabel } from "../utils/cliType";
 import type { BotSummary } from "../services/types";
 
 export function getBotRuntimeLabel(bot: Pick<BotSummary, "cliType" | "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">) {
@@ -6,5 +7,5 @@ export function getBotRuntimeLabel(bot: Pick<BotSummary, "cliType" | "supportedE
   if (preferred === "native_agent" || (supported.length === 1 && supported[0] === "native_agent")) {
     return "原生 agent";
   }
-  return `CLI / ${bot.cliType || "cli"}`;
+  return `CLI / ${cliTypeLabel(bot.cliType || "cli")}`;
 }

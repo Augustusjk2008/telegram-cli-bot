@@ -1,3 +1,4 @@
+import { cliTypeLabel } from "../utils/cliType";
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
@@ -640,7 +641,7 @@ export function SettingsScreen({
 
               <div className="space-y-2">
                 <p><span className="font-medium text-[var(--text)]">运行后端:</span> {nativeRuntime ? "原生 agent" : "CLI"}</p>
-                {!nativeRuntime ? <p><span className="font-medium text-[var(--text)]">CLI:</span> {overview.cliType}</p> : null}
+                {!nativeRuntime ? <p><span className="font-medium text-[var(--text)]">CLI:</span> {cliTypeLabel(overview.cliType)}</p> : null}
                 {!nativeRuntime && overview.cliPath ? (
                   <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
                 ) : null}
@@ -702,6 +703,7 @@ export function SettingsScreen({
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
                     >
                       <option value="codex">codex</option>
+                      <option value="codex_server">codex server</option>
                       <option value="claude">claude</option>
                     </select>
                   </label>

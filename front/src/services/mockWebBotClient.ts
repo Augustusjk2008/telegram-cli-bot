@@ -1,3 +1,4 @@
+import { isCodexCli } from "../utils/cliType";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
@@ -292,7 +293,7 @@ function defaultCliPathForType(cliType: string) {
 
 function buildMockCliParams(cliType: string): CliParamsPayload {
   return {
-    cliType: cliType === "claude" ? "claude" : "codex",
+    cliType: cliType === "claude" || cliType === "codex_server" ? cliType : "codex",
     params: {
       reasoning_effort: "xhigh",
       model: "gpt-5.4",
@@ -405,6 +406,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       rebuildRequired: false,
       options: [
         { value: "codex", label: "codex" },
+        { value: "codex_server", label: "codex server" },
         { value: "claude", label: "claude" },
       ],
     },
@@ -1376,7 +1378,7 @@ export class MockWebBotClient implements WebBotClient {
     },
   ];
   private currentPaths = new Map<string, string>();
-  private cliParamsByBot = new Map<string, CliParamsPayload>();
+  private cliParamsByBot = new Map<string, Partial<Record<CliType, CliParamsPayload>>>();
   private pluginSessions = new Map<
     string,
     | { pluginId: string; renderer: "waveform"; summary: WaveformViewSummary; window: WaveformWindowPayload }
@@ -1577,6 +1579,7 @@ export class MockWebBotClient implements WebBotClient {
   ]);
   private gitIdentityConfigs = new Map<string, GitIdentityConfig>();
   private gitCommitMessageConfig: GitCommitMessageCliConfig | null = null;
+  private gitCommitParamsByCli: Partial<Record<CliType, Record<string, unknown>>> = {};
   private gitSmartCommitJobs = new Map<string, GitSmartCommitJob>();
   private gitSmartCommitActiveJobs = new Map<string, string>();
   private gitSmartCommitJobSeq = 1;
@@ -3436,7 +3439,7 @@ export class MockWebBotClient implements WebBotClient {
         serverName: "tcb-cluster",
         activeCliType,
         runtime: { state: "runtime_ready", message: "运行态可用" },
-        codex: activeCliType === "codex" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        codex: isCodexCli(activeCliType) ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         pi: activeCliType === "pi" ? { state: "installed", message: "Pi 集群扩展已配置" } : { state: "not_checked", message: "未使用" },
       },
@@ -6081,17 +6084,19 @@ export class MockWebBotClient implements WebBotClient {
   ): Promise<GitCommitMessageCliConfig> {
     const current = await this.getGitCommitMessageConfig(botAlias);
     const nextCliType = input.cliType || current.cliType;
+    this.gitCommitParamsByCli[current.cliType] = { ...current.params };
     const base = buildMockGitCommitMessageConfig(nextCliType, input.cliPath || current.cliPath);
     const next: GitCommitMessageCliConfig = {
       ...base,
       cliPath: input.cliPath !== undefined ? input.cliPath.trim() || defaultCliPathForType(nextCliType) : base.cliPath,
       params: {
         ...base.params,
-        ...current.params,
+        ...this.gitCommitParamsByCli[nextCliType],
         ...(input.params || {}),
       },
     };
     this.gitCommitMessageConfig = next;
+    this.gitCommitParamsByCli[nextCliType] = { ...next.params };
     return {
       ...next,
       params: { ...next.params },
@@ -6105,6 +6110,7 @@ export class MockWebBotClient implements WebBotClient {
     const bot = this.getBotSummary("main");
     const next = buildMockGitCommitMessageConfig(bot.cliType, bot.cliPath);
     this.gitCommitMessageConfig = next;
+    this.gitCommitParamsByCli = {};
     return {
       ...next,
       params: { ...next.params },
@@ -6330,9 +6336,6 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
-    if (current.cliType !== cliType) {
-      this.cliParamsByBot.delete(botAlias);
-    }
     const next = {
       ...current,
       cliType: cliType as BotSummary["cliType"],
@@ -6449,7 +6452,7 @@ export class MockWebBotClient implements WebBotClient {
       ...cliParams.params,
       yolo: Boolean(input.bypassApprovalAndSandbox),
     };
-    this.cliParamsByBot.set(alias, cloneCliParamsPayload(cliParams));
+    this.cliParamsByBot.set(alias, { [bot.cliType]: cloneCliParamsPayload(cliParams) });
     if (!this.isLocalAdminSession()) {
       this.botOwners.set(alias, accountId);
       this.setAllowedBotsForAccount(accountId, [...this.getAllowedBotsForAccount(accountId), alias]);
@@ -6476,7 +6479,7 @@ export class MockWebBotClient implements WebBotClient {
     });
     if (cliParams) {
       this.cliParamsByBot.delete(botAlias);
-      this.cliParamsByBot.set(alias, cloneCliParamsPayload(cliParams));
+      this.cliParamsByBot.set(alias, cliParams);
     }
     if (this.botOwners.has(botAlias)) {
       const owner = this.botOwners.get(botAlias) || "";
@@ -6620,12 +6623,17 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getCliParams(botAlias: string): Promise<CliParamsPayload> {
-    const stored = this.cliParamsByBot.get(botAlias);
+    return this.getCliParamsForType(botAlias, this.getBotSummary(botAlias).cliType);
+  }
+
+  private getCliParamsForType(botAlias: string, cliType: CliType): CliParamsPayload {
+    const saved = this.cliParamsByBot.get(botAlias) || {};
+    const stored = saved[cliType];
     if (stored) {
       return cloneCliParamsPayload(stored);
     }
-    const payload = buildMockCliParams(this.getBotSummary(botAlias).cliType);
-    this.cliParamsByBot.set(botAlias, cloneCliParamsPayload(payload));
+    const payload = buildMockCliParams(cliType);
+    this.cliParamsByBot.set(botAlias, { ...saved, [cliType]: cloneCliParamsPayload(payload) });
     return cloneCliParamsPayload(payload);
   }
 
@@ -6676,8 +6684,8 @@ export class MockWebBotClient implements WebBotClient {
     return efforts[0] || "";
   }
 
-  async updateCliParam(botAlias: string, key: string, value: unknown): Promise<CliParamsPayload> {
-    const payload = await this.getCliParams(botAlias);
+  async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {
+    const payload = this.getCliParamsForType(botAlias, (cliType || this.getBotSummary(botAlias).cliType) as CliType);
     const nextValue = key === "model" && value === "none" ? null : value;
     const next = {
       ...payload,
@@ -6686,13 +6694,15 @@ export class MockWebBotClient implements WebBotClient {
         [key]: nextValue,
       },
     };
-    this.cliParamsByBot.set(botAlias, cloneCliParamsPayload(next));
+    this.cliParamsByBot.set(botAlias, { ...this.cliParamsByBot.get(botAlias), [payload.cliType]: cloneCliParamsPayload(next) });
     return cloneCliParamsPayload(next);
   }
 
-  async resetCliParams(botAlias: string): Promise<CliParamsPayload> {
-    this.cliParamsByBot.delete(botAlias);
-    return this.getCliParams(botAlias);
+  async resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload> {
+    const selectedType = (cliType || this.getBotSummary(botAlias).cliType) as CliType;
+    const saved = this.cliParamsByBot.get(botAlias);
+    if (saved) delete saved[selectedType];
+    return this.getCliParamsForType(botAlias, selectedType);
   }
 
   async getTunnelStatus(): Promise<TunnelSnapshot> {

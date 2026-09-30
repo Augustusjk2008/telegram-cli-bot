@@ -354,6 +354,8 @@ def unload_bot_sessions(bot_alias: str) -> None:
     with sessions_lock:
         for key, session in list(sessions.items()):
             if session.bot_alias == bot_alias:
+                from bot.codex_server.runtime import get_codex_server_registry
+                get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.agent_id))
                 _save_session_to_store(session)
                 session.disable_persistence()
                 del sessions[key]
@@ -427,6 +429,8 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
     targets = get_bot_sessions(bot_alias)
 
     for session in targets:
+        from bot.codex_server.runtime import get_codex_server_registry
+        get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.agent_id))
         with session._lock:
             session.working_dir = working_dir
             session.browse_dir = working_dir

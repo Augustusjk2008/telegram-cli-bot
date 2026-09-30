@@ -8,6 +8,20 @@
       "enabled": false
     },
     {
+      "alias": "example-codex-server",
+      "cli_type": "codex_server",
+      "cli_path": "codex",
+      "working_dir": "/path/to/project",
+      "enabled": false,
+      "supported_execution_modes": ["cli"],
+      "default_execution_mode": "cli",
+      "cli_params": {
+        "codex_server": {
+          "reasoning_effort": "xhigh"
+        }
+      }
+    },
+    {
       "alias": "test-expert",
       "cli_type": "codex",
       "cli_path": "codex",

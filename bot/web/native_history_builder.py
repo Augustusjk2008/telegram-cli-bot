@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from bot.cli import normalize_cli_type
+from bot.cli import cli_data_provider
 from bot.web.native_history_adapter import load_native_transcript
 from bot.web.native_history_locator import (
     locate_claude_transcript,
@@ -231,7 +231,7 @@ def build_web_chat_history(
     limit: int | None = 50,
     include_trace: bool = False,
 ) -> list[dict[str, Any]]:
-    provider = normalize_cli_type(getattr(profile, "cli_type", ""))
+    provider = cli_data_provider(getattr(profile, "cli_type", ""))
     native_turns: list[dict[str, Any]] = []
 
     if provider == "codex" and session.codex_session_id:
@@ -323,7 +323,7 @@ def resolve_native_trace_for_turn(
     assistant_text: str = "",
     cwd_hint: str | None = None,
 ) -> dict[str, Any] | None:
-    normalized_provider = normalize_cli_type(provider)
+    normalized_provider = cli_data_provider(provider)
     normalized_session_id = str(session_id or "").strip()
     if normalized_provider not in {"codex", "claude"} or not normalized_session_id:
         return None
@@ -420,7 +420,7 @@ def finalize_web_chat_turn(
     completion_state: str | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
-    provider = normalize_cli_type(getattr(profile, "cli_type", ""))
+    provider = cli_data_provider(getattr(profile, "cli_type", ""))
     session_id = _get_native_session_id(provider, session)
     requested_user_text = str(user_text or "")
     current_items = build_web_chat_history(profile, session, limit=max(20, limit), include_trace=True)

@@ -202,14 +202,14 @@ class RemoteChatConfig:
     def cli_args(self, cli_type: str) -> list[str]:
         args = [str(Path(__file__).with_name("mcp_stdio.py")), "--config", str(self.config_path)]
         server = {"command": sys.executable, "args": args}
-        if cli_type == "codex":
+        if cli_type in {"codex", "codex_server"}:
             return ["-c", f"mcp_servers.{SERVER_NAME}.command={json.dumps(sys.executable)}",
                     "-c", f"mcp_servers.{SERVER_NAME}.args={json.dumps(args)}"]
         if cli_type == "claude":
             return ["--mcp-config", json.dumps({"mcpServers": {SERVER_NAME: server}})]
         if cli_type == "pi":
             return ["--no-builtin-tools", "--extension", str(Path(__file__).with_name("pi_extension.ts"))]
-        raise ValueError("Remote chat supports codex, claude or pi")
+        raise ValueError("Remote chat supports codex, codex_server, claude or pi")
 
 
 def prepare_remote_chat(profile: Any, base_url: str = "") -> RemoteChatConfig:

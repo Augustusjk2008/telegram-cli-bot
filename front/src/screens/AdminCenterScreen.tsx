@@ -1,3 +1,4 @@
+import { cliTypeLabel } from "../utils/cliType";
 import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
@@ -135,9 +136,9 @@ function formatEnvValue(value: EnvConfigValue | undefined, masked = false) {
   return value || "";
 }
 
-function topEntryLabel(values: Record<string, number>) {
+function topEntryLabel(values: Record<string, number>, label = (key: string) => key) {
   const [key, count] = Object.entries(values).sort((left, right) => right[1] - left[1])[0] || [];
-  return key ? `${key} (${count})` : "无";
+  return key ? `${label(key)} (${count})` : "无";
 }
 
 function formatShortTime(value: string) {
@@ -2528,7 +2529,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 总错误: <span className="font-semibold text-[var(--text)]">{cliErrorStats?.summary.total || 0}</span>
               </p>
               <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                CLI 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byCliType || {})}</span>
+                CLI 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byCliType || {}, cliTypeLabel)}</span>
               </p>
               <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
                 Bot 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byBot || {})}</span>
@@ -2594,7 +2595,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       <tr key={item.turnId} className="border-t border-[var(--border)] align-top">
                         <td className="whitespace-nowrap px-3 py-2 text-[var(--muted)]">{formatShortTime(item.startedAt)}</td>
                         <td className="px-3 py-2 text-[var(--text)]">{item.botAlias}</td>
-                        <td className="px-3 py-2 text-[var(--text)]">{item.cliType}</td>
+                        <td className="px-3 py-2 text-[var(--text)]">{cliTypeLabel(item.cliType)}</td>
                         <td className="px-3 py-2 text-[var(--text)]">{item.category}</td>
                         <td className="max-w-md break-all px-3 py-2 text-[var(--text)]">{shortErrorText(item.errorMessage || item.errorCode)}</td>
                         <td className="break-all px-3 py-2 font-mono text-xs text-[var(--muted)]">

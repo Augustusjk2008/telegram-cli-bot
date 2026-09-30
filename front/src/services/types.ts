@@ -1,4 +1,4 @@
-export type CliType = "claude" | "codex";
+export type CliType = "claude" | "codex" | "codex_server";
 export type ChatExecutionMode = "cli" | "native_agent";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";

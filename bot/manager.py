@@ -39,6 +39,20 @@ from bot.sessions import update_bot_alias, update_bot_working_dir
 logger = logging.getLogger(__name__)
 
 
+async def _close_codex_server_runtimes(alias: str, *, require_idle: bool = True) -> None:
+    from bot.codex_server.runtime import get_codex_server_registry
+    from bot.sessions import get_bot_sessions
+    targets = get_bot_sessions(alias)
+    if require_idle:
+        for session in targets:
+            with session._lock:
+                if session.is_processing or session.process is not None:
+                    raise ValueError("当前 Bot 有任务运行中，先终止或等待完成后再修改")
+    registry = get_codex_server_registry()
+    for session in targets:
+        await registry.close_owner((session.bot_id, session.user_id, session.agent_id))
+
+
 def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     data = migrate_native_agent_payload(value)
     existing_data = migrate_native_agent_payload(existing)
@@ -202,7 +216,7 @@ class MultiBotManager:
             return env_cli_path
 
         profiles = [self.main_profile, *[self.managed_profiles[alias] for alias in sorted(self.managed_profiles.keys())]]
-        default_cli_path = normalized_cli_type
+        default_cli_path = "codex" if normalized_cli_type == "codex_server" else normalized_cli_type
         for profile in profiles:
             profile_cli_path = str(profile.cli_path or "").strip()
             if profile.cli_type == normalized_cli_type and profile_cli_path and profile_cli_path != default_cli_path:
@@ -212,7 +226,7 @@ class MultiBotManager:
             if profile.cli_type == normalized_cli_type and profile_cli_path:
                 return profile_cli_path
 
-        return normalized_cli_type
+        return default_cli_path
 
     def _agent_to_summary(self, profile: BotProfile, agent: AgentProfile) -> dict[str, Any]:
         return {
@@ -417,6 +431,7 @@ class MultiBotManager:
 
         async with self._lock:
             removed_profile = self.get_management_profile(normalized_alias)
+            await _close_codex_server_runtimes(normalized_alias)
             profile = self.managed_profiles.pop(normalized_alias, None)
             try:
                 self._save_profiles(removed_alias=normalized_alias)
@@ -476,6 +491,7 @@ class MultiBotManager:
             profile.enabled = False
             profile.archived = True
             try:
+                await _close_codex_server_runtimes(normalized_alias)
                 await get_native_agent_service().close_bot_runtimes(normalized_alias)
                 unload_bot_sessions(normalized_alias)
                 save_managed_profiles(self.storage_file, {**self.managed_profiles, normalized_alias: profile})
@@ -518,6 +534,8 @@ class MultiBotManager:
                     f"未找到 CLI 可执行文件: {resolved_cli_path} "
                     f"(请在设置页填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
                 )
+            if profile.cli_type != resolved_cli_type or profile.cli_path != resolved_cli_path:
+                await _close_codex_server_runtimes(normalized_alias)
             profile.cli_type = resolved_cli_type
             profile.cli_path = resolved_cli_path
             if normalized_alias == self.main_profile.alias:
@@ -619,6 +637,8 @@ class MultiBotManager:
             profile = self._get_profile_for_update(normalized_alias)
             if profile.remote_workspace:
                 raise ValueError("远程智能体的工作区已绑定；请通过编辑智能体更换远程连接")
+            if profile.working_dir != resolved_working_dir:
+                await _close_codex_server_runtimes(normalized_alias)
             profile.working_dir = resolved_working_dir
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()
@@ -641,6 +661,7 @@ class MultiBotManager:
                 raise ValueError("当前智能体没有远程工作区")
             if config == profile.remote_workspace:
                 return
+            await _close_codex_server_runtimes(normalized_alias)
             previous = profile.remote_workspace
             profile.remote_workspace = config
             try:

@@ -603,7 +603,7 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
             return
         message = _stringify_value(payload.get("message"))
         if message:
-            if payload_type == "agent_message":
+            if payload_type in {"agent_message", "commentary"}:
                 _append_trace_event(
                     turn,
                     _trace_event(

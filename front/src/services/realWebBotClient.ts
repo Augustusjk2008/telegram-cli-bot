@@ -1,5 +1,6 @@
 import { mapChatTranslation, mapUserTranslationUpdate } from "../utils/chatTranslation";
 import { mapRemoteWorkspace, remoteConnectionBody } from "./remoteWorkspace";
+import { cliTypeLabel, isCodexCli } from "../utils/cliType";
 import {
   WebApiClientError,
 } from "./types";
@@ -1540,7 +1541,7 @@ function serializePromptPresets(presets: PromptPreset[]) {
 }
 
 function mapCliType(value: unknown): CliType {
-  return value === "claude" ? "claude" : "codex";
+  return value === "claude" || value === "codex_server" ? value : "codex";
 }
 
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
@@ -2265,6 +2266,7 @@ function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
 
 function displayNativeProvider(provider?: string) {
   const normalized = String(provider || "").trim().toLowerCase();
+  if (isCodexCli(normalized)) return "codex";
   if (normalized === "native_agent") {
     return "原生 agent";
   }
@@ -2745,11 +2747,11 @@ function mapEnvConfigItem(raw: RawEnvConfigItem): EnvConfigItem {
     processOverridden: Boolean(raw.process_overridden ?? raw.processOverridden),
     options: (raw.options || []).map((option) => {
       if (typeof option === "string") {
-        return { value: option, label: option };
+        return { value: option, label: raw.key === "CLI_TYPE" ? cliTypeLabel(option) : option };
       }
       return {
         value: String(option.value || ""),
-        label: String(option.label || option.value || ""),
+        label: raw.key === "CLI_TYPE" ? cliTypeLabel(String(option.value || "")) : String(option.label || option.value || ""),
       };
     }),
     validation: raw.validation || {},

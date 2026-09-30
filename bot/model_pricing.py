@@ -82,7 +82,7 @@ def estimate_usage_cost(
     price_model, price = matched
     try:
         cache_write_1h = 0
-        if protocol == "codex":
+        if protocol in {"codex", "codex_server"}:
             input_tokens = _token_count(usage, "input_tokens")
             output = _token_count(usage, "output_tokens")
             cache_read = _token_count(usage, "cached_input_tokens", default=0)

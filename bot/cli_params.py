@@ -109,6 +109,7 @@ DEFAULT_CODEX_PARAMS = {
 DEFAULT_PARAMS_MAP = {
     "claude": DEFAULT_CLAUDE_PARAMS,
     "codex": DEFAULT_CODEX_PARAMS,
+    "codex_server": DEFAULT_CODEX_PARAMS,
 }
 
 # 支持的 CLI 类型
@@ -149,12 +150,14 @@ class CliParamsConfig:
     
     claude: Dict[str, Any] = field(default_factory=lambda: get_default_params("claude"))
     codex: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex"))
+    codex_server: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex_server"))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
         return {
             "claude": copy.deepcopy(self.claude),
             "codex": copy.deepcopy(self.codex),
+            "codex_server": copy.deepcopy(self.codex_server),
         }
     
     @classmethod
@@ -197,6 +200,7 @@ class CliParamsConfig:
             # 重置所有
             self.claude = get_default_params("claude")
             self.codex = get_default_params("codex")
+            self.codex_server = get_default_params("codex_server")
         else:
             cli_type = cli_type.lower().strip()
             if cli_type not in SUPPORTED_CLI_TYPES:
@@ -223,7 +227,7 @@ def get_params_schema(cli_type: str) -> Dict[str, Dict[str, Any]]:
     cli_type = cli_type.lower().strip()
     if cli_type not in SUPPORTED_CLI_TYPES:
         raise ValueError(f"不支持的 CLI 类型: {cli_type}")
-    return copy.deepcopy(PARAM_SCHEMA_MAP[cli_type])
+    return copy.deepcopy(PARAM_SCHEMA_MAP["codex" if cli_type == "codex_server" else cli_type])
 
 
 def normalize_cli_model_options(options: Optional[List[str]]) -> List[str]:
@@ -280,14 +284,21 @@ def clamp_unsafe_cli_params(params_config: CliParamsConfig, *, allow_unsafe_cli:
 def _filter_unsafe_extra_args(cli_type: str, extra_args: Any) -> list[str]:
     if not isinstance(extra_args, list):
         return []
+    cli_type = str(cli_type or "").strip().lower()
+    if cli_type == "codex_server":
+        cli_type = "codex"
     deny_single = {
         "claude": {"--dangerously-skip-permissions"},
-        "codex": {"--dangerously-bypass-approvals-and-sandbox"},
-    }.get(str(cli_type or "").strip().lower(), set())
+        "codex": {"--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto"},
+    }.get(cli_type, set())
     deny_value_flags = {
         "claude": {"--permission-mode"},
-        "codex": {"--approval-policy", "--sandbox"},
-    }.get(str(cli_type or "").strip().lower(), set())
+        "codex": {
+            "-a", "--ask-for-approval", "--approval-policy", "-s", "--sandbox", "--add-dir",
+            "-c", "--config",  # All config overrides require permission, regardless of key.
+        },
+    }.get(cli_type, set())
+    short_value_flags = {flag for flag in deny_value_flags if len(flag) == 2}
     unsafe_config_keys = ("approval_policy", "sandbox_mode", "trust_level")
     filtered: list[str] = []
     skip_next = False
@@ -298,15 +309,13 @@ def _filter_unsafe_extra_args(cli_type: str, extra_args: Any) -> list[str]:
         if skip_next:
             skip_next = False
             continue
-        if arg in deny_single:
+        flag, has_equals, _ = arg.partition("=")
+        if flag in deny_single:
             continue
-        if arg in deny_value_flags:
-            skip_next = True
+        if flag in deny_value_flags:
+            skip_next = not has_equals
             continue
-        if any(arg.startswith(f"{flag}=") for flag in deny_value_flags):
-            continue
-        if str(cli_type or "").strip().lower() == "codex" and arg in {"-c", "--config"}:
-            skip_next = True
+        if any(arg.startswith(short_flag) for short_flag in short_value_flags):
             continue
         if any(key in arg.lower() for key in unsafe_config_keys):
             continue

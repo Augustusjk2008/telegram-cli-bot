@@ -32,7 +32,7 @@ def test_cluster_config_normalizes_reasoning_efforts_and_keeps_missing_values_co
 
 @pytest.mark.parametrize(
     ("cli_type", "parameter_name", "reasoning_effort"),
-    [("codex", "reasoning_effort", "ultra"), ("claude", "effort", "max")],
+    [("codex", "reasoning_effort", "ultra"), ("codex_server", "reasoning_effort", "ultra"), ("claude", "effort", "max")],
 )
 def test_cluster_cli_override_applies_model_and_reasoning_for_selected_tier(
     cli_type: str,

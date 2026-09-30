@@ -13,6 +13,8 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { normalizePathInput } from "../utils/pathInput";
+import { defaultCliPathForType } from "../utils/cliType";
+export { defaultCliPathForType } from "../utils/cliType";
 import {
   buildExecutionConfig,
   DEFAULT_NATIVE_AGENT_CONFIG,
@@ -41,10 +43,6 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   runtimeBackend: "cli",
   nativeAgent: { ...DEFAULT_NATIVE_AGENT_DRAFT },
 };
-
-export function defaultCliPathForType(cliType: CliType) {
-  return cliType === "claude" ? "claude" : "codex";
-}
 
 export function resolveDefaultCliPath(cliType: CliType, bots: BotSummary[]) {
   const fallback = defaultCliPathForType(cliType);
@@ -312,7 +310,7 @@ export function useBotManager({
       setError("CLI 路径不能为空");
       return null;
     }
-    if (bot.cliType === cliType && (bot.cliPath || bot.cliType) === nextCliPath) {
+    if (bot.cliType === cliType && (bot.cliPath || defaultCliPathForType(bot.cliType)) === nextCliPath) {
       return bot;
     }
 

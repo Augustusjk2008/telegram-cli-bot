@@ -1,3 +1,4 @@
+import { cliTypeLabel } from "../utils/cliType";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -391,6 +392,7 @@ function CreatePanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
           >
             <option value="codex">codex</option>
+            <option value="codex_server">codex server</option>
             <option value="claude">claude</option>
           </select>
           </label>
@@ -740,6 +742,7 @@ function EditPanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           >
             <option value="codex">codex</option>
+            <option value="codex_server">codex server</option>
             <option value="claude">claude</option>
           </select>
           </label>
@@ -1684,7 +1687,7 @@ export function DesktopBotManagerScreen({
                         "px-2 py-2 align-middle text-xs",
                         focused ? "text-[var(--text)]" : "text-[var(--muted)]",
                       )}>
-                        {runtimeBackend === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
+                        {runtimeBackend === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
                       </td>
                       <td
                         className={clsx(
@@ -1821,7 +1824,7 @@ export function DesktopBotManagerScreen({
                   {getRuntimeBackend(focusedBot) === "cli" ? (
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
                       <div className="text-xs font-medium text-[var(--muted)]">CLI 路径</div>
-                      <div className="mt-1 break-all font-mono text-xs">{focusedBot.cliPath || focusedBot.cliType}</div>
+                      <div className="mt-1 break-all font-mono text-xs">{focusedBot.cliPath || defaultCliPathForType(focusedBot.cliType)}</div>
                     </div>
                   ) : (
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">

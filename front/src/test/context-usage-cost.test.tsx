@@ -27,6 +27,16 @@ function costMessage(id: string, total?: number, provider = "codex", conversatio
 }
 
 describe("Codex display cost differences", () => {
+  it("shares Codex session cost semantics while preserving server turn costs", () => {
+    const previous = costMessage("exec", 10);
+    const current = costMessage("server", 15, "codex_server");
+    expect(buildDisplayContextUsage([previous, current]).get("server")?.estimatedCost?.total).toBe(5);
+    current.meta!.contextUsage!.estimatedCost!.scope = "turn";
+    expect(buildDisplayContextUsage([previous, current]).get("server")?.estimatedCost?.total).toBe(15);
+    expect(mapChatMessageContextUsage(current.meta!.contextUsage))
+      .toMatchObject({ provider: "codex", estimatedCost: { scope: "turn", total: 15 } });
+  });
+
   it("uses raw preceding totals after growth, equality and resets without mutating messages", () => {
     const totals = [10, 15, 19, 19, 3, 8, 0, 2];
     const messages = totals.map((total, index) => costMessage(String(index), total));

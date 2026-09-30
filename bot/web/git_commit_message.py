@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from typing import Any
+from uuid import uuid4
 
-from bot.cli_params import get_default_params, get_params_schema, normalize_cli_model_options
+from bot.cli_params import CliParamsConfig, get_default_params, get_params_schema, normalize_cli_model_options
 from bot.config import CLI_MODEL_OPTIONS
 from bot.models import BotProfile, GitCommitMessageCliConfig
 from bot.prompts import render_prompt
@@ -15,6 +17,36 @@ DIFF_CHAR_LIMIT = 40 * 1024
 COMMIT_MESSAGE_RE = re.compile(r"<COMMIT_MESSAGE>\s*(.*?)\s*</COMMIT_MESSAGE>", re.S)
 DIFF_SECTION_RE = re.compile(r"(?m)^diff --git ")
 DIFF_SECTION_MIN_CHARS = 160
+
+
+async def run_codex_server_commit_message(
+    *,
+    resolved_cli: str,
+    prompt_text: str,
+    repo_root: str,
+    env: dict[str, str],
+    params_config: CliParamsConfig,
+) -> tuple[str, int]:
+    """Run one isolated turn; the caller owns timeout, quota capture and parsing."""
+    from bot.codex_server.runtime import CodexServerRegistry, CodexServerRuntimeRequest
+
+    registry = CodexServerRegistry()
+    request = CodexServerRuntimeRequest(
+        owner_key=(0, 0, "git-commit-message"),
+        conversation_id=uuid4().hex,
+        command=resolved_cli,
+        cwd=repo_root,
+        env=dict(env),
+        params_config=copy.deepcopy(params_config),
+    )
+    try:
+        runtime = await registry.open_or_create(request)
+        lines = [json.dumps(event, ensure_ascii=False) async for event in runtime.stream_turn(prompt_text)]
+        if runtime.returncode is None:
+            raise RuntimeError("codex server ended without a completed Git commit message turn")
+        return "\n".join(lines), runtime.returncode
+    finally:
+        await registry.aclose()
 
 
 def build_git_commit_cli_config(profile: BotProfile, config: GitCommitMessageCliConfig) -> dict[str, Any]:

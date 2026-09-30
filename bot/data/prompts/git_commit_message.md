@@ -10,7 +10,7 @@ body
 </COMMIT_MESSAGE>
 
 Requirements:
-- Use Conventional Commits style and write the subject and body in English
+- Use Conventional Commits style; the subject and body must be written in Chinese, while the type, optional scope, and technical identifiers retain their conventional spelling
 - The subject must not exceed 100 characters
 - The body is optional; if there are multiple changes, use 2-5 bullets
 - Do not use Markdown code blocks

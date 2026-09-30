@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 
 
 def terminate_session_process(session: "UserSession") -> None:
+    from bot.codex_server.runtime import get_codex_server_registry
+    from bot.chat_identity import chat_session_user_id
+    get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.agent_id))
     with session._lock:
         process = session.process
     if process is not None and process.poll() is None:

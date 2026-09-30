@@ -231,6 +231,7 @@ export function GitCommitCliConfigPanel({
                 className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
               >
                 <option value="codex">codex</option>
+                <option value="codex_server">codex server</option>
                 <option value="claude">claude</option>
               </select>
             </label>

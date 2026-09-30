@@ -1,3 +1,4 @@
+import { cliTypeLabel } from "../utils/cliType";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -331,6 +332,7 @@ export function BotListScreen({
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
                 >
                   <option value="codex">codex</option>
+                  <option value="codex_server">codex server</option>
                   <option value="claude">claude</option>
                 </select>
               </label>
@@ -460,7 +462,7 @@ export function BotListScreen({
                       <StatusPill status={servicePillStatus} />
                     </div>
                     <div className="truncate text-xs font-medium text-[var(--muted)]">
-                      {getRuntimeBackend(bot) === "cli" ? `CLI / ${bot.cliType}` : "原生 agent"}
+                      {getRuntimeBackend(bot) === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
                     </div>
                     <div className="truncate font-mono text-xs text-[var(--muted)]" title={workspaceLabel(bot)}>
                       {workspaceLabel(bot) || "未设置"}

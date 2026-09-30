@@ -46,7 +46,7 @@ def _parse_cli_global_extra_args(raw_value: str) -> dict[str, list[str]]:
     parsed: dict[str, list[str]] = {}
     for key, args in payload.items():
         cli_type = str(key or "").strip().lower()
-        if cli_type not in {"codex", "claude"}:
+        if cli_type not in {"codex", "codex_server", "claude"}:
             logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：不支持的 CLI 类型", key)
             continue
         if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
@@ -242,12 +242,19 @@ PUSHPLUS_TIMEOUT_SECONDS = _get_project_float("PUSHPLUS_TIMEOUT_SECONDS", 5.0)
 PUSHPLUS_PREVIEW_CHARS = _get_project_int("PUSHPLUS_PREVIEW_CHARS", 300)
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"claude", "codex"}
+SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server"}
 if CLI_TYPE not in SUPPORTED_CLI_TYPES:
     logging.warning("CLI_TYPE=%s 已不再受支持，自动回退为 codex", CLI_TYPE)
     CLI_TYPE = "codex"
     if not CLI_PATH:
         CLI_PATH = CLI_TYPE
+
+
+def default_cli_path(cli_type: str) -> str:
+    if cli_type == CLI_TYPE:
+        return CLI_PATH
+    return "claude" if cli_type == "claude" else "codex"
+
 
 DANGEROUS_COMMANDS: Set[str] = {
     "dd",

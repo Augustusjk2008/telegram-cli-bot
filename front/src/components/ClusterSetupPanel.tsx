@@ -16,6 +16,7 @@ function commandText(command: string[]) {
 const CLI_LABELS: Record<string, string> = {
   claude: "Claude",
   codex: "Codex",
+  codex_server: "codex server",
   pi: "Pi",
 };
 
@@ -28,7 +29,7 @@ function targetStatus(status: ClusterStatus) {
     ? "pi"
     : status.mcp.activeCliType === "claude"
       ? "claude"
-      : "codex";
+      : status.mcp.activeCliType === "codex_server" ? "codex_server" : "codex";
   const activeStatus = activeCliType === "pi"
     ? status.mcp.pi
     : activeCliType === "claude"

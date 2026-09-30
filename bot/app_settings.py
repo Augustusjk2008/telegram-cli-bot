@@ -154,7 +154,7 @@ def _normalize_main_bot_profile(value: Any) -> dict[str, Any]:
     if isinstance(value.get("chat_translation_enabled"), bool):
         normalized["chat_translation_enabled"] = value["chat_translation_enabled"]
     cli_type = str(value.get("cli_type") or "").strip().lower()
-    if cli_type in {"claude", "codex"}:
+    if cli_type in {"claude", "codex", "codex_server"}:
         normalized["cli_type"] = cli_type
 
     for key in ("cli_path", "working_dir"):

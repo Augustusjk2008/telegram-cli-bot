@@ -190,7 +190,7 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 
 | 模式 | 主要目标 | 传输与展示 |
 |---|---|---|
-| `cli` | Codex、Claude | Legacy SSE：正文、状态、trace、完成态 |
+| `cli` | codex、codex server、Claude | Legacy SSE：正文、状态、trace、完成态 |
 | `native_agent` | Pi | AG-UI：工具、权限、过程、上下文和原生 session |
 | Cluster | 按 Bot 配置、按主会话编组 | 动态编组、异步委派、轮询、消息回告和模型档位 |
 
@@ -218,6 +218,15 @@ WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=<高强度随机口令>
 ```
+
+CLI 选择支持 `codex`、`codex server` 和 `claude`。`codex` 保留 `codex exec` 入口；
+`codex server` 的内部标识为 `codex_server`，使用常驻 `codex app-server --stdio`，执行模式仍为 `cli`。
+选择 `codex_server` 时，`CLI_PATH` / `cli_path` 仍填写 `codex` 或其可执行文件完整路径。
+创建、编辑智能体和 Git 提交说明配置均可独立选择此入口。
+
+`cli_params.codex_server` 与 `cli_params.codex` 独立保存，使用相同的参数定义和默认值；切换入口不会覆盖另一入口的参数。
+全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。
+两种入口复用 Codex 历史格式、模型参数及费用语义。
 
 运行态数据默认位于 `~/.tcb/orbit-safe-claw`，可通过 `TCB_DATA_DIR` 覆盖。
 

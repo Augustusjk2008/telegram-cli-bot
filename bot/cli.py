@@ -270,6 +270,12 @@ def normalize_cli_type(cli_type: str) -> str:
     return (cli_type or "").strip().lower()
 
 
+def cli_data_provider(cli_type: str) -> str:
+    """Return the transcript/usage format without changing the execution entry."""
+    normalized = normalize_cli_type(cli_type)
+    return "codex" if normalized == "codex_server" else normalized
+
+
 def validate_cli_type(cli_type: str) -> str:
     normalized = normalize_cli_type(cli_type)
     if normalized not in SUPPORTED_CLI_TYPES:
@@ -304,6 +310,8 @@ def build_cli_command(
         params_config: CLI 参数配置
     """
     kind = validate_cli_type(cli_type)
+    if kind == "codex_server":
+        raise ValueError("codex server 必须通过 app-server 运行时执行，不能使用 exec")
     cmd, use_stdin = build_cli_args_from_config(
         cli_type=kind,
         resolved_cli=resolved_cli,
@@ -412,8 +420,10 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
     result["thread_id"] = _extract_codex_thread_id(event)
     event_type = str(event.get("type", "")).strip()
 
-    if event_type == "error":
+    if event_type in {"error", "turn.failed"}:
         result["error_text"] = _extract_codex_error_text(event)
+        if not result["error_text"] and isinstance(event.get("error"), dict):
+            result["error_text"] = _extract_codex_error_text({"error": event["error"]})
         return result
 
     if event_type in {"response_item", "event_msg"}:

@@ -5,7 +5,7 @@ import json
 import threading
 from typing import Any
 
-from bot.cli import normalize_cli_type
+from bot.cli import cli_data_provider
 from bot.models import BotProfile, UserSession
 from bot.web.async_chat_store import AsyncChatStore
 from bot.web.chat_store import ChatStore, ChatTurnHandle
@@ -228,7 +228,7 @@ class ChatHistoryService:
         if str(context.get("completion_state") or "") not in {"completed", "cancelled"}:
             return False
         raw_provider = str(context.get("native_provider") or "").strip().lower()
-        provider = raw_provider if raw_provider == "native_agent" else normalize_cli_type(raw_provider)
+        provider = raw_provider if raw_provider == "native_agent" else cli_data_provider(raw_provider)
         if provider not in {"codex", "claude"}:
             return False
         return bool(str(context.get("native_session_id") or "").strip())
@@ -257,7 +257,7 @@ class ChatHistoryService:
         if not self._should_attempt_trace_recovery(context):
             return False
 
-        provider = normalize_cli_type(str(context.get("native_provider") or ""))
+        provider = cli_data_provider(str(context.get("native_provider") or ""))
         turn_id = str(context.get("turn_id") or "")
         recovered = resolve_native_trace_for_turn(
             provider,
@@ -545,7 +545,7 @@ class ChatHistoryService:
         assistant_text: str,
         native_session_id: str | None = None,
     ) -> bool:
-        provider = normalize_cli_type(getattr(profile, "cli_type", ""))
+        provider = cli_data_provider(getattr(profile, "cli_type", ""))
         session_id = str(native_session_id or "").strip()
         if provider not in {"codex", "claude"} or not session_id:
             return False

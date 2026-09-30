@@ -11,7 +11,7 @@ from bot import app_settings
 from bot.cli import validate_cli_type
 from bot.cli_params import CliParamsConfig
 from bot.cluster.config import normalize_bot_cluster_config
-from bot.config import CLI_PATH, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR
+from bot.config import CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, default_cli_path
 from bot.models import AgentProfile, BotProfile, normalize_execution_mode_config, normalize_prompt_presets
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def load_managed_profiles(storage_file: Path, *, archived: bool = False) -> dict
         profile_data = {
             "alias": alias,
             "cli_type": cli_type,
-            "cli_path": str(item.get("cli_path", CLI_PATH)).strip() or CLI_PATH,
+            "cli_path": str(item.get("cli_path") or "").strip() or default_cli_path(cli_type),
             "working_dir": os.path.abspath(
                 os.path.expanduser(str(item.get("working_dir", WORKING_DIR)).strip() or WORKING_DIR)
             ),
@@ -128,6 +128,8 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
     if raw_cli_type:
         try:
             main_profile.cli_type = validate_cli_type(raw_cli_type)
+            if not str(profile_data.get("cli_path") or "").strip():
+                main_profile.cli_path = default_cli_path(main_profile.cli_type)
         except ValueError:
             logger.warning("主 Bot 持久化 cli_type 无效(%s)，已忽略", raw_cli_type)
 

@@ -1,4 +1,5 @@
 import type { ChatMessageContextUsage, ChatMessageEstimatedCost } from "../services/types";
+import { isCodexCli } from "./cliType";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -32,6 +33,7 @@ function firstNumber(raw: Record<string, unknown>, ...keys: string[]) {
 
 function displayContextProvider(provider: string) {
   const normalized = provider.trim().toLowerCase();
+  if (isCodexCli(normalized)) return "codex";
   if (normalized === "native_agent") {
     return "原生 agent";
   }
@@ -68,7 +70,10 @@ export function mapEstimatedCost(value: unknown): ChatMessageEstimatedCost | und
 export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUsage | undefined {
   const raw = asRecord(value);
   const provider = displayContextProvider(firstString(raw, "provider"));
-  const source = firstString(raw, "source");
+  const rawProvider = firstString(raw, "provider");
+  const source = firstString(raw, "source") || (
+    rawProvider.trim().toLowerCase() === "codex_server" ? "codex_server_turn" : ""
+  );
   const sessionId = firstString(raw, "sessionId", "session_id");
   const usedTokens = firstNumber(raw, "usedTokens", "used_tokens");
   const contextWindow = firstNumber(raw, "contextWindow", "context_window");

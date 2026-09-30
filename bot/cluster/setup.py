@@ -134,19 +134,19 @@ def prepare_cluster_mcp_launcher(
     return ClusterMcpLauncher(CLUSTER_MCP_SERVER_NAME, launcher_path, config_path, token_path)
 
 
-def normalize_cli_kind(cli_type: str) -> Literal["codex", "claude", "pi"]:
+def normalize_cli_kind(cli_type: str) -> Literal["codex", "codex_server", "claude", "pi"]:
     kind = str(cli_type or "").strip().lower()
-    if kind not in {"codex", "claude", "pi"}:
-        raise ValueError("cluster MCP 仅支持 codex / claude / pi")
+    if kind not in {"codex", "codex_server", "claude", "pi"}:
+        raise ValueError("cluster MCP 仅支持 codex / codex server / claude / pi")
     return kind  # type: ignore[return-value]
 
 
 def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Path) -> list[str]:
     kind = normalize_cli_kind(cli_type)
-    executable = str(cli_path or kind)
+    executable = str(cli_path or ("codex" if kind == "codex_server" else kind))
     if kind == "pi":
         return []
-    if kind == "codex":
+    if kind in {"codex", "codex_server"}:
         return [executable, "mcp", "add", CLUSTER_MCP_SERVER_NAME, "--", str(launcher_path)]
     return [executable, "mcp", "add", "--scope", "user", CLUSTER_MCP_SERVER_NAME, "--", str(launcher_path)]
 
@@ -155,11 +155,11 @@ def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     if kind == "pi":
         return [str(cli_path or kind), "-p", "--tools", f"{CLUSTER_MCP_SERVER_NAME}.cluster_status", "List MCP tools"]
-    return [str(cli_path or kind), "mcp", "get", CLUSTER_MCP_SERVER_NAME]
+    return [str(cli_path or ("codex" if kind == "codex_server" else kind)), "mcp", "get", CLUSTER_MCP_SERVER_NAME]
 
 
 def build_cli_remove_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     if kind == "pi":
         return []
-    return [str(cli_path or kind), "mcp", "remove", CLUSTER_MCP_SERVER_NAME]
+    return [str(cli_path or ("codex" if kind == "codex_server" else kind)), "mcp", "remove", CLUSTER_MCP_SERVER_NAME]
