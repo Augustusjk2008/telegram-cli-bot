@@ -153,6 +153,14 @@ type QueuedChatMessage = {
   sendOptions?: ChatSendOptions;
 };
 
+type ActiveTurnBinding = {
+  localAssistantId: string;
+  turnId: string;
+  assistantMessageId: string;
+  codexServer: boolean;
+  streamStartedAtMs: number;
+};
+
 type ParsedUserAttachment = {
   filename: string;
   savedPath: string;
@@ -784,6 +792,9 @@ function getMessageClientStateKey(item: ChatMessage) {
 }
 
 function getMessageTurnRoleKey(item: ChatMessage) {
+  if (item.role === "user") {
+    return "";
+  }
   const turnId = String(item.turnId || "").trim();
   return turnId ? `${item.role}|${turnId}` : "";
 }
@@ -794,7 +805,7 @@ function getMessageIdKey(item: ChatMessage) {
 }
 
 function getMessageContentKey(item: ChatMessage) {
-  if (item.role === "system" || item.state === "streaming") {
+  if (item.role === "system" || item.role === "user" || item.state === "streaming") {
     return "";
   }
 
@@ -1908,6 +1919,7 @@ export function ChatScreen({
   const touchStartYRef = useRef<number | null>(null);
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
+  const activeTurnBindingRef = useRef<ActiveTurnBinding | null>(null);
   const soloHistoryRevisionRef = useRef(soloHistoryRevision);
   const previousBotAliasRef = useRef(botAlias);
   const previousStorageScopeRef = useRef(storageScope);
@@ -2201,6 +2213,17 @@ export function ChatScreen({
     const nextItems = normalizeInactiveStreamingRows(messages, runtimeActive);
     const hasStreamingRow = nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
     const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow);
+
+    const activeAssistant = [...nextItems].reverse().find((item) => item.role === "assistant" && item.state === "streaming");
+    activeTurnBindingRef.current = shouldPoll && activeAssistant
+      ? {
+        localAssistantId: activeAssistant.id,
+        turnId: activeAssistant.turnId || "",
+        assistantMessageId: activeAssistant.id,
+        codexServer: overview.cliType === "codex_server" && executionModeRef.current === "cli",
+        streamStartedAtMs: resolveStreamStartMs(nextItems),
+      }
+      : null;
 
     setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
     isStreamingRef.current = shouldPoll;
@@ -3978,6 +4001,13 @@ export function ChatScreen({
         ? { tracePresentation: "native_agent_flat", renderKey: assistantId }
         : { renderKey: assistantId },
     };
+    activeTurnBindingRef.current = {
+      localAssistantId: assistantId,
+      turnId: "",
+      assistantMessageId: "",
+      codexServer: botOverviewRef.current?.cliType === "codex_server" && !nativeStreaming,
+      streamStartedAtMs: localStartedAtMs,
+    };
 
     setError("");
     if (options.clearPendingAttachments) {
@@ -4005,6 +4035,19 @@ export function ChatScreen({
     emitBotActivityForActiveAgent("busy");
     let streamTurnId = "";
     let streamAssistantMessageId = "";
+    let streamUserMessageId = userMessage.id;
+    const captureStreamStatus = (status: ChatStatusUpdate) => {
+      if (status.turnId) streamTurnId = status.turnId;
+      if (status.assistantMessageId) streamAssistantMessageId = status.assistantMessageId;
+      const previousUserMessageId = streamUserMessageId;
+      if (status.userMessageId) streamUserMessageId = status.userMessageId;
+      setItems((current) => applyUserTranslationUpdate(current, previousUserMessageId, status));
+      const activeBinding = activeTurnBindingRef.current;
+      if (activeBinding?.localAssistantId === assistantId) {
+        if (streamTurnId) activeBinding.turnId = streamTurnId;
+        if (streamAssistantMessageId) activeBinding.assistantMessageId = streamAssistantMessageId;
+      }
+    };
     const streamEventBinding = () => ({
       ...(streamTurnId ? { turnId: streamTurnId } : {}),
       ...(streamAssistantMessageId ? { assistantMessageId: streamAssistantMessageId } : {}),
@@ -4057,13 +4100,7 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
-        if (status.turnId) {
-          streamTurnId = status.turnId;
-        }
-        if (status.assistantMessageId) {
-          streamAssistantMessageId = status.assistantMessageId;
-        }
-        setItems((current) => applyUserTranslationUpdate(current, userMessage.id, status));
+        captureStreamStatus(status);
         if (sawAgUiEventRef.current) {
           return;
         }
@@ -4086,7 +4123,7 @@ export function ChatScreen({
           assistantId,
           ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
-          userMessageId: userMessage.id,
+          userMessageId: streamUserMessageId,
           status,
         });
       };
@@ -4120,9 +4157,7 @@ export function ChatScreen({
         markSseActivity();
         if (event.type === EventType.RUN_STARTED || event.type === EventType.CUSTOM) {
           const status = mapUserTranslationUpdate(event);
-          if (status.turnId) streamTurnId = status.turnId;
-          if (status.assistantMessageId) streamAssistantMessageId = status.assistantMessageId;
-          setItems((current) => applyUserTranslationUpdate(current, userMessage.id, status));
+          captureStreamStatus(status);
         }
         sawAgUiEventRef.current = true;
         streamBatcher.enqueue({
@@ -4160,6 +4195,11 @@ export function ChatScreen({
         ...finalMessage,
         elapsedSeconds,
       });
+      const activeBinding = activeTurnBindingRef.current;
+      if (activeBinding?.localAssistantId === assistantId) {
+        activeBinding.turnId = finalizedMessage.turnId || streamTurnId;
+        activeBinding.assistantMessageId = finalizedMessage.id || streamAssistantMessageId;
+      }
       const callbackMessage = finalizedMessage.state === "done"
         ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta) }
         : finalizedMessage;
@@ -4250,6 +4290,9 @@ export function ChatScreen({
         setStreamMode("poll");
         scheduleAssistantPoll(0);
       } else {
+        if (activeTurnBindingRef.current?.localAssistantId === assistantId) {
+          activeTurnBindingRef.current = null;
+        }
         resumeTerminalAutoScroll();
         isStreamingRef.current = false;
         streamModeRef.current = "";
@@ -4367,6 +4410,52 @@ export function ChatScreen({
         }
         : undefined;
     if (isStreamingRef.current) {
+      const activeTurnBinding = activeTurnBindingRef.current;
+      if (activeTurnBinding?.codexServer) {
+        const composedText = buildComposedMessageText(text, pendingAttachments);
+        if (!composedText) {
+          return true;
+        }
+        if (!activeTurnBinding.turnId) {
+          const message = "当前任务尚未建立可追加的 Codex turn";
+          setError(message);
+          return false;
+        }
+        setError("");
+        try {
+          const steeredMessage = await client.steerMessage(
+            botAlias,
+            composedText,
+            activeTurnBinding.turnId,
+            sendOptions,
+          );
+          const userMessage: ChatMessage = {
+            ...steeredMessage,
+            role: "user",
+            turnId: steeredMessage.turnId || activeTurnBinding.turnId,
+            state: "done",
+          };
+          setItems((current) => {
+            const assistantIndex = findActiveAssistantIndex(current, {
+              localAssistantId: activeTurnBinding.localAssistantId,
+              assistantMessageId: activeTurnBinding.assistantMessageId || undefined,
+              turnId: activeTurnBinding.turnId,
+              streamStartedAtMs: activeTurnBinding.streamStartedAtMs,
+            });
+            const nextItems = current.slice();
+            nextItems.splice(assistantIndex >= 0 ? assistantIndex : nextItems.length, 0, userMessage);
+            return nextItems;
+          });
+          if (pendingAttachments.length > 0) {
+            setPendingAttachments([]);
+          }
+          setComposerPulseKey((value) => value + 1);
+          return true;
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "发送转向消息失败");
+          return false;
+        }
+      }
       const nextQueuedMessage: QueuedChatMessage = {
         text: text.trim(),
         attachments: pendingAttachments,
@@ -4381,15 +4470,16 @@ export function ChatScreen({
         setPendingAttachments([]);
       }
       setComposerPulseKey((value) => value + 1);
-      return;
+      return true;
     }
     setComposerPulseKey((value) => value + 1);
-    await sendMessageInternal(text, {
+    void sendMessageInternal(text, {
       attachments: pendingAttachments,
       clearPendingAttachments: true,
       sendOptions,
     });
-  }, [pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode]);
+    return true;
+  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode]);
 
   const handleCancelQueuedMessage = useCallback(() => {
     setQueuedMessageState(null, {

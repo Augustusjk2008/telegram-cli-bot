@@ -254,6 +254,12 @@ export interface WebBotClient {
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
   ): Promise<ChatMessage>;
+  steerMessage(
+    botAlias: string,
+    text: string,
+    turnId: string,
+    options?: ChatSendOptions,
+  ): Promise<ChatMessage>;
   replyNativeAgentPermission(
     botAlias: string,
     permissionId: string,

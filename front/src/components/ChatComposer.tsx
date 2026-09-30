@@ -16,7 +16,7 @@ type ComposerAttachment = {
 };
 
 type Props = {
-  onSend: (text: string) => void;
+  onSend: (text: string) => void | boolean | Promise<void | boolean>;
   onAttachFiles?: (files: File[]) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   attachments: ComposerAttachment[];
@@ -453,8 +453,11 @@ export function ChatComposer({
           if (inputDisabled) return;
           const text = message.trim();
           if (!text && attachments.length === 0) return;
-          onSend(text);
-          setMessage("");
+          void Promise.resolve(onSend(text)).then((accepted) => {
+            if (accepted !== false) {
+              setMessage("");
+            }
+          });
         }}
       >
           <div data-testid="chat-composer-input-surface" className={inputBarClassName}>

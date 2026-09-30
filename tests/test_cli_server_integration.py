@@ -9,8 +9,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from bot.manager import MultiBotManager
-from bot.models import BotProfile
+from bot.models import AgentProfile, BotProfile
 from bot.web import api_service
+from bot.web.api_common import WebApiError
 
 
 class ServerTurn:
@@ -51,7 +52,10 @@ def server_chat(tmp_path: Path, monkeypatch):
     manager = MultiBotManager(BotProfile(alias="main", cli_type="codex_server", cli_path="codex", working_dir=str(tmp_path)), str(storage))
     runtime = ServerTurn()
     registry = SimpleNamespace(
-        open_or_create=AsyncMock(return_value=runtime), close_owner=AsyncMock(), release_owner=Mock(),
+        open_or_create=AsyncMock(return_value=runtime),
+        close_owner=AsyncMock(),
+        release_owner=Mock(),
+        steer_owner=AsyncMock(),
     )
     monkeypatch.setattr(server_module, "get_codex_server_registry", lambda: registry)
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
@@ -172,3 +176,172 @@ async def test_server_compaction_counts_events_once_across_turns(server_chat):
         }
         events = [event async for event in api_service._stream_cli_chat(manager, "main", 1001, "continue")]
         assert events[-1]["message"]["meta"]["context_usage"]["compaction_count"] == expected
+
+
+@pytest.mark.asyncio
+async def test_server_steering_appends_user_message_to_active_turn(server_chat):
+    manager, runtime, registry = server_chat
+    runtime.wait_for_interrupt = True
+    stream = api_service._stream_cli_chat(manager, "main", 1001, "hello")
+    first = await anext(stream)
+    session = api_service.get_session_for_alias(manager, "main", 1001)
+    running = api_service._get_chat_history_service(session).store.get_running_reply(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        agent_id=session.agent_id,
+        working_dir=session.working_dir,
+        session_epoch=session.session_epoch,
+        conversation_id=session.active_conversation_id,
+        native_provider_exclude="native_agent",
+    )
+    assert first["type"] == "meta"
+    assert running is not None
+    registry._runtimes = {
+        (session.bot_id, session.user_id, "main"): SimpleNamespace(_turn_id="app-turn")
+    }
+
+    result = await api_service.steer_chat(
+        manager,
+        "main",
+        1001,
+        "follow-up",
+        turn_id=running["turn_id"],
+        execution_mode="cli",
+        actor={"user_id": 1001, "account_id": "acct", "username": "tester"},
+    )
+
+    assert result["turn_id"] == running["turn_id"]
+    assert result["assistant_message_id"] == running["assistant_message_id"]
+    assert result["user_message"]["content"] == "follow-up"
+    assert result["user_message"]["turn_id"] == running["turn_id"]
+    second = await api_service.steer_chat(
+        manager,
+        "main",
+        1001,
+        "second follow-up",
+        turn_id="app-turn",
+        execution_mode="cli",
+    )
+    assert second["assistant_message_id"] == running["assistant_message_id"]
+    assert second["user_message"]["content"] == "second follow-up"
+    registry.steer_owner.assert_any_await(
+        (session.bot_id, session.user_id, "main"), "app-turn", "follow-up"
+    )
+    registry.steer_owner.assert_any_await(
+        (session.bot_id, session.user_id, "main"), "app-turn", "second follow-up"
+    )
+    assert registry.steer_owner.await_count == 2
+    assert session.is_processing
+
+    history = api_service._get_chat_history_service(session).list_history(manager.main_profile, session)
+    assert [item["role"] for item in history].count("assistant") == 1
+    assert [item["content"] for item in history if item["role"] == "user"] == [
+        "hello", "follow-up", "second follow-up"
+    ]
+
+    runtime.interrupted.set()
+    remaining = [event async for event in stream]
+    assert remaining[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_server_steering_rejects_stale_turn_and_wrong_owner(server_chat):
+    manager, runtime, registry = server_chat
+    manager.main_profile.agents.append(AgentProfile(id="worker", name="worker"))
+    runtime.wait_for_interrupt = True
+    stream = api_service._stream_cli_chat(manager, "main", 1001, "hello")
+    await anext(stream)
+    session = api_service.get_session_for_alias(manager, "main", 1001)
+    running = api_service._get_chat_history_service(session).store.get_running_reply(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        agent_id=session.agent_id,
+        working_dir=session.working_dir,
+        session_epoch=session.session_epoch,
+        conversation_id=session.active_conversation_id,
+        native_provider_exclude="native_agent",
+    )
+    assert running is not None
+
+    with pytest.raises(WebApiError) as stale:
+        await api_service.steer_chat(
+            manager,
+            "main",
+            1001,
+            "stale",
+            turn_id="stale-turn",
+            execution_mode="cli",
+        )
+    assert stale.value.status == 409
+    assert stale.value.code == "steering_turn_mismatch"
+
+    with pytest.raises(WebApiError) as wrong_owner:
+        await api_service.steer_chat(
+            manager,
+            "main",
+            1002,
+            "wrong owner",
+            turn_id=running["turn_id"],
+            agent_id="worker",
+            execution_mode="cli",
+        )
+    assert wrong_owner.value.status == 409
+    assert wrong_owner.value.code == "steering_turn_done"
+    registry.steer_owner.assert_not_awaited()
+
+    runtime.interrupted.set()
+    remaining = [event async for event in stream]
+    assert remaining[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_server_ordinary_busy_behavior_remains_session_busy(server_chat):
+    manager, _runtime, _registry = server_chat
+    session = api_service.get_session_for_alias(manager, "main", 1001)
+    session.is_processing = True
+
+    events = api_service._stream_cli_chat(manager, "main", 1001, "busy")
+    with pytest.raises(WebApiError) as exc_info:
+        await anext(events)
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "session_busy"
+    await events.aclose()
+    session.is_processing = False
+
+
+@pytest.mark.asyncio
+async def test_failed_server_steering_does_not_persist_user_message(server_chat):
+    manager, runtime, registry = server_chat
+    runtime.wait_for_interrupt = True
+    stream = api_service._stream_cli_chat(manager, "main", 1001, "hello")
+    await anext(stream)
+    session = api_service.get_session_for_alias(manager, "main", 1001)
+    running = api_service._get_chat_history_service(session).store.get_running_reply(
+        bot_id=session.bot_id,
+        user_id=session.user_id,
+        agent_id=session.agent_id,
+        working_dir=session.working_dir,
+        session_epoch=session.session_epoch,
+        conversation_id=session.active_conversation_id,
+        native_provider_exclude="native_agent",
+    )
+    assert running is not None
+    registry.steer_owner.side_effect = RuntimeError("codex server owner 没有运行时")
+
+    with pytest.raises(WebApiError) as exc_info:
+        await api_service.steer_chat(
+            manager,
+            "main",
+            1001,
+            "should not persist",
+            turn_id=running["turn_id"],
+            execution_mode="cli",
+        )
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "steering_runtime_missing"
+    history = api_service._get_chat_history_service(session).list_history(manager.main_profile, session)
+    assert "should not persist" not in [item["content"] for item in history]
+
+    runtime.interrupted.set()
+    remaining = [event async for event in stream]
+    assert remaining[-1]["type"] == "done"

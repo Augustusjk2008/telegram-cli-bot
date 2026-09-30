@@ -70,9 +70,13 @@ export function mapUserTranslationUpdate(value: unknown): ChatStatusUpdate {
 
 export function applyUserTranslationUpdate(items: ChatMessage[], localId: string, status: ChatStatusUpdate) {
   if (!status.userMessageId && !status.turnId && status.userTranslation === undefined && status.agentInputText === undefined) return items;
-  const index = items.findIndex((item) => item.role === "user" && (
-    item.id === localId || item.id === status.userMessageId || Boolean(status.turnId && item.turnId === status.turnId)
-  ));
+  let index = items.findIndex((item) => item.role === "user" && (item.id === localId || item.id === status.userMessageId));
+  if (index < 0 && status.turnId) {
+    const matchingUsers = items.filter((item) => item.role === "user" && item.turnId === status.turnId);
+    if (matchingUsers.length === 1) {
+      index = items.indexOf(matchingUsers[0]);
+    }
+  }
   if (index < 0) return items;
   const item = items[index];
   const next = items.slice();

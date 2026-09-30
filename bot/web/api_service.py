@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hmac
+import inspect
 import json
 import logging
 import os
@@ -96,7 +97,8 @@ from bot.native_agent.ag_ui_mapper import compact_run_finished_event, is_ag_ui_t
 from bot.native_agent.pi_turn_stream import pi_turn_reconnect_enabled
 from .chat_translation import (
     ChatInputCancelled, cancel_input_preparation, check_chat_stopped,
-    input_is_preparing, input_translation_pending, prepare_chat_input, submit_answer_translation, translation_snapshot,
+    input_is_preparing, input_translation_pending, prepare_chat_input, submit_answer_translation, translate_chat_input,
+    translation_snapshot,
 )
 from bot.native_agent.config_store import (
     find_configured_model,
@@ -4106,6 +4108,22 @@ def _codex_server_owner(session: UserSession) -> tuple[int, int, str]:
     return (session.bot_id, chat_session_user_id(session.user_id), session.agent_id)
 
 
+def _codex_server_steering_turn_id(registry: Any, session: UserSession, fallback: str) -> str:
+    """Resolve the app-server turn id behind the persisted web turn id."""
+    runtimes = getattr(registry, "_runtimes", None)
+    if isinstance(runtimes, dict):
+        runtime = runtimes.get(_codex_server_owner(session))
+        native_turn_id = str(
+            getattr(runtime, "active_turn_id", "")
+            or getattr(runtime, "turn_id", "")
+            or getattr(runtime, "_turn_id", "")
+            or ""
+        ).strip()
+        if native_turn_id:
+            return native_turn_id
+    return fallback
+
+
 def _release_codex_server(session: UserSession) -> None:
     from bot.codex_server.runtime import get_codex_server_registry
     get_codex_server_registry().release_owner(_codex_server_owner(session))
@@ -6028,6 +6046,121 @@ def _normalized_chat_text(
     if not text:
         _raise(400, "empty_message", "消息不能为空")
     return text
+
+
+async def steer_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    turn_id: str,
+    visible_text: str | None = None,
+    agent_id: str = "main",
+    execution_mode: str = "",
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append input to the active codex app-server turn without opening a reader."""
+    profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    if normalize_cli_type(profile.cli_type) != "codex_server":
+        _raise(409, "steering_unsupported_cli", "当前 CLI 不支持运行中追加消息")
+    requested_mode = str(execution_mode or "").strip().lower()
+    if requested_mode and requested_mode != EXECUTION_MODE_CLI:
+        _raise(409, "steering_unsupported_execution_mode", "运行中追加消息仅支持 cli 执行模式")
+    if _resolve_requested_execution_mode(execution_mode, profile) != EXECUTION_MODE_CLI:
+        _raise(409, "steering_unsupported_execution_mode", "运行中追加消息仅支持 cli 执行模式")
+    if str(getattr(session, "agent_id", "main") or "main").strip().lower() != str(agent.id).strip().lower():
+        _raise(409, "steering_scope_mismatch", "追加消息的 agent 范围无效")
+
+    normalized_turn_id = str(turn_id or "").strip()
+    if not normalized_turn_id:
+        _raise(400, "missing_turn_id", "缺少 turn_id")
+    with session._lock:
+        if not session.is_processing:
+            _raise(409, "steering_turn_done", "当前 turn 已结束")
+
+    history = _history_service_for_execution_mode(session, EXECUTION_MODE_CLI)
+    running_reply = await history.get_running_reply_async(session)
+    if running_reply is None:
+        _raise(409, "steering_turn_done", "当前 turn 已结束或不存在")
+    active_turn_id = str(running_reply.get("turn_id") or "").strip()
+
+    from bot.codex_server.runtime import get_codex_server_registry
+
+    registry = get_codex_server_registry()
+    steer_owner = getattr(registry, "steer_owner", None)
+    if not callable(steer_owner):
+        _raise(409, "steering_runtime_missing", "当前 Codex app-server 运行时不可用")
+    observed_runtime_turn_id = _codex_server_steering_turn_id(registry, session, active_turn_id)
+    if normalized_turn_id not in {active_turn_id, observed_runtime_turn_id}:
+        _raise(409, "steering_turn_mismatch", "请求的 turn 与当前活动 turn 不匹配")
+
+    request = _build_chat_run_request(
+        alias,
+        chat_session_user_id(user_id),
+        user_text,
+        visible_text=visible_text,
+        actor=actor,
+    )
+    text = _normalized_chat_text(user_text, request=request)
+    translation_config = translation_snapshot(
+        enabled=bool(getattr(profile, "chat_translation_enabled", False) and session.agent_id == "main")
+    )
+    try:
+        execution_text, user_translation = await translate_chat_input(
+            text=text,
+            session=session,
+            config=translation_config,
+        )
+    except ChatInputCancelled:
+        _raise(409, "steering_cancelled", "追加消息已取消")
+
+    with session._lock:
+        if not session.is_processing:
+            _raise(409, "steering_turn_done", "当前 turn 已结束")
+    try:
+        runtime_turn_id = _codex_server_steering_turn_id(registry, session, active_turn_id)
+        result = steer_owner(_codex_server_owner(session), runtime_turn_id, execution_text)
+        if inspect.isawaitable(result):
+            await result
+    except WebApiError:
+        raise
+    except Exception as exc:
+        message = str(exc).strip() or "Codex app-server steering 失败"
+        lowered = message.lower()
+        if isinstance(exc, (AttributeError, KeyError)) or any(
+            marker in lowered for marker in ("runtime", "运行时", "owner", "不存在", "未找到", "closed", "关闭")
+        ):
+            code = "steering_runtime_missing"
+        elif "turn" in lowered and any(marker in lowered for marker in ("没有活动", "no active", "尚未完成")):
+            code = "steering_turn_done"
+        elif "turn" in lowered and any(
+            marker in lowered for marker in ("mismatch", "match", "不匹配", "活动", "active")
+        ):
+            code = "steering_turn_mismatch"
+        else:
+            code = "steering_failed"
+        _raise(409, code, message)
+
+    try:
+        user_message = await history.append_user_message_to_turn_async(
+            session,
+            turn_id=active_turn_id,
+            conversation_id=str(running_reply.get("conversation_id") or ""),
+            user_text=text,
+            agent_input_text=execution_text,
+            translation=user_translation,
+            actor=_actor_from_request(request),
+        )
+    except (KeyError, ValueError):
+        _raise(409, "steering_turn_done", "当前 turn 已结束，追加消息未保存")
+    session.touch()
+    return {
+        "turn_id": active_turn_id,
+        "assistant_message_id": str(running_reply.get("assistant_message_id") or ""),
+        "conversation_id": str(running_reply.get("conversation_id") or ""),
+        "user_message": user_message,
+    }
 
 
 def _native_chat_prompt_factory(

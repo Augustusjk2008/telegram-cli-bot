@@ -3972,6 +3972,26 @@ export class MockWebBotClient implements WebBotClient {
     return { items: this.getAgentMessages(botAlias, options.agentId || "main") };
   }
 
+  async steerMessage(
+    botAlias: string,
+    text: string,
+    turnId: string,
+    options?: ChatSendOptions,
+  ): Promise<ChatMessage> {
+    const agentId = options?.agentId || "main";
+    const messages = this.getAgentMessages(botAlias, agentId);
+    const message: ChatMessage = {
+      id: `user-steer-${Date.now()}-${messages.length}`,
+      turnId,
+      role: "user",
+      text: options?.visibleText || text,
+      createdAt: new Date().toISOString(),
+      state: "done",
+    };
+    this.appendAgentChatMessage(botAlias, agentId, message);
+    return message;
+  }
+
   async listMessageDelta(botAlias: string, afterId: string, limit = 50, options: AgentScopedOptions = {}): Promise<HistoryDeltaResult> {
     const messages = this.getAgentMessages(botAlias, options.agentId || "main");
     if (!afterId) {

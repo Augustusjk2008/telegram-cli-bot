@@ -74,6 +74,39 @@ test("history merge deduplicates reset rows already represented locally", () => 
   expect(merged[1]).not.toBe(previousItems[1]);
 });
 
+test("history merge keeps multiple user messages in one turn distinct", () => {
+  const previousItems: ChatMessage[] = [
+    {
+      id: "user-original",
+      turnId: "turn-steered",
+      role: "user",
+      text: "原始问题",
+      createdAt: "2026-09-30T06:00:00Z",
+      state: "done",
+    },
+    {
+      id: "user-steer",
+      turnId: "turn-steered",
+      role: "user",
+      text: "追加要求",
+      createdAt: "2026-09-30T06:00:01Z",
+      state: "done",
+    },
+    {
+      id: "assistant-steered",
+      turnId: "turn-steered",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-09-30T06:00:02Z",
+      state: "done",
+    },
+  ];
+
+  const merged = mergeMessagesPreservingClientState(previousItems, previousItems.map((item) => ({ ...item })));
+
+  expect(merged.map((item) => item.id)).toEqual(["user-original", "user-steer", "assistant-steered"]);
+});
+
 test("server trace snapshot upgrades anonymous live events without doubling them", () => {
   const live: ChatMessageMetaInfo = {
     tracePresentation: "native_agent_flat",

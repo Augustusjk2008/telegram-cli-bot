@@ -318,6 +318,79 @@ class ChatHistoryService:
     def replace_assistant_preview(self, handle: ChatTurnHandle, preview_text: str) -> None:
         self.store.replace_assistant_content(handle, preview_text[-800:], state="streaming")
 
+    def get_running_reply(self, session: UserSession) -> dict[str, Any] | None:
+        return self.store.get_running_reply(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
+        )
+
+    async def get_running_reply_async(self, session: UserSession) -> dict[str, Any] | None:
+        return await self.async_store.get_running_reply(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
+        )
+
+    def append_user_message_to_turn(
+        self,
+        session: UserSession,
+        *,
+        turn_id: str,
+        conversation_id: str,
+        user_text: str,
+        agent_input_text: str | None = None,
+        translation: dict[str, Any] | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.store.append_user_message_to_turn(
+            turn_id=turn_id,
+            conversation_id=conversation_id,
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            user_text=user_text,
+            agent_input_text=agent_input_text,
+            translation=translation,
+            actor=actor,
+            native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
+        )
+
+    async def append_user_message_to_turn_async(
+        self,
+        session: UserSession,
+        *,
+        turn_id: str,
+        conversation_id: str,
+        user_text: str,
+        agent_input_text: str | None = None,
+        translation: dict[str, Any] | None = None,
+        actor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.async_store.run_write(
+            self.append_user_message_to_turn,
+            session,
+            turn_id=turn_id,
+            conversation_id=conversation_id,
+            user_text=user_text,
+            agent_input_text=agent_input_text,
+            translation=translation,
+            actor=actor,
+        )
+
     def update_context_usage(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
         return self.store.update_context_usage(handle.turn_id, context_usage)
 

@@ -541,6 +541,17 @@ type RawHistoryItem = {
   author?: RawChatMessageAuthor | null;
 };
 
+type RawSteerChatResult = {
+  turn_id?: string;
+  turnId?: string;
+  assistant_message_id?: string;
+  assistantMessageId?: string;
+  user_message?: RawHistoryItem | null;
+  userMessage?: RawHistoryItem | null;
+  user?: RawHistoryItem | null;
+  message?: RawHistoryItem | null;
+};
+
 type RawChatMessageAuthor = {
   user_id?: number | string | null;
   userId?: number | string | null;
@@ -4564,6 +4575,37 @@ export class RealWebBotClient implements WebBotClient {
       items: data.items.map((item, index) => mapChatMessage(item, index)),
       ...(revision !== undefined ? { revision } : {}),
     };
+  }
+
+  async steerMessage(
+    botAlias: string,
+    text: string,
+    turnId: string,
+    options?: ChatSendOptions,
+  ): Promise<ChatMessage> {
+    const data = await this.requestJson<RawSteerChatResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/chat/steer`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: text,
+          turn_id: turnId,
+          ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
+          ...(options?.agentId ? { agent_id: options.agentId } : {}),
+          ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
+        }),
+      },
+    );
+    const rawMessage = data.user_message || data.userMessage || data.user || data.message;
+    if (!rawMessage || typeof rawMessage !== "object") {
+      throw new Error("转向消息响应无效");
+    }
+    const message = mapChatMessage(rawMessage, 0);
+    const responseTurnId = String(data.turn_id ?? data.turnId ?? "").trim();
+    return responseTurnId && !message.turnId ? { ...message, turnId: responseTurnId } : message;
   }
 
   async listConversations(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {

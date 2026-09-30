@@ -33,6 +33,54 @@ test("real client preserves the server entry in bot and Git config requests and 
     .toMatchObject({ cliType: "codex_server", nativeSource: { provider: "codex", sessionId: "thread-id" } });
 });
 
+test("real client posts steering input to the active Codex server turn", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      data: {
+        turn_id: "turn-steer",
+        assistant_message_id: "assistant-steer",
+        user_message: {
+          id: "user-steer",
+          turn_id: "turn-steer",
+          role: "user",
+          content: "追加要求",
+          created_at: "2026-09-30T06:00:00Z",
+          state: "done",
+        },
+      },
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const message = await new RealWebBotClient().steerMessage(
+    "server",
+    "追加要求",
+    "turn-steer",
+    { agentId: "main", executionMode: "cli" },
+  );
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining("/api/bots/server/chat/steer"),
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        message: "追加要求",
+        turn_id: "turn-steer",
+        agent_id: "main",
+        execution_mode: "cli",
+      }),
+    }),
+  );
+  expect(message).toMatchObject({
+    id: "user-steer",
+    turnId: "turn-steer",
+    role: "user",
+    text: "追加要求",
+  });
+});
+
 test("mock client retains per-entry parameters through switching, renaming and reset", async () => {
   const client = new MockWebBotClient();
   await client.login({ username: "127.0.0.1", password: "test" });

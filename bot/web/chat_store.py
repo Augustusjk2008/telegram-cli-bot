@@ -2828,6 +2828,7 @@ class ChatStore:
                     t.seq ASC,
                     CASE m.role WHEN 'user' THEN 0 ELSE 1 END ASC,
                     m.created_at ASC,
+                    m.rowid ASC,
                     m.id ASC
                 """,
                 (conversation_id,),
@@ -2858,6 +2859,7 @@ class ChatStore:
                 recent.context_usage_json,
                 recent.workspace_history_head,
                 recent.workspace_history_index,
+                recent.message_rowid,
                 recent.role_order
             FROM (
                 SELECT
@@ -2882,6 +2884,7 @@ class ChatStore:
                     t.context_usage_json,
                     t.workspace_history_head,
                     t.workspace_history_index,
+                    m.rowid AS message_rowid,
                     CASE m.role WHEN 'user' THEN 0 ELSE 1 END AS role_order
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
@@ -2891,6 +2894,7 @@ class ChatStore:
                     t.seq DESC,
                     role_order DESC,
                     m.created_at DESC,
+                    message_rowid DESC,
                     m.id DESC
                 LIMIT ?
             ) AS recent
@@ -2898,6 +2902,7 @@ class ChatStore:
                 recent.seq ASC,
                 recent.role_order ASC,
                 recent.created_at ASC,
+                recent.message_rowid ASC,
                 recent.id ASC
             """,
             (conversation_id, safe_limit),
@@ -3411,6 +3416,10 @@ class ChatStore:
                 row = conn.execute(
                     """
                     SELECT
+                        t.id AS turn_id,
+                        t.conversation_id AS conversation_id,
+                        t.user_message_id AS user_message_id,
+                        t.assistant_message_id AS assistant_message_id,
                         assistant.content AS preview_text,
                         assistant.created_at AS started_at,
                         assistant.updated_at AS updated_at,
@@ -3418,7 +3427,9 @@ class ChatStore:
                     FROM turns AS t
                     JOIN messages AS assistant ON assistant.id = t.assistant_message_id
                     JOIN messages AS user ON user.id = t.user_message_id
-                    WHERE t.conversation_id = ? AND assistant.state = ?
+                    WHERE t.conversation_id = ?
+                      AND t.completion_state = 'streaming'
+                      AND assistant.state = ?
                     ORDER BY t.seq DESC
                     LIMIT 1
                     """,
@@ -3427,6 +3438,10 @@ class ChatStore:
                 if row is None:
                     return None
                 result = {
+                    "turn_id": str(row["turn_id"] or ""),
+                    "conversation_id": str(row["conversation_id"] or ""),
+                    "user_message_id": str(row["user_message_id"] or ""),
+                    "assistant_message_id": str(row["assistant_message_id"] or ""),
                     "user_text": row["user_text"] or "",
                     "preview_text": row["preview_text"] or "",
                     "started_at": row["started_at"],
@@ -3444,6 +3459,129 @@ class ChatStore:
             found=bool(result),
         )
         return result
+
+    def append_user_message_to_turn(
+        self,
+        *,
+        turn_id: str,
+        conversation_id: str,
+        bot_id: int,
+        user_id: int,
+        agent_id: str,
+        working_dir: str,
+        session_epoch: int,
+        user_text: str,
+        agent_input_text: str | None = None,
+        translation: dict[str, Any] | None = None,
+        actor: dict[str, Any] | None = None,
+        native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one user message to a currently streaming, scoped turn."""
+        normalized_turn_id = str(turn_id or "").strip()
+        normalized_conversation_id = str(conversation_id or "").strip()
+        if not normalized_turn_id or not normalized_conversation_id:
+            raise KeyError(normalized_turn_id or normalized_conversation_id)
+        now = _utc_now()
+        message_id = f"msg_{uuid.uuid4().hex}"
+        actor_data = dict(actor or {})
+        author_user_id = actor_data.get("user_id")
+        try:
+            normalized_author_user_id = int(author_user_id) if author_user_id is not None else None
+        except (TypeError, ValueError):
+            normalized_author_user_id = None
+        author_account_id = str(actor_data.get("account_id") or "").strip() or None
+        author_username = str(actor_data.get("username") or "").strip() or None
+        translation_json = json.dumps(translation, ensure_ascii=False) if isinstance(translation, dict) else None
+        normalized_agent_id = str(agent_id or "main").strip() or "main"
+        with self._connect_for_write() as conn:
+            scoped_conversation_id = self._get_scoped_conversation_id(
+                conn,
+                conversation_id=normalized_conversation_id,
+                bot_id=bot_id,
+                user_id=user_id,
+                agent_id=normalized_agent_id,
+                working_dir=working_dir,
+                session_epoch=session_epoch,
+                native_provider=native_provider,
+                native_provider_exclude=native_provider_exclude,
+            )
+            if scoped_conversation_id != normalized_conversation_id:
+                raise KeyError(normalized_conversation_id)
+            row = conn.execute(
+                """
+                SELECT t.id, t.conversation_id, t.assistant_message_id
+                FROM turns AS t
+                JOIN messages AS assistant ON assistant.id = t.assistant_message_id
+                WHERE t.id = ?
+                  AND t.conversation_id = ?
+                  AND t.completion_state = 'streaming'
+                  AND assistant.state = 'streaming'
+                """,
+                (normalized_turn_id, normalized_conversation_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("active turn is no longer available")
+            revision = self._next_conversation_revision(conn, normalized_conversation_id)
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id,
+                    conversation_id,
+                    turn_id,
+                    role,
+                    content,
+                    translation_json,
+                    agent_input_text,
+                    content_format,
+                    state,
+                    updated_revision,
+                    author_user_id,
+                    author_account_id,
+                    author_username,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, 'user', ?, ?, ?, 'markdown', 'done', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_id,
+                    normalized_conversation_id,
+                    normalized_turn_id,
+                    user_text,
+                    translation_json,
+                    agent_input_text,
+                    revision,
+                    normalized_author_user_id,
+                    author_account_id,
+                    author_username,
+                    now,
+                    now,
+                ),
+            )
+            self._record_message_changes(
+                conn,
+                normalized_conversation_id,
+                [message_id],
+                operation="upsert",
+                revision=revision,
+                now=now,
+            )
+            conn.execute(
+                """
+                UPDATE conversations
+                SET last_message_preview = ?,
+                    message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = ?),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    self._summarize_preview(user_text),
+                    normalized_conversation_id,
+                    now,
+                    normalized_conversation_id,
+                ),
+            )
+        return self.get_message(message_id)
 
     def _turn_count(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(

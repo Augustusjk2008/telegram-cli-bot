@@ -311,6 +311,159 @@ test("binds stream metadata to the placeholder before a deferred final and repla
   expect(document.querySelectorAll('[data-message-id="assistant-stream-bound"]')).toHaveLength(1);
 });
 
+test("steers an active codex server turn without queuing or duplicating the assistant", async () => {
+  const user = userEvent.setup();
+  const final = deferred<ChatMessage>();
+  let activeSignal: AbortSignal | undefined;
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>((
+    _botAlias,
+    _text,
+    _onChunk,
+    onStatus,
+    _onTrace,
+    options,
+  ) => {
+    activeSignal = options?.signal;
+    onStatus?.({ turnId: "turn-codex-server", assistantMessageId: "assistant-codex-server" });
+    return final.promise;
+  });
+  const steerMessage = vi.fn<WebBotClient["steerMessage"]>(async (_botAlias, text, turnId) => ({
+    id: "user-steer-1",
+    turnId,
+    role: "user",
+    text,
+    createdAt: "2026-09-30T06:00:01Z",
+    state: "done",
+  }));
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex_server",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+    }),
+    sendMessage,
+    steerMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "原始任务");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "追加要求");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(steerMessage).toHaveBeenCalledWith(
+    "main",
+    "追加要求",
+    "turn-codex-server",
+    undefined,
+  ));
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(activeSignal?.aborted).toBe(false);
+  expect(screen.queryByText(/排队中/)).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(3);
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("");
+
+  await act(async () => {
+    final.resolve({
+      id: "assistant-codex-server",
+      turnId: "turn-codex-server",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-09-30T06:00:02Z",
+      state: "done",
+    });
+  });
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(3);
+});
+
+test("retains steering input when the Codex server rejects it", async () => {
+  const user = userEvent.setup();
+  const final = deferred<ChatMessage>();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>((_botAlias, _text, _onChunk, onStatus) => {
+    onStatus?.({ turnId: "turn-codex-server-error", assistantMessageId: "assistant-codex-server-error" });
+    return final.promise;
+  });
+  const steerMessage = vi.fn<WebBotClient["steerMessage"]>(async () => {
+    throw new Error("steering failed");
+  });
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex_server",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: false,
+    }),
+    sendMessage,
+    steerMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "原始任务");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  const input = screen.getByPlaceholderText("输入消息");
+  await user.type(input, "保留这条输入");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(steerMessage).toHaveBeenCalledTimes(1));
+  expect(input).toHaveValue("保留这条输入");
+  expect(await screen.findByText("steering failed")).toBeInTheDocument();
+  expect(screen.queryByText(/排队中/)).not.toBeInTheDocument();
+
+  await act(async () => {
+    final.resolve({
+      id: "assistant-codex-server-error",
+      turnId: "turn-codex-server-error",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-09-30T06:02:02Z",
+      state: "done",
+    });
+  });
+});
+
+test("keeps regular codex messages in the existing queue while streaming", async () => {
+  const user = userEvent.setup();
+  const final = deferred<ChatMessage>();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>((_botAlias, _text, _onChunk, onStatus) => {
+    onStatus?.({ turnId: "turn-codex", assistantMessageId: "assistant-codex" });
+    return final.promise;
+  });
+  const steerMessage = vi.fn<WebBotClient["steerMessage"]>();
+  const client = createClient({ sendMessage, steerMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  await user.type(await screen.findByPlaceholderText("输入消息"), "原始任务");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  await user.type(screen.getByPlaceholderText("输入消息"), "排队要求");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  expect(steerMessage).not.toHaveBeenCalled();
+  expect(await screen.findByText("排队中")).toBeInTheDocument();
+  expect(screen.getByText("排队要求")).toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
+
+  await act(async () => {
+    final.resolve({
+      id: "assistant-codex",
+      turnId: "turn-codex",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-09-30T06:01:02Z",
+      state: "done",
+    });
+  });
+});
+
 test("cluster chat stays on the main Agent, preserves @ text, and sends no dispatch fields", async () => {
   const user = userEvent.setup();
   const cluster = {

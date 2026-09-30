@@ -207,6 +207,95 @@ async def test_cancelled_consumer_interrupts_and_next_turn_is_usable(runtime_set
 
 
 @pytest.mark.asyncio
+async def test_steer_uses_current_turn_and_preserves_runtime_state(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(request)
+    runtime.client.auto_complete = False
+    task = asyncio.create_task(collect(runtime))
+    while not runtime._turn_id:
+        await asyncio.sleep(0)
+    mapper = runtime._mapper
+    outgoing = runtime._outgoing
+    total_usage = runtime._total_usage
+
+    await registry.steer_owner(request.owner_key, runtime._turn_id, "follow-up")
+
+    assert runtime.client.calls[-1] == ("turn/steer", {
+        "threadId": runtime.thread_id,
+        "expectedTurnId": runtime._turn_id,
+        "input": [{"type": "text", "text": "follow-up"}],
+    })
+    assert runtime._mapper is mapper
+    assert runtime._outgoing is outgoing
+    assert runtime._total_usage is total_usage
+    assert runtime.active
+
+    await runtime.interrupt()
+    await task
+    await registry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_steer_requests_are_serialized(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(request)
+    runtime.client.auto_complete = False
+    task = asyncio.create_task(collect(runtime))
+    while not runtime._turn_id:
+        await asyncio.sleep(0)
+
+    order = []
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    original_request = runtime.client.request
+
+    async def request_with_gate(method, params, **kwargs):
+        if method == "turn/steer":
+            order.append(("start", params["input"][0]["text"]))
+            if params["input"][0]["text"] == "first":
+                first_started.set()
+                await release_first.wait()
+            order.append(("end", params["input"][0]["text"]))
+        return await original_request(method, params, **kwargs)
+
+    runtime.client.request = request_with_gate
+    first = asyncio.create_task(runtime.steer("first"))
+    await first_started.wait()
+    second = asyncio.create_task(runtime.steer("second"))
+    await asyncio.sleep(0)
+    assert not second.done()
+    release_first.set()
+    await asyncio.gather(first, second)
+    assert order == [("start", "first"), ("end", "first"), ("start", "second"), ("end", "second")]
+
+    await runtime.interrupt()
+    await task
+    await registry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_steer_rejects_no_active_wrong_turn_and_closed_runtime(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(request)
+    with pytest.raises(CodexServerError, match="活动 turn"):
+        await runtime.steer("follow-up")
+
+    runtime.client.auto_complete = False
+    task = asyncio.create_task(collect(runtime))
+    while not runtime._turn_id:
+        await asyncio.sleep(0)
+    with pytest.raises(CodexServerError, match="turn 不匹配"):
+        await registry.steer_owner(request.owner_key, "stale-turn", "follow-up")
+    await runtime.interrupt()
+    await task
+
+    await runtime.close()
+    with pytest.raises(CodexServerError, match="已关闭"):
+        await runtime.steer("follow-up")
+    await registry.aclose()
+
+
+@pytest.mark.asyncio
 async def test_starting_next_turn_clears_previous_compaction_and_reset_params(runtime_setup):
     registry, request = runtime_setup
     runtime = await registry.open_or_create(request)

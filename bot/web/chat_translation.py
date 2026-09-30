@@ -46,6 +46,33 @@ def input_translation_pending(text: str, config: TranslationConfig | None) -> di
 async def prepare_chat_input(
     *, text: str, session: Any, history: Any, turn: Any, config: TranslationConfig | None,
 ) -> tuple[str, dict[str, Any] | None]:
+    execution_text, translated = await translate_chat_input(
+        text=text,
+        session=session,
+        config=config,
+        history=history,
+        message_id=turn.user_message_id,
+    )
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    await asyncio.to_thread(
+        history.update_message_translation,
+        turn.user_message_id,
+        source_digest=digest,
+        translation=translated,
+        agent_input_text=execution_text,
+    )
+    check_chat_stopped(session)
+    return execution_text, translated
+
+
+async def translate_chat_input(
+    *,
+    text: str,
+    session: Any,
+    config: TranslationConfig | None,
+    history: Any | None = None,
+    message_id: str = "",
+) -> tuple[str, dict[str, Any] | None]:
     check_chat_stopped(session)
     translated = None
     execution_text = text
@@ -53,7 +80,13 @@ async def prepare_chat_input(
     if config is not None and config.translate_user_enabled:
         async def translate() -> dict[str, Any]:
             pending = input_translation_pending(text, config)
-            await asyncio.to_thread(history.update_message_translation, turn.user_message_id, source_digest=digest, translation=pending)
+            if history is not None and message_id:
+                await asyncio.to_thread(
+                    history.update_message_translation,
+                    message_id,
+                    source_digest=digest,
+                    translation=pending,
+                )
             return await get_translation_service().translate(text, config=config, direction="user")
 
         task = asyncio.create_task(translate(), name="chat-input-translation")
@@ -62,8 +95,18 @@ async def prepare_chat_input(
             translated = await task
         except asyncio.CancelledError:
             if session.stop_requested:
-                await asyncio.to_thread(history.update_message_translation, turn.user_message_id, source_digest=digest,
-                                        translation={"status": "failed", "error": "cancelled", "target_language": PROMPT_TARGET_LANGUAGE, "source_digest": digest})
+                if history is not None and message_id:
+                    await asyncio.to_thread(
+                        history.update_message_translation,
+                        message_id,
+                        source_digest=digest,
+                        translation={
+                            "status": "failed",
+                            "error": "cancelled",
+                            "target_language": PROMPT_TARGET_LANGUAGE,
+                            "source_digest": digest,
+                        },
+                    )
                 raise ChatInputCancelled() from None
             raise
         finally:
@@ -73,8 +116,6 @@ async def prepare_chat_input(
             execution_text = translated["text"]
     if execution_text.startswith("//"):
         execution_text = "/" + execution_text[2:]
-    # Even disabled translation records the exact body used for native trace recovery.
-    await asyncio.to_thread(history.update_message_translation, turn.user_message_id, source_digest=digest, translation=translated, agent_input_text=execution_text)
     check_chat_stopped(session)
     return execution_text, translated
 

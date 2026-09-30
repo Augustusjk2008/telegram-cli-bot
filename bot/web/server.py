@@ -243,6 +243,7 @@ from .api_service import (
     reset_cli_params,
     resolve_terminal_action_for_bot,
     run_chat,
+    steer_chat,
     handle_cluster_mcp_tool,
     render_plugin_view,
     resolve_plugin_file_target,
@@ -2188,6 +2189,29 @@ class WebApiServer:
             )
             raise
         self._schedule_chat_terminal_event(auth=auth, alias=alias, agent_id=agent_id, data=data)
+        return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
+
+    async def post_chat_steer(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        raw_turn_id = body.get("turn_id", body.get("turnId", ""))
+        if not isinstance(raw_turn_id, str) or not raw_turn_id.strip():
+            raise WebApiError(400, "missing_turn_id", "缺少 turn_id")
+        execution_mode = self._request_execution_mode(request, body, include_query=False)
+        agent_id = self._request_agent_id(request, body)
+        visible_text = body.get("visible_text")
+        data = await steer_chat(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("message", ""),
+            turn_id=raw_turn_id.strip(),
+            visible_text=str(visible_text) if visible_text is not None else None,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            actor=self._chat_actor(auth),
+        )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def post_chat_stream(self, request: web.Request) -> web.StreamResponse:

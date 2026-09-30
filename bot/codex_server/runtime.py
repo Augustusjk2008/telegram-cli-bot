@@ -120,6 +120,7 @@ class CodexServerRuntime:
         self._turn_done = asyncio.Event()
         self._turn_done.set()
         self._interrupt_lock = asyncio.Lock()
+        self._steer_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._failure: Exception | None = None
         self._output_bytes = 0
@@ -313,6 +314,27 @@ class CodexServerRuntime:
                 self._finish_failure(CodexServerError(f"Codex turn interrupt failed: {exc}"))
                 await self.client.close()
 
+    async def steer(self, prompt: str, *, expected_turn_id: str | None = None) -> None:
+        async with self._steer_lock:
+            if not self.alive:
+                raise CodexServerError("codex server 运行时已关闭，无法 steer")
+            if not self._streaming:
+                raise CodexServerError("codex server 当前没有活动 turn，无法 steer")
+            if not self.thread_id:
+                raise CodexServerError("codex server 当前 turn 缺少 thread_id，无法 steer")
+            turn_id = self._turn_id
+            if not turn_id:
+                raise CodexServerError("codex server 当前 turn 缺少 turn_id，无法 steer")
+            if expected_turn_id is not None and expected_turn_id != turn_id:
+                raise CodexServerError(
+                    f"codex server turn 不匹配：expected {expected_turn_id!r}, current {turn_id!r}"
+                )
+            await self.client.request("turn/steer", {
+                "threadId": self.thread_id,
+                "expectedTurnId": turn_id,
+                "input": [{"type": "text", "text": prompt}],
+            })
+
     async def close(self) -> None:
         async with self._close_lock:
             if self._closed:
@@ -449,6 +471,13 @@ class CodexServerRegistry:
         if future:
             await asyncio.shield(asyncio.wrap_future(future))
 
+    async def steer_owner(self, owner_key: tuple[int, int, str], turn_id: str, prompt: str) -> None:
+        with self._lock:
+            runtime = self._runtimes.get(owner_key)
+        if runtime is None:
+            raise CodexServerError("codex server owner 没有运行时，无法 steer")
+        await runtime.steer(prompt, expected_turn_id=turn_id)
+
     async def close_bot(self, bot_id: int) -> None:
         for future in self.release_bot(bot_id):
             if future:
@@ -476,3 +505,7 @@ def release_owner(owner_key: tuple[int, int, str]):
 
 def release_bot(bot_id: int):
     return _registry.release_bot(bot_id)
+
+
+async def steer_owner(owner_key: tuple[int, int, str], turn_id: str, prompt: str) -> None:
+    await _registry.steer_owner(owner_key, turn_id, prompt)

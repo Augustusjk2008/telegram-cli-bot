@@ -57,6 +57,46 @@ def test_history_revision_delta_tracks_add_stream_update_and_finalize(tmp_path: 
     assert finalized["deleted_ids"] == []
 
 
+def test_append_user_message_to_active_turn_keeps_scope_and_revision(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    handle = _begin(store, text="first")
+    before = store.get_conversation_revision(handle.conversation_id)
+
+    appended = store.append_user_message_to_turn(
+        turn_id=handle.turn_id,
+        conversation_id=handle.conversation_id,
+        bot_id=1,
+        user_id=2,
+        agent_id="main",
+        working_dir=str(tmp_path),
+        session_epoch=0,
+        user_text="follow-up",
+        agent_input_text="follow-up translated",
+        translation={"status": "completed", "text": "follow-up translated"},
+        actor={"user_id": 9, "account_id": "acct", "username": "tester"},
+        native_provider="codex",
+    )
+
+    assert appended["turn_id"] == handle.turn_id
+    assert appended["conversation_id"] == handle.conversation_id
+    assert appended["content"] == "follow-up"
+    assert appended["agent_input_text"] == "follow-up translated"
+    assert appended["translation"]["text"] == "follow-up translated"
+    assert appended["author"] == {"user_id": 9, "account_id": "acct", "username": "tester"}
+    messages = store.list_messages(handle.conversation_id)
+    assert [message["id"] for message in messages] == [
+        handle.user_message_id,
+        appended["id"],
+        handle.assistant_message_id,
+    ]
+    conversation = store.get_conversation(handle.conversation_id)
+    assert conversation["message_count"] == 3
+    assert conversation["last_message_preview"] == "follow-up"
+    delta = store.get_history_delta(handle.conversation_id, revision=before, limit=20)
+    assert delta["revision"] == before + 1
+    assert [item["id"] for item in delta["items"]] == [appended["id"]]
+
+
 def test_latest_completed_turn_at_ignores_incomplete_turns(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     completed = _begin(store, text="completed")

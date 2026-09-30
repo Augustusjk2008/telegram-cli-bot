@@ -26,7 +26,7 @@ synchronous lifecycle hooks. The latter schedule on the runtime's owning loop.
 from .client import CodexServerError
 from .runtime import (
     CodexServerRuntime, CodexServerRuntimeRequest, get_codex_server_registry,
-    release_bot, release_owner,
+    release_bot, release_owner, steer_owner,
 )
 
-__all__ = ["CodexServerError", "CodexServerRuntime", "CodexServerRuntimeRequest", "get_codex_server_registry", "release_owner", "release_bot"]
+__all__ = ["CodexServerError", "CodexServerRuntime", "CodexServerRuntimeRequest", "get_codex_server_registry", "release_owner", "release_bot", "steer_owner"]
