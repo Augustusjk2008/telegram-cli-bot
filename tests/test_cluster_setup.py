@@ -43,3 +43,4 @@ def test_codex_server_mcp_injection_keeps_codex_params_isolated(tmp_path, monkey
     args = result.get_param("codex_server", "extra_args")
     assert args[:2] == ["-c", "server_only=true"]
     assert any(arg.startswith("mcp_servers.tcb-cluster.command=") for arg in args)
+    assert 'mcp_servers.tcb-cluster.default_tools_approval_mode="approve"' in args

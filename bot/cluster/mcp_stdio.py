@@ -18,10 +18,20 @@ def _write(message: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
+def _tool_annotations(*, read_only: bool, idempotent: bool) -> dict[str, bool]:
+    return {
+        "readOnlyHint": read_only,
+        "destructiveHint": False,
+        "openWorldHint": False,
+        "idempotentHint": idempotent,
+    }
+
+
 def _tools_for_environment() -> list[dict[str, Any]]:
     return [
         {
             "name": "configure_team",
+            "annotations": _tool_annotations(read_only=False, idempotent=False),
             "description": "Configure the current main session's team. The main agent may autonomously use extend to add roles in free slots; use replace only when the user explicitly requests regrouping, reducing, or clearing the team. Always pass run_id. After success, check changed in the response: if changed=true, immediately use the new run_id from the response for all subsequent tool calls in this turn; if changed=false, keep using the original run_id. The stdio MCP adapter does not cache or automatically switch run_id.",
             "inputSchema": {
                 "type": "object",
@@ -45,6 +55,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "cluster_status",
+            "annotations": _tool_annotations(read_only=True, idempotent=True),
             "description": "Inspect the current team, internal agent IDs for roles, capacity, free slots, and task occupancy. Always pass run_id.",
             "inputSchema": {
                 "type": "object",
@@ -54,6 +65,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "list_agents",
+            "annotations": _tool_annotations(read_only=True, idempotent=True),
             "description": "List the current team, internal agent IDs for roles, capacity, free slots, and task occupancy. Always pass run_id.",
             "inputSchema": {
                 "type": "object",
@@ -63,6 +75,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "new_agent_session",
+            "annotations": _tool_annotations(read_only=False, idempotent=False),
             "description": "Start a new session for a child agent whose current session is idle and has no queued/running cluster tasks. Always pass run_id. Previous session history is preserved.",
             "inputSchema": {
                 "type": "object",
@@ -75,6 +88,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "ask_agent",
+            "annotations": _tool_annotations(read_only=False, idempotent=False),
             "description": "Start an asynchronous TCB child agent task and immediately return task_id. Always pass run_id. The main agent may continue calling poll_agent_tasks to wait for and summarize results, or end its turn while the task runs in the background. timeout_seconds is a soft deadline and defaults to the Bot setting when omitted; exceeding it does not forcibly interrupt the child agent, and poll_agent_tasks reports deadline_exceeded. model_tier accepts low/medium/high and uses the model and reasoning effort configured for that tier; blank tier settings inherit from the main agent.",
             "inputSchema": {
                 "type": "object",
@@ -91,6 +105,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "poll_agent_tasks",
+            "annotations": _tool_annotations(read_only=True, idempotent=True),
             "description": "Poll asynchronous child agent task status, progress messages, and results in the current TCB cluster. Always pass run_id. Empty task_ids returns all tasks in the current run. Optional wait_seconds waits for task completion within this tool call; it defaults to 0 for an immediate return. include_messages defaults to true; messages[].kind is progress or final, and messages exclude events/tool calls.",
             "inputSchema": {
                 "type": "object",
@@ -107,6 +122,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         },
         {
             "name": "wait_agent_messages",
+            "annotations": _tool_annotations(read_only=False, idempotent=False),
             "description": "Block until the next unread message from any child agent in the current TCB cluster. Always pass run_id. Use the server's unread cursor by default; pass after_sequence to override it. wait_seconds specifies the maximum wait; return timed_out=true if no message arrives before it expires. Return messages[].agent_id/task_id/kind to distinguish progress from final messages; exclude events/tool calls.",
             "inputSchema": {
                 "type": "object",

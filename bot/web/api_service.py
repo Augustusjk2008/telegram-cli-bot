@@ -3213,6 +3213,18 @@ def _filter_claude_host_cluster_extra_args(extra_args: list[str]) -> list[str]:
     return filtered
 
 
+def _append_missing_cli_arg_pairs(
+    extra_args: list[str],
+    pairs: list[tuple[str, str]],
+) -> list[str]:
+    merged = list(extra_args)
+    for flag, value in pairs:
+        if flag in merged and value in merged:
+            continue
+        merged.extend([flag, value])
+    return merged
+
+
 def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsConfig) -> CliParamsConfig:
     cli_type = normalize_cli_type(profile.cli_type)
     launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
@@ -3222,7 +3234,23 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
     cli_params = params.setdefault(cli_type, {})
     extra_args = [str(item) for item in cli_params.get("extra_args", []) if str(item).strip()]
     if cli_data_provider(cli_type) == "codex":
-        injection = ["-c", f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.command={_quote_toml_string(str(launcher_path))}"]
+        original_extra_args = list(extra_args)
+        extra_args = _append_missing_cli_arg_pairs(
+            extra_args,
+            [
+                (
+                    "-c",
+                    f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.command={_quote_toml_string(str(launcher_path))}",
+                ),
+                (
+                    "-c",
+                    f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.default_tools_approval_mode={_quote_toml_string('approve')}",
+                ),
+            ],
+        )
+        if extra_args != original_extra_args:
+            cli_params["extra_args"] = extra_args
+        injection = []
     elif cli_type == "claude":
         extra_args = _filter_claude_host_cluster_extra_args(extra_args)
         config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}

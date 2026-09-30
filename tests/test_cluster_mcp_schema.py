@@ -25,6 +25,19 @@ def test_python_mcp_registers_tools_with_required_run_id() -> None:
         assert "run_id" in tool["inputSchema"]["required"]
 
 
+def test_python_mcp_registers_explicit_tool_safety_annotations() -> None:
+    tools = {tool["name"]: tool for tool in mcp_stdio._tools_for_environment()}
+
+    assert tools["cluster_status"]["annotations"] == {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": False,
+        "idempotentHint": True,
+    }
+    assert tools["ask_agent"]["annotations"]["readOnlyHint"] is False
+    assert tools["ask_agent"]["annotations"]["destructiveHint"] is False
+
+
 def test_python_mcp_forwards_each_call_run_id_without_caching(monkeypatch, tmp_path: Path) -> None:
     seen_run_ids: list[str] = []
 
