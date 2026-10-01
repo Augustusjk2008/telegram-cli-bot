@@ -199,6 +199,7 @@ from .api_service import (
     execute_shell_command,
     get_plugin_artifact,
     get_plugin_view_window,
+    install_plugin_runtime,
     invoke_plugin_action,
     install_plugin,
     uninstall_plugin,
@@ -4366,6 +4367,14 @@ class WebApiServer:
         plugin_id = request.match_info.get("plugin_id", "").strip()
         body = await self._parse_json(request)
         data = await invoke_plugin_action(self.manager, alias, auth, plugin_id, dict(body or {}))
+        return _json({"ok": True, "data": data})
+
+    async def post_install_plugin_runtime(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        alias = self._manager_alias(request)
+        plugin_id = request.match_info.get("plugin_id", "").strip()
+        body = await self._parse_json(request)
+        data = await install_plugin_runtime(self.manager, alias, auth, plugin_id, dict(body or {}))
         return _json({"ok": True, "data": data})
 
     async def download_plugin_artifact(self, request: web.Request) -> web.Response:

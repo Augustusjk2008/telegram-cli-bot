@@ -18,7 +18,7 @@ type Props = {
   showUsageHint?: boolean;
   updatingPluginId?: string;
   onUpdatePlugin?: (pluginId: string, input: PluginUpdateInput) => void;
-  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onApplyHostEffects?: (effects: HostEffect[], pluginId?: string) => Promise<void> | void;
   onOpenPluginView?: (target: {
     pluginId: string;
     viewId: string;
@@ -176,7 +176,7 @@ export function PluginCatalog({
       viewId: openViewAction?.viewId || defaultView?.id || "",
       title: openViewAction?.title || defaultView?.title || plugin.name,
       inputPayload: openViewAction?.input || action.payload || {},
-      applyHostEffects: onApplyHostEffects,
+      applyHostEffects: (effects) => onApplyHostEffects?.(effects, plugin.id),
       reopenView: onOpenPluginView,
       pushToast: onNotice,
     }).catch((nextError: unknown) => {

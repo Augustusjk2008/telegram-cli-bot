@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from csv_parser import CsvTableIndex, query_csv_window
 from csv_source import CsvSourceIdentity, TemporaryCsvSource, copy_csv_source
+from plugin_sdk import PluginServer
 
-NEXT_REQUEST_ID = 9000
 SESSION_COUNTER = 0
+server = PluginServer("csv-preview")
 
 
 @dataclass
@@ -32,36 +31,8 @@ SESSIONS: dict[str, CsvSession] = {}
 RESOURCES: dict[tuple[CsvSourceIdentity, int, str], CsvResource] = {}
 
 
-def emit(message: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
-
-
-def respond(
-    request_id: Any, result: dict[str, Any] | None = None, error: str | None = None
-) -> None:
-    payload: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id}
-    if error:
-        payload["error"] = {"code": -32000, "message": error}
-    else:
-        payload["result"] = result or {}
-    emit(payload)
-
-
 def call_host(method: str, params: dict[str, Any]) -> dict[str, Any]:
-    global NEXT_REQUEST_ID
-    request_id = NEXT_REQUEST_ID
-    NEXT_REQUEST_ID += 1
-    emit({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-    while True:
-        line = sys.stdin.readline()
-        if not line:
-            raise SystemExit(0)
-        message = json.loads(line)
-        if message.get("method"):
-            continue
-        elif message.get("id") == request_id:
-            return message
+    return server.host_call(method, params)
 
 
 def resolve_path(input_payload: dict[str, Any]) -> str:
@@ -186,38 +157,24 @@ def shutdown() -> None:
             resource.source.close()
 
 
+def render_request(params: dict[str, Any]) -> dict[str, Any]:
+    context = params.get("context") if isinstance(params.get("context"), dict) else {}
+    return render_view(dict(params.get("input") or {}), context)
+
+
+def open_request(params: dict[str, Any]) -> dict[str, Any]:
+    context = params.get("context") if isinstance(params.get("context"), dict) else {}
+    return open_view(dict(params.get("input") or {}), context)
+
+
+server.register_handler("plugin.render_view", render_request)
+server.register_handler("plugin.open_view", open_request)
+server.register_handler("plugin.get_view_window", get_view_window)
+server.register_handler("plugin.dispose_view", dispose_view)
+
+
 def main() -> None:
-    try:
-        while True:
-            raw_line = sys.stdin.readline()
-            if not raw_line:
-                break
-            request = json.loads(raw_line)
-            request_id = request.get("id")
-            method = request.get("method")
-            params = request.get("params") or {}
-            context = params.get("context") if isinstance(params.get("context"), dict) else {}
-            try:
-                if method == "plugin.initialize":
-                    respond(request_id, {"ok": True, "name": "csv-preview"})
-                elif method == "plugin.render_view":
-                    respond(request_id, render_view(dict(params.get("input") or {}), context))
-                elif method == "plugin.open_view":
-                    respond(request_id, open_view(dict(params.get("input") or {}), context))
-                elif method == "plugin.get_view_window":
-                    respond(request_id, get_view_window(dict(params)))
-                elif method == "plugin.dispose_view":
-                    respond(request_id, dispose_view(dict(params)))
-                elif method == "plugin.shutdown":
-                    shutdown()
-                    respond(request_id, {"ok": True})
-                    break
-                else:
-                    respond(request_id, error=f"unsupported method: {method}")
-            except Exception as exc:
-                respond(request_id, error=str(exc))
-    finally:
-        shutdown()
+    server.run(shutdown=shutdown)
 
 
 if __name__ == "__main__":

@@ -927,7 +927,7 @@ export function DesktopWorkbench({
     }
   }
 
-  async function runPluginHostEffects(effects: HostEffect[]) {
+  async function runPluginHostEffects(effects: HostEffect[], sourcePluginId = "") {
     const effectScopeIdentity = previewScopeIdentityRef.current;
     for (const effect of effects) {
       if (previewScopeIdentityRef.current !== effectScopeIdentity) {
@@ -951,6 +951,16 @@ export function DesktopWorkbench({
       }
       if (effect.type === "download_artifact") {
         await client.downloadPluginArtifact(botAlias, effect.artifactId, effect.filename);
+        continue;
+      }
+      if (effect.type === "install_plugin_runtime") {
+        if (Object.keys(effect).some((key) => key !== "type")) {
+          throw new Error("运行时安装不接受插件提供的运行时参数");
+        }
+        if (!sourcePluginId) {
+          throw new Error("运行时安装缺少插件来源");
+        }
+        await client.installPluginRuntime(botAlias, sourcePluginId);
         continue;
       }
       await openPluginViewTab(effect, effectScopeIdentity);

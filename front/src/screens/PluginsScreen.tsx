@@ -16,7 +16,7 @@ type Props = {
   botAlias?: string;
   canOperate?: boolean;
   embedded?: boolean;
-  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onApplyHostEffects?: (effects: HostEffect[], pluginId?: string) => Promise<void> | void;
   onOpenPluginView?: (target: {
     pluginId: string;
     viewId: string;

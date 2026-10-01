@@ -169,6 +169,7 @@ import type {
   LanguageServerProviderStatus,
   PluginActionInvokeInput,
   PluginActionResult,
+  PluginRuntimeInstallResult,
   InstallablePluginSummary,
   OfflineUpdatePackageList,
   PluginViewWindowRequest,
@@ -5705,6 +5706,19 @@ export class RealWebBotClient implements WebBotClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(input),
+      },
+    );
+  }
+
+  async installPluginRuntime(botAlias: string, pluginId: string): Promise<PluginRuntimeInstallResult> {
+    return this.requestJson<PluginRuntimeInstallResult>(
+      `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/runtime/install`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
       },
     );
   }

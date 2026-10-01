@@ -19,7 +19,7 @@ type Props = {
   client: WebBotClient;
   view: PluginRenderResult;
   inputPayload?: Record<string, unknown>;
-  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onApplyHostEffects?: (effects: HostEffect[], pluginId?: string) => Promise<void> | void;
   onClosePluginSession?: (pluginId: string, sessionId: string) => Promise<void> | void;
   onRefreshPluginSession?: (pluginId: string, sessionId: string) => Promise<void> | void;
   onReopenPluginView?: (target: {
@@ -77,7 +77,7 @@ export function PluginViewSurface({
       sessionId: view.mode === "session" ? view.sessionId : undefined,
       inputPayload,
       payload,
-      applyHostEffects: onApplyHostEffects,
+      applyHostEffects: (effects) => onApplyHostEffects?.(effects, view.pluginId),
       closeSession: onClosePluginSession,
       refreshSession: onRefreshPluginSession,
       reopenView: onReopenPluginView,
@@ -97,7 +97,7 @@ export function PluginViewSurface({
         sessionId={view.mode === "session" ? view.sessionId : undefined}
         summary={summary}
         initialWindow={initialWindow}
-        onApplyHostEffects={onApplyHostEffects}
+        onApplyHostEffects={(effects) => onApplyHostEffects?.(effects, view.pluginId)}
       />
     );
   }
@@ -125,7 +125,7 @@ export function PluginViewSurface({
   }
 
   if (view.renderer === "document") {
-    return <DocumentView botAlias={botAlias} client={client} view={view} />;
+    return <DocumentView botAlias={botAlias} client={client} view={view} onRunAction={handleAction} />;
   }
 
   if (view.renderer === "hex") {

@@ -99,9 +99,17 @@ def normalize_action_result(result: dict[str, Any]) -> dict[str, Any]:
     host_effects = result.get("hostEffects") or []
     if not isinstance(host_effects, list):
         raise RuntimeError("插件 action hostEffects 必须是数组")
+    normalized_effects: list[dict[str, Any]] = []
+    for item in host_effects:
+        if not isinstance(item, dict):
+            continue
+        effect = dict(item)
+        if effect.get("type") == "install_plugin_runtime" and set(effect) != {"type"}:
+            raise RuntimeError("install_plugin_runtime 不接受插件提供的运行时参数")
+        normalized_effects.append(effect)
     return {
         "message": str(result.get("message") or ""),
         "refresh": refresh,
-        "hostEffects": [dict(item) for item in host_effects if isinstance(item, dict)],
+        "hostEffects": normalized_effects,
         "closeSession": bool(result.get("closeSession", False)),
     }

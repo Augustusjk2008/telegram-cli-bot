@@ -25,11 +25,17 @@ def cell(text: str = "", props: str = "", content: str | None = None) -> str:
 
 
 @pytest.fixture
-def parse(monkeypatch):
+def docx_module(monkeypatch):
     monkeypatch.syspath_prepend(str(BACKEND))
     spec = importlib.util.spec_from_file_location("tested_docx_parser", BACKEND / "docx_parser.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def parse(docx_module):
+    module = docx_module
 
     def render(body: str, *, styles: str = "", numbering: str = "", theme: str = "", settings: str = "",
                extra_parts: dict | None = None, write_artifact=None):
@@ -49,6 +55,57 @@ def parse(monkeypatch):
         return payload
 
     return render
+
+
+def docx_bytes(body: str, *, extra_parts: dict | None = None) -> bytes:
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="{W}" xmlns:r="{R}" xmlns:a="{A}" xmlns:wp="{WP}"><w:body>{body}</w:body></w:document>',
+        )
+        for path, content in (extra_parts or {}).items():
+            archive.writestr(path, content)
+    return buffer.getvalue()
+
+
+def test_declared_uncompressed_size_is_rejected_before_document_reads(docx_module, monkeypatch):
+    monkeypatch.setattr(docx_module, "MAX_UNCOMPRESSED_BYTES", 64)
+    monkeypatch.setattr(docx_module.ZipFile, "read", lambda *_args, **_kwargs: pytest.fail("archive.read should not run"))
+    content = docx_bytes(paragraph("document content that exceeds the test budget"))
+    with pytest.raises(RuntimeError, match="解压内容超过预览限制"):
+        docx_module.parse_docx_document("large.docx", content, write_artifact=lambda *_: pytest.fail("artifact read"))
+
+
+def test_nested_table_images_count_toward_image_budget_before_artifacts(docx_module, monkeypatch):
+    monkeypatch.setattr(docx_module, "MAX_IMAGES", 1)
+    drawing = '<w:drawing><wp:inline><a:graphic><a:blip r:embed="rId1"/></a:graphic></wp:inline></w:drawing>'
+    body = '<w:tbl><w:tr><w:tc>' + f'<w:p><w:r>{drawing}</w:r></w:p><w:p><w:r>{drawing}</w:r></w:p>' + '</w:tc></w:tr></w:tbl>'
+    relationships = f'<Relationships xmlns="{R}"><Relationship Id="rId1" Type="{R}/image" Target="media/image.png"/></Relationships>'
+    content = docx_bytes(body, extra_parts={"word/_rels/document.xml.rels": relationships, "word/media/image.png": b"image"})
+    written = []
+    with pytest.raises(RuntimeError, match="图片数量超过预览限制"):
+        docx_module.parse_docx_document("nested-images.docx", content, write_artifact=lambda *args: written.append(args) or {"artifactId": "x"})
+    assert written == []
+
+
+def test_block_budget_covers_paragraphs_and_tables(docx_module, monkeypatch):
+    monkeypatch.setattr(docx_module, "MAX_BLOCKS", 2)
+    content = docx_bytes(paragraph("one") + paragraph("two") + paragraph("three"))
+    with pytest.raises(RuntimeError, match="文档块数量超过预览限制"):
+        docx_module.parse_docx_document("many-blocks.docx", content)
+
+
+def test_document_session_indexes_headings_and_parses_only_selected_section(docx_module):
+    heading_one = paragraph("第一章", '<w:pStyle w:val="Heading1"/>')
+    heading_two = paragraph("第二章", '<w:pStyle w:val="Heading1"/>')
+    content = docx_bytes(heading_one + paragraph("one") + heading_two + paragraph("two"))
+    metadata = docx_module.inspect_docx_document("sample.docx", content)
+    sections = metadata["_sections"]
+    assert [section["title"] for section in metadata["sections"]] == ["第一章", "第二章"]
+    first = docx_module.parse_docx_section("sample.docx", content, sections[0])
+    assert first["sectionId"] == "section-1"
+    assert [block["runs"][0]["text"] for block in first["blocks"]] == ["第一章", "one"]
 
 
 def test_defaults_style_chains_toggle_semantics_and_direct_overrides(parse):

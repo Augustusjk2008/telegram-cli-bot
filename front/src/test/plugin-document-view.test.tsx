@@ -1,7 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DocumentView } from "../components/plugin-renderers/DocumentView";
-import type { DocumentViewPayload } from "../services/types";
+import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
+import type { DocumentBlock, DocumentSessionRenderResult, DocumentViewPayload } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function renderDocument(payload: Omit<DocumentViewPayload, "path">, client = {} as WebBotClient) {
@@ -201,5 +203,93 @@ describe("DocumentView formatting", () => {
     expect(screen.getByText("slide text")).toHaveStyle({ fontSize: "28px" });
     expect(screen.getByText("slide text").closest("p")).toHaveClass("leading-snug");
     expect(screen.getByText("slide cell").closest("table")).toHaveClass("table-fixed", "text-[11px]");
+  });
+});
+
+function paragraph(text: string): DocumentBlock {
+  return { type: "paragraph", runs: [{ text }] };
+}
+
+describe("DocumentView sessions", () => {
+  it("lists sections, requests only the selected section, and bounds rendered blocks", async () => {
+    const user = userEvent.setup();
+    const query = vi.fn().mockImplementation((_botAlias, _pluginId, _sessionId, request: { sectionId: string }) => Promise.resolve({
+      sectionId: request.sectionId,
+      blocks: [paragraph(`${request.sectionId} body`)],
+    }));
+    const client = { queryPluginViewWindow: query } as unknown as WebBotClient;
+    const view: DocumentSessionRenderResult = {
+      pluginId: "document-test",
+      viewId: "preview",
+      title: "Preview",
+      renderer: "document",
+      mode: "session",
+      sessionId: "document-session",
+      summary: {
+        path: "sample.docx",
+        sections: [
+          { id: "intro", title: "Introduction" },
+          { id: "details", title: "Details" },
+        ],
+      },
+      initialWindow: { sectionId: "intro", blocks: [paragraph("intro body")] },
+    };
+
+    render(<PluginViewSurface botAlias="main" client={client} view={view} />);
+
+    expect(screen.getByTestId("document-section-list")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Introduction" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("intro body")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.queryByText("intro body")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("details body")).toBeInTheDocument());
+
+    expect(query).toHaveBeenCalledWith(
+      "main",
+      "document-test",
+      "document-session",
+      { sectionId: "details" },
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByTestId("document-section-content").querySelectorAll("p")).toHaveLength(1);
+  });
+
+  it("keeps artifact image loading lazy and reports decode failures", async () => {
+    const createObjectURL = vi.fn().mockReturnValue("blob:document-image");
+    const revokeObjectURL = vi.fn();
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+
+    try {
+      const client = {
+        getPluginArtifactBlob: vi.fn().mockResolvedValue(new Blob(["image"], { type: "image/png" })),
+      } as unknown as WebBotClient;
+      const { unmount } = renderDocument({
+        blocks: [{ type: "image", artifactId: "image-1", filename: "image.png", contentType: "image/png" }],
+      }, client);
+
+      const image = await screen.findByRole("img");
+      expect(image).toHaveAttribute("loading", "lazy");
+      expect(image).toHaveAttribute("decoding", "async");
+      fireEvent.error(image);
+      expect(await screen.findByText("图片加载失败")).toBeInTheDocument();
+
+      unmount();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:document-image");
+    } finally {
+      if (originalCreateObjectURL) {
+        Object.defineProperty(URL, "createObjectURL", { configurable: true, value: originalCreateObjectURL });
+      } else {
+        Reflect.deleteProperty(URL, "createObjectURL");
+      }
+      if (originalRevokeObjectURL) {
+        Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: originalRevokeObjectURL });
+      } else {
+        Reflect.deleteProperty(URL, "revokeObjectURL");
+      }
+    }
   });
 });

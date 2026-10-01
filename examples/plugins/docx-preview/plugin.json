@@ -13,6 +13,12 @@
     "permissions": {
       "workspaceRead": true,
       "tempArtifacts": true
+    },
+    "limits": {
+      "readBytes": 33554432,
+      "artifactBytes": 33554432,
+      "artifactCount": 128,
+      "totalArtifactBytes": 268435456
     }
   },
   "views": [
@@ -20,7 +26,7 @@
       "id": "document",
       "title": "文档预览",
       "renderer": "document",
-      "viewMode": "snapshot",
+      "viewMode": "session",
       "dataProfile": "light"
     }
   ],

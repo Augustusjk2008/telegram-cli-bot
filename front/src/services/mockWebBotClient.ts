@@ -131,6 +131,7 @@ import type {
   PluginAction,
   PluginActionInvokeInput,
   PluginActionResult,
+  PluginRuntimeInstallResult,
   PromptPreset,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
@@ -5074,6 +5075,18 @@ export class MockWebBotClient implements WebBotClient {
       return { message: "已折叠" };
     }
     return { message: "已执行" };
+  }
+
+  async installPluginRuntime(_botAlias: string, pluginId: string): Promise<PluginRuntimeInstallResult> {
+    if (pluginId !== "mermaid-visio") {
+      throw new Error(`不支持的插件运行时: ${pluginId}`);
+    }
+    return {
+      ok: true,
+      runtimeId: "mermaid-visio/graphviz",
+      version: "16.1.0",
+      message: "Graphviz 运行时已安装",
+    };
   }
 
   async downloadPluginArtifact(_botAlias: string, artifactId: string, filename: string): Promise<void> {

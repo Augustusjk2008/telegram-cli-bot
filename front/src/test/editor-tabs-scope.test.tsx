@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { PluginOpenTarget, PluginRenderResult } from "../services/types";
+import type { DocumentSessionRenderResult, PluginOpenTarget, PluginRenderResult } from "../services/types";
 import { useEditorTabs } from "../workbench/useEditorTabs";
 
 function deferred<T>() {
@@ -82,6 +82,34 @@ describe("plugin view sessions", () => {
 
     expect(result.current.tabs).toEqual([]);
     expect(dispose).toHaveBeenCalledWith("main", "demo-plugin", "old-scope-session");
+  });
+
+  test("a document plugin session is disposed when its tab closes", async () => {
+    const client = new MockWebBotClient();
+    const view: DocumentSessionRenderResult = {
+      pluginId: "demo-plugin",
+      viewId: "report",
+      title: "插件报告",
+      renderer: "document",
+      mode: "session",
+      sessionId: "document-session",
+      summary: { path: "src/report.docx", sections: [{ id: "intro", title: "介绍" }] },
+      initialWindow: { sectionId: "intro", blocks: [] },
+    };
+    vi.spyOn(client, "openPluginView").mockResolvedValue(view);
+    const dispose = vi.spyOn(client, "disposePluginViewSession");
+    const { result } = renderHook(() => useEditorTabs({
+      botAlias: "main",
+      client,
+      scopeKey: "main\nworkspace-a",
+    }));
+
+    await act(async () => {
+      await result.current.openPluginView(pluginTarget);
+    });
+    act(() => result.current.closeTab("plugin://demo-plugin/report/src/index.py"));
+
+    expect(dispose).toHaveBeenCalledWith("main", "demo-plugin", "document-session");
   });
 });
 

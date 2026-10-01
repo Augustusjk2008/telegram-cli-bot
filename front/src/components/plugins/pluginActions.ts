@@ -10,7 +10,7 @@ export type PluginActionExecutionContext = {
   sessionId?: string;
   inputPayload: Record<string, unknown>;
   payload?: Record<string, unknown>;
-  applyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  applyHostEffects?: (effects: HostEffect[], pluginId?: string) => Promise<void> | void;
   closeSession?: (pluginId: string, sessionId: string) => Promise<void> | void;
   refreshSession?: (pluginId: string, sessionId: string) => Promise<void> | void;
   reopenView?: (target: {
@@ -59,7 +59,7 @@ export async function runPluginAction(
     context.pushToast?.(result.message);
   }
   if (result.hostEffects?.length) {
-    await context.applyHostEffects?.(result.hostEffects);
+    await context.applyHostEffects?.(result.hostEffects, context.pluginId);
   }
   if (result.closeSession && context.sessionId) {
     await context.closeSession?.(context.pluginId, context.sessionId);

@@ -1412,6 +1412,7 @@ export type HostEffect =
   | { type: "reveal_in_files"; path: string }
   | { type: "copy_text"; text: string }
   | { type: "download_artifact"; artifactId: string; filename: string }
+  | { type: "install_plugin_runtime" }
   | {
       type: "open_plugin_view";
       pluginId: string;
@@ -1450,6 +1451,14 @@ export type PluginActionInvokeInput = {
   sessionId?: string;
   actionId: string;
   payload?: Record<string, unknown>;
+};
+
+export type PluginRuntimeInstallResult = {
+  ok: boolean;
+  runtimeId: string;
+  version: string;
+  message: string;
+  dotPath?: string;
 };
 
 export type PluginConfigFieldOption = {
@@ -1949,8 +1958,35 @@ export type DocumentViewPayload = {
   formatting?: "document";
   title?: string;
   statsText?: string;
+  actions?: PluginAction[];
   blocks: DocumentBlock[];
 };
+
+export type DocumentSectionSummary = {
+  id?: string;
+  sectionId?: string;
+  title?: string;
+  label?: string;
+  level?: number;
+  blockCount?: number;
+};
+
+export type DocumentViewSummary = {
+  path: string;
+  title?: string;
+  statsText?: string;
+  formatting?: "document";
+  sections: DocumentSectionSummary[];
+  actions?: PluginAction[];
+};
+
+export type DocumentWindowPayload = {
+  sectionId: string;
+  blocks: DocumentBlock[];
+};
+
+export type DocumentSessionSummary = DocumentViewSummary;
+export type DocumentSessionWindow = DocumentWindowPayload;
 
 export type HexEntropyBucket = {
   index: number;
@@ -2015,6 +2051,17 @@ export type DocumentSnapshotRenderResult = {
   payload: DocumentViewPayload;
 };
 
+export type DocumentSessionRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "document";
+  mode: "session";
+  sessionId: string;
+  summary: DocumentViewSummary;
+  initialWindow: DocumentWindowPayload;
+};
+
 export type HexSnapshotRenderResult = {
   pluginId: string;
   viewId: string;
@@ -2067,7 +2114,8 @@ export type PluginSnapshotRenderResult =
 export type PluginSessionRenderResult =
   | WaveformSessionRenderResult
   | TableSessionRenderResult
-  | TreeSessionRenderResult;
+  | TreeSessionRenderResult
+  | DocumentSessionRenderResult;
 
 export type PluginRenderResult = PluginSnapshotRenderResult | PluginSessionRenderResult;
 

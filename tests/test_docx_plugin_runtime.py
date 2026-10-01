@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+import shutil
+from io import BytesIO
+from pathlib import Path
+from zipfile import ZipFile
+
+import pytest
+
+from bot.plugins.artifacts import ArtifactStore
+from bot.plugins.host_api import PluginHostApi
+from bot.plugins.manifest import load_plugin_manifest
+from bot.plugins.runtime import PluginRuntime
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DOCX_PLUGIN = REPO_ROOT / "examples" / "plugins" / "docx-preview"
+W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _docx_bytes() -> bytes:
+    body = (
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>第一章</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>正文</w:t></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>第二章</w:t></w:r></w:p>'
+        '<w:p><w:r><w:t>第二节正文</w:t></w:r></w:p>'
+    )
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            f'<w:document xmlns:w="{W}" xmlns:r="{R}"><w:body>{body}</w:body></w:document>',
+        )
+    return buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_docx_session_runs_from_copied_plugin_directory(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugins" / "docx-preview"
+    shutil.copytree(DOCX_PLUGIN, plugin_dir)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "sample.docx").write_bytes(_docx_bytes())
+
+    runtime = PluginRuntime(
+        workspace_root_for=lambda _alias: workspace,
+        host_api=PluginHostApi(ArtifactStore(tmp_path)),
+        call_timeout_seconds=10,
+    )
+    try:
+        manifest = load_plugin_manifest(plugin_dir / "plugin.json")
+        opened = await runtime.open_view("main", manifest, "document", {"path": "sample.docx"})
+        assert opened["renderer"] == "document"
+        assert opened["mode"] == "session"
+        assert opened["summary"]["sections"]
+        session_id = str(opened["sessionId"])
+        first_id = str(opened["initialWindow"]["sectionId"])
+        window = await runtime.get_view_window(
+            "main",
+            manifest,
+            session_id,
+            {"sectionId": "section-2" if first_id == "section-1" else first_id},
+        )
+        assert window["sectionId"]
+        assert window["blocks"]
+        disposed = await runtime.dispose_view("main", manifest, session_id)
+        assert disposed["disposed"] is True
+    finally:
+        await runtime.shutdown()

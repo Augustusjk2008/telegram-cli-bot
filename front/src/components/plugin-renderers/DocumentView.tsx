@@ -1,22 +1,28 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { WebBotClient } from "../../services/webBotClient";
 import type {
   DocumentBlock,
   DocumentBorder,
   DocumentBorders,
   DocumentParagraphBlock,
+  DocumentSectionSummary,
   DocumentParagraphFormat,
   DocumentSlideImageRef,
   DocumentSlideItem,
   DocumentTextRun,
+  DocumentViewSummary,
+  DocumentWindowPayload,
+  PluginAction,
   DocumentWidth,
   PluginRenderResult,
 } from "../../services/types";
+import { PluginActionBar } from "./PluginActionBar";
 
 type Props = {
   botAlias: string;
   client: WebBotClient;
-  view: Extract<PluginRenderResult, { renderer: "document"; mode: "snapshot" }>;
+  view: Extract<PluginRenderResult, { renderer: "document" }>;
+  onRunAction?: (action: PluginAction, payload?: Record<string, unknown>) => void | Promise<void>;
 };
 
 type DocumentHeadingLevel = Extract<DocumentBlock, { type: "heading" }>["level"];
@@ -215,6 +221,9 @@ function ArtifactImage({
       src={src}
       alt={image.alt || image.title || image.filename}
       title={image.title || image.filename}
+      loading="lazy"
+      decoding="async"
+      onError={() => setError("图片加载失败")}
       className={className}
       style={style}
     />
@@ -510,24 +519,163 @@ function renderBlock(block: DocumentBlock, index: number, botAlias: string, clie
   );
 }
 
-export function DocumentView({ botAlias, client, view }: Props) {
-  if (view.payload.pdf) {
+function sectionId(section: DocumentSectionSummary | undefined, index: number) {
+  return section?.sectionId || section?.id || `section-${index}`;
+}
+
+function sectionTitle(section: DocumentSectionSummary, index: number) {
+  return section.title || section.label || `第 ${index + 1} 节`;
+}
+
+function snapshotSummary(view: Extract<PluginRenderResult, { renderer: "document"; mode: "snapshot" }>): DocumentViewSummary {
+  return {
+    path: view.payload.path,
+    title: view.payload.title,
+    statsText: view.payload.statsText,
+    formatting: view.payload.formatting,
+    sections: [],
+    actions: view.payload.actions,
+  };
+}
+
+export function DocumentView(props: Props) {
+  const { botAlias, client, view } = props;
+  if (view.mode === "snapshot" && view.payload.pdf) {
     return (
       <Suspense fallback={<div className="p-5 text-sm text-[var(--muted)]">PDF 加载中...</div>}>
         <PdfView key={`${botAlias}:${view.payload.pdf.artifactId}`} botAlias={botAlias} client={client} payload={view.payload} />
       </Suspense>
     );
   }
-  const document = view.payload.formatting === "document";
+  return <DocumentContent {...props} />;
+}
+
+function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
+  const session = view.mode === "session" ? view : null;
+  const snapshot = view.mode === "snapshot" ? view : null;
+  const summary = session ? session.summary : snapshotSummary(snapshot!);
+  const initialWindow: DocumentWindowPayload = session
+    ? session.initialWindow
+    : { sectionId: "snapshot", blocks: snapshot!.payload.blocks };
+  const [selectedSectionId, setSelectedSectionId] = useState(() => initialWindow.sectionId);
+  const [windowState, setWindowState] = useState<DocumentWindowPayload | null>(() => initialWindow);
+  const [windowLoading, setWindowLoading] = useState(false);
+  const [windowError, setWindowError] = useState("");
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    const nextWindow: DocumentWindowPayload = view.mode === "session"
+      ? view.initialWindow
+      : { sectionId: "snapshot", blocks: view.payload.blocks };
+    const nextSectionId = view.mode === "session"
+      ? nextWindow.sectionId || sectionId(view.summary.sections[0], 0)
+      : nextWindow.sectionId;
+    requestIdRef.current += 1;
+    setSelectedSectionId(nextSectionId);
+    setWindowState(nextWindow);
+    setWindowLoading(false);
+    setWindowError("");
+  }, [view]);
+
+  useEffect(() => {
+    if (!session || !selectedSectionId || windowState?.sectionId === selectedSectionId) {
+      return;
+    }
+    const controller = new AbortController();
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setWindowLoading(true);
+    setWindowError("");
+
+    void client.queryPluginViewWindow(
+      botAlias,
+      view.pluginId,
+      session.sessionId,
+      { sectionId: selectedSectionId },
+      controller.signal,
+    ).then((payload) => {
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      const next = payload as DocumentWindowPayload;
+      setWindowState({
+        ...next,
+        sectionId: next.sectionId || selectedSectionId,
+        blocks: Array.isArray(next.blocks) ? next.blocks : [],
+      });
+      setWindowLoading(false);
+    }).catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+      setWindowLoading(false);
+      setWindowError(error instanceof Error && error.message ? error.message : "加载文档章节失败");
+    });
+
+    return () => controller.abort();
+  }, [botAlias, client, selectedSectionId, session?.sessionId, view.pluginId, windowState?.sectionId]);
+
+  function selectSection(nextSectionId: string) {
+    if (nextSectionId === selectedSectionId) {
+      return;
+    }
+    requestIdRef.current += 1;
+    setSelectedSectionId(nextSectionId);
+    setWindowState(null);
+    setWindowLoading(true);
+    setWindowError("");
+  }
+
+  const document = summary.formatting === "document";
+  const actions = session ? summary.actions : snapshot!.payload.actions;
+  const blocks = windowState?.blocks || [];
   return (
     <div data-testid="document-view" className="flex h-full min-h-0 flex-col overflow-y-auto p-5">
+      <PluginActionBar actions={actions} onRunAction={(action) => onRunAction?.(action)} />
       <div className="mb-4">
-        <div className="text-lg font-semibold text-[var(--text)]">{view.payload.title || view.title}</div>
-        <div className="mt-1 text-xs text-[var(--muted)]">{view.payload.path}</div>
-        {view.payload.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{view.payload.statsText}</div> : null}
+        <div className="text-lg font-semibold text-[var(--text)]">{summary.title || view.title}</div>
+        <div className="mt-1 text-xs text-[var(--muted)]">{summary.path}</div>
+        {summary.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{summary.statsText}</div> : null}
       </div>
-      {view.payload.blocks.length ? (
+
+      {session && summary.sections.length ? (
+        <nav data-testid="document-section-list" aria-label="文档章节" className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
+          <div className="px-2 pb-1 text-xs font-medium text-[var(--muted)]">章节</div>
+          <div className="flex flex-wrap gap-1">
+            {summary.sections.map((section, index) => {
+              const currentSectionId = sectionId(section, index);
+              const active = currentSectionId === selectedSectionId;
+              return (
+                <button
+                  key={currentSectionId}
+                  type="button"
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => selectSection(currentSectionId)}
+                  className={`rounded-md border px-2.5 py-1.5 text-sm ${active
+                    ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                    : "border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface-strong)]"}`}
+                >
+                  {sectionTitle(section, index)}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      ) : null}
+
+      {windowError ? (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{windowError}</div>
+      ) : null}
+
+      {windowLoading && !windowState ? (
+        <div className="text-sm text-[var(--muted)]">章节加载中...</div>
+      ) : blocks.length ? (
         <div
+          key={windowState?.sectionId || selectedSectionId}
+          data-testid="document-section-content"
           className={document ? "flow-root shrink-0 p-4" : "space-y-4 pb-6"}
           style={document ? {
             backgroundColor: "#ffffff",
@@ -539,9 +687,9 @@ export function DocumentView({ botAlias, client, view }: Props) {
             lineHeight: "normal",
           } : undefined}
         >
-          {view.payload.blocks.map((block, index) => renderBlock(block, index, botAlias, client, document))}
+          {blocks.map((block, index) => renderBlock(block, index, botAlias, client, document))}
         </div>
-      ) : (
+      ) : windowError ? null : (
         <div className="text-sm text-[var(--muted)]">文档暂无可预览内容</div>
       )}
     </div>

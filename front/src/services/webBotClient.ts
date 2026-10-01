@@ -119,6 +119,7 @@ import type {
   PluginUpdateInput,
   PluginActionInvokeInput,
   PluginActionResult,
+  PluginRuntimeInstallResult,
   PromptPreset,
   RegisterCodeCreateResult,
   RegisterCodeItem,
@@ -318,6 +319,7 @@ export interface WebBotClient {
   ): Promise<PluginViewWindowPayload>;
   disposePluginViewSession(botAlias: string, pluginId: string, sessionId: string): Promise<void>;
   invokePluginAction(botAlias: string, pluginId: string, input: PluginActionInvokeInput): Promise<PluginActionResult>;
+  installPluginRuntime(botAlias: string, pluginId: string): Promise<PluginRuntimeInstallResult>;
   getPluginArtifactBlob(botAlias: string, artifactId: string): Promise<Blob>;
   downloadPluginArtifact(botAlias: string, artifactId: string, filename: string): Promise<void>;
   writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult>;

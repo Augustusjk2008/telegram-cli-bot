@@ -19,7 +19,7 @@ type Props = {
   sessionId?: string;
   summary: WaveformViewSummary;
   initialWindow: WaveformWindowPayload;
-  onApplyHostEffects?: (effects: HostEffect[]) => Promise<void> | void;
+  onApplyHostEffects?: (effects: HostEffect[], pluginId?: string) => Promise<void> | void;
 };
 
 type ResolvedWaveformDisplay = {
@@ -260,14 +260,14 @@ export function WaveformView({ title, botAlias, client, pluginId, sessionId, sum
   const copyValue = useCallback((value: string | null) => {
     if (value == null) return;
     const effect: HostEffect = { type: "copy_text", text: value };
-    if (onApplyHostEffects) void onApplyHostEffects([effect]);
+    if (onApplyHostEffects) void onApplyHostEffects([effect], pluginId);
     else void navigator.clipboard?.writeText(value);
-  }, [onApplyHostEffects]);
+  }, [onApplyHostEffects, pluginId]);
 
   const openLogLine = useCallback((line: number) => {
     const logPath = summary.log?.logPath;
-    if (logPath && onApplyHostEffects) void onApplyHostEffects([{ type: "open_file", path: logPath, line }]);
-  }, [onApplyHostEffects, summary.log?.logPath]);
+    if (logPath && onApplyHostEffects) void onApplyHostEffects([{ type: "open_file", path: logPath, line }], pluginId);
+  }, [onApplyHostEffects, pluginId, summary.log?.logPath]);
 
   const jumpToSimulationTime = useCallback((time: number) => {
     const clamped = clampTime(time, fullRange.startTime, fullRange.endTime);

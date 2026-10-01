@@ -39,6 +39,7 @@ from .manifest_payloads import (
 )
 from .paths import default_plugins_root
 from .registry import PluginRegistry
+from .runtime_installers import GRAPHVIZ_RUNTIME_KEY, PluginRuntimeInstaller, RuntimeInstallerError
 from .runtime import PluginRuntime
 from .view_sessions import (
     PluginViewSessionRecord,
@@ -67,6 +68,7 @@ class PluginService:
         render_concurrency: int = 2,
         snapshot_cache_max_entries: int = _DEFAULT_SNAPSHOT_CACHE_MAX_ENTRIES,
         snapshot_cache_max_bytes: int = _DEFAULT_SNAPSHOT_CACHE_MAX_BYTES,
+        runtime_installer: PluginRuntimeInstaller | None = None,
     ):
         self.repo_root = Path(repo_root)
         self.plugins_root = Path(plugins_root) if plugins_root is not None else default_plugins_root()
@@ -84,6 +86,7 @@ class PluginService:
             host_api=PluginHostApi(self.artifacts),
             audit_hook=self._record_runtime_audit,
         )
+        self.runtime_installer = runtime_installer or PluginRuntimeInstaller()
         self.sessions = PluginViewSessionStore()
         self._snapshot_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._snapshot_cache_plugins: dict[str, set[str]] = {}
@@ -689,6 +692,34 @@ class PluginService:
         )
         await self.evict_idle_runtimes(throttle=True)
         return normalized
+
+    async def install_plugin_runtime(
+        self,
+        *,
+        plugin_id: str,
+        audit_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.registry.discover()
+        manifest = self.registry.get_manifest(plugin_id)
+        if manifest.plugin_id != "mermaid-visio":
+            raise RuntimeInstallerError(f"不支持的插件运行时: {manifest.plugin_id}")
+        result = await asyncio.to_thread(
+            self.runtime_installer.install,
+            GRAPHVIZ_RUNTIME_KEY,
+            manifest.root,
+        )
+        await self._invalidate_plugin(manifest.plugin_id, dispose_sessions=True)
+        self._record_runtime_audit(
+            {
+                "event": "install_plugin_runtime",
+                "plugin_id": manifest.plugin_id,
+                "runtime_id": GRAPHVIZ_RUNTIME_KEY,
+                "runtime_version": str(result.get("version") or ""),
+                "account_id": str(audit_context.get("account_id") or ""),
+                "bot_alias": str(audit_context.get("bot_alias") or ""),
+            }
+        )
+        return result
 
     async def dispose_view(
         self,

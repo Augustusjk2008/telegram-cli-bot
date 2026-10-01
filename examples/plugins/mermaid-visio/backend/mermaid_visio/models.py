@@ -36,9 +36,6 @@ class PluginConfig:
     allow_simple_layout_fallback: bool = True
     dot_path: str = "dot"
     bundled_graphviz_enabled: bool = True
-    graphviz_runtime_version: str = ""
-    graphviz_runtime_url: str = ""
-    graphviz_runtime_sha256: str = ""
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "PluginConfig":
@@ -63,9 +60,6 @@ class PluginConfig:
             allow_simple_layout_fallback=bool(payload.get("allowSimpleLayoutFallback", True)),
             dot_path=str(payload.get("dotPath") or "dot").strip() or "dot",
             bundled_graphviz_enabled=bool(payload.get("bundledGraphvizEnabled", True)),
-            graphviz_runtime_version=str(payload.get("graphvizRuntimeVersion") or "").strip(),
-            graphviz_runtime_url=str(payload.get("graphvizRuntimeUrl") or "").strip(),
-            graphviz_runtime_sha256=str(payload.get("graphvizRuntimeSha256") or "").strip().lower(),
         )
 
 

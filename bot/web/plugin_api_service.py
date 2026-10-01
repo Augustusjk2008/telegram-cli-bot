@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.manager import MultiBotManager
+from bot.plugins.runtime_installers import RuntimeInstallerError
 from bot.web.api_common import AuthContext, _raise, _require_capability, get_profile_or_raise, get_session_for_alias
 from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_VIEW_PLUGINS
 
@@ -279,6 +280,30 @@ async def invoke_plugin_action(
         _raise(400, "invalid_plugin_request", str(exc))
     except RuntimeError as exc:
         _raise(500, "plugin_action_failed", str(exc))
+
+
+async def install_plugin_runtime(
+    manager: MultiBotManager,
+    alias: str,
+    auth: AuthContext,
+    plugin_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    get_profile_or_raise(manager, alias)
+    if body:
+        _raise(400, "runtime_install_payload_forbidden", "运行时安装不接受 URL、路径或运行时 ID")
+    if plugin_id != "mermaid-visio":
+        _raise(400, "unsupported_plugin_runtime", "当前插件没有受支持的运行时安装器")
+    try:
+        return await manager.plugin_service.install_plugin_runtime(
+            plugin_id=plugin_id,
+            audit_context={"account_id": auth.account_id, "bot_alias": alias},
+        )
+    except KeyError as exc:
+        _raise(404, "plugin_not_found", str(exc))
+    except RuntimeInstallerError as exc:
+        _raise(502, "plugin_runtime_install_failed", str(exc))
 
 
 def get_plugin_artifact(

@@ -34,5 +34,25 @@
       ],
       "viewId": "archive-tree"
     }
-  ]
+  ],
+  "configSchema": {
+    "title": "ZIP 预览设置",
+    "sections": [
+      {
+        "id": "limits",
+        "title": "预览限制",
+        "fields": [
+          {
+            "key": "maxEntries",
+            "label": "最多条目数",
+            "type": "integer",
+            "default": 2000,
+            "minimum": 100,
+            "maximum": 10000,
+            "step": 1
+          }
+        ]
+      }
+    ]
+  }
 }

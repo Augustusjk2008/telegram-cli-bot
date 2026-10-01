@@ -20,6 +20,11 @@ R = f"{{{R_NS}}}"
 HEADING_PATTERN = re.compile(r"^heading[\s_-]*(\d+)$", re.IGNORECASE)
 EMU_PER_PIXEL = 9525
 MAX_GRID_COUNT = 1000
+MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_BLOCKS = 10_000
+MAX_IMAGES = 100
+MAX_IMAGE_BYTES = 32 * 1024 * 1024
+DEFAULT_SECTION_BLOCKS = 200
 IMAGE_CONTENT_TYPES = {
     ".bmp": "image/bmp",
     ".gif": "image/gif",
@@ -32,6 +37,87 @@ IMAGE_CONTENT_TYPES = {
     ".webp": "image/webp",
 }
 ArtifactWriter = Callable[[str, bytes, str], dict[str, object]]
+
+
+class ParseBudget:
+    def __init__(self, *, artifact_limits: dict[str, int] | None = None, reuse_images: bool = False):
+        limits = artifact_limits or {}
+        self.max_blocks = MAX_BLOCKS
+        self.max_images = MAX_IMAGES
+        self.max_image_bytes = min(MAX_IMAGE_BYTES, int(limits.get("artifactBytes", MAX_IMAGE_BYTES)))
+        self.max_artifacts = min(MAX_IMAGES, int(limits.get("artifactCount", MAX_IMAGES)))
+        self.max_total_image_bytes = min(MAX_UNCOMPRESSED_BYTES, int(limits.get("totalArtifactBytes", MAX_UNCOMPRESSED_BYTES)))
+        self.reuse_images = reuse_images
+        self.image_targets: set[str] = set()
+        self.artifacts = 0
+        self.total_image_bytes = 0
+        self.blocks = 0
+        self.images = 0
+
+    def add_blocks(self, count: int) -> None:
+        self.blocks += max(0, int(count))
+        if self.blocks > self.max_blocks:
+            raise RuntimeError("文档块数量超过预览限制")
+
+    def add_image(self, target: str, size: int) -> None:
+        self.images += 1
+        if self.images > self.max_images:
+            raise RuntimeError("图片数量超过预览限制")
+        if size > self.max_image_bytes:
+            raise RuntimeError("图片超过预览限制")
+        if not self.reuse_images or target not in self.image_targets:
+            self.image_targets.add(target)
+            self.artifacts += 1
+            self.total_image_bytes += size
+            if self.artifacts > self.max_artifacts:
+                raise RuntimeError("图片数量超过预览限制")
+            if self.total_image_bytes > self.max_total_image_bytes:
+                raise RuntimeError("DOCX 图片总大小超过预览限制")
+
+
+def _open_archive(source: bytes | str | Path) -> ZipFile:
+    if isinstance(source, (str, Path)):
+        return ZipFile(str(source))
+    return ZipFile(BytesIO(source))
+
+
+def _check_archive_budget(archive: ZipFile) -> None:
+    total_uncompressed = 0
+    for info in archive.infolist():
+        size = int(info.file_size)
+        if size < 0:
+            raise RuntimeError("DOCX ZIP 声明了无效的解压大小")
+        total_uncompressed += size
+        if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
+            raise RuntimeError("DOCX 解压内容超过预览限制")
+
+
+def _image_reference_targets(
+    body: ET.Element | list[ET.Element],
+    relationships: dict[str, str],
+) -> list[str]:
+    targets: list[str] = []
+    roots = [body] if isinstance(body, ET.Element) else body
+    for root in roots:
+        for node in root.iter(f"{{{A_NS}}}blip"):
+            target = relationships.get(str(node.attrib.get(f"{R}embed") or "").strip())
+            if target:
+                targets.append(target)
+    return targets
+
+
+def _check_image_budget(archive: ZipFile, body: ET.Element, relationships: dict[str, str], budget: ParseBudget) -> None:
+    targets = _image_reference_targets(body, relationships)
+    for target in targets:
+        try:
+            size = int(archive.getinfo(target).file_size)
+        except KeyError:
+            size = 0
+        budget.add_image(target, size)
+
+
+def _paragraph_text(paragraph: ET.Element) -> str:
+    return "".join(str(node.text or "") for node in paragraph.iter(f"{W}t"))
 
 
 def _xml(archive: ZipFile, name: str) -> ET.Element | None:
@@ -228,8 +314,11 @@ def _image_blocks(
     relationships: dict[str, str],
     content_types: dict[str, str],
     write_artifact: ArtifactWriter | None,
+    budget: ParseBudget | None = None,
+    include_placeholders: bool = False,
+    artifact_cache: dict[str, dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
-    if write_artifact is None:
+    if write_artifact is None and not include_placeholders:
         return []
     blocks: list[dict[str, object]] = []
     for drawing in run.findall("w:drawing", NS):
@@ -241,25 +330,43 @@ def _image_blocks(
             target = relationships.get(rel_id)
             if not target:
                 continue
-            try:
-                content = archive.read(target)
-            except KeyError:
-                continue
+            if budget is not None:
+                try:
+                    image_size = int(archive.getinfo(target).file_size)
+                except KeyError:
+                    image_size = 0
+                budget.add_image(target, image_size)
             filename = posixpath.basename(target)
             suffix = Path(filename).suffix.lower()
             content_type = content_types.get(suffix) or IMAGE_CONTENT_TYPES.get(suffix) or "application/octet-stream"
-            artifact = write_artifact(filename, content, content_type)
-            artifact_id = str(artifact.get("artifactId") or "")
-            if not artifact_id:
-                continue
             width, height = _image_size_px(inline)
             alt, title = _image_alt_title(inline)
-            block: dict[str, object] = {
-                "type": "image",
-                "artifactId": artifact_id,
-                "filename": str(artifact.get("filename") or filename),
-                "contentType": str(artifact.get("contentType") or content_type),
-            }
+            if write_artifact is None:
+                block: dict[str, object] = {
+                    "type": "image",
+                    "artifactId": "",
+                    "filename": filename,
+                    "contentType": content_type,
+                }
+            else:
+                artifact = artifact_cache.get(target) if artifact_cache is not None else None
+                if artifact is None:
+                    try:
+                        content = archive.read(target)
+                    except KeyError:
+                        continue
+                    artifact = write_artifact(filename, content, content_type)
+                    if artifact_cache is not None:
+                        artifact_cache[target] = artifact
+                artifact_id = str(artifact.get("artifactId") or "")
+                if not artifact_id:
+                    continue
+                block = {
+                    "type": "image",
+                    "artifactId": artifact_id,
+                    "filename": str(artifact.get("filename") or filename),
+                    "contentType": str(artifact.get("contentType") or content_type),
+                }
             if alt:
                 block["alt"] = alt
             if title:
@@ -273,9 +380,20 @@ def _image_blocks(
 
 
 class DocumentParser:
-    def __init__(self, archive: ZipFile, write_artifact: ArtifactWriter | None):
+    def __init__(
+        self,
+        archive: ZipFile,
+        write_artifact: ArtifactWriter | None,
+        *,
+        budget: ParseBudget | None = None,
+        include_image_placeholders: bool = False,
+        artifact_cache: dict[str, dict[str, object]] | None = None,
+    ):
         self.archive = archive
         self.write_artifact = write_artifact
+        self.budget = budget
+        self.include_image_placeholders = include_image_placeholders
+        self.artifact_cache = artifact_cache
         styles = _xml(archive, "word/styles.xml")
         relationships = _xml(archive, "word/_rels/document.xml.rels")
         theme_path = "word/theme/theme1.xml"
@@ -372,7 +490,16 @@ class DocumentParser:
                 elif node.tag == W + "drawing":
                     wrapper = ET.Element(W + "r")
                     wrapper.append(node)
-                    images = _image_blocks(wrapper, self.archive, self.relationships, self.content_types, self.write_artifact)
+                    images = _image_blocks(
+                        wrapper,
+                        self.archive,
+                        self.relationships,
+                        self.content_types,
+                        self.write_artifact,
+                        self.budget,
+                        self.include_image_placeholders,
+                        self.artifact_cache,
+                    )
                     if images:
                         flush_text()
                         flush()
@@ -384,6 +511,8 @@ class DocumentParser:
             baseline = formatting.run_style([*run_layers, (child(props, "rPr"), False)])
             blank_format = {**paragraph_format, **({"textStyle": baseline} if baseline else {})}
             blocks.append({**block, **({"format": blank_format} if blank_format else {}), "runs": [{"text": ""}]})
+        if self.budget is not None:
+            self.budget.add_blocks(len(blocks))
         return blocks
 
     @staticmethod
@@ -546,47 +675,66 @@ class DocumentParser:
                     next_merges[col] = (span, cell)
             active_merges = next_merges
             result["rows"].append({"cells": rendered_cells})
+        if self.budget is not None:
+            self.budget.add_blocks(1)
         return result
 
 
-def parse_docx_document(
-    path: str,
-    content: bytes,
+def _document_root(archive: ZipFile) -> tuple[ET.Element, ET.Element]:
+    document_root = _xml(archive, "word/document.xml")
+    if document_root is None:
+        raise RuntimeError("DOCX 缺少 word/document.xml")
+    body = document_root.find("w:body", NS)
+    if body is None:
+        raise RuntimeError("DOCX body 为空")
+    return document_root, body
+
+
+def _prepare_archive(archive: ZipFile) -> None:
+    # Read only the ZIP central directory first. No image data is read before
+    # these checks complete.
+    _check_archive_budget(archive)
+
+
+def _parse_body(
+    archive: ZipFile,
+    children: list[ET.Element],
+    write_artifact: ArtifactWriter | None,
     *,
-    write_artifact: ArtifactWriter | None = None,
+    budget: ParseBudget,
+    include_image_placeholders: bool,
+) -> tuple[list[dict[str, object]], int, int]:
+    parser = DocumentParser(
+        archive,
+        write_artifact,
+        budget=budget,
+        include_image_placeholders=include_image_placeholders,
+    )
+    blocks: list[dict[str, object]] = []
+    paragraph_count = 0
+    table_count = 0
+    for node in children:
+        if node.tag == f"{W}p":
+            paragraph_blocks = parser.paragraph(node)
+            if paragraph_blocks:
+                paragraph_count += 1
+                blocks.extend(paragraph_blocks)
+        elif node.tag == f"{W}tbl":
+            table_count += 1
+            blocks.append(parser.table(node))
+    return blocks, paragraph_count, table_count
+
+
+def _payload(
+    path: str,
+    blocks: list[dict[str, object]],
+    paragraph_count: int,
+    table_count: int,
+    image_count: int,
+    *,
+    title: str | None = None,
 ) -> dict[str, object]:
-    try:
-        with ZipFile(BytesIO(content)) as archive:
-            document_root = _xml(archive, "word/document.xml")
-            if document_root is None:
-                raise RuntimeError("DOCX 缺少 word/document.xml")
-
-            body = document_root.find("w:body", NS)
-            if body is None:
-                raise RuntimeError("DOCX body 为空")
-
-            parser = DocumentParser(archive, write_artifact)
-
-            blocks: list[dict[str, object]] = []
-            paragraph_count = 0
-            table_count = 0
-            for child in list(body):
-                if child.tag == f"{W}p":
-                    paragraph_blocks = parser.paragraph(child)
-                    if not paragraph_blocks:
-                        continue
-                    paragraph_count += 1
-                    blocks.extend(paragraph_blocks)
-                    continue
-                if child.tag == f"{W}tbl":
-                    table_count += 1
-                    blocks.append(parser.table(child))
-    except BadZipFile as exc:
-        raise RuntimeError("DOCX 文件损坏或格式不支持") from exc
-    except ET.ParseError as exc:
-        raise RuntimeError("DOCX XML 解析失败") from exc
-
-    title = next(
+    resolved_title = title or next(
         (
             "".join(str(run.get("text") or "") for run in block.get("runs", []))
             for block in blocks
@@ -594,14 +742,163 @@ def parse_docx_document(
         ),
         Path(path).name,
     )
-    image_count = sum(1 for block in blocks if block.get("type") == "image")
-    image_count += sum(1 for block in blocks if block.get("type") == "table"
-                       for row in block["rows"] for cell in row["cells"]
-                       for paragraph in cell.get("paragraphs", []) if paragraph["type"] == "image")
     return {
         "path": path,
         "formatting": "document",
-        "title": title,
+        "title": resolved_title,
         "statsText": f"{paragraph_count} 段 · {table_count} 表格 · {image_count} 图片",
         "blocks": blocks,
     }
+
+
+def _parse_source(
+    path: str,
+    source: bytes | str | Path,
+    *,
+    write_artifact: ArtifactWriter | None,
+    children_slice: tuple[int, int] | None = None,
+    artifact_limits: dict[str, int] | None = None,
+) -> dict[str, object]:
+    try:
+        with _open_archive(source) as archive:
+            _prepare_archive(archive)
+            _document, body = _document_root(archive)
+            children = list(body)
+            if children_slice is not None:
+                start, end = children_slice
+                children = children[max(0, start):max(start, end)]
+            # The first pass only parses XML and emits image placeholders. It
+            # ensures the block budget is exhausted before any artifact write.
+            preflight_budget = ParseBudget(artifact_limits=artifact_limits)
+            _parse_body(
+                archive,
+                children,
+                None,
+                budget=preflight_budget,
+                include_image_placeholders=True,
+            )
+
+            actual_budget = ParseBudget(artifact_limits=artifact_limits)
+            blocks, paragraph_count, table_count = _parse_body(
+                archive,
+                children,
+                write_artifact,
+                budget=actual_budget,
+                include_image_placeholders=False,
+            )
+            return _payload(path, blocks, paragraph_count, table_count, preflight_budget.images)
+    except BadZipFile as exc:
+        raise RuntimeError("DOCX 文件损坏或格式不支持") from exc
+    except ET.ParseError as exc:
+        raise RuntimeError("DOCX XML 解析失败") from exc
+
+
+def parse_docx_document(
+    path: str,
+    content: bytes,
+    *,
+    write_artifact: ArtifactWriter | None = None,
+    artifact_limits: dict[str, int] | None = None,
+) -> dict[str, object]:
+    return _parse_source(path, content, write_artifact=write_artifact, artifact_limits=artifact_limits)
+
+
+def _section_heading(paragraph: ET.Element, heading_styles: dict[str, int]) -> tuple[int | None, str]:
+    props = child(paragraph, "pPr")
+    style_id = attr(child(props, "pStyle"))
+    level = _heading_level(style_id, heading_styles)
+    outline = integer(attr(child(props, "outlineLvl")), 0)
+    if outline is not None and outline < 9:
+        level = min(6, outline + 1)
+    return level, _paragraph_text(paragraph).strip()
+
+
+def inspect_docx_document(
+    path: str,
+    source: bytes | str | Path,
+    *,
+    artifact_limits: dict[str, int] | None = None,
+) -> dict[str, object]:
+    try:
+        with _open_archive(source) as archive:
+            _prepare_archive(archive)
+            _document, body = _document_root(archive)
+            children = list(body)
+            relationships = _document_relationships(_xml(archive, "word/_rels/document.xml.rels"))
+            image_budget = ParseBudget(artifact_limits=artifact_limits)
+            _check_image_budget(archive, children, relationships, image_budget)
+            heading_styles = _heading_styles(_xml(archive, "word/styles.xml"))
+            headings: list[tuple[int, int, str]] = []
+            for index, node in enumerate(children):
+                if node.tag != f"{W}p":
+                    continue
+                level, title = _section_heading(node, heading_styles)
+                if level is not None:
+                    headings.append((index, level, title))
+
+            starts: list[tuple[int, int | None, str]] = []
+            if headings:
+                if headings[0][0] > 0:
+                    starts.append((0, None, "引言"))
+                starts.extend(headings)
+            else:
+                starts = [
+                    (index, None, f"第 {number + 1} 节")
+                    for number, index in enumerate(range(0, max(1, len(children)), DEFAULT_SECTION_BLOCKS))
+                ]
+            sections: list[dict[str, object]] = []
+            for number, (start, level, title) in enumerate(starts):
+                end = starts[number + 1][0] if number + 1 < len(starts) else len(children)
+                if start >= end:
+                    continue
+                section_id = f"section-{len(sections) + 1}"
+                sections.append({
+                    "id": section_id,
+                    "title": title or f"第 {len(sections) + 1} 节",
+                    "index": len(sections),
+                    "headingLevel": level,
+                    "_start": start,
+                    "_end": end,
+                })
+            if not sections:
+                sections.append({"id": "section-1", "title": Path(path).name, "index": 0, "headingLevel": None, "_start": 0, "_end": len(children)})
+            title = next((str(section["title"]) for section in sections if section.get("headingLevel") is not None), Path(path).name)
+            paragraph_count = sum(1 for node in children if node.tag == f"{W}p")
+            table_count = sum(1 for node in children if node.tag == f"{W}tbl")
+            return {
+                "path": path,
+                "title": title,
+                "statsText": f"{paragraph_count} 段 · {table_count} 表格 · {image_budget.images} 图片",
+                "sections": [
+                    {key: value for key, value in section.items() if not key.startswith("_")}
+                    for section in sections
+                ],
+                "_sections": sections,
+            }
+    except BadZipFile as exc:
+        raise RuntimeError("DOCX 文件损坏或格式不支持") from exc
+    except ET.ParseError as exc:
+        raise RuntimeError("DOCX XML 解析失败") from exc
+
+
+def parse_docx_section(
+    path: str,
+    source: bytes | str | Path,
+    section: dict[str, object],
+    *,
+    write_artifact: ArtifactWriter | None = None,
+    artifact_limits: dict[str, int] | None = None,
+) -> dict[str, object]:
+    start = int(section.get("_start") or 0)
+    end = int(section.get("_end") or start)
+    payload = _parse_source(
+        path,
+        source,
+        write_artifact=write_artifact,
+        children_slice=(start, end),
+        artifact_limits=artifact_limits,
+    )
+    if section.get("title"):
+        payload["title"] = str(section["title"])
+    payload["sectionId"] = str(section.get("id") or "")
+    return payload

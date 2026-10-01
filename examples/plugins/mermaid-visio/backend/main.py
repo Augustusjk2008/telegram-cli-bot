@@ -8,7 +8,7 @@ from typing import Any
 from mermaid_visio.artifact_packager import package_results
 from mermaid_visio.export_actions import export_selected
 from mermaid_visio.flowchart_parser import parse_flowchart
-from mermaid_visio.graphviz_runtime import graphviz_status, install_graphviz_runtime
+from mermaid_visio.graphviz_runtime import graphviz_status
 from mermaid_visio.host_rpc import emit, read_workspace_text, write_artifact
 from mermaid_visio.models import DiagramStatus, PluginConfig
 from mermaid_visio.normalizer import normalize_ir
@@ -37,7 +37,18 @@ def table_summary(statuses: list[DiagramStatus], config: PluginConfig) -> dict[s
         {"id": "export-all", "label": "全部导出 VSDX", "target": "plugin", "location": "toolbar", "variant": "primary"}
     ]
     if status["installAvailable"]:
-        actions.append({"id": "install-graphviz", "label": "安装/更新 Graphviz 运行时", "target": "plugin", "location": "toolbar"})
+        actions.append(
+            {
+                "id": "install-graphviz",
+                "label": "安装/更新 Graphviz 运行时",
+                "target": "plugin",
+                "location": "toolbar",
+                "confirm": {
+                    "title": "安装 Graphviz 运行时",
+                    "message": "将从受控官方来源下载并安装 Graphviz 16.1.0 运行时，是否继续？",
+                },
+            }
+        )
     return {
         "columns": [
             {"id": "title", "title": "图"},
@@ -118,10 +129,10 @@ def invoke_action(params: dict[str, Any]) -> dict[str, Any]:
     action_id = str(params.get("actionId") or "")
     payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
     if action_id == "install-graphviz":
-        result = install_graphviz_runtime(config)
         return {
-            "message": str(result.get("message") or ""),
-            "refresh": "view" if result.get("ok") else "session",
+            "message": "正在安装/更新 Graphviz 运行时",
+            "refresh": "view",
+            "hostEffects": [{"type": "install_plugin_runtime"}],
         }
     selected = statuses
     if action_id == "export-one":

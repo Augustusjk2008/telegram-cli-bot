@@ -16,6 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 SAMPLES_ROOT = REPO_ROOT / "examples" / "mermaid-visio-samples"
 
 from mermaid_visio.flowchart_parser import FlowchartParseError, parse_flowchart
+from mermaid_visio.converter import convert_source_to_vsdx
+from mermaid_visio.graphviz_runtime import graphviz_status
 from mermaid_visio.models import PluginConfig
 from mermaid_visio.normalizer import normalize_ir
 from mermaid_visio.source_extractor import extract_diagrams
@@ -107,6 +109,64 @@ def test_parser_accepts_direction_inside_subgraph() -> None:
 
     assert ir.groups["APP"].node_ids == ["SEEK", "FC"]
     assert [(edge.source, edge.target) for edge in ir.edges] == [("SEEK", "FC")]
+
+
+def test_graphviz_failure_keeps_simple_layout_fallback(tmp_path: Path) -> None:
+    source = extract_diagrams("fallback.mmd", "flowchart TD\nA[Start] --> B[End]\n")[0]
+    output = tmp_path / "fallback.vsdx"
+
+    warnings = convert_source_to_vsdx(
+        source,
+        PluginConfig(dot_path=str(tmp_path / "missing-dot.exe"), allow_simple_layout_fallback=True),
+        output,
+    )
+
+    assert output.is_file()
+    assert any("Graphviz 不可用" in warning for warning in warnings)
+
+
+def test_graphviz_status_exposes_controlled_install_intent() -> None:
+    status = graphviz_status(PluginConfig())
+
+    assert status["installAvailable"] is True
+    assert "graphvizRuntimeUrl" not in status
+
+
+@pytest.mark.asyncio
+async def test_graphviz_install_action_emits_only_host_install_intent(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "fallback.mmd").write_text("flowchart TD\nA --> B\n", encoding="utf-8")
+    runtime = PluginRuntime(
+        workspace_root_for=lambda _alias: workspace,
+        host_api=PluginHostApi(ArtifactStore(tmp_path)),
+        call_timeout_seconds=30,
+    )
+    manifest = _manifest_with_simple_layout()
+
+    try:
+        opened = await runtime.open_view("main", manifest, "mermaid-visio", {"path": "fallback.mmd"})
+        install_action = next(
+            action for action in opened["summary"]["actions"] if action["id"] == "install-graphviz"
+        )
+        assert install_action["confirm"] == {
+            "title": "安装 Graphviz 运行时",
+            "message": "将从受控官方来源下载并安装 Graphviz 16.1.0 运行时，是否继续？",
+        }
+        assert not {"url", "path", "runtimeId", "targetPath"} & set(install_action)
+        result = await runtime.invoke_action(
+            "main",
+            manifest,
+            view_id="mermaid-visio",
+            session_id=opened["sessionId"],
+            action_id="install-graphviz",
+            payload={},
+        )
+    finally:
+        await runtime.shutdown()
+
+    assert result["refresh"] == "view"
+    assert result["hostEffects"] == [{"type": "install_plugin_runtime"}]
 
 
 def test_parser_expands_chained_edges() -> None:

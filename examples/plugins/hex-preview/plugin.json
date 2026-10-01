@@ -41,5 +41,43 @@
       ],
       "viewId": "hex"
     }
-  ]
+  ],
+  "configSchema": {
+    "title": "Hex 预览设置",
+    "sections": [
+      {
+        "id": "preview",
+        "title": "预览参数",
+        "fields": [
+          {
+            "key": "maxPreviewBytes",
+            "label": "最大预览字节数",
+            "type": "integer",
+            "default": 16384,
+            "minimum": 256,
+            "maximum": 262144,
+            "step": 1
+          },
+          {
+            "key": "bytesPerRow",
+            "label": "每行字节数",
+            "type": "integer",
+            "default": 16,
+            "minimum": 8,
+            "maximum": 32,
+            "step": 1
+          },
+          {
+            "key": "entropyBuckets",
+            "label": "熵分桶数",
+            "type": "integer",
+            "default": 48,
+            "minimum": 8,
+            "maximum": 256,
+            "step": 1
+          }
+        ]
+      }
+    ]
+  }
 }

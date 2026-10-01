@@ -30,6 +30,10 @@ def register(app: web.Application, server) -> None:
         "/api/bots/{alias}/plugins/{plugin_id}/actions/invoke",
         server.post_invoke_plugin_action,
     )
+    app.router.add_post(
+        "/api/bots/{alias}/plugins/{plugin_id}/runtime/install",
+        server.post_install_plugin_runtime,
+    )
     app.router.add_get(
         "/api/bots/{alias}/plugins/artifacts/{artifact_id}",
         server.download_plugin_artifact,
