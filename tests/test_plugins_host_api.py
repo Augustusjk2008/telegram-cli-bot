@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from bot.plugins.artifacts import ArtifactStore
-from bot.plugins.host_api import PluginHostApi, PluginHostContext
+from bot.plugins.host_api import PluginHostApi, PluginHostContext, PluginHostPermissionError
 from bot.plugins.manifest import load_plugin_manifest
 from bot.plugins.manifest_payloads import build_manifest_payload, build_manifest_signature
 from bot.plugins.models import (
@@ -27,7 +27,7 @@ def _limits(**kwargs):
     return limits_cls(**kwargs)
 
 
-def _manifest(root: Path, *, limits) -> PluginManifest:
+def _manifest(root: Path, *, limits, workspace_read: bool = True) -> PluginManifest:
     return PluginManifest(
         root=root,
         plugin_id="limited",
@@ -42,7 +42,7 @@ def _manifest(root: Path, *, limits) -> PluginManifest:
             entry="main.py",
             protocol="jsonrpc-stdio",
             permissions=PluginPermissions(
-                workspace_read=True,
+                workspace_read=workspace_read,
                 workspace_list=True,
                 temp_artifacts=True,
             ),
@@ -163,28 +163,163 @@ async def test_host_read_range_returns_bounded_chunk_and_identity(tmp_path: Path
         {"path": "sample.vcd", "offset": 3, "length": 4},
     )
 
+    assert result["path"] == str(source.resolve())
     assert result["offset"] == 3
     assert result["length"] == 4
     assert result["fileSizeBytes"] == 10
-    assert isinstance(result["mtimeNs"], str)
+    assert result["mtimeNs"] == str(source.stat().st_mtime_ns)
     assert base64.b64decode(result["contentBase64"]) == b"3456"
     assert result["eof"] is False
 
 
 @pytest.mark.asyncio
-async def test_host_read_range_rejects_invalid_bounds(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("content", "offset", "length", "expected", "eof"),
+    [
+        (b"0123", 0, 0, b"", False),
+        (b"0123", 4, 0, b"", True),
+        (b"0123", 4, 1, b"", True),
+        (b"", 0, 0, b"", True),
+        (b"", 0, 1, b"", True),
+        (b"0123", 3, 4, b"3", True),
+    ],
+)
+async def test_host_read_range_returns_empty_or_final_chunk(
+    tmp_path: Path, content: bytes, offset: int, length: int, expected: bytes, eof: bool
+) -> None:
+    source = tmp_path / "sample.csv"
+    source.write_bytes(content)
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    result = await api.dispatch(
+        _context(tmp_path),
+        manifest,
+        "host.workspace.read_range",
+        {"path": "sample.csv", "offset": offset, "length": length},
+    )
+
+    assert result == {
+        "path": str(source.resolve()),
+        "offset": offset,
+        "length": len(expected),
+        "fileSizeBytes": len(content),
+        "mtimeNs": str(source.stat().st_mtime_ns),
+        "contentBase64": base64.b64encode(expected).decode("ascii"),
+        "eof": eof,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        ({"offset": -1, "length": 1}, "offset"),
+        ({"offset": 5, "length": 1}, "offset"),
+        ({"offset": 5, "length": 0}, "offset"),
+        ({"offset": True, "length": 1}, "offset"),
+        ({"offset": 1.0, "length": 1}, "offset"),
+        ({"offset": "0", "length": 1}, "offset"),
+        ({"length": 1}, "offset"),
+        ({"offset": 0, "length": -1}, "length"),
+        ({"offset": 0, "length": False}, "length"),
+        ({"offset": 0, "length": 1.0}, "length"),
+        ({"offset": 0, "length": "0"}, "length"),
+        ({"offset": 0}, "length"),
+        ({"offset": 0, "length": 1024 * 1024 + 1}, "length"),
+    ],
+)
+async def test_host_read_range_rejects_invalid_bounds(tmp_path: Path, params: dict, message: str) -> None:
     (tmp_path / "sample.vcd").write_bytes(b"0123")
     manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
     api = PluginHostApi(ArtifactStore(tmp_path))
 
-    for params, message in (
-        ({"path": "sample.vcd", "offset": -1, "length": 1}, "offset"),
-        ({"path": "sample.vcd", "offset": 5, "length": 1}, "offset"),
-        ({"path": "sample.vcd", "offset": 0, "length": 0}, "length"),
-        ({"path": "sample.vcd", "offset": 0, "length": 1024 * 1024 + 1}, "length"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            await api.dispatch(_context(tmp_path), manifest, "host.workspace.read_range", params)
+    with pytest.raises(ValueError, match=message):
+        await api.dispatch(_context(tmp_path), manifest, "host.workspace.read_range", {"path": "sample.vcd", **params})
+
+
+@pytest.mark.asyncio
+async def test_host_read_range_accepts_one_mib_chunk(tmp_path: Path) -> None:
+    chunk = b"x" * (1024 * 1024)
+    (tmp_path / "large.csv").write_bytes(chunk + b"y")
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=len(chunk) + 1))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    result = await api.dispatch(
+        _context(tmp_path),
+        manifest,
+        "host.workspace.read_range",
+        {"path": "large.csv", "offset": 0, "length": len(chunk)},
+    )
+
+    assert result["length"] == len(chunk)
+    assert base64.b64decode(result["contentBase64"]) == chunk
+    assert result["eof"] is False
+
+
+@pytest.mark.asyncio
+async def test_host_read_range_requires_workspace_read_permission(tmp_path: Path) -> None:
+    (tmp_path / "sample.csv").write_bytes(b"0123")
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32), workspace_read=False)
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    with pytest.raises(PluginHostPermissionError, match="permission_denied:workspaceRead"):
+        await api.dispatch(
+            _context(tmp_path),
+            manifest,
+            "host.workspace.read_range",
+            {"path": "sample.csv", "offset": 0, "length": 0},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("absolute", [False, True])
+async def test_host_read_range_rejects_paths_outside_workspace(tmp_path: Path, absolute: bool) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.csv"
+    outside.write_bytes(b"0123")
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    with pytest.raises(ValueError, match="路径越界"):
+        await api.dispatch(
+            _context(workspace),
+            manifest,
+            "host.workspace.read_range",
+            {"path": str(outside) if absolute else "../outside.csv", "offset": 0, "length": 0},
+        )
+
+
+@pytest.mark.asyncio
+async def test_host_read_range_rejects_directories(tmp_path: Path) -> None:
+    (tmp_path / "directory").mkdir()
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    with pytest.raises(ValueError, match="不是普通文件"):
+        await api.dispatch(
+            _context(tmp_path),
+            manifest,
+            "host.workspace.read_range",
+            {"path": "directory", "offset": 0, "length": 0},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("length", [0, 1])
+async def test_host_read_range_rejects_files_over_read_limit(tmp_path: Path, length: int) -> None:
+    (tmp_path / "large.csv").write_bytes(b"01234")
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=4))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    with pytest.raises(ValueError, match="读取限额"):
+        await api.dispatch(
+            _context(tmp_path),
+            manifest,
+            "host.workspace.read_range",
+            {"path": "large.csv", "offset": 0, "length": length},
+        )
 
 
 @pytest.mark.asyncio

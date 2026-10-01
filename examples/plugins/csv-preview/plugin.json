@@ -6,7 +6,39 @@
   "description": "快速浏览 CSV 表格，支持搜索、排序和分页。",
   "enabled": true,
   "config": {
-    "defaultPageSize": 50
+    "defaultPageSize": 50,
+    "headerMode": "auto"
+  },
+  "configSchema": {
+    "title": "CSV 预览设置",
+    "sections": [
+      {
+        "id": "table",
+        "title": "表格",
+        "fields": [
+          {
+            "key": "defaultPageSize",
+            "label": "默认页大小",
+            "type": "integer",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 500,
+            "step": 1
+          },
+          {
+            "key": "headerMode",
+            "label": "表头模式",
+            "type": "select",
+            "default": "auto",
+            "options": [
+              {"value": "auto", "label": "自动识别"},
+              {"value": "header", "label": "有表头"},
+              {"value": "no-header", "label": "无表头"}
+            ]
+          }
+        ]
+      }
+    ]
   },
   "runtime": {
     "type": "python",
@@ -14,6 +46,9 @@
     "protocol": "jsonrpc-stdio",
     "permissions": {
       "workspaceRead": true
+    },
+    "limits": {
+      "readBytes": 268435456
     }
   },
   "views": [

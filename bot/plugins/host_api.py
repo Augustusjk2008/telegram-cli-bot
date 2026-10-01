@@ -72,8 +72,8 @@ class PluginHostApi:
         self._ensure_regular_file_within_limit(path, limits.read_bytes)
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError("offset 必须是非负整数")
-        if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
-            raise ValueError("length 必须是正整数")
+        if isinstance(length, bool) or not isinstance(length, int) or length < 0:
+            raise ValueError("length 必须是非负整数")
         if length > MAX_WORKSPACE_READ_RANGE_BYTES:
             raise ValueError(f"length 超过单次读取上限: {MAX_WORKSPACE_READ_RANGE_BYTES}")
 

@@ -1713,6 +1713,13 @@ export type TableViewSummary = {
   totalRows: number;
   defaultPageSize: number;
   actions?: PluginAction[];
+  metadata?: {
+    encoding?: string;
+    delimiter?: string;
+    hasHeader?: boolean;
+    headerMode?: "auto" | "header" | "no-header";
+    headerDecision?: string;
+  };
 };
 
 export type TableWindowPayload = {

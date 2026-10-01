@@ -43,3 +43,20 @@ def test_bundled_plugin_manifests_load_with_basic_contracts() -> None:
             assert handler.view_id in view_ids
             assert handler.extensions
             assert all(extension.startswith(".") for extension in handler.extensions)
+
+        if manifest.plugin_id == "csv-preview":
+            assert manifest.config["defaultPageSize"] == 50
+            assert manifest.config["headerMode"] == "auto"
+            assert manifest.config_schema is not None
+            fields = {
+                field.key: field
+                for section in manifest.config_schema.sections
+                for field in section.fields
+            }
+            assert fields["defaultPageSize"].minimum == 1
+            assert fields["defaultPageSize"].maximum == 500
+            assert [option.value for option in fields["headerMode"].options] == [
+                "auto",
+                "header",
+                "no-header",
+            ]
