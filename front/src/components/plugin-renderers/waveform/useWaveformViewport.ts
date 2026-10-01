@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { WebBotClient } from "../../../services/webBotClient";
 import type {
   WaveformTrack,
+  WaveformSignalSummary,
   WaveformViewSummary,
   WaveformWindowPayload,
 } from "../../../services/types";
@@ -19,6 +20,9 @@ type Props = {
   sessionId?: string;
   summary: WaveformViewSummary;
   initialWindow: WaveformWindowPayload;
+  signals: WaveformSignalSummary[];
+  viewStartTime: number;
+  viewEndTime: number;
   display: DisplayShape;
   pixelWidth: number;
 };
@@ -30,6 +34,9 @@ export function useWaveformViewport({
   sessionId,
   summary,
   initialWindow,
+  signals,
+  viewStartTime,
+  viewEndTime,
   display,
   pixelWidth,
 }: Props) {
@@ -40,6 +47,7 @@ export function useWaveformViewport({
   const [viewportHeight, setViewportHeight] = useState(display.trackHeight * 8);
   const [viewportWidth, setViewportWidth] = useState(display.minWaveWidth);
   const [windowError, setWindowError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const requestIdRef = useRef(0);
   const debounceTimerRef = useRef<number | null>(null);
 
@@ -72,8 +80,8 @@ export function useWaveformViewport({
   const visibleTrackCount = Math.max(1, Math.ceil(viewportHeight / rowHeight) + 4);
   const firstTrackIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - 2);
   const visibleSignals = useMemo(
-    () => summary.signals.slice(firstTrackIndex, firstTrackIndex + visibleTrackCount),
-    [firstTrackIndex, summary.signals, visibleTrackCount],
+    () => signals.slice(firstTrackIndex, firstTrackIndex + visibleTrackCount),
+    [firstTrackIndex, signals, visibleTrackCount],
   );
   const visibleSignalIds = useMemo(
     () => visibleSignals.map((signal) => signal.signalId),
@@ -81,10 +89,10 @@ export function useWaveformViewport({
   );
   const visibleSignalsKey = visibleSignalIds.join("|");
   const visibleWaveWidth = Math.max(1, viewportWidth - display.labelWidth);
-  const timelineStart = Number(summary.startTime);
-  const timelineEnd = Number(summary.endTime);
+  const timelineStart = Number(viewStartTime);
+  const timelineEnd = Number(viewEndTime);
   const timelineRange = Math.max(1, timelineEnd - timelineStart);
-  const waveScrollLeft = Math.max(0, Math.min(pixelWidth, scrollLeft));
+  const waveScrollLeft = Math.max(0, Math.min(pixelWidth, scrollLeft - display.labelWidth));
   const quantizedPixelWidth = Math.max(64, Math.ceil(visibleWaveWidth / 8) * 8);
   const quantizedWindowStart = Math.round(
     (timelineStart + (Math.min(pixelWidth, waveScrollLeft) / Math.max(1, pixelWidth)) * timelineRange) * 1000,
@@ -94,6 +102,7 @@ export function useWaveformViewport({
   ) / 1000;
   const requestWindowStart = Math.min(quantizedWindowStart, quantizedWindowEnd);
   const requestWindowEnd = Math.max(quantizedWindowStart, quantizedWindowEnd);
+  const isFitAll = viewStartTime === summary.startTime && viewEndTime === summary.endTime;
 
   useEffect(() => {
     if (!sessionId) {
@@ -108,13 +117,14 @@ export function useWaveformViewport({
       debounceTimerRef.current = null;
       const requestId = requestIdRef.current + 1;
       requestIdRef.current = requestId;
+      setIsLoading(true);
       void client.queryPluginViewWindow(
         botAlias,
         pluginId,
         sessionId,
         {
-          startTime: requestWindowStart,
-          endTime: requestWindowEnd,
+          startTime: isFitAll ? timelineStart : requestWindowStart,
+          endTime: isFitAll ? timelineEnd : requestWindowEnd,
           signalIds: visibleSignalIds,
           pixelWidth: quantizedPixelWidth,
         },
@@ -123,6 +133,7 @@ export function useWaveformViewport({
         if (requestIdRef.current !== requestId) {
           return;
         }
+        setIsLoading(false);
         setWindowError("");
         setWindowData(nextWindow as WaveformWindowPayload);
       }).catch((error) => {
@@ -132,6 +143,7 @@ export function useWaveformViewport({
         if (requestIdRef.current !== requestId) {
           return;
         }
+        setIsLoading(false);
         setWindowError(error instanceof Error ? error.message : "加载窗口失败");
       });
     }, 60);
@@ -142,7 +154,7 @@ export function useWaveformViewport({
         debounceTimerRef.current = null;
       }
     };
-  }, [botAlias, client, pluginId, quantizedPixelWidth, requestWindowEnd, requestWindowStart, sessionId, visibleSignalIds, visibleSignalsKey]);
+  }, [botAlias, client, isFitAll, pluginId, quantizedPixelWidth, requestWindowEnd, requestWindowStart, sessionId, timelineEnd, timelineStart, visibleSignalIds, visibleSignalsKey]);
 
   const visibleTracks = useMemo<WaveformTrack[]>(
     () =>
@@ -165,7 +177,8 @@ export function useWaveformViewport({
     firstTrackIndex,
     rowHeight,
     windowError,
-    totalTrackCount: summary.signals.length,
+    totalTrackCount: signals.length,
+    isLoading,
     setScrollLeft,
     setScrollTop,
   };

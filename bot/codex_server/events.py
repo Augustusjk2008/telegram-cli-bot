@@ -17,6 +17,16 @@ def tokens(value: dict[str, Any]) -> dict[str, int]:
             for key, out in TOKEN_FIELDS.items()}
 
 
+def _error_event(error: dict[str, Any] | str | None, fallback: str) -> dict[str, Any]:
+    details = dict(error) if isinstance(error, dict) else {"message": error or fallback}
+    parts = [str(details.get("message") or fallback)]
+    if details.get("codexErrorInfo") is not None:
+        parts.append("codexErrorInfo: " + json.dumps(details["codexErrorInfo"], ensure_ascii=False))
+    if details.get("additionalDetails"):
+        parts.append(str(details["additionalDetails"]))
+    return {"type": "error", "message": "\n".join(parts), "error": details}
+
+
 class CodexServerEventMapper:
     def __init__(self, thread_id: str, baseline: dict[str, int] | None, *, text_limit: int = 4 * 1024 * 1024):
         self.thread_id = thread_id
@@ -33,6 +43,7 @@ class CodexServerEventMapper:
         self._final: str = ""
         self._candidate: str = ""
         self._compactions: set[str] = set()
+        self._last_error: dict[str, Any] | None = None
 
     def _usage(self, payload: dict) -> None:
         usage = payload.get("tokenUsage") or {}
@@ -91,15 +102,17 @@ class CodexServerEventMapper:
             for item in turn.get("items") or []:
                 result.extend(self._item("item/completed", item))
             status = turn.get("status")
-            error = (turn.get("error") or {}).get("message")
+            error = turn.get("error")
             result.extend(self.finish(status=status, error=error))
             return result
         if method == "error":
-            error = payload.get("error") or {}
+            self._last_error = payload.get("error") or {}
+            event = _error_event(self._last_error, "Codex turn failed")
             # Retry notices must not turn a subsequently successful turn into a failure.
             if payload.get("willRetry"):
-                return [{"type": "event_msg", "payload": {"type": "retry", "message": str(error.get("message") or error)}}]
-            return [{"type": "error", "message": str(error.get("message") or error)}]
+                return [{"type": "event_msg", "payload": {"type": "retry", "message": event["message"],
+                                                          "error": event["error"]}}]
+            return [event]
         return []
 
     def _item(self, method: str, item: dict) -> list[dict]:
@@ -154,7 +167,7 @@ class CodexServerEventMapper:
             return [{"type": "event_msg", "payload": {"type": kind, "message": text}}] if text else []
         return []
 
-    def finish(self, *, status: str = "failed", error: str | None = None) -> list[dict]:
+    def finish(self, *, status: str = "failed", error: dict[str, Any] | str | None = None) -> list[dict]:
         if self.done:
             return []
         self.done = True
@@ -166,7 +179,9 @@ class CodexServerEventMapper:
                            "phase": "final_answer", "content": [{"type": "output_text", "text": text}]}})
         success = status == "completed"
         if not success:
-            result.append({"type": "error", "message": error or ("Codex turn interrupted" if status == "interrupted" else "Codex turn failed")})
+            if status != "interrupted":
+                error = error or self._last_error
+            result.append(_error_event(error, "Codex turn interrupted" if status == "interrupted" else "Codex turn failed"))
         terminal = {"type": "turn.completed" if success else "turn.failed", "status": status,
                     "thread_id": self.thread_id, "turn_id": self.turn_id}
         if self.usage is not None:

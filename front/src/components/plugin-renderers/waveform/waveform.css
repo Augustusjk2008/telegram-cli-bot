@@ -1,0 +1,11 @@
+[data-waveform] {
+  --waveform-line: var(--text);
+  --waveform-text: var(--text);
+  --waveform-dense-fill: var(--accent);
+  --waveform-dense-line: var(--accent-strong);
+}
+
+[data-waveform] svg,
+[data-waveform] canvas {
+  color: var(--waveform-line);
+}

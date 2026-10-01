@@ -110,6 +110,35 @@ def test_manifest_signature_changes_when_runtime_limits_change(tmp_path: Path) -
     assert build_manifest_signature(manifest_a) != build_manifest_signature(manifest_b)
 
 
+def test_manifest_allows_explicit_waveform_read_limit(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    (plugin_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "id": "large-reader",
+                "name": "Large Reader",
+                "version": "1.0.0",
+                "runtime": {
+                    "type": "python",
+                    "entry": "main.py",
+                    "protocol": "jsonrpc-stdio",
+                    "permissions": {"workspaceRead": True},
+                    "limits": {"readBytes": 256 * 1024 * 1024},
+                },
+                "views": [{"id": "main", "title": "Main", "renderer": "document"}],
+                "fileHandlers": [{"id": "txt", "label": "Text", "extensions": [".txt"], "viewId": "main"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = load_plugin_manifest(plugin_dir / "plugin.json")
+
+    assert manifest.runtime.limits.read_bytes == 256 * 1024 * 1024
+
+
 @pytest.mark.asyncio
 async def test_host_read_text_rejects_files_over_read_limit(tmp_path: Path) -> None:
     (tmp_path / "large.txt").write_text("12345", encoding="utf-8")
@@ -118,6 +147,44 @@ async def test_host_read_text_rejects_files_over_read_limit(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match="读取限额"):
         await api.dispatch(_context(tmp_path), manifest, "host.workspace.read_text", {"path": "large.txt"})
+
+
+@pytest.mark.asyncio
+async def test_host_read_range_returns_bounded_chunk_and_identity(tmp_path: Path) -> None:
+    source = tmp_path / "sample.vcd"
+    source.write_bytes(b"0123456789")
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    result = await api.dispatch(
+        _context(tmp_path),
+        manifest,
+        "host.workspace.read_range",
+        {"path": "sample.vcd", "offset": 3, "length": 4},
+    )
+
+    assert result["offset"] == 3
+    assert result["length"] == 4
+    assert result["fileSizeBytes"] == 10
+    assert isinstance(result["mtimeNs"], str)
+    assert base64.b64decode(result["contentBase64"]) == b"3456"
+    assert result["eof"] is False
+
+
+@pytest.mark.asyncio
+async def test_host_read_range_rejects_invalid_bounds(tmp_path: Path) -> None:
+    (tmp_path / "sample.vcd").write_bytes(b"0123")
+    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
+    api = PluginHostApi(ArtifactStore(tmp_path))
+
+    for params, message in (
+        ({"path": "sample.vcd", "offset": -1, "length": 1}, "offset"),
+        ({"path": "sample.vcd", "offset": 5, "length": 1}, "offset"),
+        ({"path": "sample.vcd", "offset": 0, "length": 0}, "length"),
+        ({"path": "sample.vcd", "offset": 0, "length": 1024 * 1024 + 1}, "length"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            await api.dispatch(_context(tmp_path), manifest, "host.workspace.read_range", params)
 
 
 @pytest.mark.asyncio

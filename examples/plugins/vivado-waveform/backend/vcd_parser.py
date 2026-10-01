@@ -4,7 +4,7 @@ import re
 from array import array
 from bisect import bisect_right
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,7 @@ TARGET_MIN_PULSE_PIXELS = 1.0
 MAX_DEFAULT_SIGNAL_COUNT = 12
 MAX_WINDOW_SEGMENTS_PER_TRACK = 320
 MAX_PARSE_SEGMENTS_PER_TRACK = 4000
+MAX_OVERVIEW_BINS = 256
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,12 @@ class VcdSignal:
     label: str
     width: int
     kind: str
+    scope_parts: tuple[str, ...] = ()
+    name: str = ""
+    recorded: bool = False
+    change_count: int = 0
+    first_change_time: int | float | None = None
+    last_change_time: int | float | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +106,10 @@ class VcdIndex:
     display: dict[str, object]
     signals: tuple[VcdSignal, ...]
     series_by_signal: dict[str, VcdSeries]
+    overview: tuple[dict[str, object], ...] = ()
+    source_identity: dict[str, object] = field(default_factory=dict)
+    index_cache_hit: bool = False
+    index_build_ms: float = 0.0
 
 
 def _parse_timescale(value: str) -> tuple[float, str]:
@@ -133,7 +144,7 @@ def _choose_display_unit(duration_seconds: float, fallback_unit: str) -> str:
 
 def _round_time(value: float) -> int | float:
     rounded = round(value)
-    if abs(value - rounded) < 1e-12:
+    if abs(value - rounded) <= 1e-12 * max(1.0, abs(value)):
         return int(rounded)
     return round(value, TIME_DECIMALS)
 
@@ -304,7 +315,58 @@ def _compress_segments(
     return [segment for segment in compressed if float(segment["end"]) > float(segment["start"])]
 
 
-def build_vcd_index(path: Path) -> VcdIndex:
+def _source_identity_for_path(path: Path) -> dict[str, object]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return {"sourcePath": str(path.resolve())}
+    return {
+        "sourcePath": str(path.resolve()),
+        "mtimeNs": str(stat.st_mtime_ns),
+        "fileSize": int(stat.st_size),
+    }
+
+
+def _build_overview(
+    signals: Sequence[VcdSignal],
+    series_by_signal: dict[str, VcdSeries],
+    *,
+    start_time: int | float,
+    end_time: int | float,
+) -> tuple[dict[str, object], ...]:
+    start = float(start_time)
+    end = float(end_time)
+    if end <= start:
+        end = start + 1.0
+    width = (end - start) / MAX_OVERVIEW_BINS
+    active: list[set[str]] = [set() for _ in range(MAX_OVERVIEW_BINS)]
+    transitions = [0] * MAX_OVERVIEW_BINS
+    for signal in signals:
+        series = series_by_signal.get(signal.signal_id)
+        if series is None:
+            continue
+        for raw_time in series.raw_times:
+            time_value = float(_scale_time(int(raw_time), series.scale_factor))
+            bucket = int((time_value - start) / width)
+            bucket = max(0, min(MAX_OVERVIEW_BINS - 1, bucket))
+            active[bucket].add(signal.signal_id)
+            transitions[bucket] += 1
+    return tuple(
+        {
+            "start": _round_time(start + index * width),
+            "end": _round_time(end if index == MAX_OVERVIEW_BINS - 1 else start + (index + 1) * width),
+            "activeSignalCount": len(active[index]),
+            "transitionCount": transitions[index],
+        }
+        for index in range(MAX_OVERVIEW_BINS)
+    )
+
+
+def build_vcd_index(
+    path: Path,
+    *,
+    source_identity: dict[str, object] | None = None,
+) -> VcdIndex:
     scope: list[tuple[str, str]] = []
     source_timescale_amount = 1.0
     source_timescale_unit = "ns"
@@ -357,12 +419,15 @@ def build_vcd_index(path: Path) -> VcdIndex:
                 if not name:
                     continue
                 label = ".".join([name_part for _, name_part in scope] + [name]) if scope else name
+                scope_parts = tuple(name_part for _, name_part in scope)
                 signals_by_code[id_code] = VcdSignal(
                     id_code=id_code,
                     signal_id=label,
                     label=label,
                     width=width,
                     kind="bus" if width > 1 else "scalar",
+                    scope_parts=scope_parts,
+                    name=name,
                 )
                 changes.setdefault(id_code, _SeriesBuilder.create())
                 continue
@@ -396,7 +461,30 @@ def build_vcd_index(path: Path) -> VcdIndex:
 
     for id_code, signal in signals_by_code.items():
         builder = changes.get(id_code)
-        if builder is None or not builder.raw_times:
+        if builder is None:
+            builder = _SeriesBuilder.create()
+        recorded = bool(builder.raw_times)
+        first_change_time = (
+            _scale_time(int(builder.raw_times[0]), scale_factor) if recorded else None
+        )
+        last_change_time = (
+            _scale_time(int(builder.raw_times[-1]), scale_factor) if recorded else None
+        )
+        signal = VcdSignal(
+            id_code=signal.id_code,
+            signal_id=signal.signal_id,
+            label=signal.label,
+            width=signal.width,
+            kind=signal.kind,
+            scope_parts=signal.scope_parts,
+            name=signal.name,
+            recorded=recorded,
+            change_count=len(builder.raw_times),
+            first_change_time=first_change_time,
+            last_change_time=last_change_time,
+        )
+        signals.append(signal)
+        if not recorded:
             continue
         for index, raw_start in enumerate(builder.raw_times[:-1]):
             raw_interval = int(builder.raw_times[index + 1]) - int(raw_start)
@@ -404,7 +492,6 @@ def build_vcd_index(path: Path) -> VcdIndex:
             if signal.width == 1 and interval > 0:
                 if min_scalar_interval is None or interval < float(min_scalar_interval):
                     min_scalar_interval = _round_time(interval)
-        signals.append(signal)
         series_by_signal[signal.signal_id] = VcdSeries(
             signal=signal,
             raw_times=builder.raw_times,
@@ -413,8 +500,16 @@ def build_vcd_index(path: Path) -> VcdIndex:
             scale_factor=scale_factor,
         )
 
+    resolved_identity = dict(source_identity or _source_identity_for_path(path))
+    index_path = Path(str(resolved_identity.get("sourcePath") or path)).resolve()
+    overview = _build_overview(
+        tuple(signals),
+        series_by_signal,
+        start_time=0,
+        end_time=end_time,
+    )
     return VcdIndex(
-        path=path.resolve(),
+        path=index_path,
         timescale=f"1{display_unit}",
         start_time=0,
         end_time=end_time,
@@ -422,12 +517,23 @@ def build_vcd_index(path: Path) -> VcdIndex:
         display=_display_options(end_time, min_scalar_interval),
         signals=tuple(signals),
         series_by_signal=series_by_signal,
+        overview=overview,
+        source_identity=resolved_identity,
     )
 
 
-def build_waveform_summary(index: VcdIndex, *, path: Path | None = None) -> dict[str, Any]:
-    default_signal_ids = [signal.signal_id for signal in index.signals[:MAX_DEFAULT_SIGNAL_COUNT]]
-    return {
+def build_waveform_summary(
+    index: VcdIndex,
+    *,
+    path: Path | None = None,
+    lod_enabled: bool | None = None,
+) -> dict[str, Any]:
+    default_signal_ids = [
+        signal.signal_id
+        for signal in index.signals
+        if signal.recorded
+    ][:MAX_DEFAULT_SIGNAL_COUNT]
+    summary = {
         "path": str((path or index.path).resolve()),
         "timescale": index.timescale,
         "startTime": index.start_time,
@@ -437,13 +543,62 @@ def build_waveform_summary(index: VcdIndex, *, path: Path | None = None) -> dict
             {
                 "signalId": signal.signal_id,
                 "label": signal.label,
+                "scopeParts": list(signal.scope_parts),
+                "name": signal.name,
                 "width": signal.width,
                 "kind": signal.kind,
+                "recorded": signal.recorded,
+                "changeCount": signal.change_count,
+                "firstChangeTime": signal.first_change_time,
+                "lastChangeTime": signal.last_change_time,
             }
             for signal in index.signals
         ],
         "defaultSignalIds": default_signal_ids,
+        "overview": {"bins": [dict(item) for item in index.overview]},
+        "indexStats": {
+            "fileSizeBytes": int(index.source_identity.get("fileSize", 0) or 0),
+            "declaredSignalCount": len(index.signals),
+            "recordedSignalCount": sum(1 for signal in index.signals if signal.recorded),
+            "totalChangeCount": sum(signal.change_count for signal in index.signals),
+            "indexCacheHit": bool(index.index_cache_hit),
+            "indexBuildMs": float(index.index_build_ms),
+        },
     }
+    if lod_enabled is not None:
+        summary["lodEnabled"] = bool(lod_enabled)
+    return summary
+
+
+def inspect_waveform(
+    index: VcdIndex,
+    *,
+    time: int | float,
+    signal_ids: list[str],
+) -> dict[str, object]:
+    values: list[dict[str, object]] = []
+    for signal_id in signal_ids:
+        signal = next((item for item in index.signals if item.signal_id == signal_id), None)
+        series = index.series_by_signal.get(signal_id)
+        if signal is None or series is None or not series.raw_times:
+            values.append({"signalId": signal_id, "value": None, "recorded": False, "exact": True})
+            continue
+        raw_time = float(time) / series.scale_factor if series.scale_factor else float(time)
+        epsilon = 1e-12 * max(1.0, abs(raw_time))
+        position = bisect_right(series.raw_times, raw_time + epsilon) - 1
+        if position < 0:
+            value: str | None = None
+        else:
+            value = series.value_table[int(series.value_ids[position])]
+        values.append(
+            {
+                "signalId": signal_id,
+                "value": value,
+                "recorded": True,
+                "exact": True,
+            }
+        )
+    return {"time": time, "values": values}
 
 
 def query_waveform_window(
@@ -458,12 +613,26 @@ def query_waveform_window(
 ) -> dict[str, Any]:
     start = start_time
     end = end_time if float(end_time) >= float(start_time) else start_time
-    requested_signal_ids = signal_ids or [signal.signal_id for signal in index.signals[:MAX_DEFAULT_SIGNAL_COUNT]]
+    requested_signal_ids = signal_ids or [
+        signal.signal_id
+        for signal in index.signals
+        if signal.recorded
+    ][:MAX_DEFAULT_SIGNAL_COUNT]
     max_segments = max(64, min(max_segments_per_track, max(64, int(pixel_width) if pixel_width else max_segments_per_track)))
     tracks: list[dict[str, Any]] = []
     for signal_id in requested_signal_ids:
         series = index.series_by_signal.get(signal_id)
         if series is None:
+            declared = next((signal for signal in index.signals if signal.signal_id == signal_id), None)
+            if declared is not None:
+                tracks.append(
+                    {
+                        "signalId": declared.signal_id,
+                        "label": declared.label,
+                        "width": declared.width,
+                        "segments": [],
+                    }
+                )
             continue
         overall_end = index.segment_end_time if float(end) >= float(index.end_time) else index.end_time
         segments = _window_segments(series, start, end, overall_end)

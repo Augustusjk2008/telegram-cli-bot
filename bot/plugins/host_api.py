@@ -11,6 +11,8 @@ from bot.web.workspace_search_service import build_file_outline, normalize_works
 from .artifacts import ArtifactStore
 from .models import PluginHostLimits, PluginManifest
 
+MAX_WORKSPACE_READ_RANGE_BYTES = 1024 * 1024
+
 
 class PluginHostPermissionError(RuntimeError):
     def __init__(self, permission: str):
@@ -59,6 +61,37 @@ class PluginHostApi:
         if len(data) > limits.read_bytes:
             raise ValueError(f"文件超过插件读取限额: {len(data)} > {limits.read_bytes}")
         return data
+
+    def _read_file_range(
+        self,
+        path: Path,
+        offset: object,
+        length: object,
+        limits: PluginHostLimits,
+    ) -> dict[str, Any]:
+        self._ensure_regular_file_within_limit(path, limits.read_bytes)
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset 必须是非负整数")
+        if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+            raise ValueError("length 必须是正整数")
+        if length > MAX_WORKSPACE_READ_RANGE_BYTES:
+            raise ValueError(f"length 超过单次读取上限: {MAX_WORKSPACE_READ_RANGE_BYTES}")
+
+        stat = path.stat()
+        if offset > stat.st_size:
+            raise ValueError(f"offset 超出文件范围: {offset} > {stat.st_size}")
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            content = handle.read(length)
+        return {
+            "path": str(path),
+            "offset": offset,
+            "length": len(content),
+            "fileSizeBytes": stat.st_size,
+            "mtimeNs": str(stat.st_mtime_ns),
+            "contentBase64": base64.b64encode(content).decode("ascii"),
+            "eof": offset + len(content) >= stat.st_size,
+        }
 
     def _check_artifact_size(self, size: int, limits: PluginHostLimits) -> None:
         if size > limits.artifact_bytes:
@@ -119,6 +152,10 @@ class PluginHostApi:
                 "path": str(path),
                 "contentBase64": base64.b64encode(self._read_file_bytes(path, limits)).decode("ascii"),
             }
+        if method == "host.workspace.read_range":
+            self._require(permissions.workspace_read, "workspaceRead")
+            path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))
+            return self._read_file_range(path, params.get("offset"), params.get("length"), limits)
         if method == "host.workspace.stat":
             self._require(permissions.workspace_read, "workspaceRead")
             path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))

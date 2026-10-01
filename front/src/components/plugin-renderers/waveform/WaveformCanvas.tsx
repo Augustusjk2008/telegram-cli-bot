@@ -44,14 +44,20 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
     const middle = denseLayout.middleY;
     const bottom = denseLayout.bandBottom;
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = "rgba(15, 23, 42, 0.92)";
-    context.fillStyle = "rgba(15, 23, 42, 0.92)";
+    const styles = getComputedStyle(canvas);
+    const lineColor = styles.getPropertyValue("--waveform-line").trim() || styles.color || "#eaf4ff";
+    const textColor = styles.getPropertyValue("--waveform-text").trim() || lineColor;
+    const denseFill = styles.getPropertyValue("--waveform-dense-fill").trim() || lineColor;
+    const denseLine = styles.getPropertyValue("--waveform-dense-line").trim() || lineColor;
+    context.strokeStyle = lineColor;
+    context.fillStyle = textColor;
     context.lineWidth = 2;
     context.font = "11px monospace";
     let previousLevel: number | null = null;
     const drawDenseSegment = (segment: WaveformTrackSegment, startX: number, endX: number) => {
       const segmentWidth = Math.max(1, endX - startX);
-      context.globalAlpha = 0.12;
+      context.fillStyle = denseFill;
+      context.globalAlpha = 0.18;
       context.fillRect(startX, top, segmentWidth, bottom - top);
       context.globalAlpha = 0.75;
       context.beginPath();
@@ -59,8 +65,11 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
       context.lineTo(endX, bottom);
       context.moveTo(startX, bottom);
       context.lineTo(endX, top);
+      context.strokeStyle = denseLine;
       context.stroke();
       context.globalAlpha = 1;
+      context.strokeStyle = lineColor;
+      context.fillStyle = textColor;
       if (segmentWidth >= 56 && segment.transitionCount) {
         context.save();
         context.textAlign = "center";

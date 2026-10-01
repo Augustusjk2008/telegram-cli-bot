@@ -29,7 +29,12 @@
     "type": "python",
     "entry": "backend/main.py",
     "protocol": "jsonrpc-stdio",
-    "permissions": {}
+    "permissions": {
+      "workspaceRead": true
+    },
+    "limits": {
+      "readBytes": 268435456
+    }
   },
   "views": [
     {

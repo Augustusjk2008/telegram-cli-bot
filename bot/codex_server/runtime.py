@@ -295,6 +295,8 @@ class CodexServerRuntime:
         finally:
             if not self._turn_done.is_set():
                 await self.interrupt()
+            if self._terminal and self._terminal["type"] == "turn.failed" and self._terminal.get("status") != "interrupted":
+                await self.close()
             if self._turn_id:
                 self._previous_turns.append(self._turn_id)
             self._streaming = False

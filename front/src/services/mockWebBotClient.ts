@@ -174,6 +174,7 @@ import type {
   TreeViewSummary,
   TreeWindowPayload,
   WaveformTrack,
+  WaveformSignalSummary,
   WaveformViewSummary,
   WaveformWindowPayload,
 } from "./types";
@@ -849,6 +850,27 @@ function buildMockWaveformTracks(): WaveformTrack[] {
 
 function buildMockWaveformSummary(sourcePath: string): WaveformViewSummary {
   const tracks = buildMockWaveformTracks();
+  const generatedSignals: WaveformSignalSummary[] = Array.from({ length: 179 }, (_, index) => {
+    const signalId = `tb.dut.signal_${String(index + 1).padStart(3, "0")}`;
+    return {
+      signalId,
+      label: signalId,
+      scopeParts: ["tb", "dut"],
+      name: `signal_${String(index + 1).padStart(3, "0")}`,
+      width: index % 4 === 0 ? 8 : 1,
+      kind: index % 4 === 0 ? "bus" as const : "scalar" as const,
+      recorded: false,
+      changeCount: 0,
+      firstChangeTime: null,
+      lastChangeTime: null,
+    };
+  });
+  const bins = Array.from({ length: 24 }, (_, index) => ({
+    start: index * 5,
+    end: (index + 1) * 5,
+    activeSignalCount: index % 3 === 0 ? 3 : 2,
+    transitionCount: index % 3 === 0 ? 8 : 4,
+  }));
   return {
     path: sourcePath,
     timescale: "1ns",
@@ -865,13 +887,42 @@ function buildMockWaveformSummary(sourcePath: string): WaveformViewSummary {
       axisHeight: 42,
       trackHeight: 64,
     },
-    signals: tracks.map((track) => ({
+    signals: tracks.map((track): WaveformSignalSummary => ({
       signalId: track.signalId,
       label: track.label,
+      scopeParts: track.label.split(".").slice(0, -1),
+      name: track.label.split(".").pop() || track.label,
       width: track.width,
       kind: track.width > 1 ? "bus" : "scalar",
-    })),
+      recorded: true,
+      changeCount: track.segments.length,
+      firstChangeTime: track.segments[0]?.start ?? null,
+      lastChangeTime: track.segments.at(-1)?.end ?? null,
+    })).concat(generatedSignals),
     defaultSignalIds: tracks.map((track) => track.signalId),
+    overview: { bins },
+    indexStats: {
+      fileSizeBytes: 32716967,
+      declaredSignalCount: 182,
+      recordedSignalCount: 3,
+      totalChangeCount: tracks.reduce((total, track) => total + track.segments.length, 0),
+      indexCacheHit: true,
+      indexBuildMs: 0,
+    },
+    lodEnabled: true,
+    log: {
+      logPath: `${sourcePath}.vivado.log`,
+      testStatus: "pass",
+      testName: "tb_uart_rx_tolerance",
+      finishTime: 120,
+      elapsed: 1.4,
+      events: [
+        { id: "line-12", kind: "pass", message: "TEST_PASS", line: 12, simTime: 120, tags: ["fast_out"] },
+        { id: "line-18", kind: "warning", message: "VCD pattern not found", line: 18, simTime: null, tags: [] },
+      ],
+      missingSignals: [generatedSignals[0].signalId],
+      warnings: ["部分信号未记录"],
+    },
   };
 }
 
@@ -4949,10 +5000,29 @@ export class MockWebBotClient implements WebBotClient {
       };
     }
     const waveformRequest = request as {
+      op?: string;
       startTime: number;
       endTime: number;
       signalIds: string[];
     };
+    if (waveformRequest.op === "inspect") {
+      const inspectTime = Number((request as { time?: number }).time || 0);
+      const signalIds = Array.isArray(waveformRequest.signalIds) ? waveformRequest.signalIds : [];
+      return {
+        time: inspectTime,
+        values: signalIds.map((signalId) => {
+          const track = session.window.tracks.find((candidate) => candidate.signalId === signalId);
+          const segment = track?.segments.find((candidate) => inspectTime >= candidate.start && inspectTime < candidate.end)
+            || (track?.segments.at(-1)?.end === inspectTime ? track.segments.at(-1) : undefined);
+          return {
+            signalId,
+            value: segment?.value || null,
+            recorded: Boolean(track?.segments.length),
+            exact: true as const,
+          };
+        }),
+      };
+    }
     return {
       startTime: waveformRequest.startTime,
       endTime: waveformRequest.endTime,

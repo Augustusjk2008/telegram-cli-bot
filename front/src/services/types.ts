@@ -1580,8 +1580,50 @@ export type WaveformSignalKind = "scalar" | "bus";
 export type WaveformSignalSummary = {
   signalId: string;
   label: string;
+  scopeParts?: string[];
+  name?: string;
   width: number;
   kind: WaveformSignalKind;
+  recorded?: boolean;
+  changeCount?: number;
+  firstChangeTime?: number | null;
+  lastChangeTime?: number | null;
+};
+
+export type WaveformOverviewBin = {
+  start: number;
+  end: number;
+  activeSignalCount: number;
+  transitionCount: number;
+};
+
+export type WaveformIndexStats = {
+  fileSizeBytes: number;
+  declaredSignalCount: number;
+  recordedSignalCount: number;
+  totalChangeCount: number;
+  indexCacheHit: boolean;
+  indexBuildMs: number;
+};
+
+export type WaveformLogEvent = {
+  id: string;
+  kind: string;
+  message: string;
+  line: number;
+  simTime: number | null;
+  tags: string[];
+};
+
+export type WaveformLogSummary = {
+  logPath?: string;
+  testStatus: "pass" | "fail" | "unknown";
+  testName?: string;
+  finishTime?: number;
+  elapsed?: number;
+  events: WaveformLogEvent[];
+  missingSignals: string[];
+  warnings?: string[];
 };
 
 export type WaveformBusStyle = "cross" | "box";
@@ -1615,12 +1657,28 @@ export type WaveformViewSummary = {
   display?: WaveformDisplayOptions;
   signals: WaveformSignalSummary[];
   defaultSignalIds: string[];
+  overview?: { bins: WaveformOverviewBin[] };
+  indexStats?: WaveformIndexStats;
+  lodEnabled?: boolean;
+  log?: WaveformLogSummary;
 };
 
 export type WaveformWindowPayload = {
   startTime: number;
   endTime: number;
   tracks: WaveformTrack[];
+};
+
+export type WaveformInspectValue = {
+  signalId: string;
+  value: string | null;
+  recorded: boolean;
+  exact: true;
+};
+
+export type WaveformInspectPayload = {
+  time: number;
+  values: WaveformInspectValue[];
 };
 
 export type TableColumn = {

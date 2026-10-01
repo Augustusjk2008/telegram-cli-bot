@@ -97,6 +97,7 @@ export function PluginViewSurface({
         sessionId={view.mode === "session" ? view.sessionId : undefined}
         summary={summary}
         initialWindow={initialWindow}
+        onApplyHostEffects={onApplyHostEffects}
       />
     );
   }

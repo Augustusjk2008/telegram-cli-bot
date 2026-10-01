@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from bot.cli import CodexJsonStreamParser
 from bot.codex_server.events import CodexServerEventMapper, tokens
 from bot.web.native_history_adapter import consume_stream_trace_chunk
@@ -80,3 +82,37 @@ def test_resume_without_transcript_excludes_historical_prefix():
     mapper.consume(usage(1040, 106, last_input=20, last_output=4))
     assert mapper.usage["input_tokens"] == 40
     assert mapper.usage["output_tokens"] == 6
+
+
+@pytest.mark.parametrize("error", [
+    {"message": "Selected model is at capacity", "codexErrorInfo": "serverOverloaded", "additionalDetails": "Try again later"},
+    {"message": "", "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": 502}},
+     "additionalDetails": "upstream response stream closed"},
+])
+def test_failed_turn_preserves_structured_error_and_exposes_details_to_cli_parser(error):
+    mapper = CodexServerEventMapper("thread", tokens({}))
+    output = mapper.consume(packet("turn/completed", turn={"id": "turn", "status": "failed", "error": error}))
+    assert output[0]["error"] == error
+    parser = CodexJsonStreamParser(raw_tail_max_bytes=10000, final_text_max_bytes=10000)
+    for event in output:
+        parser.consume_line(json.dumps(event) + "\n")
+    text = parser.result().error_text
+    assert (error["message"] or "Codex turn failed") in text
+    assert json.dumps(error["codexErrorInfo"]) in text
+    assert error["additionalDetails"] in text
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
+def test_retry_details_only_become_final_error_when_turn_fails(status):
+    mapper = CodexServerEventMapper("thread", tokens({}))
+    error = {"message": "Reconnecting... 5/5", "codexErrorInfo": "responseStreamDisconnected",
+             "additionalDetails": "stream closed before completion"}
+    retry = mapper.consume(packet("error", willRetry=True, error=error))
+    assert retry[0]["payload"]["error"] == error
+    output = mapper.consume(packet("turn/completed", turn={"id": "turn", "status": status, "error": None}))
+    if status == "completed":
+        assert not any(event["type"] == "error" for event in output)
+    elif status == "failed":
+        assert output[0]["error"] == error
+    else:
+        assert output[0]["message"] == "Codex turn interrupted"

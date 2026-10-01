@@ -18,6 +18,8 @@ from .models import (
     PluginViewSpec,
 )
 
+MAX_PLUGIN_READ_BYTES = 256 * 1024 * 1024
+
 
 def _expect_mapping(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -82,7 +84,12 @@ def _parse_limits(value: Any) -> PluginHostLimits:
     if unknown:
         raise ValueError(f"runtime.limits 包含未知字段: {', '.join(unknown)}")
     return PluginHostLimits(
-        read_bytes=_parse_limit_value(current.get("readBytes"), hard_cap.read_bytes, hard_cap.read_bytes, "runtime.limits.readBytes"),
+        read_bytes=_parse_limit_value(
+            current.get("readBytes"),
+            hard_cap.read_bytes,
+            MAX_PLUGIN_READ_BYTES,
+            "runtime.limits.readBytes",
+        ),
         directory_entries=_parse_limit_value(
             current.get("directoryEntries"),
             hard_cap.directory_entries,

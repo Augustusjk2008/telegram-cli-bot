@@ -189,6 +189,36 @@ async def test_exception_partial_usage_and_next_request_recovery(runtime_setup):
 
 
 @pytest.mark.asyncio
+async def test_failed_turn_retires_owned_process_and_next_request_resumes_thread(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(request)
+    other = await registry.open_or_create(replace(request, owner_key=(1, 2, "child")))
+    runtime.client.auto_complete = False
+    try:
+        task = asyncio.create_task(collect(runtime))
+        while not runtime._turn_id:
+            await asyncio.sleep(0)
+        runtime.client.emit("thread/tokenUsage/updated", turnId=runtime._turn_id, tokenUsage={
+            "total": {"inputTokens": 5, "outputTokens": 2}, "last": {"inputTokens": 5, "outputTokens": 2}})
+        runtime.client.emit("turn/completed", turn={"id": runtime._turn_id, "status": "failed", "items": [],
+                                                  "error": {"message": "stream disconnected"}})
+        events = await asyncio.wait_for(task, 2)
+        assert events[-1]["type"] == "turn.failed" and events[-1]["usage"]["input_tokens"] == 5
+        assert any(event.get("type") == "response_item" for event in events)
+        assert runtime.returncode == 1 and not runtime.alive and not runtime.client.alive
+        assert not runtime.active and runtime._reader.done()
+        assert other.alive
+        assert [method for method, _ in runtime.client.calls].count("turn/start") == 1
+
+        recovered = await registry.open_or_create(request)
+        assert recovered is not runtime and recovered.thread_id == runtime.thread_id
+        assert recovered.client.calls[1][0] == "thread/resume"
+        assert (await collect(recovered))[-1]["type"] == "turn.completed"
+    finally:
+        await registry.aclose()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_consumer_interrupts_and_next_turn_is_usable(runtime_setup):
     registry, request = runtime_setup
     runtime = await registry.open_or_create(request)
