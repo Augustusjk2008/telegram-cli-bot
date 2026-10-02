@@ -160,3 +160,106 @@ async def test_simple_bundled_plugins_run_from_copied_directories(
         assert result["renderer"] == renderer
     finally:
         await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_copied_rtl_plugin_omits_source_actions_and_preserves_tree_and_copy(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugins" / "rtl-hierarchy"
+    shutil.copytree(BUNDLED_PLUGINS_ROOT / "rtl-hierarchy", plugin_dir)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "design.hier"
+    source.write_text("top\n  u_core\n    alu\n  u_mem\n", encoding="utf-8")
+    manifest = load_plugin_manifest(plugin_dir / "plugin.json")
+    runtime = PluginRuntime(
+        workspace_root_for=lambda _alias: workspace,
+        host_api=PluginHostApi(ArtifactStore(tmp_path)),
+        call_timeout_seconds=10,
+    )
+    try:
+        snapshot = await runtime.render_view("main", manifest, "module-tree", {"path": str(source)})
+        opened = await runtime.open_view("main", manifest, "module-tree", {"path": str(source)})
+        session_id = opened["sessionId"]
+        children = await runtime.get_view_window(
+            "main", manifest, session_id, {"op": "children", "nodeId": "top"},
+        )
+        assert [node["id"] for node in children["nodes"]] == ["top.u_core", "top.u_mem"]
+        search = await runtime.get_view_window("main", manifest, session_id, {"op": "search", "query": "alu"})
+        assert [node["id"] for node in search["nodes"]] == ["top.u_core.alu"]
+        for nodes in (
+            snapshot["payload"]["roots"], opened["summary"]["roots"],
+            opened["initialWindow"]["nodes"], children["nodes"], search["nodes"],
+        ):
+            for node in nodes:
+                assert [action["id"] for action in node["actions"]] == ["copy-name"]
+                assert node["actions"][0]["hostAction"] == {"type": "copy_text", "text": node["label"]}
+
+        for legacy_session_id in (session_id, None, "missing-session"):
+            result = await runtime.invoke_action(
+                "main", manifest, view_id="module-tree", session_id=legacy_session_id,
+                action_id="open-source", payload={"nodeId": "top.u_core", "path": "src/index.ts", "line": 12},
+            )
+            assert result["message"] == "缺少源码定位信息"
+            assert result.get("hostEffects", []) == []
+
+        copied = await runtime.invoke_action(
+            "main", manifest, view_id="module-tree", session_id=session_id,
+            action_id="copy-name", payload={"nodeId": "top.u_core"},
+        )
+        assert copied["hostEffects"] == [{"type": "copy_text", "text": "top.u_core"}]
+    finally:
+        await runtime.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_copied_timing_plugin_omits_source_actions_and_preserves_exports(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugins" / "timing-report"
+    shutil.copytree(BUNDLED_PLUGINS_ROOT / "timing-report", plugin_dir)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "timing.rpt"
+    source.write_text("endpoint,slack\nrx_data,-0.132\ntx_data,-0.081\n", encoding="utf-8")
+    manifest = load_plugin_manifest(plugin_dir / "plugin.json")
+    artifacts = ArtifactStore(tmp_path)
+    runtime = PluginRuntime(
+        workspace_root_for=lambda _alias: workspace,
+        host_api=PluginHostApi(artifacts),
+        call_timeout_seconds=10,
+    )
+    try:
+        snapshot = await runtime.render_view("main", manifest, "timing-table", {"path": str(source)})
+        opened = await runtime.open_view("main", manifest, "timing-table", {"path": str(source)})
+        session_id = opened["sessionId"]
+        window = await runtime.get_view_window(
+            "main", manifest, session_id, {"offset": 0, "limit": 1, "query": "tx_data"},
+        )
+        assert [row["cells"]["endpoint"] for row in window["rows"]] == ["tx_data"]
+        for rows in (snapshot["payload"]["rows"], opened["initialWindow"]["rows"], window["rows"]):
+            assert all([action["id"] for action in row["actions"]] == ["export-row"] for row in rows)
+        for toolbar in (snapshot["payload"]["actions"], opened["summary"]["actions"]):
+            assert [action["id"] for action in toolbar] == ["export-all"]
+
+        for legacy_session_id in (session_id, None, "missing-session"):
+            result = await runtime.invoke_action(
+                "main", manifest, view_id="timing-table", session_id=legacy_session_id,
+                action_id="open-source", payload={"rowId": "path-1", "path": "src/index.ts", "line": 12},
+            )
+            assert result["message"] == "缺少源码定位信息"
+            assert result.get("hostEffects", []) == []
+
+        for action_id, payload, expected_csv in (
+            ("export-row", {"rowId": "path-2"}, "endpoint,slack\ntx_data,-0.081\n"),
+            ("export-all", {}, "endpoint,slack\nrx_data,-0.132\ntx_data,-0.081\n"),
+        ):
+            exported = await runtime.invoke_action(
+                "main", manifest, view_id="timing-table", session_id=session_id,
+                action_id=action_id, payload=payload,
+            )
+            assert len(exported["hostEffects"]) == 1
+            effect = exported["hostEffects"][0]
+            assert effect["type"] == "download_artifact"
+            assert effect["filename"] == "timing.csv"
+            artifact = artifacts.get(bot_alias="main", artifact_id=effect["artifactId"])
+            assert artifact.path.read_text(encoding="utf-8") == expected_csv
+    finally:
+        await runtime.shutdown()

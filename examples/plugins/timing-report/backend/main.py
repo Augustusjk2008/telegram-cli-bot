@@ -73,7 +73,6 @@ def parse_rows(text: str) -> list[dict[str, Any]]:
                     "slack": parse_slack(slack),
                 },
                 "actions": [
-                    {"id": "open-source", "label": "打开源码", "target": "plugin", "location": "row"},
                     {"id": "export-row", "label": "导出行", "target": "plugin", "location": "row"},
                 ],
             }
@@ -172,15 +171,12 @@ def get_view_window(params: dict[str, Any]) -> dict[str, Any]:
 
 def invoke_action(params: dict[str, Any]) -> dict[str, Any]:
     session_id = str(params.get("sessionId") or "")
-    session = SESSIONS[session_id]
     action_id = str(params.get("actionId") or "")
     payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
     if action_id == "open-source":
-        return {
-            "message": "已打开源码",
-            "hostEffects": [{"type": "open_file", "path": "src/index.ts", "line": 12}],
-        }
+        return {"message": "缺少源码定位信息"}
 
+    session = SESSIONS[session_id]
     rows = session["rows"]
     if action_id == "export-row":
         row_id = str(payload.get("rowId") or "")

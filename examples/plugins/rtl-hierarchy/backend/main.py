@@ -45,7 +45,6 @@ def make_node(node_id: str, label: str, *, children: list[dict[str, Any]] | None
         "expandable": bool(children),
         "children": children or [],
         "actions": [
-            {"id": "open-source", "label": "打开源码", "target": "plugin", "location": "node"},
             {"id": "copy-name", "label": "复制名", "target": "host", "location": "node", "hostAction": {"type": "copy_text", "text": label}},
         ],
     }
@@ -200,10 +199,7 @@ def invoke_action(params: dict[str, Any]) -> dict[str, Any]:
     payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
     node_id = str(payload.get("nodeId") or "")
     if action_id == "open-source":
-        return {
-            "message": "已打开源码",
-            "hostEffects": [{"type": "open_file", "path": "src/index.ts", "line": 12}],
-        }
+        return {"message": "缺少源码定位信息"}
     return {
         "message": "已复制",
         "hostEffects": [{"type": "copy_text", "text": node_id}],

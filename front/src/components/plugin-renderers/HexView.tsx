@@ -1,4 +1,5 @@
 import type { HexViewPayload } from "../../services/types";
+import { VirtualList } from "../virtual/VirtualList";
 
 type Props = {
   title: string;
@@ -45,16 +46,26 @@ export function HexView({ title, payload }: Props) {
           ))}
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[12px] leading-6">
-        <div className="grid min-w-max grid-cols-[96px_minmax(0,1fr)_180px] gap-4">
-          {payload.rows.map((row) => (
-            <div key={row.offset} className="contents">
+      <div className="flex min-h-0 flex-1 flex-col p-4">
+        <VirtualList
+          key={payload.path}
+          items={payload.rows}
+          rowHeight={24}
+          dataTestId="virtualized-hex-rows"
+          className="flex-1 font-mono text-[12px] leading-6"
+          getKey={(row) => String(row.offset)}
+          renderRow={(row) => (
+            <div
+              data-testid="hex-row"
+              className="grid h-full w-max gap-4 whitespace-pre"
+              style={{ gridTemplateColumns: `96px ${payload.bytesPerRow * 3 - 1}ch ${payload.bytesPerRow}ch` }}
+            >
               <div className="select-none text-right text-[var(--muted)]">{formatOffset(row.offset)}</div>
-              <div className="whitespace-pre text-[var(--text)]">{row.hex.join(" ")}</div>
-              <div className="whitespace-pre text-[var(--muted)]">{row.ascii}</div>
+              <div className="text-[var(--text)]">{row.hex.join(" ")}</div>
+              <div className="text-[var(--muted)]">{row.ascii}</div>
             </div>
-          ))}
-        </div>
+          )}
+        />
       </div>
     </div>
   );
