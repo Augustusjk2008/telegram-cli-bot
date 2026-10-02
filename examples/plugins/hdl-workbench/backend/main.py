@@ -2,16 +2,36 @@ from __future__ import annotations
 
 from hdl_parser import HdlParser
 from hdl_project import ProjectScanner, ScanOptions
+from hdl_views import HdlViews
 from plugin_sdk import PluginServer
 
 
 server = PluginServer("hdl-workbench")
 parser: HdlParser | None = None
+views: HdlViews | None = None
 
 
 def initialize(_context: dict) -> None:
     global parser
+    shutdown()
     parser = HdlParser()
+
+
+def session_views() -> HdlViews:
+    global views
+    if parser is None:
+        raise RuntimeError("HDL Workbench 尚未初始化")
+    if views is None:
+        views = HdlViews(parser, server.host_call, server.context, server.config)
+    return views
+
+
+def shutdown() -> None:
+    global parser, views
+    if views is not None:
+        views.shutdown()
+    views = None
+    parser = None
 
 
 def parse_source(params: dict) -> dict:
@@ -44,4 +64,8 @@ def analyze_project(params: dict) -> dict:
 if __name__ == "__main__":
     server.register_handler("plugin.parse_source", parse_source)
     server.register_handler("plugin.analyze_project", analyze_project)
-    server.run(initialize=initialize)
+    server.register_handler("plugin.open_view", lambda params: session_views().open_view(params))
+    server.register_handler("plugin.get_view_window", lambda params: session_views().get_view_window(params))
+    server.register_handler("plugin.invoke_action", lambda params: session_views().invoke_action(params))
+    server.register_handler("plugin.dispose_view", lambda params: session_views().dispose_view(params))
+    server.run(initialize=initialize, shutdown=shutdown)

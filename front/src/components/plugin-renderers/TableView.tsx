@@ -232,7 +232,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
                         type="button"
                         disabled={action.disabled}
                         onClick={() => onRunAction?.(action, { rowId: row.id })}
-                        className="ml-2 rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        className="ml-2 whitespace-nowrap rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
                         {action.label}
                       </button>
@@ -296,7 +296,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
                         type="button"
                         disabled={action.disabled}
                         onClick={() => onRunAction?.(action, { rowId: row.id })}
-                        className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        className="whitespace-nowrap rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
                         {action.label}
                       </button>

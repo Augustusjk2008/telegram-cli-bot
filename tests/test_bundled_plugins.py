@@ -97,6 +97,33 @@ def test_bundled_plugin_manifests_load_with_basic_contracts() -> None:
                     fields["maxEntries"].maximum) == (2000, 100, 10000)
 
 
+def test_hdl_workbench_catalog_and_session_contract() -> None:
+    manifest = load_plugin_manifest(BUNDLED_PLUGINS_ROOT / "hdl-workbench/plugin.json")
+    assert manifest.runtime.permissions.workspace_read
+    assert manifest.runtime.permissions.workspace_list
+    assert not manifest.runtime.permissions.temp_artifacts
+    assert {view.id: (view.renderer, view.view_mode) for view in manifest.views} == {
+        "module-tree": ("tree", "session"),
+        "module-details": ("table", "session"),
+    }
+    fields = {
+        field.key: field
+        for section in manifest.config_schema.sections
+        for field in section.fields
+    }
+    assert set(fields) == {
+        "topModule", "ignoreDirectories", "includeDirectories",
+        "maxFiles", "maxFileBytes", "maxTotalBytes",
+    }
+    assert {key: field.default for key, field in fields.items()} == manifest.config
+    action, = manifest.catalog_actions
+    assert action.target == "host" and action.location == "catalog"
+    assert action.payload["folderPicker"] is True
+    assert action.payload["folderInputKey"] == "path"
+    assert action.host_action["pluginId"] == manifest.plugin_id
+    assert action.host_action["viewId"] == "module-tree"
+
+
 def _xlsx_bytes() -> bytes:
     buffer = BytesIO()
     with ZipFile(buffer, "w") as archive:

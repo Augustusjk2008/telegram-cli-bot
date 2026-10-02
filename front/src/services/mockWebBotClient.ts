@@ -1362,6 +1362,126 @@ function buildMockZipTreeIndex(): Map<string | null, TreeNode[]> {
   ]);
 }
 
+const MOCK_HDL_SOURCES: Record<string, string> = {
+  "rtl/system.sv": "module system (\n  input logic clk,\n  input logic [7:0] data\n);\n  core #(.WIDTH(8)) u_core (\n    .clk(clk),\n    .data(data)\n  );\n`ifdef ENABLE_OPTIONAL\n  optional u_optional (.clk(clk));\n`endif\nendmodule\n",
+  "rtl/core.sv": "module core #(\n  parameter int WIDTH = 4\n) (\n  input logic clk,\n  input logic [WIDTH-1:0] data\n);\nendmodule\n",
+  "rtl/optional.sv": "module optional (\n  input logic clk\n);\nendmodule\n",
+  "rtl/utility.sv": "module utility (\n  input logic enable\n);\nendmodule\n",
+};
+
+const HDL_COLUMNS: TableColumn[] = [
+  ["kind", "类别"], ["name", "名称"], ["direction", "方向"], ["type", "类型"],
+  ["width", "位宽/数组"], ["default", "默认值"], ["override", "实例覆盖"], ["context", "静态条件"], ["source", "声明位置"],
+].map(([id, title]) => ({ id, title, sortable: true }));
+
+type MockHdlDefinition = { id: string; name: string; path: string; line: number; rows: TableRow[] };
+type MockHdlReference = { id: string; name: string; definitionId: string; path: string; line: number; conditional?: string };
+type MockHdlProject = {
+  path: string;
+  definitions: Map<string, MockHdlDefinition>;
+  references: Map<string, MockHdlReference>;
+  children: Map<string | null, TreeNode[]>;
+  nodes: Map<string, TreeNode>;
+};
+type MockHdlSession = {
+  botAlias: string;
+  accountId: string;
+  viewId: "module-tree" | "module-details";
+  project: MockHdlProject;
+  fingerprints: Map<string, string>;
+  definitionId?: string;
+  rows?: TableRow[];
+};
+
+function buildMockHdlProject(path: string, topModule: string): MockHdlProject {
+  const topModules = topModule.split(",").map((name) => name.trim()).filter(Boolean);
+  const definitions = new Map<string, MockHdlDefinition>();
+  for (const name of ["system", "core", "optional", "utility"]) {
+    const sourcePath = `${path}/rtl/${name}.sv`;
+    const id = `definition:rtl/${name}.sv:${name}`;
+    const fields = name === "core"
+      ? [
+          { kind: "参数", name: "WIDTH", type: "int", default: "4", line: 2 },
+          { kind: "端口", name: "clk", direction: "input", type: "logic", line: 4 },
+          { kind: "端口", name: "data", direction: "input", type: "logic", width: "[WIDTH-1:0]", line: 5 },
+        ]
+      : name === "system"
+        ? [{ kind: "端口", name: "clk", direction: "input", type: "logic", line: 2 },
+           { kind: "端口", name: "data", direction: "input", type: "logic", width: "[7:0]", line: 3 }]
+        : [{ kind: "端口", name: name === "utility" ? "enable" : "clk", direction: "input", type: "logic", line: 2 }];
+    definitions.set(id, {
+      id, name, path: sourcePath, line: 1,
+      rows: fields.map(({ line, ...cells }) => ({
+        id: `${id}:${cells.kind}:${cells.name}`,
+        cells: { direction: "", width: "", default: "", override: "", context: "", ...cells, source: `${sourcePath}:${line}` },
+        actions: [{ id: "open-declaration", label: "打开声明", target: "plugin", location: "row", payload: { rowId: `${id}:${cells.kind}:${cells.name}` } }],
+      })),
+    });
+  }
+  const references = new Map<string, MockHdlReference>([
+    ["reference:u_core", { id: "reference:u_core", name: "u_core", definitionId: "definition:rtl/core.sv:core", path: `${path}/rtl/system.sv`, line: 5 }],
+    ["reference:u_optional", { id: "reference:u_optional", name: "u_optional", definitionId: "definition:rtl/optional.sv:optional", path: `${path}/rtl/system.sv`, line: 10, conditional: "`ifdef ENABLE_OPTIONAL" }],
+  ]);
+  const children = new Map<string | null, TreeNode[]>();
+  const nodes = new Map<string, TreeNode>();
+  const moduleNode = (definition: MockHdlDefinition, prefix: string): TreeNode => ({
+    id: `${prefix}:${definition.id}`, label: definition.name, kind: "class",
+    secondaryText: `${definition.path}:${definition.line}`,
+    hasChildren: definition.name === "system", expandable: definition.name === "system",
+    payload: { definitionId: definition.id, source: { path: definition.path, line: definition.line, column: 1 } },
+    actions: [
+      { id: "open-details", label: "查看端口/参数", target: "plugin", location: "node" },
+      { id: "open-definition", label: "打开定义", target: "plugin", location: "node" },
+    ],
+  });
+  const roots: TreeNode[] = [
+    { id: "group:tops", label: topModules.length ? "指定顶层" : "候选顶层", kind: "folder", hasChildren: true, expandable: true },
+    { id: "group:all", label: "全部模块", kind: "folder", hasChildren: true, expandable: true },
+    { id: "group:diagnostics", label: "诊断", kind: "folder", hasChildren: true, expandable: true },
+  ];
+  children.set(null, roots);
+  const all = [...definitions.values()];
+  children.set("group:tops", all.filter((item) => topModules.length ? topModules.includes(item.name) : ["system", "utility"].includes(item.name)).map((item) => moduleNode(item, "top")));
+  children.set("group:all", all.map((item) => moduleNode(item, "all")));
+  children.set("group:diagnostics", [{ id: "diagnostic:conditional", label: "条件分支保留静态引用", kind: "symbol", description: "u_optional · `ifdef ENABLE_OPTIONAL · 未进行预处理", expandable: false }]);
+  for (const group of children.values()) {
+    for (const node of group) nodes.set(node.id, node);
+  }
+  for (const node of [...nodes.values()].filter((item) => item.payload?.definitionId)) {
+    const instances: TreeNode[] = node.payload?.definitionId === "definition:rtl/system.sv:system"
+      ? [...references.values()].map((reference) => ({
+          id: `${node.id}:${reference.id}`, label: `${reference.name} : ${definitions.get(reference.definitionId)!.name}`, kind: "symbol",
+          secondaryText: `${reference.path}:${reference.line}`,
+          badges: reference.conditional ? [{ text: `条件分支 ${reference.conditional}`, tone: "warning" }] : undefined,
+          hasChildren: false, expandable: false,
+          payload: { definitionId: reference.definitionId, referenceId: reference.id, source: { path: reference.path, line: reference.line, column: 1 } },
+          actions: [
+            { id: "open-details", label: "查看端口/参数", target: "plugin", location: "node" },
+            { id: "open-instance", label: "打开实例化位置", target: "plugin", location: "node" },
+          ],
+        }))
+      : [];
+    children.set(node.id, instances);
+    for (const instance of instances) {
+      nodes.set(instance.id, instance);
+      children.set(instance.id, []);
+    }
+  }
+  return { path, definitions, references, children, nodes };
+}
+
+function buildMockHdlWindow(rows: TableRow[], request: PluginViewWindowRequest): TableWindowPayload {
+  const offset = Math.max(0, Math.floor(Number(request.offset) || 0));
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(request.limit) || 2)));
+  const query = String(request.query || "").trim().toLocaleLowerCase();
+  let filtered = rows.filter((row) => !query || Object.values(row.cells).some((cell) => String(cell).toLocaleLowerCase().includes(query)));
+  const sort = request.sort as TableWindowPayload["appliedSort"];
+  if (sort && HDL_COLUMNS.some((column) => column.id === sort.columnId)) {
+    filtered = [...filtered].sort((a, b) => String(a.cells[sort.columnId]).localeCompare(String(b.cells[sort.columnId]), "zh-CN", { numeric: true }) * (sort.direction === "desc" ? -1 : 1));
+  }
+  return { offset, limit, totalRows: filtered.length, rows: filtered.slice(offset, offset + limit).map((row) => ({ ...row, cells: { ...row.cells }, actions: clonePluginActions(row.actions) })), appliedSort: sort };
+}
+
 export class MockWebBotClient implements WebBotClient {
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -1421,6 +1541,8 @@ export class MockWebBotClient implements WebBotClient {
     | { pluginId: string; renderer: "tree"; summary: TreeViewSummary; window: TreeWindowPayload; rootPath?: string; childrenByNodeId?: Map<string | null, TreeNode[]> }
   >();
   private pluginSessionCounter = 0;
+  private hdlSessions = new Map<string, MockHdlSession>();
+  private hdlSourcePaths = new Set<string>();
   private pluginArtifacts = new Map<string, { filename: string; content: string; contentType?: string }>([
     ["artifact-docx-image-1", { filename: "image1.png", content: "mock image", contentType: "image/png" }],
   ]);
@@ -1761,6 +1883,33 @@ export class MockWebBotClient implements WebBotClient {
     lastError: "",
   };
   private plugins: PluginSummary[] = [
+    {
+      id: "hdl-workbench", schemaVersion: 2, name: "HDL Workbench", version: "0.1.0",
+      description: "浏览 Verilog/SystemVerilog 模块、实例、端口和参数，并跳转到源码。", enabled: true,
+      config: { topModule: "", ignoreDirectories: ".git,.hg,.svn,.tcb,.codegraph,.tmp,.venv,venv,__pycache__,node_modules,vendor,site-packages,build,dist,out,target", includeDirectories: "", maxFiles: 1000, maxFileBytes: 4194304, maxTotalBytes: 67108864 },
+      configSchema: {
+        title: "HDL 项目设置",
+        sections: [{ id: "scan", fields: [
+          { key: "topModule", label: "顶层模块", type: "string", default: "" },
+          { key: "ignoreDirectories", label: "忽略目录", type: "string", default: ".git,.hg,.svn,.tcb,.codegraph,.tmp,.venv,venv,__pycache__,node_modules,vendor,site-packages,build,dist,out,target" },
+          { key: "includeDirectories", label: "Include 目录", type: "string", default: "" },
+          { key: "maxFiles", label: "最大扫描文件数", type: "integer", default: 1000, minimum: 1 },
+          { key: "maxFileBytes", label: "单文件字节上限", type: "integer", default: 4194304, minimum: 1 },
+          { key: "maxTotalBytes", label: "总源码字节上限", type: "integer", default: 67108864, minimum: 1 },
+        ] }],
+      },
+      views: [
+        { id: "module-tree", title: "HDL 层级", renderer: "tree", viewMode: "session", dataProfile: "light" },
+        { id: "module-details", title: "模块详情", renderer: "table", viewMode: "session", dataProfile: "heavy" },
+      ],
+      fileHandlers: [],
+      catalogActions: [{
+        id: "open-hdl-project", label: "选择 HDL 项目", target: "host", location: "catalog", variant: "primary",
+        payload: { folderPicker: true, folderInputKey: "path", folderTitle: "选择 HDL 项目目录" },
+        hostAction: { type: "open_plugin_view", pluginId: "hdl-workbench", viewId: "module-tree", title: "HDL 层级", input: {} },
+      }],
+      runtime: { type: "python", entry: "backend/main.py", protocol: "jsonrpc-stdio", permissions: buildPluginPermissions({ workspaceRead: true, workspaceList: true }) },
+    },
     {
       id: "vivado-waveform",
       schemaVersion: 2,
@@ -2827,6 +2976,10 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private fileKey(botAlias: string, browserPath: string, filename: string): string {
+    const absolutePath = this.normalizeMockPath(/^(?:\/|[A-Za-z]:[\\/])/.test(filename) ? filename : `${browserPath}/${filename}`);
+    if (this.hdlSourcePaths.has(`${botAlias}:${absolutePath}`)) {
+      return `${botAlias}:hdl:${absolutePath}`;
+    }
     return `${botAlias}:${browserPath}:${filename}`;
   }
 
@@ -4509,7 +4662,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async listFiles(botAlias: string, path?: string, options?: DirectoryListingOptions): Promise<DirectoryListing> {
     const currentPath = this.normalizeMockPath(path?.trim() || this.getBrowserPath(botAlias));
-    const botFiles = mockFiles[botAlias] || {};
+    const botFiles = this.mockFilesWithHdl(botAlias);
     return {
       workingDir: currentPath,
       entries: (botFiles[currentPath] || []).map((entry) => {
@@ -4535,7 +4688,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async revealFileTreePath(botAlias: string, path: string): Promise<FileTreeRevealResult> {
-    const botFiles = mockFiles[botAlias] || {};
+    const botFiles = this.mockFilesWithHdl(botAlias);
     const root = this.normalizeMockPath(this.getBrowserPath(botAlias));
     const target = this.resolveFileTreePath(botAlias, path);
     const split = this.splitMockFilePath(target);
@@ -4698,11 +4851,51 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async openPluginView(
-    _botAlias: string,
+    botAlias: string,
     pluginId: string,
     viewId: string,
     input: Record<string, unknown>,
   ): Promise<PluginRenderResult> {
+    if (pluginId === "hdl-workbench") {
+      this.pluginSessionCounter += 1;
+      const sessionId = `hdl-session-${this.pluginSessionCounter}`;
+      if (viewId === "module-tree") {
+        const path = this.normalizeMockPath(String(input.path || this.getBrowserPath(botAlias)));
+        const topModule = String(this.plugins.find((plugin) => plugin.id === pluginId)?.config?.topModule || "");
+        const project = buildMockHdlProject(path, topModule);
+        const fingerprints = new Map<string, string>();
+        for (const [relativePath, content] of Object.entries(MOCK_HDL_SOURCES)) {
+          const sourcePath = `${path}/${relativePath}`;
+          this.hdlSourcePaths.add(`${botAlias}:${sourcePath}`);
+          const browserPath = this.getBrowserPath(botAlias);
+          if (!this.fileContents.has(this.fileKey(botAlias, browserPath, sourcePath))) {
+            this.setFileState(botAlias, browserPath, sourcePath, content);
+          }
+          fingerprints.set(sourcePath, this.hdlSourceFingerprint(botAlias, sourcePath));
+        }
+        const roots = structuredClone(project.children.get(null)!);
+        const summary: TreeViewSummary = { roots, searchable: true, searchPlaceholder: "搜索模块或实例", statsText: "4 模块 · 2 实例 · 条件分支未展开", emptySearchText: "未找到模块或实例" };
+        this.hdlSessions.set(sessionId, { botAlias, accountId: this.currentAccountId(), viewId, project, fingerprints });
+        return { pluginId, viewId, title: "HDL 层级", renderer: "tree", mode: "session", sessionId, summary, initialWindow: { op: "children", nodeId: null, nodes: structuredClone(roots) } };
+      }
+      if (viewId !== "module-details") throw new Error("HDL 视图不存在");
+      const parent = this.getHdlSession(botAlias, String(input.parentSessionId || ""));
+      if (parent.viewId !== "module-tree" || input.path !== parent.project.path) throw new Error("HDL 项目会话不匹配");
+      const definition = parent.project.definitions.get(String(input.definitionId || ""));
+      if (!definition) throw new Error("HDL 模块不存在");
+      const reference = input.referenceId ? parent.project.references.get(String(input.referenceId)) : undefined;
+      if (input.referenceId && reference?.definitionId !== definition.id) throw new Error("HDL 实例不存在");
+      const rows = structuredClone(definition.rows);
+      if (reference?.name === "u_core") rows.find((row) => row.cells.name === "WIDTH")!.cells.override = "8";
+      if (reference?.conditional) rows.forEach((row) => { row.cells.context = reference.conditional!; });
+      this.hdlSessions.set(sessionId, { botAlias, accountId: this.currentAccountId(), viewId, project: parent.project, fingerprints: new Map(parent.fingerprints), rows, definitionId: definition.id });
+      return {
+        pluginId, viewId, title: `${definition.name}${reference ? ` (${reference.name})` : ""} · 端口/参数`, renderer: "table", mode: "session", sessionId,
+        summary: { columns: structuredClone(HDL_COLUMNS), totalRows: rows.length, defaultPageSize: 2,
+          actions: [{ id: "open-definition", label: "打开定义", target: "plugin", location: "toolbar" }] },
+        initialWindow: buildMockHdlWindow(rows, { offset: 0, limit: 2 }),
+      };
+    }
     if (pluginId === "docx-preview") {
       const sourcePath = typeof input.path === "string" ? input.path : "docs/roadmap.docx";
       return {
@@ -4872,6 +5065,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private ensurePluginSession(sessionId: string, pluginId: string) {
+    if (pluginId === "hdl-workbench" || sessionId.startsWith("hdl-session-")) return null;
     const existing = this.pluginSessions.get(sessionId);
     if (existing) {
       return existing.pluginId === pluginId ? existing : null;
@@ -4941,13 +5135,30 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async queryPluginViewWindow(
-    _botAlias: string,
+    botAlias: string,
     pluginId: string,
     sessionId: string,
     request: PluginViewWindowRequest,
     signal?: AbortSignal,
   ): Promise<PluginViewWindowPayload> {
     signal?.throwIfAborted?.();
+    if (pluginId === "hdl-workbench") {
+      const session = this.getHdlSession(botAlias, sessionId);
+      if (session.viewId === "module-details") return buildMockHdlWindow(session.rows!, request);
+      if (request.op === "search") {
+        const query = String(request.query || "").trim().toLocaleLowerCase();
+        const nodes = [...session.project.nodes.values()].filter((node) => node.payload?.definitionId && node.label.toLocaleLowerCase().includes(query));
+        const unique = [...new Map(nodes.map((node) => [node.payload?.referenceId || node.payload?.definitionId, node])).values()];
+        return { op: "search", nodes: structuredClone(unique) };
+      }
+      if (request.op !== "children") throw new Error("HDL 树仅支持 children/search 请求");
+      const requestedNodeId = request.nodeId ?? null;
+      if (requestedNodeId !== null && typeof requestedNodeId !== "string") throw new Error("HDL 节点不存在");
+      const nodeId = typeof requestedNodeId === "string" ? requestedNodeId : null;
+      const nodes = session.project.children.get(nodeId) || (session.project.nodes.has(nodeId) ? [] : undefined);
+      if (!nodes) throw new Error("HDL 节点不存在");
+      return { op: "children", nodeId, nodes: structuredClone(nodes) };
+    }
     const session = this.ensurePluginSession(sessionId, pluginId);
     if (!session) {
       throw new Error("插件会话不存在");
@@ -5050,7 +5261,12 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async disposePluginViewSession(_botAlias: string, pluginId: string, sessionId: string): Promise<void> {
+  async disposePluginViewSession(botAlias: string, pluginId: string, sessionId: string): Promise<void> {
+    if (pluginId === "hdl-workbench") {
+      const session = this.hdlSessions.get(sessionId);
+      if (session?.botAlias === botAlias && session.accountId === this.currentAccountId()) this.hdlSessions.delete(sessionId);
+      return;
+    }
     const session = this.ensurePluginSession(sessionId, pluginId);
     if (!session) {
       return;
@@ -5059,10 +5275,40 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async invokePluginAction(
-    _botAlias: string,
+    botAlias: string,
     pluginId: string,
     input: PluginActionInvokeInput,
   ): Promise<PluginActionResult> {
+    if (pluginId === "hdl-workbench") {
+      const session = this.getHdlSession(botAlias, String(input.sessionId || ""));
+      if (input.viewId !== session.viewId) throw new Error("HDL 视图不匹配");
+      if (session.viewId === "module-details") {
+        if (input.actionId === "open-definition") {
+          const definition = session.project.definitions.get(session.definitionId!);
+          if (!definition) throw new Error("HDL 模块不存在");
+          return this.openHdlSource(botAlias, session, definition.path, definition.line);
+        }
+        if (input.actionId !== "open-declaration") throw new Error("HDL 动作不存在");
+        const row = session.rows!.find((item) => item.id === input.payload?.rowId);
+        if (!row) throw new Error("HDL 声明不存在");
+        const source = String(row.cells.source);
+        const separator = source.lastIndexOf(":");
+        return this.openHdlSource(botAlias, session, source.slice(0, separator), Number(source.slice(separator + 1)));
+      }
+      const node = session.project.nodes.get(String(input.payload?.nodeId || ""));
+      const definition = session.project.definitions.get(String(node?.payload?.definitionId || ""));
+      if (!definition) throw new Error("HDL 模块不存在");
+      const reference = session.project.references.get(String(node?.payload?.referenceId || ""));
+      if (input.actionId === "open-details") {
+        return { hostEffects: [{ type: "open_plugin_view", pluginId, viewId: "module-details", title: `${definition.name}${reference ? ` (${reference.name})` : ""} · 端口/参数`, input: {
+          path: session.project.path, parentSessionId: input.sessionId, definitionId: definition.id,
+          ...(reference ? { referenceId: reference.id } : {}),
+        } }] };
+      }
+      if (input.actionId === "open-definition" && !reference) return this.openHdlSource(botAlias, session, definition.path, definition.line);
+      if (input.actionId === "open-instance" && reference) return this.openHdlSource(botAlias, session, reference.path, reference.line);
+      throw new Error("HDL 动作不存在");
+    }
     if (pluginId === "timing-report") {
       this.pluginArtifactCounter += 1;
       const artifactId = `artifact-${this.pluginArtifactCounter}`;
@@ -5094,6 +5340,40 @@ export class MockWebBotClient implements WebBotClient {
       return { message: "已折叠" };
     }
     return { message: "已执行" };
+  }
+
+  private getHdlSession(botAlias: string, sessionId: string): MockHdlSession {
+    const session = this.hdlSessions.get(sessionId);
+    if (!session || session.botAlias !== botAlias || session.accountId !== this.currentAccountId()) throw new Error("插件会话不存在");
+    return session;
+  }
+
+  private openHdlSource(botAlias: string, session: MockHdlSession, path: string, line: number): PluginActionResult {
+    if (session.fingerprints.get(path) !== this.hdlSourceFingerprint(botAlias, path)) {
+      return { message: "源码已变化，请重新打开 HDL 项目", hostEffects: [] };
+    }
+    return { hostEffects: [{ type: "open_file", path, line }] };
+  }
+
+  private hdlSourceFingerprint(botAlias: string, path: string): string {
+    const browserPath = this.getBrowserPath(botAlias);
+    return `${this.getFileVersion(botAlias, browserPath, path)}:${this.getFileContent(botAlias, browserPath, path)}`;
+  }
+
+  private mockFilesWithHdl(botAlias: string): Record<string, FileEntry[]> {
+    const files = { ...(mockFiles[botAlias] || {}) };
+    const add = (directory: string, entry: FileEntry) => {
+      if (!(files[directory] || []).some((item) => item.name === entry.name)) files[directory] = [...(files[directory] || []), entry];
+    };
+    for (const key of this.hdlSourcePaths) {
+      if (!key.startsWith(`${botAlias}:`)) continue;
+      const path = key.slice(botAlias.length + 1);
+      const { dir, name } = this.splitMockFilePath(path);
+      add(dir, { name, isDir: false, size: new TextEncoder().encode(this.getFileContent(botAlias, this.getBrowserPath(botAlias), path)).length });
+      const parent = this.splitMockFilePath(dir);
+      add(parent.dir, { name: parent.name, isDir: true });
+    }
+    return files;
   }
 
   async installPluginRuntime(_botAlias: string, pluginId: string): Promise<PluginRuntimeInstallResult> {

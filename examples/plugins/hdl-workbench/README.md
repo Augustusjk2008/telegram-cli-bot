@@ -1,8 +1,8 @@
 # HDL Workbench
 
-独立的 Verilog/SystemVerilog 项目分析后端，适用于 `.v`、`.sv`、`.vh`、`.svh`。
-输出模块、端口、参数、静态实例引用、源码位置和诊断。单文件解析器接收已有 UTF-8 源码；项目扫描通过 Host API 读取目录和文件。
-当前提供 Python API 和 JSON-RPC stdio，尚未提供插件目录入口或浏览器视图。
+独立的 Verilog/SystemVerilog 项目浏览插件，适用于 `.v`、`.sv`、`.vh`、`.svh`。
+提供按需展开的模块/实例树、端口/参数详情表和真实源码导航；项目扫描通过 Host API 读取目录和文件。
+也保留单文件解析和项目索引的 Python API、JSON-RPC stdio 接口。
 
 ## 依赖与安装
 
@@ -26,8 +26,29 @@ python -m pip install --only-binary=:all: -r requirements.txt
 依赖缺失、版本不一致或二进制不兼容时，通过 JSON-RPC 返回错误及包含实际 Python 路径和依赖文件路径的安装命令。
 不会自动安装软件。
 
-本目录可整体复制到任意目录，`backend` 中的 SDK、模型和解析器均不依赖 `bot`、前端或仓库根目录。
-当前没有 `plugin.json`，因此尚不能从插件目录安装为可操作视图。
+本目录可整体复制到任意目录，`backend` 中的 SDK、模型、解析器和视图均不依赖 `bot`、前端或仓库根目录。
+在 Orbit 的插件目录安装 `HDL Workbench`，或使用本目录的路径安装。schema v2 manifest 仅申请 `workspaceRead`、`workspaceList`。
+
+## 使用
+
+1. 在插件目录点击“选择 HDL 项目”，选择当前工作区内的项目目录。
+2. 在“候选顶层”（配置了顶层时为“指定顶层”）或“全部模块”下展开模块和静态实例。
+3. 点击模块/已解析实例查看端口、参数及实例参数覆盖；详情表支持搜索和分页。
+4. 使用“打开定义”“打开实例化位置”或详情行的声明动作，在源码编辑器中打开对应文件和行列。
+
+同名定义保留为候选项，循环分支停止展开，缺失引用和诊断保留在树中。
+层级搜索返回匹配的模块和实例；条件分支、generate 和实例数组保留静态上下文，不代表展开后的设计。
+详情中的位宽、默认值和覆盖值保留源码表达式，不计算有效数值；位置式参数覆盖按可覆盖参数的声明顺序对应。
+“静态条件”列保留声明和实例的宏/generate 上下文，实例数组在树中明确标记。
+
+每次打开后端视图生成独立 session ID。由树打开的详情会话共享该树的索引，关闭树后详情仍可使用；
+最后一个引用关闭或插件退出时释放索引和节点/行注册表。不同会话不能使用彼此的节点或行 ID。
+从树打开新的详情视图时必须使用仍存在的父会话；不把失效会话自动替换为重新扫描的项目。
+
+源码位置由当前索引决定，客户端传入的文件路径和行号不会替代索引位置。
+树和表中的位置使用项目相对路径，项目外的共享文件保留绝对路径；导航始终使用索引中的绝对位置。
+跳转前通过 Host 核对文件路径、大小、修改时间和内容 SHA-256；文件已变化、无法读取或读取过程中变化时拒绝跳转并提示刷新。
+当前没有项目手动刷新动作；需要关闭原层级标签后重新打开项目以取得新索引。已有详情会话继续保留其原有索引。
 
 ## Python API
 
@@ -72,6 +93,13 @@ print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 它会发出 `host.workspace.stat`、`host.workspace.list_dir`、`host.workspace.read_range` 请求，需要 Host 在同一 stdio 通道返回响应。
 没有 Host 响应器时，不能用一组静态 JSON 输入完成项目扫描；初始化上下文也不能省略工作区路径。
 该方法返回项目摘要、文件指纹、模块和引用索引、include 结果、顶层候选和诊断，不展开整棵实例树。
+
+浏览器使用 `plugin.open_view` 打开 `module-tree` 或 `module-details`，返回 session 摘要和初始窗口。
+`plugin.get_view_window` 的树请求为 `{"sessionId":"...","op":"children","nodeId":"..."}` 或 `op="search"` 加 `query`；
+表请求使用 `offset`、`limit`、`query`，默认每页 50 行，最大 500 行。
+树窗口只返回直接子节点，不递归展开；表窗口只返回所请求的行。
+`plugin.invoke_action` 根据会话中的 `nodeId`/`rowId` 返回 `open_plugin_view` 或核验后的 `open_file` Host effect；
+`plugin.dispose_view` 关闭指定会话，`plugin.shutdown` 清理所有会话。
 
 ## 项目索引与层级
 
@@ -130,6 +158,7 @@ include 循环不会反复读取，也不会将头文件文本内联到包含模
 不进行预处理、include 文本内联、宏展开、常量求值或 generate 展开。
 位宽表达式没有被换算成有效位数，静态实例不等于工具完成展开后的设计层级。
 不解析 VHDL，也不将 interface、program、checker、UDP 或 package 作为模块定义展示。
+尚未提取时钟/复位候选信号，也没有项目手动刷新动作。
 非 ANSI 端口别名、复合端口表达式会标记为解析不完整；不支持的宏生成语法可能显示语法区域诊断。
 
 ## 验证
@@ -140,8 +169,20 @@ include 循环不会反复读取，也不会将头文件文本内联到包含模
 python -m venv .tmp/hdl-parser-venv
 & .tmp/hdl-parser-venv/Scripts/python.exe -m pip install --only-binary=:all: -r examples/plugins/hdl-workbench/requirements.txt
 & .tmp/hdl-parser-venv/Scripts/python.exe -m pip install pytest==8.3.4 pytest-asyncio==1.3.0
-& .tmp/hdl-parser-venv/Scripts/python.exe -m pytest --noconftest tests/test_hdl_parser.py tests/test_hdl_project.py -q
+& .tmp/hdl-parser-venv/Scripts/python.exe -m pytest --noconftest tests/test_hdl_parser.py tests/test_hdl_project.py tests/test_hdl_views.py -q
 ```
 
 `--noconftest` 用于隔离 Host 的自动 session fixture；解析和项目单元测试不需要 Host 依赖。
 未安装解析依赖的普通 Host 测试环境会跳过实际解析用例，依赖错误和初始化诊断用例仍会运行。
+
+复制目录、真实 Host API 和 runtime 的集成检查可在装有 Host 依赖的环境运行；
+如解析依赖位于独立测试环境，显式指定子进程解释器（只影响测试）：
+
+```powershell
+$env:HDL_PLUGIN_TEST_PYTHON = (Resolve-Path .tmp/hdl-parser-venv/Scripts/python.exe).Path
+python -m pytest tests/test_hdl_plugin_runtime.py tests/test_plugin_runtime.py tests/test_plugin_service_cache.py tests/test_plugins_host_api.py tests/test_bundled_plugins.py -q
+```
+
+前端检查使用现有组件和 mock：`npm run test:gate -- src/test/plugin-hdl-view.test.tsx`、`npm run lint`、`npm run build`。
+浏览器验收连接人工已启动的应用：设置 `PLAYWRIGHT_BASE_URL` 后运行 `npx playwright test src/test/plugin-hdl-workbench.spec.ts`。
+浏览器测试拦截 API，不修改运行中的用户配置或项目；源码文件和行号在实际编辑器中检查。

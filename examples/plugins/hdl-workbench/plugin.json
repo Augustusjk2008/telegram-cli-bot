@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 2,
+  "id": "hdl-workbench",
+  "name": "HDL Workbench",
+  "version": "0.1.0",
+  "description": "浏览 Verilog/SystemVerilog 模块、静态实例、端口和参数，并跳转到源码。",
+  "enabled": true,
+  "config": {
+    "topModule": "",
+    "ignoreDirectories": ".git,.hg,.svn,.tcb,.codegraph,.tmp,.venv,venv,__pycache__,node_modules,vendor,site-packages,build,dist,out,target",
+    "includeDirectories": "",
+    "maxFiles": 1000,
+    "maxFileBytes": 4194304,
+    "maxTotalBytes": 67108864
+  },
+  "configSchema": {
+    "title": "HDL 项目设置",
+    "sections": [
+      {
+        "id": "project",
+        "title": "项目",
+        "fields": [
+          {
+            "key": "topModule",
+            "label": "顶层模块名（逗号分隔，留空自动列出候选）",
+            "type": "string",
+            "default": ""
+          },
+          {
+            "key": "ignoreDirectories",
+            "label": "忽略目录名（逗号分隔）",
+            "type": "string",
+            "default": ".git,.hg,.svn,.tcb,.codegraph,.tmp,.venv,venv,__pycache__,node_modules,vendor,site-packages,build,dist,out,target"
+          },
+          {
+            "key": "includeDirectories",
+            "label": "include 搜索目录（相对项目目录，逗号分隔）",
+            "type": "string",
+            "default": ""
+          }
+        ]
+      },
+      {
+        "id": "limits",
+        "title": "扫描限额",
+        "fields": [
+          {
+            "key": "maxFiles",
+            "label": "最大扫描文件数",
+            "type": "integer",
+            "default": 1000,
+            "minimum": 1,
+            "maximum": 10000
+          },
+          {
+            "key": "maxFileBytes",
+            "label": "单文件字节限额（同时受 Host 限制）",
+            "type": "integer",
+            "default": 4194304,
+            "minimum": 1,
+            "maximum": 33554432
+          },
+          {
+            "key": "maxTotalBytes",
+            "label": "总源码字节限额",
+            "type": "integer",
+            "default": 67108864,
+            "minimum": 1,
+            "maximum": 268435456
+          }
+        ]
+      }
+    ]
+  },
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {
+      "workspaceRead": true,
+      "workspaceList": true
+    }
+  },
+  "views": [
+    {
+      "id": "module-tree",
+      "title": "HDL 层级",
+      "renderer": "tree",
+      "viewMode": "session",
+      "dataProfile": "light"
+    },
+    {
+      "id": "module-details",
+      "title": "模块详情",
+      "renderer": "table",
+      "viewMode": "session",
+      "dataProfile": "heavy"
+    }
+  ],
+  "catalogActions": [
+    {
+      "id": "open-hdl-project",
+      "label": "选择 HDL 项目",
+      "target": "host",
+      "location": "catalog",
+      "variant": "primary",
+      "payload": {
+        "folderPicker": true,
+        "folderInputKey": "path",
+        "folderTitle": "选择 HDL 项目目录"
+      },
+      "hostAction": {
+        "type": "open_plugin_view",
+        "pluginId": "hdl-workbench",
+        "viewId": "module-tree",
+        "title": "HDL 层级",
+        "input": {}
+      }
+    }
+  ]
+}
