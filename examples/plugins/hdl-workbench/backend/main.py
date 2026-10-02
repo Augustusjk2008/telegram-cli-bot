@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hdl_parser import HdlParser
+from hdl_project import ProjectScanner, ScanOptions
 from plugin_sdk import PluginServer
 
 
@@ -24,6 +25,23 @@ def parse_source(params: dict) -> dict:
     return parser.parse(path, content).to_dict()
 
 
+def analyze_project(params: dict) -> dict:
+    if parser is None:
+        raise RuntimeError("HDL Workbench 尚未初始化")
+    host = server.context.get("host") or {}
+    workspace_root = host.get("workspaceRoot")
+    if not isinstance(workspace_root, str) or not workspace_root:
+        raise ValueError("Host 未提供 workspaceRoot")
+    path = params.get("path", ".")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("缺少 HDL 项目目录")
+    options = ScanOptions.from_config(server.config)
+    scanner = ProjectScanner(parser, server.host_call, workspace_root, options,
+                             host_read_bytes=(host.get("limits") or {}).get("readBytes", options.max_file_bytes))
+    return scanner.scan(path).to_dict()
+
+
 if __name__ == "__main__":
     server.register_handler("plugin.parse_source", parse_source)
+    server.register_handler("plugin.analyze_project", analyze_project)
     server.run(initialize=initialize)

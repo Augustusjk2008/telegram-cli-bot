@@ -187,6 +187,132 @@ endmodule
     assert {diagnostic.code for diagnostic in result.diagnostics} == {"unexpanded_macro_condition", "unelaborated_generate"}
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_literal_includes_keep_argument_text_and_directive_source_ranges(parser, hdl_module, newline):
+    source = newline.join([
+        '/* 中文😀 */ `include /* gap */ "目录/defs.vh" // after',
+        'module top;',
+        '  `include "nested.svh"',
+        'endmodule',
+        '',
+    ])
+    result = parser.parse("rtl/top.sv", source)
+
+    assert not result.incomplete
+    assert not result.diagnostics
+    assert not result.modules[0].incomplete
+    assert [(item.expression, item.target_path, item.contexts) for item in result.includes] == [
+        ('"目录/defs.vh"', "目录/defs.vh", ()), ('"nested.svh"', "nested.svh", ()),
+    ]
+    for include, line, column, directive in [
+        (result.includes[0], 1, len('/* 中文😀 */ '.encode("utf-16-le")) // 2 + 1,
+         '`include /* gap */ "目录/defs.vh"'),
+        (result.includes[1], 3, 3, '`include "nested.svh"'),
+    ]:
+        location = include.location
+        assert location.path == "rtl/top.sv"
+        assert (location.start_line, location.end_line) == (line, line)
+        assert location.start_column == column
+        assert location.end_column == column + len(directive.encode("utf-16-le")) // 2
+        assert source.encode("utf-8")[location.start_byte:location.end_byte].decode("utf-8") == directive
+    assert result.to_dict()["includes"][0]["target_path"] == "目录/defs.vh"
+    assert hdl_module.ParseResult(result.path, result.modules, result.diagnostics, result.incomplete).includes == ()
+
+
+def test_includes_retain_nested_macro_branch_contexts_inside_modules(parser):
+    result = parser.parse("branches.sv", """`ifdef FIRST
+`include "first.vh"
+`elsif SECOND
+module top;
+`ifndef INNER
+`include "second.svh"
+`else
+`include "other.svh"
+`endif
+endmodule
+`else
+`include "last.vh"
+`endif
+`include "always.vh"
+""")
+
+    assert not result.incomplete
+    assert [item.contexts for item in result.includes] == [
+        ("`ifdef FIRST",),
+        ("`elsif SECOND of `ifdef FIRST", "`ifndef INNER"),
+        ("`elsif SECOND of `ifdef FIRST", "`else of `ifndef INNER"),
+        ("`else of `ifdef FIRST",),
+        (),
+    ]
+    assert {item.code for item in result.diagnostics} == {"unexpanded_macro_condition"}
+
+
+def test_includes_in_comments_strings_and_text_macro_definitions_are_excluded(parser):
+    source = (
+        '// `include "line.vh"\n'
+        '/* `include "block.vh" */\n'
+        '`define FAKE `include "define.vh"\n'
+        '`define MULTI(x) `ifdef HIDDEN \\\n'
+        '  `include "continued.svh" \\\n'
+        '  `endif\n'
+        'module top;\n'
+        'initial $display("`include string");\n'
+        '`include "real.svh"\n'
+        'endmodule\n'
+    )
+    result = parser.parse("opaque.sv", source)
+
+    assert not result.incomplete
+    assert not result.diagnostics
+    include, = result.includes
+    assert (include.expression, include.target_path, include.contexts) == ('"real.svh"', "real.svh", ())
+    assert include.location.start_line == 9
+
+
+@pytest.mark.parametrize("expression", [
+    '`HEADER', '`MISSING', '`MAKE_HEADER(foo, "bar.svh")', '`MAKE_HEADER(\r\nfoo, "bar.svh")',
+    '`DIR``FILE', '`"file.svh`"',
+])
+def test_macro_include_paths_remain_unresolved_without_spurious_syntax_errors(parser, expression):
+    source = f'`define HEADER "defs.svh"\r\nmodule top;\r\n  `include {expression} // after\r\nendmodule\r\n'
+    result = parser.parse("macro.sv", source)
+
+    assert not result.incomplete
+    assert not result.modules[0].incomplete
+    include, = result.includes
+    assert (include.expression, include.target_path) == (expression, None)
+    assert source.encode("utf-8")[include.location.start_byte:include.location.end_byte].decode("utf-8") == f"`include {expression}"
+    diagnostic, = result.diagnostics
+    assert (diagnostic.code, diagnostic.severity, diagnostic.location) == ("unresolved_include", "warning", include.location)
+
+
+@pytest.mark.parametrize("expression", ['UNKNOWN', '<defs.svh>', '""', '', '"unterminated.svh'])
+def test_unknown_empty_and_invalid_include_paths_are_not_confirmed_literals(parser, expression):
+    result = parser.parse("unknown.sv", f'`include {expression}\nmodule good; endmodule\n')
+
+    include, = result.includes
+    assert (include.expression, include.target_path) == (expression, None)
+    assert any(item.code == "unresolved_include" and item.severity == "warning" for item in result.diagnostics)
+    assert result.modules[0].name == "good"
+    assert not result.modules[0].incomplete
+
+
+def test_macro_include_recovery_keeps_real_syntax_errors(parser):
+    result = parser.parse("broken.sv", """module broken;
+`include `HEADER
+assign value = ;
+endmodule
+module good; endmodule
+""")
+
+    assert result.incomplete
+    assert result.modules[0].incomplete
+    assert not result.modules[1].incomplete
+    assert [(item.code, item.location.start_line) for item in result.diagnostics] == [
+        ("unresolved_include", 2), ("syntax_error", 3),
+    ]
+
+
 def test_callable_scope_declarations_and_comment_modules_are_excluded(parser):
     result = parser.parse("scopes.sv", """// module fake(input bad); endmodule
 module visible(input logic a);

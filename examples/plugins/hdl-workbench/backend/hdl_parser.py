@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 from typing import TYPE_CHECKING, Iterator
 
-from hdl_models import Connection, Diagnostic, Instance, Module, Parameter, ParseResult, Port, SourceLocation
+from hdl_models import Connection, Diagnostic, IncludeDirective, Instance, Module, Parameter, ParseResult, Port, SourceLocation
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -143,6 +143,67 @@ class _Extraction:
                 continue
             self.macro_offsets.append(node.end_byte)
             self.macro_contexts.append(tuple(branch for _, branch in stack))
+
+    def includes(self, root: Node) -> tuple[IncludeDirective, ...]:
+        # Keep arguments atomic, including multiline macro calls; definitions are opaque.
+        atomic = {"comment", "text_macro_usage", "double_quoted_string", "string_literal",
+                  "include_compiler_directive_standard"}
+        tokens: list[Node] = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if node.type == "text_macro_definition":
+                continue
+            if node.type in atomic or not node.children:
+                tokens.append(node)
+            else:
+                stack.extend(reversed(node.children))
+
+        includes: list[IncludeDirective] = []
+        for index, directive in enumerate(tokens):
+            if directive.type != "directive_include":
+                continue
+            parent = directive.parent
+            compiler = parent if parent and parent.type == "include_compiler_directive" else None
+            row = directive.end_point.row
+            arguments: list[Node] = []
+            for cursor in range(index + 1, len(tokens)):
+                token = tokens[cursor]
+                if compiler is not None:
+                    if token.start_byte >= compiler.end_byte:
+                        break
+                elif token.start_point.row > row or token.type.startswith("directive_"):
+                    break
+                if token.type == "comment":
+                    continue
+                arguments.append(token)
+                row = token.end_point.row
+            end = arguments[-1].end_byte if arguments else directive.end_byte
+            expression = self.source[arguments[0].start_byte:end].decode("utf-8") if arguments else ""
+            target = None
+            if (len(arguments) == 1 and arguments[0].type == "double_quoted_string"
+                    and not arguments[0].has_error and expression.startswith('"') and expression.endswith('"')):
+                target = expression[1:-1] or None
+            include = IncludeDirective(expression, target, self.range_location(directive.start_byte, end),
+                                       self.contexts(directive))
+            includes.append(include)
+            if target is None:
+                self.diagnostics.append(Diagnostic(
+                    "unresolved_include", "include 路径未解析；请使用非空的字面量双引号路径，宏路径需先预处理", "warning", include.location,
+                ))
+                # Grammar 1.0.3 rejects valid macro arguments. Recover only errors
+                # contained in this directive, never an enclosing source region.
+                if (arguments and any(token.type in {"text_macro_usage", "`"} for token in arguments)
+                        and all(token.type in {"text_macro_usage", "`", "double_quoted_string"}
+                                and not token.has_error for token in arguments)):
+                    for token in (directive, *arguments):
+                        ancestor = token.parent
+                        while (ancestor is not None and ancestor.start_byte >= directive.start_byte
+                               and ancestor.end_byte <= end):
+                            if ancestor.is_error:
+                                self.recovered.add(ancestor.id)
+                            ancestor = ancestor.parent
+        return tuple(includes)
 
     def type_parts(self, node: Node | None) -> tuple[str, str]:
         if node is None:
@@ -414,6 +475,7 @@ class _Extraction:
 
     def extract(self, root: Node) -> ParseResult:
         self.macro_conditions(root)
+        includes = self.includes(root)
         definitions = [node for node in walk(root, stop=SCOPES) if node.type == "module_declaration"]
         parsed = [(self.module(node), node) for node in definitions]
         self.syntax_diagnostics(root)
@@ -424,7 +486,7 @@ class _Extraction:
                         for module, node in parsed if module is not None)
         diagnostics = tuple(sorted(self.diagnostics, key=lambda item: item.location.start_byte))
         return ParseResult(self.path, modules, diagnostics, any(module.incomplete for module in modules)
-                           or any(item.severity == "error" for item in diagnostics))
+                           or any(item.severity == "error" for item in diagnostics), includes)
 
 
 class _ArgumentNodes:

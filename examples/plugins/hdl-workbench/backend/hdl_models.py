@@ -79,11 +79,20 @@ class Diagnostic:
 
 
 @dataclass(frozen=True)
+class IncludeDirective:
+    expression: str
+    target_path: str | None
+    location: SourceLocation
+    contexts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ParseResult:
     path: str
     modules: tuple[Module, ...]
     diagnostics: tuple[Diagnostic, ...]
     incomplete: bool
+    includes: tuple[IncludeDirective, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
