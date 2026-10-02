@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>质量观察报告 / Quality Review — 2026 年第三季度</title>
+  <style>
+    body { font-family: "Microsoft YaHei", sans-serif; font-size: 11pt; color: #24364b; line-height: 1.35; }
+    h1 { font-size: 23pt; color: #153957; margin-top: 0; margin-bottom: 10pt; }
+    h2 { font-size: 15pt; color: #176c78; margin-top: 14pt; margin-bottom: 6pt; }
+    h3 { font-size: 12pt; margin-top: 10pt; margin-bottom: 4pt; }
+    p { margin-top: 0; margin-bottom: 7pt; }
+    li { margin-top: 0; margin-bottom: 3pt; }
+    ul, ol { margin-top: 3pt; margin-bottom: 7pt; }
+    .meta { color: #586b7e; font-size: 9pt; }
+    .caption { color: #586b7e; font-size: 9pt; margin-top: 4pt; margin-bottom: 8pt; }
+    .new-page { break-before: page; }
+    .note { color: #176c78; }
+    blockquote { margin-left: 12pt; margin-right: 0; margin-top: 6pt; margin-bottom: 8pt; color: #36546b; }
+    table { width: 170mm; border-collapse: collapse; margin-top: 5pt; margin-bottom: 8pt; font-size: 9pt; }
+    th, td { border: 1px solid #b9c8d3; padding: 5px; vertical-align: middle; }
+    th { background-color: #e5eef3; text-align: left; font-weight: bold; }
+    .number { text-align: right; }
+    pre { font-family: Consolas, monospace; font-size: 9pt; line-height: 1.2; background-color: #f0f4f7; margin-top: 5pt; margin-bottom: 9pt; }
+    code { font-family: Consolas, monospace; font-size: 9pt; }
+    a { color: #126d86; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>质量观察报告<br><span style="font-size: 15pt;">Quarterly Quality Review</span></h1>
+  <p class="meta">2026 年第三季度 · 示例项目 Aurora · 编制日期 2026-10-02 · 全部数据均为虚构</p>
+
+  <h2>1. 结论与行动 / Executive brief</h2>
+  <p>本期对 <strong>70 项交付检查</strong>进行复核：62 项通过、7 项待补充证据、1 项暂停。通过率为 <strong>88.6%</strong>。已完成的检查以可追溯证据为依据，待办条目保留负责人和下一步动作。</p>
+  <p><em>Review first, release with evidence.</em> 本报告将结论、核查方法和交付材料按阅读顺序组织；相关数据明细见同目录的长表样例。</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 55mm;">指标 / Metric</th>
+        <th style="width: 30mm; text-align: right;">本期</th>
+        <th style="width: 85mm;">解释 / Interpretation</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>已复核 / Reviewed</td><td class="number">70</td><td>七个领域，各包含十项检查。</td></tr>
+      <tr><td>通过 / Accepted</td><td class="number">62</td><td>证据齐全，可进入交付汇总。</td></tr>
+      <tr><td>待补充 / Follow-up</td><td class="number">7</td><td>每个领域一项，需补充复核记录。</td></tr>
+      <tr><td>暂停 / On hold</td><td class="number">1</td><td>归档校验未完成，暂缓关闭该项。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>2. 本周优先级 / Priorities</h2>
+  <ol>
+    <li><strong>补齐证据。</strong> 周三前完成七项待办。
+      <ul>
+        <li>为每条记录补充复核日期和证据编号。</li>
+        <li>由第二位复核人确认：内容可读、版本一致。</li>
+      </ul>
+    </li>
+    <li><strong>完成归档校验。</strong> 保留原始文件，核对清单与输出数量。</li>
+    <li><strong>发布审阅稿。</strong> 将未关闭事项标为 <u>待确认</u>，避免误读。</li>
+  </ol>
+
+  <p><img src="assets/process.png" alt="三个步骤：采集、复核、归档；按顺序流转。" width="620" height="114"></p>
+  <p class="caption">图 1 · 本地 PNG 流程插图。Acquisition → Review → Archive。</p>
+  <blockquote>交付标准：结论有依据，待办有归属，原始资料可追溯。</blockquote>
+
+  <h1 class="new-page">核查方法与趋势</h1>
+  <p class="meta">Methods &amp; trend · 第 2 部分</p>
+  <h2>3. 样式、计算与记录</h2>
+  <p class="note">每条记录使用相同结构，<span style="color: #ad5a22; font-weight: bold;">橙色文字表示仍需确认的结论</span>。这一段同时展示继承的字体和颜色，以及行内样式覆盖。</p>
+  <p>通过率 = 62 ÷ 70 × 100% ≈ 88.6%。演示符号：CO<sub>2</sub>、m<sup>2</sup>。文内标记使用 <code>status = "accepted"</code>，多行记录保留缩进与空白：</p>
+  <pre><code>review = {
+    "project": "Aurora 示例",
+    "accepted": 62,
+    "follow_up": 7,
+    "on_hold": 1
+}
+
+ratio = review["accepted"] / 70</code></pre>
+
+  <h3>3.1 责任与证据矩阵</h3>
+  <table>
+    <thead>
+      <tr>
+        <th rowspan="2" style="width: 42mm;">工作包 / Workstream</th>
+        <th colspan="2" style="width: 100mm; text-align: center;">核查证据 / Verification</th>
+        <th rowspan="2" style="width: 28mm;">负责人</th>
+      </tr>
+      <tr><th style="width: 30mm;">状态</th><th style="width: 70mm;">材料</th></tr>
+    </thead>
+    <tbody>
+      <tr><td rowspan="2">数据与接口</td><td>已核对</td><td>字段字典 / Field dictionary</td><td>林舟</td></tr>
+      <tr><td>待补充</td><td>边界用例记录 / Boundary notes</td><td>陈宁</td></tr>
+      <tr><td>报告输出</td><td>已核对</td><td>表格、图片与正文检查单</td><td>周岚</td></tr>
+      <tr><td>交付归档</td><td>暂停</td><td>待完成最终文件数量核对</td><td>王禾</td></tr>
+      <tr><td colspan="4">合并单元格说明：上方包含跨行工作包、分组表头；此行为跨四列备注。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.2 月度复核通过率 / Monthly acceptance</h3>
+  <svg xmlns="http://www.w3.org/2000/svg" width="620" height="152" viewBox="0 0 620 152" role="img" aria-label="七月通过率百分之八十一，八月百分之八十五，九月百分之八十八点六。">
+    <rect x="0" y="0" width="620" height="152" fill="#f2f6f8" />
+    <line x1="66" y1="119" x2="578" y2="119" stroke="#90a5b7" stroke-width="1" />
+    <rect x="118" y="39" width="78" height="80" fill="#7c9fb8" />
+    <rect x="270" y="35" width="78" height="84" fill="#46859a" />
+    <rect x="422" y="31" width="78" height="88" fill="#176c78" />
+    <text x="157" y="29" text-anchor="middle" font-family="Microsoft YaHei" font-size="15" fill="#24364b">81.0%</text>
+    <text x="309" y="25" text-anchor="middle" font-family="Microsoft YaHei" font-size="15" fill="#24364b">85.0%</text>
+    <text x="461" y="21" text-anchor="middle" font-family="Microsoft YaHei" font-size="15" fill="#24364b">88.6%</text>
+    <text x="157" y="140" text-anchor="middle" font-family="Microsoft YaHei" font-size="13" fill="#24364b">Jul / 七月</text>
+    <text x="309" y="140" text-anchor="middle" font-family="Microsoft YaHei" font-size="13" fill="#24364b">Aug / 八月</text>
+    <text x="461" y="140" text-anchor="middle" font-family="Microsoft YaHei" font-size="13" fill="#24364b">Sep / 九月</text>
+  </svg>
+  <p class="caption">图 2 · 静态内联 SVG；柱高以 0% 为基线。图表导出为图片，数值和说明仍可在正文中编辑。</p>
+
+  <h1 class="new-page">交付材料与复核清单</h1>
+  <p class="meta">Delivery notes · 第 3 部分</p>
+  <h2>4. 资料说明 / Evidence notes</h2>
+  <p>插图用于说明审阅环境，所有图形均为样例素材。交付包应同时保留原始 HTML 与相对路径资源，以便后续重新导出。</p>
+  <p><img src="assets/workbench.jpg" alt="工作台示意：左侧记录板，中间显示器，右侧资料卡。" width="620" height="202"></p>
+  <p class="caption">图 3 · 本地 JPEG 工作台示意图，无外部资源。</p>
+  <p><img src="data:image/png;base64,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" alt="示例状态标签：REVIEW COPY。" width="240" height="48"></p>
+  <p class="caption">图 4 · PNG data URI，图片字节随 HTML 保存。</p>
+
+  <h2>5. 审阅清单 / Review checklist</h2>
+  <ul>
+    <li><strong>内容：</strong>核对标题、段落、中文标点与英文术语；确认代码缩进。</li>
+    <li><strong>表格：</strong>核对表头、列宽、合并单元格和连续编号。
+      <ol>
+        <li>检查跨页位置有无文字裁切。</li>
+        <li>确认合并区域仍对应正确的数据和负责人。</li>
+      </ol>
+    </li>
+    <li><strong>资源：</strong>流程图、工作台图、状态标签与趋势图均应可见。</li>
+    <li><strong>分页：</strong>第二、第三部分另起一页；核对页尾标题与后文位置。</li>
+  </ul>
+
+  <h3>5.1 参考与下一步</h3>
+  <p>HTML 语义可参考 <a href="https://html.spec.whatwg.org/">HTML Living Standard</a>。该链接仅作为可点击的正文参考，转换时不读取网页内容。</p>
+  <p>下一步：完成七项证据补充，关闭归档校验，再由审阅人签署交付意见。<strong>Approval follows evidence.</strong></p>
+  <p class="meta">样例结束 · End of sample · 目标约三页，实际分页以 Word / LibreOffice 为准。</p>
+</body>
+</html>

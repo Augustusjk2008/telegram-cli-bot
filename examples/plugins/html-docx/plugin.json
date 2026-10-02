@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "id": "html-docx",
+  "name": "HTML To Word",
+  "version": "0.1.0",
+  "description": "将静态 HTML 报告导出为正文、列表和表格可编辑的 Word 文档。",
+  "enabled": true,
+  "config": {
+    "defaultFont": "Microsoft YaHei",
+    "defaultFontSizePt": 11,
+    "maxSourceBytes": 2097152,
+    "maxResourceBytes": 16777216,
+    "maxImagePixels": 16000000,
+    "maxElements": 10000,
+    "maxTableCells": 10000,
+    "conversionTimeoutSeconds": 45
+  },
+  "configSchema": {
+    "title": "HTML Word Settings",
+    "sections": [{
+      "id": "conversion", "title": "文档与转换限制",
+      "fields": [
+        {"key": "defaultFont", "label": "默认字体", "type": "string", "default": "Microsoft YaHei"},
+        {"key": "defaultFontSizePt", "label": "默认字号 pt", "type": "integer", "default": 11, "minimum": 6, "maximum": 72},
+        {"key": "maxSourceBytes", "label": "源文件字节上限", "type": "integer", "default": 2097152, "minimum": 1, "maximum": 2097152},
+        {"key": "maxResourceBytes", "label": "图片资源总字节上限", "type": "integer", "default": 16777216, "minimum": 1, "maximum": 16777216},
+        {"key": "maxImagePixels", "label": "单张图片像素上限", "type": "integer", "default": 16000000, "minimum": 1, "maximum": 16000000},
+        {"key": "maxElements", "label": "最大文档元素数", "type": "integer", "default": 10000, "minimum": 1, "maximum": 10000},
+        {"key": "maxTableCells", "label": "最大表格网格数", "type": "integer", "default": 10000, "minimum": 1, "maximum": 10000},
+        {"key": "conversionTimeoutSeconds", "label": "单次操作总超时秒数", "type": "integer", "default": 45, "minimum": 1, "maximum": 55}
+      ]
+    }]
+  },
+  "runtime": {"type": "python", "entry": "backend/main.py", "protocol": "jsonrpc-stdio",
+              "permissions": {"workspaceRead": true, "tempArtifacts": true}},
+  "views": [{"id": "html-docx", "title": "HTML 转 Word", "renderer": "table", "viewMode": "session", "dataProfile": "light"}],
+  "fileHandlers": [{"id": "html-source", "label": "HTML 转 Word", "extensions": [".html", ".htm"], "viewId": "html-docx"}]
+}
