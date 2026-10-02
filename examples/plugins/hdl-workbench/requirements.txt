@@ -1,0 +1,2 @@
+tree-sitter==0.26.0
+tree-sitter-verilog==1.0.3
