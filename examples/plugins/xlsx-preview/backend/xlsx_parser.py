@@ -13,6 +13,7 @@ PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS = {"x": SS_NS, "rel": PKG_REL_NS}
 ROW_LIMIT = 40
 COL_LIMIT = 12
+MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 CELL_REF_RE = re.compile(r"([A-Z]+)")
 
 
@@ -105,9 +106,67 @@ def _table_block(row_maps: list[dict[int, str]], width: int) -> dict[str, object
     }
 
 
+def _sheet_preview(
+    archive: ZipFile, target: str, shared_strings: list[str],
+) -> tuple[list[dict[int, str]], int, bool]:
+    row_maps: list[dict[int, str]] = []
+    max_width = 0
+    try:
+        source = archive.open(target)
+    except KeyError:
+        return row_maps, max_width, False
+
+    with source:
+        stack: list[ET.Element] = []
+        row_map: dict[int, str] | None = None
+        has_cells = False
+        for event, node in ET.iterparse(source, events=("start", "end")):
+            if event == "start":
+                stack.append(node)
+                if (
+                    len(stack) == 3
+                    and stack[0].tag == f"{{{SS_NS}}}worksheet"
+                    and stack[1].tag == f"{{{SS_NS}}}sheetData"
+                    and node.tag == f"{{{SS_NS}}}row"
+                ):
+                    row_map = {}
+                    has_cells = False
+                continue
+
+            more_rows = False
+            if row_map is not None:
+                if len(stack) == 4 and node.tag == f"{{{SS_NS}}}c":
+                    col = _column_index(str(node.attrib.get("r") or ""))
+                    if col > 0:
+                        has_cells = True
+                        max_width = max(max_width, col)
+                        if col <= COL_LIMIT and len(row_maps) < ROW_LIMIT:
+                            row_map[col] = _cell_text(node, shared_strings)
+                elif len(stack) == 3:
+                    if has_cells:
+                        if len(row_maps) == ROW_LIMIT:
+                            more_rows = True
+                        else:
+                            row_maps.append(row_map)
+                    row_map = None
+
+            # Keep cell descendants only until their display text has been read.
+            if row_map is None or len(stack) <= 4:
+                node.clear()
+                if len(stack) > 1:
+                    stack[-2].remove(node)
+            stack.pop()
+            if more_rows:
+                return row_maps, max_width, True
+
+    return row_maps, max_width, max_width > COL_LIMIT
+
+
 def parse_xlsx_document(path: str, content: bytes) -> dict[str, object]:
     try:
         with ZipFile(BytesIO(content)) as archive:
+            if sum(item.file_size for item in archive.infolist()) > MAX_UNCOMPRESSED_BYTES:
+                raise RuntimeError("XLSX 解压内容超过预览限制")
             shared_strings = _shared_strings(archive)
             sheets = _sheet_targets(archive)
             blocks: list[dict[str, object]] = []
@@ -115,32 +174,17 @@ def parse_xlsx_document(path: str, content: bytes) -> dict[str, object]:
 
             for sheet_name, target in sheets:
                 blocks.append({"type": "heading", "level": 2, "runs": [{"text": sheet_name}]})
-                sheet_root = _xml(archive, target)
-                row_maps: list[dict[int, str]] = []
-                max_width = 0
-
-                if sheet_root is not None:
-                    for row in sheet_root.findall("x:sheetData/x:row", NS):
-                        row_map: dict[int, str] = {}
-                        for cell in row.findall("x:c", NS):
-                            col = _column_index(str(cell.attrib.get("r") or ""))
-                            if col <= 0:
-                                continue
-                            row_map[col] = _cell_text(cell, shared_strings)
-                            max_width = max(max_width, col)
-                        if row_map:
-                            row_maps.append(row_map)
+                row_maps, max_width, truncated = _sheet_preview(archive, target, shared_strings)
 
                 if not row_maps:
                     blocks.append({"type": "paragraph", "runs": [{"text": "工作表为空。"}]})
                     continue
 
-                preview_rows = row_maps[:ROW_LIMIT]
                 preview_width = min(max_width or 1, COL_LIMIT)
-                previewed_rows += len(preview_rows)
-                blocks.append(_table_block(preview_rows, preview_width))
+                previewed_rows += len(row_maps)
+                blocks.append(_table_block(row_maps, preview_width))
 
-                if len(row_maps) > ROW_LIMIT or max_width > COL_LIMIT:
+                if truncated:
                     blocks.append({
                         "type": "paragraph",
                         "runs": [{"text": f"仅预览前 {ROW_LIMIT} 行、前 {COL_LIMIT} 列。"}],

@@ -7,6 +7,7 @@
   "enabled": true,
   "config": {
     "includeHidden": false,
+    "ignoreDirectories": ".git,node_modules,venv,.venv,__pycache__,dist,build",
     "maxFiles": 2000,
     "maxSymbolsPerFile": 200,
     "codeExtensions": ".py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.md,.cpp"
@@ -23,6 +24,12 @@
             "label": "包含隐藏目录",
             "type": "boolean",
             "default": false
+          },
+          {
+            "key": "ignoreDirectories",
+            "label": "忽略目录名（逗号分隔）",
+            "type": "string",
+            "default": ".git,node_modules,venv,.venv,__pycache__,dist,build"
           },
           {
             "key": "maxFiles",

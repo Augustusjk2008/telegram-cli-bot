@@ -8,6 +8,7 @@ from typing import Any
 
 SESSION_COUNTER = 0
 NEXT_REQUEST_ID = 9000
+SEARCH_RESULT_LIMIT = 200
 SESSIONS: dict[str, "SessionState"] = {}
 RUNTIME_CONTEXT: dict[str, Any] = {}
 
@@ -20,11 +21,14 @@ class SessionState:
     max_files: int
     max_symbols_per_file: int
     code_extensions: set[str]
+    ignored_directories: set[str]
     directory_entries: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     directory_children: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    directory_warnings: dict[str, str] = field(default_factory=dict)
     file_symbols: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     search_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     seen_files: set[str] = field(default_factory=set)
+    scan_limited: bool = False
 
 
 def emit(message: dict[str, Any]) -> None:
@@ -114,6 +118,11 @@ def build_session(session_id: str, context: dict[str, Any], input_payload: dict[
         max_files=bounded_int(config.get("maxFiles"), 2000, 200, 20000),
         max_symbols_per_file=bounded_int(config.get("maxSymbolsPerFile"), 200, 20, 1000),
         code_extensions=parse_extensions(config.get("codeExtensions")),
+        ignored_directories={
+            name.strip().casefold()
+            for name in str(config.get("ignoreDirectories") or "").split(",")
+            if name.strip()
+        },
     )
 
 
@@ -123,6 +132,19 @@ def should_include_file(session: SessionState, path: str) -> bool:
 
 def stats_text(file_count: int, symbol_count: int) -> str:
     return f"{file_count} 文件 · {symbol_count} 符号"
+
+
+def session_stats_text(
+    session: SessionState, file_count: int, symbol_count: int, *, result_limited: bool = False
+) -> str:
+    text = stats_text(file_count, symbol_count)
+    if session.directory_warnings:
+        text += " · 部分目录内容未完整显示"
+    if session.scan_limited:
+        text += f" · 扫描已达 {session.max_files} 文件上限"
+    if result_limited:
+        text += f" · 搜索已达 {SEARCH_RESULT_LIMIT} 结果上限"
+    return text
 
 
 def build_dir_node(path: str) -> dict[str, Any]:
@@ -245,6 +267,10 @@ def get_directory_entries(session: SessionState, path: str) -> list[dict[str, An
 
     host_path = "." if normalized == "." else normalized
     payload = host_result("host.workspace.list_dir", {"path": host_path}, "读取目录失败")
+    warnings: list[str] = []
+    if payload.get("truncated"):
+        warnings.append("目录条目已达读取上限，部分内容未显示。")
+    files_skipped = False
     items: list[dict[str, Any]] = []
     for entry in list(payload.get("entries") or []):
         if not isinstance(entry, dict):
@@ -256,17 +282,25 @@ def get_directory_entries(session: SessionState, path: str) -> list[dict[str, An
             continue
         relative_path = name if normalized == "." else f"{normalized}/{name}"
         if bool(entry.get("isDir")):
+            if name.casefold() in session.ignored_directories:
+                continue
             items.append({"name": name, "path": normalize_path(relative_path), "isDir": True})
             continue
         normalized_file = normalize_path(relative_path)
         if not should_include_file(session, normalized_file):
             continue
         if normalized_file not in session.seen_files and len(session.seen_files) >= session.max_files:
+            session.scan_limited = True
+            files_skipped = True
             continue
         session.seen_files.add(normalized_file)
         items.append({"name": name, "path": normalized_file, "isDir": False})
 
     items.sort(key=lambda item: (not item["isDir"], item["name"].lower()))
+    if files_skipped:
+        warnings.append(f"扫描已达 {session.max_files} 文件上限，部分文件未显示。")
+    if warnings:
+        session.directory_warnings[normalized] = " ".join(warnings)
     session.directory_entries[normalized] = items
     return items
 
@@ -286,6 +320,16 @@ def get_directory_children(session: SessionState, path: str) -> list[dict[str, A
         cached_symbols = session.file_symbols.get(relative_path)
         symbol_count = count_symbol_nodes(cached_symbols) if cached_symbols is not None else None
         nodes.append(build_file_node(relative_path, symbol_count))
+    warning = session.directory_warnings.get(normalized)
+    if warning:
+        nodes.append({
+            "id": f"notice:{normalized}",
+            "label": "目录内容未完整显示",
+            "kind": "heading",
+            "secondaryText": warning,
+            "badges": [{"text": "已截断", "tone": "warning"}],
+            "hasChildren": False,
+        })
     session.directory_children[normalized] = nodes
     session.search_cache.clear()
     return nodes
@@ -340,6 +384,8 @@ def collect_workspace_files(session: SessionState) -> list[str]:
             files.append(str(entry["path"]))
             if len(files) >= session.max_files:
                 break
+    if stack:
+        session.scan_limited = True
     return files
 
 
@@ -347,11 +393,10 @@ def search_workspace(session: SessionState, query: str) -> dict[str, Any]:
     keyword = query.strip().lower()
     if not keyword:
         root_nodes = get_directory_children(session, session.root_path)
-        visible_files = sum(1 for node in root_nodes if str(node.get("id") or "").startswith("file:"))
         return {
             "op": "search",
             "nodes": root_nodes,
-            "statsText": stats_text(visible_files, 0),
+            "statsText": root_stats(session, root_nodes),
         }
 
     cached = session.search_cache.get(keyword)
@@ -360,7 +405,9 @@ def search_workspace(session: SessionState, query: str) -> dict[str, Any]:
 
     nodes: list[dict[str, Any]] = []
     matched_symbol_count = 0
-    for path in collect_workspace_files(session):
+    files = collect_workspace_files(session)
+    result_limited = False
+    for index, path in enumerate(files):
         path_lower = path.lower()
         file_match = keyword in path_lower or keyword in PurePosixPath(path).name.lower()
         symbols = get_file_symbols(session, path)
@@ -372,13 +419,14 @@ def search_workspace(session: SessionState, query: str) -> dict[str, Any]:
             file_node["children"] = matched_symbols
             matched_symbol_count += count_symbol_nodes(matched_symbols)
         nodes.append(file_node)
-        if len(nodes) >= 200:
+        if len(nodes) >= SEARCH_RESULT_LIMIT:
+            result_limited = index + 1 < len(files)
             break
 
     payload = {
         "op": "search",
         "nodes": nodes,
-        "statsText": stats_text(len(nodes), matched_symbol_count),
+        "statsText": session_stats_text(session, len(nodes), matched_symbol_count, result_limited=result_limited),
     }
     session.search_cache[keyword] = payload
     return payload
@@ -397,7 +445,7 @@ def root_stats(session: SessionState, nodes: list[dict[str, Any]]) -> str:
         count_symbol_nodes(session.file_symbols.get(str(node.get("payload", {}).get("path") or ""), []))
         for node in nodes
     )
-    return stats_text(visible_files, visible_symbols)
+    return session_stats_text(session, visible_files, visible_symbols)
 
 
 def open_view(input_payload: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
