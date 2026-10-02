@@ -84,15 +84,24 @@ describe("HDL mock session contracts", () => {
     const plainDetails = await openDetails(client, tree.sessionId, plainCore);
     expect(details.sessionId).not.toBe(tree.sessionId);
     expect(details.sessionId).not.toBe(plainDetails.sessionId);
-    expect(details.initialWindow).toMatchObject({ offset: 0, limit: 2, totalRows: 3 });
+    expect(details.initialWindow).toMatchObject({ offset: 0, limit: 2, totalRows: 6 });
     expect(details.initialWindow.rows.map((row) => row.cells.name)).toEqual(["WIDTH", "clk"]);
     expect(details.initialWindow.rows[0].cells).toMatchObject({ default: "4", override: "8" });
     expect(plainDetails.initialWindow.rows[0].cells.override).toBe("");
     const query = (request: Record<string, unknown>) => client.queryPluginViewWindow("main", pluginId, details.sessionId, request) as Promise<TableWindowPayload>;
-    const last = await query({ offset: 2, limit: 2 });
-    expect(last.rows.map((row) => row.cells.name)).toEqual(["data"]);
-    expect(last.rows[0].cells.width).toBe("[WIDTH-1:0]");
-    expect((await query({ offset: 3, limit: 2 })).rows).toEqual([]);
+    const secondPage = await query({ offset: 2, limit: 2 });
+    expect(secondPage.rows.map((row) => row.cells.name)).toEqual(["data", "clk"]);
+    expect(secondPage.rows[0].cells.width).toBe("[WIDTH-1:0]");
+    expect(secondPage.rows[0].cells.evidence).toBe("");
+    expect((await query({ offset: 6, limit: 2 })).rows).toEqual([]);
+    const signals = await query({ offset: 0, limit: 10, query: "推断" });
+    expect(signals.totalRows).toBe(3);
+    expect(signals.rows.map((row) => [row.cells.kind, row.cells.name])).toEqual([["时钟候选", "clk"], ["复位候选", "reset_n"], ["复位候选", "reset_n"]]);
+    expect(signals.rows.every((row) => row.cells.context === "`ifdef ENABLE_REGISTERS")).toBe(true);
+    expect(signals.rows[0].cells.evidence).toContain("事件控制 always_ff @(posedge clk or negedge reset_n)");
+    expect(signals.rows[2].cells.evidence).toContain("复位分支 if (!reset_n)；q <= '0;");
+    const signalAction = await client.invokePluginAction("main", pluginId, { viewId: "module-details", sessionId: details.sessionId, actionId: "open-declaration", payload: { rowId: signals.rows[2].id, path: "/forged.sv", line: 999 } });
+    expect(signalAction.hostEffects).toEqual([{ type: "open_file", path: `${projectPath}/rtl/core.sv`, line: 11 }]);
     expect(await query({ offset: 0, limit: 1, query: "input", sort: { columnId: "name", direction: "desc" } })).toMatchObject({ totalRows: 2, rows: [{ cells: { name: "data" } }] });
     expect(await query({ offset: 0, limit: 2, query: "missing" })).toMatchObject({ totalRows: 0, rows: [] });
     const action = { viewId: "module-details", sessionId: details.sessionId, actionId: "open-declaration", payload: { rowId: details.initialWindow.rows[0].id, path: "/forged.sv", line: 999 } };
@@ -111,6 +120,94 @@ describe("HDL mock session contracts", () => {
     expect((await children(client, tree.sessionId, "group:all")).length).toBe(4);
     expect((await client.queryPluginViewWindow("main", pluginId, plainDetails.sessionId, { offset: 0, limit: 2 }) as TableWindowPayload).rows).toHaveLength(2);
   });
+});
+
+it("refreshes nested source via the toolbar, resets loaded children and keeps old details immutable", async () => {
+  const client = new MockWebBotClient();
+  const initialTree = await openTree(client);
+  const oldDetails = await openDetails(client, initialTree.sessionId, await coreInstance(client, initialTree.sessionId));
+  const sourcePath = `${projectPath}/rtl/core.sv`;
+  const source = await client.readFileFull("main", sourcePath);
+  const query = vi.spyOn(client, "queryPluginViewWindow");
+  const reopened = vi.fn();
+  const effects = vi.fn();
+  function RefreshFlow() {
+    const [view, setView] = useState<PluginRenderResult>(initialTree);
+    return <PluginViewSurface botAlias="main" client={client} view={view} inputPayload={{ path: projectPath }}
+      onReopenPluginView={async (target) => {
+        const next = await client.openPluginView("main", target.pluginId, target.viewId, target.input);
+        reopened(next);
+        setView(next);
+      }}
+      onApplyHostEffects={async (nextEffects) => {
+        effects(nextEffects);
+        for (const effect of nextEffects) {
+          if (effect.type === "open_plugin_view") setView(await client.openPluginView("main", effect.pluginId, effect.viewId, effect.input));
+        }
+      }} />;
+  }
+  const user = userEvent.setup();
+  render(<RefreshFlow />);
+  await user.click(screen.getByRole("button", { name: "展开 候选顶层" }));
+  await user.click(await screen.findByRole("button", { name: "展开 system" }));
+  await screen.findByRole("button", { name: "查看端口/参数 u_core : core" });
+  await client.writeFile("main", sourcePath, source.content.replace("WIDTH = 4", "WIDTH = 6").replace("  input logic [WIDTH-1:0] data", "  // nested edit\n\n  input logic [WIDTH:0] data"));
+  await user.click(screen.getByRole("button", { name: "刷新项目" }));
+  await waitFor(() => expect(reopened).toHaveBeenCalledOnce());
+  const refreshed = reopened.mock.calls[0][0] as Awaited<ReturnType<typeof openTree>>;
+  expect(refreshed.sessionId).not.toBe(initialTree.sessionId);
+  await expect(children(client, initialTree.sessionId, null)).rejects.toThrow("插件会话不存在");
+  expect(screen.queryByRole("button", { name: "查看端口/参数 u_core : core" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "展开 候选顶层" }));
+  await user.click(await screen.findByRole("button", { name: "展开 system" }));
+  expect(query.mock.calls.filter((call) => call[2] === refreshed.sessionId).map((call) => call[3])).toEqual([
+    { op: "children", nodeId: "group:tops" }, { op: "children", nodeId: "top:definition:rtl/system.sv:system" },
+  ]);
+  await user.click(await screen.findByRole("button", { name: "查看端口/参数 u_core : core" }));
+  await screen.findByRole("table");
+  expect(effects.mock.calls[0][0][0].input.parentSessionId).toBe(refreshed.sessionId);
+  const parameterRow = screen.getByRole("row", { name: /参数 WIDTH/ });
+  expect(within(parameterRow).getByRole("cell", { name: "6" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "下一页" }));
+  const dataRow = await screen.findByRole("row", { name: /端口 data/ });
+  expect(within(dataRow).getByRole("cell", { name: "[WIDTH:0]" })).toBeInTheDocument();
+  await user.click(within(dataRow).getByRole("button", { name: "打开声明" }));
+  await waitFor(() => expect(effects).toHaveBeenLastCalledWith([{ type: "open_file", path: sourcePath, line: 7 }]));
+  const oldWindow = await client.queryPluginViewWindow("main", pluginId, oldDetails.sessionId, { offset: 0, limit: 2 }) as TableWindowPayload;
+  expect(oldWindow.rows[0].cells.default).toBe("4");
+  expect(await client.invokePluginAction("main", pluginId, { viewId: "module-details", sessionId: oldDetails.sessionId, actionId: "open-declaration", payload: { rowId: oldWindow.rows[0].id } })).toMatchObject({ message: expect.stringContaining("源码已变化"), hostEffects: [] });
+  await client.disposePluginViewSession("main", pluginId, oldDetails.sessionId);
+  await expect(client.queryPluginViewWindow("main", pluginId, oldDetails.sessionId, { offset: 0, limit: 2 })).rejects.toThrow("插件会话不存在");
+});
+
+it("loads a large shallow hierarchy on demand and requests bounded table pages", async () => {
+  const client = new MockWebBotClient();
+  const tree = await openTree(client);
+  const root: TreeNode = { id: "large-system", label: "large-system", hasChildren: true, expandable: true };
+  const instances: TreeNode[] = Array.from({ length: 2000 }, (_, index) => ({ id: `instance-${index}`, label: `instance-${index}`, hasChildren: false }));
+  const details = await openDetails(client, tree.sessionId, await coreInstance(client, tree.sessionId));
+  const rows = Array.from({ length: 1201 }, (_, index) => ({ id: `port-${index}`, cells: { kind: "端口", name: `port-${index}` } }));
+  const query = vi.spyOn(client, "queryPluginViewWindow").mockImplementation(async (_bot, _plugin, sessionId, request) => {
+    if (sessionId === tree.sessionId) return { op: request.op === "search" ? "search" : "children", nodes: request.op === "search" ? instances.filter((node) => node.label === request.query) : instances };
+    const offset = Number(request.offset || 0);
+    const limit = Number(request.limit || 50);
+    return { offset, limit, totalRows: rows.length, rows: rows.slice(offset, offset + limit) };
+  });
+  const user = userEvent.setup();
+  const { rerender } = render(<PluginViewSurface botAlias="main" client={client} view={{ ...tree, summary: { ...tree.summary, roots: [root] }, initialWindow: { nodes: [root] } }} />);
+  expect(query).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "展开 large-system" }));
+  await screen.findByRole("button", { name: "instance-0" });
+  expect(within(screen.getByTestId("plugin-tree-virtual-list")).getAllByRole("button").length).toBeLessThan(100);
+  expect(screen.queryByRole("button", { name: "instance-1999" })).not.toBeInTheDocument();
+  await user.type(screen.getByRole("textbox", { name: "搜索" }), "instance-1999");
+  await screen.findByRole("button", { name: "instance-1999" });
+  rerender(<PluginViewSurface botAlias="main" client={client} view={{ ...details, summary: { ...details.summary, totalRows: rows.length, defaultPageSize: 50 }, initialWindow: { offset: 0, limit: 50, totalRows: rows.length, rows: rows.slice(0, 50) } }} />);
+  expect(screen.getAllByRole("row")).toHaveLength(51);
+  await user.click(screen.getByRole("button", { name: "下一页" }));
+  await screen.findByRole("cell", { name: "port-50" });
+  expect(screen.queryByRole("cell", { name: "port-0" })).not.toBeInTheDocument();
+  expect(query).toHaveBeenLastCalledWith("main", pluginId, details.sessionId, { offset: 50, limit: 50, sort: undefined, query: "" }, expect.any(AbortSignal));
 });
 
 function HdlFlow({ client, plugins, onEffects }: { client: MockWebBotClient; plugins: PluginSummary[]; onEffects: (effects: HostEffect[]) => void }) {
@@ -152,6 +249,6 @@ it("connects catalog folder selection, lazy hierarchy, details paging and declar
   await user.click(screen.getByRole("button", { name: "下一页" }));
   const row = await screen.findByRole("row", { name: /端口 data/ });
   await user.click(within(row).getByRole("button", { name: "打开声明" }));
-  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("main", pluginId, expect.objectContaining({ viewId: "module-details", actionId: "open-declaration", payload: { rowId: "definition:rtl/core.sv:core:端口:data" } })));
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("main", pluginId, expect.objectContaining({ viewId: "module-details", actionId: "open-declaration", payload: { rowId: expect.any(String) } })));
   expect(effects).toHaveBeenLastCalledWith([{ type: "open_file", path: `${projectPath}/rtl/core.sv`, line: 5 }]);
 });

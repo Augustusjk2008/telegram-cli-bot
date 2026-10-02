@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 import pytest
 
@@ -52,6 +53,32 @@ def detail_input(views, opened, node):
 
 def details(views, opened, node):
     return views.open_view({"viewId": "module-details", "input": detail_input(views, opened, node)})
+
+
+def test_signal_rows_show_inference_evidence_and_navigate_each_trusted_occurrence(make_views):
+    source = """`ifdef ACTIVE
+module sequential(input logic clk, rst_n, data, output logic q);
+always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= 1'b0;
+    else q <= data;
+end
+endmodule
+`endif
+"""
+    views, _host = make_views({"rtl/sequential.sv": source})
+    opened = tree(views)
+    table = details(views, opened, module_node(views, opened, "sequential"))
+    window = views.get_view_window({"sessionId": table["sessionId"], "query": "候选"})
+    assert window["totalRows"] == 3
+    assert [(row["cells"]["kind"], row["cells"]["name"]) for row in window["rows"]] == [
+        ("时钟候选", "clk"), ("复位候选", "rst_n"), ("复位候选", "rst_n"),
+    ]
+    assert len({row["id"] for row in window["rows"]}) == 3
+    for row, (line, expression) in zip(window["rows"], [(3, "clk"), (3, "rst_n"), (4, "rst_n")]):
+        assert row["cells"]["evidence"] and row["cells"]["context"] == "`ifdef ACTIVE"
+        column = source.splitlines()[line - 1].index(expression) + 1
+        effect, = action(views, table, "open-declaration", rowId=row["id"], path="/forged.sv", line=999)["hostEffects"]
+        assert effect == {"type": "open_file", "path": "/workspace/project/rtl/sequential.sv", "line": line, "column": column}
 
 
 def test_tree_is_lazy_and_occurrence_ids_preserve_independent_cycle_paths(make_views):
@@ -163,7 +190,7 @@ def test_table_pages_query_and_sort_preserve_trusted_row_ids(make_views):
     opened = tree(views)
     table = details(views, opened, module_node(views, opened, "ports"))
     assert [column["id"] for column in table["summary"]["columns"]] == [
-        "kind", "name", "direction", "type", "width", "default", "override", "context", "source",
+        "kind", "name", "direction", "type", "width", "default", "override", "context", "evidence", "source",
     ]
     assert table["summary"]["totalRows"] == 60 and len(table["initialWindow"]["rows"]) == 50
     page = views.get_view_window({"sessionId": table["sessionId"], "offset": 50, "limit": 999})
@@ -358,3 +385,42 @@ def test_parser_only_initialization_cannot_acquire_workspace_scope_from_a_reques
         views.open_view({"viewId": "module-tree", "input": {"path": "project"},
                          "context": {"host": {"workspaceRoot": "/workspace"}}})
     assert not host.calls and not views._sessions and not views._resources
+
+
+def test_large_hierarchy_bounds_each_window_and_preserves_search_paging_and_cleanup(make_views, hdl_views):
+    count = hdl_views.CHILD_LIMIT + 25
+    source = "module top;\n" + "\n".join(f"leaf u{i}();" for i in range(count)) + "\nendmodule\n"
+    source += "module leaf(\n" + ",\n".join(f"input logic p{i}" for i in range(600)) + "\n); endmodule"
+    views, _host = make_views({"large.sv": source})
+    opened = tree(views)
+    assert len(views._sessions[opened["sessionId"]].nodes) == 3
+    top = module_node(views, opened, "top")
+    window = children(views, opened, top["id"])
+    assert len(window) == hdl_views.CHILD_LIMIT + 1
+    assert window[-1]["badges"] == [{"text": "窗口截断", "tone": "warning"}]
+    assert not window[-1]["hasChildren"] and "搜索" in window[-1]["secondaryText"]
+    assert len(json.dumps(window, ensure_ascii=False).encode("utf-8")) < 8 * 1024 * 1024
+    search = views.get_view_window({"sessionId": opened["sessionId"], "op": "search", "query": f"u{count - 1}"})
+    late, = search["nodes"]
+    table = details(views, opened, late)
+    assert table["summary"]["totalRows"] == 600 and len(table["initialWindow"]["rows"]) == 50
+    page = views.get_view_window({"sessionId": table["sessionId"], "offset": 550, "limit": 500})
+    assert len(page["rows"]) == 50 and page["rows"][-1]["cells"]["name"] == "p599"
+    resource = views._sessions[table["sessionId"]].resource
+    views.dispose_view({"sessionId": opened["sessionId"]})
+    assert resource.references == 1
+    views.dispose_view({"sessionId": table["sessionId"]})
+    assert resource.references == 0 and not views._sessions and not views._resources
+
+
+def test_project_summary_and_diagnostics_expose_missing_references_and_scan_truncation(make_views):
+    views, _host = make_views({
+        "a.v": "module top; absent unresolved(); endmodule",
+        "b.v": "module omitted; endmodule",
+    }, {"maxFiles": 1})
+    opened = tree(views)
+    assert "分析不完整" in opened["summary"]["statsText"]
+    assert "1 个未解析引用" in opened["summary"]["statsText"]
+    diagnostic_root = opened["initialWindow"]["nodes"][2]
+    codes = {badge["text"] for node in children(views, opened, diagnostic_root["id"]) for badge in node["badges"]}
+    assert {"missing_module", "file_count_limit"} <= codes

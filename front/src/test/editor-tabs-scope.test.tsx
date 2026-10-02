@@ -33,6 +33,31 @@ function pluginSession(sessionId: string): PluginRenderResult {
 }
 
 describe("plugin view sessions", () => {
+  test("definitions and refreshed parent sessions keep independent tabs with stable input identity", async () => {
+    const client = new MockWebBotClient();
+    const open = vi.spyOn(client, "openPluginView");
+    for (const session of ["first", "other-definition", "refreshed", "reopened"]) {
+      open.mockResolvedValueOnce(pluginSession(session));
+    }
+    const dispose = vi.spyOn(client, "disposePluginViewSession");
+    const { result } = renderHook(() => useEditorTabs({ botAlias: "main", client }));
+    const inputs = [
+      { path: "src/index.py", definitionId: "first", parentSessionId: "old" },
+      { path: "src/index.py", definitionId: "other", parentSessionId: "old" },
+      { path: "src/index.py", definitionId: "first", parentSessionId: "new" },
+      { parentSessionId: "new", definitionId: "first", path: "src/index.py" },
+    ];
+    for (const input of inputs) {
+      await act(async () => { await result.current.openPluginView({ ...pluginTarget, input }); });
+    }
+    expect(result.current.tabs.map((tab) => tab.pluginView?.mode === "session" && tab.pluginView.sessionId))
+      .toEqual(["first", "other-definition", "reopened"]);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledWith("main", "demo-plugin", "refreshed");
+    act(() => { result.current.closeAllTabs(); });
+    expect(dispose).toHaveBeenCalledTimes(4);
+  });
+
   test("a late response for a closed plugin tab is discarded and its server session is disposed", async () => {
     const client = new MockWebBotClient();
     const response = deferred<PluginRenderResult>();

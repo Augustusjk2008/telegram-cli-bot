@@ -101,7 +101,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
   }, [deferredQuery, snapshot, sort, summary.columns]);
   const displayRows = session ? windowState.rows : snapshotRows;
   const totalRows = session
-    ? Number(windowState.totalRows || summary.totalRows || 0)
+    ? Number(windowState.totalRows ?? summary.totalRows ?? 0)
     : snapshotRows.length;
   const pageIndex = Math.floor(offset / pageSize) + 1;
   const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));

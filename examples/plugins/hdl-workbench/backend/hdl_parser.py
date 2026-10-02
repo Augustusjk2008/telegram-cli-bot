@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 from typing import TYPE_CHECKING, Iterator
 
-from hdl_models import Connection, Diagnostic, IncludeDirective, Instance, Module, Parameter, ParseResult, Port, SourceLocation
+from hdl_models import Connection, Diagnostic, IncludeDirective, Instance, Module, Parameter, ParseResult, Port, SignalCandidate, SourceLocation
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -431,6 +431,225 @@ class _Extraction:
             ))
         return result
 
+    @staticmethod
+    def semantic_children(node: Node) -> list[Node]:
+        return [child for child in node.named_children if child.type != "comment"]
+
+    def unwrap(self, node: Node) -> Node:
+        wrappers = {"statement", "statement_item", "statement_or_null", "cond_predicate", "expression",
+                    "primary", "primary_literal", "integral_number", "mintypmax_expression"}
+        while node.type in wrappers:
+            children = self.semantic_children(node)
+            if len(children) != 1:
+                break
+            node = children[0]
+        return node
+
+    def syntax_key(self, node: Node) -> tuple[str, ...]:
+        tokens = []
+        stack = [self.unwrap(node)]
+        while stack:
+            item = stack.pop()
+            if item.type == "comment":
+                continue
+            if item.children:
+                stack.extend(reversed(item.children))
+            else:
+                tokens.append(self.text(item))
+        return tuple(tokens)
+
+    def simple_signal(self, node: Node) -> Node | None:
+        node = self.unwrap(node)
+        if node.has_error:
+            return None
+        if node.type in IDENTIFIERS:
+            return node
+        children = self.semantic_children(node)
+        if (node.type == "primary" and len(children) == 2 and children[0].type in IDENTIFIERS
+                and children[1].type == "select1" and children[1].named_children
+                and all(item.type == "bit_select1" for item in children[1].named_children)):
+            return node
+        return None
+
+    def number_literal(self, node: Node) -> str | None:
+        node = self.unwrap(node)
+        original = node
+        while node.type == "expression" and not node.has_error:
+            children = self.semantic_children(node)
+            if (len(children) != 2 or children[0].type != "unary_operator"
+                    or self.text(children[0]) not in {"+", "-"}):
+                break
+            node = self.unwrap(children[1])
+        if not node.has_error and node.type in {"binary_number", "octal_number", "hex_number", "decimal_number",
+                                               "unsigned_number", "unbased_unsized_literal"}:
+            return self.text(original)
+        return None
+
+    def boolean_literal(self, node: Node) -> bool:
+        text = self.number_literal(node)
+        if text is None:
+            return False
+        text = text.lower().replace("_", "")
+        if text.startswith(("+", "-")):
+            return False
+        if text in {"'0", "'1"}:
+            return True
+        _, quote, digits = text.partition("'")
+        base = 10
+        if quote:
+            digits = digits.removeprefix("s")
+            if not digits or digits[0] not in "bodh":
+                return False
+            base, digits = {"b": 2, "o": 8, "d": 10, "h": 16}[digits[0]], digits[1:]
+        else:
+            digits = text
+        try:
+            return int(digits, base) in {0, 1}
+        except ValueError:
+            return False
+
+    def reset_guard(self, node: Node) -> Node | None:
+        node = self.unwrap(node)
+        signal = self.simple_signal(node)
+        if signal is not None:
+            return signal
+        children = self.semantic_children(node)
+        if (node.type == "expression" and len(children) == 2 and children[0].type == "unary_operator"
+                and self.text(children[0]) in {"!", "~"}):
+            return self.simple_signal(children[1])
+        if (node.type == "expression" and len(children) == 2
+                and any(child.type in {"==", "!=", "===", "!=="} for child in node.children)):
+            for signal_node, constant in (children, list(reversed(children))):
+                if self.boolean_literal(constant):
+                    return self.simple_signal(signal_node)
+        return None
+
+    def block_statements(self, node: Node) -> list[Node] | None:
+        statements = []
+        for child in self.semantic_children(node):
+            if child.type in {"statement", "statement_or_null"}:
+                statements.append(child)
+            elif child.type not in IDENTIFIERS | {"block_item_declaration"}:
+                return None
+        return statements
+
+    def branch_assignments(self, node: Node, *, conditional: bool) -> list[tuple[Node, Node, Node]] | None:
+        assignments = []
+        stack = [node]
+        while stack:
+            item = self.unwrap(stack.pop())
+            if item.has_error:
+                return None
+            if item.type == "seq_block":
+                statements = self.block_statements(item)
+                if statements is None:
+                    return None
+                stack.extend(reversed(statements))
+                continue
+            if conditional and item.type == "conditional_statement":
+                stack.extend(reversed([child for child in item.named_children if child.type == "statement_or_null"]))
+                continue
+            if item.type == "blocking_assignment":
+                item = first(item, {"operator_assignment"})
+                if item is None or self.text(first(item, {"assignment_operator"})) != "=":
+                    return None
+            if item.type not in {"operator_assignment", "nonblocking_assignment", "clocking_drive"}:
+                return None
+            left = first(item, {"variable_lvalue", "clockvar_expression"})
+            right = first(item, {"expression"})
+            if (left is None or right is None or any(child.type not in {"variable_lvalue", "clockvar_expression",
+                    "expression", "assignment_operator", "comment"} for child in item.named_children)):
+                return None
+            assignments.append((item, left, right))
+        return assignments
+
+    def reset_branch(self, body: Node) -> tuple[Node, str, str] | None:
+        branch = self.unwrap(body)
+        while branch.type == "seq_block":
+            statements = self.block_statements(branch)
+            if statements is None or len(statements) != 1:
+                return None
+            branch = self.unwrap(statements[0])
+        if branch.type != "conditional_statement" or branch.has_error:
+            return None
+        guard = first(branch, {"cond_predicate"})
+        alternatives = [item for item in branch.named_children if item.type == "statement_or_null"]
+        if guard is None or len(alternatives) != 2:
+            return None
+        signal = self.reset_guard(guard)
+        reset = self.branch_assignments(alternatives[0], conditional=False)
+        normal = self.branch_assignments(alternatives[1], conditional=True)
+        if signal is None or not reset or not normal:
+            return None
+        if any((literal := self.number_literal(right)) is None or any(char in literal.lower() for char in "xz?")
+               for _, _, right in reset):
+            return None
+        targets = {self.syntax_key(left) for _, left, _ in reset}
+        if not targets.issubset({self.syntax_key(left) for _, left, _ in normal}):
+            return None
+        if not any(self.syntax_key(left) in targets and self.number_literal(right) is None
+                   and any(item.type in IDENTIFIERS for item in walk(right, stop={"text_macro_usage"}))
+                   and self.syntax_key(right) != self.syntax_key(left) for _, left, right in normal):
+            return None
+        proof = "; ".join(self.text(assignment) for assignment, _, _ in reset[:3])
+        if len(reset) > 3:
+            proof += f"; …（{len(reset)} 个赋值）"
+        return signal, self.text(guard), proof
+
+    def signals(self, process: Node) -> tuple[SignalCandidate, ...]:
+        keyword = self.text(first(process, {"always_keyword"}))
+        if keyword not in {"always", "always_ff"}:
+            return ()
+        statement = first(process, {"statement"})
+        timing = self.unwrap(statement) if statement else None
+        if timing is None or timing.type != "procedural_timing_control_statement":
+            return ()
+        control = first(timing, {"event_control"})
+        body = first(timing, {"statement_or_null"})
+        if control is None or body is None:
+            return ()
+        events = []
+        for event in walk(control):
+            if event.type != "event_expression":
+                continue
+            edge = first(event, {"edge_identifier"})
+            if edge is None or edge.has_error or self.text(edge) not in {"posedge", "negedge", "edge"}:
+                continue
+            expression = first(event, {"expression"})
+            # Grammar 1.0.3 can recover "clk iff" as ERROR and expose the gate
+            # as the direct expression. Only the AST expression before iff is an edge.
+            iff = next((item for item in walk(event) if any(child.type == "iff" for child in item.children)), None)
+            if iff is not None:
+                token = next(child for child in iff.children if child.type == "iff")
+                expression = next((item for item in walk(event) if item.type == "expression"
+                                   and edge.end_byte <= item.start_byte and item.end_byte <= token.start_byte), None)
+            if expression is not None and not expression.has_error:
+                events.append((edge, expression))
+        if not events:
+            return ()
+        reset = self.reset_branch(body)
+        reset_key = self.syntax_key(reset[0]) if reset else None
+        matching = [self.simple_signal(expression) is not None and self.syntax_key(expression) == reset_key
+                    for _, expression in events]
+        ambiguous = sum(not item for item in matching) > 1 or control.has_error
+        candidates = []
+        for (edge, expression), is_reset in zip(events, matching):
+            evidence = f"{keyword} {self.text(control)}；边沿 {self.text(edge)}"
+            if is_reset:
+                evidence += f"；匹配首优先分支 if ({reset[1]})：{reset[2]}（异步复位候选）"
+            elif ambiguous:
+                evidence += "；多边沿或语法不完整，时钟/异步控制分类不确定"
+            else:
+                evidence += "（时钟候选）"
+            candidates.append(SignalCandidate("reset" if is_reset else "clock", self.text(expression), evidence,
+                                              self.location(expression), self.contexts(expression)))
+        if reset:
+            signal, guard, proof = reset
+            mode = "异步" if any(matching) else "同步"
+            evidence = f"{keyword} 首优先分支 if ({guard})：{proof}；else 更新相同目标（{mode}复位候选）"
+            candidates.append(SignalCandidate("reset", self.text(signal), evidence, self.location(signal), self.contexts(signal)))
+        return tuple(candidates)
+
     def module(self, node: Node) -> Module | None:
         header = first(node, {"module_header"})
         identifier = first(header, IDENTIFIERS) if header else None
@@ -457,8 +676,9 @@ class _Extraction:
         for item in body:
             if item.type in {"generate_region", "if_generate_construct", "case_generate_construct", "loop_generate_construct"}:
                 self.warn(item, "unelaborated_generate", "generate 未展开；实例及条件保留源码表达式")
+        signals = tuple(signal for item in body if item.type == "always_construct" for signal in self.signals(item))
         return Module(self.text(identifier), self.location(identifier), tuple(ports), tuple(parameters), tuple(instances),
-                      False, self.contexts(identifier))
+                      False, self.contexts(identifier), signals)
 
     def syntax_diagnostics(self, root: Node) -> None:
         stack = [root]

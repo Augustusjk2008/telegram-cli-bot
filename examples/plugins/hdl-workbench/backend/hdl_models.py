@@ -60,6 +60,15 @@ class Instance:
 
 
 @dataclass(frozen=True)
+class SignalCandidate:
+    kind: str
+    expression: str
+    evidence: str
+    location: SourceLocation
+    contexts: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Module:
     name: str
     location: SourceLocation
@@ -68,6 +77,7 @@ class Module:
     instances: tuple[Instance, ...]
     incomplete: bool
     contexts: tuple[str, ...] = ()
+    signals: tuple[SignalCandidate, ...] = ()
 
 
 @dataclass(frozen=True)

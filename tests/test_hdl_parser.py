@@ -313,6 +313,150 @@ module good; endmodule
     ]
 
 
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_signal_sample_preserves_async_and_sync_occurrence_evidence_and_module_api(parser, hdl_module, newline):
+    source = (PLUGIN / "samples/signals.sv").read_bytes().replace(b"\n", newline)
+    result = parser.parse("rtl/signals.sv", source)
+
+    assert not result.incomplete and not result.diagnostics
+    asynchronous, synchronous = result.modules
+    assert [(item.kind, item.expression, item.location.start_line) for item in asynchronous.signals] == [
+        ("clock", "clk", 8), ("reset", "rst_n", 8), ("reset", "rst_n", 9),
+    ]
+    assert [(item.kind, item.expression, item.location.start_line) for item in synchronous.signals] == [
+        ("clock", "clk", 22), ("reset", "clear", 23),
+    ]
+    assert "negedge rst_n" in asynchronous.signals[1].evidence
+    assert "if (!rst_n)" in asynchronous.signals[2].evidence
+    assert "value <= '0" in asynchronous.signals[2].evidence
+    assert "value <= 8'h00" in synchronous.signals[1].evidence
+    for module in result.modules:
+        for signal in module.signals:
+            assert source[signal.location.start_byte:signal.location.end_byte].decode("utf-8") == signal.expression
+            assert signal.contexts == ()
+    legacy = hdl_module.Module(asynchronous.name, asynchronous.location, asynchronous.ports,
+                              asynchronous.parameters, asynchronous.instances, False, asynchronous.contexts)
+    assert legacy.signals == ()
+    assert result.to_dict()["modules"][0]["signals"][0]["kind"] == "clock"
+
+
+def test_reset_candidates_require_literal_initialization_and_normal_first_priority_alternatives(parser):
+    result = parser.parse("branches.sv", """module branches;
+always @(posedge clk) if (control == 1'b1) q <= 0; else q <= data;
+always @(posedge clk) if (signed_clear) q = -1; else q = data;
+always @(posedge clk) if (enable) q <= data; else q <= q;
+always @(posedge clk) if (select) q <= first; else q <= second;
+always @(posedge clk) if (constant_select) q <= 0; else q <= 1;
+always @(posedge clk) if (constant_expression_select) q <= 0; else q <= 1 + 1;
+always @(posedge clk) if (clear_enable) q <= 0; else q <= (q);
+always @(posedge clk) if (enable) q <= data; else if (reset) q <= 0;
+always @(posedge clk) if (reset && enable) q <= 0; else q <= data;
+always @(posedge clk) if (reset) q <= RESET_VALUE; else q <= data;
+always @(posedge clk) begin q <= data; if (reset) q <= 0; else q <= data; end
+endmodule
+""")
+
+    assert not result.incomplete
+    signals = result.modules[0].signals
+    assert [item.expression for item in signals if item.kind == "reset"] == ["control", "signed_clear"]
+    assert len([item for item in signals if item.kind == "clock"]) == 11
+    assert "control == 1'b1" in next(item.evidence for item in signals if item.kind == "reset")
+
+
+def test_multiple_edge_events_remain_ambiguous_and_iff_gates_are_not_edge_signals(parser):
+    result = parser.parse("events.sv", """module events;
+always @(posedge event_a, negedge event_b) q <= data;
+always @(posedge same or negedge same) r <= data;
+always_ff @(posedge clock iff enable) s <= data;
+endmodule
+""")
+
+    signals = result.modules[0].signals
+    assert [(item.kind, item.expression) for item in signals] == [
+        ("clock", "event_a"), ("clock", "event_b"), ("clock", "same"), ("clock", "same"), ("clock", "clock"),
+    ]
+    assert all("分类不确定" in item.evidence for item in signals[:4])
+    assert signals[2].location.start_byte != signals[3].location.start_byte
+    assert "iff enable" in signals[-1].evidence
+
+
+def test_indexed_async_guard_matching_uses_syntax_and_preserves_raw_expressions(parser):
+    source = """module indexed;
+always_ff @(posedge clocks[IDX] or posedge other or negedge resets [0]) begin
+  if (~resets[0]) q[0] <= 1'b0;
+  else q[0] <= data[0];
+end
+endmodule
+"""
+    result = parser.parse("indexed.sv", source)
+
+    assert not result.incomplete
+    signals = result.modules[0].signals
+    assert [(item.kind, item.expression) for item in signals] == [
+        ("clock", "clocks[IDX]"), ("clock", "other"), ("reset", "resets [0]"), ("reset", "resets[0]"),
+    ]
+    assert all("分类不确定" in item.evidence for item in signals[:2])
+    for signal in signals:
+        assert result.path == signal.location.path
+        assert signal.expression == source.encode()[signal.location.start_byte:signal.location.end_byte].decode()
+
+
+def test_signal_process_scope_boundaries_keep_only_static_macro_generate_events(parser):
+    result = parser.parse("scopes.sv", """`ifdef ACTIVE
+module scopes;
+function automatic logic helper(input logic x);
+  @(posedge function_clock) helper = x;
+endfunction
+task helper_task;
+  @(posedge task_clock) if (task_reset) q <= 0; else q <= data;
+endtask
+initial begin @(posedge initial_clock); q <= 0; end
+always_comb if (comb_reset) q = 0; else q = data;
+always @* if (wildcard_reset) q = 0; else q = data;
+always @(level_reset) if (level_reset) q = 0; else q = data;
+generate if (WIDTH > 1) begin : wide
+  always_ff @(posedge generated_clock) begin
+    if (!generated_reset) q <= '0; else q <= data;
+  end
+end endgenerate
+always @(posedge outer_clock) begin @(posedge nested_clock); q <= data; end
+endmodule
+`endif
+""")
+
+    assert not result.incomplete
+    signals = result.modules[0].signals
+    assert [(item.kind, item.expression) for item in signals] == [
+        ("clock", "generated_clock"), ("reset", "generated_reset"), ("clock", "outer_clock"),
+    ]
+    assert signals[0].contexts == signals[1].contexts == ("`ifdef ACTIVE", "generate", "if (WIDTH > 1)")
+    assert signals[2].contexts == ("`ifdef ACTIVE",)
+
+
+def test_signal_locations_are_real_utf8_ranges_and_utf16_columns_with_crlf(parser):
+    source = (
+        "module positions;\r\n"
+        "/* 中文😀 */ always_ff @(posedge clocks[IDX] or negedge resets[0]) begin\r\n"
+        "  /* 中文😀 */ if (!resets[0]) q <= 0; else q <= data;\r\n"
+        "end\r\nendmodule\r\n"
+    )
+    result = parser.parse("中文.sv", source)
+
+    assert not result.incomplete
+    assert len(result.modules[0].signals) == 3
+    expected = [
+        ("clocks[IDX]", 2, "/* 中文😀 */ always_ff @(posedge "),
+        ("resets[0]", 2, "/* 中文😀 */ always_ff @(posedge clocks[IDX] or negedge "),
+        ("resets[0]", 3, "  /* 中文😀 */ if (!"),
+    ]
+    for signal, (expression, line, prefix) in zip(result.modules[0].signals, expected):
+        location = signal.location
+        assert (location.path, location.start_line, location.end_line) == ("中文.sv", line, line)
+        assert location.start_column == len(prefix.encode("utf-16-le")) // 2 + 1
+        assert location.end_column == location.start_column + len(expression)
+        assert source.encode()[location.start_byte:location.end_byte].decode() == expression
+
+
 def test_callable_scope_declarations_and_comment_modules_are_excluded(parser):
     result = parser.parse("scopes.sv", """// module fake(input bad); endmodule
 module visible(input logic a);

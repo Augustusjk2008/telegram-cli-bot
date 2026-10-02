@@ -6,6 +6,7 @@ import base64
 from copy import deepcopy
 from dataclasses import dataclass, field
 from hashlib import sha256
+from itertools import islice
 from uuid import uuid4
 
 from hdl_models import SourceLocation
@@ -15,9 +16,10 @@ from hdl_project import ProjectIndex, ProjectScanner, READ_CHUNK_BYTES, ScanOpti
 COLUMNS = (
     ("kind", "类别"), ("name", "名称"), ("direction", "方向"), ("type", "类型"),
     ("width", "位宽/数组"), ("default", "默认值"), ("override", "实例覆盖"),
-    ("context", "静态条件"), ("source", "声明位置"),
+    ("context", "静态条件"), ("evidence", "推断依据"), ("source", "声明位置"),
 )
 SEARCH_LIMIT = 200
+CHILD_LIMIT = 2000
 
 
 @dataclass
@@ -158,7 +160,8 @@ class HdlViews:
             initial = self._table_window(session, {})
         else:
             title = "HDL 模块层级"
-            summary = {"searchable": True, "searchPlaceholder": "搜索模块、实例或诊断", "statsText": self._stats(index)}
+            summary = {"searchable": True, "searchPlaceholder": "搜索模块、实例或诊断", "statsText": self._stats(index),
+                       "actions": [_action("refresh-project", "刷新项目", "toolbar")]}
             initial = {"op": "children", "nodeId": None, "nodes": self._roots(session), "statsText": self._stats(index)}
         resource.references += 1
         self._resources[resource.id] = resource
@@ -258,21 +261,38 @@ class HdlViews:
         node, index = session.nodes[node_id], session.resource.index
         if node.kind == "group":
             if node.group == "diagnostics":
-                return [self._diagnostic_node(session, number) for number in range(len(index.diagnostics))]
+                return self._limited_children(node_id, range(len(index.diagnostics)),
+                                              lambda number: self._diagnostic_node(session, number))
             definitions = (index.selected_top_ids if self._options.top_modules else index.candidate_top_ids) if node.group == "tops" else index.definitions
-            return [self._module_node(session, ("module", node_id, key), key) for key in definitions]
+            return self._limited_children(node_id, definitions,
+                                          lambda key: self._module_node(session, ("module", node_id, key), key))
         if node.cycle or node.kind == "diagnostic":
             return []
         if node.kind == "instance" and not node.definition_id:
             reference = index.references[session.references[node.reference_id]]
-            return [self._module_node(session, ("candidate", node_id, key), key, node.chain, node.reference_id)
-                    for key in reference.candidate_ids]
-        return [self._instance_node(session, ("instance", node_id, reference.id), reference.id, node.chain)
-                for reference in index.references_by_owner[node.definition_id]]
+            return self._limited_children(node_id, reference.candidate_ids,
+                lambda key: self._module_node(session, ("candidate", node_id, key), key, node.chain, node.reference_id))
+        return self._limited_children(node_id, index.references_by_owner[node.definition_id],
+            lambda reference: self._instance_node(session, ("instance", node_id, reference.id), reference.id, node.chain))
+
+    @staticmethod
+    def _limited_children(node_id: str, items, render) -> list[dict]:
+        nodes = [render(item) for item in islice(items, CHILD_LIMIT)]
+        if len(items) > CHILD_LIMIT:
+            nodes.append({"id": f"truncated:{node_id}", "kind": "symbol", "hasChildren": False,
+                          "label": f"仅显示前 {CHILD_LIMIT} / {len(items)} 个直接节点",
+                          "secondaryText": "窗口已截断；使用搜索定位其余模块、实例或诊断。",
+                          "badges": [{"text": "窗口截断", "tone": "warning"}]})
+        return nodes
 
     @staticmethod
     def _stats(index: ProjectIndex) -> str:
-        return f"{len(index.definitions)} 个模块 · {len(index.references)} 个静态实例 · {len(index.diagnostics)} 条诊断" + (" · 分析不完整" if index.incomplete else "")
+        text = f"{len(index.files)} 个文件 · {len(index.definitions)} 个模块 · {len(index.references)} 个静态实例 · {len(index.diagnostics)} 条诊断"
+        for status, label in (("missing", "未解析"), ("ambiguous", "多候选")):
+            count = sum(item.status == status for item in index.references.values())
+            if count:
+                text += f" · {count} 个{label}引用"
+        return text + (" · 分析不完整" if index.incomplete else "")
 
     def _search(self, session: _Session, params: dict) -> dict:
         query = params.get("query", "")
@@ -330,8 +350,16 @@ class HdlViews:
                       "type": parameter.type_expression, "width": "", "default": parameter.default_expression,
                       "override": overrides.get(parameter.location.start_byte),
                       "context": " · ".join(dict.fromkeys((*instance_contexts, *parameter.contexts)))})
+        for signal in module.signals:
+            self._row(session, signal.location, {
+                "kind": "时钟候选" if signal.kind == "clock" else "复位候选",
+                "name": signal.expression, "evidence": signal.evidence,
+                "context": " · ".join(dict.fromkeys((*instance_contexts, *signal.contexts))),
+            })
 
     def _row(self, session: _Session, location: SourceLocation, cells: dict) -> None:
+        for key, _title in COLUMNS:
+            cells.setdefault(key, None)
         cells["source"] = self._location_label(session, location, column=True)
         session.rows[str(uuid4())] = _Row(cells, location)
 
@@ -407,7 +435,7 @@ class HdlViews:
             if digest.hexdigest() != file.sha256:
                 raise ValueError("源码内容变化")
         except (RuntimeError, ValueError, KeyError, TypeError):
-            return {"message": "源码已变化或无法核验，请重新打开项目刷新分析。", "refresh": "none", "hostEffects": []}
+            return {"message": "源码已变化或无法核验，请在层级视图点击“刷新项目”后重新打开详情。", "refresh": "none", "hostEffects": []}
         return {"refresh": "none", "hostEffects": [{"type": "open_file", "path": location.path,
                 "line": location.start_line, "column": location.start_column}]}
 
@@ -419,6 +447,9 @@ class HdlViews:
         if not isinstance(payload, dict):
             raise ValueError("动作 payload 必须为对象")
         index = session.resource.index
+        if action_id == "refresh-project" and session.view_id == "module-tree":
+            # Host removes this view's cache/session before the frontend reopens it.
+            return {"refresh": "view", "hostEffects": []}
         if session.view_id == "module-details":
             if action_id == "open-definition" and "rowId" not in payload and "nodeId" not in payload:
                 return self._source_action(session, index.definitions[session.definition_id].location)

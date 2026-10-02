@@ -128,7 +128,16 @@ function clonePluginTarget(target: PluginOpenTarget): PluginOpenTarget {
 
 function pluginViewTabPath(target: PluginOpenTarget) {
   const sourcePath = typeof target.input.path === "string" ? target.input.path : "";
-  return `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}`;
+  const viewInput = { ...target.input };
+  if (typeof target.input.path === "string") delete viewInput.path;
+  const identity = Object.keys(viewInput).length
+    ? JSON.stringify(viewInput, (_key, value) => (
+        value && typeof value === "object" && !Array.isArray(value)
+          ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)))
+          : value
+      ))
+    : "";
+  return `plugin://${target.pluginId}/${target.viewId}/${sourcePath || target.title}${identity ? `?input=${encodeURIComponent(identity)}` : ""}`;
 }
 
 function remapPluginTarget(target: PluginOpenTarget, oldPath: string, nextPath: string) {

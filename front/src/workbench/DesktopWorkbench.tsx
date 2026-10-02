@@ -935,7 +935,7 @@ export function DesktopWorkbench({
       }
       if (effect.type === "open_file") {
         setSidebarView("files");
-        await openWorkspaceFile(effect.path, effect.line, 1, "", () => true, effectScopeIdentity);
+        await openWorkspaceFile(effect.path, effect.line, effect.column ?? 1, "", () => true, effectScopeIdentity);
         continue;
       }
       if (effect.type === "reveal_in_files") {
@@ -1417,7 +1417,7 @@ export function DesktopWorkbench({
       data-has-focus={focusedPane ? "true" : "false"}
       data-focused-pane={focusedPane || "none"}
       data-resizing={isResizingPane ? "true" : "false"}
-      className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full"
+      className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full grid-cols-[minmax(0,1fr)]"
       style={{ gridTemplateRows: "auto minmax(0,1fr) auto" }}
     >
       {focusedPane ? (

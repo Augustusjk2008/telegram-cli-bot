@@ -1364,16 +1364,17 @@ function buildMockZipTreeIndex(): Map<string | null, TreeNode[]> {
 
 const MOCK_HDL_SOURCES: Record<string, string> = {
   "rtl/system.sv": "module system (\n  input logic clk,\n  input logic [7:0] data\n);\n  core #(.WIDTH(8)) u_core (\n    .clk(clk),\n    .data(data)\n  );\n`ifdef ENABLE_OPTIONAL\n  optional u_optional (.clk(clk));\n`endif\nendmodule\n",
-  "rtl/core.sv": "module core #(\n  parameter int WIDTH = 4\n) (\n  input logic clk,\n  input logic [WIDTH-1:0] data\n);\nendmodule\n",
+  "rtl/core.sv": "module core #(\n  parameter int WIDTH = 4\n) (\n  input logic clk,\n  input logic [WIDTH-1:0] data\n);\n  logic reset_n;\n  logic [WIDTH-1:0] q;\n`ifdef ENABLE_REGISTERS\n  always_ff @(posedge clk or negedge reset_n) begin\n    if (!reset_n)\n      q <= '0;\n    else\n      q <= data;\n  end\n`endif\nendmodule\n",
   "rtl/optional.sv": "module optional (\n  input logic clk\n);\nendmodule\n",
   "rtl/utility.sv": "module utility (\n  input logic enable\n);\nendmodule\n",
 };
 
 const HDL_COLUMNS: TableColumn[] = [
   ["kind", "类别"], ["name", "名称"], ["direction", "方向"], ["type", "类型"],
-  ["width", "位宽/数组"], ["default", "默认值"], ["override", "实例覆盖"], ["context", "静态条件"], ["source", "声明位置"],
+  ["width", "位宽/数组"], ["default", "默认值"], ["override", "实例覆盖"], ["context", "静态条件"], ["evidence", "推断依据"], ["source", "声明位置"],
 ].map(([id, title]) => ({ id, title, sortable: true }));
 
+type MockHdlField = { kind: string; name: string; line: number; direction?: string; type?: string; width?: string; default?: string; context?: string; evidence?: string };
 type MockHdlDefinition = { id: string; name: string; path: string; line: number; rows: TableRow[] };
 type MockHdlReference = { id: string; name: string; definitionId: string; path: string; line: number; conditional?: string };
 type MockHdlProject = {
@@ -1393,13 +1394,14 @@ type MockHdlSession = {
   rows?: TableRow[];
 };
 
-function buildMockHdlProject(path: string, topModule: string): MockHdlProject {
+function buildMockHdlProject(path: string, topModule: string, sources: Record<string, string>): MockHdlProject {
   const topModules = topModule.split(",").map((name) => name.trim()).filter(Boolean);
   const definitions = new Map<string, MockHdlDefinition>();
   for (const name of ["system", "core", "optional", "utility"]) {
     const sourcePath = `${path}/rtl/${name}.sv`;
     const id = `definition:rtl/${name}.sv:${name}`;
-    const fields = name === "core"
+    const lines = sources[`rtl/${name}.sv`].split(/\r?\n/);
+    const fields: MockHdlField[] = name === "core"
       ? [
           { kind: "参数", name: "WIDTH", type: "int", default: "4", line: 2 },
           { kind: "端口", name: "clk", direction: "input", type: "logic", line: 4 },
@@ -1409,12 +1411,31 @@ function buildMockHdlProject(path: string, topModule: string): MockHdlProject {
         ? [{ kind: "端口", name: "clk", direction: "input", type: "logic", line: 2 },
            { kind: "端口", name: "data", direction: "input", type: "logic", width: "[7:0]", line: 3 }]
         : [{ kind: "端口", name: name === "utility" ? "enable" : "clk", direction: "input", type: "logic", line: 2 }];
+    // Track edits to the known fixture declarations; this mock is not an HDL parser.
+    for (const field of fields) {
+      field.line = lines.findIndex((line) => new RegExp(`^\\s*${field.kind === "参数" ? "parameter int" : "input logic"}\\b.*\\b${field.name}\\b`).test(line)) + 1;
+      const declaration = lines[field.line - 1] || "";
+      if (field.kind === "参数") field.default = declaration.split("=")[1]?.trim().replace(/,$/, "") || "";
+      if (field.kind === "端口") field.width = declaration.match(/\[[^\]]+\]/)?.[0] || "";
+    }
+    if (name === "core") {
+      const eventLine = lines.findIndex((line) => line.trim().startsWith("always_ff @(posedge clk or negedge reset_n)")) + 1;
+      const branchLine = lines.findIndex((line) => line.trim() === "if (!reset_n)") + 1;
+      const context = lines.slice(0, eventLine).find((line) => line.trim() === "`ifdef ENABLE_REGISTERS")?.trim() || "";
+      if (eventLine) {
+        fields.push(
+          { kind: "时钟候选", name: "clk", line: eventLine, context, evidence: `推断候选：事件控制 ${lines[eventLine - 1].trim()}；posedge clk` },
+          { kind: "复位候选", name: "reset_n", line: eventLine, context, evidence: `推断候选：事件控制 ${lines[eventLine - 1].trim()}；negedge reset_n` },
+        );
+        if (branchLine) fields.push({ kind: "复位候选", name: "reset_n", line: branchLine, context, evidence: `推断候选：复位分支 ${lines[branchLine - 1].trim()}；${lines[branchLine]?.trim() || ""}` });
+      }
+    }
     definitions.set(id, {
-      id, name, path: sourcePath, line: 1,
-      rows: fields.map(({ line, ...cells }) => ({
-        id: `${id}:${cells.kind}:${cells.name}`,
-        cells: { direction: "", width: "", default: "", override: "", context: "", ...cells, source: `${sourcePath}:${line}` },
-        actions: [{ id: "open-declaration", label: "打开声明", target: "plugin", location: "row", payload: { rowId: `${id}:${cells.kind}:${cells.name}` } }],
+      id, name, path: sourcePath, line: lines.findIndex((line) => line.trim().startsWith(`module ${name}`)) + 1,
+      rows: fields.filter((field) => field.line > 0).map(({ line, ...cells }, index) => ({
+        id: `${id}:${index}`,
+        cells: { direction: "", type: "", width: "", default: "", override: "", context: "", evidence: "", ...cells, source: `${sourcePath}:${line}` },
+        actions: [{ id: "open-declaration", label: "打开声明", target: "plugin", location: "row", payload: { rowId: `${id}:${index}` } }],
       })),
     });
   }
@@ -1885,7 +1906,7 @@ export class MockWebBotClient implements WebBotClient {
   private plugins: PluginSummary[] = [
     {
       id: "hdl-workbench", schemaVersion: 2, name: "HDL Workbench", version: "0.1.0",
-      description: "浏览 Verilog/SystemVerilog 模块、实例、端口和参数，并跳转到源码。", enabled: true,
+      description: "浏览 Verilog/SystemVerilog 模块、静态实例、端口、参数与时钟/复位候选，刷新项目并跳转到源码。", enabled: true,
       config: { topModule: "", ignoreDirectories: ".git,.hg,.svn,.tcb,.codegraph,.tmp,.venv,venv,__pycache__,node_modules,vendor,site-packages,build,dist,out,target", includeDirectories: "", maxFiles: 1000, maxFileBytes: 4194304, maxTotalBytes: 67108864 },
       configSchema: {
         title: "HDL 项目设置",
@@ -4862,7 +4883,7 @@ export class MockWebBotClient implements WebBotClient {
       if (viewId === "module-tree") {
         const path = this.normalizeMockPath(String(input.path || this.getBrowserPath(botAlias)));
         const topModule = String(this.plugins.find((plugin) => plugin.id === pluginId)?.config?.topModule || "");
-        const project = buildMockHdlProject(path, topModule);
+        const sources: Record<string, string> = {};
         const fingerprints = new Map<string, string>();
         for (const [relativePath, content] of Object.entries(MOCK_HDL_SOURCES)) {
           const sourcePath = `${path}/${relativePath}`;
@@ -4872,9 +4893,12 @@ export class MockWebBotClient implements WebBotClient {
             this.setFileState(botAlias, browserPath, sourcePath, content);
           }
           fingerprints.set(sourcePath, this.hdlSourceFingerprint(botAlias, sourcePath));
+          sources[relativePath] = this.getFileContent(botAlias, browserPath, sourcePath);
         }
+        const project = buildMockHdlProject(path, topModule, sources);
         const roots = structuredClone(project.children.get(null)!);
-        const summary: TreeViewSummary = { roots, searchable: true, searchPlaceholder: "搜索模块或实例", statsText: "4 模块 · 2 实例 · 条件分支未展开", emptySearchText: "未找到模块或实例" };
+        const summary: TreeViewSummary = { roots, searchable: true, searchPlaceholder: "搜索模块或实例", statsText: "4 模块 · 2 实例 · 条件分支未展开", emptySearchText: "未找到模块或实例",
+          actions: [{ id: "refresh-project", label: "刷新项目", location: "toolbar", target: "plugin" }] };
         this.hdlSessions.set(sessionId, { botAlias, accountId: this.currentAccountId(), viewId, project, fingerprints });
         return { pluginId, viewId, title: "HDL 层级", renderer: "tree", mode: "session", sessionId, summary, initialWindow: { op: "children", nodeId: null, nodes: structuredClone(roots) } };
       }
@@ -5282,6 +5306,10 @@ export class MockWebBotClient implements WebBotClient {
     if (pluginId === "hdl-workbench") {
       const session = this.getHdlSession(botAlias, String(input.sessionId || ""));
       if (input.viewId !== session.viewId) throw new Error("HDL 视图不匹配");
+      if (input.actionId === "refresh-project" && session.viewId === "module-tree") {
+        this.hdlSessions.delete(input.sessionId!);
+        return { refresh: "view", message: "已刷新 HDL 项目" };
+      }
       if (session.viewId === "module-details") {
         if (input.actionId === "open-definition") {
           const definition = session.project.definitions.get(session.definitionId!);

@@ -3,7 +3,7 @@
   "id": "hdl-workbench",
   "name": "HDL Workbench",
   "version": "0.1.0",
-  "description": "浏览 Verilog/SystemVerilog 模块、静态实例、端口和参数，并跳转到源码。",
+  "description": "浏览 Verilog/SystemVerilog 模块、静态实例、端口、参数与时钟/复位候选，刷新项目并跳转到源码。",
   "enabled": true,
   "config": {
     "topModule": "",

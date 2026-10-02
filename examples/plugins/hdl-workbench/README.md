@@ -1,7 +1,7 @@
 # HDL Workbench
 
 独立的 Verilog/SystemVerilog 项目浏览插件，适用于 `.v`、`.sv`、`.vh`、`.svh`。
-提供按需展开的模块/实例树、端口/参数详情表和真实源码导航；项目扫描通过 Host API 读取目录和文件。
+提供按需展开的模块/实例树、端口/参数和时钟/复位候选详情表、手动刷新及真实源码导航；项目扫描通过 Host API 读取目录和文件。
 也保留单文件解析和项目索引的 Python API、JSON-RPC stdio 接口。
 
 ## 依赖与安装
@@ -33,8 +33,9 @@ python -m pip install --only-binary=:all: -r requirements.txt
 
 1. 在插件目录点击“选择 HDL 项目”，选择当前工作区内的项目目录。
 2. 在“候选顶层”（配置了顶层时为“指定顶层”）或“全部模块”下展开模块和静态实例。
-3. 点击模块/已解析实例查看端口、参数及实例参数覆盖；详情表支持搜索和分页。
+3. 点击模块/已解析实例查看端口、参数、实例参数覆盖及信号候选；详情表支持搜索和分页。“推断依据”列展示事件控制或复位分支证据。
 4. 使用“打开定义”“打开实例化位置”或详情行的声明动作，在源码编辑器中打开对应文件和行列。
+5. 源码修改后在层级视图点击“刷新项目”，重新展开并打开详情，取得新的索引和位置。
 
 同名定义保留为候选项，循环分支停止展开，缺失引用和诊断保留在树中。
 层级搜索返回匹配的模块和实例；条件分支、generate 和实例数组保留静态上下文，不代表展开后的设计。
@@ -48,7 +49,10 @@ python -m pip install --only-binary=:all: -r requirements.txt
 源码位置由当前索引决定，客户端传入的文件路径和行号不会替代索引位置。
 树和表中的位置使用项目相对路径，项目外的共享文件保留绝对路径；导航始终使用索引中的绝对位置。
 跳转前通过 Host 核对文件路径、大小、修改时间和内容 SHA-256；文件已变化、无法读取或读取过程中变化时拒绝跳转并提示刷新。
-当前没有项目手动刷新动作；需要关闭原层级标签后重新打开项目以取得新索引。已有详情会话继续保留其原有索引。
+“刷新项目”清理当前树的 Host 缓存和会话，然后重新扫描，包括嵌套目录中的源码修改；树的已展开节点和搜索状态重置。
+已有详情标签继续保留原索引，新详情使用新父会话单独打开；旧详情的源码跳转仍会拒绝已变化的文件。
+项目摘要集中显示诊断、未解析/歧义引用和分析不完整标记。每个树窗口最多返回 2000 个直接节点，超出时显示截断提示；
+搜索仍覆盖整个已扫描索引，默认返回最多 200 个匹配（请求上限 500），便于定位未显示的实例或模块。
 
 ## Python API
 
@@ -74,6 +78,7 @@ print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 `samples/ports.sv` 包含两个模块；`top` 在第 2 行，端口 `a`、`b` 分别在第 6、7 行，
 `u_named`、`u_second`、`u_positional` 分别在第 14、15、16 行。
 `samples/classic.v` 演示非 ANSI 端口：`result` 的方向声明在第 5 行，独立的 `reg [8:0]` 类型在第 6 行。
+`samples/signals.sv` 演示异步复位（第 8–9 行）和同步复位（第 22–23 行）的独立候选证据。
 
 ## JSON-RPC stdio
 
@@ -99,6 +104,7 @@ print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 表请求使用 `offset`、`limit`、`query`，默认每页 50 行，最大 500 行。
 树窗口只返回直接子节点，不递归展开；表窗口只返回所请求的行。
 `plugin.invoke_action` 根据会话中的 `nodeId`/`rowId` 返回 `open_plugin_view` 或核验后的 `open_file` Host effect；
+树的 `refresh-project` 动作返回 `refresh="view"`，由 Host 清理缓存和原会话，再由前端重新打开视图。
 `plugin.dispose_view` 关闭指定会话，`plugin.shutdown` 清理所有会话。
 
 ## 项目索引与层级
@@ -148,6 +154,10 @@ include 循环不会反复读取，也不会将头文件文本内联到包含模
 - 命名和位置式参数覆盖，保留表达式及位置，不计算数值。
 - 宏条件和 generate 中可识别的声明及实例保留 `contexts`，并给出未展开提示。
 - 使用真实语法节点定位声明及实例，不把注释里的伪模块或函数、task 的局部声明当作模块接口。
+- `always`、`always_ff` 的前导边沿事件控制提取时钟候选；匹配复位分支的事件单独标记为异步复位候选。
+- 首优先 `if` 分支的简单信号/位选择、`!`/`~` 或与 0/1 的相等/不等比较，在字面量初始化和 `else` 更新相同目标时提取复位候选。
+  同步复位也保留分支证据；同一信号的事件和分支是不同源码出现位置，不合并。
+- 候选保留原始表达式、真实行列和宏/generate 上下文。多边沿无法分类时在依据中明确注明不确定。
 
 语法包会将部分模块实例解析为 checker、UDP、program 或 interface 引用。
 后端保留目标名称，并用 `reference_kind` 标记这种歧义；项目索引根据模块名称解析候选，不推断其他设计单元的语义。
@@ -158,7 +168,10 @@ include 循环不会反复读取，也不会将头文件文本内联到包含模
 不进行预处理、include 文本内联、宏展开、常量求值或 generate 展开。
 位宽表达式没有被换算成有效位数，静态实例不等于工具完成展开后的设计层级。
 不解析 VHDL，也不将 interface、program、checker、UDP 或 package 作为模块定义展示。
-尚未提取时钟/复位候选信号，也没有项目手动刷新动作。
+信号候选是结构推断，不能确认设计意图或替代时序约束。普通使能/数据选择、`always_comb`、`@*`、纯电平事件、
+`initial`、函数/task 和嵌套事件不作为时钟/复位推断入口；仅检查进程的前导事件控制。
+复位推断不支持复合/层级/宏生成条件、符号或算术/拼接初始化、未知值初始化、低优先级或仅 `else` 的复位分支，
+也不支持外层多个执行语句、case/循环/带延迟复位分支。部分 `iff` 形式仍有语法包诊断，事件门控不会被当作复位。
 非 ANSI 端口别名、复合端口表达式会标记为解析不完整；不支持的宏生成语法可能显示语法区域诊断。
 
 ## 验证
@@ -183,6 +196,6 @@ $env:HDL_PLUGIN_TEST_PYTHON = (Resolve-Path .tmp/hdl-parser-venv/Scripts/python.
 python -m pytest tests/test_hdl_plugin_runtime.py tests/test_plugin_runtime.py tests/test_plugin_service_cache.py tests/test_plugins_host_api.py tests/test_bundled_plugins.py -q
 ```
 
-前端检查使用现有组件和 mock：`npm run test:gate -- src/test/plugin-hdl-view.test.tsx`、`npm run lint`、`npm run build`。
+前端检查使用现有组件和 mock：`npm run test:gate -- src/test/plugin-hdl-view.test.tsx src/test/plugin-table-view.test.tsx src/test/editor-tabs-scope.test.tsx`、`npm run lint`、`npm run build`。
 浏览器验收连接人工已启动的应用：设置 `PLAYWRIGHT_BASE_URL` 后运行 `npx playwright test src/test/plugin-hdl-workbench.spec.ts`。
-浏览器测试拦截 API，不修改运行中的用户配置或项目；源码文件和行号在实际编辑器中检查。
+浏览器测试拦截 API，不修改运行中的用户配置或项目；检查窄窗口、刷新后的独立详情和实际编辑器中的源码位置。
