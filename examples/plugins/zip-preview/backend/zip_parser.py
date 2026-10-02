@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PurePosixPath
 from zipfile import BadZipFile, ZipFile
@@ -34,11 +35,20 @@ def _folder_node(path: str, label: str) -> dict[str, object]:
     }
 
 
-def _file_node(path: str, size: int, compressed: int) -> dict[str, object]:
+@dataclass(frozen=True)
+class ZipMember:
+    path: str
+    ordinal: int
+    size: int
+    compressed_size: int
+
+
+def _file_node(member: ZipMember) -> dict[str, object]:
+    path, size, compressed = member.path, member.size, member.compressed_size
     current_path = PurePosixPath(path)
     parent = str(current_path.parent)
     return {
-        "id": f"file:{path}",
+        "id": f"file:{member.ordinal}:{path}",
         "label": current_path.name,
         "kind": "file",
         "secondaryText": "" if parent == "." else parent,
@@ -55,71 +65,82 @@ def _file_node(path: str, size: int, compressed: int) -> dict[str, object]:
 
 
 def _sorted_nodes(nodes: list[dict[str, object]]) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
-    for node in sorted(nodes, key=lambda item: (item.get("kind") != "folder", str(item.get("label") or "").lower())):
-        children = node.get("children")
-        if isinstance(children, list) and children:
-            node = {**node, "children": _sorted_nodes(children)}
-        result.append(node)
-    return result
+    return sorted(nodes, key=lambda item: (item.get("kind") != "folder", str(item.get("label") or "").lower()))
 
 
-def parse_zip_tree(path: str, content: bytes, config: dict[str, object] | None = None) -> dict[str, object]:
+@dataclass(frozen=True)
+class ZipIndex:
+    path: str
+    children: dict[str, list[str | ZipMember]]
+    stats_text: str
+
+    def get_nodes(self, node_id: str | None = None) -> list[dict[str, object]]:
+        folder_path = ""
+        if node_id is not None:
+            if not node_id.startswith("dir:") or not node_id[4:] or node_id[4:] not in self.children:
+                raise RuntimeError("ZIP 目录节点不存在")
+            folder_path = node_id[4:]
+        return _sorted_nodes([
+            _folder_node(item, PurePosixPath(item).name) if isinstance(item, str) else _file_node(item)
+            for item in self.children[folder_path]
+        ])
+
+    def summary(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "roots": self.get_nodes(),
+            "statsText": self.stats_text,
+            "searchable": False,
+            "emptySearchText": "压缩包为空",
+        }
+
+    def snapshot(self) -> dict[str, object]:
+        payload = self.summary()
+        pending = list(payload["roots"])
+        while pending:
+            node = pending.pop()
+            if node.get("kind") == "folder":
+                nodes = self.get_nodes(str(node["id"]))
+                node["children"] = nodes
+                pending.extend(nodes)
+        return payload
+
+
+def build_zip_index(path: str, content: bytes, config: dict[str, object] | None = None) -> ZipIndex:
     max_entries = _clamp_int((config or {}).get("maxEntries"), DEFAULT_MAX_ENTRIES, 100, 10000)
     try:
         with ZipFile(BytesIO(content)) as archive:
-            files = [info for info in archive.infolist() if info.filename and not info.filename.endswith("/")]
+            files = [
+                (ordinal, info) for ordinal, info in enumerate(archive.infolist())
+                if info.filename and not info.filename.endswith("/")
+            ]
     except BadZipFile as exc:
         raise RuntimeError("ZIP 文件损坏或格式不支持") from exc
 
     truncated = len(files) > max_entries
     files = files[:max_entries]
 
-    roots: list[dict[str, object]] = []
-    folder_children: dict[str, list[dict[str, object]]] = {"": roots}
-    folder_nodes: dict[str, dict[str, object]] = {}
-    folder_count = 0
+    children: dict[str, list[str | ZipMember]] = {"": []}
+    for ordinal, info in files:
+        member_path = PurePosixPath(info.filename)
+        for folder in reversed(member_path.parents):
+            folder_path = str(folder)
+            if not folder.name or folder_path in children:
+                continue
+            parent_path = str(folder.parent)
+            children[parent_path if parent_path in children else ""].append(folder_path)
+            children[folder_path] = []
+        parent_path = str(member_path.parent)
+        children[parent_path if parent_path in children else ""].append(
+            ZipMember(str(member_path), ordinal, info.file_size, info.compress_size)
+        )
 
-    def ensure_folder(folder_path: str) -> dict[str, object]:
-        nonlocal folder_count
-        clean_path = str(PurePosixPath(folder_path))
-        if clean_path in {"", "."}:
-            raise RuntimeError("ZIP 目录路径无效")
-        existing = folder_nodes.get(clean_path)
-        if existing is not None:
-            return existing
-
-        parent_path = str(PurePosixPath(clean_path).parent)
-        if parent_path == ".":
-          parent_path = ""
-        parent_children = folder_children.setdefault(parent_path, roots if parent_path == "" else [])
-        if parent_path and parent_path not in folder_nodes:
-            ensure_folder(parent_path)
-            parent_children = folder_children[parent_path]
-
-        node = _folder_node(clean_path, PurePosixPath(clean_path).name)
-        parent_children.append(node)
-        folder_nodes[clean_path] = node
-        folder_children[clean_path] = node["children"]  # type: ignore[assignment]
-        folder_count += 1
-        return node
-
-    for info in files:
-        clean_path = str(PurePosixPath(info.filename))
-        parent_path = str(PurePosixPath(clean_path).parent)
-        if parent_path != ".":
-            ensure_folder(parent_path)
-        children = folder_children["" if parent_path == "." else parent_path]
-        children.append(_file_node(clean_path, info.file_size, info.compress_size))
-
-    stats_text = f"{len(files)} 文件 · {folder_count} 文件夹"
+    stats_text = f"{len(files)} 文件 · {len(children) - 1} 文件夹"
     if truncated:
         stats_text += f" · 仅预览前 {max_entries} 项"
 
-    return {
-        "path": path,
-        "roots": _sorted_nodes(roots),
-        "statsText": stats_text,
-        "searchable": False,
-        "emptySearchText": "压缩包为空",
-    }
+    return ZipIndex(path, children, stats_text)
+
+
+def parse_zip_tree(path: str, content: bytes, config: dict[str, object] | None = None) -> dict[str, object]:
+    return build_zip_index(path, content, config).snapshot()

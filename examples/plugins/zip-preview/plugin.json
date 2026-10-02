@@ -21,7 +21,7 @@
       "id": "archive-tree",
       "title": "压缩包结构",
       "renderer": "tree",
-      "viewMode": "snapshot",
+      "viewMode": "session",
       "dataProfile": "light"
     }
   ],

@@ -86,6 +86,7 @@ def test_bundled_plugin_manifests_load_with_basic_contracts() -> None:
                     fields["entropyBuckets"].maximum) == (48, 8, 256)
 
         if manifest.plugin_id == "zip-preview":
+            assert manifest.views[0].view_mode == "session"
             assert manifest.config_schema is not None
             fields = {
                 field.key: field
@@ -156,7 +157,27 @@ async def test_simple_bundled_plugins_run_from_copied_directories(
     )
     try:
         manifest = load_plugin_manifest(plugin_dir / "plugin.json")
-        result = await runtime.render_view("main", manifest, view_id, {"path": filename})
+        if plugin_id == "zip-preview":
+            result = await runtime.open_view("main", manifest, view_id, {"path": filename})
+            assert result["mode"] == "session"
+            assert result["initialWindow"]["nodes"][0]["children"] == []
+            session_id = result["sessionId"]
+            children = await runtime.get_view_window(
+                "main", manifest, session_id, {"op": "children", "nodeId": "dir:folder"},
+            )
+            assert [node["label"] for node in children["nodes"]] == ["file.txt"]
+            snapshot = await runtime.render_view("main", manifest, view_id, {"path": filename})
+            assert snapshot["payload"]["roots"][0]["children"] == children["nodes"]
+            with pytest.raises(RuntimeError, match="目录节点不存在"):
+                await runtime.get_view_window(
+                    "main", manifest, session_id, {"op": "children", "nodeId": "dir:unknown"},
+                )
+            assert (await runtime.dispose_view("main", manifest, session_id))["disposed"] is True
+            assert (await runtime.dispose_view("main", manifest, session_id))["disposed"] is False
+            with pytest.raises(RuntimeError, match="会话不存在或已释放"):
+                await runtime.get_view_window("main", manifest, session_id, {"op": "children"})
+        else:
+            result = await runtime.render_view("main", manifest, view_id, {"path": filename})
         assert result["renderer"] == renderer
     finally:
         await runtime.shutdown()

@@ -152,7 +152,6 @@ import type {
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
   TerminalRuntimePlatform,
-  TreeViewPayload,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -1336,47 +1335,31 @@ function buildRepoOutlineSummary(rootPath = ""): TreeViewSummary {
   };
 }
 
-function buildMockZipTreePayload(sourcePath: string): TreeViewPayload {
-  return {
-    roots: [
-      {
-        id: "dir:docs",
-        label: "docs",
-        kind: "folder",
-        hasChildren: true,
-        expandable: true,
-        children: [
-          {
-            id: "file:docs/readme.txt",
-            label: "readme.txt",
-            kind: "file",
-            secondaryText: "docs",
-            badges: [{ text: "5 B", tone: "info" }],
-            payload: { path: "docs/readme.txt" },
-          },
-        ],
-      },
-      {
-        id: "dir:src",
-        label: "src",
-        kind: "folder",
-        hasChildren: true,
-        expandable: true,
-        children: [
-          {
-            id: "file:src/main.py",
-            label: "main.py",
-            kind: "file",
-            secondaryText: "src",
-            badges: [{ text: "12 B", tone: "info" }],
-            payload: { path: "src/main.py" },
-          },
-        ],
-      },
-    ],
-    searchable: false,
-    statsText: `2 文件 · 2 文件夹 · ${sourcePath.split(/[\\/]/).pop() || "sample.zip"}`,
-  };
+function buildMockZipTreeIndex(): Map<string | null, TreeNode[]> {
+  const directory = (path: string): TreeNode => ({
+    id: `dir:${path}`,
+    label: path.split("/").pop()!,
+    kind: "folder",
+    hasChildren: true,
+    expandable: true,
+    payload: { path },
+  });
+  const file = (ordinal: number, path: string, size: number): TreeNode => ({
+    id: `file:${ordinal}:${path}`,
+    label: path.split("/").pop()!,
+    kind: "file",
+    secondaryText: path.split("/").slice(0, -1).join("/"),
+    badges: [{ text: `${size} B`, tone: "info" }],
+    hasChildren: false,
+    expandable: false,
+    payload: { path },
+  });
+  return new Map([
+    [null, [directory("docs"), directory("src"), file(0, "README.md", 5), file(1, "README.md", 7)]],
+    ["dir:docs", [directory("docs/guides"), file(2, "docs/readme.txt", 5)]],
+    ["dir:docs/guides", [file(3, "docs/guides/setup.txt", 9)]],
+    ["dir:src", [file(4, "src/main.py", 12)]],
+  ]);
 }
 
 export class MockWebBotClient implements WebBotClient {
@@ -1435,7 +1418,7 @@ export class MockWebBotClient implements WebBotClient {
     string,
     | { pluginId: string; renderer: "waveform"; summary: WaveformViewSummary; window: WaveformWindowPayload }
     | { pluginId: string; renderer: "table"; summary: TableViewSummary; window: TableWindowPayload }
-    | { pluginId: string; renderer: "tree"; summary: TreeViewSummary; window: TreeWindowPayload; rootPath?: string }
+    | { pluginId: string; renderer: "tree"; summary: TreeViewSummary; window: TreeWindowPayload; rootPath?: string; childrenByNodeId?: Map<string | null, TreeNode[]> }
   >();
   private pluginSessionCounter = 0;
   private pluginArtifacts = new Map<string, { filename: string; content: string; contentType?: string }>([
@@ -4744,13 +4727,31 @@ export class MockWebBotClient implements WebBotClient {
     }
     if (pluginId === "zip-preview") {
       const sourcePath = typeof input.path === "string" ? input.path : "docs/sample.zip";
+      const childrenByNodeId = buildMockZipTreeIndex();
+      const summary = {
+        path: sourcePath,
+        roots: cloneTreeNodes(childrenByNodeId.get(null) || []),
+        statsText: `5 文件 · 3 文件夹 · ${sourcePath.split(/[\\/]/).pop() || "sample.zip"}`,
+        searchable: false,
+        emptySearchText: "压缩包为空",
+      };
+      const initialWindow: TreeWindowPayload = {
+        op: "children",
+        nodeId: null,
+        nodes: cloneTreeNodes(summary.roots),
+      };
+      this.pluginSessionCounter += 1;
+      const sessionId = `zip-session-${this.pluginSessionCounter}`;
+      this.pluginSessions.set(sessionId, { pluginId, renderer: "tree", summary, window: initialWindow, childrenByNodeId });
       return {
         pluginId,
         viewId,
         title: sourcePath.split(/[\\/]/).pop() || "sample.zip",
         renderer: "tree",
-        mode: "snapshot",
-        payload: buildMockZipTreePayload(sourcePath),
+        mode: "session",
+        sessionId,
+        summary,
+        initialWindow,
       };
     }
     if (pluginId === "hex-preview") {
@@ -4875,6 +4876,9 @@ export class MockWebBotClient implements WebBotClient {
     if (existing) {
       return existing.pluginId === pluginId ? existing : null;
     }
+    if (pluginId === "zip-preview" || sessionId.startsWith("zip-session-")) {
+      return null;
+    }
     if (!/^session-\d+$/.test(sessionId)) {
       if (/^timing-session-\d+$/.test(sessionId)) {
         const summary = buildMockTimingSummary(2);
@@ -4964,6 +4968,21 @@ export class MockWebBotClient implements WebBotClient {
       };
     }
     if (session.renderer === "tree") {
+      if (session.pluginId === "zip-preview") {
+        if (request.op !== "children") {
+          throw new Error("ZIP 视图仅支持 children 请求");
+        }
+        const requestedNodeId = request.nodeId ?? null;
+        if (requestedNodeId !== null && typeof requestedNodeId !== "string") {
+          throw new Error("ZIP 目录不存在");
+        }
+        const nodeId = typeof requestedNodeId === "string" ? requestedNodeId : null;
+        const nodes = "childrenByNodeId" in session ? session.childrenByNodeId?.get(nodeId) : undefined;
+        if (!nodes) {
+          throw new Error("ZIP 目录不存在");
+        }
+        return { op: "children", nodeId, nodes: cloneTreeNodes(nodes) };
+      }
       const op = String((request as { op?: string; kind?: string }).op || (request as { op?: string; kind?: string }).kind || "children");
       if (session.pluginId === "repo-outline") {
         const repoRootPath = "rootPath" in session && typeof session.rootPath === "string" ? session.rootPath : "";
