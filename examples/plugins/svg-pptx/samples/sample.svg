@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+  <style>
+    .copy { font-family: "Microsoft YaHei", "DejaVu Sans", sans-serif; font-size: 28px; fill: #183153; }
+    .title { font-size: 44px; font-weight: bold; }
+  </style>
+  <rect width="960" height="540" fill="#f4f7fb"/>
+  <rect x="48" y="48" width="864" height="444" rx="24" fill="white" stroke="#cdd9e8"/>
+  <g class="copy">
+    <text class="title" x="80" y="130">可编辑文字 · Editable text</text>
+    <text x="80" y="215"><tspan x="80">第一行：SVG 转 PPTX</tspan><tspan x="80" dy="48">Second line: one slide, editable text</tspan></text>
+    <text x="80" y="355">图片层遮挡示例 / Overlay example</text>
+  </g>
+  <rect x="400" y="320" width="240" height="54" rx="10" fill="#247ba0"/>
+  <text x="520" y="355" text-anchor="middle" font-family="Microsoft YaHei, sans-serif" font-size="22" fill="white">上层 / Foreground</text>
+</svg>

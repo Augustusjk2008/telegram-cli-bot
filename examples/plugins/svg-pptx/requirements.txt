@@ -1,0 +1,6 @@
+python-pptx==1.0.2
+resvg_py==0.3.3
+Pillow==12.1.0
+tinycss2==1.4.0
+cssselect2==0.8.0
+defusedxml==0.7.1
