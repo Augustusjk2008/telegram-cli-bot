@@ -1,5 +1,6 @@
 """主进程 Web 启动相关测试。"""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -114,6 +115,7 @@ async def test_chat_voice_is_rejected_when_feature_is_disabled(monkeypatch):
     from bot.web.server import WebApiServer
 
     server = object.__new__(WebApiServer)
+    server.manager = MagicMock()
     server._with_websocket_capability = AsyncMock(
         return_value=AuthContext(user_id=1, token_used=True, account_id="account", capabilities={CAP_CHAT_SEND})
     )
@@ -127,3 +129,66 @@ async def test_chat_voice_is_rejected_when_feature_is_disabled(monkeypatch):
             "GET", "/api/bots/main/chat/voice", match_info={"alias": "main"},
         ))
     assert exc_info.value.code == "voice_disabled"
+
+
+@pytest.mark.asyncio
+async def test_chat_voice_occupied_connection_gets_structured_error_after_handshake(monkeypatch):
+    from aiohttp.test_utils import make_mocked_request
+    from bot.codex_server.voice import VoiceLeaseRegistry
+    from bot.web.api_common import AuthContext
+    from bot.web.auth_store import CAP_CHAT_SEND
+    from bot.web.server import WebApiServer
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.closed = False
+            self.messages = []
+            self.close_code = None
+
+        async def prepare(self, _request):
+            return self
+
+        async def send_json(self, value):
+            self.messages.append(value)
+
+        async def close(self, *, code=None, message=b""):
+            self.close_code = code
+            self.close_message = message
+            self.closed = True
+            return True
+
+    server = object.__new__(WebApiServer)
+    server.manager = MagicMock()
+    auth = AuthContext(user_id=1, token_used=True, account_id="account", capabilities={CAP_CHAT_SEND})
+    server._with_websocket_capability = AsyncMock(return_value=auth)
+    server._manager_alias = lambda _request: "main"
+    server._request_agent_id = lambda _request: "main"
+    server._request_execution_mode = lambda _request, **_kwargs: "cli"
+    server._chat_user_id = lambda value: value.user_id
+    monkeypatch.setattr("bot.web.server.config.TCB_CODEX_SERVER_VOICE_ENABLED", True)
+
+    session = SimpleNamespace(bot_id=1, user_id=1, agent_id="main")
+    monkeypatch.setattr(
+        "bot.web.server.get_codex_server_voice_session",
+        lambda *args, **kwargs: (MagicMock(), session, "conversation"),
+    )
+    registry = VoiceLeaseRegistry()
+    registry.acquire((1, 1, "main", "conversation"), ("other", 2))
+    monkeypatch.setattr("bot.web.server.voice_leases", registry)
+    websocket = FakeWebSocket()
+    monkeypatch.setattr("bot.web.server.web.WebSocketResponse", lambda **_kwargs: websocket)
+
+    result = await server.chat_voice_ws(make_mocked_request(
+        "GET",
+        "/api/bots/main/chat/voice?protocol_version=1&conversation_id=conversation&session_epoch=0&agent_id=main",
+        match_info={"alias": "main"},
+    ))
+
+    assert result is websocket
+    assert websocket.messages == [{
+        "type": "voice.error",
+        "code": "voice_connection_occupied",
+        "message": "当前会话已有语音连接",
+        "state": "idle",
+    }]
+    assert websocket.closed

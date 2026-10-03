@@ -4804,13 +4804,17 @@ export function ChatScreen({
     && botOverview.effectiveCapabilities?.includes("chat_send") === true
     && !readOnly
     && !childAgentReadOnly;
+  const voiceConversationId = resolveActiveConversationId(conversations, items)
+    || botOverview?.activeConversationId
+    || botOverview?.agents?.find((agent) => agent.id === activeAgentId)?.activeConversationId
+    || "";
   const voiceSession = useCodexVoiceSession({
     client,
     botAlias,
     agentId: activeAgentId,
-    scopeKey: JSON.stringify([accountId, effectiveExecutionMode,
-      resolveActiveConversationId(conversations, items)
-        || botOverview?.agents?.find((agent) => agent.id === activeAgentId)?.activeConversationId]),
+    conversationId: voiceConversationId,
+    sessionEpoch: botOverview?.sessionEpoch,
+    scopeKey: JSON.stringify([accountId, effectiveExecutionMode, voiceConversationId, botOverview?.sessionEpoch]),
     enabled: voiceEnabled && isVisible && !conversationLoading,
     busy: isStreaming,
   });

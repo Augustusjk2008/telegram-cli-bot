@@ -488,7 +488,10 @@ def get_file_browser_directory(manager: MultiBotManager, alias: str, user_id: in
 
 
 def build_session_snapshot(profile: BotProfile, session: UserSession) -> dict[str, Any]:
-    return _get_chat_history_service(session).build_session_snapshot(profile, session)
+    return {
+        **_get_chat_history_service(session).build_session_snapshot(profile, session),
+        "session_epoch": max(0, int(getattr(session, "session_epoch", 0) or 0)),
+    }
 
 
 def _build_capabilities(is_main: bool) -> list[str]:
@@ -687,6 +690,8 @@ def get_overview(
         else None
     )
     history_service = _history_service_for_execution_mode(session, resolved_execution_mode)
+    session_snapshot = history_service.build_session_snapshot(profile, session)
+    session_snapshot["session_epoch"] = max(0, int(getattr(session, "session_epoch", 0) or 0))
     return {
         "bot": {
             **build_bot_summary(manager, alias, user_id, profile=profile, session=session),
@@ -694,7 +699,7 @@ def get_overview(
             "voice": voice,
         },
         "voice": voice,
-        "session": history_service.build_session_snapshot(profile, session),
+        "session": session_snapshot,
         "agents": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id)),
         "active_agent_id": session.agent_id,
         "active_cluster_run": (
@@ -4162,6 +4167,8 @@ def get_codex_server_voice_session(
     *,
     agent_id: str = "main",
     execution_mode: str = "",
+    conversation_id: str = "",
+    session_epoch: int | str | None = None,
 ):
     if not config.TCB_CODEX_SERVER_VOICE_ENABLED:
         _raise(403, "voice_disabled", "语音连接未启用")
@@ -4171,10 +4178,22 @@ def get_codex_server_voice_session(
         _raise(409, "voice_unsupported_cli", "语音连接仅支持 codex_server")
     if resolved_mode != EXECUTION_MODE_CLI or str(execution_mode or "").strip().lower() not in {"", "cli"}:
         _raise(409, "voice_unsupported_execution_mode", "语音连接仅支持 cli 执行模式")
+    requested_conversation_id = str(conversation_id or "").strip()
+    try:
+        requested_epoch = int(session_epoch)
+    except (TypeError, ValueError):
+        _raise(400, "voice_session_binding_required", "语音连接缺少有效的 session_epoch")
     with session._lock:
         if session.is_processing:
             _raise(409, "voice_task_active", "当前有活动任务，语音任务/混合输入将在 M2 支持")
-        conversation_id = str(session.active_conversation_id or "").strip()
+        active_conversation_id = str(session.active_conversation_id or "").strip()
+        current_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0))
+        current_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+    if str(agent_id or "main").strip().lower() != current_agent_id:
+        _raise(409, "voice_session_changed", "当前 agent 会话已切换")
+    if requested_epoch != current_epoch or requested_conversation_id != active_conversation_id:
+        _raise(409, "voice_session_changed", "当前聊天会话已切换")
+    conversation_id = active_conversation_id
     if not conversation_id:
         _raise(409, "voice_conversation_required", "请先选择当前聊天会话")
     store = _get_chat_store(session)

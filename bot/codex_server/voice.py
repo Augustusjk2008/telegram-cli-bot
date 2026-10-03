@@ -16,6 +16,8 @@ from .client import CodexServerUnknownOutcome
 MAX_SDP_BYTES = 128_000
 MAX_MESSAGE_BYTES = 160_000
 MAX_REQUEST_IDS = 1024
+VOICE_PROTOCOL_VERSION = 1
+VOICE_LEASE_TTL = 90.0
 VOICE_BUSY_MESSAGE = "当前有活动任务，语音任务/混合输入将在 M2 支持"
 _ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _PRIVATE_KEY = re.compile(r"credential|secret|token|authorization|cookie|password|apikey|sdp|base64|^audio$|^audiodata$", re.I)
@@ -142,40 +144,68 @@ class VoiceLease:
     state: str = "idle"
     last_seq: int = 0
     created_at: float = field(default_factory=time.time)
-    last_activity: float = field(default_factory=time.time)
+    last_activity: float = field(default_factory=time.monotonic)
+    ttl: float = VOICE_LEASE_TTL
     runtime: Any = field(default=None, repr=False)
     attached: bool = True
     _stop_attempted: bool = False
     _started: bool = False
     _closed: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    _disconnect_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _registry: Any = field(default=None, repr=False)
+    _loop: Any = field(default=None, repr=False)
+    _disconnecting: bool = field(default=False, repr=False)
 
     @property
     def owner_key(self) -> tuple[int, int, str]:
         return self.key[:3]
 
+    @property
+    def expired(self) -> bool:
+        return time.monotonic() - self.last_activity >= self.ttl
+
+    @property
+    def task_active(self) -> bool:
+        return bool(self.runtime is not None and self.runtime.alive
+                    and getattr(self.runtime, "voice_task_active", False))
+
+    @property
+    def busy(self) -> bool:
+        return self.attached and not self.expired and self.state not in {"closed", "error"}
+
+    def renew(self) -> None:
+        if not self.attached or self.expired:
+            raise VoiceError("voice_lease_expired", "语音连接已过期，请重新连接", 409)
+        self.last_activity = time.monotonic()
+
     def bind(self, runtime: Any) -> None:
         if (runtime.request.owner_key != self.owner_key or runtime.request.conversation_id != self.key[3]
                 or not runtime.request.experimental_api):
             raise VoiceError("voice_session_changed", "语音会话绑定已失效", 409)
-        if runtime.active:
+        if runtime.active or getattr(runtime, "voice_task_active", False):
             raise VoiceError("voice_task_active", VOICE_BUSY_MESSAGE, 409)
         self.runtime, self.thread_id = runtime, runtime.thread_id
+        self._loop = asyncio.get_running_loop()
         runtime.voice_lease = self
 
     def publish(self, message: dict) -> None:
-        self.last_activity = time.time()
         self.last_seq = self.runtime.voice_events.publish({**message, "connection_id": self.connection_id})
 
     def summary(self, request_id: str = "") -> None:
         self.publish({"type": "voice.state", "state": self.state, "id": request_id,
                       "thread_id": self.thread_id, "realtime_session_id": self.realtime_session_id,
-                      "client_generation": self.client_generation, "last_seq": self.last_seq})
+                      "client_generation": self.client_generation, "last_seq": self.last_seq,
+                      "task_state": getattr(self.runtime, "voice_task_state", "idle"),
+                      "turn_id": getattr(self.runtime, "voice_turn_id", "")})
 
-    def transition(self, state: str) -> None:
+    def transition(self, state: str, *, code: str = "", message: str = "") -> None:
         self.state = state
         if state == "closed":
             self._closed.set()
-        self.summary()
+        if code:
+            self.publish({"type": "voice.state", "state": state, "code": code, "message": message})
+        else:
+            self.summary()
 
     def observe(self, packet: dict) -> None:
         name, data = packet.get("method"), packet.get("params") or {}
@@ -187,19 +217,25 @@ class VoiceLease:
             self.transition("active")
         elif name == "thread/realtime/closed":
             self.transition("closed")
+            self.detach()
         elif name == "thread/realtime/error":
             self.transition("error")
-        elif name in {"runtime/error", "runtime/closed"} and self.state != "closed":
-            self.transition("unknown")
+            self.detach()
+        elif name in {"runtime/error", "runtime/closed"}:
+            self._closed.set()
+            if self.state != "closed":
+                self.transition("unknown", code="voice_runtime_closed", message="语音运行时已关闭，结果待确认")
+            self.detach()
         elif name == "thread/realtime/sdp" and self.state in {"negotiating", "active"}:
             sdp = data.get("sdp")
             if isinstance(sdp, str) and len(sdp.encode("utf-8")) <= MAX_SDP_BYTES:
                 self.publish({"type": "voice.sdp", "sdp": sdp})
 
     async def start(self, sdp: str) -> None:
+        self.renew()
         if self._started or self.state != "idle":
             raise VoiceError("voice_already_started", "该连接已启动，不会重发", 409)
-        if self.runtime.active:
+        if self.runtime.active or getattr(self.runtime, "voice_task_active", False):
             raise VoiceError("voice_task_active", VOICE_BUSY_MESSAGE, 409)
         self._started = True
         self.transition("negotiating")
@@ -208,6 +244,7 @@ class VoiceLease:
         except BaseException as exc:
             self.transition("unknown" if isinstance(exc, (CodexServerUnknownOutcome, asyncio.CancelledError))
                             or not self.runtime.alive else "error")
+            self.detach()
             if isinstance(exc, asyncio.CancelledError):
                 raise
             raise VoiceError("voice_start_failed", "语音启动失败；请检查 Codex 0.159.2 兼容性和连接状态", 502) from exc
@@ -216,59 +253,89 @@ class VoiceLease:
         if not self._started or self.state == "closed":
             if self.state != "closed":
                 self.transition("closed")
+            self.detach()
             return
         if self._stop_attempted:
             return
         self._stop_attempted = True
         self.transition("stopping")
         try:
-            await self.runtime.stop_realtime()
+            await asyncio.wait_for(self.runtime.stop_realtime(), timeout)
             # An acknowledgement is not proof of closure.
             await asyncio.wait_for(self._closed.wait(), timeout)
         except BaseException as exc:
             if self.state != "closed":
-                self.transition("unknown")
+                self.transition("unknown", code="voice_stop_unknown", message="语音停止结果待确认，不会自动重试")
+            self.detach()
             if isinstance(exc, asyncio.CancelledError):
                 raise
 
+    def detach(self) -> None:
+        self.attached = False
+        if self._registry is not None:
+            self._registry.release(self)
+
     async def disconnect(self) -> None:
-        try:
-            if self.runtime is not None:
-                await self.stop_voice()
-        finally:
+        async with self._disconnect_lock:
+            # Mark the browser control channel detached, but keep the runtime
+            # binding until stop_voice can observe thread/realtime/closed.
+            self._disconnecting = True
             self.attached = False
+            try:
+                if self.runtime is not None and self.runtime.alive:
+                    await self.stop_voice()
+            finally:
+                self._disconnecting = False
+                self.detach()
+                if self.runtime is not None and self.runtime.voice_lease is self:
+                    self.runtime.voice_lease = None
 
 
 class VoiceLeaseRegistry:
-    def __init__(self):
+    def __init__(self, *, ttl: float = VOICE_LEASE_TTL):
         self._leases: dict[tuple[int, int, str, str], VoiceLease] = {}
+        self._tasks: dict[tuple[int, int, str], Any] = {}
+        self.ttl = ttl
         self._lock = threading.RLock()
+
+    def _prune(self) -> None:
+        for lease in list(self._leases.values()):
+            if not lease.attached or lease.expired or (lease.runtime is not None and not lease.runtime.alive):
+                self.release(lease)
+                if lease._loop is not None and lease._loop.is_running():
+                    lease._loop.call_soon_threadsafe(lambda old=lease: old._loop.create_task(old.disconnect()))
+        for owner, runtime in list(self._tasks.items()):
+            if not runtime.alive or not getattr(runtime, "voice_task_active", False):
+                self._tasks.pop(owner)
 
     def acquire(self, key: tuple[int, int, str, str], actor_id: tuple[str, int]) -> VoiceLease:
         with self._lock:
-            for old_key, old in list(self._leases.items()):
-                if not old.attached and (old.state == "closed" or old.runtime is None or not old.runtime.alive):
-                    self._leases.pop(old_key)
+            self._prune()
             if key in self._leases:
                 raise VoiceError("voice_connection_occupied", "当前会话已有语音连接", 409)
+            if key[:3] in self._tasks:
+                raise VoiceError("voice_task_active", VOICE_BUSY_MESSAGE, 409)
             if len(self._leases) >= 128:
                 raise VoiceError("voice_connection_limit", "语音连接数量超过限制", 429)
-            lease = VoiceLease(key, actor_id)
+            lease = VoiceLease(key, actor_id, ttl=self.ttl, _registry=self)
             self._leases[key] = lease
             return lease
 
     def owner_busy(self, owner_key: tuple[int, int, str]) -> bool:
         with self._lock:
-            return any(lease.owner_key == owner_key and lease.state != "closed"
-                       and (lease.attached or (lease.runtime is not None and lease.runtime.alive))
+            self._prune()
+            return owner_key in self._tasks or any(lease.owner_key == owner_key and (lease.busy or lease.task_active)
                        for lease in self._leases.values())
 
     def release(self, lease: VoiceLease) -> None:
         with self._lock:
-            if self._leases.get(lease.key) is not lease or lease.state not in {"idle", "closed", "error"}:
-                return
-            self._leases.pop(lease.key, None)
-            if lease.runtime is not None and lease.runtime.voice_lease is lease:
+            lease.attached = False
+            if self._leases.get(lease.key) is lease:
+                self._leases.pop(lease.key)
+            if lease.task_active:
+                self._tasks[lease.owner_key] = lease.runtime
+            elif (lease.runtime is not None and lease.runtime.voice_lease is lease
+                  and not lease._disconnecting):
                 lease.runtime.voice_lease = None
 
 

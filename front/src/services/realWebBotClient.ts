@@ -4542,6 +4542,10 @@ export class RealWebBotClient implements WebBotClient {
         history_count: number;
         is_processing: boolean;
         running_reply?: RawRunningReply | null;
+        active_conversation_id?: string;
+        activeConversationId?: string;
+        session_epoch?: number;
+        sessionEpoch?: number;
       };
       agents?: RawAgentSummary[];
       active_agent_id?: string;
@@ -4562,6 +4566,10 @@ export class RealWebBotClient implements WebBotClient {
       historyCount: data.session.history_count,
       isProcessing: data.session.is_processing,
       runningReply: mapRunningReply(data.session.running_reply),
+      activeConversationId: String(data.session.active_conversation_id ?? data.session.activeConversationId ?? ""),
+      ...(Number.isFinite(Number(data.session.session_epoch ?? data.session.sessionEpoch))
+        ? { sessionEpoch: Number(data.session.session_epoch ?? data.session.sessionEpoch) }
+        : {}),
       agents: (data.agents || []).map(mapAgentSummary),
       activeClusterRun: mapActiveClusterRun(data.active_cluster_run),
       activeAgentId: String(data.active_agent_id || options.agentId || "main"),
@@ -4576,6 +4584,9 @@ export class RealWebBotClient implements WebBotClient {
     const socket = new WebSocket(buildWsUrl(`/api/bots/${encodeURIComponent(botAlias)}/chat/voice`, {
       agent_id: options.agentId || "main",
       execution_mode: "cli",
+      protocol_version: options.protocolVersion ?? 1,
+      conversation_id: options.conversationId?.trim() || undefined,
+      session_epoch: options.sessionEpoch,
     }));
     let closed = false;
     let opened = false;

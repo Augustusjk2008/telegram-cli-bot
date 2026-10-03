@@ -69,6 +69,7 @@ from bot.config import (
 )
 from bot.codex_server.voice import (
     VoiceError,
+    VOICE_PROTOCOL_VERSION,
     voice_leases,
     validate_message,
 )
@@ -1882,10 +1883,27 @@ class WebApiServer:
             raise WebApiError(403, "voice_disabled", "语音连接未启用")
         if execution_mode and execution_mode.strip().lower() != "cli":
             raise WebApiError(409, "voice_unsupported_execution_mode", "语音连接仅支持 cli 执行模式")
+        raw_agent_id = request.query.get("agent_id") or request.query.get("agentId")
+        if not isinstance(raw_agent_id, str) or not raw_agent_id.strip():
+            raise WebApiError(400, "voice_session_binding_required", "语音连接缺少 agent_id")
+        protocol_version = request.query.get("protocol_version") or request.query.get("protocolVersion")
+        if str(protocol_version or "").strip() != str(VOICE_PROTOCOL_VERSION):
+            raise WebApiError(400, "voice_protocol_unsupported", "不支持的语音协议版本")
+        requested_conversation_id = str(
+            request.query.get("conversation_id") or request.query.get("conversationId") or ""
+        ).strip()
+        requested_epoch = request.query.get("session_epoch") or request.query.get("sessionEpoch")
+        if not requested_conversation_id or requested_epoch is None:
+            raise WebApiError(400, "voice_session_binding_required", "语音连接缺少会话绑定")
+        try:
+            requested_epoch = int(requested_epoch)
+        except (TypeError, ValueError) as exc:
+            raise WebApiError(400, "voice_session_binding_required", "语音连接缺少有效的 session_epoch") from exc
 
         runtime = None
         lease = None
         voice_queue = None
+        ws = web.WebSocketResponse(heartbeat=30.0)
         try:
             profile, session, conversation_id = get_codex_server_voice_session(
                 self.manager,
@@ -1893,12 +1911,18 @@ class WebApiServer:
                 self._chat_user_id(auth),
                 agent_id=agent_id,
                 execution_mode=execution_mode,
+                conversation_id=requested_conversation_id,
+                session_epoch=requested_epoch,
             )
             lease_key = (session.bot_id, chat_session_user_id(session.user_id), session.agent_id, conversation_id)
+            await ws.prepare(request)
             try:
                 lease = voice_leases.acquire(lease_key, (auth.account_id, auth.user_id))
             except VoiceError as exc:
-                raise WebApiError(exc.status, exc.code, exc.message) from exc
+                await ws.send_json({"type": "voice.error", "code": exc.code, "message": exc.message,
+                                    "state": "idle"})
+                await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=exc.code.encode("utf-8"))
+                return ws
             try:
                 runtime = await open_codex_server_voice_runtime(
                     profile,
@@ -1907,14 +1931,18 @@ class WebApiServer:
                     allow_unsafe_cli=CAP_RUN_UNSAFE_CLI in auth.capabilities,
                 )
             except CodexServerError as exc:
-                raise WebApiError(502, "voice_runtime_unavailable", str(exc)) from exc
+                await ws.send_json({"type": "voice.error", "code": "voice_runtime_unavailable",
+                                    "message": str(exc), "state": "idle"})
+                await ws.close(code=WSCloseCode.INTERNAL_ERROR, message=b"voice runtime unavailable")
+                return ws
             try:
                 voice_queue = runtime.subscribe_voice()
                 lease.bind(runtime)
             except VoiceError as exc:
-                raise WebApiError(exc.status, exc.code, exc.message) from exc
-            ws = web.WebSocketResponse(heartbeat=30.0)
-            await ws.prepare(request)
+                await ws.send_json({"type": "voice.error", "code": exc.code, "message": exc.message,
+                                    "state": lease.state if lease is not None else "idle"})
+                await ws.close(code=WSCloseCode.INTERNAL_ERROR, message=exc.code.encode("utf-8"))
+                return ws
             lease.summary()
 
             async def forward_events() -> None:
@@ -1928,6 +1956,12 @@ class WebApiServer:
             async def receive_commands() -> None:
                 seen_ids: set[str] = set()
                 async for message in ws:
+                    try:
+                        lease.renew()
+                    except VoiceError as exc:
+                        await ws.send_json({"type": "voice.error", "code": exc.code,
+                                            "message": exc.message, "state": lease.state})
+                        return
                     if message.type != WSMsgType.TEXT:
                         if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
                             return
@@ -1958,7 +1992,16 @@ class WebApiServer:
                                      "state": lease.state}
                         await ws.send_json(error)
 
-            tasks = [asyncio.create_task(forward_events()), asyncio.create_task(receive_commands())]
+            async def heartbeat_lease() -> None:
+                try:
+                    while not ws.closed:
+                        await asyncio.sleep(15)
+                        lease.renew()
+                except (asyncio.CancelledError, VoiceError):
+                    return
+
+            tasks = [asyncio.create_task(forward_events()), asyncio.create_task(receive_commands()),
+                     asyncio.create_task(heartbeat_lease())]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()

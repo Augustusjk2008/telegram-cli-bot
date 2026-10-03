@@ -72,6 +72,8 @@ describe("RealWebBotClient", () => {
     const onClose = vi.fn();
     const connection = new RealWebBotClient().connectCodexVoice("main", {
       agentId: "reviewer",
+      conversationId: "conversation-1",
+      sessionEpoch: 4,
       onMessage,
       onClose,
     });
@@ -80,6 +82,9 @@ describe("RealWebBotClient", () => {
     expect(url.pathname).toBe("/node/laptop/api/bots/main/chat/voice");
     expect(url.searchParams.get("agent_id")).toBe("reviewer");
     expect(url.searchParams.get("execution_mode")).toBe("cli");
+    expect(url.searchParams.get("protocol_version")).toBe("1");
+    expect(url.searchParams.get("conversation_id")).toBe("conversation-1");
+    expect(url.searchParams.get("session_epoch")).toBe("4");
     socket.readyState = 1;
     socket.emit("open");
     await connection.ready;

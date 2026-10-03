@@ -129,10 +129,24 @@ class CodexServerRuntime:
         self._wire_bytes = 0
         self.voice_events = VoiceEvents()
         self.voice_lease: Any = None
+        self._voice_task_state = "idle"
+        self._voice_turn_id = ""
 
     @property
     def active(self) -> bool:
         return self._streaming
+
+    @property
+    def voice_task_state(self) -> str:
+        return self._voice_task_state
+
+    @property
+    def voice_turn_id(self) -> str:
+        return self._voice_turn_id
+
+    @property
+    def voice_task_active(self) -> bool:
+        return self._voice_task_state in {"starting", "active"}
 
     @property
     def alive(self) -> bool:
@@ -219,6 +233,32 @@ class CodexServerRuntime:
         self._turn_done.set()
         self._available.set()
 
+    def _observe_voice_turn(self, packet: dict, payload: dict) -> None:
+        """Track realtime turns while the normal turn mapper is idle."""
+        if self._streaming:
+            return
+        method = packet.get("method")
+        turn = payload.get("turn") or {}
+        if not isinstance(turn, dict):
+            turn = {}
+        incoming = str(payload.get("turnId") or turn.get("id") or "")
+        if incoming and incoming in self._previous_turns:
+            return
+        if method == "turn/started":
+            self._voice_turn_id = incoming
+            self._voice_task_state = "active"
+            return
+        if not self.voice_task_active or (incoming and self._voice_turn_id and incoming != self._voice_turn_id):
+            return
+        if method not in {"turn/completed", "turn/failed"}:
+            return
+        status = str(turn.get("status") or payload.get("status") or "failed").lower()
+        self._voice_task_state = (
+            "completed" if status == "completed" else
+            "interrupted" if status == "interrupted" else
+            "failed"
+        )
+
     async def _read_events(self) -> None:
         try:
             async for packet in self.client.events():
@@ -228,6 +268,7 @@ class CodexServerRuntime:
                 self.voice_events.packet(packet, self.thread_id)
                 if self.voice_lease is not None:
                     self.voice_lease.observe(packet)
+                self._observe_voice_turn(packet, payload)
                 incoming = str(payload.get("turnId") or (payload.get("turn") or {}).get("id") or "")
                 if not self._streaming:
                     if packet.get("method") == "thread/tokenUsage/updated":
@@ -253,8 +294,10 @@ class CodexServerRuntime:
             raise
         except Exception as exc:
             self._finish_failure(exc)
+            if self.voice_task_active:
+                self._voice_task_state = "unknown"
             if self.voice_lease is not None and self.voice_lease.state not in {"closed", "unknown"}:
-                self.voice_lease.transition("unknown")
+                self.voice_lease.transition("unknown", code="voice_runtime_error", message="语音运行时错误，结果待确认")
             self.voice_events.publish({"type": "voice.event", "name": "runtime/error",
                                        "thread_id": self.thread_id, "data": {"error": str(exc)}})
             await self.client.close()
@@ -286,6 +329,8 @@ class CodexServerRuntime:
     async def stream_turn(self, prompt: str):
         if self._streaming:
             raise CodexServerError("codex server 同一运行时只允许一个活动 turn")
+        if self.voice_task_active:
+            raise CodexServerError("codex server 当前语音任务尚未完成")
         if not self.alive:
             raise self._failure or CodexServerError("codex server 运行时已关闭，请重新 open_or_create")
         self._streaming = True
@@ -380,6 +425,15 @@ class CodexServerRuntime:
             if self._closed:
                 return
             self._closed = True
+            if self.voice_task_active:
+                self._voice_task_state = "unknown"
+            closed_packet = {"method": "runtime/closed", "params": {
+                "threadId": self.thread_id, "turnId": self._voice_turn_id,
+                "voiceTaskState": self._voice_task_state,
+            }}
+            self.voice_events.packet(closed_packet, self.thread_id)
+            if self.voice_lease is not None:
+                self.voice_lease.observe(closed_packet)
             await self.interrupt()
             await self.client.close()
             if self._reader and self._reader is not asyncio.current_task():
@@ -431,6 +485,8 @@ class CodexServerRegistry:
             if existing:
                 if existing.active:
                     raise CodexServerError("codex server owner 当前 turn 尚未完成")
+                if existing.voice_task_active:
+                    raise CodexServerError("codex server owner 当前语音任务尚未完成")
                 if existing.voice_lease is not None and existing.voice_lease.state not in {"closed", "unknown", "error"}:
                     raise CodexServerError("codex server owner 当前语音连接尚未结束")
                 if existing.loop is not asyncio.get_running_loop():

@@ -14,7 +14,7 @@ const stateLabels: Record<string, string> = {
   stopping: "结束中",
   closed: "已结束",
   error: "连接错误",
-  unknown: "状态待确认",
+  unknown: "结果待确认",
 };
 
 export function CodexVoiceBar({ session, disabled = false, busy = false }: Props) {

@@ -58,6 +58,17 @@ M0 通过、M1 开始实现前，必须形成并评审以下设计。未完成�
 - M2 持久化字段和幂等键。至少覆盖本地 turn_id、Codex turn ID、realtime_session_id、item ID、协议事件序号、转写定稿状态和任务提交键。
 - M1 交付前建立配置级功能开关，默认关闭。关闭后普通文字聊天必须继续可用。
 
+### 5.1 M1 固定协议契约
+
+本轮实现固定以下边界，作为代码和回归测试的共同依据：
+
+- 控制协议版本为 `1`。WebSocket 完成鉴权和会话校验后发送 `voice.state`，其中 `state=idle` 表示连接已建立；后续消息统一使用带 `type`、单调 `seq` 和连接 `connection_id` 的 envelope。语音错误使用 `voice.error`，至少保留 `code`、`message` 和当前 `state`。
+- 客户端连接参数必须包含 `agent_id`、`conversation_id`、`session_epoch`、`protocol_version` 和 `execution_mode=cli`。服务端只接受与当前 `(bot_id, chat_session_user_id(user_id), agent_id)`、活动 conversation、session epoch、工作目录和实验 API 完全一致的绑定；会话切换、目录变化或 agent 变化按 `voice_session_changed` 收敛。
+- 租约键固定为 `(bot_id, shared_user_id, agent_id, conversation_id)`。租约连接状态和语音任务状态分别记录；获取、心跳/续租、客户端断线释放、TTL 清理和未知结果都必须可重复执行。未知 RPC 不自动重试，后续事件、终态或 TTL 必须提供回收路径；没有活动语音任务的未知连接不能永久占用文字聊天。
+- 连接状态按 `idle → starting/negotiating → active → stopping → closed/error/unknown` 收敛。结束语音只停止 realtime 媒体，不发送 `turn/interrupt`；活动语音任务在浏览器连接结束后继续由 runtime 观察，runtime 真正关闭时发布 `runtime/closed` 或 `unknown`。
+- 当前采用全量 ICE，客户端使用固定 `iceServers` 配置；`/node/<node ID>/` 只改变 HTTP/WebSocket 转发前缀，不改变消息 envelope、鉴权和租约键。
+- `client.events()` 只能由 runtime 的单一 reader 消费。该 reader 同时向普通 turn 流和语音订阅者分发事件；语音连接、浏览器 data channel 和控制 WebSocket 不得建立第二个 reader。
+
 ## 6. M0：隔离探测器可行性验证
 
 M0 只验证隔离探测器中的原生协议、真实媒体和真实语音工具任务。M0 不接入生产 Web API，不修改生产 runtime，不写入 TCB ChatStore。

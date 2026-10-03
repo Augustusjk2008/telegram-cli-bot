@@ -895,7 +895,15 @@ export type CodexVoiceCapability = {
 export type CodexVoiceState = "idle" | "negotiating" | "active" | "stopping" | "closed" | "error" | "unknown";
 
 export type CodexVoiceMessage =
-  | { type: "voice.state"; seq: number; state: CodexVoiceState; connection_id?: string }
+  | {
+    type: "voice.state";
+    seq: number;
+    state: CodexVoiceState;
+    connection_id?: string;
+    code?: string;
+    message?: string;
+    outcome?: string;
+  }
   | { type: "voice.sdp"; seq: number; connection_id?: string; sdp: string }
   | { type: "voice.event"; seq: number; event_id?: string; name: string; thread_id?: string; turn_id?: string; realtime_session_id?: string; item_id?: string; data: Record<string, unknown> }
   | { type: "voice.error" | "error"; seq?: number; code?: string; message?: string; state?: CodexVoiceState; error?: { code?: string; message?: string }; outcome?: string };
@@ -913,6 +921,9 @@ export type CodexVoiceConnection = {
 
 export type CodexVoiceConnectionOptions = {
   agentId?: string;
+  conversationId?: string;
+  sessionEpoch?: number;
+  protocolVersion?: number;
   onMessage: (message: CodexVoiceMessage) => void;
   onClose: () => void;
 };
@@ -935,6 +946,8 @@ export type BotOverview = {
   cluster?: BotClusterConfig;
   activeClusterRun?: ActiveClusterRun | null;
   activeAgentId?: string;
+  activeConversationId?: string;
+  sessionEpoch?: number;
   busyAgentIds?: string[];
   busyAgentNames?: string[];
   busyAgentCount?: number;

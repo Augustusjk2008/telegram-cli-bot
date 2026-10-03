@@ -102,10 +102,43 @@ async def test_runtime_voice_events_are_bounded_and_stop_is_realtime_only():
 async def test_unknown_stop_result_is_not_retried():
     runtime = FakeRuntime()
     runtime.stop_realtime.side_effect = CodexServerUnknownOutcome("unknown")
-    lease = VoiceLease((1, 2, "main", "conversation"), ("account", 2))
+    registry = VoiceLeaseRegistry()
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
     lease.bind(runtime)
     await lease.start("v=0\r\n")
     await lease.stop_voice(timeout=.01)
     await lease.stop_voice(timeout=.01)
     assert lease.state == "unknown"
     assert runtime.stop_realtime.await_count == 1
+    assert not registry.owner_busy((1, 2, "main"))
+
+
+@pytest.mark.asyncio
+async def test_disconnect_keeps_runtime_binding_until_realtime_closed():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry()
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    await lease.start("v=0\r\n")
+
+    disconnecting = asyncio.create_task(lease.disconnect())
+    await asyncio.sleep(0)
+    assert runtime.voice_lease is lease
+    closed = {"method": "thread/realtime/closed", "params": {
+        "threadId": "thread-1", "realtimeSessionId": "realtime-1"}}
+    lease.realtime_session_id = "realtime-1"
+    lease.observe(closed)
+    await disconnecting
+
+    assert lease.state == "closed"
+    assert runtime.voice_lease is None
+    assert not registry.owner_busy((1, 2, "main"))
+
+
+def test_detached_lease_expires_and_does_not_block_reacquire():
+    registry = VoiceLeaseRegistry(ttl=.01)
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.last_activity -= 1
+    assert not registry.owner_busy((1, 2, "main"))
+    replacement = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    assert replacement is not lease
