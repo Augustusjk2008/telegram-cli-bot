@@ -85,8 +85,10 @@
       <button id="resume" hidden>恢复音频</button>
       <button id="interrupt" class="danger" disabled>中断任务</button>
       <button id="stop" disabled>结束语音</button>
+      <button id="summary" disabled>读取 M0 证据</button>
     </div>
     <p id="playback-note" class="muted controls-note">停止播报只抑制本地声音；结束语音释放媒体设备。任务终态以服务端通知为准。</p>
+    <p id="m0-summary" class="muted" role="status" aria-live="polite">尚未读取 M0 证据。</p>
     <audio id="remote-audio" autoplay playsinline></audio>
   </section>
   <p id="notice" role="status" aria-live="polite">正在连接探测器。断线或结果未知时不会自动重连、重试或重发任务。</p>
@@ -184,6 +186,7 @@
     $("suppress").disabled = !audio.srcObject || suppressed;
     $("resume").hidden = !audio.srcObject || !(suppressed || autoplayBlocked);
     $("interrupt").disabled = !ready || !state.active_turn_id || taskUnknown || !activeTask() || hasPending(["interrupt"]);
+    $("summary").disabled = !online || hasPending(["summary"]);
     const sending = hasPending(["text", "steer"]);
     const text = $("text-input").value.trim();
     $("send-text").disabled = !ready || !text || sending || taskUnknown || activeTask() || state.task_state === "unknown";
@@ -526,6 +529,15 @@
   $("interrupt").onclick = async () => {
     try { await command("interrupt"); notice("中断请求已受理；等待服务端任务终态。"); }
     catch (error) { if (error.outcome === "unknown") taskUnknown = true; notice(`中断任务：${error.message}`, true); }
+    render();
+  };
+  $("summary").onclick = async () => {
+    try {
+      const value = await command("summary");
+      const missing = Array.isArray(value?.missing) ? value.missing.filter((item) => typeof item === "string") : [];
+      const status = value?.status === "passed" ? "通过" : "未完成";
+      $("m0-summary").textContent = sanitize(`M0 证据：${status}${missing.length ? `；缺失：${missing.join("、")}` : "；全部必需项已观察"}`);
+    } catch (error) { notice(`读取 M0 证据：${error.message}`, true); }
     render();
   };
   $("text-form").onsubmit = (event) => { event.preventDefault(); void textRequest("text"); };

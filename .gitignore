@@ -16,6 +16,11 @@ managed_bots.json
 .env
 *.log
 /docs/
+!/docs/
+/docs/*
+!/docs/plan/
+/docs/plan/*
+!/docs/plan/codex-server-voice-roadmap.md
 .worktrees/
 .release-local/*
 !.release-local/
