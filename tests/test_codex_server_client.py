@@ -12,11 +12,15 @@ import json, sys, time, subprocess
 def emit(x):
  print(json.dumps(x), flush=True)
 held = None
+capabilities = None
 for line in sys.stdin:
  p = json.loads(line)
  method = p.get('method')
  if method == 'initialize':
+  capabilities = p['params']['capabilities']
   emit({'id': p['id'], 'result': {'userAgent': 'codex/0.159.2'}})
+ elif method == 'capabilities':
+  emit({'id': p['id'], 'result': capabilities})
  elif method == 'initialized':
   pass
  elif method == 'hold':
@@ -49,11 +53,22 @@ for line in sys.stdin:
 '''
 
 
-async def start_fake(tmp_path, **env):
+async def start_fake(tmp_path, *, experimental_api=False, **env):
     path = tmp_path / "fake_server.py"
     path.write_text(FAKE_SERVER, encoding="utf-8")
     return await CodexServerClient.start([sys.executable, "-u", str(path)], cwd=str(tmp_path),
-                                         env={**os.environ, **env}, timeout=1)
+                                         env={**os.environ, **env}, timeout=1,
+                                         experimental_api=experimental_api)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options, expected", [({}, False), ({"experimental_api": True}, True)])
+async def test_experimental_api_is_opt_in(tmp_path, options, expected):
+    client = await start_fake(tmp_path, **options)
+    try:
+        assert await client.request("capabilities", {}) == {"experimentalApi": expected}
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -77,7 +92,8 @@ async def test_matching_interleaving_and_single_reader(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_incompatible_server_version_is_rejected(tmp_path):
+@pytest.mark.parametrize("experimental_api", [False, True])
+async def test_incompatible_server_version_is_rejected(tmp_path, experimental_api):
     path = tmp_path / "bad_version_server.py"
     path.write_text(FAKE_SERVER.replace("codex/0.159.2", "codex/0.159.1"), encoding="utf-8")
     with pytest.raises(CodexServerError, match="不兼容"):
@@ -86,6 +102,7 @@ async def test_incompatible_server_version_is_rejected(tmp_path):
             cwd=str(tmp_path),
             env={**os.environ},
             timeout=1,
+            experimental_api=experimental_api,
         )
 
 

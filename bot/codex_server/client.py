@@ -70,7 +70,8 @@ class CodexServerClient:
         self._dispatcher = asyncio.create_task(self._dispatch(), name="codex-server-dispatch")
 
     @classmethod
-    async def start(cls, argv: list[str], *, cwd: str, env: dict[str, str], timeout: float = 30):
+    async def start(cls, argv: list[str], *, cwd: str, env: dict[str, str], timeout: float = 30,
+                    experimental_api: bool = False):
         process = None
         tree = None
         try:
@@ -91,7 +92,7 @@ class CodexServerClient:
         try:
             result = await client.request("initialize", {
                 "clientInfo": {"name": "orbit_safe_claw", "title": "Orbit Safe Claw", "version": "1.0"},
-                "capabilities": {"experimentalApi": False},
+                "capabilities": {"experimentalApi": experimental_api},
             })
             user_agent = result.get("userAgent")
             if not isinstance(user_agent, str) or not re.search(rf"(?:/|\b){re.escape(APP_SERVER_VERSION)}(?:\b|\s|$)", user_agent):

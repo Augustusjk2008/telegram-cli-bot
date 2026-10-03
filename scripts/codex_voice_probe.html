@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Codex 语音探测</title>
+  <script>
+    let launchToken = new URLSearchParams(location.hash.slice(1)).get("token") || "";
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  </script>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, "Microsoft YaHei", sans-serif; color: #182c37; background: #f1f5f4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1280px; margin: auto; padding: 32px 24px 48px; }
+    header, .section-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    header { margin-bottom: 24px; }
+    h1 { font-size: clamp(25px, 4vw, 34px); letter-spacing: -.04em; margin: 4px 0 8px; }
+    h2 { font-size: 17px; margin: 0; }
+    p { margin: 8px 0; line-height: 1.6; }
+    .eyebrow { color: #277665; font-size: 12px; font-weight: 750; letter-spacing: .16em; }
+    .muted, small { color: #597079; font-size: 13px; line-height: 1.6; }
+    .badge { border: 1px solid #c7d8d2; border-radius: 999px; background: #e9f3ef; padding: 8px 14px; font-size: 13px; white-space: nowrap; }
+    .card { background: #fff; border: 1px solid #d8e2df; border-radius: 16px; padding: 22px; min-width: 0; }
+    .states { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+    .state-label { font-size: 12px; color: #597079; margin-bottom: 7px; }
+    .state-value { display: block; font-size: 21px; font-weight: 650; overflow-wrap: anywhere; }
+    .state-value[data-tone="bad"] { color: #a33d27; }
+    .state-value[data-tone="good"] { color: #127259; }
+    .controls, .row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+    button { font: inherit; font-size: 14px; border: 1px solid #c8d5d0; border-radius: 9px; padding: 10px 14px; background: #fff; color: #213c46; cursor: pointer; min-height: 42px; }
+    button:hover:enabled { background: #edf4f1; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary { background: #176c59; border-color: #176c59; color: white; }
+    button.primary:hover:enabled { background: #0e5747; }
+    button.danger { color: #a03c25; border-color: #e5c5b9; }
+    button[aria-pressed="true"] { background: #fff0d6; border-color: #cb952f; }
+    :focus-visible { outline: 3px solid #d09220; outline-offset: 3px; }
+    .controls-note { margin: 13px 0 0; }
+    #notice { margin: 16px 0; padding: 12px 16px; border-radius: 10px; background: #e4efeb; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+    #notice[data-error="true"] { background: #fff0e8; color: #883820; }
+    .columns { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; }
+    .stack { display: grid; gap: 18px; align-content: start; min-width: 0; }
+    .section-head { margin-bottom: 14px; }
+    .scroll { max-height: 390px; overflow: auto; overflow-wrap: anywhere; scrollbar-gutter: stable; }
+    #captions { min-height: 180px; }
+    .empty { color: #6b7e83; font-size: 14px; padding: 20px 0; }
+    .caption { border-left: 3px solid #84bbaa; padding: 4px 0 4px 13px; margin: 14px 0; }
+    .caption p { white-space: pre-wrap; margin: 5px 0; font-size: 15px; }
+    .caption small { font-size: 11px; overflow-wrap: anywhere; }
+    textarea { display: block; width: 100%; resize: vertical; min-height: 104px; border: 1px solid #bbcfc6; border-radius: 9px; padding: 12px; margin: 9px 0 12px; background: #fcfdfc; color: inherit; font: inherit; line-height: 1.5; }
+    label { font-size: 14px; }
+    .presets { margin-top: 12px; }
+    .presets button { font-size: 12px; min-height: 34px; padding: 5px 10px; }
+    details { border-top: 1px solid #e2eae7; padding: 10px 0; }
+    summary { cursor: pointer; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+    pre { font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; max-height: 300px; overflow: auto; }
+    dl { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 8px 12px; font-size: 12px; line-height: 1.6; margin-bottom: 0; }
+    dt { color: #60747a; } dd { margin: 0; overflow-wrap: anywhere; }
+    #history-output { max-height: 380px; }
+    [hidden] { display: none !important; }
+    @media (max-width: 760px) {
+      main { padding: 20px 14px 32px; } header { align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+      .columns { grid-template-columns: 1fr; } .card { padding: 17px; } .states { gap: 10px; }
+      .state-value { font-size: 18px; } .controls button { flex: 1 1 130px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">CODEX · M0 PROBE</div><h1>语音与任务，分别观察</h1><p class="muted">独立语音探测 · 原生 WebRTC · 临时测试工作区</p></div>
+    <span id="connection" class="badge" role="status">正在验证访问权限</span>
+  </header>
+  <div class="states" aria-live="polite">
+    <section class="card"><div class="state-label">语音连接 · 服务端状态</div><strong id="voice-state" class="state-value">等待状态</strong><small id="media-state">本地媒体未开启</small></section>
+    <section class="card"><div class="state-label">执行任务 · 服务端状态</div><strong id="task-state" class="state-value">等待状态</strong><small id="turn-id">无活动 turn</small></section>
+  </div>
+  <section class="card" aria-label="语音与任务控制">
+    <div class="controls">
+      <button id="start" class="primary" disabled>开始语音</button>
+      <button id="mute" aria-pressed="false" disabled>麦克风静音</button>
+      <button id="suppress" disabled>停止当前播报</button>
+      <button id="resume" hidden>恢复音频</button>
+      <button id="interrupt" class="danger" disabled>中断任务</button>
+      <button id="stop" disabled>结束语音</button>
+    </div>
+    <p id="playback-note" class="muted controls-note">停止播报只抑制本地声音；结束语音释放媒体设备。任务终态以服务端通知为准。</p>
+    <audio id="remote-audio" autoplay playsinline></audio>
+  </section>
+  <p id="notice" role="status" aria-live="polite">正在连接探测器。断线或结果未知时不会自动重连、重试或重发任务。</p>
+  <div class="columns">
+    <div class="stack">
+      <section class="card">
+        <div class="section-head"><h2>实时字幕</h2><span class="muted">仅观察，不提交任务</span></div>
+        <div id="captions" class="scroll" role="log" aria-label="实时字幕"><p class="empty">开始语音后，用户和助手的转写将在这里显示。</p></div>
+        <p class="muted">按来源与 item / response ID 关联；无 ID 的平面转写单独显示，不按文字去重。</p>
+      </section>
+      <section class="card">
+        <div class="section-head"><h2>文字对照</h2><span class="muted">沿用同一 thread</span></div>
+        <form id="text-form">
+          <label for="text-input">任务或补充要求</label>
+          <textarea id="text-input" placeholder="输入只读任务；点击按钮后才发送。" maxlength="20000"></textarea>
+          <div class="row"><button id="send-text" class="primary" type="submit" disabled>发送文字任务</button><button id="steer" type="button" disabled>补充当前任务</button></div>
+        </form>
+        <div class="row presets"><span class="muted">填入示例</span><button id="baseline" disabled>基线读取</button><button id="slow" disabled>慢速只读任务</button></div>
+        <p class="muted">启动时已运行文字基线。示例只填入输入框；补充要求绑定当前活动 turn。</p>
+      </section>
+      <section class="card">
+        <div class="section-head"><h2>原生历史</h2><button id="history" disabled>读取历史</button></div>
+        <pre id="history-output">尚未读取。结束语音后仍可检查任务与历史。</pre>
+      </section>
+    </div>
+    <div class="stack">
+      <section class="card">
+        <div class="section-head"><h2>事件时间线</h2><span id="event-count" class="muted">0 条</span></div>
+        <div id="timeline" class="scroll" aria-label="事件时间线"><p class="empty">等待服务端事件与浏览器媒体证据。</p></div>
+        <p class="muted">显示最近 300 条。保留关联 ID；音频、凭据与完整 SDP 不进入日志。</p>
+      </section>
+      <section class="card">
+        <h2>探测上下文</h2>
+        <dl><dt>Thread</dt><dd id="thread">—</dd><dt>工作区</dt><dd id="workspace">—</dd><dt>日志</dt><dd id="log-path">—</dd><dt>播放证据</dt><dd id="audio-evidence">尚未接收远端媒体</dd></dl>
+      </section>
+    </div>
+  </div>
+</main>
+<script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const audio = $("remote-audio");
+  const pending = new Map(), sequences = new Set(), browserRows = new Map();
+  const captions = new Map(), flatCaptions = new Map(), transcriptEvents = new Set();
+  let socket, online = false, disposed = false, state = {};
+  let peer = null, mic = null, channel = null, generation = 0, statsTimer = null, answerTimer = null;
+  let starting = false, stopping = false, startSent = false, suppressed = false, autoplayBlocked = false;
+  let voiceUnknown = false, taskUnknown = false, mediaStatus = "本地媒体未开启";
+  let requestNumber = 0, captionNumber = 0, eventCount = 0;
+  const requestPrefix = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const voiceLabels = { idle: "未开始", starting: "启动中", started: "已启动", stopping: "关闭中", closed: "已关闭", error: "错误", unknown: "结果未知" };
+  const taskLabels = { idle: "空闲", submitting: "提交中", inProgress: "执行中", completed: "已完成", interrupted: "已中断", failed: "失败", unknown: "结果未知" };
+  const activeTask = () => ["submitting", "inProgress"].includes(state.task_state);
+  const hasPending = (ops) => [...pending.values()].some((p) => ops.includes(p.op));
+
+  // Sanitize before either rendering or forwarding; SDP is only used for negotiation.
+  function sanitize(value, depth = 0) {
+    if (depth > 14) return "[深层内容省略]";
+    if (typeof value === "string") {
+      if (/(?:^|\n)v=0(?:\r?\n|$)|a=ice-(?:pwd|ufrag):|m=audio\s|data:audio\/|[A-Za-z0-9+/]{180,}={0,2}/i.test(value)) return "[媒体或 SDP 已移除]";
+      return value.replace(/\b(?:Bearer\s+|sk-)[A-Za-z0-9._-]+/gi, "[凭据已移除]")
+        .replace(/((?:token|client_secret|api[_-]?key|password|authorization)\s*[=:]\s*)[^\s&,;]+/gi, "$1[已移除]");
+    }
+    if (Array.isArray(value)) return value.map((entry) => sanitize(entry, depth + 1));
+    if (value && typeof value === "object") {
+      const clean = {};
+      for (const [key, entry] of Object.entries(value)) {
+        if (/credential|secret|token|authorization|cookie|password|apikey|sdp|base64|^audio$|^rawaudio$|^audiodata$|^audiobuffer$/i.test(key.replace(/[_-]/g, ""))) continue;
+        if (key === "delta" && /(?:^|\.)audio\.delta$/.test(String(value.type || ""))) continue;
+        Object.defineProperty(clean, key, { value: sanitize(entry, depth + 1), enumerable: true });
+      }
+      return clean;
+    }
+    return value;
+  }
+
+  function notice(message, error = false) {
+    $("notice").textContent = sanitize(String(message));
+    $("notice").dataset.error = String(error);
+  }
+
+  function render() {
+    const voice = voiceUnknown ? "unknown" : state.voice_state;
+    const task = taskUnknown ? "unknown" : state.task_state;
+    for (const [id, value, labels] of [["voice-state", voice, voiceLabels], ["task-state", task, taskLabels]]) {
+      $(id).textContent = value ? `${labels[value] || value} · ${value}` : "等待状态";
+      $(id).dataset.tone = ["unknown", "error", "failed"].includes(value) ? "bad" : ["started", "completed"].includes(value) ? "good" : "";
+    }
+    const ready = online && state.ready;
+    $("media-state").textContent = mediaStatus;
+    $("turn-id").textContent = state.active_turn_id ? `turn · ${state.active_turn_id}` : "无活动 turn";
+    $("start").disabled = !ready || starting || stopping || peer !== null || voiceUnknown || hasPending(["start_voice", "stop_voice"]) || !["idle", "closed", "error"].includes(state.voice_state);
+    $("stop").disabled = stopping || !(starting || peer || (online && (voiceUnknown || ["starting", "started", "stopping", "unknown"].includes(state.voice_state))));
+    $("mute").disabled = !mic;
+    $("suppress").disabled = !audio.srcObject || suppressed;
+    $("resume").hidden = !audio.srcObject || !(suppressed || autoplayBlocked);
+    $("interrupt").disabled = !ready || !state.active_turn_id || taskUnknown || !activeTask() || hasPending(["interrupt"]);
+    const sending = hasPending(["text", "steer"]);
+    const text = $("text-input").value.trim();
+    $("send-text").disabled = !ready || !text || sending || taskUnknown || activeTask() || state.task_state === "unknown";
+    $("steer").disabled = !ready || !text || sending || taskUnknown || !state.active_turn_id || state.task_state !== "inProgress";
+    $("history").disabled = !ready || hasPending(["history"]);
+    $("baseline").disabled = !state.baseline_prompt;
+    $("slow").disabled = !state.slow_prompt;
+  }
+
+  function timeline(event, existing) {
+    const clean = sanitize(event);
+    const row = existing || document.createElement("details");
+    const summary = document.createElement("summary"), detail = document.createElement("pre");
+    summary.textContent = `${clean.sequence != null ? "#" + clean.sequence + " · " : ""}${clean.time || new Date().toISOString()} · ${clean.source || "browser"} · ${clean.name || "event"}`;
+    detail.textContent = JSON.stringify(clean, null, 2);
+    row.replaceChildren(summary, detail);
+    if (!existing) {
+      $("timeline").querySelector(".empty")?.remove();
+      $("timeline").prepend(row);
+      if ($("timeline").children.length > 300) $("timeline").lastElementChild.remove();
+      $("event-count").textContent = `${++eventCount} 条`;
+    }
+    return row;
+  }
+
+  function browserEvent(name, data = {}) {
+    const id = `${requestPrefix}-${++requestNumber}`;
+    const safeName = sanitize(String(name)), safeData = sanitize(data);
+    const row = timeline({ source: "browser", name: safeName, request_id: id, data: safeData });
+    browserRows.set(id, row);
+    if (browserRows.size > 500) browserRows.delete(browserRows.keys().next().value);
+    if (online && socket?.readyState === WebSocket.OPEN) {
+      try { socket.send(JSON.stringify({ id, op: "browser_event", name: safeName, data: safeData })); }
+      catch { disconnected("事件记录连接失败；本地媒体已释放。"); }
+    }
+  }
+
+  function unknownError(message) { return Object.assign(new Error(message), { outcome: "unknown" }); }
+
+  function command(op, args = {}) {
+    if (!online || socket?.readyState !== WebSocket.OPEN) return Promise.reject(new Error("连接不可用，未发送请求。"));
+    const id = `${requestPrefix}-${++requestNumber}`;
+    timeline({ source: "browser", name: `request.${op}`, request_id: id, data: sanitize(args) });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        timeline({ source: "browser", name: `result.${op}`, request_id: id, outcome: "unknown" });
+        reject(unknownError(`${op} 等待超时，结果未知；未自动重试。`));
+        render();
+      }, 65000);
+      pending.set(id, { op, resolve, reject, timer });
+      render();
+      try { socket.send(JSON.stringify({ id, op, ...args })); }
+      catch {
+        clearTimeout(timer); pending.delete(id);
+        reject(unknownError(`${op} 发送连接异常，结果未知。`));
+        disconnected("连接异常；未重发请求。");
+      }
+    });
+  }
+
+  function result(message) {
+    const entry = pending.get(message.id);
+    if (!entry) {
+      if (!browserRows.has(message.id)) timeline({ source: "server", name: "result.late", ...sanitize(message) });
+      return;
+    }
+    clearTimeout(entry.timer); pending.delete(message.id);
+    timeline({ source: "server", name: `result.${entry.op}`, request_id: message.id, data: message });
+    if (message.ok && message.outcome !== "unknown") entry.resolve(message.result);
+    else entry.reject(Object.assign(new Error(typeof message.error === "string" ? message.error : JSON.stringify(sanitize(message.error)) || "请求未成功"), { outcome: message.outcome }));
+    render();
+  }
+
+  function releaseMedia(reason) {
+    generation++;
+    clearInterval(statsTimer); clearTimeout(answerTimer);
+    statsTimer = answerTimer = null;
+    const oldPeer = peer, oldChannel = channel, oldMic = mic, oldRemote = audio.srcObject;
+    peer = mic = channel = null;
+    starting = false; startSent = false;
+    oldMic?.getTracks().forEach((track) => track.stop());
+    oldRemote?.getTracks().forEach((track) => track.stop());
+    oldChannel?.close(); oldPeer?.close();
+    audio.pause(); audio.srcObject = null; audio.muted = false;
+    suppressed = autoplayBlocked = false;
+    $("mute").setAttribute("aria-pressed", "false"); $("mute").textContent = "麦克风静音";
+    mediaStatus = reason;
+    render();
+  }
+
+  function disconnected(message) {
+    if (!online && disposed) return;
+    online = false; disposed = true;
+    voiceUnknown = true;
+    if (activeTask() || hasPending(["text", "steer", "interrupt"])) taskUnknown = true;
+    for (const item of pending.values()) { clearTimeout(item.timer); item.reject(unknownError("连接已断开，请求结果未知；未自动重发。")); }
+    pending.clear();
+    releaseMedia("连接已断开，本地设备已释放");
+    socket?.close();
+    $("connection").textContent = "连接已断开";
+    notice(`${message} 请检查日志，需重新连接时手动刷新页面。`, true);
+  }
+
+  async function playAudio(reason) {
+    const current = peer;
+    try {
+      await audio.play();
+      if (!current || current !== peer) return;
+      autoplayBlocked = false;
+      browserEvent("media.play.accepted", { reason, muted: audio.muted });
+    } catch (error) {
+      if (!current || current !== peer) return;
+      autoplayBlocked = true;
+      browserEvent("media.play.blocked", { reason, error: error.name });
+      notice("浏览器尚未允许播放。点击“恢复音频”后继续观察。", true);
+    }
+    render();
+  }
+
+  function observeBoundary(name) {
+    if (!suppressed || !["response.created", "output_audio_buffer.started"].includes(name)) return;
+    suppressed = false; audio.muted = false;
+    $("playback-note").textContent = "已观察到下一次说话 / 响应边界，恢复本地音频；旧播放缓冲是否清空仍未验证。";
+    browserEvent("playback.boundary_resume", { boundary: name, buffer_clearing: "unverified" });
+    void playAudio("next_boundary"); render();
+  }
+
+  function updateCaption(source, name, payload, event = {}) {
+    const data = payload?.params || payload || {};
+    const item = data.item;
+    const nativeItem = /thread\/realtime\/(?:item\/(?:started|completed|transcript\/delta)|itemStarted|itemCompleted|itemTranscriptDelta)$/.test(name);
+    const nativeFlat = /^thread\/realtime\/transcript\/(?:delta|done)$/.test(name);
+    const standard = /^(?:conversation\.item\.input_audio_transcription\.(?:delta|completed)|response\.(?:audio_transcript|output_audio_transcript|output_text)\.(?:delta|done))$/.test(name);
+    if (!nativeItem && !nativeFlat && !standard) return;
+    if (item && item.type !== "transcriptSegment") return;
+    const eventId = data.event_id;
+    if (eventId) {
+      const unique = `${source}:${generation}:${eventId}`;
+      if (transcriptEvents.has(unique)) return;
+      transcriptEvents.add(unique);
+    }
+    const role = item?.role || data.role || (name.startsWith("conversation.") ? "user" : standard ? "assistant" : "unknown");
+    const itemId = item?.id || data.itemId || data.item_id || event.item_id;
+    const responseId = data.response_id;
+    const session = item?.realtimeSessionId || data.realtimeSessionId || event.realtime_session_id || "";
+    const done = /(?:done|completed|itemCompleted)$/.test(name);
+    const flatKey = `${source}:${session}:${role}`;
+    // Item deltas may omit session/role; the thread + item ID remains the stable key.
+    let key = itemId ? `${source}:${event.thread_id || data.threadId || state.thread_id}:${itemId}:${data.content_index ?? ""}` : responseId ? `${source}:${responseId}:${data.output_index ?? ""}:${data.content_index ?? ""}` : flatCaptions.get(flatKey);
+    if (!key) { key = `flat-${++captionNumber}`; flatCaptions.set(flatKey, key); }
+    let caption = captions.get(key);
+    if (!caption) {
+      const row = document.createElement("article"), meta = document.createElement("small"), text = document.createElement("p");
+      row.className = "caption"; row.append(meta, text);
+      $("captions").querySelector(".empty")?.remove(); $("captions").append(row);
+      caption = { row, meta, text, role, value: "", done: false };
+      captions.set(key, caption);
+      if (captions.size > 200) { const oldest = captions.keys().next().value; captions.get(oldest).row.remove(); captions.delete(oldest); }
+    }
+    if (role !== "unknown") caption.role = role;
+    const finalText = item?.text ?? data.text ?? data.transcript;
+    if (typeof finalText === "string") caption.value = finalText;
+    else if (!caption.done && typeof data.delta === "string") caption.value += data.delta;
+    caption.done ||= done;
+    caption.meta.textContent = `${{ user: "用户", assistant: "助手", unknown: "转写" }[caption.role] || caption.role} · ${source} · ${itemId || responseId || key}${caption.done ? " · 完整" : " · 转写中"}`;
+    caption.text.textContent = sanitize(caption.value);
+    $("captions").scrollTop = $("captions").scrollHeight;
+    if (done && !itemId && !responseId) flatCaptions.delete(flatKey);
+  }
+
+  function serverEvent(event) {
+    if (event.sequence != null) {
+      if (sequences.has(event.sequence)) return;
+      sequences.add(event.sequence);
+    }
+    const echo = browserRows.get(event.request_id);
+    timeline(event, echo?.isConnected ? echo : undefined);
+    if (echo) return;
+    const data = sanitize(event.data || {});
+    const source = event.source === "browser" ? "datachannel" : event.source || "app-server";
+    updateCaption(source, event.name, data, event);
+    // Playback boundaries are only taken from the live data channel, never replayed history.
+  }
+
+  async function remoteAnswer(sdp) {
+    const current = peer, run = generation;
+    if (!current || !startSent) return;
+    try {
+      if (current.remoteDescription) return;
+      await current.setRemoteDescription({ type: "answer", sdp });
+      if (run !== generation) return;
+      clearTimeout(answerTimer);
+      browserEvent("webrtc.remote_description", { applied: true });
+      mediaStatus = "远端协商已应用，等待媒体连接"; render();
+    } catch (error) { if (run === generation) mediaFailure("远端协商失败", error); }
+  }
+
+  function mediaFailure(message, error) {
+    browserEvent("media.failure", { phase: message, error: error?.name || "Error" });
+    voiceUnknown = startSent || ["starting", "started"].includes(state.voice_state);
+    releaseMedia(`${message}，本地设备已释放`);
+    notice(`${message}。${voiceUnknown ? "服务端语音状态待确认，请结束语音或检查日志。" : "未建立本地媒体。"}`, true);
+  }
+
+  async function collectIce(current) {
+    if (current.iceGatheringState === "complete") return;
+    await new Promise((resolve) => {
+      const finish = () => { clearTimeout(timer); current.removeEventListener("icegatheringstatechange", check); resolve(); };
+      const check = () => { if (current.iceGatheringState === "complete" || current.connectionState === "closed") finish(); };
+      const timer = setTimeout(finish, 2500);
+      current.addEventListener("icegatheringstatechange", check); check();
+    });
+  }
+
+  async function reportStats(current, run) {
+    try {
+      const reports = await current.getStats();
+      if (run !== generation) return;
+      const samples = [];
+      reports.forEach((report) => {
+        if (report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio")) {
+          const sample = {};
+          for (const key of ["packetsReceived", "bytesReceived", "packetsLost", "jitter", "audioLevel", "totalAudioEnergy", "totalSamplesReceived", "concealedSamples"]) if (report[key] !== undefined) sample[key] = report[key];
+          samples.push(sample);
+        }
+      });
+      browserEvent("media.inbound_stats", { samples });
+      if (samples.length) $("audio-evidence").textContent = `远端音频：${samples.reduce((n, s) => n + (s.bytesReceived || 0), 0)} bytes · ${samples.reduce((n, s) => n + (s.packetsReceived || 0), 0)} packets；${audio.paused ? "未播放" : audio.muted ? "本地静音" : "播放中"}`;
+    } catch (error) { if (run === generation) browserEvent("media.stats_error", { error: error.name }); }
+  }
+
+  async function startVoice() {
+    if ($("start").disabled) return;
+    starting = true; voiceUnknown = false;
+    const run = ++generation;
+    mediaStatus = "等待麦克风授权"; render();
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || !globalThis.RTCPeerConnection) throw new Error("浏览器不支持媒体 API");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (run !== generation) { stream.getTracks().forEach((track) => track.stop()); return; }
+      mic = stream;
+      const current = peer = new RTCPeerConnection({ iceServers: [] });
+      mic.getTracks().forEach((track) => {
+        current.addTrack(track, stream);
+        track.addEventListener("ended", () => { if (run === generation) mediaFailure("麦克风已停止", { name: "TrackEnded" }); });
+      });
+      browserEvent("media.microphone_acquired", { audio_tracks: mic.getAudioTracks().length });
+      current.addEventListener("track", ({ track, streams }) => {
+        if (run !== generation) { track.stop(); return; }
+        audio.srcObject = streams[0] || new MediaStream([track]);
+        browserEvent("media.remote_track", { kind: track.kind, readyState: track.readyState, muted: track.muted });
+        $("audio-evidence").textContent = "已接收远端音轨，等待播放与 RTP 统计";
+        for (const name of ["mute", "unmute", "ended"]) track.addEventListener(name, () => { if (run === generation) browserEvent(`media.remote_track.${name}`, { readyState: track.readyState }); });
+        void playAudio("remote_track"); render();
+      });
+      current.addEventListener("connectionstatechange", () => {
+        if (run !== generation) return;
+        mediaStatus = `本地 WebRTC · ${current.connectionState}`;
+        browserEvent("webrtc.connection_state", { state: current.connectionState }); render();
+        if (["failed", "disconnected", "closed"].includes(current.connectionState)) mediaFailure("媒体连接中断", { name: current.connectionState });
+      });
+      current.addEventListener("iceconnectionstatechange", () => { if (run === generation) browserEvent("webrtc.ice_state", { state: current.iceConnectionState }); });
+      channel = current.createDataChannel("oai-events");
+      channel.addEventListener("open", () => { if (run === generation) browserEvent("datachannel.open", { label: "oai-events" }); });
+      channel.addEventListener("close", () => { if (run === generation) mediaFailure("事件通道已关闭", { name: "DataChannelClosed" }); });
+      channel.addEventListener("error", () => { if (run === generation) mediaFailure("事件通道错误", { name: "DataChannelError" }); });
+      channel.addEventListener("message", ({ data }) => {
+        if (run !== generation) return;
+        try {
+          const event = sanitize(JSON.parse(data));
+          const name = typeof event?.type === "string" ? event.type : "datachannel.unknown";
+          browserEvent(name, event);
+          updateCaption("datachannel", name, event);
+          observeBoundary(name);
+        } catch { browserEvent("datachannel.unparsed", { format: typeof data, content_omitted: true }); }
+      });
+      const offer = await current.createOffer();
+      if (run !== generation) return;
+      await current.setLocalDescription(offer);
+      if (run !== generation) return;
+      await collectIce(current);
+      if (run !== generation) return;
+      browserEvent("webrtc.ice_gathering", { state: current.iceGatheringState, wait_limit_ms: 2500 });
+      startSent = true;
+      mediaStatus = "正在协商，等待远端 SDP"; render();
+      statsTimer = setInterval(() => { void reportStats(current, run); }, 5000);
+      answerTimer = setTimeout(() => { if (run === generation) mediaFailure("等待远端协商超时", { name: "Timeout" }); }, 70000);
+      await command("start_voice", { sdp: current.localDescription.sdp });
+      if (run === generation) notice("语音启动请求已受理。请结合服务端状态、字幕与实际媒体证据确认连通。");
+    } catch (error) {
+      if (run === generation) { mediaFailure("语音启动失败", error); notice(`语音启动失败：${error.message} 本地设备已释放。`, true); }
+    } finally { if (run === generation) { starting = false; render(); } }
+  }
+
+  async function stopVoice() {
+    if ($("stop").disabled) return;
+    stopping = true;
+    let response;
+    // Release devices synchronously even while getUserMedia or the server request is pending.
+    try { response = command("stop_voice"); }
+    finally { releaseMedia("本地设备已释放，等待服务端关闭状态"); }
+    browserEvent("media.released", { reason: "end_voice", task_interrupt_sent: false });
+    try { await response; notice("结束语音请求已受理；任务继续由服务端状态跟踪。"); }
+    catch (error) { voiceUnknown = true; notice(`结束语音：${error.message} 本地设备已释放。`, true); }
+    finally { stopping = false; render(); }
+  }
+
+  async function textRequest(op) {
+    if ($(op === "text" ? "send-text" : "steer").disabled) return;
+    const text = $("text-input").value.trim();
+    try {
+      const args = { text };
+      if (op === "steer") args.expected_turn_id = state.active_turn_id;
+      await command(op, args);
+      if ($("text-input").value.trim() === text) $("text-input").value = "";
+      notice("文字请求已受理；是否完成以服务端任务状态为准。");
+    } catch (error) { if (error.outcome === "unknown") taskUnknown = true; notice(`${error.message} 输入已保留，未自动重发。`, true); }
+    render();
+  }
+
+  $("start").onclick = startVoice; $("stop").onclick = stopVoice;
+  $("mute").onclick = () => {
+    if (!mic) return;
+    const muted = $("mute").getAttribute("aria-pressed") !== "true";
+    mic.getAudioTracks().forEach((track) => { track.enabled = !muted; });
+    $("mute").setAttribute("aria-pressed", String(muted)); $("mute").textContent = muted ? "取消麦克风静音" : "麦克风静音";
+    browserEvent("media.microphone_mute", { muted });
+  };
+  $("suppress").onclick = () => {
+    suppressed = true; audio.muted = true;
+    $("playback-note").textContent = "当前播报已在本地静音；下一次观察到说话 / 响应边界或手动恢复后播放。缓冲清空未验证。";
+    browserEvent("playback.suppressed", { scope: "local", buffer_clearing: "unverified", task_interrupt_sent: false }); render();
+  };
+  $("resume").onclick = () => {
+    suppressed = false; audio.muted = false;
+    $("playback-note").textContent = "已手动恢复本地音频。旧播放缓冲是否清空仍未验证。";
+    browserEvent("playback.manual_resume", { buffer_clearing: "unverified" }); void playAudio("user_gesture"); render();
+  };
+  $("interrupt").onclick = async () => {
+    try { await command("interrupt"); notice("中断请求已受理；等待服务端任务终态。"); }
+    catch (error) { if (error.outcome === "unknown") taskUnknown = true; notice(`中断任务：${error.message}`, true); }
+    render();
+  };
+  $("text-form").onsubmit = (event) => { event.preventDefault(); void textRequest("text"); };
+  $("steer").onclick = () => { void textRequest("steer"); };
+  $("text-input").oninput = render;
+  for (const [id, field] of [["baseline", "baseline_prompt"], ["slow", "slow_prompt"]]) $(id).onclick = () => { $("text-input").value = state[field] || ""; $("text-input").focus(); render(); };
+  $("history").onclick = async () => {
+    try { $("history-output").textContent = JSON.stringify(sanitize(await command("history")), null, 2) ?? "服务端未返回历史。"; notice("历史已读取。任务状态仍以服务端状态通知为准。"); }
+    catch (error) { notice(`读取历史：${error.message}`, true); }
+  };
+  for (const name of ["loadedmetadata", "playing", "pause", "waiting", "stalled", "ended", "error"]) audio.addEventListener(name, () => {
+    if (!peer) return;
+    browserEvent(`media.audio.${name}`, { paused: audio.paused, muted: audio.muted, readyState: audio.readyState, currentTime: audio.currentTime, error_code: audio.error?.code });
+    if (name === "playing") $("audio-evidence").textContent = `已触发 playing · ${audio.muted ? "本地静音" : "音频播放中"}；以实际听感核对`;
+  });
+  addEventListener("pagehide", () => { disconnected("页面已离开。"); });
+
+  async function connect() {
+    const controller = new AbortController();
+    const claimTimeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const body = JSON.stringify({ token: launchToken }); launchToken = "";
+      const response = await fetch("/claim", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body, signal: controller.signal, cache: "no-store" });
+      if (!response.ok || !(await response.json()).ok) throw new Error("访问验证失败，请使用探测器打印的地址。");
+      if (disposed) return;
+      clearTimeout(claimTimeout);
+      $("connection").textContent = "正在连接事件通道";
+      const url = new URL("/ws", location.href); url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(url);
+      socket.onopen = () => { online = true; $("connection").textContent = "探测器已连接"; notice("已连接。等待探测器就绪后，可开始语音或读取原生历史。"); render(); };
+      socket.onerror = () => { disconnected("WebSocket 错误，未自动重连。"); };
+      socket.onclose = () => { disconnected("WebSocket 已断开，语音与未完成请求状态待确认。"); };
+      socket.onmessage = ({ data }) => {
+        if (!online) return;
+        try {
+          const message = JSON.parse(data);
+          if (message.type === "sdp") { void remoteAnswer(message.sdp); return; }
+          if (message.type === "result") { result(message); return; }
+          if (message.type === "event") { serverEvent(message.event); return; }
+          if (message.type === "state") {
+            const previousVoice = state.voice_state;
+            state = { ...state, ...sanitize(message.state) };
+            voiceUnknown = state.voice_state === "unknown"; taskUnknown = state.task_state === "unknown";
+            for (const [id, field] of [["thread", "thread_id"], ["workspace", "workspace"], ["log-path", "log_path"]]) $(id).textContent = state[field] || "—";
+            if ((peer || starting) && ["closed", "error"].includes(state.voice_state) && state.voice_state !== previousVoice) releaseMedia("服务端语音已关闭，本地设备已释放");
+            render();
+          }
+        } catch { timeline({ source: "browser", name: "websocket.invalid_message", data: { content_omitted: true } }); }
+      };
+    } catch (error) {
+      releaseMedia("尚未连接，本地设备未开启");
+      $("connection").textContent = "连接失败";
+      notice(`连接失败：${error.name === "AbortError" ? "访问验证超时，结果未知。" : error.message} 未自动重试；可手动刷新并使用已有会话 Cookie。`, true);
+    } finally { clearTimeout(claimTimeout); launchToken = ""; }
+  }
+  render(); void connect();
+</script>
+</body>
+</html>
