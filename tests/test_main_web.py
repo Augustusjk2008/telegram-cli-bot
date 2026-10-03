@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import web
 from bot.web.runtime_binding import WebPortInUseError
 
 @pytest.fixture(autouse=True)
@@ -90,3 +91,39 @@ def test_web_runtime_state_records_actual_port(monkeypatch, tmp_path):
     main_module._clear_web_runtime_state()
 
     assert not state_path.exists()
+
+
+def test_chat_voice_route_is_registered():
+    from bot.web.routes import chat_routes
+
+    app = web.Application()
+    chat_routes.register(app, MagicMock())
+
+    assert any(
+        route.resource is not None
+        and route.resource.canonical == "/api/bots/{alias}/chat/voice"
+        for route in app.router.routes()
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_voice_is_rejected_when_feature_is_disabled(monkeypatch):
+    from aiohttp.test_utils import make_mocked_request
+    from bot.web.api_common import AuthContext, WebApiError
+    from bot.web.auth_store import CAP_CHAT_SEND
+    from bot.web.server import WebApiServer
+
+    server = object.__new__(WebApiServer)
+    server._with_websocket_capability = AsyncMock(
+        return_value=AuthContext(user_id=1, token_used=True, account_id="account", capabilities={CAP_CHAT_SEND})
+    )
+    server._manager_alias = lambda _request: "main"
+    server._request_agent_id = lambda _request: "main"
+    server._request_execution_mode = lambda _request, **_kwargs: "cli"
+    monkeypatch.setattr("bot.web.server.config.TCB_CODEX_SERVER_VOICE_ENABLED", False)
+
+    with pytest.raises(WebApiError) as exc_info:
+        await server.chat_voice_ws(make_mocked_request(
+            "GET", "/api/bots/main/chat/voice", match_info={"alias": "main"},
+        ))
+    assert exc_info.value.code == "voice_disabled"

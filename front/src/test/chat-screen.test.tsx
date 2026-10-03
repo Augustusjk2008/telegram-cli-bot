@@ -80,6 +80,24 @@ test.each([true, false])("renders user Markdown, math and diagrams (current user
   expect(await within(message).findByLabelText("Mermaid 图表")).toContainHTML("<text>Start to End</text>");
 });
 
+test("shows the voice bar only for an enabled codex_server CLI scope", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex_server",
+      status: "running",
+      workingDir: "C:\\workspace",
+      supportedExecutionModes: ["cli"],
+      defaultExecutionMode: "cli",
+      executionMode: "cli",
+      voice: { enabled: true, reason: "available" },
+      effectiveCapabilities: ["chat_send"],
+    }),
+  });
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByTestId("codex-voice-bar")).toBeInTheDocument();
+});
+
 test("leaves plan mode as soon as plan execution starts", async () => {
   const user = userEvent.setup();
   const executionGate = deferred<void>();

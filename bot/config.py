@@ -155,6 +155,7 @@ for uid in _allowed_raw.split(","):
 
 CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
 CLI_PATH = _get_project_config("CLI_PATH", "codex")
+TCB_CODEX_SERVER_VOICE_ENABLED = _get_project_bool("TCB_CODEX_SERVER_VOICE_ENABLED", False)
 NATIVE_AGENT_BACKEND = "pi"
 NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "").strip()
 NATIVE_AGENT_ENABLED = _get_project_bool("NATIVE_AGENT_ENABLED", False)

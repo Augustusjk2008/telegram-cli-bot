@@ -48,6 +48,10 @@ import type {
   GitStashList,
   GitTreeStatus,
   BotOverview,
+  CodexVoiceCapability,
+  CodexVoiceConnection,
+  CodexVoiceConnectionOptions,
+  CodexVoiceMessage,
   BotExecutionConfigInput,
   BotWorkdirOpenResult,
   BotStatus,
@@ -344,6 +348,7 @@ function mapWorkspaceDocumentCloseResult(raw: RawWorkspaceDocumentSyncResult | n
 }
 
 type RawBotSummary = {
+  voice?: CodexVoiceCapability;
   remote_workspace?: import("./remoteWorkspace").RawRemoteWorkspace;
   alias: string;
   cli_type: CliType;
@@ -1587,6 +1592,9 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     lastActiveText: mapStatusText(status),
     archived: Boolean(raw.archived ?? raw.is_archived ?? raw.isArchived),
   };
+  if (raw.voice && typeof raw.voice.enabled === "boolean") {
+    summary.voice = { enabled: raw.voice.enabled, reason: raw.voice.reason || "disabled" };
+  }
   const latestAnswerCompletedAt = raw.last_answer_completed_at ?? raw.lastAnswerCompletedAt;
   if (typeof latestAnswerCompletedAt === "string" && latestAnswerCompletedAt.trim()) {
     summary.lastAnswerCompletedAt = latestAnswerCompletedAt;
@@ -4539,11 +4547,16 @@ export class RealWebBotClient implements WebBotClient {
       active_agent_id?: string;
       busy_agent_ids?: string[];
       active_cluster_run?: RawActiveClusterRun | null;
+      voice?: CodexVoiceCapability;
     }>(`/api/bots/${encodeURIComponent(botAlias)}${suffix}`);
 
     const summary = mapBotSummary(data.bot, data.session.is_processing);
     const overview: BotOverview = {
       ...summary,
+      voice: {
+        enabled: (data.voice ?? data.bot.voice)?.enabled === true,
+        reason: (data.voice ?? data.bot.voice)?.reason || "disabled",
+      },
       workingDir: data.session.working_dir || summary.workingDir,
       messageCount: data.session.message_count,
       historyCount: data.session.history_count,
@@ -4557,6 +4570,63 @@ export class RealWebBotClient implements WebBotClient {
       busyAgentCount: summary.busyAgentCount || 0,
     };
     return overview;
+  }
+
+  connectCodexVoice(botAlias: string, options: CodexVoiceConnectionOptions): CodexVoiceConnection {
+    const socket = new WebSocket(buildWsUrl(`/api/bots/${encodeURIComponent(botAlias)}/chat/voice`, {
+      agent_id: options.agentId || "main",
+      execution_mode: "cli",
+    }));
+    let closed = false;
+    let opened = false;
+    let resolveReady!: () => void;
+    let rejectReady!: (error: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      socket.removeEventListener("open", onOpen);
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("close", onClose);
+      socket.removeEventListener("error", onError);
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      cleanup();
+      if (!opened) rejectReady(new Error("语音控制连接已关闭"));
+      socket.close();
+    };
+    const fail = () => {
+      if (closed) return;
+      close();
+      options.onClose();
+    };
+    const onOpen = () => { opened = true; window.clearTimeout(timer); resolveReady(); };
+    const onClose = () => fail();
+    const onError = () => fail();
+    const onMessage = (event: MessageEvent) => {
+      let message: CodexVoiceMessage;
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (message && ["voice.state", "voice.sdp", "voice.event", "voice.error", "error"].includes(message.type)) {
+        options.onMessage(message);
+      }
+    };
+    const timer = window.setTimeout(fail, 15000);
+    socket.addEventListener("open", onOpen);
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("close", onClose);
+    socket.addEventListener("error", onError);
+    return {
+      ready,
+      send: (command) => {
+        if (closed || socket.readyState !== WebSocket.OPEN) throw new Error("语音控制连接未打开");
+        const operationId = typeof crypto?.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        socket.send(JSON.stringify({ ...command, id: operationId }));
+      },
+      close,
+    };
   }
 
   async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<HistorySnapshotResult> {

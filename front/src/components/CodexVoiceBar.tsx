@@ -1,0 +1,99 @@
+import { Mic, MicOff, Phone, Square, Volume2, VolumeX } from "lucide-react";
+import { VOICE_BUSY_REASON, type CodexVoiceSession } from "../workbench/useCodexVoiceSession";
+
+type Props = {
+  session: CodexVoiceSession;
+  disabled?: boolean;
+  busy?: boolean;
+};
+
+const stateLabels: Record<string, string> = {
+  idle: "未连接",
+  negotiating: "连接中",
+  active: "已连接",
+  stopping: "结束中",
+  closed: "已结束",
+  error: "连接错误",
+  unknown: "状态待确认",
+};
+
+export function CodexVoiceBar({ session, disabled = false, busy = false }: Props) {
+  const active = session.connected;
+  const hasCaption = session.captions.length > 0;
+  return (
+    <section
+      data-testid="codex-voice-bar"
+      aria-label="Codex 语音控制"
+      className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2 text-xs"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-[var(--text)]">语音</span>
+        <span data-testid="codex-voice-state" className="text-[var(--muted)]">{stateLabels[session.state] || session.state}</span>
+        {session.mic !== "off" ? <span className="text-[var(--muted)]">麦克风：{session.mic === "muted" ? "已静音" : session.mic === "requesting" ? "授权中" : "开启"}</span> : null}
+        <span className="text-[var(--muted)]">{session.activity}</span>
+        <span className="text-[var(--muted)]">任务：{{ idle: "空闲", running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", unknown: "结果待确认" }[session.task]}</span>
+        {!active ? (
+          <button
+            type="button"
+            aria-label="开始语音"
+            onClick={() => void session.start()}
+            disabled={disabled || busy}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] px-2 font-medium text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Phone className="h-3.5 w-3.5" />开始语音
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-label={session.mic === "muted" ? "取消静音" : "静音"}
+              aria-pressed={session.mic === "muted"}
+              onClick={session.toggleMute}
+              disabled={session.mic !== "on" && session.mic !== "muted"}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--workbench-hairline)] px-2 text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+            >
+              {session.mic === "muted" ? <MicOff className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+              {session.mic === "muted" ? "取消静音" : "静音"}
+            </button>
+            <button
+              type="button"
+              aria-label={session.playback === "suppressed" ? "恢复播报" : "停止当前播报"}
+              onClick={session.playback === "suppressed" ? session.resumePlayback : session.stopPlayback}
+              disabled={session.state === "stopping" || session.playback === "idle"}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--workbench-hairline)] px-2 text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+            >
+              {session.playback === "suppressed" ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+              {session.playback === "suppressed" ? "恢复播报" : "停止播报"}
+            </button>
+            <button
+              type="button"
+              aria-label="结束语音"
+              onClick={session.end}
+              disabled={session.state === "stopping"}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--status-danger-border)] px-2 text-[var(--status-danger)] hover:bg-[var(--status-danger-bg)] disabled:opacity-50"
+            >
+              <Square className="h-3.5 w-3.5" />结束语音
+            </button>
+          </>
+        )}
+      </div>
+      {busy ? <p className="mt-1 text-[var(--status-warning)]">{VOICE_BUSY_REASON}</p> : null}
+      {session.playback === "blocked" ? <button type="button" onClick={session.resumePlayback} className="mt-1 text-[var(--accent)]">允许播放音频</button> : null}
+      {active ? <p className="mt-1 text-[var(--muted)]">媒体：{session.peer} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
+      {session.error ? <p role="alert" className="mt-1 text-[var(--status-danger)]">{session.error}</p> : null}
+      {hasCaption ? (
+        <div data-testid="codex-voice-captions" className="mt-2 max-h-24 space-y-1 overflow-y-auto rounded-md bg-[var(--workbench-panel-bg)] px-2 py-1.5">
+          {session.captions.map((caption) => (
+            <p key={caption.id} className="whitespace-pre-wrap text-[var(--text)]">
+              <span className="mr-1 text-[var(--muted)]">{caption.role === "user" ? "你" : caption.role === "assistant" ? "Codex" : "转写"}</span>
+              {caption.text}
+              {!caption.done ? <span className="ml-1 text-[var(--muted)]">…</span> : null}
+            </p>
+          ))}
+          <span className="text-[var(--muted)]">字幕仅暂时显示，未持久化</span>
+        </div>
+      ) : null}
+      {session.receivedPackets > 0 ? <span className="sr-only">已接收远端音频 {session.receivedPackets} 个数据包</span> : null}
+    </section>
+  );
+}

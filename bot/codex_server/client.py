@@ -22,6 +22,10 @@ from bot.platform.subprocess_streams import close_process_streams
 class CodexServerError(RuntimeError):
     """A protocol/transport failure; requests with unknown outcomes are not retried."""
 
+
+class CodexServerUnknownOutcome(CodexServerError):
+    """A realtime control request timed out; the shared runtime remains usable."""
+
 APP_SERVER_VERSION = "0.159.2"
 
 
@@ -220,6 +224,12 @@ class CodexServerClient:
             await self._write({"id": request_id, "method": method, "params": params})
             return await asyncio.wait_for(future, self.timeout if timeout is None else timeout)
         except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            if method in {"thread/realtime/start", "thread/realtime/stop"}:
+                # Realtime control must never cancel an independent turn or kill
+                # the shared process. A late response is discarded, never retried.
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise CodexServerUnknownOutcome("语音请求结果未知，不会重发") from exc
             # An accepted request may already have changed files. Never retry it.
             self._fail(CodexServerError(f"app-server {method} 超时或取消；请求结果未知，不会重发"))
             await self.close()

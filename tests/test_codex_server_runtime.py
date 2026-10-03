@@ -356,6 +356,42 @@ async def test_mcp_config_content_change_at_same_path_rebuilds(runtime_setup, tm
     await registry.aclose()
 
 
+@pytest.mark.asyncio
+async def test_voice_subscriber_receives_idle_events_from_single_reader(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(replace(request, experimental_api=True))
+    queue = runtime.subscribe_voice()
+    reader = runtime._reader
+    try:
+        runtime.client.emit("thread/realtime/started", realtimeSessionId="realtime-1")
+        event = await asyncio.wait_for(queue.get(), 1)
+        assert event["name"] == "thread/realtime/started"
+        assert event["realtime_session_id"] == "realtime-1"
+        assert runtime._reader is reader and not runtime.active
+        runtime.client.emit("thread/realtime/closed", threadId="other-thread")
+        await asyncio.sleep(0)
+        assert queue.empty()
+        runtime.unsubscribe_voice(queue)
+        runtime.client.emit("thread/realtime/closed")
+        await asyncio.sleep(0)
+        assert queue.empty()
+    finally:
+        await registry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_experimental_api_change_rebuilds_runtime(runtime_setup):
+    registry, request = runtime_setup
+    first = await registry.open_or_create(request)
+    second = await registry.open_or_create(replace(request, experimental_api=True))
+    try:
+        assert second is not first
+        assert second.request.experimental_api is True
+        assert not first.alive
+    finally:
+        await registry.aclose()
+
+
 def test_independent_params_and_filtered_permissions(monkeypatch, tmp_path):
     monkeypatch.setattr("bot.codex_server.params.resolve_cli_executable", lambda *args: "codex.exe")
     config = CliParamsConfig.from_dict({"codex": {"model": "exec-only"}, "codex_server": {

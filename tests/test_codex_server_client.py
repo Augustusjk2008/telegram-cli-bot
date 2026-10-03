@@ -4,7 +4,12 @@ import sys
 
 import pytest
 
-from bot.codex_server.client import CodexServerClient, CodexServerError, noninteractive_response
+from bot.codex_server.client import (
+    CodexServerClient,
+    CodexServerError,
+    CodexServerUnknownOutcome,
+    noninteractive_response,
+)
 
 
 FAKE_SERVER = r'''
@@ -46,7 +51,7 @@ for line in sys.stdin:
  elif method == 'child':
   child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
   emit({'id':p['id'],'result':{'pid':child.pid}})
- elif method == 'never':
+ elif method in ('never', 'thread/realtime/start'):
   pass
  else:
   emit({'id':p['id'],'result':{}})
@@ -152,6 +157,17 @@ async def test_request_cancel_closes_unknown_outcome(tmp_path):
         await task
     assert not client.alive
     assert client.process.poll() is not None
+
+
+@pytest.mark.asyncio
+async def test_realtime_timeout_keeps_shared_client_alive(tmp_path):
+    client = await start_fake(tmp_path, experimental_api=True)
+    try:
+        with pytest.raises(CodexServerUnknownOutcome, match="结果未知"):
+            await client.request("thread/realtime/start", {}, timeout=.03)
+        assert client.alive
+    finally:
+        await client.close()
 
 
 def test_windows_selector_compatible(tmp_path):

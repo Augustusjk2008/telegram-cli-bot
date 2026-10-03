@@ -31,6 +31,7 @@ from aiohttp import web
 from ag_ui.encoder import EventEncoder
 
 from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
+from bot import config
 from bot.chat_identity import chat_session_user_id
 from bot.codex_usage import close_codex_usage_service_sync, get_codex_usage_service
 from bot.config import (
@@ -66,6 +67,12 @@ from bot.config import (
     WEB_TUNNEL_STATE_FILE,
     request_restart,
 )
+from bot.codex_server.voice import (
+    VoiceError,
+    voice_leases,
+    validate_message,
+)
+from bot.codex_server.client import CodexServerError
 from bot.debug.service import DebugService
 from bot.language_server import (
     ExternalSourceRegistry,
@@ -216,6 +223,8 @@ from .api_service import (
     get_native_agent_preflight_payload,
     get_native_agent_models_payload,
     get_overview,
+    get_codex_server_voice_session,
+    open_codex_server_voice_runtime,
     get_cluster_task_status,
     get_terminal_actions_config,
     get_cluster_bundle_schema,
@@ -1854,8 +1863,113 @@ class WebApiServer:
         _require_capability(auth, CAP_VIEW_BOT_STATUS)
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = get_overview(self.manager, alias, auth.user_id, agent_id=agent_id, execution_mode=execution_mode)
+        data = get_overview(
+            self.manager,
+            alias,
+            auth.user_id,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            can_chat_send=CAP_CHAT_SEND in auth.capabilities,
+        )
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(base_auth, data["bot"])}})
+
+    async def chat_voice_ws(self, request: web.Request) -> web.WebSocketResponse:
+        auth = await self._with_websocket_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        agent_id = self._request_agent_id(request)
+        execution_mode = self._request_execution_mode(request, include_body=False)
+        if not config.TCB_CODEX_SERVER_VOICE_ENABLED:
+            raise WebApiError(403, "voice_disabled", "语音连接未启用")
+        if execution_mode and execution_mode.strip().lower() != "cli":
+            raise WebApiError(409, "voice_unsupported_execution_mode", "语音连接仅支持 cli 执行模式")
+
+        runtime = None
+        lease = None
+        voice_queue = None
+        try:
+            profile, session, conversation_id = get_codex_server_voice_session(
+                self.manager,
+                alias,
+                self._chat_user_id(auth),
+                agent_id=agent_id,
+                execution_mode=execution_mode,
+            )
+            lease_key = (session.bot_id, chat_session_user_id(session.user_id), session.agent_id, conversation_id)
+            try:
+                lease = voice_leases.acquire(lease_key, (auth.account_id, auth.user_id))
+            except VoiceError as exc:
+                raise WebApiError(exc.status, exc.code, exc.message) from exc
+            try:
+                runtime = await open_codex_server_voice_runtime(
+                    profile,
+                    session,
+                    conversation_id,
+                    allow_unsafe_cli=CAP_RUN_UNSAFE_CLI in auth.capabilities,
+                )
+            except CodexServerError as exc:
+                raise WebApiError(502, "voice_runtime_unavailable", str(exc)) from exc
+            try:
+                voice_queue = runtime.subscribe_voice()
+                lease.bind(runtime)
+            except VoiceError as exc:
+                raise WebApiError(exc.status, exc.code, exc.message) from exc
+            ws = web.WebSocketResponse(heartbeat=30.0)
+            await ws.prepare(request)
+            lease.summary()
+
+            async def forward_events() -> None:
+                while True:
+                    event = await voice_queue.get()
+                    await ws.send_json(event)
+                    if event.get("terminal"):
+                        await ws.close(code=WSCloseCode.POLICY_VIOLATION, message=b"voice subscriber too slow")
+                        return
+
+            async def receive_commands() -> None:
+                seen_ids: set[str] = set()
+                async for message in ws:
+                    if message.type != WSMsgType.TEXT:
+                        if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                            return
+                        continue
+                    if len((message.data or "").encode("utf-8")) > 160_000:
+                        await ws.send_json({"type": "voice.error", "code": "voice_message_too_large",
+                                            "message": "语音消息超过大小限制", "state": lease.state})
+                        continue
+                    try:
+                        payload = validate_message(json.loads(message.data or "{}"), seen_ids)
+                        op = payload["op"]
+                        if op == "start":
+                            await lease.start(payload["sdp"])
+                        elif op == "stop_voice":
+                            await lease.stop_voice()
+                        elif op == "summary":
+                            lease.summary(payload["id"])
+                        else:
+                            lease.publish({"type": "voice.event", "event_id": payload["id"],
+                                           "name": f"browser/{payload['name']}",
+                                           "thread_id": lease.thread_id, "data": payload["data"]})
+                    except (json.JSONDecodeError, VoiceError) as exc:
+                        if isinstance(exc, VoiceError):
+                            error = {"type": "voice.error", "code": exc.code, "message": exc.message,
+                                     "state": lease.state}
+                        else:
+                            error = {"type": "voice.error", "code": "invalid_json", "message": "请求不是合法 JSON",
+                                     "state": lease.state}
+                        await ws.send_json(error)
+
+            tasks = [asyncio.create_task(forward_events()), asyncio.create_task(receive_commands())]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            return ws
+        finally:
+            if voice_queue is not None and runtime is not None:
+                runtime.unsubscribe_voice(voice_queue)
+            if lease is not None:
+                await lease.disconnect()
+                voice_leases.release(lease)
 
     def _request_agent_id(self, request: web.Request, body: dict[str, Any] | None = None) -> str:
         value = request.query.get("agent_id") or request.query.get("agentId")

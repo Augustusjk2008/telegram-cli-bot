@@ -39,6 +39,59 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("creates a scoped voice WebSocket and cleans up after remote close", async () => {
+    class FakeWebSocket {
+      static OPEN = 1;
+      static last: FakeWebSocket;
+      readonly url: string;
+      readyState = 0;
+      readonly sent: string[] = [];
+      private listeners = new Map<string, Set<(event?: MessageEvent) => void>>();
+      constructor(url: string) {
+        this.url = url;
+        FakeWebSocket.last = this;
+      }
+      addEventListener(name: string, listener: (event?: MessageEvent) => void) {
+        const listeners = this.listeners.get(name) || new Set();
+        listeners.add(listener);
+        this.listeners.set(name, listeners);
+      }
+      removeEventListener(name: string, listener: (event?: MessageEvent) => void) {
+        this.listeners.get(name)?.delete(listener);
+      }
+      emit(name: string, event?: MessageEvent) {
+        this.listeners.get(name)?.forEach((listener) => listener(event));
+      }
+      send(value: string) { this.sent.push(value); }
+      close = vi.fn(() => { this.readyState = 3; this.emit("close"); });
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    window.history.replaceState(null, "", "/node/laptop/");
+    vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/laptop" });
+    const onMessage = vi.fn();
+    const onClose = vi.fn();
+    const connection = new RealWebBotClient().connectCodexVoice("main", {
+      agentId: "reviewer",
+      onMessage,
+      onClose,
+    });
+    const socket = FakeWebSocket.last;
+    const url = new URL(socket.url);
+    expect(url.pathname).toBe("/node/laptop/api/bots/main/chat/voice");
+    expect(url.searchParams.get("agent_id")).toBe("reviewer");
+    expect(url.searchParams.get("execution_mode")).toBe("cli");
+    socket.readyState = 1;
+    socket.emit("open");
+    await connection.ready;
+    connection.send({ op: "summary" });
+    expect(JSON.parse(socket.sent[0])).toMatchObject({ op: "summary", id: expect.any(String) });
+    socket.emit("message", { data: JSON.stringify({ type: "voice.state", seq: 1, state: "active" }) } as MessageEvent);
+    expect(onMessage).toHaveBeenCalledWith({ type: "voice.state", seq: 1, state: "active" });
+    socket.emit("close");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(socket.close).toHaveBeenCalled();
+  });
+
   test.each([true, false])("preserves directory listing paths with URLSearchParams.size support=%s", async (supportsSize) => {
     const descriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, "size");
     if (!supportsSize) {

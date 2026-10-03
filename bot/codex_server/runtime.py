@@ -18,6 +18,7 @@ from bot.cli_params import CliParamsConfig
 from .client import CodexServerClient, CodexServerError
 from .events import CodexServerEventMapper, TOKEN_FIELDS, tokens
 from .params import ServerParams, _config_value, check_git_directory, convert_params
+from .voice import VoiceError, VoiceEvents
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class CodexServerRuntimeRequest:
     env: dict[str, str]
     params_config: CliParamsConfig
     thread_id: str = ""
+    experimental_api: bool = False
 
 
 def _config_fingerprint(params: ServerParams, env: dict[str, str]) -> tuple:
@@ -125,6 +127,8 @@ class CodexServerRuntime:
         self._failure: Exception | None = None
         self._output_bytes = 0
         self._wire_bytes = 0
+        self.voice_events = VoiceEvents()
+        self.voice_lease: Any = None
 
     @property
     def active(self) -> bool:
@@ -141,7 +145,10 @@ class CodexServerRuntime:
     @classmethod
     async def create(cls, request: CodexServerRuntimeRequest, params: ServerParams, fingerprint: tuple):
         await asyncio.to_thread(check_git_directory, params, request.env)
-        client = await CodexServerClient.start(params.argv, cwd=params.cwd, env=request.env)
+        client = await CodexServerClient.start(
+            params.argv, cwd=params.cwd, env=request.env,
+            experimental_api=bool(request.experimental_api),
+        )
         runtime = cls(request, params, fingerprint, client)
         try:
             config_result = await client.request("config/read", {"cwd": params.cwd, "includeLayers": False})
@@ -218,6 +225,9 @@ class CodexServerRuntime:
                 payload = packet.get("params") or {}
                 if payload.get("threadId") != self.thread_id:
                     continue
+                self.voice_events.packet(packet, self.thread_id)
+                if self.voice_lease is not None:
+                    self.voice_lease.observe(packet)
                 incoming = str(payload.get("turnId") or (payload.get("turn") or {}).get("id") or "")
                 if not self._streaming:
                     if packet.get("method") == "thread/tokenUsage/updated":
@@ -243,7 +253,35 @@ class CodexServerRuntime:
             raise
         except Exception as exc:
             self._finish_failure(exc)
+            if self.voice_lease is not None and self.voice_lease.state not in {"closed", "unknown"}:
+                self.voice_lease.transition("unknown")
+            self.voice_events.publish({"type": "voice.event", "name": "runtime/error",
+                                       "thread_id": self.thread_id, "data": {"error": str(exc)}})
             await self.client.close()
+
+    def subscribe_voice(self, *, maxsize: int = 64) -> asyncio.Queue:
+        if not self.request.experimental_api:
+            raise VoiceError("voice_unavailable", "语音实验 API 未启用", 409)
+        return self.voice_events.subscribe(maxsize=maxsize)
+
+    def unsubscribe_voice(self, queue: asyncio.Queue) -> None:
+        self.voice_events.unsubscribe(queue)
+
+    async def start_realtime(self, sdp: str) -> dict[str, Any]:
+        if not self.request.experimental_api:
+            raise VoiceError("voice_unavailable", "语音实验 API 未启用", 409)
+        return await self.client.request("thread/realtime/start", {
+            "threadId": self.thread_id,
+            "outputModality": "audio",
+            "transport": {"type": "webrtc", "sdp": sdp},
+        }, timeout=30)
+
+    async def stop_realtime(self) -> dict[str, Any]:
+        if not self.request.experimental_api:
+            raise VoiceError("voice_unavailable", "语音实验 API 未启用", 409)
+        return await self.client.request("thread/realtime/stop", {
+            "threadId": self.thread_id,
+        }, timeout=10)
 
     async def stream_turn(self, prompt: str):
         if self._streaming:
@@ -393,11 +431,14 @@ class CodexServerRegistry:
             if existing:
                 if existing.active:
                     raise CodexServerError("codex server owner 当前 turn 尚未完成")
+                if existing.voice_lease is not None and existing.voice_lease.state not in {"closed", "unknown", "error"}:
+                    raise CodexServerError("codex server owner 当前语音连接尚未结束")
                 if existing.loop is not asyncio.get_running_loop():
                     raise CodexServerError("codex server owner 绑定到其他 event loop；请先 release_owner")
                 same_conversation = existing.request.conversation_id == request.conversation_id
                 same_thread = not request.thread_id or request.thread_id == existing.thread_id
-                if existing.alive and same_conversation and same_thread and existing.fingerprint == fingerprint:
+                same_api = existing.request.experimental_api == request.experimental_api
+                if existing.alive and same_conversation and same_thread and same_api and existing.fingerprint == fingerprint:
                     existing.params = params
                     existing.request = request
                     return existing

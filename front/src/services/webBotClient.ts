@@ -8,6 +8,8 @@ import type {
   AnnouncementListResult,
   CreateAnnouncementInput,
   BotOverview,
+  CodexVoiceConnection,
+  CodexVoiceConnectionOptions,
   BotWorkdirOpenResult,
   BotSummary,
   AgentListResult,
@@ -221,6 +223,7 @@ export interface WebBotClient {
   previewClusterConfigBundle(botAlias: string, bundle: unknown): Promise<ClusterBundlePreviewResult>;
   applyClusterConfigBundle(botAlias: string, bundle: unknown, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult>;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
+  connectCodexVoice(botAlias: string, options: CodexVoiceConnectionOptions): CodexVoiceConnection;
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;
   createConversation(botAlias: string, title?: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;
   selectConversation(botAlias: string, conversationId: string, options?: AgentScopedOptions): Promise<ConversationSelectResult>;

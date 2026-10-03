@@ -660,9 +660,25 @@ def list_archived_bots(manager: MultiBotManager) -> list[dict[str, Any]]:
             for alias, profile in sorted(manager.load_archived_profiles().items())]
 
 
-def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main", execution_mode: str = "") -> dict[str, Any]:
+def get_overview(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    agent_id: str = "main",
+    execution_mode: str = "",
+    *,
+    can_chat_send: bool = False,
+) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    from bot.codex_server.voice import voice_capability
+    voice = voice_capability(
+        enabled=config.TCB_CODEX_SERVER_VOICE_ENABLED,
+        cli_type=normalize_cli_type(profile.cli_type),
+        execution_mode=resolved_execution_mode,
+        can_send=can_chat_send,
+        valid_session=session.agent_id == str(agent_id or "main").strip().lower(),
+    )
     bot_id = resolve_session_bot_id(manager, alias)
     active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
     active_cluster_status = (
@@ -675,7 +691,9 @@ def get_overview(manager: MultiBotManager, alias: str, user_id: int, agent_id: s
         "bot": {
             **build_bot_summary(manager, alias, user_id, profile=profile, session=session),
             "execution_mode": resolved_execution_mode,
+            "voice": voice,
         },
+        "voice": voice,
         "session": history_service.build_session_snapshot(profile, session),
         "agents": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id)),
         "active_agent_id": session.agent_id,
@@ -4137,6 +4155,96 @@ def _codex_server_owner(session: UserSession) -> tuple[int, int, str]:
     return (session.bot_id, chat_session_user_id(session.user_id), session.agent_id)
 
 
+def get_codex_server_voice_session(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    agent_id: str = "main",
+    execution_mode: str = "",
+):
+    if not config.TCB_CODEX_SERVER_VOICE_ENABLED:
+        _raise(403, "voice_disabled", "语音连接未启用")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    if normalize_cli_type(profile.cli_type) != "codex_server":
+        _raise(409, "voice_unsupported_cli", "语音连接仅支持 codex_server")
+    if resolved_mode != EXECUTION_MODE_CLI or str(execution_mode or "").strip().lower() not in {"", "cli"}:
+        _raise(409, "voice_unsupported_execution_mode", "语音连接仅支持 cli 执行模式")
+    with session._lock:
+        if session.is_processing:
+            _raise(409, "voice_task_active", "当前有活动任务，语音任务/混合输入将在 M2 支持")
+        conversation_id = str(session.active_conversation_id or "").strip()
+    if not conversation_id:
+        _raise(409, "voice_conversation_required", "请先选择当前聊天会话")
+    store = _get_chat_store(session)
+    try:
+        conversation = store.get_conversation(conversation_id)
+    except KeyError:
+        _raise(409, "voice_session_changed", "当前聊天会话已失效")
+    if (conversation.get("bot_id") != session.bot_id or conversation.get("user_id") != session.user_id
+            or str(conversation.get("agent_id") or "main") != session.agent_id
+            or conversation.get("working_dir") != session.working_dir or conversation.get("archived_at")
+            or conversation.get("native_provider") not in {"", None, "codex", "codex_server"}):
+        _raise(409, "voice_session_changed", "当前聊天会话不支持语音")
+    _ensure_conversation_execution_mode(conversation, EXECUTION_MODE_CLI)
+    return profile, session, conversation_id
+
+
+async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSession,
+                                        conversation_id: str, *, allow_unsafe_cli: bool = False):
+    """Open only a server-resolved binding. Voice does not create chat turns."""
+    from bot.codex_server.runtime import CodexServerRuntimeRequest, get_codex_server_registry
+
+    thread_id = str(session.codex_session_id or "")
+    if not thread_id:
+        try:
+            thread_id = str(_get_chat_store(session).get_conversation(conversation_id).get("native_session_id") or "")
+        except KeyError:
+            _raise(409, "voice_session_changed", "当前聊天会话已失效")
+    epoch, cwd = session.session_epoch, session.working_dir
+    env = _build_cli_env("codex_server")
+    if getattr(profile, "remote_workspace", None):
+        from bot.remote_workspace.chat import prepare_remote_chat
+        env.update(prepare_remote_chat(profile).env)
+    resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
+    if resolved_cli is None:
+        _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
+    params = _effective_cli_params(
+        profile,
+        profile.cli_params,
+        "",
+        allow_unsafe_cli=allow_unsafe_cli,
+    )
+    registry = get_codex_server_registry()
+    runtime = await registry.open_or_create(CodexServerRuntimeRequest(
+        owner_key=_codex_server_owner(session),
+        conversation_id=conversation_id,
+        command=resolved_cli,
+        cwd=session.working_dir,
+        env=env,
+        params_config=params,
+        thread_id=thread_id,
+        experimental_api=True,
+    ))
+    with session._lock:
+        changed = (
+            session.active_conversation_id != conversation_id
+            or session.session_epoch != epoch
+            or session.working_dir != cwd
+            or session.is_processing
+        )
+    if changed:
+        await registry.close_owner(_codex_server_owner(session))
+        _raise(409, "voice_session_changed", "当前聊天会话已切换")
+    if not thread_id or thread_id != runtime.thread_id:
+        with session._lock:
+            session.codex_session_id = runtime.thread_id
+        session.persist()
+        _get_chat_store(session).set_conversation_native_session(conversation_id, runtime.thread_id)
+    return runtime
+
+
 def _codex_server_steering_turn_id(registry: Any, session: UserSession, fallback: str) -> str:
     """Resolve the app-server turn id behind the persisted web turn id."""
     runtimes = getattr(registry, "_runtimes", None)
@@ -5182,6 +5290,10 @@ async def _stream_cli_chat(
     with session._lock:
         if session.is_processing:
             _raise(409, "session_busy", msg("chat", "busy"))
+        if cli_type == "codex_server":
+            from bot.codex_server.voice import voice_leases, VOICE_BUSY_MESSAGE
+            if voice_leases.owner_busy(_codex_server_owner(session)):
+                _raise(409, "voice_connection_active", VOICE_BUSY_MESSAGE)
         session.stop_requested = False
         session.is_processing = True
         session.running_user_text = text
@@ -5285,6 +5397,7 @@ async def _stream_cli_chat(
                     env=server_env,
                     params_config=params_for_attempt,
                     thread_id=str(attempt.cli_session_id or ""),
+                    experimental_api=False,
                 ))
                 check_chat_stopped(session)
                 server_reader = _CodexServerOutputReader(server_runtime, prompt_text, output_queue)

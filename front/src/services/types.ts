@@ -477,6 +477,7 @@ export type RemoteConnectionInput = {
 };
 
 export type BotSummary = {
+  voice?: CodexVoiceCapability;
   remoteWorkspace?: RemoteWorkspace;
   alias: string;
   cliType: CliType;
@@ -886,7 +887,38 @@ export type RunningReply = {
   updatedAt?: string;
 };
 
+export type CodexVoiceCapability = {
+  enabled: boolean;
+  reason: "disabled" | "unsupported_cli" | "unsupported_execution_mode" | "available" | (string & {});
+};
+
+export type CodexVoiceState = "idle" | "negotiating" | "active" | "stopping" | "closed" | "error" | "unknown";
+
+export type CodexVoiceMessage =
+  | { type: "voice.state"; seq: number; state: CodexVoiceState; connection_id?: string }
+  | { type: "voice.sdp"; seq: number; connection_id?: string; sdp: string }
+  | { type: "voice.event"; seq: number; event_id?: string; name: string; thread_id?: string; turn_id?: string; realtime_session_id?: string; item_id?: string; data: Record<string, unknown> }
+  | { type: "voice.error" | "error"; seq?: number; code?: string; message?: string; state?: CodexVoiceState; error?: { code?: string; message?: string }; outcome?: string };
+
+export type CodexVoiceCommand =
+  | { op: "start"; sdp: string }
+  | { op: "stop_voice" | "summary" }
+  | { op: "browser_event"; name: string; data: Record<string, unknown> };
+
+export type CodexVoiceConnection = {
+  ready: Promise<void>;
+  send: (command: CodexVoiceCommand) => void;
+  close: () => void;
+};
+
+export type CodexVoiceConnectionOptions = {
+  agentId?: string;
+  onMessage: (message: CodexVoiceMessage) => void;
+  onClose: () => void;
+};
+
 export type BotOverview = {
+  voice?: CodexVoiceCapability;
   remoteWorkspace?: RemoteWorkspace;
   alias: string;
   cliType: CliType;

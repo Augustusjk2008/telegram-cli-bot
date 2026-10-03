@@ -9,6 +9,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/chat", server.post_chat)
     app.router.add_post("/api/bots/{alias}/chat/steer", server.post_chat_steer)
     app.router.add_post("/api/bots/{alias}/chat/stream", server.post_chat_stream)
+    app.router.add_get("/api/bots/{alias}/chat/voice", server.chat_voice_ws)
     app.router.add_get("/api/bots/{alias}/history", server.get_history_view)
     app.router.add_get("/api/bots/{alias}/history/delta", server.get_history_delta_view)
     app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", server.get_history_trace_view)

@@ -33,6 +33,8 @@ import type {
   RemoveBotOptions,
   RemoveBotResult,
   BotOverview,
+  CodexVoiceConnection,
+  CodexVoiceConnectionOptions,
   BotExecutionConfigInput,
   BotWorkdirOpenResult,
   BotSummary,
@@ -3799,7 +3801,12 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentIds: [],
       executionMode: options.executionMode || bot.executionMode || bot.defaultExecutionMode || "cli",
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
+      voice: { enabled: false, reason: "disabled" },
     };
+  }
+
+  connectCodexVoice(_botAlias: string, _options: CodexVoiceConnectionOptions): CodexVoiceConnection {
+    throw new WebApiClientError("演示模式不提供语音连接", { code: "voice_disabled", status: 403 });
   }
 
   private findTemplate(templateId: string): ClusterConfigBundle {

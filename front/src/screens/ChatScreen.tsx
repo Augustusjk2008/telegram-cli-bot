@@ -21,6 +21,7 @@ import { createPortal } from "react-dom";
 import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
+import { CodexVoiceBar } from "../components/CodexVoiceBar";
 import { ChatComposer, type ChatComposerModelOption } from "../components/ChatComposer";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
@@ -92,6 +93,7 @@ import {
 import { fallbackAgents } from "../utils/defaultAgents";
 import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
 import { useChatHistorySync } from "../hooks/useChatHistorySync";
+import { useCodexVoiceSession } from "../workbench/useCodexVoiceSession";
 import { useChatStreamBatcher } from "../hooks/useChatStreamBatcher";
 import { FRONTEND_FEATURE_FLAGS } from "../app/featureFlags";
 import { DynamicVirtualList, type DynamicVirtualListHandle } from "../components/virtual/DynamicVirtualList";
@@ -4795,6 +4797,23 @@ export function ChatScreen({
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || !isStreaming || actionLoading === "kill";
   const showActionBar = !isImmersive;
+  const voiceEnabled = botOverview?.alias === botAlias
+    && botOverview?.cliType === "codex_server"
+    && effectiveExecutionMode === "cli"
+    && botOverview.voice?.enabled === true
+    && botOverview.effectiveCapabilities?.includes("chat_send") === true
+    && !readOnly
+    && !childAgentReadOnly;
+  const voiceSession = useCodexVoiceSession({
+    client,
+    botAlias,
+    agentId: activeAgentId,
+    scopeKey: JSON.stringify([accountId, effectiveExecutionMode,
+      resolveActiveConversationId(conversations, items)
+        || botOverview?.agents?.find((agent) => agent.id === activeAgentId)?.activeConversationId]),
+    enabled: voiceEnabled && isVisible && !conversationLoading,
+    busy: isStreaming,
+  });
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
@@ -5101,6 +5120,7 @@ export function ChatScreen({
           onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
         />
       ) : null}
+      {voiceEnabled && isVisible ? <CodexVoiceBar session={voiceSession} disabled={loading || conversationLoading} busy={isStreaming} /> : null}
       {chatDisabledReason && !childAgentReadOnly ? (
         <section className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm font-medium text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
           {chatDisabledReason}
@@ -5285,12 +5305,12 @@ export function ChatScreen({
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}
             pulse={composerPulseKey > 0}
-            disabled={chatMutationsDisabled || nativePermissionPending || loading}
+            disabled={chatMutationsDisabled || nativePermissionPending || loading || voiceSession.connected}
             compact={isImmersive || embedded}
             mobileLayout={mobileLayout}
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
-            placeholder={composerPlaceholder}
+            placeholder={voiceSession.connected ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
