@@ -37,6 +37,14 @@ class FakeRuntime:
         self.voice_events.unsubscribe(queue)
 
 
+async def wait_for_cleanup(lease: VoiceLease) -> None:
+    for _ in range(100):
+        if not lease.cleanup_pending:
+            return
+        await asyncio.sleep(0)
+    pytest.fail("voice lease cleanup did not complete")
+
+
 def test_voice_capability_is_default_off_and_scope_checked():
     assert voice_capability(enabled=False, cli_type="codex_server", execution_mode="cli", can_send=True) == {
         "enabled": False,
@@ -142,3 +150,143 @@ def test_detached_lease_expires_and_does_not_block_reacquire():
     assert not registry.owner_busy((1, 2, "main"))
     replacement = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
     assert replacement is not lease
+
+
+@pytest.mark.asyncio
+async def test_expired_cleanup_stops_only_its_owned_realtime_and_releases_binding():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry(ttl=.01)
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    await lease.start("v=0\r\n")
+
+    async def stop_realtime():
+        lease.observe({"method": "thread/realtime/closed", "params": {
+            "realtimeSessionId": "realtime-1"}})
+        return {}
+
+    runtime.stop_realtime.side_effect = stop_realtime
+    lease.last_activity -= 1
+    assert registry.owner_busy((1, 2, "main"))
+    await wait_for_cleanup(lease)
+
+    assert runtime.stop_realtime.await_count == 1
+    assert runtime.voice_lease is None
+    assert lease.key not in registry._leases
+    assert not registry.owner_busy((1, 2, "main"))
+
+
+@pytest.mark.asyncio
+async def test_pending_cleanup_rejects_reusing_the_runtime_until_it_finishes():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry(ttl=.01)
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    await lease.start("v=0\r\n")
+    gate = asyncio.Event()
+
+    async def stop_realtime():
+        await gate.wait()
+        lease.observe({"method": "thread/realtime/closed", "params": {
+            "realtimeSessionId": "realtime-1"}})
+        return {}
+
+    runtime.stop_realtime.side_effect = stop_realtime
+    lease.last_activity -= 1
+    registry._prune()
+    with pytest.raises(VoiceError, match="正在清理") as acquire_error:
+        registry.acquire(lease.key, ("account", 2))
+    assert acquire_error.value.code == "voice_cleanup_pending"
+    replacement = VoiceLease(lease.key, ("account", 2), _registry=registry)
+    with pytest.raises(VoiceError, match="正在清理") as exc_info:
+        replacement.bind(runtime)
+    assert exc_info.value.code == "voice_cleanup_pending"
+    registry.release(replacement)
+
+    gate.set()
+    await wait_for_cleanup(lease)
+    replacement = registry.acquire(lease.key, ("account", 2))
+    replacement.bind(runtime)
+    assert runtime.voice_lease is replacement
+
+
+@pytest.mark.asyncio
+async def test_replaced_runtime_binding_prevents_old_cleanup_stop():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry(ttl=.01)
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    await lease.start("v=0\r\n")
+    lease.last_activity -= 1
+    registry._prune()
+
+    replacement = VoiceLease(lease.key, ("account", 2), _registry=registry)
+    runtime.voice_lease = replacement
+    runtime.voice_lease_generation = replacement.connection_id
+    await wait_for_cleanup(lease)
+
+    assert runtime.stop_realtime.await_count == 0
+    assert runtime.voice_lease is replacement
+    registry.release(replacement)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_completion_allows_runtime_reacquire():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry(ttl=.01)
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    lease.last_activity -= 1
+    registry._prune()
+
+    await wait_for_cleanup(lease)
+    replacement = registry.acquire(lease.key, ("account", 2))
+    replacement.bind(runtime)
+    assert runtime.voice_lease is replacement
+
+
+@pytest.mark.asyncio
+async def test_expired_cleanup_retains_active_voice_task_protection():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry(ttl=.01)
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    runtime.voice_task_active = True
+    lease.last_activity -= 1
+    registry._prune()
+
+    assert registry._tasks[(1, 2, "main")] is runtime
+    assert runtime.stop_realtime.await_count == 0
+    assert registry.owner_busy((1, 2, "main"))
+
+    runtime.voice_task_active = False
+    registry._prune()
+    await wait_for_cleanup(lease)
+    assert (1, 2, "main") not in registry._tasks
+    assert runtime.stop_realtime.await_count == 0
+    assert runtime.voice_lease is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_release_disconnect_and_runtime_close_are_idempotent():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry()
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    await lease.start("v=0\r\n")
+
+    async def stop_realtime():
+        lease.observe({"method": "thread/realtime/closed", "params": {}})
+        return {}
+
+    runtime.stop_realtime.side_effect = stop_realtime
+    await lease.disconnect()
+    await lease.disconnect()
+    registry.release(lease)
+    registry.release(lease)
+    lease.observe({"method": "runtime/closed", "params": {}})
+    lease.observe({"method": "runtime/closed", "params": {}})
+
+    assert runtime.stop_realtime.await_count == 1
+    assert runtime.voice_lease is None
+    assert not registry.owner_busy((1, 2, "main"))

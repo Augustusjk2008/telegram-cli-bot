@@ -203,6 +203,35 @@ class AsyncChatStore:
             agent_input_text=agent_input_text,
         )
 
+    async def ensure_voice_turn(self, **kwargs: Any):
+        return await self.run_write(self.store.ensure_voice_turn, **kwargs)
+
+    async def record_voice_event(self, handle: Any, event: dict[str, Any]) -> bool:
+        return await self.run_write(self.store.record_voice_event, handle, event)
+
+    async def get_voice_task(self, handle: Any) -> dict[str, Any]:
+        return await self.run_read(self.store.get_voice_task, handle)
+
+    async def update_voice_transcript(self, handle: Any, **kwargs: Any) -> bool:
+        return await self.run_write(self.store.update_voice_transcript, handle, **kwargs)
+
+    async def append_voice_trace(self, handle: Any, trace_events: list[dict[str, Any]]) -> bool:
+        return await self.run_write(self.store.append_voice_trace, handle, trace_events)
+
+    async def complete_voice_turn(self, handle: Any, **kwargs: Any) -> dict[str, Any]:
+        return await self.run_write(self.store.complete_voice_turn, handle, **kwargs)
+
+    async def find_voice_steer_request(
+        self,
+        turn_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        return await self.run_read(
+            self.store.find_voice_steer_request,
+            turn_id,
+            request_id,
+        )
+
     async def list_messages(
         self,
         conversation_id: str,

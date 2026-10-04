@@ -481,6 +481,7 @@ class ChatStore:
                 content TEXT NOT NULL,
                 translation_json TEXT,
                 agent_input_text TEXT,
+                request_id TEXT,
                 content_format TEXT NOT NULL,
                 state TEXT NOT NULL,
                 updated_revision INTEGER NOT NULL DEFAULT 0,
@@ -523,6 +524,52 @@ class ChatStore:
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_events_turn_ordinal
             ON trace_events(turn_id, ordinal);
+
+            CREATE TABLE IF NOT EXISTS voice_turns (
+                turn_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                task_submission_key TEXT NOT NULL,
+                codex_turn_id TEXT,
+                realtime_session_id TEXT,
+                user_item_id TEXT,
+                assistant_item_id TEXT,
+                state TEXT NOT NULL DEFAULT 'active',
+                user_transcript_final INTEGER NOT NULL DEFAULT 0,
+                assistant_transcript_final INTEGER NOT NULL DEFAULT 0,
+                last_seq INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_turns_conversation_submission
+            ON voice_turns(conversation_id, task_submission_key);
+
+            CREATE INDEX IF NOT EXISTS idx_voice_turns_submission
+            ON voice_turns(task_submission_key);
+
+            CREATE TABLE IF NOT EXISTS voice_events (
+                id TEXT PRIMARY KEY,
+                turn_id TEXT NOT NULL,
+                event_id TEXT NOT NULL,
+                seq INTEGER,
+                event_name TEXT,
+                codex_turn_id TEXT,
+                realtime_session_id TEXT,
+                item_id TEXT,
+                role TEXT,
+                transcript TEXT,
+                is_final INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_events_turn_event
+            ON voice_events(turn_id, event_id);
+
+            CREATE INDEX IF NOT EXISTS idx_voice_events_turn_seq
+            ON voice_events(turn_id, seq);
             """
         )
         conn.execute("DROP INDEX IF EXISTS idx_conversations_identity")
@@ -576,6 +623,43 @@ class ChatStore:
         self._ensure_column(conn, "messages", "updated_revision", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column(conn, "messages", "translation_json", "TEXT")
         self._ensure_column(conn, "messages", "agent_input_text", "TEXT")
+        self._ensure_column(conn, "messages", "request_id", "TEXT")
+        for column_name, column_type in {
+            "conversation_id": "TEXT NOT NULL DEFAULT ''",
+            "task_submission_key": "TEXT NOT NULL DEFAULT ''",
+            "codex_turn_id": "TEXT",
+            "realtime_session_id": "TEXT",
+            "user_item_id": "TEXT",
+            "assistant_item_id": "TEXT",
+            "state": "TEXT NOT NULL DEFAULT 'active'",
+            "user_transcript_final": "INTEGER NOT NULL DEFAULT 0",
+            "assistant_transcript_final": "INTEGER NOT NULL DEFAULT 0",
+            "last_seq": "INTEGER",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+            "updated_at": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            self._ensure_column(conn, "voice_turns", column_name, column_type)
+        for column_name, column_type in {
+            "turn_id": "TEXT NOT NULL DEFAULT ''",
+            "event_id": "TEXT NOT NULL DEFAULT ''",
+            "seq": "INTEGER",
+            "event_name": "TEXT",
+            "codex_turn_id": "TEXT",
+            "realtime_session_id": "TEXT",
+            "item_id": "TEXT",
+            "role": "TEXT",
+            "transcript": "TEXT",
+            "is_final": "INTEGER",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            self._ensure_column(conn, "voice_events", column_name, column_type)
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_turn_request
+            ON messages(turn_id, request_id)
+            WHERE request_id IS NOT NULL AND request_id <> ''
+            """
+        )
         for column_name in ("bot_mode", "assistant_home", "managed_prompt_hash", "prompt_surface_version"):
             self._drop_column(conn, "conversations", column_name)
         self._drop_column(conn, "turns", "managed_prompt_hash")
@@ -684,6 +768,217 @@ class ChatStore:
             raise KeyError(normalized)
         with closing(read_conn):
             return self.get_conversation_revision(normalized, conn=read_conn)
+
+    @staticmethod
+    def _normalize_voice_state(value: Any, *, default: str = "active") -> str:
+        state = str(value or "").strip().lower()
+        return state if state in {"active", "completed", "failed", "interrupted", "unknown"} else default
+
+    @staticmethod
+    def _voice_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on", "final", "completed"}
+
+    @staticmethod
+    def _voice_event_id(event: dict[str, Any]) -> str:
+        event_id = str(event.get("event_id") or event.get("id") or "").strip()
+        if event_id:
+            return event_id
+        seq = event.get("seq")
+        try:
+            if seq is not None and str(seq).strip() != "":
+                return f"seq:{int(seq)}"
+        except (TypeError, ValueError):
+            pass
+        stable = {
+            key: event.get(key)
+            for key in (
+                "event_name", "type", "codex_turn_id", "realtime_session_id",
+                "item_id", "role", "transcript", "is_final", "task_state",
+            )
+        }
+        return "hash:" + hashlib.sha256(
+            json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
+    def _voice_row(self, conn: sqlite3.Connection, turn_id: str) -> sqlite3.Row:
+        row = conn.execute(
+            "SELECT * FROM voice_turns WHERE turn_id = ?",
+            (str(turn_id or "").strip(),),
+        ).fetchone()
+        if row is None:
+            raise KeyError(turn_id)
+        return row
+
+    def _voice_meta_from_row(
+        self,
+        conn: sqlite3.Connection,
+        voice_row: sqlite3.Row,
+        *,
+        assistant_message_id: str,
+        trace_count: int = 0,
+    ) -> dict[str, Any]:
+        user_final = bool(int(voice_row["user_transcript_final"] or 0))
+        assistant_final = bool(int(voice_row["assistant_transcript_final"] or 0))
+        task_row = conn.execute(
+            """
+            SELECT
+                (SELECT content FROM messages WHERE id = t.user_message_id) AS user_content,
+                (SELECT content FROM messages WHERE id = t.assistant_message_id) AS assistant_content,
+                (SELECT COUNT(*) FROM voice_events WHERE turn_id = t.id) AS event_count
+            FROM turns AS t
+            WHERE t.id = ?
+            """,
+            (str(voice_row["turn_id"] or ""),),
+        ).fetchone()
+        user_persisted = bool(task_row and str(task_row["user_content"] or ""))
+        assistant_persisted = bool(task_row and str(task_row["assistant_content"] or ""))
+        return {
+            "tcb_turn_id": str(voice_row["turn_id"] or ""),
+            "assistant_message_id": assistant_message_id,
+            "codex_turn_id": str(voice_row["codex_turn_id"] or ""),
+            "realtime_session_id": str(voice_row["realtime_session_id"] or ""),
+            "state": self._normalize_voice_state(voice_row["state"]),
+            "conversation_id": str(voice_row["conversation_id"] or ""),
+            "transcript_state": {
+                "user": {
+                    "item_id": str(voice_row["user_item_id"] or ""),
+                    "is_final": user_final,
+                    "persisted": user_persisted,
+                },
+                "assistant": {
+                    "item_id": str(voice_row["assistant_item_id"] or ""),
+                    "is_final": assistant_final,
+                    "persisted": assistant_persisted,
+                },
+                "user_final": user_final,
+                "assistant_final": assistant_final,
+            },
+            "persistence": {
+                "user_transcript": user_persisted,
+                "assistant_transcript": assistant_persisted,
+                "trace": bool(trace_count),
+                "voice_events": int(task_row["event_count"] or 0) if task_row else 0,
+                "last_seq": voice_row["last_seq"],
+            },
+            "task_submission_key": str(voice_row["task_submission_key"] or ""),
+            "user_item_id": str(voice_row["user_item_id"] or ""),
+            "assistant_item_id": str(voice_row["assistant_item_id"] or ""),
+            "last_seq": voice_row["last_seq"],
+        }
+
+    def _update_voice_message_conn(
+        self,
+        conn: sqlite3.Connection,
+        message_id: str,
+        content: str,
+        *,
+        state: str,
+        now: str,
+        changed_message_ids: list[str],
+    ) -> bool:
+        row = conn.execute(
+            "SELECT content, state FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(message_id)
+        if str(row["content"] or "") == content and str(row["state"] or "") == state:
+            return False
+        conn.execute(
+            """
+            UPDATE messages
+            SET translation_json = CASE WHEN content = ? THEN translation_json END,
+                agent_input_text = CASE WHEN content = ? THEN agent_input_text END,
+                content = ?, state = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (content, content, content, state, now, message_id),
+        )
+        if message_id not in changed_message_ids:
+            changed_message_ids.append(message_id)
+        return True
+
+    def _append_trace_events_conn(
+        self,
+        conn: sqlite3.Connection,
+        turn_id: str,
+        events: list[dict[str, Any]],
+        *,
+        now: str,
+    ) -> bool:
+        normalized_events = [dict(event) for event in events if isinstance(event, dict)]
+        if not normalized_events:
+            return False
+        row = conn.execute(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
+        next_ordinal = int(row["next_ordinal"])
+        changed = False
+        for event in normalized_events:
+            payload = event.get("payload")
+            payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+            kind = str(event.get("kind") or "unknown")
+            call_id = str(event.get("call_id") or "")
+            if kind == "tool_result" and call_id:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM trace_events
+                    WHERE turn_id = ? AND kind = ? AND call_id = ?
+                    ORDER BY ordinal ASC, created_at ASC, id ASC
+                    LIMIT 1
+                    """,
+                    (turn_id, kind, call_id),
+                ).fetchone()
+                if existing is not None:
+                    conn.execute(
+                        """
+                        UPDATE trace_events
+                        SET raw_type = ?, title = ?, tool_name = ?, summary = ?,
+                            payload_json = ?, created_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            str(event.get("raw_type") or ""),
+                            str(event.get("title") or ""),
+                            str(event.get("tool_name") or ""),
+                            str(event.get("summary") or ""),
+                            payload_json,
+                            now,
+                            str(existing["id"]),
+                        ),
+                    )
+                    changed = True
+                    continue
+            conn.execute(
+                """
+                INSERT INTO trace_events (
+                    id, turn_id, ordinal, kind, raw_type, title, tool_name,
+                    call_id, summary, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"trace_{uuid.uuid4().hex}",
+                    turn_id,
+                    next_ordinal,
+                    kind,
+                    str(event.get("raw_type") or ""),
+                    str(event.get("title") or ""),
+                    str(event.get("tool_name") or ""),
+                    call_id,
+                    str(event.get("summary") or ""),
+                    payload_json,
+                    now,
+                ),
+            )
+            next_ordinal += 1
+            changed = True
+        if changed:
+            conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+        return changed
 
     def _next_turn_seq(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(
@@ -1575,6 +1870,204 @@ class ChatStore:
                                 self._write_migration_marker(bot_id, shared_user_id, completed=True)
             return moved
 
+    def ensure_voice_turn(
+        self,
+        *,
+        bot_id: int,
+        bot_alias: str,
+        user_id: int,
+        agent_id: str = "main",
+        working_dir: str,
+        session_epoch: int,
+        task_submission_key: str,
+        codex_turn_id: str,
+        realtime_session_id: str = "",
+        actor: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
+    ) -> ChatTurnHandle:
+        normalized_key = str(task_submission_key or "").strip()
+        if not normalized_key:
+            raise ValueError("task_submission_key is required")
+        normalized_agent_id = str(agent_id or "main").strip() or "main"
+        normalized_conversation_id = str(conversation_id or "").strip()
+        normalized_codex_turn_id = str(codex_turn_id or "").strip()
+        normalized_realtime_session_id = str(realtime_session_id or "").strip()
+        now = _utc_now()
+        actor_data = dict(actor or {})
+        try:
+            normalized_author_user_id = int(actor_data["user_id"]) if actor_data.get("user_id") is not None else None
+        except (TypeError, ValueError):
+            normalized_author_user_id = None
+        author_account_id = str(actor_data.get("account_id") or "").strip() or None
+        author_username = str(actor_data.get("username") or "").strip() or None
+        with self._connect_for_write() as conn:
+            existing = conn.execute(
+                """
+                SELECT
+                    vt.turn_id, vt.conversation_id, t.user_message_id, t.assistant_message_id
+                FROM voice_turns AS vt
+                JOIN turns AS t ON t.id = vt.turn_id
+                JOIN conversations AS c ON c.id = vt.conversation_id
+                WHERE vt.task_submission_key = ?
+                  AND c.bot_id = ? AND c.user_id = ? AND c.agent_id = ?
+                  AND c.working_dir = ? AND c.session_epoch = ?
+                  AND c.native_provider = 'codex'
+                  AND c.archived_at IS NULL
+                ORDER BY vt.created_at ASC, vt.turn_id ASC
+                LIMIT 1
+                """,
+                (
+                    normalized_key,
+                    bot_id,
+                    user_id,
+                    normalized_agent_id,
+                    working_dir,
+                    session_epoch,
+                ),
+            ).fetchone()
+            if existing is not None:
+                conn.execute(
+                    """
+                    UPDATE voice_turns
+                    SET codex_turn_id = CASE WHEN ? <> '' THEN ? ELSE codex_turn_id END,
+                        realtime_session_id = CASE WHEN ? <> '' THEN ? ELSE realtime_session_id END,
+                        updated_at = ?
+                    WHERE turn_id = ?
+                    """,
+                    (
+                        normalized_codex_turn_id,
+                        normalized_codex_turn_id,
+                        normalized_realtime_session_id,
+                        normalized_realtime_session_id,
+                        now,
+                        str(existing["turn_id"]),
+                    ),
+                )
+                return ChatTurnHandle(
+                    conversation_id=str(existing["conversation_id"]),
+                    turn_id=str(existing["turn_id"]),
+                    user_message_id=str(existing["user_message_id"]),
+                    assistant_message_id=str(existing["assistant_message_id"]),
+                )
+
+            if normalized_conversation_id:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM conversations
+                    WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ?
+                      AND working_dir = ? AND session_epoch = ? AND native_provider = 'codex'
+                      AND archived_at IS NULL
+                    """,
+                    (
+                        normalized_conversation_id,
+                        bot_id,
+                        user_id,
+                        normalized_agent_id,
+                        working_dir,
+                        session_epoch,
+                    ),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(normalized_conversation_id)
+                resolved_conversation_id = str(row["id"])
+                next_seq = self._next_turn_seq(conn, resolved_conversation_id)
+            else:
+                resolved_conversation_id, next_seq = self._get_or_create_conversation(
+                    conn,
+                    bot_id=bot_id,
+                    bot_alias=bot_alias,
+                    user_id=user_id,
+                    agent_id=normalized_agent_id,
+                    cli_type="codex",
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
+                    native_provider="codex",
+                )
+
+            turn_id = f"turn_{uuid.uuid4().hex}"
+            user_message_id = f"msg_{uuid.uuid4().hex}"
+            assistant_message_id = f"msg_{uuid.uuid4().hex}"
+            revision = self._next_conversation_revision(conn, resolved_conversation_id)
+            conn.execute(
+                """
+                INSERT INTO turns (
+                    id, conversation_id, seq, user_message_id, assistant_message_id,
+                    assistant_state, completion_state, native_provider, native_session_id,
+                    started_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'streaming', 'streaming', 'codex', NULL, ?, ?)
+                """,
+                (
+                    turn_id,
+                    resolved_conversation_id,
+                    next_seq,
+                    user_message_id,
+                    assistant_message_id,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, conversation_id, turn_id, role, content, content_format, state,
+                    updated_revision, author_user_id, author_account_id, author_username,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, 'user', '', 'markdown', 'done', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_message_id,
+                    resolved_conversation_id,
+                    turn_id,
+                    revision,
+                    normalized_author_user_id,
+                    author_account_id,
+                    author_username,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO messages (
+                    id, conversation_id, turn_id, role, content, content_format, state,
+                    updated_revision, created_at, updated_at
+                ) VALUES (?, ?, ?, 'assistant', '', 'markdown', 'streaming', ?, ?, ?)
+                """,
+                (assistant_message_id, resolved_conversation_id, turn_id, revision, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO voice_turns (
+                    turn_id, conversation_id, task_submission_key, codex_turn_id,
+                    realtime_session_id, state, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    turn_id,
+                    resolved_conversation_id,
+                    normalized_key,
+                    normalized_codex_turn_id,
+                    normalized_realtime_session_id,
+                    now,
+                    now,
+                ),
+            )
+            self._record_message_changes(
+                conn,
+                resolved_conversation_id,
+                [user_message_id, assistant_message_id],
+                operation="upsert",
+                revision=revision,
+                now=now,
+            )
+        return ChatTurnHandle(
+            conversation_id=resolved_conversation_id,
+            turn_id=turn_id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_message_id,
+        )
+
     def begin_turn(
         self,
         *,
@@ -2299,87 +2792,11 @@ class ChatStore:
 
     def append_trace_events(self, turn_id: str, events: list[dict[str, Any]]) -> None:
         started_at = time.perf_counter()
-        normalized_events = [dict(event) for event in events if isinstance(event, dict)]
-        if not normalized_events:
+        if not any(isinstance(event, dict) for event in events):
             return
         now = _utc_now()
         with self._connect_for_write() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
-                (turn_id,),
-            ).fetchone()
-            next_ordinal = int(row["next_ordinal"])
-            for event in normalized_events:
-                payload = event.get("payload")
-                payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
-                kind = str(event.get("kind") or "unknown")
-                call_id = str(event.get("call_id") or "")
-                if kind == "tool_result" and call_id:
-                    existing = conn.execute(
-                        """
-                        SELECT id
-                        FROM trace_events
-                        WHERE turn_id = ? AND kind = ? AND call_id = ?
-                        ORDER BY ordinal ASC, created_at ASC, id ASC
-                        LIMIT 1
-                        """,
-                        (turn_id, kind, call_id),
-                    ).fetchone()
-                    if existing is not None:
-                        conn.execute(
-                            """
-                            UPDATE trace_events
-                            SET raw_type = ?,
-                                title = ?,
-                                tool_name = ?,
-                                summary = ?,
-                                payload_json = ?,
-                                created_at = ?
-                            WHERE id = ?
-                            """,
-                            (
-                                str(event.get("raw_type") or ""),
-                                str(event.get("title") or ""),
-                                str(event.get("tool_name") or ""),
-                                str(event.get("summary") or ""),
-                                payload_json,
-                                now,
-                                str(existing["id"]),
-                            ),
-                        )
-                        continue
-                conn.execute(
-                    """
-                    INSERT INTO trace_events (
-                        id,
-                        turn_id,
-                        ordinal,
-                        kind,
-                        raw_type,
-                        title,
-                        tool_name,
-                        call_id,
-                        summary,
-                        payload_json,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"trace_{uuid.uuid4().hex}",
-                        turn_id,
-                        next_ordinal,
-                        kind,
-                        str(event.get("raw_type") or ""),
-                        str(event.get("title") or ""),
-                        str(event.get("tool_name") or ""),
-                        call_id,
-                        str(event.get("summary") or ""),
-                        payload_json,
-                        now,
-                    ),
-                )
-                next_ordinal += 1
-            conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+            self._append_trace_events_conn(conn, turn_id, events, now=now)
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -2387,8 +2804,401 @@ class ChatStore:
             elapsed_ms,
             op="append_trace_events",
             turn_id=turn_id,
-            trace_count=len(normalized_events),
+            trace_count=sum(1 for event in events if isinstance(event, dict)),
         )
+
+    def _complete_voice_turn_conn(
+        self,
+        conn: sqlite3.Connection,
+        voice_row: sqlite3.Row,
+        *,
+        task_state: str,
+        content: str | None,
+        native_session_id: str | None,
+        error_code: str | None,
+        error_message: str | None,
+        context_usage: dict[str, Any] | None,
+        now: str,
+        changed_message_ids: list[str],
+    ) -> bool:
+        current_state = self._normalize_voice_state(voice_row["state"])
+        if current_state != "active":
+            return False
+        normalized_state = self._normalize_voice_state(task_state, default="unknown")
+        had_content = False
+        assistant_message_id = str(
+            conn.execute(
+                "SELECT assistant_message_id FROM turns WHERE id = ?",
+                (str(voice_row["turn_id"]),),
+            ).fetchone()["assistant_message_id"]
+        )
+        if content is None:
+            content_row = conn.execute(
+                "SELECT content FROM messages WHERE id = ?",
+                (assistant_message_id,),
+            ).fetchone()
+            content = str(content_row["content"] or "") if content_row is not None else ""
+        had_content = bool(str(content or "").strip())
+        self._update_voice_message_conn(
+            conn,
+            assistant_message_id,
+            str(content),
+            state="done" if normalized_state == "completed" else "error",
+            now=now,
+            changed_message_ids=changed_message_ids,
+        )
+        if had_content:
+            conn.execute(
+                "UPDATE voice_turns SET assistant_transcript_final = 1 WHERE turn_id = ?",
+                (str(voice_row["turn_id"]),),
+            )
+        user_message_id = str(
+            conn.execute(
+                "SELECT user_message_id FROM turns WHERE id = ?",
+                (str(voice_row["turn_id"]),),
+            ).fetchone()["user_message_id"]
+        )
+        user_state = "done" if normalized_state == "completed" else "error"
+        user_changed = conn.execute(
+            """
+            UPDATE messages
+            SET state = CASE WHEN state = 'streaming' THEN ? ELSE state END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (user_state, now, user_message_id),
+        ).rowcount
+        if user_changed and user_message_id not in changed_message_ids:
+            changed_message_ids.append(user_message_id)
+        context_usage_json = (
+            json.dumps(context_usage, ensure_ascii=False)
+            if isinstance(context_usage, dict)
+            else None
+        )
+        effective_error_code = error_code or (None if normalized_state == "completed" else normalized_state)
+        conn.execute(
+            """
+            UPDATE turns
+            SET assistant_state = ?, completion_state = ?, native_session_id = ?,
+                updated_at = ?, completed_at = ?, error_code = ?, error_message = ?,
+                context_usage_json = ?
+            WHERE id = ?
+            """,
+            (
+                "done" if normalized_state == "completed" else "error",
+                normalized_state,
+                native_session_id,
+                now,
+                now,
+                effective_error_code,
+                error_message,
+                context_usage_json,
+                str(voice_row["turn_id"]),
+            ),
+        )
+        conn.execute(
+            "UPDATE voice_turns SET state = ?, updated_at = ? WHERE turn_id = ?",
+            (normalized_state, now, str(voice_row["turn_id"])),
+        )
+        if assistant_message_id not in changed_message_ids:
+            changed_message_ids.append(assistant_message_id)
+        conversation_id = str(voice_row["conversation_id"])
+        title = self._derive_title(conn, conversation_id)
+        preview_row = conn.execute(
+            "SELECT content FROM messages WHERE id = ?",
+            (assistant_message_id,),
+        ).fetchone()
+        conn.execute(
+            """
+            UPDATE conversations
+            SET native_session_id = COALESCE(NULLIF(?, ''), native_session_id),
+                title = CASE WHEN COALESCE(title, '') = '' THEN ? ELSE title END,
+                last_message_preview = ?,
+                message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                native_session_id or "",
+                title,
+                self._summarize_preview(str(preview_row["content"] or "")) if preview_row else "",
+                conversation_id,
+                now,
+                conversation_id,
+            ),
+        )
+        return True
+
+    def record_voice_event(self, handle: ChatTurnHandle, event: dict[str, Any]) -> bool:
+        if not isinstance(event, dict):
+            return False
+        now = _utc_now()
+        event_id = self._voice_event_id(event)
+        seq: int | None
+        try:
+            seq = int(event["seq"]) if event.get("seq") is not None else None
+        except (TypeError, ValueError):
+            seq = None
+        event_name = str(event.get("event_name") or event.get("type") or "").strip()
+        codex_turn_id = str(event.get("codex_turn_id") or "").strip()
+        realtime_session_id = str(event.get("realtime_session_id") or "").strip()
+        item_id = str(event.get("item_id") or "").strip()
+        role = str(event.get("role") or "").strip().lower()
+        transcript_present = "transcript" in event or "transcript_text" in event
+        transcript = str(event.get("transcript", event.get("transcript_text", "")) or "") if transcript_present else None
+        is_final_present = any(key in event for key in ("is_final", "transcript_final", "final"))
+        is_final = (
+            self._voice_bool(
+                event.get("is_final", event.get("transcript_final", event.get("final")))
+            )
+            if is_final_present
+            else None
+        )
+        proposed_state = self._normalize_voice_state(event.get("task_state"), default="active")
+        trace_events = event.get("trace_events")
+        changed_message_ids: list[str] = []
+        with self._connect_for_write() as conn:
+            voice_row = self._voice_row(conn, handle.turn_id)
+            existing = conn.execute(
+                "SELECT 1 FROM voice_events WHERE turn_id = ? AND event_id = ?",
+                (handle.turn_id, event_id),
+            ).fetchone()
+            if existing is not None:
+                return False
+            conn.execute(
+                """
+                INSERT INTO voice_events (
+                    id, turn_id, event_id, seq, event_name, codex_turn_id,
+                    realtime_session_id, item_id, role, transcript, is_final, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"voice_event_{uuid.uuid4().hex}",
+                    handle.turn_id,
+                    event_id,
+                    seq,
+                    event_name,
+                    codex_turn_id or None,
+                    realtime_session_id or None,
+                    item_id or None,
+                    role or None,
+                    transcript,
+                    int(is_final) if is_final is not None else None,
+                    now,
+                ),
+            )
+            current_state = self._normalize_voice_state(voice_row["state"])
+            if current_state == "active":
+                if transcript is not None and role in {"user", "assistant"}:
+                    message_id = (
+                        str(voice_row["user_message_id"])
+                        if role == "user" and "user_message_id" in voice_row.keys()
+                        else str(voice_row["assistant_message_id"])
+                        if role == "assistant" and "assistant_message_id" in voice_row.keys()
+                        else ""
+                    )
+                    if not message_id:
+                        turn_row = conn.execute(
+                            "SELECT user_message_id, assistant_message_id FROM turns WHERE id = ?",
+                            (handle.turn_id,),
+                        ).fetchone()
+                        message_id = str(turn_row["user_message_id"] if role == "user" else turn_row["assistant_message_id"])
+                    self._update_voice_message_conn(
+                        conn,
+                        message_id,
+                        transcript,
+                        state="done" if is_final else "streaming",
+                        now=now,
+                        changed_message_ids=changed_message_ids,
+                    )
+                    if role == "user":
+                        conn.execute(
+                            """
+                            UPDATE voice_turns
+                            SET user_transcript_final = CASE WHEN user_transcript_final = 1 THEN 1 ELSE ? END
+                            WHERE turn_id = ?
+                            """,
+                            (int(bool(is_final)), handle.turn_id),
+                        ) if is_final is not None else None
+                    else:
+                        conn.execute(
+                            """
+                            UPDATE voice_turns
+                            SET assistant_transcript_final = CASE WHEN assistant_transcript_final = 1 THEN 1 ELSE ? END
+                            WHERE turn_id = ?
+                            """,
+                            (int(bool(is_final)), handle.turn_id),
+                        ) if is_final is not None else None
+                if item_id:
+                    item_column = "user_item_id" if role == "user" else "assistant_item_id" if role == "assistant" else ""
+                    if item_column:
+                        conn.execute(
+                            f"UPDATE voice_turns SET {item_column} = ? WHERE turn_id = ?",
+                            (item_id, handle.turn_id),
+                        )
+                update_fields = ["updated_at = ?"]
+                update_params: list[Any] = [now]
+                if codex_turn_id:
+                    update_fields.append("codex_turn_id = ?")
+                    update_params.append(codex_turn_id)
+                if realtime_session_id:
+                    update_fields.append("realtime_session_id = ?")
+                    update_params.append(realtime_session_id)
+                if seq is not None:
+                    update_fields.append("last_seq = CASE WHEN last_seq IS NULL OR last_seq < ? THEN ? ELSE last_seq END")
+                    update_params.extend([seq, seq])
+                update_params.append(handle.turn_id)
+                conn.execute(
+                    f"UPDATE voice_turns SET {', '.join(update_fields)} WHERE turn_id = ?",
+                    update_params,
+                )
+                if isinstance(trace_events, list):
+                    self._append_trace_events_conn(conn, handle.turn_id, trace_events, now=now)
+                if proposed_state != "active":
+                    self._complete_voice_turn_conn(
+                        conn,
+                        voice_row,
+                        task_state=proposed_state,
+                        content=None,
+                        native_session_id=(str(event.get("native_session_id") or "").strip() or None),
+                        error_code=str(event.get("error_code") or "") or None,
+                        error_message=str(event.get("error_message") or "") or None,
+                        context_usage=event.get("context_usage") if isinstance(event.get("context_usage"), dict) else None,
+                        now=now,
+                        changed_message_ids=changed_message_ids,
+                    )
+            if changed_message_ids:
+                self._record_message_changes(
+                    conn,
+                    str(voice_row["conversation_id"]),
+                    changed_message_ids,
+                    operation="upsert",
+                    now=now,
+                )
+        return True
+
+    def get_voice_task(self, handle: ChatTurnHandle) -> dict[str, Any]:
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(handle.turn_id)
+        with closing(conn):
+            with conn:
+                voice_row = self._voice_row(conn, handle.turn_id)
+                trace_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) AS count FROM trace_events WHERE turn_id = ?",
+                        (handle.turn_id,),
+                    ).fetchone()["count"]
+                    or 0
+                )
+                task = self._voice_meta_from_row(
+                    conn,
+                    voice_row,
+                    assistant_message_id=handle.assistant_message_id,
+                    trace_count=trace_count,
+                )
+                task["tcb_turn_id"] = handle.turn_id
+                task["conversation_id"] = handle.conversation_id
+                return task
+
+    def update_voice_transcript(
+        self,
+        handle: ChatTurnHandle,
+        *,
+        role: str,
+        transcript: str,
+        is_final: bool = False,
+        item_id: str = "",
+    ) -> bool:
+        normalized_role = str(role or "").strip().lower()
+        if normalized_role not in {"user", "assistant"}:
+            raise ValueError("voice transcript role must be user or assistant")
+        now = _utc_now()
+        changed_message_ids: list[str] = []
+        with self._connect_for_write() as conn:
+            voice_row = self._voice_row(conn, handle.turn_id)
+            if self._normalize_voice_state(voice_row["state"]) != "active":
+                return False
+            message_id = str(
+                conn.execute(
+                    "SELECT user_message_id, assistant_message_id FROM turns WHERE id = ?",
+                    (handle.turn_id,),
+                ).fetchone()["user_message_id" if normalized_role == "user" else "assistant_message_id"]
+            )
+            changed = self._update_voice_message_conn(
+                conn,
+                message_id,
+                str(transcript or ""),
+                state="done" if is_final else "streaming",
+                now=now,
+                changed_message_ids=changed_message_ids,
+            )
+            fields = ["updated_at = ?"]
+            params: list[Any] = [now]
+            if item_id:
+                fields.append(f"{'user' if normalized_role == 'user' else 'assistant'}_item_id = ?")
+                params.append(str(item_id))
+            final_column = "user_transcript_final" if normalized_role == "user" else "assistant_transcript_final"
+            fields.append(f"{final_column} = CASE WHEN {final_column} = 1 THEN 1 ELSE ? END")
+            params.append(int(bool(is_final)))
+            params.append(handle.turn_id)
+            conn.execute(f"UPDATE voice_turns SET {', '.join(fields)} WHERE turn_id = ?", params)
+            if changed_message_ids:
+                self._record_message_changes(
+                    conn,
+                    str(voice_row["conversation_id"]),
+                    changed_message_ids,
+                    operation="upsert",
+                    now=now,
+                )
+            return changed
+
+    def append_voice_trace(self, handle: ChatTurnHandle, trace_events: list[dict[str, Any]]) -> bool:
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            self._voice_row(conn, handle.turn_id)
+            return self._append_trace_events_conn(conn, handle.turn_id, trace_events, now=now)
+
+    def complete_voice_turn(
+        self,
+        handle: ChatTurnHandle,
+        *,
+        task_state: str | None = None,
+        completion_state: str | None = None,
+        state: str | None = None,
+        content: str | None = None,
+        native_session_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        context_usage: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        selected_state = task_state or completion_state or state or "completed"
+        normalized_state = self._normalize_voice_state(selected_state, default="unknown")
+        now = _utc_now()
+        changed_message_ids: list[str] = []
+        with self._connect_for_write() as conn:
+            voice_row = self._voice_row(conn, handle.turn_id)
+            self._complete_voice_turn_conn(
+                conn,
+                voice_row,
+                task_state=normalized_state,
+                content=content,
+                native_session_id=native_session_id,
+                error_code=error_code,
+                error_message=error_message,
+                context_usage=context_usage,
+                now=now,
+                changed_message_ids=changed_message_ids,
+            )
+            if changed_message_ids:
+                self._record_message_changes(
+                    conn,
+                    str(voice_row["conversation_id"]),
+                    changed_message_ids,
+                    operation="upsert",
+                    now=now,
+                )
+        return self.get_message(handle.assistant_message_id)
 
     def mark_trace_recovery_attempted(self, turn_id: str, *, status: str) -> None:
         now = _utc_now()
@@ -2711,6 +3521,10 @@ class ChatStore:
             "native_session_id": row["native_session_id"],
         }
         is_assistant = str(row["role"] or "") == "assistant"
+        voice_row = conn.execute(
+            "SELECT * FROM voice_turns WHERE turn_id = ?",
+            (turn_id,),
+        ).fetchone()
         if is_assistant:
             meta.update({
                 "trace_count": int(trace_stats.get("trace_count", 0) or 0),
@@ -2749,6 +3563,13 @@ class ChatStore:
                 parsed_context_usage = None
             if isinstance(parsed_context_usage, dict):
                 meta["context_usage"] = parsed_context_usage
+            if voice_row is not None:
+                meta["voice"] = self._voice_meta_from_row(
+                    conn,
+                    voice_row,
+                    assistant_message_id=str(row["id"] or ""),
+                    trace_count=int(trace_stats.get("trace_count", 0) or 0),
+                )
         author: dict[str, Any] = {}
         try:
             author_user_id = row["author_user_id"]
@@ -3333,6 +4154,9 @@ class ChatStore:
                     FROM turns AS t
                     JOIN messages AS m ON m.id = t.assistant_message_id
                     WHERE t.conversation_id = ? AND m.role = ? AND m.state = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM voice_turns AS voice_turn WHERE voice_turn.turn_id = t.id
+                      )
                     """,
                     (resolved_conversation_id, "assistant", "streaming"),
                 ).fetchall()
@@ -3429,7 +4253,14 @@ class ChatStore:
                     JOIN messages AS user ON user.id = t.user_message_id
                     WHERE t.conversation_id = ?
                       AND t.completion_state = 'streaming'
-                      AND assistant.state = ?
+                      AND (
+                          assistant.state = ?
+                          OR EXISTS (
+                              SELECT 1
+                              FROM voice_turns AS voice_turn
+                              WHERE voice_turn.turn_id = t.id AND voice_turn.state = 'active'
+                          )
+                      )
                     ORDER BY t.seq DESC
                     LIMIT 1
                     """,
@@ -3447,6 +4278,24 @@ class ChatStore:
                     "started_at": row["started_at"],
                     "updated_at": row["updated_at"] or row["started_at"],
                 }
+                voice_row = conn.execute(
+                    "SELECT * FROM voice_turns WHERE turn_id = ?",
+                    (str(row["turn_id"] or ""),),
+                ).fetchone()
+                if voice_row is not None:
+                    trace_count = int(
+                        conn.execute(
+                            "SELECT COUNT(*) AS count FROM trace_events WHERE turn_id = ?",
+                            (str(row["turn_id"] or ""),),
+                        ).fetchone()["count"]
+                        or 0
+                    )
+                    result["voice"] = self._voice_meta_from_row(
+                        conn,
+                        voice_row,
+                        assistant_message_id=str(row["assistant_message_id"] or ""),
+                        trace_count=trace_count,
+                    )
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -3474,6 +4323,9 @@ class ChatStore:
         agent_input_text: str | None = None,
         translation: dict[str, Any] | None = None,
         actor: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        local_message_id: str | None = None,
+        message_id: str | None = None,
         native_provider: str | None = None,
         native_provider_exclude: str | None = None,
     ) -> dict[str, Any]:
@@ -3483,7 +4335,8 @@ class ChatStore:
         if not normalized_turn_id or not normalized_conversation_id:
             raise KeyError(normalized_turn_id or normalized_conversation_id)
         now = _utc_now()
-        message_id = f"msg_{uuid.uuid4().hex}"
+        normalized_request_id = str(request_id or "").strip() or None
+        normalized_message_id = str(local_message_id or message_id or "").strip() or f"msg_{uuid.uuid4().hex}"
         actor_data = dict(actor or {})
         author_user_id = actor_data.get("user_id")
         try:
@@ -3522,6 +4375,20 @@ class ChatStore:
             ).fetchone()
             if row is None:
                 raise ValueError("active turn is no longer available")
+            existing = None
+            if normalized_request_id:
+                existing = conn.execute(
+                    "SELECT id FROM messages WHERE turn_id = ? AND request_id = ? LIMIT 1",
+                    (normalized_turn_id, normalized_request_id),
+                ).fetchone()
+            if existing is None and (local_message_id or message_id):
+                existing = conn.execute(
+                    "SELECT id FROM messages WHERE id = ? AND turn_id = ? LIMIT 1",
+                    (normalized_message_id, normalized_turn_id),
+                ).fetchone()
+            if existing is not None:
+                existing_message_id = str(existing["id"])
+                return self.get_message(existing_message_id)
             revision = self._next_conversation_revision(conn, normalized_conversation_id)
             conn.execute(
                 """
@@ -3533,6 +4400,7 @@ class ChatStore:
                     content,
                     translation_json,
                     agent_input_text,
+                    request_id,
                     content_format,
                     state,
                     updated_revision,
@@ -3541,15 +4409,16 @@ class ChatStore:
                     author_username,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, 'user', ?, ?, ?, 'markdown', 'done', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'user', ?, ?, ?, ?, 'markdown', 'done', ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    message_id,
+                    normalized_message_id,
                     normalized_conversation_id,
                     normalized_turn_id,
                     user_text,
                     translation_json,
                     agent_input_text,
+                    normalized_request_id,
                     revision,
                     normalized_author_user_id,
                     author_account_id,
@@ -3561,7 +4430,7 @@ class ChatStore:
             self._record_message_changes(
                 conn,
                 normalized_conversation_id,
-                [message_id],
+                [normalized_message_id],
                 operation="upsert",
                 revision=revision,
                 now=now,
@@ -3581,7 +4450,34 @@ class ChatStore:
                     normalized_conversation_id,
                 ),
             )
-        return self.get_message(message_id)
+        return self.get_message(normalized_message_id)
+
+    def find_voice_steer_request(
+        self,
+        turn_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        normalized_turn_id = str(turn_id or "").strip()
+        normalized_request_id = str(request_id or "").strip()
+        if not normalized_turn_id or not normalized_request_id:
+            return None
+        conn = self._connect(create=False)
+        if conn is None:
+            return None
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    """
+                    SELECT id
+                    FROM messages
+                    WHERE turn_id = ? AND request_id = ? AND role = 'user'
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 1
+                    """,
+                    (normalized_turn_id, normalized_request_id),
+                ).fetchone()
+                message_id = str(row["id"]) if row is not None else ""
+        return self.get_message(message_id) if message_id else None
 
     def _turn_count(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(
@@ -3902,11 +4798,13 @@ class ChatStore:
                         turn.native_session_id AS native_session_id,
                         turn.completion_state AS completion_state,
                         turn.trace_recovery_attempted_at AS trace_recovery_attempted_at,
-                        turn.trace_recovery_status AS trace_recovery_status
+                        turn.trace_recovery_status AS trace_recovery_status,
+                        voice_turn.turn_id AS voice_turn_id
                     FROM messages AS assistant
                     JOIN turns AS turn ON turn.id = assistant.turn_id
                     JOIN conversations AS conversation ON conversation.id = assistant.conversation_id
                     JOIN messages AS user ON user.id = turn.user_message_id
+                    LEFT JOIN voice_turns AS voice_turn ON voice_turn.turn_id = turn.id
                     WHERE assistant.id = ?
                       AND turn.workspace_history_discarded_at IS NULL
                     """,
@@ -3928,6 +4826,7 @@ class ChatStore:
                     "completion_state": str(row["completion_state"] or ""),
                     "trace_recovery_attempted_at": str(row["trace_recovery_attempted_at"] or ""),
                     "trace_recovery_status": str(row["trace_recovery_status"] or ""),
+                    "is_voice": row["voice_turn_id"] is not None,
                     "trace_count": int(trace_stats.get("trace_count", 0) or 0),
                     "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
                     "process_count": int(trace_stats.get("process_count", 0) or 0),

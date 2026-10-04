@@ -62,6 +62,8 @@ import type {
   PromptPreset,
   NativeAgentModelsPayload,
   NativeAgentModelOption,
+  SteerMessageResult,
+  VoiceTaskBinding,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
@@ -934,6 +936,32 @@ function resolveActiveConversationId(conversations: ConversationSummary[], items
     || items.find((item) => item.conversationId)?.conversationId
     || ""
   );
+}
+
+function latestVoiceTaskBinding(items: ChatMessage[], runningReply?: BotOverview["runningReply"] | null) {
+  const fromHistory = [...items].reverse().find((item) => item.role === "assistant")?.meta?.voice;
+  return fromHistory || runningReply?.voice || null;
+}
+
+function voiceTaskTurnId(binding: VoiceTaskBinding | null, activeTurn?: ActiveTurnBinding | null) {
+  return binding?.tcbTurnId || activeTurn?.turnId || "";
+}
+
+function steerResultMessage(result: ChatMessage | SteerMessageResult, fallbackTurnId: string): ChatMessage | null {
+  if ("role" in result && "id" in result && "text" in result) {
+    return result.turnId || !fallbackTurnId ? result : { ...result, turnId: fallbackTurnId };
+  }
+  const message = (result as SteerMessageResult).message;
+  if (!message) {
+    return null;
+  }
+  return message.turnId || !fallbackTurnId ? message : { ...message, turnId: fallbackTurnId };
+}
+
+function createVoiceRequestId() {
+  return typeof crypto?.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function historyScopeForSnapshot(
@@ -1908,7 +1936,8 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
-  const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean }) => Promise<boolean>) | null>(null);
+  const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean; forceHistory?: boolean }) => Promise<boolean>) | null>(null);
+  const voiceTaskBindingRef = useRef<VoiceTaskBinding | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
   const revealScrollFrameRef = useRef<number | null>(null);
@@ -2465,6 +2494,7 @@ export function ChatScreen({
   pollAssistantStateRef.current = async (options = {}) => {
     const sendVersion = assistantSendVersionRef.current;
     const allowDuringSse = options.allowDuringSse === true;
+    const forceHistory = options.forceHistory === true;
     if (!isForegroundRef.current || (isSseStreaming() && !allowDuringSse)) {
       return true;
     }
@@ -2490,7 +2520,8 @@ export function ChatScreen({
       const hasStreamingAssistant = hasPersistedStreamingAssistant(previousItems);
 
       const shouldRefreshMessages = Boolean(
-        FRONTEND_FEATURE_FLAGS.historyRevisionSync
+        forceHistory
+        || FRONTEND_FEATURE_FLAGS.historyRevisionSync
         || overview.isProcessing
         || overview.runningReply
         || hasStreamingAssistant
@@ -4411,6 +4442,51 @@ export function ChatScreen({
           ...(soloMode ? { soloMode: true } : {}),
         }
         : undefined;
+    const voiceTaskBinding = voiceTaskBindingRef.current;
+    if (voiceTaskBinding?.state === "active") {
+      const composedText = buildComposedMessageText(text, pendingAttachments);
+      if (!composedText) {
+        return true;
+      }
+      const turnId = voiceTaskTurnId(voiceTaskBinding, activeTurnBindingRef.current);
+      if (!turnId) {
+        setError("当前语音任务尚未建立可追加的本地 turn");
+        return false;
+      }
+      const requestId = createVoiceRequestId();
+      setError("");
+      try {
+        const result = await client.steerMessage(
+          botAlias,
+          composedText,
+          turnId,
+          {
+            taskMode: "standard",
+            agentId: activeAgentIdRef.current || "main",
+            executionMode: "cli",
+            ...(voiceTaskBinding.conversationId
+              ? { conversationId: voiceTaskBinding.conversationId }
+              : { conversationId: resolveActiveConversationId(conversations, itemsRef.current) }),
+            ...(typeof voiceTaskBinding.sessionEpoch === "number" ? { sessionEpoch: voiceTaskBinding.sessionEpoch } : {}),
+            ...(voiceTaskBinding.codexTurnId ? { codexTurnId: voiceTaskBinding.codexTurnId } : {}),
+            requestId,
+          },
+        );
+        const resultStatus = "status" in result ? result.status : "accepted";
+        if (resultStatus === "unknown") {
+          setError("文字补充结果待确认，请通过历史检查是否已保存");
+        }
+        if (pendingAttachments.length > 0) {
+          setPendingAttachments([]);
+        }
+        setComposerPulseKey((value) => value + 1);
+        void pollAssistantStateRef.current?.({ allowDuringSse: true, forceHistory: true });
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "发送文字补充失败");
+        return false;
+      }
+    }
     if (isStreamingRef.current) {
       const activeTurnBinding = activeTurnBindingRef.current;
       if (activeTurnBinding?.codexServer) {
@@ -4431,10 +4507,14 @@ export function ChatScreen({
             activeTurnBinding.turnId,
             sendOptions,
           );
+          const resolvedSteeredMessage = steerResultMessage(steeredMessage, activeTurnBinding.turnId);
+          if (!resolvedSteeredMessage) {
+            throw new Error("转向消息响应无效");
+          }
           const userMessage: ChatMessage = {
-            ...steeredMessage,
+            ...resolvedSteeredMessage,
             role: "user",
-            turnId: steeredMessage.turnId || activeTurnBinding.turnId,
+            turnId: resolvedSteeredMessage.turnId || activeTurnBinding.turnId,
             state: "done",
           };
           setItems((current) => {
@@ -4808,16 +4888,43 @@ export function ChatScreen({
     || botOverview?.activeConversationId
     || botOverview?.agents?.find((agent) => agent.id === activeAgentId)?.activeConversationId
     || "";
+  const restoredVoiceTask = useMemo(
+    () => latestVoiceTaskBinding(items, botOverview?.runningReply),
+    [botOverview?.runningReply, items],
+  );
   const voiceSession = useCodexVoiceSession({
     client,
     botAlias,
     agentId: activeAgentId,
     conversationId: voiceConversationId,
     sessionEpoch: botOverview?.sessionEpoch,
+    taskBinding: restoredVoiceTask,
     scopeKey: JSON.stringify([accountId, effectiveExecutionMode, voiceConversationId, botOverview?.sessionEpoch]),
     enabled: voiceEnabled && isVisible && !conversationLoading,
     busy: isStreaming,
   });
+  voiceTaskBindingRef.current = voiceSession.connected
+    ? voiceSession.taskBinding
+    : (voiceSession.taskBinding || restoredVoiceTask);
+  const voiceTaskRevision = voiceSession.taskBinding
+    ? JSON.stringify([
+      voiceSession.taskBinding.seq,
+      voiceSession.taskBinding.tcbTurnId,
+      voiceSession.taskBinding.assistantMessageId,
+      voiceSession.taskBinding.codexTurnId,
+      voiceSession.taskBinding.realtimeSessionId,
+      voiceSession.taskBinding.conversationId,
+      voiceSession.taskBinding.state,
+      voiceSession.taskBinding.transcriptState,
+      voiceSession.taskBinding.sessionEpoch,
+    ])
+    : "";
+  useEffect(() => {
+    if (!voiceTaskRevision) {
+      return;
+    }
+    void pollAssistantStateRef.current?.({ allowDuringSse: true, forceHistory: true });
+  }, [voiceTaskRevision]);
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities

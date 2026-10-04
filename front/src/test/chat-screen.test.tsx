@@ -447,6 +447,75 @@ test("retains steering input when the Codex server rejects it", async () => {
   });
 });
 
+test("steers an active persisted voice task into the same turn", async () => {
+  const user = userEvent.setup();
+  const steerMessage = vi.fn<WebBotClient["steerMessage"]>(async (_botAlias, text, turnId) => ({
+    id: "user-voice-steer",
+    turnId,
+    role: "user",
+    text,
+    createdAt: "2026-10-04T06:00:01Z",
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "assistant-voice",
+      turnId: "tcb-turn-voice",
+      conversationId: "conversation-voice",
+      role: "assistant",
+      text: "语音处理中",
+      createdAt: "2026-10-04T06:00:00Z",
+      state: "streaming",
+      meta: {
+        voice: {
+          tcbTurnId: "tcb-turn-voice",
+          assistantMessageId: "assistant-voice",
+          codexTurnId: "codex-turn-voice",
+          conversationId: "conversation-voice",
+          state: "active",
+          transcriptState: "syncing",
+          sessionEpoch: 8,
+        },
+      },
+    }] }),
+    getBotOverview: async () => ({
+      alias: "main",
+      cliType: "codex_server",
+      status: "running",
+      workingDir: "C:\\workspace",
+      isProcessing: true,
+      activeConversationId: "conversation-voice",
+      sessionEpoch: 8,
+      effectiveCapabilities: ["chat_send"],
+      supportedExecutionModes: ["cli"],
+      defaultExecutionMode: "cli",
+      voice: { enabled: true, reason: "available" },
+    }),
+    steerMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  const voiceBar = await screen.findByTestId("codex-voice-bar");
+  await waitFor(() => expect(voiceBar).toHaveTextContent("运行中"));
+  await user.type(screen.getByPlaceholderText("输入消息"), "补充要求");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+
+  await waitFor(() => expect(steerMessage).toHaveBeenCalledWith(
+    "main",
+    "补充要求",
+    "tcb-turn-voice",
+    expect.objectContaining({
+      agentId: "main",
+      executionMode: "cli",
+      conversationId: "conversation-voice",
+      sessionEpoch: 8,
+      codexTurnId: "codex-turn-voice",
+      requestId: expect.any(String),
+    }),
+  ));
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("");
+});
+
 test("keeps regular codex messages in the existing queue while streaming", async () => {
   const user = userEvent.setup();
   const final = deferred<ChatMessage>();

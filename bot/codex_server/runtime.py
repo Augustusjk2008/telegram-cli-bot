@@ -121,6 +121,8 @@ class CodexServerRuntime:
         self._available = asyncio.Event()
         self._turn_done = asyncio.Event()
         self._turn_done.set()
+        self._voice_done = asyncio.Event()
+        self._voice_done.set()
         self._interrupt_lock = asyncio.Lock()
         self._steer_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
@@ -129,6 +131,8 @@ class CodexServerRuntime:
         self._wire_bytes = 0
         self.voice_events = VoiceEvents()
         self.voice_lease: Any = None
+        self.voice_lease_generation: str | None = None
+        self.voice_persistence: Any = None
         self._voice_task_state = "idle"
         self._voice_turn_id = ""
 
@@ -143,6 +147,11 @@ class CodexServerRuntime:
     @property
     def voice_turn_id(self) -> str:
         return self._voice_turn_id
+
+    @property
+    def active_turn_id(self) -> str:
+        """Turn id accepted by steer for either CLI or realtime voice."""
+        return self._turn_id or self._voice_turn_id
 
     @property
     def voice_task_active(self) -> bool:
@@ -247,17 +256,19 @@ class CodexServerRuntime:
         if method == "turn/started":
             self._voice_turn_id = incoming
             self._voice_task_state = "active"
+            self._voice_done.clear()
             return
         if not self.voice_task_active or (incoming and self._voice_turn_id and incoming != self._voice_turn_id):
             return
         if method not in {"turn/completed", "turn/failed"}:
             return
-        status = str(turn.get("status") or payload.get("status") or "failed").lower()
+        status = str(turn.get("status") or payload.get("status") or "").lower()
         self._voice_task_state = (
-            "completed" if status == "completed" else
-            "interrupted" if status == "interrupted" else
+            "completed" if method == "turn/completed" and status in {"", "completed", "complete", "success", "succeeded"} else
+            "interrupted" if status in {"interrupted", "cancelled", "canceled"} else
             "failed"
         )
+        self._voice_done.set()
 
     async def _read_events(self) -> None:
         try:
@@ -269,6 +280,8 @@ class CodexServerRuntime:
                 if self.voice_lease is not None:
                     self.voice_lease.observe(packet)
                 self._observe_voice_turn(packet, payload)
+                if self.voice_persistence is not None:
+                    await self.voice_persistence.observe(packet)
                 incoming = str(payload.get("turnId") or (payload.get("turn") or {}).get("id") or "")
                 if not self._streaming:
                     if packet.get("method") == "thread/tokenUsage/updated":
@@ -296,6 +309,8 @@ class CodexServerRuntime:
             self._finish_failure(exc)
             if self.voice_task_active:
                 self._voice_task_state = "unknown"
+            if self.voice_persistence is not None:
+                await self.voice_persistence.close(unknown=True, message="语音运行时错误，结果待确认")
             if self.voice_lease is not None and self.voice_lease.state not in {"closed", "unknown"}:
                 self.voice_lease.transition("unknown", code="voice_runtime_error", message="语音运行时错误，结果待确认")
             self.voice_events.publish({"type": "voice.event", "name": "runtime/error",
@@ -386,6 +401,25 @@ class CodexServerRuntime:
 
     async def interrupt(self) -> None:
         async with self._interrupt_lock:
+            if not self._streaming and self.voice_task_active:
+                turn_id = self._voice_turn_id
+                if not turn_id or not self.client.alive:
+                    self._voice_task_state = "unknown"
+                    if self.voice_persistence is not None:
+                        await self.voice_persistence.close(unknown=True, message="无法确认语音任务是否停止")
+                    return
+                try:
+                    await self.client.request(
+                        "turn/interrupt",
+                        {"threadId": self.thread_id, "turnId": turn_id},
+                        timeout=10,
+                    )
+                    await asyncio.wait_for(self._voice_done.wait(), 10)
+                except Exception as exc:
+                    self._voice_task_state = "unknown"
+                    if self.voice_persistence is not None:
+                        await self.voice_persistence.close(unknown=True, message=f"语音停止结果待确认: {exc}")
+                return
             if self._turn_done.is_set():
                 return
             if not self._turn_id or not self.client.alive:
@@ -403,11 +437,11 @@ class CodexServerRuntime:
         async with self._steer_lock:
             if not self.alive:
                 raise CodexServerError("codex server 运行时已关闭，无法 steer")
-            if not self._streaming:
+            if not self._streaming and not self.voice_task_active:
                 raise CodexServerError("codex server 当前没有活动 turn，无法 steer")
             if not self.thread_id:
                 raise CodexServerError("codex server 当前 turn 缺少 thread_id，无法 steer")
-            turn_id = self._turn_id
+            turn_id = self._turn_id or self._voice_turn_id
             if not turn_id:
                 raise CodexServerError("codex server 当前 turn 缺少 turn_id，无法 steer")
             if expected_turn_id is not None and expected_turn_id != turn_id:
@@ -432,6 +466,8 @@ class CodexServerRuntime:
                 "voiceTaskState": self._voice_task_state,
             }}
             self.voice_events.packet(closed_packet, self.thread_id)
+            if self.voice_persistence is not None:
+                await self.voice_persistence.close(unknown=True)
             if self.voice_lease is not None:
                 self.voice_lease.observe(closed_packet)
             await self.interrupt()

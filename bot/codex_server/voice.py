@@ -155,6 +155,10 @@ class VoiceLease:
     _registry: Any = field(default=None, repr=False)
     _loop: Any = field(default=None, repr=False)
     _disconnecting: bool = field(default=False, repr=False)
+    _cleanup_pending: bool = field(default=False, repr=False)
+    _cleanup_runtime: Any = field(default=None, repr=False)
+    _cleanup_connection_id: str = field(default="", repr=False)
+    _cleanup_task: asyncio.Task | None = field(default=None, repr=False)
 
     @property
     def owner_key(self) -> tuple[int, int, str]:
@@ -173,6 +177,10 @@ class VoiceLease:
     def busy(self) -> bool:
         return self.attached and not self.expired and self.state not in {"closed", "error"}
 
+    @property
+    def cleanup_pending(self) -> bool:
+        return self._cleanup_pending
+
     def renew(self) -> None:
         if not self.attached or self.expired:
             raise VoiceError("voice_lease_expired", "语音连接已过期，请重新连接", 409)
@@ -184,9 +192,15 @@ class VoiceLease:
             raise VoiceError("voice_session_changed", "语音会话绑定已失效", 409)
         if runtime.active or getattr(runtime, "voice_task_active", False):
             raise VoiceError("voice_task_active", VOICE_BUSY_MESSAGE, 409)
+        if self._registry is not None and self._registry._cleanup_for_runtime(runtime) is not None:
+            raise VoiceError("voice_cleanup_pending", "语音运行时正在清理，请稍后重试", 409)
+        current = getattr(runtime, "voice_lease", None)
+        if current is not None and current is not self:
+            raise VoiceError("voice_runtime_bound", "语音运行时仍由其他连接绑定", 409)
         self.runtime, self.thread_id = runtime, runtime.thread_id
         self._loop = asyncio.get_running_loop()
         runtime.voice_lease = self
+        runtime.voice_lease_generation = self.connection_id
 
     def publish(self, message: dict) -> None:
         self.last_seq = self.runtime.voice_events.publish({**message, "connection_id": self.connection_id})
@@ -249,11 +263,16 @@ class VoiceLease:
                 raise
             raise VoiceError("voice_start_failed", "语音启动失败；请检查 Codex 0.159.2 兼容性和连接状态", 502) from exc
 
-    async def stop_voice(self, *, timeout: float = 10) -> None:
+    async def stop_voice(self, *, timeout: float = 10, _expected_connection_id: str = "") -> None:
         if not self._started or self.state == "closed":
             if self.state != "closed":
                 self.transition("closed")
             self.detach()
+            return
+        if self.runtime is None or not self._owns_runtime_binding(_expected_connection_id):
+            self.detach()
+            return
+        if _expected_connection_id and self.task_active:
             return
         if self._stop_attempted:
             return
@@ -282,36 +301,151 @@ class VoiceLease:
             self._disconnecting = True
             self.attached = False
             try:
-                if self.runtime is not None and self.runtime.alive:
+                if (self.runtime is not None and self.runtime.alive
+                        and self._owns_runtime_binding()):
                     await self.stop_voice()
             finally:
                 self._disconnecting = False
                 self.detach()
-                if self.runtime is not None and self.runtime.voice_lease is self:
-                    self.runtime.voice_lease = None
+
+    def _owns_runtime_binding(self, expected_connection_id: str = "") -> bool:
+        runtime = self.runtime
+        connection_id = expected_connection_id or self.connection_id
+        return bool(runtime is not None and getattr(runtime, "voice_lease", None) is self
+                    and getattr(runtime, "voice_lease_generation", connection_id) == connection_id)
 
 
 class VoiceLeaseRegistry:
     def __init__(self, *, ttl: float = VOICE_LEASE_TTL):
         self._leases: dict[tuple[int, int, str, str], VoiceLease] = {}
         self._tasks: dict[tuple[int, int, str], Any] = {}
+        self._pending_cleanups: dict[int, VoiceLease] = {}
         self.ttl = ttl
         self._lock = threading.RLock()
 
     def _prune(self) -> None:
         for lease in list(self._leases.values()):
             if not lease.attached or lease.expired or (lease.runtime is not None and not lease.runtime.alive):
-                self.release(lease)
-                if lease._loop is not None and lease._loop.is_running():
-                    lease._loop.call_soon_threadsafe(lambda old=lease: old._loop.create_task(old.disconnect()))
+                self._begin_cleanup(lease)
         for owner, runtime in list(self._tasks.items()):
             if not runtime.alive or not getattr(runtime, "voice_task_active", False):
-                self._tasks.pop(owner)
+                if self._tasks.get(owner) is runtime:
+                    self._tasks.pop(owner)
+        for lease in list(self._pending_cleanups.values()):
+            if lease.task_active:
+                self._tasks[lease.owner_key] = lease.runtime
+            else:
+                self._schedule_cleanup(lease)
+
+    def _cleanup_for_runtime(self, runtime: Any) -> VoiceLease | None:
+        with self._lock:
+            lease = self._pending_cleanups.get(id(runtime))
+            if lease is not None and lease._cleanup_runtime is runtime and lease._cleanup_pending:
+                return lease
+            if lease is not None:
+                self._pending_cleanups.pop(id(runtime), None)
+            return None
+
+    def _owns_runtime_binding(self, lease: VoiceLease, runtime: Any, connection_id: str) -> bool:
+        return bool(getattr(runtime, "voice_lease", None) is lease
+                    and getattr(runtime, "voice_lease_generation", connection_id) == connection_id)
+
+    def _clear_runtime_binding(self, lease: VoiceLease, runtime: Any, connection_id: str) -> None:
+        if self._owns_runtime_binding(lease, runtime, connection_id):
+            runtime.voice_lease = None
+            if getattr(runtime, "voice_lease_generation", None) == connection_id:
+                runtime.voice_lease_generation = None
+
+    def _begin_cleanup(self, lease: VoiceLease) -> None:
+        if lease._cleanup_pending:
+            return
+        runtime = lease.runtime
+        lease._cleanup_pending = True
+        lease._cleanup_runtime = runtime
+        lease._cleanup_connection_id = lease.connection_id
+        lease.attached = False
+        if runtime is None:
+            if self._leases.get(lease.key) is lease:
+                self._leases.pop(lease.key)
+            lease._cleanup_pending = False
+            lease._cleanup_runtime = None
+            lease._cleanup_connection_id = ""
+            return
+        if lease.task_active:
+            self._tasks[lease.owner_key] = runtime
+        self._pending_cleanups[id(runtime)] = lease
+
+    def _schedule_cleanup(self, lease: VoiceLease) -> None:
+        if not lease._cleanup_pending or lease._cleanup_task is not None:
+            return
+        runtime = lease._cleanup_runtime
+        if runtime is None or lease.task_active:
+            return
+        if not runtime.alive or not self._owns_runtime_binding(lease, runtime, lease._cleanup_connection_id):
+            self._finish_cleanup(lease)
+            return
+        loop = lease._loop
+        if loop is None or not loop.is_running():
+            self._finish_cleanup(lease)
+            return
+        loop.call_soon_threadsafe(self._create_cleanup_task, lease)
+
+    def _create_cleanup_task(self, lease: VoiceLease) -> None:
+        with self._lock:
+            if not lease._cleanup_pending or lease._cleanup_task is not None:
+                return
+            runtime = lease._cleanup_runtime
+            connection_id = lease._cleanup_connection_id
+            if runtime is None or lease.task_active:
+                return
+            if not runtime.alive or not self._owns_runtime_binding(lease, runtime, connection_id):
+                self._finish_cleanup(lease)
+                return
+            lease._cleanup_task = asyncio.create_task(
+                self._cleanup_expired(lease, runtime, connection_id),
+                name="codex-voice-lease-cleanup",
+            )
+
+    async def _cleanup_expired(self, lease: VoiceLease, runtime: Any, connection_id: str) -> None:
+        try:
+            if not lease._cleanup_pending or not self._owns_runtime_binding(lease, runtime, connection_id):
+                return
+            if lease.task_active:
+                return
+            lease._disconnecting = True
+            try:
+                if lease._started and lease.state != "closed":
+                    await lease.stop_voice(timeout=10, _expected_connection_id=connection_id)
+                elif lease.state != "closed":
+                    lease.transition("closed")
+            finally:
+                lease._disconnecting = False
+        finally:
+            with self._lock:
+                lease._cleanup_task = None
+                if not lease.task_active:
+                    self._finish_cleanup(lease)
+
+    def _finish_cleanup(self, lease: VoiceLease) -> None:
+        runtime = lease._cleanup_runtime
+        connection_id = lease._cleanup_connection_id
+        if runtime is not None and self._pending_cleanups.get(id(runtime)) is lease:
+            self._pending_cleanups.pop(id(runtime), None)
+        if self._leases.get(lease.key) is lease:
+            self._leases.pop(lease.key)
+        if runtime is not None:
+            self._clear_runtime_binding(lease, runtime, connection_id)
+        lease._cleanup_pending = False
+        lease._cleanup_runtime = None
+        lease._cleanup_connection_id = ""
 
     def acquire(self, key: tuple[int, int, str, str], actor_id: tuple[str, int]) -> VoiceLease:
         with self._lock:
             self._prune()
-            if key in self._leases:
+            existing = self._leases.get(key)
+            if existing is not None and existing._cleanup_pending:
+                raise VoiceError("voice_cleanup_pending", "语音运行时正在清理，请稍后重试", 409)
+            if existing is not None:
                 raise VoiceError("voice_connection_occupied", "当前会话已有语音连接", 409)
             if key[:3] in self._tasks:
                 raise VoiceError("voice_task_active", VOICE_BUSY_MESSAGE, 409)
@@ -324,19 +458,21 @@ class VoiceLeaseRegistry:
     def owner_busy(self, owner_key: tuple[int, int, str]) -> bool:
         with self._lock:
             self._prune()
-            return owner_key in self._tasks or any(lease.owner_key == owner_key and (lease.busy or lease.task_active)
-                       for lease in self._leases.values())
+            return (owner_key in self._tasks
+                    or any(lease.owner_key == owner_key and (lease.busy or lease.task_active)
+                           for lease in self._leases.values())
+                    or any(lease.owner_key == owner_key for lease in self._pending_cleanups.values()))
 
     def release(self, lease: VoiceLease) -> None:
         with self._lock:
             lease.attached = False
-            if self._leases.get(lease.key) is lease:
+            if not lease._cleanup_pending and self._leases.get(lease.key) is lease:
                 self._leases.pop(lease.key)
             if lease.task_active:
                 self._tasks[lease.owner_key] = lease.runtime
-            elif (lease.runtime is not None and lease.runtime.voice_lease is lease
-                  and not lease._disconnecting):
-                lease.runtime.voice_lease = None
+            elif (lease.runtime is not None and not lease._disconnecting
+                  and not lease._cleanup_pending):
+                self._clear_runtime_binding(lease, lease.runtime, lease.connection_id)
 
 
 voice_leases = VoiceLeaseRegistry()

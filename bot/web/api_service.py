@@ -3100,6 +3100,16 @@ async def kill_user_process(
 
     try:
         if resolved_execution_mode == EXECUTION_MODE_CLI and profile.cli_type == "codex_server":
+            # A voice task has no CLI stream owner; interrupt its Codex turn directly.
+            from bot.codex_server.runtime import get_codex_server_registry
+            registry = get_codex_server_registry()
+            runtime = getattr(registry, "_runtimes", {}).get(_codex_server_owner(session))
+            if runtime is not None and getattr(runtime, "voice_task_active", False):
+                try:
+                    await runtime.interrupt()
+                except Exception as exc:
+                    logger.warning("语音任务终止请求失败: %s", exc)
+                return {"killed": True, "message": "已请求停止语音任务", "stop_requested": True}
             # The stream owns the interrupt and waits for turn/completed before clearing busy state.
             with session._lock:
                 session.stop_requested = True
@@ -4211,7 +4221,8 @@ def get_codex_server_voice_session(
 
 
 async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSession,
-                                        conversation_id: str, *, allow_unsafe_cli: bool = False):
+                                        conversation_id: str, *, allow_unsafe_cli: bool = False,
+                                        actor: dict[str, Any] | None = None):
     """Open only a server-resolved binding. Voice does not create chat turns."""
     from bot.codex_server.runtime import CodexServerRuntimeRequest, get_codex_server_registry
 
@@ -4261,6 +4272,17 @@ async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSess
             session.codex_session_id = runtime.thread_id
         session.persist()
         _get_chat_store(session).set_conversation_native_session(conversation_id, runtime.thread_id)
+    from bot.web.voice_task_persistence import VoiceTaskPersistence
+    current_persistence = getattr(runtime, "voice_persistence", None)
+    if current_persistence is None:
+        runtime.voice_persistence = VoiceTaskPersistence(
+            _history_service_for_execution_mode(session, EXECUTION_MODE_CLI),
+            profile,
+            session,
+            conversation_id,
+            runtime,
+            actor=actor,
+        )
     return runtime
 
 
@@ -4273,6 +4295,8 @@ def _codex_server_steering_turn_id(registry: Any, session: UserSession, fallback
             getattr(runtime, "active_turn_id", "")
             or getattr(runtime, "turn_id", "")
             or getattr(runtime, "_turn_id", "")
+            or getattr(runtime, "voice_turn_id", "")
+            or getattr(runtime, "_voice_turn_id", "")
             or ""
         ).strip()
         if native_turn_id:
@@ -6220,6 +6244,10 @@ async def steer_chat(
     agent_id: str = "main",
     execution_mode: str = "",
     actor: dict[str, Any] | None = None,
+    conversation_id: str = "",
+    session_epoch: int | str | None = None,
+    codex_turn_id: str = "",
+    request_id: str = "",
 ) -> dict[str, Any]:
     """Append input to the active codex app-server turn without opening a reader."""
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
@@ -6232,6 +6260,22 @@ async def steer_chat(
         _raise(409, "steering_unsupported_execution_mode", "运行中追加消息仅支持 cli 执行模式")
     if str(getattr(session, "agent_id", "main") or "main").strip().lower() != str(agent.id).strip().lower():
         _raise(409, "steering_scope_mismatch", "追加消息的 agent 范围无效")
+
+    requested_conversation_id = str(conversation_id or "").strip()
+    if session_epoch is not None:
+        try:
+            requested_epoch = int(session_epoch)
+        except (TypeError, ValueError):
+            _raise(400, "steering_session_binding_required", "追加消息缺少有效的 session_epoch")
+    else:
+        requested_epoch = None
+    with session._lock:
+        current_conversation_id = str(session.active_conversation_id or "").strip()
+        current_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0))
+    if requested_conversation_id and requested_conversation_id != current_conversation_id:
+        _raise(409, "steering_session_changed", "当前聊天会话已切换")
+    if requested_epoch is not None and requested_epoch != current_epoch:
+        _raise(409, "steering_session_changed", "当前聊天会话已切换")
 
     normalized_turn_id = str(turn_id or "").strip()
     if not normalized_turn_id:
@@ -6255,6 +6299,16 @@ async def steer_chat(
     observed_runtime_turn_id = _codex_server_steering_turn_id(registry, session, active_turn_id)
     if normalized_turn_id not in {active_turn_id, observed_runtime_turn_id}:
         _raise(409, "steering_turn_mismatch", "请求的 turn 与当前活动 turn 不匹配")
+    normalized_codex_turn_id = str(codex_turn_id or "").strip()
+    if normalized_codex_turn_id and normalized_codex_turn_id != observed_runtime_turn_id:
+        _raise(409, "steering_turn_mismatch", "请求的 Codex turn 与当前活动 turn 不匹配")
+    normalized_request_id = str(request_id or "").strip()
+    runtime_for_request = getattr(registry, "_runtimes", {}).get(_codex_server_owner(session))
+    persistence_for_request = getattr(runtime_for_request, "voice_persistence", None)
+    if normalized_request_id and persistence_for_request is not None:
+        cached = persistence_for_request.cached_steer_result(normalized_request_id)
+        if cached is not None:
+            return cached
 
     request = _build_chat_run_request(
         alias,
@@ -6312,16 +6366,22 @@ async def steer_chat(
             agent_input_text=execution_text,
             translation=user_translation,
             actor=_actor_from_request(request),
+            request_id=str(request_id or "").strip() or None,
         )
     except (KeyError, ValueError):
         _raise(409, "steering_turn_done", "当前 turn 已结束，追加消息未保存")
     session.touch()
-    return {
+    result = {
         "turn_id": active_turn_id,
         "assistant_message_id": str(running_reply.get("assistant_message_id") or ""),
         "conversation_id": str(running_reply.get("conversation_id") or ""),
         "user_message": user_message,
+        "request_id": str(request_id or "").strip(),
+        "status": "accepted",
     }
+    if normalized_request_id and persistence_for_request is not None:
+        persistence_for_request.cache_steer_result(normalized_request_id, result)
+    return result
 
 
 def _native_chat_prompt_factory(

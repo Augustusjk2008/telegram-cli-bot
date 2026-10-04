@@ -90,7 +90,13 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
               {!caption.done ? <span className="ml-1 text-[var(--muted)]">…</span> : null}
             </p>
           ))}
-          <span className="text-[var(--muted)]">字幕仅暂时显示，未持久化</span>
+          <span className="text-[var(--muted)]">
+            {session.taskBinding?.transcriptState === "saved"
+              ? "字幕已保存"
+              : session.taskBinding?.transcriptState === "syncing"
+                ? "字幕同步中"
+                : "实时字幕"}
+          </span>
         </div>
       ) : null}
       {session.receivedPackets > 0 ? <span className="sr-only">已接收远端音频 {session.receivedPackets} 个数据包</span> : null}

@@ -221,6 +221,8 @@ class ChatHistoryService:
         )
 
     def _should_attempt_trace_recovery(self, context: dict[str, Any]) -> bool:
+        if bool(context.get("is_voice")):
+            return False
         if str(context.get("trace_recovery_status") or "") in {"no_trace", "recovered", "kept_existing"}:
             return False
         if str(context.get("role") or "") != "assistant":
@@ -232,6 +234,234 @@ class ChatHistoryService:
         if provider not in {"codex", "claude"}:
             return False
         return bool(str(context.get("native_session_id") or "").strip())
+
+    def ensure_voice_turn(
+        self,
+        session: UserSession,
+        *,
+        bot_alias: str,
+        task_submission_key: str,
+        codex_turn_id: str,
+        realtime_session_id: str = "",
+        actor: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
+    ) -> ChatTurnHandle:
+        active_conversation_id = str(
+            conversation_id if conversation_id is not None else _active_conversation_id(session)
+        ).strip()
+        if active_conversation_id:
+            try:
+                active_provider = self.store.get_conversation_native_provider(active_conversation_id)
+            except KeyError:
+                active_provider = ""
+            if str(active_provider or "").strip().lower() != "codex":
+                with session._lock:
+                    session.active_conversation_id = None
+                session.persist()
+                active_conversation_id = ""
+        handle = self.store.ensure_voice_turn(
+            bot_id=session.bot_id,
+            bot_alias=bot_alias,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            task_submission_key=task_submission_key,
+            codex_turn_id=codex_turn_id,
+            realtime_session_id=realtime_session_id,
+            actor=actor,
+            conversation_id=active_conversation_id or None,
+        )
+        if _active_conversation_id(session) != handle.conversation_id:
+            with session._lock:
+                session.active_conversation_id = handle.conversation_id
+            session.persist()
+        return handle
+
+    async def ensure_voice_turn_async(
+        self,
+        session: UserSession,
+        *,
+        bot_alias: str,
+        task_submission_key: str,
+        codex_turn_id: str,
+        realtime_session_id: str = "",
+        actor: dict[str, Any] | None = None,
+        conversation_id: str | None = None,
+    ) -> ChatTurnHandle:
+        active_conversation_id = str(
+            conversation_id if conversation_id is not None else _active_conversation_id(session)
+        ).strip()
+        if active_conversation_id:
+            try:
+                active_provider = self.store.get_conversation_native_provider(active_conversation_id)
+            except KeyError:
+                active_provider = ""
+            if str(active_provider or "").strip().lower() != "codex":
+                with session._lock:
+                    session.active_conversation_id = None
+                session.persist()
+                active_conversation_id = ""
+        handle = await self.async_store.ensure_voice_turn(
+            bot_id=session.bot_id,
+            bot_alias=bot_alias,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            task_submission_key=task_submission_key,
+            codex_turn_id=codex_turn_id,
+            realtime_session_id=realtime_session_id,
+            actor=actor,
+            conversation_id=active_conversation_id or None,
+        )
+        if _active_conversation_id(session) != handle.conversation_id:
+            with session._lock:
+                session.active_conversation_id = handle.conversation_id
+            session.persist()
+        return handle
+
+    @staticmethod
+    def _voice_event_args(
+        handle_or_session: ChatTurnHandle | UserSession,
+        event_or_handle: dict[str, Any] | ChatTurnHandle,
+        event: dict[str, Any] | None,
+    ) -> tuple[ChatTurnHandle, dict[str, Any]]:
+        if event is None:
+            if not isinstance(handle_or_session, ChatTurnHandle) or not isinstance(event_or_handle, dict):
+                raise TypeError("record_voice_event expects (handle, event) or (session, handle, event)")
+            return handle_or_session, event_or_handle
+        if not isinstance(event_or_handle, ChatTurnHandle):
+            raise TypeError("record_voice_event expects a ChatTurnHandle")
+        return event_or_handle, event
+
+    def record_voice_event(
+        self,
+        handle_or_session: ChatTurnHandle | UserSession,
+        event_or_handle: dict[str, Any] | ChatTurnHandle,
+        event: dict[str, Any] | None = None,
+    ) -> bool:
+        handle, payload = self._voice_event_args(handle_or_session, event_or_handle, event)
+        return self.store.record_voice_event(handle, payload)
+
+    async def record_voice_event_async(
+        self,
+        handle_or_session: ChatTurnHandle | UserSession,
+        event_or_handle: dict[str, Any] | ChatTurnHandle,
+        event: dict[str, Any] | None = None,
+    ) -> bool:
+        handle, payload = self._voice_event_args(handle_or_session, event_or_handle, event)
+        return await self.async_store.record_voice_event(handle, payload)
+
+    def get_voice_task(self, handle: ChatTurnHandle) -> dict[str, Any]:
+        return self.store.get_voice_task(handle)
+
+    async def get_voice_task_async(self, handle: ChatTurnHandle) -> dict[str, Any]:
+        return await self.async_store.get_voice_task(handle)
+
+    def find_voice_steer_request(
+        self,
+        turn_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        return self.store.find_voice_steer_request(turn_id, request_id)
+
+    async def find_voice_steer_request_async(
+        self,
+        turn_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        return await self.async_store.find_voice_steer_request(turn_id, request_id)
+
+    def update_voice_transcript(
+        self,
+        handle: ChatTurnHandle,
+        *,
+        role: str,
+        transcript: str,
+        is_final: bool = False,
+        item_id: str = "",
+    ) -> bool:
+        return self.store.update_voice_transcript(
+            handle,
+            role=role,
+            transcript=transcript,
+            is_final=is_final,
+            item_id=item_id,
+        )
+
+    async def update_voice_transcript_async(
+        self,
+        handle: ChatTurnHandle,
+        *,
+        role: str,
+        transcript: str,
+        is_final: bool = False,
+        item_id: str = "",
+    ) -> bool:
+        return await self.async_store.update_voice_transcript(
+            handle,
+            role=role,
+            transcript=transcript,
+            is_final=is_final,
+            item_id=item_id,
+        )
+
+    def append_voice_trace(self, handle: ChatTurnHandle, trace_events: list[dict[str, Any]]) -> bool:
+        return self.store.append_voice_trace(handle, trace_events)
+
+    async def append_voice_trace_async(self, handle: ChatTurnHandle, trace_events: list[dict[str, Any]]) -> bool:
+        return await self.async_store.append_voice_trace(handle, trace_events)
+
+    def complete_voice_turn(
+        self,
+        handle: ChatTurnHandle,
+        *,
+        content: str = "",
+        completion_state: str = "completed",
+        native_session_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        context_usage: dict[str, Any] | None = None,
+        task_state: str | None = None,
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        return self.store.complete_voice_turn(
+            handle,
+            content=content,
+            completion_state=completion_state,
+            native_session_id=native_session_id,
+            error_code=error_code,
+            error_message=error_message,
+            context_usage=context_usage,
+            task_state=task_state,
+            state=state,
+        )
+
+    async def complete_voice_turn_async(
+        self,
+        handle: ChatTurnHandle,
+        *,
+        content: str = "",
+        completion_state: str = "completed",
+        native_session_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        context_usage: dict[str, Any] | None = None,
+        task_state: str | None = None,
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        return await self.async_store.complete_voice_turn(
+            handle,
+            content=content,
+            completion_state=completion_state,
+            native_session_id=native_session_id,
+            error_code=error_code,
+            error_message=error_message,
+            context_usage=context_usage,
+            task_state=task_state,
+            state=state,
+        )
 
     def _should_replace_trace(
         self,
@@ -352,6 +582,9 @@ class ChatHistoryService:
         agent_input_text: str | None = None,
         translation: dict[str, Any] | None = None,
         actor: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        local_message_id: str | None = None,
+        message_id: str | None = None,
     ) -> dict[str, Any]:
         return self.store.append_user_message_to_turn(
             turn_id=turn_id,
@@ -365,6 +598,9 @@ class ChatHistoryService:
             agent_input_text=agent_input_text,
             translation=translation,
             actor=actor,
+            request_id=request_id,
+            local_message_id=local_message_id,
+            message_id=message_id,
             native_provider=self.native_provider_filter,
             native_provider_exclude=self.native_provider_exclude,
         )
@@ -379,6 +615,9 @@ class ChatHistoryService:
         agent_input_text: str | None = None,
         translation: dict[str, Any] | None = None,
         actor: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        local_message_id: str | None = None,
+        message_id: str | None = None,
     ) -> dict[str, Any]:
         return await self.async_store.run_write(
             self.append_user_message_to_turn,
@@ -389,6 +628,9 @@ class ChatHistoryService:
             agent_input_text=agent_input_text,
             translation=translation,
             actor=actor,
+            request_id=request_id,
+            local_message_id=local_message_id,
+            message_id=message_id,
         )
 
     def update_context_usage(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
@@ -618,6 +860,11 @@ class ChatHistoryService:
         assistant_text: str,
         native_session_id: str | None = None,
     ) -> bool:
+        try:
+            if self.store.get_trace_recovery_context(handle.assistant_message_id).get("is_voice"):
+                return False
+        except KeyError:
+            return False
         provider = cli_data_provider(getattr(profile, "cli_type", ""))
         session_id = str(native_session_id or "").strip()
         if provider not in {"codex", "claude"} or not session_id:
@@ -646,6 +893,18 @@ class ChatHistoryService:
         self.reconcile_idle_streaming_turns(session)
         with session._lock:
             is_processing = bool(session.is_processing)
+        running_reply = self.store.get_running_reply(
+            bot_id=session.bot_id,
+            user_id=session.user_id,
+            agent_id=session.agent_id,
+            working_dir=session.working_dir,
+            session_epoch=_session_epoch(session),
+            conversation_id=_active_conversation_id(session) or None,
+            native_provider=self.native_provider_filter,
+            native_provider_exclude=self.native_provider_exclude,
+        )
+        if not is_processing and not (running_reply and running_reply.get("voice")):
+            running_reply = None
         return {
             "bot_alias": profile.alias,
             "cli_type": profile.cli_type,
@@ -663,16 +922,7 @@ class ChatHistoryService:
                 native_provider_exclude=self.native_provider_exclude,
             ),
             "is_processing": is_processing,
-            "running_reply": self.store.get_running_reply(
-                bot_id=session.bot_id,
-                user_id=session.user_id,
-                agent_id=session.agent_id,
-                working_dir=session.working_dir,
-                session_epoch=_session_epoch(session),
-                conversation_id=_active_conversation_id(session) or None,
-                native_provider=self.native_provider_filter,
-                native_provider_exclude=self.native_provider_exclude,
-            ) if is_processing else None,
+            "running_reply": running_reply,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,

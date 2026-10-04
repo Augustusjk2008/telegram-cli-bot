@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CodexVoiceConnection, CodexVoiceMessage, CodexVoiceState } from "../services/types";
+import type {
+  CodexVoiceConnection,
+  CodexVoiceMessage,
+  CodexVoiceState,
+  VoiceTaskBinding,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 export const VOICE_BUSY_REASON = "当前有活动任务，语音任务/混合输入将在 M2 支持";
@@ -12,6 +17,7 @@ type VoiceView = {
   playback: "idle" | "playing" | "blocked" | "suppressed";
   activity: string;
   task: "idle" | "running" | "completed" | "failed" | "interrupted" | "unknown";
+  taskBinding: VoiceTaskBinding | null;
   receivedBytes: number;
   receivedPackets: number;
   captions: Caption[];
@@ -19,8 +25,45 @@ type VoiceView = {
 };
 const initialView: VoiceView = {
   state: "idle", mic: "off", peer: "new", playback: "idle", activity: "等待连接", task: "idle",
-  receivedBytes: 0, receivedPackets: 0, captions: [], error: "",
+  taskBinding: null, receivedBytes: 0, receivedPackets: 0, captions: [], error: "",
 };
+
+function taskLabelState(binding: VoiceTaskBinding | null): VoiceView["task"] {
+  if (!binding) return "idle";
+  return binding.state === "active" ? "running" : binding.state;
+}
+
+function initialViewForTask(binding?: VoiceTaskBinding | null): VoiceView {
+  if (!binding) return initialView;
+  return {
+    ...initialView,
+    task: taskLabelState(binding),
+    taskBinding: binding,
+    activity: binding.state === "active" ? "任务运行中" : "语音任务已同步",
+  };
+}
+
+function isTerminalTaskState(state: VoiceTaskBinding["state"]) {
+  return state !== "active";
+}
+
+function normalizeTranscriptState(value: unknown): {
+  state: VoiceTaskBinding["transcriptState"];
+  details?: Record<string, unknown>;
+} {
+  if (typeof value === "string") {
+    return { state: value.trim().toLowerCase() === "saved" ? "saved" : "syncing" };
+  }
+  const details = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  const user = record(details?.user);
+  const assistant = record(details?.assistant);
+  const userPersisted = user.persisted === true || details?.user_persisted === true;
+  const assistantPersisted = assistant.persisted === true || details?.assistant_persisted === true;
+  return {
+    state: userPersisted && assistantPersisted ? "saved" : "syncing",
+    ...(details ? { details } : {}),
+  };
+}
 type Session = {
   connection?: CodexVoiceConnection;
   peer?: RTCPeerConnection;
@@ -35,7 +78,6 @@ type Session = {
   stopping: boolean;
   applyingSdp: boolean;
   suppressed: boolean;
-  unknown: boolean;
   released: boolean;
   playbackGeneration: number;
   responseId?: string;
@@ -45,30 +87,33 @@ type Session = {
 };
 
 function releaseMedia(session: Session) {
-  if (session.released) return;
-  session.released = true;
-  session.abort.abort();
+  if (!session.released) {
+    session.released = true;
+    session.abort.abort();
+    session.mic?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
+    session.tracks.forEach((track) => track.stop());
+    if (session.channel) {
+      session.channel.onmessage = null;
+      session.channel.onclose = null;
+      session.channel.onerror = null;
+      session.channel.close();
+    }
+    if (session.peer) {
+      session.peer.ontrack = null;
+      session.peer.onconnectionstatechange = null;
+      session.peer.close();
+    }
+    if (session.audio) {
+      session.audio.onended = null;
+      session.audio.pause();
+      session.audio.srcObject = null;
+      session.audio.removeAttribute("src");
+    }
+  }
   window.clearInterval(session.statsTimer);
+  session.statsTimer = undefined;
   window.clearTimeout(session.deadline);
-  session.mic?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
-  session.tracks.forEach((track) => track.stop());
-  if (session.channel) {
-    session.channel.onmessage = null;
-    session.channel.onclose = null;
-    session.channel.onerror = null;
-    session.channel.close();
-  }
-  if (session.peer) {
-    session.peer.ontrack = null;
-    session.peer.onconnectionstatechange = null;
-    session.peer.close();
-  }
-  if (session.audio) {
-    session.audio.onended = null;
-    session.audio.pause();
-    session.audio.srcObject = null;
-    session.audio.removeAttribute("src");
-  }
+  session.deadline = undefined;
 }
 
 function gatherIce(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {
@@ -159,56 +204,74 @@ function updateCaptions(captions: Caption[], name: string, data: Record<string, 
   return (previous ? captions.map((row) => row.id === caption.id ? caption : row) : [...captions, caption]).slice(-30);
 }
 
-export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conversationId: requestedConversationId, sessionEpoch: requestedSessionEpoch, enabled, busy = false }: {
+export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conversationId: requestedConversationId, sessionEpoch: requestedSessionEpoch, taskBinding: restoredTaskBinding, enabled, busy = false }: {
   client: WebBotClient;
   botAlias: string;
   agentId: string;
   scopeKey: string;
   conversationId?: string;
   sessionEpoch?: number;
+  taskBinding?: VoiceTaskBinding | null;
   enabled: boolean;
   busy?: boolean;
 }) {
-  const [view, setView] = useState<VoiceView>(initialView);
+  const [view, setView] = useState<VoiceView>(() => initialViewForTask(restoredTaskBinding));
   const current = useRef<Session | null>(null);
   const scopeInitialized = useRef(false);
+  const restoredTaskBindingRef = useRef<VoiceTaskBinding | null | undefined>(restoredTaskBinding);
+  restoredTaskBindingRef.current = restoredTaskBinding;
 
   const dispose = useCallback((sendStop = true) => {
     const session = current.current;
-    current.current = null;
     if (!session) return;
-    if (sendStop && session.started && !session.stopping && !session.unknown) {
+    const shouldSendStop = sendStop && session.started && !session.stopping;
+    current.current = null;
+    session.stopping = true;
+    if (shouldSendStop) {
       try { session.connection?.send({ op: "stop_voice" }); } catch { /* Disconnect also releases the server lease. */ }
     }
-    session.stopping = true;
     releaseMedia(session);
     session.connection?.close();
   }, []);
 
   useEffect(() => {
-    if (scopeInitialized.current) setView(initialView);
+    if (scopeInitialized.current) setView(initialViewForTask(restoredTaskBindingRef.current));
     scopeInitialized.current = true;
-    const leave = () => { dispose(); setView(initialView); };
+    const leave = () => { dispose(); setView(initialViewForTask(restoredTaskBindingRef.current)); };
     window.addEventListener("pagehide", leave);
     return () => { window.removeEventListener("pagehide", leave); dispose(); };
   }, [client, botAlias, agentId, scopeKey, enabled, dispose]);
 
-  const finalizeUnknown = useCallback((session: Session, error = "") => {
-    if (current.current !== session) return;
-    dispose(false);
-    setView((value) => ({ ...value, state: "unknown", mic: "off", peer: "closed", playback: "idle", error: error || value.error,
-      activity: "结果待确认",
-      task: value.task === "running" ? "unknown" : value.task,
-    }));
-  }, [dispose]);
+  useEffect(() => {
+    if (current.current || !restoredTaskBinding) {
+      return;
+    }
+    setView((value) => {
+      if (value.taskBinding?.state === "unknown" && restoredTaskBinding.state !== "unknown") {
+        return value;
+      }
+      if (isTerminalTaskState(value.taskBinding?.state || "active")
+        && value.taskBinding?.state !== restoredTaskBinding.state
+        && value.taskBinding?.seq === undefined) {
+        return value;
+      }
+      return {
+        ...value,
+        task: taskLabelState(restoredTaskBinding),
+        taskBinding: restoredTaskBinding,
+        activity: restoredTaskBinding.state === "active" ? "任务运行中" : "语音任务已同步",
+      };
+    });
+  }, [restoredTaskBinding]);
 
   const finish = useCallback((session: Session, state: CodexVoiceState, error = "") => {
     if (current.current !== session) return;
     if (state === "unknown") {
-      session.unknown = true;
+      dispose(false);
       setView((value) => ({ ...value, state: "unknown", error: error || value.error,
+        mic: "off", peer: "closed", playback: "idle",
         activity: "结果待确认",
-        task: value.task === "running" ? "unknown" : value.task,
+        task: value.taskBinding?.state === "unknown" || value.task === "running" ? "unknown" : value.task,
       }));
       return;
     }
@@ -234,24 +297,55 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
 
   const start = useCallback(async () => {
     if (!enabled) return;
-    if (current.current?.unknown) dispose(false);
     if (current.current) return;
     if (busy) { setView((value) => ({ ...value, error: VOICE_BUSY_REASON })); return; }
     const session: Session = {
       abort: new AbortController(), tracks: new Set(), seen: new Set(), seq: -1,
-      started: false, stopping: false, applyingSdp: false, suppressed: false, unknown: false, released: false,
+      started: false, stopping: false, applyingSdp: false, suppressed: false, released: false,
       playbackGeneration: 0,
     };
     current.current = session;
     const live = () => current.current === session && !session.stopping;
     const fail = (message: string) => {
-      if (session.unknown) {
-        finalizeUnknown(session, message);
-      } else {
-        finish(session, session.started ? "unknown" : "error", message);
-      }
+      finish(session, session.started ? "unknown" : "error", message);
     };
     setView({ ...initialView, state: "negotiating", mic: "requesting", activity: "等待麦克风授权" });
+    const applyTaskBinding = (raw: Record<string, unknown>) => {
+      const nested = record(raw.data);
+      const payload = Object.keys(nested).length > 0 ? { ...nested, ...raw } : raw;
+      const rawState = String(payload.state || "unknown").trim().toLowerCase();
+      const transcript = normalizeTranscriptState(payload.transcript_state ?? payload.transcriptState);
+      const sessionEpoch = optionalNumber(payload.session_epoch ?? payload.sessionEpoch);
+      const binding: VoiceTaskBinding = {
+        type: "voice.task",
+        ...(typeof payload.seq === "number" && Number.isFinite(payload.seq) ? { seq: payload.seq } : {}),
+        ...(payload.tcb_turn_id || payload.tcbTurnId ? { tcbTurnId: String(payload.tcb_turn_id || payload.tcbTurnId) } : {}),
+        ...(payload.assistant_message_id || payload.assistantMessageId ? { assistantMessageId: String(payload.assistant_message_id || payload.assistantMessageId) } : {}),
+        ...(payload.codex_turn_id || payload.codexTurnId ? { codexTurnId: String(payload.codex_turn_id || payload.codexTurnId) } : {}),
+        ...(payload.realtime_session_id || payload.realtimeSessionId ? { realtimeSessionId: String(payload.realtime_session_id || payload.realtimeSessionId) } : {}),
+        ...(payload.conversation_id || payload.conversationId ? { conversationId: String(payload.conversation_id || payload.conversationId) } : {}),
+        state: ["active", "completed", "failed", "interrupted", "unknown"].includes(rawState)
+          ? rawState as VoiceTaskBinding["state"]
+          : "unknown",
+        transcriptState: transcript.state,
+        ...(transcript.details ? { transcriptDetails: transcript.details } : {}),
+        ...(sessionEpoch !== undefined ? { sessionEpoch } : {}),
+      };
+      setView((value) => {
+        if (value.taskBinding?.state === "unknown" && binding.state !== "unknown") {
+          return value;
+        }
+        if (isTerminalTaskState(value.taskBinding?.state || "active") && binding.state === "active") {
+          return value;
+        }
+        return {
+          ...value,
+          task: taskLabelState(binding),
+          taskBinding: binding,
+          activity: binding.state === "active" ? "任务运行中" : "语音任务已同步",
+        };
+      });
+    };
     const runtimeEvent = (name: string, raw: Record<string, unknown>, eventId?: string, itemId?: string) => {
       if (!live()) return;
       const outer = record(raw.params || raw);
@@ -287,8 +381,8 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       }
       setView((value) => {
         let task = value.task;
-        if (name === "turn/started") task = "running";
-        if (name === "turn/completed") {
+        if (name === "turn/started" && value.taskBinding?.state !== "unknown" && !isTerminalTaskState(value.taskBinding?.state || "active")) task = "running";
+        if (name === "turn/completed" && value.taskBinding?.state !== "unknown") {
           const status = record(data.turn).status || data.status;
           task = status === "completed" || status === "failed" || status === "interrupted" ? status : "unknown";
         }
@@ -314,14 +408,11 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
           session.stopping = true;
           finish(session, message.state);
         } else if (message.state === "error") {
-          if (session.unknown) finalizeUnknown(session, voiceErrorMessage(message, "语音连接失败"));
-          else {
-            session.stopping = true;
-            finish(session, message.state, voiceErrorMessage(message, "语音连接失败"));
-          }
-        } else if (session.unknown) {
-          return;
+          session.stopping = true;
+          finish(session, message.state, voiceErrorMessage(message, "语音连接失败"));
         } else if (!session.stopping && message.state !== "idle") setView((value) => ({ ...value, state: message.state }));
+      } else if (message.type === "voice.task") {
+        applyTaskBinding(record(message));
       } else if (message.type === "voice.sdp" && live() && session.peer && !session.applyingSdp) {
         session.applyingSdp = true;
         void session.peer.setRemoteDescription({ type: "answer", sdp: message.sdp }).then(() => {
@@ -433,7 +524,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     } catch (error) {
       if (live()) fail(error instanceof Error ? error.message : "语音启动失败");
     }
-  }, [enabled, busy, client, botAlias, agentId, scopeKey, requestedConversationId, requestedSessionEpoch, dispose, finalizeUnknown, finish, play]);
+  }, [enabled, busy, client, botAlias, agentId, scopeKey, requestedConversationId, requestedSessionEpoch, dispose, finish, play]);
 
   const end = useCallback(() => {
     const session = current.current;
@@ -444,7 +535,9 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     setView((value) => ({ ...value, state: "stopping", mic: "off", peer: "closed", playback: "idle" }));
     try {
       session.connection?.send({ op: "stop_voice" });
-      session.deadline = window.setTimeout(() => finish(session, "unknown", "结束语音结果待确认，设备已释放"), 10000);
+      if (current.current === session) {
+        session.deadline = window.setTimeout(() => finish(session, "unknown", "结束语音结果待确认，设备已释放"), 10000);
+      }
     } catch { finish(session, "unknown", "结束语音结果待确认，设备已释放"); }
   }, [finish]);
 

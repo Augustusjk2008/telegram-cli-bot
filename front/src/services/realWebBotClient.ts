@@ -209,6 +209,9 @@ import type {
   HistoryDeltaResult,
   HistoryDeltaOptions,
   HistorySnapshotResult,
+  SteerMessageResult,
+  VoiceTaskBinding,
+  VoiceTranscriptDetails,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -547,11 +550,38 @@ type RawHistoryItem = {
   author?: RawChatMessageAuthor | null;
 };
 
+type RawVoiceTaskBinding = {
+  type?: string;
+  seq?: number;
+  tcb_turn_id?: string;
+  tcbTurnId?: string;
+  assistant_message_id?: string;
+  assistantMessageId?: string;
+  codex_turn_id?: string;
+  codexTurnId?: string;
+  realtime_session_id?: string;
+  realtimeSessionId?: string;
+  conversation_id?: string;
+  conversationId?: string;
+  state?: string;
+  transcript_state?: string | VoiceTranscriptDetails;
+  transcriptState?: string | VoiceTranscriptDetails;
+  session_epoch?: number | string;
+  sessionEpoch?: number | string;
+};
+
 type RawSteerChatResult = {
+  status?: string;
+  request_id?: string;
+  requestId?: string;
   turn_id?: string;
   turnId?: string;
   assistant_message_id?: string;
   assistantMessageId?: string;
+  user_message_id?: string;
+  userMessageId?: string;
+  conversation_id?: string;
+  conversationId?: string;
   user_message?: RawHistoryItem | null;
   userMessage?: RawHistoryItem | null;
   user?: RawHistoryItem | null;
@@ -728,6 +758,7 @@ type RawChatMessageMeta = {
   degraded?: boolean;
   degraded_reason?: string;
   degradedReason?: string;
+  voice?: RawVoiceTaskBinding | null;
 };
 
 type RawChatMessageContextUsage = {
@@ -996,8 +1027,11 @@ type RawTerminalActionRunResult = {
 type RawRunningReply = {
   user_text?: string;
   preview_text?: string;
-  started_at: string;
+  started_at?: string;
+  startedAt?: string;
   updated_at?: string;
+  voice?: RawVoiceTaskBinding | null;
+  meta?: { voice?: RawVoiceTaskBinding | null } | null;
 };
 
 type RawAuthSession = {
@@ -2095,15 +2129,55 @@ function mapChatAttachmentDeleteResult(raw: RawChatAttachmentDeleteResult): Chat
   };
 }
 
+function mapVoiceTaskBinding(raw?: RawVoiceTaskBinding | null): VoiceTaskBinding | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const state = String(raw.state || "unknown").trim().toLowerCase();
+  const transcriptPayload = raw.transcript_state ?? raw.transcriptState;
+  const transcriptDetails = transcriptPayload && typeof transcriptPayload === "object"
+    ? transcriptPayload as VoiceTranscriptDetails
+    : undefined;
+  const userDetails = transcriptDetails?.user && typeof transcriptDetails.user === "object"
+    ? transcriptDetails.user as Record<string, unknown>
+    : {};
+  const assistantDetails = transcriptDetails?.assistant && typeof transcriptDetails.assistant === "object"
+    ? transcriptDetails.assistant as Record<string, unknown>
+    : {};
+  const userPersisted = userDetails.persisted === true || transcriptDetails?.user_persisted === true;
+  const assistantPersisted = assistantDetails.persisted === true || transcriptDetails?.assistant_persisted === true;
+  const transcriptState = typeof transcriptPayload === "string"
+    ? transcriptPayload.trim().toLowerCase()
+    : userPersisted && assistantPersisted ? "saved" : "syncing";
+  const sessionEpoch = Number(raw.session_epoch ?? raw.sessionEpoch);
+  return {
+    ...(raw.type === "voice.task" ? { type: "voice.task" as const } : {}),
+    ...(typeof raw.seq === "number" && Number.isFinite(raw.seq) ? { seq: raw.seq } : {}),
+    ...((raw.tcb_turn_id ?? raw.tcbTurnId) ? { tcbTurnId: String(raw.tcb_turn_id ?? raw.tcbTurnId) } : {}),
+    ...((raw.assistant_message_id ?? raw.assistantMessageId) ? { assistantMessageId: String(raw.assistant_message_id ?? raw.assistantMessageId) } : {}),
+    ...((raw.codex_turn_id ?? raw.codexTurnId) ? { codexTurnId: String(raw.codex_turn_id ?? raw.codexTurnId) } : {}),
+    ...((raw.realtime_session_id ?? raw.realtimeSessionId) ? { realtimeSessionId: String(raw.realtime_session_id ?? raw.realtimeSessionId) } : {}),
+    ...((raw.conversation_id ?? raw.conversationId) ? { conversationId: String(raw.conversation_id ?? raw.conversationId) } : {}),
+    state: ["active", "completed", "failed", "interrupted", "unknown"].includes(state)
+      ? state as VoiceTaskBinding["state"]
+      : "unknown",
+    transcriptState: transcriptState === "saved" ? "saved" : "syncing",
+    ...(transcriptDetails ? { transcriptDetails } : {}),
+    ...(Number.isFinite(sessionEpoch) ? { sessionEpoch } : {}),
+  };
+}
+
 function mapRunningReply(raw?: RawRunningReply | null): RunningReply | null {
-  if (!raw?.started_at) {
+  const voice = mapVoiceTaskBinding(raw?.voice || raw?.meta?.voice);
+  if (!raw || (!raw.started_at && !raw.startedAt && !voice)) {
     return null;
   }
   return {
     userText: raw.user_text,
     previewText: raw.preview_text,
-    startedAt: raw.started_at,
-    updatedAt: raw.updated_at,
+    startedAt: raw.started_at || raw.startedAt || "",
+    ...(raw.updated_at ? { updatedAt: raw.updated_at } : {}),
+    ...(voice ? { voice } : {}),
   };
 }
 
@@ -2314,6 +2388,7 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   const rawRollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
   const rawDegraded = raw.degraded;
   const rawDegradedReason = raw.degraded_reason ?? raw.degradedReason;
+  const voice = mapVoiceTaskBinding(raw.voice);
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
@@ -2380,6 +2455,9 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   }
   if (typeof rawDegradedReason === "string") {
     meta.degradedReason = rawDegradedReason;
+  }
+  if (voice) {
+    meta.voice = voice;
   }
 
   return Object.keys(meta).length > 0 ? meta : undefined;
@@ -4618,7 +4696,7 @@ export class RealWebBotClient implements WebBotClient {
     const onMessage = (event: MessageEvent) => {
       let message: CodexVoiceMessage;
       try { message = JSON.parse(event.data); } catch { return; }
-      if (message && ["voice.state", "voice.sdp", "voice.event", "voice.error", "error"].includes(message.type)) {
+      if (message && ["voice.state", "voice.sdp", "voice.event", "voice.task", "voice.error", "error"].includes(message.type)) {
         options.onMessage(message);
       }
     };
@@ -4664,7 +4742,7 @@ export class RealWebBotClient implements WebBotClient {
     text: string,
     turnId: string,
     options?: ChatSendOptions,
-  ): Promise<ChatMessage> {
+  ): Promise<ChatMessage | SteerMessageResult> {
     const data = await this.requestJson<RawSteerChatResult>(
       `/api/bots/${encodeURIComponent(botAlias)}/chat/steer`,
       {
@@ -4678,16 +4756,42 @@ export class RealWebBotClient implements WebBotClient {
           ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
           ...(options?.agentId ? { agent_id: options.agentId } : {}),
           ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
+          ...(options?.conversationId ? { conversation_id: options.conversationId } : {}),
+          ...(typeof options?.sessionEpoch === "number" ? { session_epoch: options.sessionEpoch } : {}),
+          ...(options?.codexTurnId ? { codex_turn_id: options.codexTurnId } : {}),
+          ...(options?.requestId ? { request_id: options.requestId } : {}),
         }),
       },
     );
     const rawMessage = data.user_message || data.userMessage || data.user || data.message;
-    if (!rawMessage || typeof rawMessage !== "object") {
+    const message = rawMessage && typeof rawMessage === "object" ? mapChatMessage(rawMessage, 0) : undefined;
+    const responseTurnId = String(data.turn_id ?? data.turnId ?? "").trim();
+    const status = String(data.status || "accepted").trim().toLowerCase() === "unknown" ? "unknown" : "accepted";
+    if (!message && status !== "unknown") {
       throw new Error("转向消息响应无效");
     }
-    const message = mapChatMessage(rawMessage, 0);
-    const responseTurnId = String(data.turn_id ?? data.turnId ?? "").trim();
-    return responseTurnId && !message.turnId ? { ...message, turnId: responseTurnId } : message;
+    const mappedMessage = message
+      ? (responseTurnId && !message.turnId ? { ...message, turnId: responseTurnId } : message)
+      : undefined;
+    const result = {
+      ...(mappedMessage || {}),
+      status,
+      ...(String(data.request_id ?? data.requestId ?? options?.requestId ?? "").trim()
+        ? { requestId: String(data.request_id ?? data.requestId ?? options?.requestId).trim() }
+        : {}),
+      ...(responseTurnId ? { turnId: responseTurnId } : {}),
+      ...(String(data.assistant_message_id ?? data.assistantMessageId ?? "").trim()
+        ? { assistantMessageId: String(data.assistant_message_id ?? data.assistantMessageId).trim() }
+        : {}),
+      ...(String(data.user_message_id ?? data.userMessageId ?? message?.id ?? "").trim()
+        ? { userMessageId: String(data.user_message_id ?? data.userMessageId ?? message?.id).trim() }
+        : {}),
+      ...(String(data.conversation_id ?? data.conversationId ?? options?.conversationId ?? "").trim()
+        ? { conversationId: String(data.conversation_id ?? data.conversationId ?? options?.conversationId).trim() }
+        : {}),
+      ...(mappedMessage ? { message: mappedMessage } : {}),
+    };
+    return result as ChatMessage | SteerMessageResult;
   }
 
   async listConversations(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {

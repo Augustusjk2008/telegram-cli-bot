@@ -1929,6 +1929,7 @@ class WebApiServer:
                     session,
                     conversation_id,
                     allow_unsafe_cli=CAP_RUN_UNSAFE_CLI in auth.capabilities,
+                    actor=self._chat_actor(auth),
                 )
             except CodexServerError as exc:
                 await ws.send_json({"type": "voice.error", "code": "voice_runtime_unavailable",
@@ -2359,6 +2360,13 @@ class WebApiServer:
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         agent_id = self._request_agent_id(request, body)
         visible_text = body.get("visible_text")
+        raw_conversation_id = body.get("conversation_id", body.get("conversationId", ""))
+        raw_session_epoch = body.get("session_epoch", body.get("sessionEpoch"))
+        raw_codex_turn_id = body.get("codex_turn_id", body.get("codexTurnId", ""))
+        raw_request_id = body.get("request_id", body.get("requestId", ""))
+        if any(value is not None and not isinstance(value, (str, int))
+               for value in (raw_conversation_id, raw_session_epoch, raw_codex_turn_id, raw_request_id)):
+            raise WebApiError(400, "invalid_steering_binding", "追加消息绑定字段无效")
         data = await steer_chat(
             self.manager,
             alias,
@@ -2369,6 +2377,10 @@ class WebApiServer:
             agent_id=agent_id,
             execution_mode=execution_mode,
             actor=self._chat_actor(auth),
+            conversation_id=str(raw_conversation_id or ""),
+            session_epoch=raw_session_epoch,
+            codex_turn_id=str(raw_codex_turn_id or ""),
+            request_id=str(raw_request_id or ""),
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 

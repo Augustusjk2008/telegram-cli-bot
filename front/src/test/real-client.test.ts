@@ -92,9 +92,104 @@ describe("RealWebBotClient", () => {
     expect(JSON.parse(socket.sent[0])).toMatchObject({ op: "summary", id: expect.any(String) });
     socket.emit("message", { data: JSON.stringify({ type: "voice.state", seq: 1, state: "active" }) } as MessageEvent);
     expect(onMessage).toHaveBeenCalledWith({ type: "voice.state", seq: 1, state: "active" });
+    socket.emit("message", { data: JSON.stringify({
+      type: "voice.task",
+      seq: 2,
+      tcb_turn_id: "tcb-turn-1",
+      assistant_message_id: "assistant-1",
+      codex_turn_id: "codex-turn-1",
+      realtime_session_id: "realtime-1",
+      conversation_id: "conversation-1",
+      state: "active",
+      transcript_state: "syncing",
+      session_epoch: 4,
+    }) } as MessageEvent);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "voice.task", tcb_turn_id: "tcb-turn-1" }));
     socket.emit("close");
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(socket.close).toHaveBeenCalled();
+  });
+
+  test("posts voice steering binding and maps the accepted response", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      status: "accepted",
+      request_id: "request-1",
+      turn_id: "tcb-turn-1",
+      assistant_message_id: "assistant-1",
+      user_message_id: "user-1",
+      conversation_id: "conversation-1",
+      user_message: {
+        id: "user-1",
+        turn_id: "tcb-turn-1",
+        role: "user",
+        content: "补充要求",
+        created_at: "2026-10-04T01:00:00Z",
+        state: "done",
+      },
+    }));
+
+    const result = await new RealWebBotClient().steerMessage("main", "补充要求", "tcb-turn-1", {
+      agentId: "main",
+      executionMode: "cli",
+      conversationId: "conversation-1",
+      sessionEpoch: 4,
+      codexTurnId: "codex-turn-1",
+      requestId: "request-1",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({
+      turn_id: "tcb-turn-1",
+      conversation_id: "conversation-1",
+      session_epoch: 4,
+      codex_turn_id: "codex-turn-1",
+      request_id: "request-1",
+    });
+    expect(result).toMatchObject({
+      status: "accepted",
+      requestId: "request-1",
+      assistantMessageId: "assistant-1",
+      userMessageId: "user-1",
+      message: { id: "user-1", turnId: "tcb-turn-1" },
+    });
+  });
+
+  test("restores voice task metadata from history", async () => {
+    fetchMock.mockResolvedValue(jsonOk({ items: [{
+      id: "assistant-voice",
+      role: "assistant",
+      content: "语音回答",
+      meta: {
+        voice: {
+          tcb_turn_id: "tcb-turn-1",
+          assistant_message_id: "assistant-voice",
+          codex_turn_id: "codex-turn-1",
+          conversation_id: "conversation-1",
+          state: "unknown",
+          transcript_state: {
+            user: { item_id: "user-item", is_final: true, persisted: true },
+            assistant: { item_id: "assistant-item", is_final: true, persisted: true },
+            user_final: true,
+            assistant_final: true,
+          },
+          session_epoch: 4,
+        },
+      },
+    }] }));
+
+    const snapshot = await new RealWebBotClient().listMessages("main");
+    expect(snapshot.items[0]).toMatchObject({
+      meta: {
+        voice: {
+          tcbTurnId: "tcb-turn-1",
+          state: "unknown",
+          transcriptState: "saved",
+          transcriptDetails: {
+            user: { item_id: "user-item", persisted: true },
+            assistant: { item_id: "assistant-item", persisted: true },
+          },
+          sessionEpoch: 4,
+        },
+      },
+    });
   });
 
   test.each([true, false])("preserves directory listing paths with URLSearchParams.size support=%s", async (supportsSize) => {

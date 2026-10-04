@@ -885,6 +885,7 @@ export type RunningReply = {
   previewText?: string;
   startedAt: string;
   updatedAt?: string;
+  voice?: VoiceTaskBinding;
 };
 
 export type CodexVoiceCapability = {
@@ -893,6 +894,28 @@ export type CodexVoiceCapability = {
 };
 
 export type CodexVoiceState = "idle" | "negotiating" | "active" | "stopping" | "closed" | "error" | "unknown";
+
+export type VoiceTaskState = "active" | "completed" | "failed" | "interrupted" | "unknown";
+
+export type VoiceTranscriptState = "syncing" | "saved";
+
+export type VoiceTranscriptDetails = Record<string, unknown>;
+
+export type VoiceTranscriptStatePayload = VoiceTranscriptState | VoiceTranscriptDetails;
+
+export type VoiceTaskBinding = {
+  type?: "voice.task";
+  seq?: number;
+  tcbTurnId?: string;
+  assistantMessageId?: string;
+  codexTurnId?: string;
+  realtimeSessionId?: string;
+  conversationId?: string;
+  state: VoiceTaskState;
+  transcriptState: VoiceTranscriptState;
+  transcriptDetails?: VoiceTranscriptDetails;
+  sessionEpoch?: number;
+};
 
 export type CodexVoiceMessage =
   | {
@@ -904,6 +927,18 @@ export type CodexVoiceMessage =
     message?: string;
     outcome?: string;
   }
+  | ({
+    type: "voice.task";
+    seq: number;
+    tcb_turn_id?: string;
+    assistant_message_id?: string;
+    codex_turn_id?: string;
+    realtime_session_id?: string;
+    conversation_id?: string;
+    state: VoiceTaskState;
+    transcript_state: VoiceTranscriptStatePayload;
+    session_epoch?: number;
+  } & Partial<Pick<VoiceTaskBinding, "tcbTurnId" | "assistantMessageId" | "codexTurnId" | "realtimeSessionId" | "conversationId" | "transcriptState" | "sessionEpoch">>)
   | { type: "voice.sdp"; seq: number; connection_id?: string; sdp: string }
   | { type: "voice.event"; seq: number; event_id?: string; name: string; thread_id?: string; turn_id?: string; realtime_session_id?: string; item_id?: string; data: Record<string, unknown> }
   | { type: "voice.error" | "error"; seq?: number; code?: string; message?: string; state?: CodexVoiceState; error?: { code?: string; message?: string }; outcome?: string };
@@ -1034,6 +1069,7 @@ export type ChatMessageMetaInfo = {
   rollbackSupported?: boolean;
   degraded?: boolean;
   degradedReason?: string;
+  voice?: VoiceTaskBinding;
 };
 
 export type ChatMessageAuthor = {
@@ -1289,6 +1325,20 @@ export type ChatSendOptions = {
   executionMode?: ChatExecutionMode;
   soloMode?: boolean;
   signal?: AbortSignal;
+  conversationId?: string;
+  sessionEpoch?: number;
+  codexTurnId?: string;
+  requestId?: string;
+};
+
+export type SteerMessageResult = {
+  status: "accepted" | "unknown";
+  requestId?: string;
+  turnId?: string;
+  assistantMessageId?: string;
+  userMessageId?: string;
+  conversationId?: string;
+  message?: ChatMessage;
 };
 
 export type NativeAgentPermissionReplyOptions = AgentScopedOptions & {

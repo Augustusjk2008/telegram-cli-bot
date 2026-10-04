@@ -110,6 +110,7 @@ import type {
   HistoryDeltaOptions,
   HistoryDeltaResult,
   HistorySnapshotResult,
+  SteerMessageResult,
   PublicHostInfo,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
@@ -263,7 +264,7 @@ export interface WebBotClient {
     text: string,
     turnId: string,
     options?: ChatSendOptions,
-  ): Promise<ChatMessage>;
+  ): Promise<ChatMessage | SteerMessageResult>;
   replyNativeAgentPermission(
     botAlias: string,
     permissionId: string,
