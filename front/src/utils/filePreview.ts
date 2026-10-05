@@ -97,7 +97,10 @@ export function isFilePreviewFullyLoaded(result: FileReadResult | null) {
   if (result.previewKind === "image") {
     return true;
   }
-  return result.mode === "cat" || Boolean(result.isFullContent);
+  if (typeof result.isFullContent === "boolean") {
+    return result.isFullContent;
+  }
+  return result.mode === "cat";
 }
 
 export function isJsonPreviewPath(path: string) {
