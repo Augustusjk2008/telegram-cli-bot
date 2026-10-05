@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.cli_params import CliParamsConfig
-from .client import CodexServerClient, CodexServerError
+from .client import CodexServerClient, CodexServerError, REALTIME_CONVERSATION_VERSION
 from .events import CodexServerEventMapper, TOKEN_FIELDS, tokens
 from .params import ServerParams, _config_value, check_git_directory, convert_params
 from .voice import VoiceError, VoiceEvents
@@ -331,6 +331,7 @@ class CodexServerRuntime:
         return await self.client.request("thread/realtime/start", {
             "threadId": self.thread_id,
             "outputModality": "audio",
+            "version": REALTIME_CONVERSATION_VERSION,
             "transport": {"type": "webrtc", "sdp": sdp},
         }, timeout=30)
 

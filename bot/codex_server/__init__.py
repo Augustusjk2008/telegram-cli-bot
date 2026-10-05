@@ -1,4 +1,4 @@
-"""Codex app-server adapter (protocol baseline: codex-cli 0.159.2).
+"""Codex app-server adapter (protocol baseline: codex-cli 0.160.0).
 
 Parameter mapping, after the caller's allow_unsafe_cli clamp/filter:
   Independent params_config.codex_server -> existing Codex argument builder.

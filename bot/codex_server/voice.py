@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from .client import CodexServerUnknownOutcome
+from .client import APP_SERVER_VERSION, CodexServerUnknownOutcome
 
 MAX_SDP_BYTES = 128_000
 MAX_MESSAGE_BYTES = 160_000
@@ -261,7 +261,11 @@ class VoiceLease:
             self.detach()
             if isinstance(exc, asyncio.CancelledError):
                 raise
-            raise VoiceError("voice_start_failed", "语音启动失败；请检查 Codex 0.159.2 兼容性和连接状态", 502) from exc
+            raise VoiceError(
+                "voice_start_failed",
+                f"语音启动失败；请检查 Codex {APP_SERVER_VERSION} 兼容性和连接状态",
+                502,
+            ) from exc
 
     async def stop_voice(self, *, timeout: float = 10, _expected_connection_id: str = "") -> None:
         if not self._started or self.state == "closed":

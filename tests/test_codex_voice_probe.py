@@ -229,6 +229,16 @@ async def test_stop_voice_and_interrupt_use_different_operations(probe):
 
 
 @pytest.mark.asyncio
+async def test_start_voice_selects_avas_compatible_v3(probe):
+    probe.ready = True
+    await probe.command({"op": "start_voice", "sdp": "v=0\r\n"})
+    method, params = probe.client.calls[-1]
+    assert method == "thread/realtime/start"
+    assert params["version"] == "v3"
+    assert params["transport"]["type"] == "webrtc"
+
+
+@pytest.mark.asyncio
 async def test_unknown_text_request_is_not_retried(probe):
     async def fail(method, params, **kwargs):
         probe.client._sequence += 1

@@ -26,11 +26,12 @@ class CodexServerError(RuntimeError):
 class CodexServerUnknownOutcome(CodexServerError):
     """A realtime control request timed out; the shared runtime remains usable."""
 
-APP_SERVER_VERSION = "0.159.2"
+APP_SERVER_VERSION = "0.160.0"
+REALTIME_CONVERSATION_VERSION = "v3"
 
 
 def noninteractive_response(method: str) -> dict[str, Any]:
-    """Responses verified against the locally generated 0.159.2 JSON schemas."""
+    """Responses verified against the locally generated 0.160.0 JSON schemas."""
     if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
         return {"result": {"decision": "decline"}}
     if method in {"execCommandApproval", "applyPatchApproval"}:
@@ -100,7 +101,7 @@ class CodexServerClient:
             })
             user_agent = result.get("userAgent")
             if not isinstance(user_agent, str) or not re.search(rf"(?:/|\b){re.escape(APP_SERVER_VERSION)}(?:\b|\s|$)", user_agent):
-                raise CodexServerError("不兼容的 app-server initialize 响应（已验证版本 0.159.2）")
+                raise CodexServerError(f"不兼容的 app-server initialize 响应（已验证版本 {APP_SERVER_VERSION}）")
             await client.notify("initialized")
             return client
         except BaseException:
@@ -182,7 +183,9 @@ class CodexServerClient:
                     if future is not None and not future.done():
                         if "error" in packet:
                             error = packet["error"]
-                            future.set_exception(CodexServerError(f"app-server 请求失败（协议基准 0.159.2）: {error}"))
+                            future.set_exception(CodexServerError(
+                                f"app-server 请求失败（协议基准 {APP_SERVER_VERSION}）: {error}"
+                            ))
                         elif isinstance(packet.get("result"), dict):
                             future.set_result(packet["result"])
                         else:

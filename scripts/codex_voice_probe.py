@@ -1,4 +1,4 @@
-"""Isolated Codex 0.159.2 voice probe. Start the loopback service manually.
+"""Isolated Codex 0.160.0 voice probe. Start the loopback service manually.
 
 python -m scripts.codex_voice_probe --host 127.0.0.1 --port 0
 python -m scripts.codex_voice_probe --check-text  # stdio only, no listening socket
@@ -20,7 +20,12 @@ from typing import Any
 
 from aiohttp import web, WSMsgType
 
-from bot.codex_server.client import APP_SERVER_VERSION, CodexServerClient, CodexServerError
+from bot.codex_server.client import (
+    APP_SERVER_VERSION,
+    REALTIME_CONVERSATION_VERSION,
+    CodexServerClient,
+    CodexServerError,
+)
 from bot.platform.executables import build_executable_invocation, resolve_cli_executable
 
 
@@ -427,7 +432,8 @@ class VoiceProbe:
             self.publish_state()
             try:
                 return await self.rpc("thread/realtime/start", {"threadId": self.thread_id,
-                    "outputModality": "audio", "transport": {"type": "webrtc", "sdp": sdp}})
+                    "outputModality": "audio", "version": REALTIME_CONVERSATION_VERSION,
+                    "transport": {"type": "webrtc", "sdp": sdp}})
             except CodexServerError:
                 self.voice_state = "unknown" if not self.client.alive else "error"
                 self.publish_state()

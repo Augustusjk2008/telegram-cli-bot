@@ -14,7 +14,7 @@
 
 ## 2. 当前事实
 
-- 本机 Codex CLI 为 0.159.2，realtime_conversation 已启用。
+- 本机 Codex CLI 为 0.160.0，realtime_conversation 已启用。
 - 本机实验 schema 可见 thread/realtime/start、appendAudio、appendText、appendSpeech、stop、listVoices、字幕和音频事件。schema 存在不等于账号、额度、媒体或部署可用。
 - CodexServerClient.start() 的 experimental_api 默认关闭。生产 runtime 当前只处理普通 turn，且无普通 turn 时会跳过多数事件。
 - 探测器显式开启实验 API，使用独立 app-server、单一 client.events() reader、loopback 一次性 token、HttpOnly cookie 和脱敏 JSONL 日志。
@@ -77,13 +77,13 @@ M0 只验证隔离探测器中的原生协议、真实媒体和真实语音工�
 
 代码/单测：
 
-- [x] 已运行探测器、client、runtime、事件 mapper 和配置测试：74 passed。
+- [x] 已运行探测器、client、runtime、事件 mapper 和配置测试：77 passed。
 - [x] 单 reader、事件关联字段、脱敏日志、字幕不重复提交、thread/realtime/stop 与 turn/interrupt 分离已有单测覆盖。
 - [ ] 记录 thread/read 历史读取的兼容性；当前 includeTurns=true 已出现分页历史弃用提示，不能把该提示忽略为成功。
 
 schema/协议：
 
-- [x] 已确认 0.159.2 的 realtime 方法、WebRTC transport、远端 SDP 事件和停止请求形状。
+- [x] 已确认 0.160.0 的 realtime 方法、WebRTC transport、远端 SDP 事件和停止请求形状；WebRTC 启动请求显式使用 `version=v3`，以匹配 AVAS 所需的 `quicksilver=v2`。
 - [x] 已确认 account 类型为 chatgpt、功能已启用；未确认语音额度、计费和真实服务结果。
 - [ ] 用同一测试 thread 确认语音能否附着已有 thread，谁创建任务 turn，以及普通任务执行期间语音、补充和插话的行为。
 
@@ -217,4 +217,4 @@ python -m scripts.codex_voice_probe --host 127.0.0.1 --port 0
 - Voice agents：https://developers.openai.com/api/docs/guides/voice-agents
 - Getting started with GPT-Live：https://developers.openai.com/api/docs/guides/live
 
-原生 thread/realtime/* 接口存在性的依据是本机 Codex 0.159.2 生成的实验 schema。公共文档不构成当前账号语音权限或原生链路可用性的证明。
+原生 thread/realtime/* 接口存在性的依据是本机 Codex 0.160.0 生成的实验 schema。公共文档不构成当前账号语音权限或原生链路可用性的证明。

@@ -23,7 +23,7 @@ for line in sys.stdin:
  method = p.get('method')
  if method == 'initialize':
   capabilities = p['params']['capabilities']
-  emit({'id': p['id'], 'result': {'userAgent': 'codex/0.159.2'}})
+  emit({'id': p['id'], 'result': {'userAgent': 'codex/0.160.0'}})
  elif method == 'capabilities':
   emit({'id': p['id'], 'result': capabilities})
  elif method == 'initialized':
@@ -100,7 +100,7 @@ async def test_matching_interleaving_and_single_reader(tmp_path):
 @pytest.mark.parametrize("experimental_api", [False, True])
 async def test_incompatible_server_version_is_rejected(tmp_path, experimental_api):
     path = tmp_path / "bad_version_server.py"
-    path.write_text(FAKE_SERVER.replace("codex/0.159.2", "codex/0.159.1"), encoding="utf-8")
+    path.write_text(FAKE_SERVER.replace("codex/0.160.0", "codex/0.159.2"), encoding="utf-8")
     with pytest.raises(CodexServerError, match="不兼容"):
         await CodexServerClient.start(
             [sys.executable, "-u", str(path)],

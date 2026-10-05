@@ -379,6 +379,20 @@ async def test_voice_subscriber_receives_idle_events_from_single_reader(runtime_
         await registry.aclose()
 
 
+@pytest.mark.asyncio
+async def test_start_realtime_selects_avas_compatible_v3(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(replace(request, experimental_api=True))
+    try:
+        await runtime.start_realtime("v=0\r\n")
+        method, params = runtime.client.calls[-1]
+        assert method == "thread/realtime/start"
+        assert params["version"] == "v3"
+        assert params["transport"]["type"] == "webrtc"
+    finally:
+        await registry.aclose()
+
+
 async def _wait_for_voice_state(runtime, state):
     for _ in range(50):
         if runtime.voice_task_state == state:

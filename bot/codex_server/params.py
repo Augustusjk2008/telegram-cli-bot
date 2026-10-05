@@ -12,7 +12,7 @@ from typing import Any
 from bot.cli_params import CliParamsConfig, build_cli_args_from_config, build_codex_project_trust_config_arg
 from bot.platform.executables import build_executable_invocation, resolve_cli_executable
 from bot.platform.processes import build_hidden_process_kwargs
-from .client import CodexServerError
+from .client import APP_SERVER_VERSION, CodexServerError
 
 
 @dataclass
@@ -88,7 +88,7 @@ def convert_params(command: str, cwd: str, params_config: CliParamsConfig) -> Se
         elif flag in {"--ask-for-approval", "--approval-policy", "-a"}:
             policy = value()
             if policy not in {"untrusted", "on-request", "never"}:
-                raise CodexServerError(f"0.159.2 app-server 不支持 approvalPolicy: {policy}")
+                raise CodexServerError(f"{APP_SERVER_VERSION} app-server 不支持 approvalPolicy: {policy}")
             result.thread["approvalPolicy"] = policy
         elif flag in {"--dangerously-bypass-approvals-and-sandbox", "--yolo"}:
             result.thread.update(approvalPolicy="never", sandbox="danger-full-access")
