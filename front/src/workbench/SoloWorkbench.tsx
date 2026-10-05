@@ -1,3 +1,5 @@
+import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { clsx } from "clsx";
 import { FileText, History, Info, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -10,8 +12,6 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullPreview,
-  withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { PaneResizer } from "./PaneResizer";
 import { SoloSessionChangesTab, type SoloSessionChangesClient } from "./SoloSessionChangesTab";
@@ -45,6 +45,7 @@ type PreviewState = {
   loading: boolean;
   error: string;
   result: FileReadResult | null;
+  htmlPreview?: HtmlPreviewHandle | null;
 };
 
 const MIN_CHAT_WIDTH_PX = 360;
@@ -93,6 +94,9 @@ export function SoloWorkbench({
   const [activeTabId, setActiveTabId] = useState("session");
   const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
 
+  const previewScope = `${sessionSnapshot?.agentId || "main"}\n${sessionSnapshot?.workingDir || workspaceName}`;
+  const previewLoader = useFilePreviewLoader(client, botAlias, previewScope);
+
   const loadPreview = useCallback(async (path: string, mode: "preview" | "full") => {
     const nextPath = path.trim();
     if (!nextPath) return;
@@ -103,16 +107,11 @@ export function SoloWorkbench({
     const requestId = (previewRequestSeqRef.current[nextPath] || 0) + 1;
     previewRequestSeqRef.current[nextPath] = requestId;
     try {
-      let result = mode === "full"
-        ? await client.readFileFull(botAlias, nextPath)
-        : await client.readFile(botAlias, nextPath);
-      if (mode === "preview" && shouldAutoLoadFullPreview(nextPath, result)) {
-        result = await client.readFileFull(botAlias, nextPath);
-      }
-      if (previewRequestSeqRef.current[nextPath] !== requestId) return;
+      const data = await previewLoader.load(nextPath, { mode, agentId: sessionSnapshot?.agentId });
+      if (!data || previewRequestSeqRef.current[nextPath] !== requestId) { data?.htmlPreview?.dispose(); return; }
       setPreviews((current) => ({
         ...current,
-        [nextPath]: { loading: false, error: "", result: withDetectedPreviewKind(nextPath, result) },
+        [nextPath]: { loading: false, error: "", ...data },
       }));
     } catch (err) {
       if (previewRequestSeqRef.current[nextPath] !== requestId) return;
@@ -125,7 +124,7 @@ export function SoloWorkbench({
         },
       }));
     }
-  }, [botAlias, client]);
+  }, [previewLoader, sessionSnapshot?.agentId]);
 
   const requestPreview = useCallback((path: string) => {
     const nextPath = path.trim();
@@ -184,13 +183,16 @@ export function SoloWorkbench({
     setPreviews({});
     previewRequestSeqRef.current = {};
     setChatWidthPx(null);
-  }, [botAlias]);
+  }, [botAlias, previewScope]);
 
   const columnTemplate = chatWidthPx === null
     ? DEFAULT_COLUMNS
     : `${chatWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TABS_WIDTH_PX}px, 1fr)`;
   const activeTab = tabs.find((tab) => tab.id === activeTabId) || tabs[0];
   const activePreview = activeTab.kind === "file-preview" ? previews[activeTab.path] : null;
+  useEffect(() => {
+    previewLoader.reconcile(tabs.filter((tab) => tab.kind === "file-preview").map((tab) => tab.path), activeTab.kind === "file-preview" ? activeTab.path : "");
+  }, [previewLoader, tabs, activeTab, previews]);
   const canLoadFullPreview = Boolean(
     activePreview?.result
     && !isFilePreviewFullyLoaded(activePreview.result)
@@ -283,6 +285,10 @@ export function SoloWorkbench({
                         aria-label={`关闭 ${tab.title}`}
                         title={`关闭 ${tab.title}`}
                         onClick={() => {
+                          if (tab.kind === "file-preview") {
+                            previewLoader.cancel(tab.path);
+                            delete previewRequestSeqRef.current[tab.path];
+                          }
                           setTabs((current) => current.filter((item) => item.id !== tab.id));
                           setActiveTabId((current) => current === tab.id ? "session" : current);
                         }}
@@ -326,18 +332,17 @@ export function SoloWorkbench({
                     </div>
                   </div>
                   <div className="min-h-0 overflow-hidden">
-                    {activePreview?.error ? (
-                      <div className="p-4 text-sm text-red-600">{activePreview.error}</div>
-                    ) : (
-                      <FilePreviewSurface
-                        title={activeTab.path}
-                        result={activePreview?.result || null}
-                        loading={activePreview?.loading}
-                        botAlias={botAlias}
-                        desktop
-                        onFileLinkClick={requestPreview}
-                      />
-                    )}
+                    <FilePreviewSurface
+                      title={activeTab.path}
+                      result={activePreview?.result || null}
+                      htmlPreview={activePreview?.htmlPreview}
+                      error={activePreview?.error}
+                      onRetry={() => void loadPreview(activeTab.path, "preview")}
+                      loading={activePreview?.loading}
+                      botAlias={botAlias}
+                      desktop
+                      onFileLinkClick={requestPreview}
+                    />
                   </div>
                 </div>
               ) : (

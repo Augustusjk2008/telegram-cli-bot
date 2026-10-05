@@ -12,6 +12,7 @@ import { isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePr
 import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
+  previewVisible?: boolean;
   botAlias: string;
   remotePlatform?: RemoteWorkspace["platform"];
   client: WebBotClient;
@@ -97,6 +98,7 @@ function PluginViewLoading() {
 }
 
 export function EditorPane({
+  previewVisible = true,
   botAlias,
   remotePlatform,
   client,
@@ -560,14 +562,16 @@ export function EditorPane({
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeTab.kind === "file-preview" ? (
-          <FilePreviewPane
+          previewVisible ? <FilePreviewPane
             remotePlatform={remotePlatform}
             title={activePreviewPath || activeTab.basename}
             result={activePreviewResult}
+            htmlPreview={activeTab.htmlPreview}
             loading={activeTab.loading}
             botAlias={botAlias}
             statusText={visibleStatusText}
             error={visibleError}
+            onRetry={onSwitchFileView ? () => void onSwitchFileView(activePreviewPath, "preview") : undefined}
             onLoadFull={
               activePreviewPath
               && activePreviewResult
@@ -577,7 +581,7 @@ export function EditorPane({
                 ? () => void onLoadFullPreview(activePreviewPath)
                 : undefined
             }
-          />
+          /> : null
         ) : activeTab.kind === "git-diff" ? (
           <GitDiffViewer
             content={activeTab.content}

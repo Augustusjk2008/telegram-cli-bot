@@ -1,3 +1,5 @@
+import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, FilePlus, FolderOpen, FolderPlus, House, Upload } from "lucide-react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
@@ -23,8 +25,6 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullPreview,
-  withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isAbortError } from "../utils/errorMessage";
@@ -251,6 +251,8 @@ export function FilesScreen({
   const [previewName, setPreviewName] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
+  const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewHandle | null>(null);
+  const [previewError, setPreviewError] = useState("");
   const [editorPath, setEditorPath] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
@@ -279,6 +281,22 @@ export function FilesScreen({
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const listingRequestSeqRef = useRef(0);
   const previewRequestSeqRef = useRef(0);
+  const previewLoader = useFilePreviewLoader(client, botAlias, `${currentPath}\n${JSON.stringify(remoteWorkspace || null)}`);
+  useEffect(() => {
+    previewRequestSeqRef.current += 1;
+    setPreviewName("");
+    setPreviewResult(null);
+    setHtmlPreview(null);
+    setPreviewLoading(false);
+  }, [previewLoader]);
+  const closePreview = () => {
+    previewRequestSeqRef.current += 1;
+    previewLoader.clear();
+    setPreviewName("");
+    setPreviewResult(null);
+    setHtmlPreview(null);
+    setPreviewLoading(false);
+  };
   const codeNavigationRequestSeqRef = useRef(0);
   const codeNavigationHoverRequestSeqRef = useRef(0);
   const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
@@ -605,8 +623,7 @@ export function FilesScreen({
     try {
       await client.deletePath(botAlias, file.name);
       if (previewName === file.name) {
-        setPreviewName("");
-        setPreviewResult(null);
+        closePreview();
       }
       await loadListing();
     } catch (err) {
@@ -666,22 +683,20 @@ export function FilesScreen({
     }
     const requestSeq = previewRequestSeqRef.current + 1;
     previewRequestSeqRef.current = requestSeq;
+    previewLoader.clear();
+    setPreviewName(name);
+    setPreviewResult(null);
+    setHtmlPreview(null);
     setPreviewLoading(true);
+    setPreviewError("");
     try {
-      let result = mode === "full"
-        ? await client.readFileFull(botAlias, name)
-        : await client.readFile(botAlias, name);
-      if (mode === "preview" && shouldAutoLoadFullPreview(name, result)) {
-        result = await client.readFileFull(botAlias, name);
-      }
-      if (requestSeq !== previewRequestSeqRef.current) {
-        return;
-      }
-      result = withDetectedPreviewKind(name, result);
-      setPreviewName(name);
-      setPreviewResult(result);
+      const data = await previewLoader.load(name, { mode, remote: remoteWorkspace ? true : undefined });
+      if (!data || requestSeq !== previewRequestSeqRef.current) { data?.htmlPreview?.dispose(); return; }
+      setPreviewResult(data.result);
+      setHtmlPreview(data.htmlPreview);
     } catch (err) {
       if (requestSeq === previewRequestSeqRef.current) {
+        setPreviewError(err instanceof Error ? err.message : "预览文件失败");
         setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
         setStatusText("");
       }
@@ -693,7 +708,7 @@ export function FilesScreen({
   };
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = canPreviewFiles && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
+  const canLoadFull = !htmlPreview && canPreviewFiles && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
   const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
   const previewDownloadProgress = downloadProgress?.filename === previewName ? downloadProgress : null;
 
@@ -765,8 +780,7 @@ export function FilesScreen({
         return false;
       }
       const content = result.content || "";
-      setPreviewName("");
-      setPreviewResult(null);
+      closePreview();
       syncCurrentEditorDocumentSnapshot(name, content, binding);
       setEditorPath(name);
       setEditorContent(content);
@@ -781,8 +795,7 @@ export function FilesScreen({
       setError(message);
       setStatusText("");
       if (previewName === name) {
-        setPreviewName("");
-        setPreviewResult(null);
+        closePreview();
       }
       return false;
     } finally {
@@ -1055,7 +1068,7 @@ export function FilesScreen({
       setRenameTargetIsDir(false);
       setRenameValue("");
       if (previewName === result.oldPath) {
-        setPreviewName(result.path);
+        void loadPreview(result.path, "preview");
       }
       if (editorPath === result.oldPath) {
         syncCurrentEditorDocumentSnapshot(result.path, editorContent, binding);
@@ -1322,11 +1335,13 @@ export function FilesScreen({
           remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
           title={previewName}
           result={previewResult}
+          htmlPreview={htmlPreview}
+          error={previewError}
+          onRetry={() => void loadPreview(previewName, "preview")}
           botAlias={botAlias}
           loading={previewLoading}
           onClose={() => {
-            setPreviewName("");
-            setPreviewResult(null);
+            closePreview();
           }}
           statusText={previewStatusText}
           onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}

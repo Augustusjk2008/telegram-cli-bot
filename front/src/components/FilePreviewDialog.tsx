@@ -1,3 +1,4 @@
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
@@ -13,11 +14,14 @@ type DesktopAnchorRect = {
 type Props = {
   title: string;
   result: FileReadResult | null;
+  htmlPreview?: HtmlPreviewHandle | null;
   botAlias?: string;
   remotePlatform?: RemoteWorkspace["platform"];
   variant?: "mobile" | "desktop";
   desktopAnchorRect?: DesktopAnchorRect | null;
   loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
   statusText?: string;
   downloadProgressText?: string;
   downloadPercent?: number;
@@ -44,11 +48,14 @@ function clamp(value: number, min: number, max: number) {
 export function FilePreviewDialog({
   title,
   result,
+  htmlPreview,
   botAlias = "",
   remotePlatform,
   variant = "mobile",
   desktopAnchorRect = null,
   loading = false,
+  error,
+  onRetry,
   statusText = "",
   downloadProgressText = "",
   downloadPercent,
@@ -243,7 +250,10 @@ export function FilePreviewDialog({
             <FilePreviewSurface
               title={title}
               result={result}
+              htmlPreview={htmlPreview}
               loading={loading}
+              error={error}
+              onRetry={onRetry}
               botAlias={botAlias}
               remotePlatform={remotePlatform}
               desktop
@@ -257,7 +267,7 @@ export function FilePreviewDialog({
             </div>
             <div className="flex justify-end gap-2">
               {renderDownloadProgress()}
-              {!readOnly && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
+              {!readOnly && !htmlPreview && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
                 <button
                   type="button"
                   onClick={onLoadFull}
@@ -314,7 +324,10 @@ export function FilePreviewDialog({
         <FilePreviewSurface
           title={title}
           result={result}
+          htmlPreview={htmlPreview}
           loading={loading}
+          error={error}
+          onRetry={onRetry}
           botAlias={botAlias}
           remotePlatform={remotePlatform}
           onFileLinkClick={onFileLinkClick}
@@ -325,7 +338,7 @@ export function FilePreviewDialog({
           </div>
           <div className="flex justify-end gap-2">
             {renderDownloadProgress()}
-            {!readOnly && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
+            {!readOnly && !htmlPreview && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
               <button
                 type="button"
                 onClick={onLoadFull}

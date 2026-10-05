@@ -1,3 +1,5 @@
+import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { ChatTranslationControl } from "../components/ChatTranslationControl";
 import { buildDisplayContextUsage } from "../chat/displayContextUsage";
 import { applyUserTranslationUpdate, mapUserTranslationUpdate, mergeMessageTranslation, translatedMessageText } from "../utils/chatTranslation";
@@ -74,8 +76,6 @@ import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
   isFilePreviewTooLarge,
-  shouldAutoLoadFullPreview,
-  withDetectedPreviewKind,
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
@@ -1861,6 +1861,8 @@ export function ChatScreen({
   const [previewName, setPreviewName] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
+  const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewHandle | null>(null);
+  const [previewError, setPreviewError] = useState("");
   const [previewDownloadProgress, setPreviewDownloadProgress] = useState<FileDownloadProgress | null>(null);
   const previewDownloadAbortControllerRef = useRef<AbortController | null>(null);
   const previewRequestSeqRef = useRef(0);
@@ -1886,6 +1888,22 @@ export function ChatScreen({
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>(fallbackAgents());
   const [activeAgentId, setActiveAgentId] = useState("main");
+  const previewLoader = useFilePreviewLoader(client, botAlias, `${storageScope}\n${activeAgentId}\n${workingDir}\n${isVisible}\n${JSON.stringify(botOverview?.remoteWorkspace || null)}`);
+  useEffect(() => {
+    previewRequestSeqRef.current += 1;
+    setPreviewName("");
+    setPreviewResult(null);
+    setHtmlPreview(null);
+    setPreviewLoading(false);
+  }, [previewLoader]);
+  const closePreview = () => {
+    previewRequestSeqRef.current += 1;
+    previewLoader.clear();
+    setPreviewName("");
+    setPreviewResult(null);
+    setHtmlPreview(null);
+    setPreviewLoading(false);
+  };
   const [clusterRunId, setClusterRunId] = useState("");
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
@@ -2799,12 +2817,14 @@ export function ChatScreen({
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
+      agentId: activeAgentId,
+      workingDir,
       state: error ? "error" : isStreaming ? "running" : loading ? "waiting" : "idle",
       processing: isStreaming,
       elapsedSeconds: isStreaming ? elapsedSeconds : undefined,
       lastError: error || undefined,
     });
-  }, [elapsedSeconds, error, isStreaming, loading, onWorkbenchStatusChange]);
+  }, [activeAgentId, workingDir, elapsedSeconds, error, isStreaming, loading, onWorkbenchStatusChange]);
 
   useLayoutEffect(() => {
     const wasForeground = previousForegroundRef.current;
@@ -3126,23 +3146,21 @@ export function ChatScreen({
   const loadPreview = useCallback(async (name: string, mode: "preview" | "full") => {
     const requestSeq = previewRequestSeqRef.current + 1;
     previewRequestSeqRef.current = requestSeq;
+    previewLoader.clear();
+    setPreviewName(name);
+    setPreviewResult(null);
+    setHtmlPreview(null);
     setPreviewLoading(true);
+    setPreviewError("");
     setError("");
     try {
-      let result = mode === "full"
-        ? await client.readFileFull(botAlias, name)
-        : await client.readFile(botAlias, name);
-      if (mode === "preview" && shouldAutoLoadFullPreview(name, result)) {
-        result = await client.readFileFull(botAlias, name);
-      }
-      if (requestSeq !== previewRequestSeqRef.current) {
-        return;
-      }
-      result = withDetectedPreviewKind(name, result);
-      setPreviewName(name);
-      setPreviewResult(result);
+      const data = await previewLoader.load(name, { mode, agentId: activeAgentIdRef.current, remote: botOverviewRef.current ? Boolean(botOverviewRef.current.remoteWorkspace) : undefined });
+      if (!data || requestSeq !== previewRequestSeqRef.current) { data?.htmlPreview?.dispose(); return; }
+      setPreviewResult(data.result);
+      setHtmlPreview(data.htmlPreview);
     } catch (err) {
       if (requestSeq === previewRequestSeqRef.current) {
+        setPreviewError(err instanceof Error ? err.message : "预览文件失败");
         setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
       }
     } finally {
@@ -3150,7 +3168,7 @@ export function ChatScreen({
         setPreviewLoading(false);
       }
     }
-  }, [botAlias, client]);
+  }, [previewLoader]);
 
   const cancelPreviewDownload = useCallback(() => {
     const controller = previewDownloadAbortControllerRef.current;
@@ -3197,7 +3215,7 @@ export function ChatScreen({
   }, [botAlias, client, previewName]);
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
+  const canLoadFull = !htmlPreview && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
   const shouldUseInlinePreview = !(embedded && onRequestDesktopPreview);
 
   const handleFileLinkClick = useCallback((href: string) => {
@@ -5446,13 +5464,15 @@ export function ChatScreen({
           remotePlatform={botOverview?.remoteWorkspace ? botOverview?.remoteWorkspace.platform || "posix" : undefined}
           title={previewName}
           result={previewResult}
+          htmlPreview={htmlPreview}
+          error={previewError}
+          onRetry={() => void loadPreview(previewName, "preview")}
           botAlias={botAlias}
           loading={previewLoading}
           statusText={previewStatusText}
           onClose={() => {
             cancelPreviewDownload();
-            setPreviewName("");
-            setPreviewResult(null);
+            closePreview();
           }}
           onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onDownload={() => void downloadPreview()}

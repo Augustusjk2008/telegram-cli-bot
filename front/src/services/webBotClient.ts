@@ -42,6 +42,7 @@ import type {
   FileDownloadProgress,
   FileMoveResult,
   FileReadResult,
+  HtmlPreviewSession,
   FileRenameResult,
   FileWriteResult,
   AppUpdateDownloadProgress,
@@ -305,6 +306,8 @@ export interface WebBotClient {
   createWorkdirDirectory(botAlias: string, parentPath: string, name: string): Promise<void>;
   deletePath(botAlias: string, path: string): Promise<void>;
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
+  createHtmlPreview(botAlias: string, filename: string, options?: AgentScopedOptions): Promise<HtmlPreviewSession>;
+  closeHtmlPreview(botAlias: string, sessionId: string, options?: AgentScopedOptions): Promise<void>;
   readFile(botAlias: string, filename: string): Promise<FileReadResult>;
   readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
   readExternalSource(botAlias: string, sourceId: string): Promise<ExternalSourceReadResult>;

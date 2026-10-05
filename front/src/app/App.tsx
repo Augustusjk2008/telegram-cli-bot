@@ -1036,6 +1036,8 @@ export function App() {
                     if (
                       currentStatus?.state === status.state
                       && currentStatus.processing === status.processing
+                      && currentStatus.agentId === status.agentId
+                      && currentStatus.workingDir === status.workingDir
                       && currentStatus.elapsedSeconds === status.elapsedSeconds
                       && currentStatus.lastError === status.lastError
                     ) {

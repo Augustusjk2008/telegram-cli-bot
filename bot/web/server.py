@@ -167,6 +167,7 @@ from .terminal_manager import (
     encode_terminal_ws_v2,
 )
 from .tunnel_service import TunnelService
+from .html_preview_service import HtmlPreviewStore
 from .routes import (
     admin_routes,
     announcement_routes,
@@ -177,6 +178,7 @@ from .routes import (
     codex_usage_routes,
     debug_routes,
     files_routes,
+    html_preview_routes,
     git_routes,
     lan_chat_routes,
     plugin_routes,
@@ -916,6 +918,21 @@ async def error_middleware(request: web.Request, handler):
 
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
+    if html_preview_routes.is_resource_request(request.path, WebApiServer._web_base_path()):
+        try:
+            response = web.Response(status=204) if request.method == "OPTIONS" else await handler(request)
+        except web.HTTPException as exc:
+            response = web.Response(status=exc.status, text=exc.text, headers=exc.headers)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
+        response.headers.pop("Access-Control-Allow-Credentials", None)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers.setdefault("Content-Security-Policy", "default-src 'none'; sandbox")
+        return response
+    if request.headers.get("Origin", "").strip().lower() == "null":
+        return _error_response(WebApiError(403, "csrf_origin_rejected", "请求来源不被允许"))
     # 处理 OPTIONS 预检请求
     if request.method == "OPTIONS":
         response = web.Response(status=204)
@@ -1013,6 +1030,7 @@ class WebApiServer:
         instance_id: str | None = None,
     ):
         self.manager = manager
+        self.html_preview_store = HtmlPreviewStore()
         self._host = str(host or WEB_HOST or "").strip() or "0.0.0.0"
         self._port = int(port if port is not None else WEB_PORT)
         if hasattr(manager, "remote_bridge_url"):
@@ -5106,6 +5124,7 @@ class WebApiServer:
             remote_routes,
             debug_routes,
             files_routes,
+            html_preview_routes,
             plugin_routes,
             git_routes,
             admin_routes,

@@ -90,6 +90,7 @@ import type {
   FileDownloadProgress,
   FileEntry,
   FileReadResult,
+  HtmlPreviewSession,
   GitActionResult,
   GitBranchResetResult,
   GitBranchList,
@@ -4825,6 +4826,19 @@ export class MockWebBotClient implements WebBotClient {
       }
     }
   }
+
+  async createHtmlPreview(botAlias: string, filename: string): Promise<HtmlPreviewSession> {
+    if ((await this.getBotOverview(botAlias)).remoteWorkspace) throw new Error("远程工作区不支持交互预览");
+    const sessionId = crypto.randomUUID();
+    return {
+      sessionId,
+      entryUrl: new URL(`/api/file-previews/${sessionId}/${filename.split(/[\\/]/).map(encodeURIComponent).join("/")}`, window.location.origin).href,
+      entryPath: filename,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    };
+  }
+
+  async closeHtmlPreview(_botAlias: string, _sessionId: string): Promise<void> {}
 
   async readFile(botAlias: string, filename: string): Promise<FileReadResult> {
     const browserPath = this.getBrowserPath(botAlias);

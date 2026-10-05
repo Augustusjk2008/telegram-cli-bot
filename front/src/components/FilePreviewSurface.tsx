@@ -1,3 +1,5 @@
+import { HtmlPreview } from "./HtmlPreview";
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { clsx } from "clsx";
 import { LoaderCircle } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
@@ -11,7 +13,10 @@ const JsonPreview = lazy(() => import("./JsonPreview").then((module) => ({ defau
 export type FilePreviewSurfaceProps = {
   title: string;
   result: FileReadResult | null;
+  htmlPreview?: HtmlPreviewHandle | null;
   loading?: boolean;
+  error?: string;
+  onRetry?: () => void;
   botAlias?: string;
   remotePlatform?: RemoteWorkspace["platform"];
   className?: string;
@@ -22,7 +27,10 @@ export type FilePreviewSurfaceProps = {
 export function FilePreviewSurface({
   title,
   result,
+  htmlPreview,
   loading = false,
+  error = "",
+  onRetry,
   botAlias = "",
   remotePlatform,
   className = "",
@@ -74,6 +82,8 @@ export function FilePreviewSurface({
   }, [botAlias, title, remotePlatform]);
 
   function renderContent() {
+    if (htmlPreview) return <HtmlPreview key={title} title={title} preview={htmlPreview} desktop={desktop} />;
+
     if (loading && !result) {
       return (
         <div className={clsx("flex items-center justify-center gap-2 text-sm text-[var(--muted)]", desktop ? "h-full" : "min-h-40")}>
@@ -81,6 +91,13 @@ export function FilePreviewSurface({
           加载预览...
         </div>
       );
+    }
+
+    if (error && !result) {
+      return <div role="alert" className="flex items-center gap-3 p-4 text-sm text-red-600">
+        {error}
+        {onRetry ? <button type="button" className="shrink-0 rounded-md border border-[var(--border)] px-2 py-1 text-[var(--text)]" onClick={onRetry}>重试</button> : null}
+      </div>;
     }
 
     if (!result) {
@@ -127,6 +144,7 @@ export function FilePreviewSurface({
         <iframe
           title={title}
           sandbox=""
+          referrerPolicy="no-referrer"
           srcDoc={content}
           className={clsx(desktop ? "h-full" : "h-[50vh]", "w-full rounded-xl border border-[var(--border)] bg-white")}
         />

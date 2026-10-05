@@ -1,3 +1,5 @@
+import { relativeRemotePath } from "../services/remoteWorkspace";
+import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
 import { clsx } from "clsx";
 import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -28,8 +30,6 @@ import type {
 import {
   isHtmlPreviewPath,
   getFilePreviewStatusText,
-  shouldAutoLoadFullPreview,
-  withDetectedPreviewKind,
 } from "../utils/filePreview";
 import { getErrorMessage } from "../utils/errorMessage";
 import { WORKSPACE_DELETED_EVENT, isWorkspaceDeletedEvent } from "../utils/workspaceEvents";
@@ -252,9 +252,6 @@ export function DesktopWorkbench({
   const [pendingSidebarWorkdir, setPendingSidebarWorkdir] = useState("");
   const previewRequestSeqRef = useRef(new Map<string, number>());
   const previewRequestSerialRef = useRef(0);
-  const previewScopeIdentity = `${botAlias}\n${workspaceUserScope}`;
-  const previewScopeIdentityRef = useRef(previewScopeIdentity);
-  previewScopeIdentityRef.current = previewScopeIdentity;
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
   const [isResizingPane, setIsResizingPane] = useState(false);
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
@@ -263,6 +260,21 @@ export function DesktopWorkbench({
     state: "idle",
     processing: false,
   });
+  const previewAgentId = (externalChatStatus || localChatStatus).agentId || "main";
+  const previewScopeIdentity = `${botAlias}\n${workspaceUserScope}`;
+  const htmlPreviewScopeIdentity = `${previewScopeIdentity}\n${previewAgentId}\n${(externalChatStatus || localChatStatus).workingDir || ""}\n${JSON.stringify(remoteWorkspace || null)}`;
+  const previewScopeIdentityRef = useRef(previewScopeIdentity);
+  previewScopeIdentityRef.current = previewScopeIdentity;
+  const previewLoader = useFilePreviewLoader(client, botAlias, htmlPreviewScopeIdentity);
+  const previousPreviewScopeRef = useRef(htmlPreviewScopeIdentity);
+  useEffect(() => {
+    if (previousPreviewScopeRef.current !== htmlPreviewScopeIdentity) {
+      previousPreviewScopeRef.current = htmlPreviewScopeIdentity;
+      previewRequestSeqRef.current.clear();
+      for (const tab of tabs.tabs) if (tab.kind === "file-preview") tabs.closeTab(tab.path);
+    }
+  }, [htmlPreviewScopeIdentity]);
+
   const [terminalStatus, setTerminalStatus] = useState<TerminalWorkbenchStatus>({
     connected: false,
     connectionText: "未启动",
@@ -431,6 +443,9 @@ export function DesktopWorkbench({
   });
 
   const showEditorPane = !structureOnly && (focusedPane === "editor" || (!focusedPane && !layoutState.editorCollapsed));
+  useEffect(() => {
+    previewLoader.reconcile(tabs.tabs.filter((tab) => tab.kind === "file-preview").map((tab) => tab.sourcePath || ""), showEditorPane && tabs.activeTab?.kind === "file-preview" ? tabs.activeTab.sourcePath || "" : "");
+  }, [previewLoader, tabs.tabs, tabs.activeTab, showEditorPane]);
   const showTerminalPane = !structureOnly && (focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed));
   const showCenterPane = showEditorPane || showTerminalPane;
   const showChatPane = focusedPane === "chat" || (!focusedPane && !layoutState.chatCollapsed);
@@ -749,6 +764,7 @@ export function DesktopWorkbench({
     for (const requestPath of previewRequestSeqRef.current.keys()) {
       if (isSameOrDescendantWorkbenchPath(requestPath, path)) {
         previewRequestSeqRef.current.delete(requestPath);
+        previewLoader.cancel(requestPath);
       }
     }
   }
@@ -761,33 +777,29 @@ export function DesktopWorkbench({
     if (!canPreviewFiles) {
       return;
     }
+    path = remoteWorkspace ? relativeRemotePath(path, remoteWorkspace.root, remoteWorkspace.platform) : path.trim();
     const requestScopeIdentity = previewScopeIdentityRef.current;
     const requestSeq = previewRequestSerialRef.current + 1;
     previewRequestSerialRef.current = requestSeq;
     previewRequestSeqRef.current.set(path, requestSeq);
     tabs.openFilePreview({
       path,
+      htmlPreview: null,
       loading: true,
       statusText: mode === "full" ? "正在读取全文" : "正在加载预览",
       activate: options?.activate,
     });
     try {
-      let result = mode === "full"
-        ? await client.readFileFull(botAlias, path)
-        : await client.readFile(botAlias, path);
-      if (mode === "preview" && shouldAutoLoadFullPreview(path, result)) {
-        result = await client.readFileFull(botAlias, path);
-      }
-      if (
-        previewScopeIdentityRef.current !== requestScopeIdentity
-        || previewRequestSeqRef.current.get(path) !== requestSeq
-      ) {
+      const data = await previewLoader.load(path, { mode, remote: remoteWorkspace ? true : undefined, agentId: previewAgentId });
+      if (!data || previewScopeIdentityRef.current !== requestScopeIdentity || previewRequestSeqRef.current.get(path) !== requestSeq) {
+        data?.htmlPreview?.dispose();
         return;
       }
-      result = withDetectedPreviewKind(path, result);
+      const { result, htmlPreview } = data;
       tabs.openFilePreview({
         path,
         result,
+        htmlPreview,
         loading: false,
         statusText: getFilePreviewStatusText(result),
         activate: false,
@@ -1536,6 +1548,7 @@ export function DesktopWorkbench({
               >
                 <Suspense fallback={paneFallback}>
                   <EditorPane
+                    previewVisible={showEditorPane}
                     remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
                     botAlias={botAlias}
                     client={client}

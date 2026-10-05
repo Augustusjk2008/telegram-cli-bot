@@ -1,3 +1,4 @@
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { useEffect, useRef, useState } from "react";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { getExternalSourceErrorMessage } from "../services/types";
@@ -818,6 +819,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   function openFilePreview(input: {
     path: string;
     result?: FileReadResult | null;
+    htmlPreview?: HtmlPreviewHandle | null;
     loading?: boolean;
     statusText?: string;
     error?: string;
@@ -844,6 +846,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
           basename: documentBasename(sourcePath),
           kind: "file-preview",
           filePreview,
+          htmlPreview: input.htmlPreview === undefined ? existing?.htmlPreview : input.htmlPreview,
           sourcePath,
           readOnly: true,
           loading: Boolean(input.loading),
@@ -1115,6 +1118,8 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       if (item.kind === "file-preview") {
         return {
           ...item,
+          htmlPreview: null,
+          loading: item.loading || Boolean(item.htmlPreview),
           path: filePreviewTabPath(nextSourcePath),
           sourcePath: nextSourcePath,
           basename: basename(nextSourcePath),
@@ -1180,7 +1185,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       previews: currentTabs.flatMap((item, index) => item.kind === "file-preview" && nextTabs[index]?.sourcePath !== item.sourcePath
         ? [{
             path: nextTabs[index]?.sourcePath || "",
-            loading: item.loading,
+            loading: item.loading || Boolean(item.htmlPreview),
             full: item.statusText === "正在读取全文",
           }]
         : []),

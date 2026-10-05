@@ -1,12 +1,13 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { FileOpenTarget } from "../services/types";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { DesktopWorkbench } from "../workbench/DesktopWorkbench";
 
+beforeEach(() => localStorage.clear());
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -170,20 +171,13 @@ test("horizontal workbench renders raster previews in the editor pane", async ()
   expect(screen.queryByRole("dialog", { name: "diagram.png" })).not.toBeInTheDocument();
 });
 
-test("horizontal HTML previews omit edit and download actions", async () => {
+test("horizontal HTML previews keep sessions separate from explicitly loaded editor source", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
-  const html = "<!doctype html><title>Preview</title><main>Editable</main>";
-  vi.spyOn(client, "readFile").mockResolvedValue({
-    content: html,
-    mode: "head",
-    isFullContent: true,
-  });
-  vi.spyOn(client, "readFileFull").mockResolvedValue({
-    content: html,
-    mode: "cat",
-    isFullContent: true,
-  });
+  const read = vi.spyOn(client, "readFile");
+  const full = vi.spyOn(client, "readFileFull").mockResolvedValue({ content: "<h1>Editor source</h1>", mode: "cat" });
+  const create = vi.spyOn(client, "createHtmlPreview");
+  const close = vi.spyOn(client, "closeHtmlPreview");
 
   render(
     <PersistentTerminalProvider client={client}>
@@ -200,9 +194,17 @@ test("horizontal HTML previews omit edit and download actions", async () => {
   await user.click(await screen.findByRole("button", { name: "预览 HTML" }));
   const editorPane = await screen.findByTestId("desktop-pane-editor");
   expect(await within(editorPane).findByRole("tab", { name: "index.html 预览" })).toBeInTheDocument();
-  expect(within(editorPane).queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
   expect(within(editorPane).queryByRole("button", { name: "下载" })).not.toBeInTheDocument();
   expect(within(editorPane).queryByRole("tab", { name: "index.html" })).not.toBeInTheDocument();
+  expect(await within(screen.getByTestId("desktop-inline-file-preview")).findByTitle("index.html")).toHaveAttribute("sandbox", "allow-scripts allow-forms allow-downloads");
+  expect(create).toHaveBeenCalledTimes(1);
+  expect(read).not.toHaveBeenCalled();
+  expect(full).not.toHaveBeenCalled();
+  await user.click(within(editorPane).getByRole("button", { name: "切换到编辑" }));
+  expect(await screen.findByRole("textbox", { name: "文件内容" })).toHaveValue("<h1>Editor source</h1>");
+  expect(full).toHaveBeenCalledWith("main", "index.html");
+  await user.click(within(editorPane).getByRole("button", { name: "关闭 index.html 预览" }));
+  expect(close).toHaveBeenCalledTimes(1);
 });
 
 test("plugin file views and file previews remain switchable editor tabs", async () => {

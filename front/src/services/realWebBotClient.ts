@@ -160,6 +160,7 @@ import type {
   FileMoveResult,
   FileReadMode,
   FileReadResult,
+  HtmlPreviewSession,
   FileRenameResult,
   FileWriteResult,
   InlineCompletionConfig,
@@ -5746,6 +5747,27 @@ export class RealWebBotClient implements WebBotClient {
       },
       body: JSON.stringify({ path }),
     });
+  }
+
+  async createHtmlPreview(botAlias: string, filename: string, options: AgentScopedOptions = {}): Promise<HtmlPreviewSession> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    const query = params.size ? `?${params}` : "";
+    const data = await this.requestJson<{ session_id: string; entry_url: string; entry_path: string; expires_at: string }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/files/html-preview${query}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename }) },
+    );
+    // The server already supplies the deployment prefix; do not run this through the API URL builder.
+    const entryUrl = new URL(data.entry_url, window.location.origin);
+    if (entryUrl.origin !== window.location.origin) throw new Error("预览地址必须属于当前站点");
+    return { sessionId: data.session_id, entryUrl: entryUrl.href, entryPath: data.entry_path, expiresAt: data.expires_at };
+  }
+
+  async closeHtmlPreview(botAlias: string, sessionId: string, options: AgentScopedOptions = {}): Promise<void> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    const query = params.size ? `?${params}` : "";
+    await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/files/html-preview/${encodeURIComponent(sessionId)}${query}`, { method: "DELETE" });
   }
 
   async readFile(botAlias: string, filename: string): Promise<FileReadResult> {

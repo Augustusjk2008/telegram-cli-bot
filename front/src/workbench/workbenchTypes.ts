@@ -1,3 +1,4 @@
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import type { FileReadResult, PluginOpenTarget, PluginRenderResult } from "../services/types";
 
 export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
@@ -35,6 +36,8 @@ export type TerminalWorkbenchStatus = {
 };
 
 export type ChatWorkbenchStatus = {
+  agentId?: string;
+  workingDir?: string;
   state: "idle" | "running" | "waiting" | "error";
   processing: boolean;
   elapsedSeconds?: number;
@@ -160,6 +163,7 @@ export type EditorTab = {
   savedContent: string;
   kind?: "file" | "file-preview" | "git-diff" | "plugin-view" | "external-source";
   filePreview?: FileReadResult;
+  htmlPreview?: HtmlPreviewHandle | null;
   pluginTargets?: PluginOpenTarget[];
   pluginOpenTarget?: PluginOpenTarget;
   pluginView?: PluginRenderResult;

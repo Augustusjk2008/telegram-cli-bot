@@ -108,6 +108,12 @@ def middleware(server):
 
 
 async def _workspace_request(server, request, profile, suffix, browse_dirs):
+    if suffix == "files/html-preview" and request.method == "POST":
+        from bot.web.routes.html_preview_routes import reject_remote
+        reject_remote(profile)
+    if suffix == "files/html-preview/{session_id}" and request.method == "DELETE":
+        # Revoking an owned local ticket remains possible after a remote switch.
+        return None
     operations = {
         ("GET", "pwd"): CAP_VIEW_FILE_TREE,
         ("GET", "ls"): CAP_VIEW_FILE_TREE,

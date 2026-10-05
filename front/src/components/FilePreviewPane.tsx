@@ -1,3 +1,4 @@
+import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { BookOpenText } from "lucide-react";
 import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
@@ -5,11 +6,13 @@ import { FilePreviewSurface } from "./FilePreviewSurface";
 type Props = {
   title: string;
   result: FileReadResult | null;
+  htmlPreview?: HtmlPreviewHandle | null;
   botAlias?: string;
   remotePlatform?: RemoteWorkspace["platform"];
   loading?: boolean;
   statusText?: string;
   error?: string;
+  onRetry?: () => void;
   onLoadFull?: () => void;
   onFileLinkClick?: (href: string) => void;
 };
@@ -17,11 +20,13 @@ type Props = {
 export function FilePreviewPane({
   title,
   result,
+  htmlPreview,
   botAlias = "",
   remotePlatform,
   loading = false,
   statusText = "",
   error = "",
+  onRetry,
   onLoadFull,
   onFileLinkClick,
 }: Props) {
@@ -31,19 +36,18 @@ export function FilePreviewPane({
       className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--editor-bg)]"
     >
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        {error && !result ? (
-          <div className="flex h-full items-center justify-center px-6 text-sm text-red-600">{error}</div>
-        ) : (
-          <FilePreviewSurface
-            title={title}
-            result={result}
-            loading={loading}
-            botAlias={botAlias}
-            remotePlatform={remotePlatform}
-            desktop
-            onFileLinkClick={onFileLinkClick}
-          />
-        )}
+        <FilePreviewSurface
+          title={title}
+          result={result}
+          htmlPreview={htmlPreview}
+          loading={loading}
+          error={error}
+          onRetry={onRetry}
+          botAlias={botAlias}
+          remotePlatform={remotePlatform}
+          desktop
+          onFileLinkClick={onFileLinkClick}
+        />
       </div>
 
       <footer className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--workbench-hairline)] px-3 py-1.5">
@@ -54,7 +58,7 @@ export function FilePreviewPane({
           {error || statusText}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {result?.mode !== "cat" && onLoadFull ? (
+          {!htmlPreview && result?.mode !== "cat" && onLoadFull ? (
             <button
               type="button"
               onClick={onLoadFull}

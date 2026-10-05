@@ -1465,6 +1465,13 @@ export type FileDownloadProgress = {
 export type FileReadMode = "head" | "cat";
 export type FilePreviewKind = "text" | "image" | "html";
 
+export type HtmlPreviewSession = {
+  sessionId: string;
+  entryUrl: string;
+  entryPath: string;
+  expiresAt: string;
+};
+
 export type FileReadResult = {
   content: string;
   mode: FileReadMode;
