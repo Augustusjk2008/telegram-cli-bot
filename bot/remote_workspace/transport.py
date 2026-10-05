@@ -598,7 +598,17 @@ class RemoteConnection:
     def mkdir(self, path: str, *, root: str) -> dict:
         with self._operation() as sftp:
             resolved = self._resolve(path, root, missing=True)
-            sftp.mkdir(resolved)
+            if self._stat_optional(resolved) is not None:
+                raise RemoteWorkspaceError(409, "path_exists", "Path already exists")
+            try:
+                sftp.mkdir(resolved)
+            except OSError:
+                # Some SFTP servers report an existing directory as a generic
+                # failure without an errno. Re-check after a possible race so
+                # callers can handle the stable path_exists contract.
+                if self._stat_optional(resolved) is not None:
+                    raise RemoteWorkspaceError(409, "path_exists", "Path already exists")
+                raise
             return {"path": resolved, "name": posixpath.basename(resolved), "working_dir": root}
 
     def _open_channel(self, root: str, timeout: float):

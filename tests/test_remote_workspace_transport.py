@@ -676,6 +676,17 @@ def test_create_and_mkdir_do_not_overwrite(ssh):
     assert connection.read_file("folder/new.txt", ROOT)["content"] == "hello"
 
 
+def test_mkdir_existing_directory_reports_path_exists_without_reissuing_mkdir(ssh):
+    _, connection = connected(ssh)
+    connection.mkdir("folder", root=ROOT)
+    ssh.clients[0].sftp.mkdir = Mock(side_effect=OSError("Failure"))
+
+    with error_code("path_exists"):
+        connection.mkdir("folder", root=ROOT)
+
+    ssh.clients[0].sftp.mkdir.assert_not_called()
+
+
 def test_terminal_channels_share_transport_but_close_independently(ssh):
     from bot.platform.terminal import PtyWrapper
 
