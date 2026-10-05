@@ -21,6 +21,7 @@ from bot.web.auth_store import (
 
 _REMOTE_GIT_OPERATIONS = {
     ("GET", "git"): "overview",
+    ("POST", "git/init"): "init",
     ("GET", "git/diff"): "diff",
     ("POST", "git/stage"): "stage",
     ("POST", "git/unstage"): "unstage",
@@ -153,6 +154,8 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         git = RemoteGitService(connection, root)
         if git_operation == "overview":
             return _response(await asyncio.to_thread(git.overview))
+        if git_operation == "init":
+            return _response(await asyncio.to_thread(git.init))
         if git_operation == "diff":
             staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
             return _response(await asyncio.to_thread(git.diff, request.query.get("path", ""), staged=staged))

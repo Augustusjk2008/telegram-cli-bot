@@ -1104,14 +1104,15 @@ export function GitScreen({
                 <h2 className="text-lg font-semibold">当前目录不在 Git 仓库中</h2>
                 <p className="break-all text-sm text-[var(--muted)]">{overview.workingDir}</p>
               </div>
-              {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>请选择已有 Git 仓库的根目录作为远程工作区。</p> : <button
+              {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>远程工作区根目录还没有 Git 仓库，可以直接初始化。</p> : null}
+              <button
                 type="button"
                 onClick={async () => {
                   setActionLoading("init");
                   setError("");
                   try {
                     const next = await client.initGitRepository(botAlias);
-                    setOverview(next);
+                    syncOverview(next);
                     setNotice("Git 仓库已初始化");
                   } catch (err) {
                     setError(err instanceof Error ? err.message : "初始化 Git 仓库失败");
@@ -1123,7 +1124,7 @@ export function GitScreen({
                 className={clsx("ml-3 mt-4", buttonClass("primary"))}
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
-              </button>}
+              </button>
             </section>
           ) : null}
 

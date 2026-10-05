@@ -34,8 +34,9 @@ def tracked(path, xy=".M"):
 class Connection:
     platform = "posix"
 
-    def __init__(self, *, initial=False, files=None, untracked=()):
+    def __init__(self, *, repository=True, initial=False, files=None, untracked=()):
         self.config = {"connection_id": "ssh-one", "host": "remote.example", "username": "dev"}
+        self.repository = repository
         self.initial = initial
         self.files = files if files is not None else {"file.txt": ".M"}
         self.untracked = list(untracked)
@@ -58,7 +59,13 @@ class Connection:
         if args == ["--version"]:
             return result("git version 2.45.0\n")
         if args == ["rev-parse", "--show-toplevel"]:
+            if not self.repository:
+                return result(stderr="fatal: not a git repository (or any of the parent directories): .git\n", returncode=128)
             return result(root + "\n")
+        if args == ["init"]:
+            self.repository = True
+            self.initial = True
+            return result("Initialized empty Git repository\n")
         if args[0] == "status":
             return result(f"# branch.oid {'(initial)' if self.initial else OID}\x00"
                           "# branch.head main\x00# branch.upstream origin/main\x00# branch.ab +2 -1\x00"
@@ -95,6 +102,58 @@ def test_overview_preserves_shape_status_names_and_remote_commits():
     }
     assert overview["recent_commits"][1]["hash"] == "b" * 40
     assert connection.calls[0][0] == ["--version"]
+
+
+def test_non_repository_offers_init_without_running_repository_commands():
+    connection = Connection(repository=False)
+    overview = remote.RemoteGitService(connection, ROOT).overview()
+    assert not overview["repo_found"] and overview["can_init"]
+    assert overview["working_dir"] == ROOT
+    assert overview["repo_path"] == overview["repo_name"] == overview["current_branch"] == ""
+    assert overview["changed_files"] == overview["recent_commits"] == []
+    assert [call[0] for call in connection.calls] == [["--version"], ["rev-parse", "--show-toplevel"]]
+
+
+def test_init_creates_remote_repository_once_and_returns_initial_status():
+    connection = Connection(repository=False, files={}, untracked=["new.txt"])
+    service = remote.RemoteGitService(connection, ROOT)
+    overview = service.init()
+    assert overview["repo_found"] and not overview["can_init"]
+    assert overview["repo_path"] == ROOT
+    assert overview["changed_files"][0]["path"] == "new.txt"
+    assert overview["changed_files"][0]["untracked"]
+    assert overview["recent_commits"] == []
+    assert service.init() == overview
+    mutations = [call for call in connection.calls if call[0] == ["init"]]
+    assert len(mutations) == 1
+    assert mutations[0][1:3] == (ROOT, remote.MUTATION_TIMEOUT)
+
+
+@pytest.mark.parametrize("message", [
+    "fatal: detected dubious ownership in repository at '/srv/project'",
+    "fatal: failed to stat '/srv/project/.git': Permission denied",
+    "fatal: not a git repository: /srv/project/.git",
+    "fatal: this operation must be run in a work tree",
+])
+def test_repo_probe_errors_are_not_treated_as_uninitialized(message):
+    connection = Connection()
+    connection.overrides["rev-parse"] = result(stderr=message, returncode=128)
+    service = remote.RemoteGitService(connection, ROOT)
+    for operation in (service.overview, service.init):
+        with pytest.raises(RemoteWorkspaceError) as exc:
+            operation()
+        assert exc.value.message == message
+    assert not any(call[0] == ["init"] for call in connection.calls)
+
+
+def test_init_preserves_failure_without_returning_a_successful_overview():
+    connection = Connection(repository=False)
+    connection.overrides["init"] = result(stderr="Permission denied", returncode=128)
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).init()
+    assert exc.value.code == "git_init_failed"
+    assert exc.value.message == "Permission denied"
+    assert connection.calls[-1][0] == ["init"]
 
 
 @pytest.mark.parametrize("path", ["", ".", "..", "../secret", "dir/../secret", "/outside", "C:/outside",
@@ -174,11 +233,12 @@ def test_incomplete_status_never_reports_clean_or_mutates(command, truncated, te
     assert not any(call[0][0] == "add" for call in connection.calls)
 
 
-def test_top_level_must_equal_workspace():
+@pytest.mark.parametrize("operation", ["overview", "init"])
+def test_top_level_must_equal_workspace(operation):
     connection = Connection()
     connection.overrides["rev-parse"] = result("/srv\n")
     with pytest.raises(RemoteWorkspaceError) as exc:
-        remote.RemoteGitService(connection, ROOT).overview()
+        getattr(remote.RemoteGitService(connection, ROOT), operation)()
     assert exc.value.code == "remote_git_root_required"
     assert exc.value.data == {"repo_path": "/srv", "working_dir": ROOT}
     assert len(connection.calls) == 2
@@ -233,12 +293,12 @@ def test_ssh_and_missing_root_errors_are_preserved(code):
 
 @pytest.mark.parametrize("code", ["remote_timeout", "remote_disconnected"])
 @pytest.mark.parametrize("operation, args, command", [("stage", ["file.txt"], "add"), ("unstage", ["file.txt"], "reset"),
-                                                       ("commit", "message", "commit")])
+                                                       ("commit", "message", "commit"), ("init", None, "init")])
 def test_mutation_is_never_retried(code, operation, args, command):
-    connection = Connection(files={"file.txt": "MM"})
+    connection = Connection(repository=operation != "init", files={"file.txt": "MM"})
     connection.overrides[command] = RemoteWorkspaceError(504, code, "response lost")
     with pytest.raises(RemoteWorkspaceError) as exc:
-        getattr(remote.RemoteGitService(connection, ROOT), operation)(args)
+        getattr(remote.RemoteGitService(connection, ROOT), operation)(*(() if args is None else (args,)))
     assert exc.value.code == code
     assert sum(call[0][0] == command for call in connection.calls) == 1
     assert connection.calls[-1][0][0] == command
@@ -266,6 +326,7 @@ def test_remote_service_never_invokes_local_git_or_alters_control_directory(monk
         monkeypatch.setattr(local, name, Mock(side_effect=AssertionError("Local Git is forbidden")))
     monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=AssertionError("Local process is forbidden")))
     monkeypatch.setattr(Path, "resolve", Mock(side_effect=AssertionError("Local path resolution is forbidden")))
+    remote.RemoteGitService(Connection(repository=False, files={}), ROOT).init()
     service = remote.RemoteGitService(Connection(files={"file.txt": "MM"}, untracked=["new.txt"]), ROOT)
     service.overview()
     service.diff("file.txt")

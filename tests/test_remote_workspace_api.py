@@ -117,6 +117,7 @@ def _forbid_local_git(server, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,suffix,body,operation,args,kwargs", [
     ("GET", "git", None, "overview", (), {}),
+    ("POST", "git/init", None, "init", (), {}),
     ("GET", "git/diff?path=a%20b.txt&staged=true", None, "diff", ("a b.txt",), {"staged": True}),
     ("POST", "git/stage", {"paths": ["a b.txt"]}, "stage", (["a b.txt"],), {}),
     ("POST", "git/unstage", {"paths": ["a b.txt"]}, "unstage", (["a b.txt"],), {}),
@@ -168,7 +169,7 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
     service = Mock()
     monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
     app = server._build_app()
-    allowed = {("GET", "git"), ("GET", "git/diff"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
+    allowed = {("GET", "git"), ("GET", "git/diff"), ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
               if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]
     async with TestClient(TestServer(app)) as client:

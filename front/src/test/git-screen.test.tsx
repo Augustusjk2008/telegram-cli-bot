@@ -141,6 +141,7 @@ function createGitScreenClient() {
   const getGitCommitGraph = vi.fn(async () => graphPayload);
   const client = {
     getGitOverview,
+    initGitRepository: vi.fn(async () => cloneOverview()),
     getGitCommitGraph,
     getGitIdentityConfig: vi.fn(async () => identityConfig),
     getActiveGitSmartCommit: vi.fn(async () => null),
@@ -229,12 +230,19 @@ test("remote SSH errors remain distinct from missing Git", async () => {
   expect(screen.queryByRole("link", { name: /官方安装指南/ })).not.toBeInTheDocument();
 });
 
-test("remote non-repository requires an existing repository root and never offers init", async () => {
+test("remote non-repository can retry a failed initialization and publish the initialized overview", async () => {
   const { client, getGitOverview } = createGitScreenClient();
   getGitOverview.mockResolvedValue({ ...cloneOverview(), repoFound: false, canInit: true });
-  render(<GitScreen botAlias="remote" client={client} remote />);
-  expect(await screen.findByText("请选择已有 Git 仓库的根目录作为远程工作区。")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "初始化 Git 仓库" })).not.toBeInTheDocument();
+  vi.mocked(client.initGitRepository).mockRejectedValueOnce(new Error("Permission denied"));
+  const onOverviewChange = vi.fn();
+  render(<GitScreen botAlias="remote" client={client} remote onOverviewChange={onOverviewChange} />);
+  fireEvent.click(await screen.findByRole("button", { name: "初始化 Git 仓库" }));
+  expect(await screen.findByText("Permission denied")).toBeInTheDocument();
+  expect(client.initGitRepository).toHaveBeenCalledExactlyOnceWith("remote");
+  fireEvent.click(screen.getByRole("button", { name: "初始化 Git 仓库" }));
+  expect(await screen.findByTestId("git-changes-panel")).toBeInTheDocument();
+  expect(onOverviewChange).toHaveBeenLastCalledWith(cloneOverview());
+  expect(screen.queryByText("Permission denied")).not.toBeInTheDocument();
 });
 
 test("a failed remote commit preserves the draft and does not retry the mutation", async () => {

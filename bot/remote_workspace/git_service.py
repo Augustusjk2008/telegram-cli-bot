@@ -94,7 +94,14 @@ class RemoteGitService:
             raise RemoteWorkspaceError(400, error, message)
         return result
 
-    def _require_repo(self) -> None:
+    @staticmethod
+    def _is_not_repository(message: str) -> bool:
+        # This is Git's unambiguous response for a directory that simply has
+        # no repository. Other `not a git repository: ...` diagnostics can
+        # describe a broken or inaccessible repository and must remain errors.
+        return message.lower().startswith("fatal: not a git repository (or any of the parent directories):")
+
+    def _repo_root(self) -> str | None:
         version = self._git(["--version"], allowed=(0, 127))
         if version["returncode"] == 127:
             raise RemoteWorkspaceError(
@@ -102,7 +109,18 @@ class RemoteGitService:
                 "Git was not found in the SSH account's noninteractive PATH. Install Git on the remote machine "
                 "or update that account's PATH, then retry.",
             )
-        top = self._git(["rev-parse", "--show-toplevel"], error="git_not_repository")["stdout"].removesuffix("\n")
+        result = self._git(
+            ["rev-parse", "--show-toplevel"],
+            error="git_repo_probe_failed",
+            allowed=(0, 128),
+        )
+        if result["returncode"]:
+            message = (result["stderr"] or result["stdout"] or "Remote Git repository probe failed").strip()
+            if self._is_not_repository(message):
+                return None
+            raise RemoteWorkspaceError(400, "git_repo_probe_failed", message)
+
+        top = result["stdout"].removesuffix("\n")
         if self.platform == "windows":
             top = top.removesuffix("\r")
         top = _absolute(top, self.platform)
@@ -113,6 +131,11 @@ class RemoteGitService:
             raise RemoteWorkspaceError(400, "remote_git_root_required",
                                        "Select the repository root as the remote workspace to use Git.",
                                        {"repo_path": top, "working_dir": self.root})
+        return top
+
+    def _require_repo(self) -> None:
+        if self._repo_root() is None:
+            raise RemoteWorkspaceError(400, "git_not_repository", "The remote workspace is not a Git repository")
 
     def _path(self, path: str) -> str:
         if not isinstance(path, str) or not path or "\x00" in path:
@@ -208,9 +231,37 @@ class RemoteGitService:
             "recent_commits": self._recent_commits(has_head),
         }
 
+    def _empty_overview(self) -> dict:
+        return {
+            "repo_found": False, "can_init": True, "working_dir": self.root,
+            "repo_path": "", "repo_name": "", "current_branch": "", "is_clean": True,
+            "ahead_count": 0, "behind_count": 0, "changed_files": [],
+            "changed_files_truncated": False, "changed_files_total_estimate": 0,
+            "status_truncated": False, "untracked_files_truncated": False,
+            "count_lower_bound": 0, "count_exact": True, "truncation_reason": "",
+            "recent_commits": [],
+        }
+
     def overview(self) -> dict:
         with self._lock:
-            self._require_repo()
+            if self._repo_root() is None:
+                return self._empty_overview()
+            return self._overview()
+
+    def init(self) -> dict:
+        with self._lock:
+            if self._repo_root() is not None:
+                return self._overview()
+            self._git(["init"], error="git_init_failed", mutation=True, truncated=True)
+            try:
+                if self._repo_root() is None:
+                    raise RemoteWorkspaceError(
+                        400, "git_init_failed", "Git initialization did not create a repository at the remote workspace",
+                    )
+            except RemoteWorkspaceError as exc:
+                if exc.code == "git_repo_probe_failed":
+                    raise RemoteWorkspaceError(400, "git_init_failed", exc.message, exc.data) from exc
+                raise
             return self._overview()
 
     def diff(self, path: str, staged: bool = False) -> dict:
