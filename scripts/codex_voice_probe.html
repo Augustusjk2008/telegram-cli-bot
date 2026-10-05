@@ -134,7 +134,7 @@
   const pending = new Map(), sequences = new Set(), browserRows = new Map();
   const captions = new Map(), flatCaptions = new Map(), transcriptEvents = new Set();
   let socket, online = false, disposed = false, state = {};
-  let peer = null, mic = null, channel = null, generation = 0, statsTimer = null, answerTimer = null;
+  let peer = null, mic = null, channel = null, generation = 0, statsTimer = null, answerTimer = null, disconnectTimer = null;
   let starting = false, stopping = false, startSent = false, suppressed = false, autoplayBlocked = false;
   let voiceUnknown = false, taskUnknown = false, mediaStatus = "本地媒体未开启";
   let requestNumber = 0, captionNumber = 0, eventCount = 0;
@@ -264,7 +264,8 @@
   function releaseMedia(reason) {
     generation++;
     clearInterval(statsTimer); clearTimeout(answerTimer);
-    statsTimer = answerTimer = null;
+    clearTimeout(disconnectTimer);
+    statsTimer = answerTimer = disconnectTimer = null;
     const oldPeer = peer, oldChannel = channel, oldMic = mic, oldRemote = audio.srcObject;
     peer = mic = channel = null;
     starting = false; startSent = false;
@@ -447,7 +448,19 @@
         if (run !== generation) return;
         mediaStatus = `本地 WebRTC · ${current.connectionState}`;
         browserEvent("webrtc.connection_state", { state: current.connectionState }); render();
-        if (["failed", "disconnected", "closed"].includes(current.connectionState)) mediaFailure("媒体连接中断", { name: current.connectionState });
+        clearTimeout(disconnectTimer);
+        disconnectTimer = null;
+        if (current.connectionState === "disconnected") {
+          browserEvent("webrtc.disconnected_grace", { wait_ms: 10000 });
+          disconnectTimer = setTimeout(() => {
+            disconnectTimer = null;
+            if (run === generation && ["disconnected", "failed"].includes(current.connectionState)) {
+              mediaFailure("媒体连接持续中断", { name: current.connectionState });
+            }
+          }, 10000);
+        } else if (["failed", "closed"].includes(current.connectionState)) {
+          mediaFailure("媒体连接中断", { name: current.connectionState });
+        }
       });
       current.addEventListener("iceconnectionstatechange", () => { if (run === generation) browserEvent("webrtc.ice_state", { state: current.iceConnectionState }); });
       channel = current.createDataChannel("oai-events");

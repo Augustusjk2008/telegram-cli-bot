@@ -84,6 +84,7 @@ type Session = {
   suppressedResponseId?: string;
   statsTimer?: number;
   deadline?: number;
+  disconnectTimer?: number;
 };
 
 function releaseMedia(session: Session) {
@@ -114,6 +115,8 @@ function releaseMedia(session: Session) {
   session.statsTimer = undefined;
   window.clearTimeout(session.deadline);
   session.deadline = undefined;
+  window.clearTimeout(session.disconnectTimer);
+  session.disconnectTimer = undefined;
 }
 
 function gatherIce(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {
@@ -475,8 +478,21 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       };
       peer.onconnectionstatechange = () => {
         if (!live()) return;
-        setView((value) => ({ ...value, peer: peer.connectionState }));
-        if (["failed", "disconnected", "closed"].includes(peer.connectionState)) fail("媒体连接中断，语音结果待确认");
+        const connectionState = peer.connectionState;
+        setView((value) => ({ ...value, peer: connectionState,
+          ...(connectionState === "disconnected" ? { activity: "媒体连接暂时中断，等待恢复" } : {}) }));
+        window.clearTimeout(session.disconnectTimer);
+        session.disconnectTimer = undefined;
+        if (connectionState === "disconnected") {
+          session.disconnectTimer = window.setTimeout(() => {
+            session.disconnectTimer = undefined;
+            if (live() && ["disconnected", "failed"].includes(peer.connectionState)) {
+              fail("媒体连接持续中断，语音结果待确认");
+            }
+          }, 10000);
+        } else if (["failed", "closed"].includes(connectionState)) {
+          fail("媒体连接中断，语音结果待确认");
+        }
       };
       const channel = session.channel = peer.createDataChannel("oai-events");
       channel.onclose = () => fail("语音事件通道已关闭");

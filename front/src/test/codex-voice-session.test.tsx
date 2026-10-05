@@ -279,6 +279,39 @@ describe("useCodexVoiceSession", () => {
     expect(connection.send).toHaveBeenCalledTimes(1);
   });
 
+  test("waits through transient peer disconnection before failing", async () => {
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<Harness client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+    vi.useFakeTimers();
+    try {
+      await act(async () => messages[0]({ type: "voice.state", seq: 1, state: "active" }));
+      const peer = FakePeer.last!;
+      act(() => { peer.connectionState = "disconnected"; peer.onconnectionstatechange?.(); });
+      expect(connection.close).not.toHaveBeenCalled();
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(connection.close).not.toHaveBeenCalled();
+      act(() => { peer.connectionState = "connected"; peer.onconnectionstatechange?.(); });
+      act(() => { vi.advanceTimersByTime(10000); });
+      expect(connection.close).not.toHaveBeenCalled();
+      act(() => { peer.connectionState = "failed"; peer.onconnectionstatechange?.(); });
+      expect(connection.close).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("结果待确认");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("releases the connection when explicit stop times out", async () => {
     const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
     const client = clientWithVoice(connection);
