@@ -22,7 +22,7 @@
 - Pi runtime 只能由 `pi_session_runtime.py` 的单 reader 消费 `client.events()`。
 - Web rollback 使用本地 `ShadowGitHistory`，不依赖 Pi `workspace_history` RPC。
 - 目标不变量：Pi session 指纹固定为 `cwd + model_id + pi_agent + reasoning_effort`；任一项变化必须失效旧 session 和 rollback 链。
-- 当前实现尚未完全兑现该不变量：runtime 复用只比较 `runtime_key + owner_key + cwd + env`，native metadata 不匹配时也会保留原 session id；修改该链路时必须补齐失效逻辑和回归测试。
+- 当前实现已在 runtime 匹配中比较 `cwd + model + agent_id + reasoning_effort`，并单独比较 `config_fingerprint`；但仅 `config_fingerprint` 变化时，替换旧 runtime 的分支仍不会调用 `invalidate_binding()`，可能把旧 `native_session_id` 和 `workspace_history_head` 带入新 runtime。修改该链路时必须补齐失效逻辑和回归测试。
 - 普通 CLI trace 与原生过程统一进入 `NativeAgentTranscript`；CLI 使用 `mode="cli"`，不得显示原生权限操作。
 - CLI SSE `meta/status/trace/done` 顶层保留 `turn_id`、`assistant_message_id`。
 - 普通聊天按显式 `agent_id` 路由并隔离 session；启用 Bot 级 cluster 后，主 agent 通过 `tcb-cluster` MCP 动态编组和委派 child-agent 任务，`@agent_id` 不承担集群分发协议。

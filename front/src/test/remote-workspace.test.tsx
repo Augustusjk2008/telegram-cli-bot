@@ -215,15 +215,19 @@ test("restored terminal tab reconnects with its remote alias, cwd and owner", as
   expect(create).toHaveBeenCalledTimes(2);
 });
 
-test("shared mobile files screen edits remote text and hides unsupported file actions", async () => {
+test("shared mobile files screen edits and downloads remote text while hiding unsupported file actions", async () => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries: [{ name: "Case\\Name.txt", isDir: false }] });
   const read = vi.spyOn(client, "readFileFull").mockResolvedValue({ mode: "cat", content: "before", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" });
   const write = vi.spyOn(client, "writeFile").mockResolvedValue({ path: "", fileSizeBytes: 5, lastModifiedNs: "124" });
+  const download = vi.spyOn(client, "downloadFile").mockResolvedValue(undefined);
   render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} />);
   fireEvent.click(await screen.findByRole("button", { name: "更多操作 Case\\Name.txt" }));
-  expect(screen.queryByRole("menuitem", { name: /重命名|下载|删除/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("menuitem", { name: "下载 Case\\Name.txt" }));
+  await waitFor(() => expect(download).toHaveBeenCalledWith("remote", "Case\\Name.txt", expect.any(Function), expect.any(AbortSignal)));
   expect(screen.queryByLabelText("上传文件")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "更多操作 Case\\Name.txt" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "编辑 Case\\Name.txt" }));
   await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "Case\\Name.txt"));
   expect(screen.getByText("before")).toBeInTheDocument();

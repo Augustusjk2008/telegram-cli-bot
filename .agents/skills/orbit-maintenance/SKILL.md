@@ -1,6 +1,6 @@
 ---
 name: orbit-maintenance
-description: Use when changing Orbit Safe Claw native agent, Pi, cluster, session/history flow, plugin runtime or manifests, installation, updater, release packaging, or their focused tests.
+description: Use when changing Orbit Safe Claw native agent, Pi, cluster, session/history flow, remote workspace/terminal/Git bridge, plugin runtime or manifests, installation, updater, release packaging, or their focused tests.
 ---
 
 # Orbit Maintenance
@@ -10,7 +10,8 @@ Load only the reference for the subsystem being changed. Do not read every refer
 ## Route by subsystem
 
 - Native agent, Pi RPC/runtime/session, AG-UI, cluster, context usage, workspace history: read [references/native-agent.md](references/native-agent.md).
-- Plugin manifests, registry, runtime, view sessions, Vivado waveform: read [references/plugin-system.md](references/plugin-system.md).
+- Remote workspace, SSH transport, remote MCP/Pi extension, remote Git and terminal isolation: read [references/remote-workspace.md](references/remote-workspace.md).
+- Plugin manifests, registry, runtime, Host API, runtime installers, view sessions, artifacts/audit and bundled plugins: read [references/plugin-system.md](references/plugin-system.md).
 - Install/start scripts, runtime paths, updater, release packaging: read [references/release-runtime.md](references/release-runtime.md).
 
 If a change crosses subsystems, read only the references for the affected boundaries.

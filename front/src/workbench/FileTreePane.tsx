@@ -1977,7 +1977,7 @@ export function FileTreePane({
                     复制
                   </button>
                 ) : null}
-                {!remote ? <button
+                <button
                   type="button"
                   onClick={() => {
                     void tree.downloadFile(contextMenu.entry.path);
@@ -1986,7 +1986,7 @@ export function FileTreePane({
                   className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                 >
                   下载
-                </button> : null}
+                </button>
               </>
             )}
             {canManageFiles ? (

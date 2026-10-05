@@ -517,6 +517,20 @@ def test_read_ranges_utf8_and_size_limit(ssh, monkeypatch):
         connection.write_file("file.txt", "big", ROOT)
 
 
+def test_binary_download_streams_without_text_decoding(ssh, monkeypatch):
+    raw = b"\x00\xff\x10remote-bytes"
+    ssh.nodes[ROOT + "/archive.bin"] = {"mode": stat.S_IFREG | 0o640, "data": raw, "mtime": 100}
+    _, connection = connected(ssh)
+    monkeypatch.setattr(remote, "READ_CHUNK_BYTES", 3)
+
+    metadata = connection.file_metadata("archive.bin", ROOT)
+    chunks = []
+    connection.stream_file("archive.bin", ROOT, chunks.append, expected_size=metadata["size"])
+
+    assert metadata["size"] == len(raw)
+    assert b"".join(chunks) == raw
+
+
 def test_partial_read_stops_after_requested_lines_in_bounded_chunks(ssh):
     ssh.nodes[ROOT + "/file.txt"]["data"] = b"short\n" * 300000
     _, connection = connected(ssh)

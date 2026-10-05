@@ -107,6 +107,38 @@ async def test_remote_files_use_ssh_root_and_enforce_file_permissions(tmp_path, 
         assert (await response.json())["error"]["code"] == "remote_feature_unavailable"
 
 
+@pytest.mark.asyncio
+async def test_remote_file_download_streams_sftp_bytes(tmp_path, monkeypatch):
+    server, _auth = _server(tmp_path, monkeypatch)
+    connection = Mock()
+    payload = b"\x00\xffremote archive"
+    connection.file_metadata.return_value = {"size": len(payload)}
+
+    def stream_file(_path, *, root, write_chunk, expected_size):
+        assert root == CONFIG["root"]
+        assert expected_size == len(payload)
+        write_chunk(payload[:5])
+        write_chunk(payload[5:])
+
+    connection.stream_file.side_effect = stream_file
+    service = Mock()
+    service.get.return_value = connection
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get("/api/bots/main/files/download?filename=archive.bin")
+        assert response.status == 200
+        assert await response.read() == payload
+        assert response.headers["Content-Length"] == str(len(payload))
+        assert response.headers["Content-Type"].startswith("application/octet-stream")
+        assert 'filename="archive.bin"' in response.headers["Content-Disposition"]
+
+    connection.file_metadata.assert_called_once_with(
+        "/srv/project/archive.bin", root=CONFIG["root"],
+    )
+    connection.stream_file.assert_called_once()
+
+
 def _forbid_local_git(server, monkeypatch):
     for name in dir(server):
         if name.startswith(("get_git_", "post_git_", "put_git_", "patch_git_")):

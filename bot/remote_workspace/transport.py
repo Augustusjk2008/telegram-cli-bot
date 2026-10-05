@@ -24,7 +24,7 @@ import socket
 import stat
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 import uuid
 
 import paramiko
@@ -459,6 +459,38 @@ class RemoteConnection:
                 "is_full_content": full_content,
                 "total_lines": len(lines) if complete else None, "offset": offset,
             }
+
+    def file_metadata(self, path: str, root: str) -> dict:
+        with self._operation() as sftp:
+            resolved = self._resolve(path, root)
+            attrs = sftp.stat(resolved)
+            if not stat.S_ISREG(attrs.st_mode):
+                raise RemoteWorkspaceError(400, "not_a_file", "Path is not a regular file")
+            return {"path": resolved, "size": attrs.st_size, "file_size_bytes": attrs.st_size}
+
+    def stream_file(
+        self,
+        path: str,
+        root: str,
+        write_chunk: Callable[[bytes], None],
+        *,
+        expected_size: int | None = None,
+    ) -> None:
+        with self._operation() as sftp:
+            resolved = self._resolve(path, root)
+            attrs = sftp.stat(resolved)
+            if not stat.S_ISREG(attrs.st_mode):
+                raise RemoteWorkspaceError(400, "not_a_file", "Path is not a regular file")
+            if expected_size is not None and attrs.st_size != expected_size:
+                raise RemoteWorkspaceError(409, "file_version_conflict", "File changed before downloading")
+            remaining = attrs.st_size
+            with sftp.open(resolved, "rb") as handle:
+                while remaining:
+                    chunk = handle.read(min(READ_CHUNK_BYTES, remaining))
+                    if not chunk:
+                        raise RemoteWorkspaceError(409, "file_version_conflict", "File changed while downloading")
+                    write_chunk(chunk)
+                    remaining -= len(chunk)
 
     def _file_version(self, path: str, attrs) -> str:
         """Hash the current file immediately before replacement, without decoding it."""

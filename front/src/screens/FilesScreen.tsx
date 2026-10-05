@@ -1269,7 +1269,7 @@ export function FilesScreen({
               onFileClick={(name) => void handleFileClick(name)}
               onEdit={canMutateFiles ? (file) => void handleOpenEditor(file.name) : undefined}
               onRename={canManageFiles ? (file) => void handleOpenRenameDialog(file.name, file.isDir) : undefined}
-              onDownload={canPreviewFiles && !remoteWorkspace ? (file) => void handleDownloadEntry(file) : undefined}
+              onDownload={canPreviewFiles ? (file) => void handleDownloadEntry(file) : undefined}
               onDelete={canManageFiles ? (file) => void handleDeleteEntry(file) : undefined}
               allowDelete={canManageFiles && !isVirtualRoot}
             />
@@ -1346,7 +1346,7 @@ export function FilesScreen({
           statusText={previewStatusText}
           onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
-          onDownload={canPreviewFiles && !remoteWorkspace ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
+          onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
           onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}
           downloadProgressText={previewDownloadProgress ? formatDownloadDetail(previewDownloadProgress) : ""}
           downloadPercent={previewDownloadProgress?.percent}

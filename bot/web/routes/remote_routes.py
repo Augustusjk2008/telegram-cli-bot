@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import posixpath
+from contextlib import suppress
 from typing import Any
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -121,6 +124,7 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         ("POST", "cd"): CAP_MUTATE_BROWSE_STATE,
         ("POST", "files/reveal"): CAP_VIEW_FILE_TREE,
         ("GET", "files/read"): CAP_READ_FILE_CONTENT,
+        ("GET", "files/download"): CAP_READ_FILE_CONTENT,
         ("POST", "files/write"): CAP_WRITE_FILES,
         ("POST", "files/create"): CAP_WRITE_FILES,
         ("POST", "files/mkdir"): CAP_WRITE_FILES,
@@ -177,6 +181,43 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
             connection.read_file, _relative_target(request.query.get("filename"), current, platform), root=root, limit=limit,
         )
         return _response(data)
+    if suffix == "files/download":
+        filename = str(request.query.get("filename") or "")
+        target = _relative_target(filename, current, platform)
+        metadata = await asyncio.to_thread(connection.file_metadata, target, root=root)
+        download_name = filename.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or "download"
+        download_name = download_name.replace("\r", "").replace("\n", "").replace('"', "") or "download"
+        ascii_name = download_name if all(ord(char) < 128 for char in download_name) else "download"
+        content_type = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
+        response = web.StreamResponse(headers={
+            "Content-Type": content_type,
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(download_name, safe="")} '
+            ).rstrip(),
+        })
+        response.content_length = int(metadata["size"])
+        await response.prepare(request)
+        loop = asyncio.get_running_loop()
+
+        def write_chunk(chunk: bytes) -> None:
+            asyncio.run_coroutine_threadsafe(response.write(chunk), loop).result()
+
+        try:
+            await asyncio.to_thread(
+                connection.stream_file,
+                target,
+                root=root,
+                write_chunk=write_chunk,
+                expected_size=int(metadata["size"]),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            with suppress(Exception):
+                await response.write_eof()
+            raise
+        await response.write_eof()
+        return response
     body = await server._parse_json(request)
     if suffix == "cd":
         directory = await asyncio.to_thread(resolve_remote_directory, connection, _relative_target(body.get("path"), current, platform), root, platform)
