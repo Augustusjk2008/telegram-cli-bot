@@ -481,8 +481,8 @@ class VoiceLeaseRegistry:
                 self._leases.pop(lease.key)
             if lease.task_active:
                 self._tasks[lease.owner_key] = lease.runtime
-            elif (lease.runtime is not None and not lease._disconnecting
-                  and not lease._cleanup_pending):
+            if (lease.runtime is not None and not lease._cleanup_pending
+                    and (not lease._disconnecting or lease.state in {"closed", "error"})):
                 self._clear_runtime_binding(lease, lease.runtime, lease.connection_id)
 
 

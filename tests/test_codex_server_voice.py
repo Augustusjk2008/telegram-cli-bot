@@ -268,6 +268,25 @@ async def test_expired_cleanup_retains_active_voice_task_protection():
 
 
 @pytest.mark.asyncio
+async def test_closed_lease_clears_binding_while_retaining_active_task_protection():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry()
+    lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))
+    lease.bind(runtime)
+    runtime.voice_task_active = True
+    lease.state = "closed"
+    lease.detach()
+
+    assert runtime.voice_lease is None
+    assert registry.owner_busy((1, 2, "main"))
+
+    runtime.voice_task_active = False
+    replacement = registry.acquire(lease.key, ("account", 2))
+    replacement.bind(runtime)
+    assert runtime.voice_lease is replacement
+
+
+@pytest.mark.asyncio
 async def test_repeated_release_disconnect_and_runtime_close_are_idempotent():
     runtime = FakeRuntime()
     registry = VoiceLeaseRegistry()
