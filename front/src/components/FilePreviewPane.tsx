@@ -1,4 +1,4 @@
-import type { HtmlPreviewHandle } from "../utils/filePreview";
+import { isFilePreviewFullyLoaded, type HtmlPreviewHandle } from "../utils/filePreview";
 import { BookOpenText } from "lucide-react";
 import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
@@ -58,7 +58,7 @@ export function FilePreviewPane({
           {error || statusText}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {!htmlPreview && result?.mode !== "cat" && onLoadFull ? (
+          {!htmlPreview && !isFilePreviewFullyLoaded(result) && onLoadFull ? (
             <button
               type="button"
               onClick={onLoadFull}
