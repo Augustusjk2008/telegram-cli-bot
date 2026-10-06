@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -32,15 +33,17 @@ GIT_CAPABILITIES_REQUIRING_CONFIRMATION = frozenset(
 )
 
 
-def build_git_capabilities(*, available: bool, reason: str = "") -> dict[str, Any]:
+def build_git_capabilities(*, available: bool | Mapping[str, bool], reason: str = "") -> dict[str, Any]:
     """Build the stable capability matrix returned by local and remote Git APIs."""
-    normalized_available = bool(available)
-    normalized_reason = "" if normalized_available else str(reason or "")
+    availability = {
+        name: bool(available.get(name, False) if isinstance(available, Mapping) else available)
+        for name in GIT_CAPABILITY_NAMES
+    }
     return {
         "capabilities": {
             name: {
-                "available": normalized_available,
-                "reason": normalized_reason,
+                "available": availability[name],
+                "reason": "" if availability[name] else str(reason or ""),
                 "requires_confirmation": name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION,
             }
             for name in GIT_CAPABILITY_NAMES

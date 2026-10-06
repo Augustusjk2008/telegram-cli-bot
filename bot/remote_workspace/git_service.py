@@ -10,9 +10,16 @@ import weakref
 from bot.git_contract import build_git_capabilities
 from bot.git_shared import (
     GIT_OVERVIEW_CHANGED_FILES_LIMIT,
+    _decode_git_graph_cursor,
+    _encode_git_graph_cursor,
+    _git_graph_ref_kind,
+    _layout_git_graph_nodes,
+    _normalize_git_graph_limit,
+    _normalize_git_graph_scope,
     _parse_changed_files,
     _parse_porcelain_v2_z,
     _parse_status_header,
+    _parse_tree_status_kind,
     _zero_changed_file_stats,
 )
 
@@ -254,7 +261,210 @@ class RemoteGitService:
             result = self._git(["--version"], allowed=(0, 127))
             if result["returncode"] == 127:
                 return build_git_capabilities(available=False, reason="remote_git_not_found")
-            return build_git_capabilities(available=False, reason="remote_feature_unavailable")
+            return build_git_capabilities(
+                available={
+                    "tree_status": True,
+                    "commit_graph": True,
+                    "branches": True,
+                    "stash": True,
+                    "identity": True,
+                },
+                reason="remote_feature_unavailable",
+            )
+
+    @staticmethod
+    def _status_items(raw: str) -> dict[str, str]:
+        if raw and not raw.endswith("\x00"):
+            raise RemoteWorkspaceError(502, "remote_git_status_truncated", "Remote Git status was incomplete")
+
+        items: dict[str, str] = {}
+        records = raw.split("\x00") if raw else []
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if not record:
+                continue
+            if len(record) < 4 or record[2] != " ":
+                raise RemoteWorkspaceError(502, "remote_git_status_truncated", "Remote Git status was incomplete")
+            status = record[:2]
+            path = record[3:]
+            kind = _parse_tree_status_kind(status)
+            if kind:
+                items[path.rstrip("/")] = kind
+            if status[0] in {"R", "C"}:
+                if index >= len(records) or not records[index]:
+                    raise RemoteWorkspaceError(502, "remote_git_status_truncated", "Remote Git status was incomplete")
+                index += 1
+        return items
+
+    def tree_status(self) -> dict:
+        with self._lock:
+            if self._repo_root() is None:
+                return {"repo_found": False, "working_dir": self.root, "repo_path": "", "items": {}}
+            raw = self._git(
+                ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"],
+                error="git_status_failed",
+            )["stdout"]
+            return {
+                "repo_found": True,
+                "working_dir": self.root,
+                "repo_path": self.root,
+                "items": self._status_items(raw),
+            }
+
+    @staticmethod
+    def _parse_nul_fields(raw: str, width: int, *, error: str = "remote_git_output_truncated") -> list[list[str]]:
+        if not raw:
+            return []
+        # Git's ref and log formatters append a line ending after each format
+        # record. Strip only the line ending after a NUL delimiter so newlines
+        # inside branch names and commit messages remain data.
+        raw = raw.replace("\x00\r\n", "\x00").replace("\x00\n", "\x00")
+        if not raw.endswith("\x00"):
+            raise RemoteWorkspaceError(502, error, "Remote Git output was incomplete")
+        fields = raw.split("\x00")[:-1]
+        if len(fields) % width:
+            raise RemoteWorkspaceError(502, error, "Remote Git output was incomplete")
+        return [fields[index:index + width] for index in range(0, len(fields), width)]
+
+    def branches(self) -> dict:
+        with self._lock:
+            self._require_repo()
+            raw = self._git([
+                "for-each-ref",
+                "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(objectname:short)%00%(contents:subject)%00",
+                "refs/heads",
+            ], error="git_branches_failed")["stdout"]
+            branches = [
+                {
+                    "name": name,
+                    "current": head_marker == "*",
+                    "upstream": upstream,
+                    "short_hash": short_hash,
+                    "subject": subject,
+                }
+                for name, head_marker, upstream, short_hash, subject in self._parse_nul_fields(raw, 5)
+            ]
+            return {
+                "current_branch": next((item["name"] for item in branches if item["current"]), ""),
+                "branches": branches,
+            }
+
+    @staticmethod
+    def _parse_graph_commits(raw: str) -> list[dict]:
+        commits = []
+        if raw:
+            raw = raw.replace("\x00\r\n", "\x00").replace("\x00\n", "\x00")
+        if raw and not raw.endswith("\x00"):
+            raise RemoteWorkspaceError(502, "remote_git_graph_truncated", "Remote Git output was incomplete")
+        for record in (raw.split("\x00")[:-1] if raw else []):
+            fields = record.split("\x1f", 6)
+            if len(fields) != 7:
+                raise RemoteWorkspaceError(502, "remote_git_graph_truncated", "Remote Git output was incomplete")
+            full_hash, parents_text, short_hash, author_name, authored_at, subject, message = fields
+            commits.append({
+                "hash": full_hash,
+                "parents": [item for item in parents_text.split() if item],
+                "short_hash": short_hash,
+                "author_name": author_name,
+                "authored_at": authored_at,
+                "subject": subject,
+                "message": message.rstrip("\r\n"),
+            })
+        return commits
+
+    @staticmethod
+    def _parse_graph_refs(raw: str) -> dict[str, list[dict]]:
+        refs_by_commit: dict[str, list[dict]] = {}
+        for fields in RemoteGitService._parse_nul_fields(raw, 6, error="remote_git_graph_truncated"):
+            refname, object_hash, peeled_hash, object_type, peeled_type, head_marker = fields
+            kind_name = _git_graph_ref_kind(refname)
+            if kind_name is None:
+                continue
+            kind, name = kind_name
+            commit_hash = peeled_hash if peeled_hash and peeled_type == "commit" else object_hash if object_type == "commit" else ""
+            if not commit_hash:
+                continue
+            refs_by_commit.setdefault(commit_hash, []).append({
+                "name": name,
+                "kind": kind,
+                "current": kind == "local_branch" and head_marker == "*",
+            })
+        return refs_by_commit
+
+    def graph(self, scope: str = "all", limit: object = "", cursor: object = "") -> dict:
+        with self._lock:
+            try:
+                normalized_scope = _normalize_git_graph_scope(scope)
+                normalized_limit = _normalize_git_graph_limit(limit)
+                offset = _decode_git_graph_cursor(cursor, scope=normalized_scope)
+            except ValueError as exc:
+                raise RemoteWorkspaceError(400, getattr(exc, "code", "invalid_cursor"), str(exc)) from exc
+            self._require_repo()
+            commits_raw = self._git([
+                "log", "--topo-order", f"--skip={offset}", f"-n{normalized_limit + 1}",
+                "--date=iso-strict",
+                "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%B%x00",
+                "--all" if normalized_scope == "all" else "HEAD",
+            ], error="git_graph_failed")["stdout"]
+            commits = self._parse_graph_commits(commits_raw)
+            refs_raw = self._git([
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(objecttype)%00%(*objecttype)%00%(HEAD)%00",
+                "refs/heads", "refs/remotes", "refs/tags",
+            ], error="git_graph_failed")["stdout"]
+            refs_by_commit = self._parse_graph_refs(refs_raw)
+            head_result = self._git(["rev-parse", "--verify", "HEAD^{commit}"], allowed=(0, 128), error="git_graph_failed")
+            head_hash = head_result["stdout"].strip() if head_result["returncode"] == 0 else ""
+            if head_hash:
+                refs_by_commit.setdefault(head_hash, []).append({"name": "HEAD", "kind": "head", "current": True})
+            order = {"head": 0, "local_branch": 1, "remote_branch": 2, "tag": 3}
+            for refs in refs_by_commit.values():
+                refs.sort(key=lambda item: (order.get(str(item.get("kind")), 99), str(item.get("name") or "")))
+            nodes = _layout_git_graph_nodes(commits, refs_by_commit)
+            has_more = len(nodes) > normalized_limit
+            return {
+                "repo_found": True,
+                "scope": normalized_scope,
+                "nodes": nodes[:normalized_limit],
+                "has_more": has_more,
+                "next_cursor": _encode_git_graph_cursor(
+                    offset=offset + normalized_limit,
+                    scope=normalized_scope,
+                    head_token=head_hash,
+                ) if has_more else "",
+            }
+
+    def stashes(self) -> dict:
+        with self._lock:
+            self._require_repo()
+            raw = self._git([
+                "stash", "list", "--format=%gd%x00%H%x00%ci%x00%gs%x00",
+            ], error="git_stash_list_failed")["stdout"]
+            items = [
+                {"ref": ref, "hash": full_hash[:12], "created_at": created_at, "message": message}
+                for ref, full_hash, created_at, message in self._parse_nul_fields(raw, 4)
+            ]
+            return {"items": items}
+
+    def identity(self) -> dict:
+        with self._lock:
+            repo_path = self._repo_root()
+
+            def read(scope: str, key: str) -> str:
+                result = self._git(["config", f"--{scope}", "--get", key], allowed=(0, 1), error="git_identity_failed")
+                return result["stdout"].strip() if result["returncode"] == 0 else ""
+
+            return {
+                "repo_found": repo_path is not None,
+                "repo_path": repo_path or "",
+                "global": {"name": read("global", "user.name"), "email": read("global", "user.email")},
+                "local": {
+                    "name": read("local", "user.name") if repo_path else "",
+                    "email": read("local", "user.email") if repo_path else "",
+                },
+            }
 
     def init(self) -> dict:
         with self._lock:

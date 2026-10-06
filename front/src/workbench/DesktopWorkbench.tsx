@@ -506,7 +506,6 @@ export function DesktopWorkbench({
     : null;
 
   const refreshGitDecorations = useCallback(async () => {
-    if (remoteWorkspace) return;
     const requestId = gitDecorationRequestRef.current + 1;
     gitDecorationRequestRef.current = requestId;
     try {
@@ -530,7 +529,7 @@ export function DesktopWorkbench({
       preserveExpandedPaths: options?.preserveExpandedPaths,
       rootPath: options?.rootPath,
     });
-    if (!remoteWorkspace) await refreshGitDecorations();
+    await refreshGitDecorations();
     return nextRootPath;
   }, [fileTree, refreshGitDecorations, remoteWorkspace]);
 
@@ -667,7 +666,7 @@ export function DesktopWorkbench({
   }, [fileTree.rootPath, previewScopeIdentity, session.restoreApplied, session.restoreLoaded, session.restoredSession]);
 
   useEffect(() => {
-    if (!fileTree.rootPath || remoteWorkspace) {
+    if (!fileTree.rootPath) {
       setGitBranchName("");
       setGitDecorations({});
       setGitRepoPath("");
@@ -694,7 +693,7 @@ export function DesktopWorkbench({
   }, [botAlias, client, fileTree.rootPath, remoteWorkspace]);
 
   useEffect(() => {
-    if (!fileTree.rootPath || remoteWorkspace) {
+    if (!fileTree.rootPath) {
       return;
     }
     void refreshGitDecorations();

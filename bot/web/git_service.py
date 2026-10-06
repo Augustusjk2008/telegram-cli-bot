@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import hashlib
 import json
 import os
@@ -35,6 +33,16 @@ from bot.codex_usage import (
 from bot.app_settings import get_git_proxy_config_args
 from bot.git_shared import (
     GIT_OVERVIEW_CHANGED_FILES_LIMIT,
+    GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
+    GIT_COMMIT_GRAPH_MAX_LIMIT,
+    GitGraphInputError,
+    _decode_git_graph_cursor,
+    _encode_git_graph_cursor,
+    _git_graph_ref_kind,
+    _layout_git_graph_nodes,
+    _normalize_git_graph_limit,
+    _normalize_git_graph_scope,
+    _parse_tree_status_kind,
     _parse_changed_files,
     _parse_porcelain_entry,
     _parse_porcelain_v2_z,
@@ -59,8 +67,6 @@ GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES = 32
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
 GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
-GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
-GIT_COMMIT_GRAPH_MAX_LIMIT = 300
 GIT_LOCAL_TIMEOUT_SECONDS = max(0.1, float(os.environ.get("TCB_GIT_LOCAL_TIMEOUT_SECONDS", "10")))
 GIT_INDEX_WRITE_TIMEOUT_SECONDS = max(
     GIT_LOCAL_TIMEOUT_SECONDS,
@@ -777,16 +783,6 @@ def _merge_changed_file_stats(repo_root: str, changed_files: list[dict[str, Any]
     return merged
 
 
-def _parse_tree_status_kind(status: str) -> Optional[str]:
-    if status == "!!":
-        return "ignored"
-    if status == "??" or status.startswith("A"):
-        return "added"
-    if "D" in status:
-        return None
-    return "modified" if status.strip() else None
-
-
 def _relative_to_working_dir(repo_relative_path: str, working_dir: str, repo_root: str) -> Optional[str]:
     normalized_path = repo_relative_path.replace("\\", "/").rstrip("/")
     if not normalized_path:
@@ -1080,58 +1076,6 @@ def _list_recent_commits(repo_root: str, limit: int = 8) -> list[dict[str, str]]
     return items
 
 
-def _normalize_git_graph_scope(scope: str) -> str:
-    value = (scope or "all").strip().lower()
-    if value not in {"current", "all"}:
-        _raise(400, "invalid_git_graph_scope", "版本树范围不合法")
-    return value
-
-
-def _normalize_git_graph_limit(limit: Any) -> int:
-    text = "" if limit is None else str(limit).strip()
-    if not text:
-        return GIT_COMMIT_GRAPH_DEFAULT_LIMIT
-    try:
-        value = int(text)
-    except (TypeError, ValueError) as exc:
-        _raise(400, "invalid_limit", "limit 必须是 1-300 的整数")
-        raise exc  # pragma: no cover
-    if value < 1 or value > GIT_COMMIT_GRAPH_MAX_LIMIT:
-        _raise(400, "invalid_limit", "limit 必须是 1-300 的整数")
-    return value
-
-
-def _decode_git_graph_cursor(cursor: Any, *, scope: str) -> int:
-    value = str(cursor or "").strip()
-    if not value:
-        return 0
-    try:
-        padded = value + ("=" * (-len(value) % 4))
-        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
-        payload = json.loads(raw.decode("utf-8"))
-    except (binascii.Error, UnicodeEncodeError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        _raise(400, "invalid_cursor", "cursor 不合法")
-        raise exc  # pragma: no cover
-
-    if not isinstance(payload, dict):
-        _raise(400, "invalid_cursor", "cursor 不合法")
-    if payload.get("scope") != scope:
-        _raise(400, "invalid_cursor", "cursor 不合法")
-    offset = payload.get("offset")
-    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        _raise(400, "invalid_cursor", "cursor 不合法")
-    return offset
-
-
-def _encode_git_graph_cursor(*, offset: int, scope: str, head_token: str) -> str:
-    payload = json.dumps(
-        {"offset": offset, "scope": scope, "head": head_token},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
-
-
 def _list_git_graph_commits(repo_root: str, *, scope: str, offset: int, limit: int) -> list[dict[str, Any]]:
     args = [
         "log",
@@ -1175,16 +1119,6 @@ def _list_git_graph_commits(repo_root: str, *, scope: str, offset: int, limit: i
             }
         )
     return commits
-
-
-def _git_graph_ref_kind(refname: str) -> tuple[str, str] | None:
-    if refname.startswith("refs/heads/"):
-        return "local_branch", refname.removeprefix("refs/heads/")
-    if refname.startswith("refs/remotes/"):
-        return "remote_branch", refname.removeprefix("refs/remotes/")
-    if refname.startswith("refs/tags/"):
-        return "tag", refname.removeprefix("refs/tags/")
-    return None
 
 
 def _list_git_graph_refs(repo_root: str) -> dict[str, list[dict[str, Any]]]:
@@ -1235,71 +1169,6 @@ def _list_git_graph_refs(repo_root: str) -> dict[str, list[dict[str, Any]]]:
     for refs in refs_by_commit.values():
         refs.sort(key=lambda item: (order.get(str(item.get("kind")), 99), str(item.get("name") or "")))
     return refs_by_commit
-
-
-def _find_lane(lanes: list[str], commit_hash: str, *, exclude_index: int | None = None) -> int | None:
-    for index, value in enumerate(lanes):
-        if index == exclude_index:
-            continue
-        if value == commit_hash:
-            return index
-    return None
-
-
-def _layout_git_graph_nodes(
-    commits: list[dict[str, Any]],
-    refs_by_commit: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    lanes: list[str] = []
-    nodes: list[dict[str, Any]] = []
-    for commit in commits:
-        commit_hash = str(commit.get("hash") or "")
-        column = _find_lane(lanes, commit_hash)
-        if column is None:
-            lanes.append(commit_hash)
-            column = len(lanes) - 1
-
-        parents = list(commit.get("parents") or [])
-        before_width = len(lanes)
-        next_lanes = list(lanes)
-        edges: list[dict[str, Any]] = []
-        if parents:
-            first_parent = str(parents[0])
-            existing = _find_lane(next_lanes, first_parent, exclude_index=column)
-            if existing is None:
-                next_lanes[column] = first_parent
-                parent_column = column
-            else:
-                next_lanes.pop(column)
-                parent_column = existing if existing < column else existing - 1
-            edges.append({"from": column, "to": parent_column, "commit": first_parent})
-
-            for parent in parents[1:]:
-                parent_hash = str(parent)
-                existing = _find_lane(next_lanes, parent_hash)
-                if existing is None:
-                    insert_at = min(column + len(edges), len(next_lanes))
-                    next_lanes.insert(insert_at, parent_hash)
-                    parent_column = insert_at
-                else:
-                    parent_column = existing
-                edges.append({"from": column, "to": parent_column, "commit": parent_hash})
-        else:
-            next_lanes.pop(column)
-
-        edge_width = max([column + 1, *(max(edge["from"], edge["to"]) + 1 for edge in edges)], default=1)
-        node = {
-            **commit,
-            "refs": list(refs_by_commit.get(commit_hash) or []),
-            "graph": {
-                "column": column,
-                "width": max(before_width, len(next_lanes), edge_width, 1),
-                "edges": edges,
-            },
-        }
-        nodes.append(node)
-        lanes = next_lanes
-    return nodes
 
 
 def _parse_branch_lines(lines: list[str]) -> list[dict[str, Any]]:
@@ -1489,9 +1358,12 @@ def get_git_commit_graph(
     limit: Any = GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
     cursor: Any = "",
 ) -> dict[str, Any]:
-    normalized_scope = _normalize_git_graph_scope(scope)
-    normalized_limit = _normalize_git_graph_limit(limit)
-    offset = _decode_git_graph_cursor(cursor, scope=normalized_scope)
+    try:
+        normalized_scope = _normalize_git_graph_scope(scope)
+        normalized_limit = _normalize_git_graph_limit(limit)
+        offset = _decode_git_graph_cursor(cursor, scope=normalized_scope)
+    except GitGraphInputError as exc:
+        _raise(400, exc.code, str(exc))
     _working_dir, repo_root = _require_repo_root(manager, alias, user_id)
     commits = _list_git_graph_commits(repo_root, scope=normalized_scope, offset=offset, limit=normalized_limit + 1)
     refs_by_commit = _list_git_graph_refs(repo_root)

@@ -32,6 +32,10 @@ def tracked(path, xy=".M"):
     return f"1 {xy} N... 100644 100644 100644 {OID} {OID} {path}\x00"
 
 
+def nul_fields(*fields):
+    return "".join(f"{field}\x00" for field in fields)
+
+
 class Connection:
     platform = "posix"
 
@@ -43,6 +47,7 @@ class Connection:
         self.untracked = list(untracked)
         self.calls = []
         self.overrides = {}
+        self.readonly_outputs = {}
 
     def execute(self, command, root, *, timeout, max_output):
         tokens = shlex.split(command)
@@ -63,6 +68,21 @@ class Connection:
             if not self.repository:
                 return result(stderr="fatal: not a git repository (or any of the parent directories): .git\n", returncode=128)
             return result(root + "\n")
+        if args == ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"]:
+            return result(self.readonly_outputs.get("tree_status", ""))
+        if args[0] == "for-each-ref" and "refs/heads" in args and "refs/remotes" not in args:
+            return result(self.readonly_outputs.get("branches", ""))
+        if args[0] == "for-each-ref" and "refs/remotes" in args:
+            return result(self.readonly_outputs.get("graph_refs", ""))
+        if args[0] == "log" and "--topo-order" in args:
+            return result(self.readonly_outputs.get("graph", ""))
+        if args[:2] == ["rev-parse", "--verify"]:
+            return result(self.readonly_outputs.get("head", ""), returncode=0 if self.readonly_outputs.get("head") else 128)
+        if args[:2] == ["stash", "list"]:
+            return result(self.readonly_outputs.get("stashes", ""))
+        if args[0] == "config":
+            value = self.readonly_outputs.get("config", {}).get(tuple(args[1:]), "")
+            return result(value, returncode=0 if value else 1)
         if args == ["init"]:
             self.repository = True
             self.initial = True
@@ -105,11 +125,16 @@ def test_overview_preserves_shape_status_names_and_remote_commits():
     assert connection.calls[0][0] == ["--version"]
 
 
-def test_capabilities_only_probe_remote_git_version_and_mark_unimplemented_features():
+def test_capabilities_only_probe_remote_git_version_and_mark_read_only_features():
     connection = Connection()
     capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
     assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
-    assert all(not item["available"] and item["reason"] == "remote_feature_unavailable" for item in capabilities.values())
+    readable = {"tree_status", "commit_graph", "branches", "stash", "identity"}
+    assert all(
+        item["available"] is (name in readable)
+        and item["reason"] == ("" if name in readable else "remote_feature_unavailable")
+        for name, item in capabilities.items()
+    )
     assert all(
         item["requires_confirmation"] is (name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION)
         for name, item in capabilities.items()
@@ -123,6 +148,135 @@ def test_capabilities_report_missing_remote_git_without_repository_probe():
     capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
     assert all(item["reason"] == "remote_git_not_found" for item in capabilities.values())
     assert [call[0] for call in connection.calls] == [["--version"]]
+
+
+def test_tree_status_parses_nul_records_without_losing_special_paths():
+    connection = Connection(files={})
+    connection.readonly_outputs["tree_status"] = "".join([
+        " M space file.txt\x00",
+        "A  added\nfile\x00",
+        "?? unicode-中文\\name.txt\x00",
+        "!! ignored dir/\x00",
+        " D deleted.txt\x00",
+    ])
+
+    payload = remote.RemoteGitService(connection, ROOT).tree_status()
+
+    assert payload["items"] == {
+        "space file.txt": "modified",
+        "added\nfile": "added",
+        "unicode-中文\\name.txt": "added",
+        "ignored dir": "ignored",
+    }
+    status_calls = [call for call in connection.calls if call[0][0] == "status"]
+    assert status_calls[-1][0] == ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"]
+
+
+def test_tree_status_rejects_incomplete_output_and_does_not_return_partial_items():
+    connection = Connection(files={})
+    connection.readonly_outputs["tree_status"] = " M partial.txt"
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).tree_status()
+
+    assert exc.value.code == "remote_git_status_truncated"
+
+
+def test_remote_read_only_git_views_parse_branches_graph_stashes_and_identity():
+    merge, first_parent, second_parent, root = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    connection = Connection(files={})
+    connection.readonly_outputs.update({
+        "branches": nul_fields(
+            "main", "*", "origin/main", merge[:7], "merge subject",
+            "feature\nbranch", " ", "", second_parent[:7], "feature subject",
+        ),
+        "graph": "".join([
+            "\x1f".join((merge, f"{first_parent} {second_parent}", merge[:7], "Alice", "2026-10-06T10:00:00+08:00", "merge subject", "merge subject\n\ncomplete merge body\n")) + "\x00",
+            "\x1f".join((second_parent, root, second_parent[:7], "Bob", "2026-10-05T10:00:00+08:00", "side subject", "side subject\n\nside body\n")) + "\x00",
+            "\x1f".join((first_parent, root, first_parent[:7], "Alice", "2026-10-04T10:00:00+08:00", "first subject", "first subject\n")) + "\x00",
+        ]),
+        "graph_refs": "".join([
+            nul_fields("refs/heads/main", merge, "", "commit", "", "*"),
+            nul_fields("refs/heads/feature", second_parent, "", "commit", "", " "),
+            nul_fields("refs/remotes/origin/main", merge, "", "commit", "", " "),
+            nul_fields("refs/tags/v1", root, "", "commit", "", " "),
+        ]),
+        "head": f"{merge}\n",
+        "stashes": nul_fields("stash@{0}", merge, "2026-10-06 11:00:00 +0800", "WIP on main: full description"),
+        "config": {
+            ("--global", "--get", "user.name"): "Global Name\n",
+            ("--global", "--get", "user.email"): "global@example.com\n",
+            ("--local", "--get", "user.name"): "Local Name\n",
+            ("--local", "--get", "user.email"): "local@example.com\n",
+        },
+    })
+    service = remote.RemoteGitService(connection, ROOT)
+
+    branches = service.branches()
+    graph = service.graph(scope="all", limit=2)
+    current_graph = service.graph(scope="current", limit=1)
+    stashes = service.stashes()
+    identity = service.identity()
+
+    assert branches == {
+        "current_branch": "main",
+        "branches": [
+            {"name": "main", "current": True, "upstream": "origin/main", "short_hash": merge[:7], "subject": "merge subject"},
+            {"name": "feature\nbranch", "current": False, "upstream": "", "short_hash": second_parent[:7], "subject": "feature subject"},
+        ],
+    }
+    assert graph["scope"] == "all" and graph["has_more"] and graph["next_cursor"]
+    assert graph["nodes"][0]["parents"] == [first_parent, second_parent]
+    assert graph["nodes"][0]["message"] == "merge subject\n\ncomplete merge body"
+    assert {ref["name"] for ref in graph["nodes"][0]["refs"]} == {"HEAD", "main", "origin/main"}
+    assert current_graph["scope"] == "current"
+    assert any(call[0][-1] == "HEAD" for call in connection.calls if call[0][0] == "log")
+    assert stashes == {"items": [{"ref": "stash@{0}", "hash": merge[:12], "created_at": "2026-10-06 11:00:00 +0800", "message": "WIP on main: full description"}]}
+    assert identity == {
+        "repo_found": True,
+        "repo_path": ROOT,
+        "global": {"name": "Global Name", "email": "global@example.com"},
+        "local": {"name": "Local Name", "email": "local@example.com"},
+    }
+
+
+def test_remote_identity_allows_missing_config_and_non_repository():
+    connection = Connection(repository=False, files={})
+
+    payload = remote.RemoteGitService(connection, ROOT).identity()
+
+    assert payload == {
+        "repo_found": False,
+        "repo_path": "",
+        "global": {"name": "", "email": ""},
+        "local": {"name": "", "email": ""},
+    }
+
+
+@pytest.mark.parametrize("operation", ["branches", "graph", "stashes"])
+def test_remote_read_only_views_require_a_remote_repository(operation):
+    service = remote.RemoteGitService(Connection(repository=False, files={}), ROOT)
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        getattr(service, operation)()
+
+    assert exc.value.code == "git_not_repository"
+
+
+def test_remote_tree_status_reports_missing_repository_without_partial_data():
+    payload = remote.RemoteGitService(Connection(repository=False, files={}), ROOT).tree_status()
+
+    assert payload == {"repo_found": False, "working_dir": ROOT, "repo_path": "", "items": {}}
+
+
+def test_remote_branches_support_detached_head_and_missing_upstream():
+    connection = Connection(files={})
+    connection.readonly_outputs["branches"] = nul_fields("topic", " ", "", OID[:7], "topic subject")
+
+    payload = remote.RemoteGitService(connection, ROOT).branches()
+
+    assert payload["current_branch"] == ""
+    assert payload["branches"][0]["upstream"] == ""
 
 
 def test_capabilities_preserve_remote_transport_errors():

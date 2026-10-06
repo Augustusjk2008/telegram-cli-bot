@@ -420,6 +420,11 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
               <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]">
                 {node.subject || "-"}
               </div>
+              {node.message && node.message !== node.subject ? (
+                <div className="whitespace-pre-wrap break-words text-xs text-[var(--muted)]">
+                  {node.message}
+                </div>
+              ) : null}
             </div>
             </button>
           </TouchHint>
@@ -553,20 +558,21 @@ export function GitScreen({
 
   async function refreshGitWorkspace(options: { graph?: boolean } = {}) {
     await refreshOverviewQuietly();
-    if (remote) return;
     await loadBranches();
     if (options.graph !== false) {
       await loadGitGraph({ scope: graphScope });
     }
+    await loadStashes();
+    await loadIdentityConfig(identityScope);
   }
 
   useEffect(() => {
     void loadOverview();
-    if (!remote) void loadIdentityConfig("global");
+    void loadIdentityConfig("global");
   }, [botAlias, client, remote]);
 
   useEffect(() => {
-    if (!remote && overview?.repoFound) {
+    if (overview?.repoFound) {
       void loadGitGraph({ scope: graphScope });
     } else {
       setGraphPayload(null);
@@ -635,7 +641,7 @@ export function GitScreen({
   }, [botAlias, client, remote]);
 
   useEffect(() => {
-    if (!remote && overview?.repoFound) {
+    if (overview?.repoFound) {
       void loadBranches();
       void loadStashes();
     } else {
@@ -713,9 +719,11 @@ export function GitScreen({
     try {
       const result = await fn();
       syncOverview(result.overview);
-      if (!remote && options.refreshWorkspace) {
+      if (options.refreshWorkspace) {
         await loadBranches();
         await loadGitGraph({ scope: graphScope });
+        await loadStashes();
+        await loadIdentityConfig(identityScope);
       }
       setNotice(result.message || "Git 操作完成");
       if (key === "commit") {
@@ -997,7 +1005,7 @@ export function GitScreen({
               type="button"
               aria-label={`暂存 ${item.path}`}
               title={`暂存 ${item.path}`}
-              onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]))}
+              onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]), { refreshWorkspace: true })}
               disabled={mutationBusy}
               className={iconButtonClass()}
             >
@@ -1009,7 +1017,7 @@ export function GitScreen({
               type="button"
               aria-label={`取消暂存 ${item.path}`}
               title={`取消暂存 ${item.path}`}
-              onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]))}
+              onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]), { refreshWorkspace: true })}
               disabled={mutationBusy}
               className={iconButtonClass()}
             >
@@ -1104,8 +1112,8 @@ export function GitScreen({
                 <h2 className="text-lg font-semibold">当前目录不在 Git 仓库中</h2>
                 <p className="break-all text-sm text-[var(--muted)]">{overview.workingDir}</p>
               </div>
-              {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>远程工作区根目录还没有 Git 仓库，可以直接初始化。</p> : null}
-              <button
+              {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>远程工作区根目录还没有 Git 仓库。</p> : null}
+              {!remote ? <button
                 type="button"
                 onClick={async () => {
                   setActionLoading("init");
@@ -1124,7 +1132,7 @@ export function GitScreen({
                 className={clsx("ml-3 mt-4", buttonClass("primary"))}
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
-              </button>
+              </button> : null}
             </section>
           ) : null}
 
@@ -1259,19 +1267,19 @@ export function GitScreen({
                       {overview.isClean ? "工作区干净" : "存在改动"}
                     </StateBadge>
                   </div>
-                  <div className={sectionBodyClass(clsx("grid gap-2 text-xs", !remote && "grid-cols-2"))}>
+                  <div className={sectionBodyClass("grid grid-cols-2 gap-2 text-xs")}>
                     <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
                       <div className="text-[var(--muted)]">当前分支</div>
                       <div className="mt-1 truncate font-medium">{overview.currentBranch || "-"}</div>
                     </div>
-                    {!remote ? <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
+                    <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
                       <div className="text-[var(--muted)]">Ahead / Behind</div>
                       <div className="mt-1 font-medium">{overview.aheadCount} / {overview.behindCount}</div>
-                    </div> : null}
+                    </div>
                   </div>
                 </section>
 
-                {!remote ? <>
+                <>
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">分支</h2>
@@ -1281,7 +1289,7 @@ export function GitScreen({
                     </button>
                   </div>
                   {branchesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载分支...</p> : null}
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                  {!remote ? <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <label className="min-w-[180px] flex-1">
                       <span className="sr-only">切换分支</span>
                       <select
@@ -1306,8 +1314,8 @@ export function GitScreen({
                       <GitPullRequest className="h-3.5 w-3.5" />
                       切换
                     </button>
-                  </div>
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                  </div> : null}
+                  {!remote ? <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <label className="min-w-[180px] flex-1">
                       <span className="sr-only">新建分支名</span>
                       <input
@@ -1327,7 +1335,7 @@ export function GitScreen({
                       <GitFork className="h-3.5 w-3.5" />
                       新建分支
                     </button>
-                  </div>
+                  </div> : null}
                   <div className={sectionBodyClass(listClass())}>
                     {branches.branches.map((branch) => (
                       <div
@@ -1346,7 +1354,7 @@ export function GitScreen({
                   </div>
                 </section>
 
-                <section className={sectionClass("space-y-2")}>
+                {!remote ? <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">远端</h2>
                   </div>
@@ -1388,7 +1396,7 @@ export function GitScreen({
                       Stash Push
                     </button>
                   </div>
-                </section>
+                </section> : null}
 
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
@@ -1417,7 +1425,7 @@ export function GitScreen({
                                 {stash.hash || "-"} · {stash.createdAt || "-"}
                               </div>
                             </div>
-                            <div className="flex shrink-0 gap-1">
+                            {!remote ? <div className="flex shrink-0 gap-1">
                               <button
                                 type="button"
                                 aria-label={`应用 ${stash.ref}`}
@@ -1438,7 +1446,7 @@ export function GitScreen({
                               >
                                 <Trash2 className="h-3 w-3" />
                               </button>
-                            </div>
+                            </div> : null}
                           </div>
                         </div>
                       ))}
@@ -1446,7 +1454,7 @@ export function GitScreen({
                   )}
                 </section>
 
-                </> : null}
+                </>
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">提交更改</h2>
@@ -1522,7 +1530,7 @@ export function GitScreen({
                     </> : null}
                     <button
                       type="button"
-                      onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage))}
+                      onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage), { refreshWorkspace: true })}
                       disabled={mutationBusy || overview.isClean || (remote && (!groups.staged.length || !commitMessage.trim()))}
                       className={buttonClass("primary")}
                     >
@@ -1557,7 +1565,8 @@ export function GitScreen({
                       ))}
                     </div>
                   </section>
-                ) : <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
+                ) : null}
+                <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass("flex-wrap")}>
                     <div>
                       <h2 className="text-sm font-semibold">提交图</h2>
@@ -1637,8 +1646,11 @@ export function GitScreen({
                           <div className="min-w-0 flex-1 text-xs">
                             <div className="font-mono font-semibold text-[var(--accent)]">{selectedGraphNode.shortHash}</div>
                             <div className="truncate text-[var(--muted)]">{selectedGraphNode.subject}</div>
+                            <div data-testid="git-selected-commit-message" className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[var(--text)]">
+                              {selectedGraphNode.message || selectedGraphNode.subject}
+                            </div>
                           </div>
-                          <label className="min-w-[150px] flex-1 sm:flex-none">
+                          {!remote ? <label className="min-w-[150px] flex-1 sm:flex-none">
                             <span className="sr-only">从提交图新建分支名</span>
                             <input
                               aria-label="从提交图新建分支名"
@@ -1648,8 +1660,8 @@ export function GitScreen({
                               disabled={mutationBusy}
                               className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
                             />
-                          </label>
-                          <button
+                          </label> : null}
+                          {!remote ? <button
                             type="button"
                             onClick={() => void createBranchFromGraphNode()}
                             disabled={mutationBusy || !graphBranchDraft.trim()}
@@ -1661,8 +1673,8 @@ export function GitScreen({
                               <GitFork className="h-3.5 w-3.5" />
                             )}
                             新建分支
-                          </button>
-                          <label>
+                          </button> : null}
+                          {!remote ? <label>
                             <span className="sr-only">提交图重置模式</span>
                             <select
                               aria-label="提交图重置模式"
@@ -1675,8 +1687,8 @@ export function GitScreen({
                               <option value="mixed">mixed</option>
                               <option value="hard">hard</option>
                             </select>
-                          </label>
-                          <button
+                          </label> : null}
+                          {!remote ? <button
                             type="button"
                             onClick={() => void resetBranchToGraphNode()}
                             disabled={mutationBusy || selectedGraphNode.canReset === false}
@@ -1688,7 +1700,7 @@ export function GitScreen({
                               <RotateCcw className="h-3.5 w-3.5" />
                             )}
                             重置到此提交
-                          </button>
+                          </button> : null}
                         </div>
                       ) : null}
                       {graphPayload?.hasMore ? (
@@ -1704,12 +1716,12 @@ export function GitScreen({
                       ) : null}
                     </div>
                   ) : null}
-                </section>}
+                </section>
               </div>
             </div>
           ) : null}
 
-          {!loading && !remote ? (
+          {!loading ? (
             <div className={sectionStackClass()}>
               <section
                 data-testid="git-identity-panel"
@@ -1758,6 +1770,7 @@ export function GitScreen({
                       aria-label="Git 用户名"
                       value={identityName}
                       onChange={(event) => setIdentityName(event.target.value)}
+                      readOnly={remote}
                       placeholder="Your Name"
                       className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
@@ -1768,6 +1781,7 @@ export function GitScreen({
                       aria-label="Git 邮箱"
                       value={identityEmail}
                       onChange={(event) => setIdentityEmail(event.target.value)}
+                      readOnly={remote}
                       placeholder="you@example.com"
                       className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
@@ -1778,7 +1792,7 @@ export function GitScreen({
                   <p className="text-xs text-[var(--muted)]">
                     {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
                   </p>
-                  <button
+                  {!remote ? <button
                     type="button"
                     onClick={() => void saveGitIdentity()}
                     disabled={mutationBusy || identityLoading || !identityName.trim() || !identityEmail.trim()}
@@ -1786,11 +1800,11 @@ export function GitScreen({
                   >
                     <Save className="h-3.5 w-3.5" />
                     {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
-                  </button>
+                  </button> : null}
                 </div>
               </section>
 
-              <section className={sectionClass("space-y-3")}>
+              {!remote ? <section className={sectionClass("space-y-3")}>
                 <div className={sectionBodyClass("pb-3")}>
                   <GitCommitCliConfigPanel
                     botAlias={botAlias}
@@ -1798,7 +1812,7 @@ export function GitScreen({
                     canManage={canManageGitCommitCli}
                   />
                 </div>
-              </section>
+              </section> : null}
             </div>
           ) : null}
         </div>

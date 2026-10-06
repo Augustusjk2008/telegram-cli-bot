@@ -218,7 +218,12 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
     service.get.return_value = Mock()
     monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
     app = server._build_app()
-    allowed = {("GET", "git"), ("GET", "git/capabilities"), ("GET", "git/diff"), ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
+    allowed = {
+        ("GET", "git"), ("GET", "git/capabilities"), ("GET", "git/diff"),
+        ("GET", "git/tree-status"), ("GET", "git/graph"), ("GET", "git/branches"),
+        ("GET", "git/stashes"), ("GET", "git/identity"),
+        ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit"),
+    }
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
               if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]
     async with TestClient(TestServer(app)) as client:
@@ -234,6 +239,34 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         response = await client.post("/api/bots/main/git/init", json={})
         assert response.status == 403
     assert service.get.call_count == len(routes) - len(allowed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suffix, operation, args, payload", [
+    ("git/tree-status", "tree_status", (), {"repo_found": True, "items": {"file.txt": "modified"}}),
+    ("git/graph?scope=current&limit=2&cursor=next", "graph", ("current", "2", "next"), {"repo_found": True, "scope": "current", "nodes": []}),
+    ("git/branches", "branches", (), {"current_branch": "main", "branches": []}),
+    ("git/stashes", "stashes", (), {"items": []}),
+    ("git/identity", "identity", (), {"repo_found": True, "repo_path": "/srv/project", "global": {}, "local": {}}),
+])
+async def test_remote_git_read_only_routes_delegate_to_remote_backend(tmp_path, monkeypatch, suffix, operation, args, payload):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_GIT_OPS)
+    service, connection, git = Mock(), Mock(), Mock()
+    service.get.return_value = connection
+    getattr(git, operation).return_value = payload
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
+    monkeypatch.setattr(git_backend, "RemoteGitService", Mock(return_value=git))
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get(f"/api/bots/main/{suffix}")
+        assert response.status == 200, await response.text()
+        assert (await response.json())["data"] == payload
+
+    if operation == "graph":
+        git.graph.assert_called_once_with(*args)
+    else:
+        getattr(git, operation).assert_called_once_with(*args)
 
 
 @pytest.mark.asyncio

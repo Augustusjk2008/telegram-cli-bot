@@ -196,20 +196,30 @@ class RemoteGitBackend:
     def commit(self, message: str) -> dict[str, Any]:
         return self.service.commit(message)
 
+    def tree_status(self) -> dict[str, Any]:
+        return self.service.tree_status()
+
+    def graph(self, scope: str = "all", limit: Any = "", cursor: Any = "") -> dict[str, Any]:
+        return self.service.graph(scope, limit, cursor)
+
+    def branches(self) -> dict[str, Any]:
+        return self.service.branches()
+
+    def stashes(self) -> dict[str, Any]:
+        return self.service.stashes()
+
+    def identity(self) -> dict[str, Any]:
+        return self.service.identity()
+
     @staticmethod
     def _unsupported(*_args: Any, **_kwargs: Any):
         raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
 
-    tree_status = _unsupported
-    graph = _unsupported
-    branches = _unsupported
     branch_create = _unsupported
     branch_switch = _unsupported
     branch_reset = _unsupported
-    stashes = _unsupported
     stash_apply = _unsupported
     stash_drop = _unsupported
-    identity = _unsupported
     identity_update = _unsupported
     discard = _unsupported
     discard_all = _unsupported

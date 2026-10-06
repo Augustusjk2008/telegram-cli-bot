@@ -265,7 +265,12 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
     changedFilesTruncated: false, changedFilesTotalEstimate: 0, statusTruncated: false,
     untrackedFilesTruncated: false, countLowerBound: 0, countExact: true, truncationReason: "", recentCommits: [],
   });
-  const decorations = vi.spyOn(client, "getGitTreeStatus");
+  const decorations = vi.spyOn(client, "getGitTreeStatus").mockResolvedValue({
+    repoFound: true,
+    workingDir: remote.root,
+    repoPath: remote.root,
+    items: { "README.md": "modified" },
+  });
   const sync = vi.spyOn(client, "syncWorkspaceDocuments");
   render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
   expect(screen.getByTestId("desktop-workbench-root")).toBeInTheDocument();
@@ -276,12 +281,14 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
   fireEvent.click(await screen.findByRole("button", { name: "打开 README.md" }));
   await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "README.md"));
+  await waitFor(() => expect(decorations).toHaveBeenCalledWith("remote"));
+  expect(screen.getByRole("button", { name: "打开 README.md" }).closest("[data-tree-path]")).toHaveAttribute("data-git-state", "modified");
   const posixFile = await screen.findByRole("button", { name: "打开 Case\\Name.txt" });
   expect(posixFile).toHaveAttribute("title", "/home/dev/Case\\Name.txt");
   fireEvent.click(posixFile);
   await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "Case\\Name.txt"));
   expect(resolve).not.toHaveBeenCalled();
-  expect(git).not.toHaveBeenCalled();
+  expect(git).toHaveBeenCalledWith("remote");
   expect(sync).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "新建文件" }));
@@ -294,7 +301,7 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   expect(git).toHaveBeenCalledWith("remote");
   fireEvent.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
-  expect(decorations).not.toHaveBeenCalled();
+  expect(decorations).toHaveBeenCalledWith("remote");
 });
 
 test("desktop tree preserves a trailing backslash in the remote root", async () => {

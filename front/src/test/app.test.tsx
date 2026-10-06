@@ -340,7 +340,7 @@ test("mobile remote workspace exposes Files and Git with the remote Git request 
   await user.click(screen.getByRole("button", { name: "Git" }));
   expect(await screen.findByRole("heading", { name: "最近提交" })).toBeInTheDocument();
   expect(git).toHaveBeenCalledWith("main");
-  expect(graph).not.toHaveBeenCalled();
+  expect(graph).toHaveBeenCalledWith("main", expect.objectContaining({ scope: "all" }));
   await user.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByRole("button", { name: "Home" })).toBeInTheDocument();
 });

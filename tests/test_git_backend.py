@@ -4,6 +4,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web import git_backend
@@ -54,3 +56,25 @@ def test_resolver_selects_remote_backend_with_saved_root_and_connection(tmp_path
     assert backend.root == CONFIG["root"]
     assert backend.service.root == CONFIG["root"]
     service.get.assert_called_once_with(CONFIG)
+
+
+def test_remote_backend_delegates_read_only_views_and_rejects_mutations():
+    backend = git_backend.RemoteGitBackend(Mock(), CONFIG["root"])
+    backend.service = Mock()
+    backend.service.tree_status.return_value = {"items": {}}
+    backend.service.graph.return_value = {"nodes": []}
+    backend.service.branches.return_value = {"branches": []}
+    backend.service.stashes.return_value = {"items": []}
+    backend.service.identity.return_value = {"repo_found": False}
+
+    assert backend.tree_status() == {"items": {}}
+    assert backend.graph("current", 2, "cursor") == {"nodes": []}
+    assert backend.branches() == {"branches": []}
+    assert backend.stashes() == {"items": []}
+    assert backend.identity() == {"repo_found": False}
+    backend.service.graph.assert_called_once_with("current", 2, "cursor")
+
+    for method, args in ((backend.branch_create, ("feature",)), (backend.stash_apply, ("stash@{0}",)), (backend.identity_update, ())):
+        with pytest.raises(git_backend.WebApiError) as exc:
+            method(*args)
+        assert exc.value.code == "remote_feature_unavailable"

@@ -35,7 +35,7 @@ for (const width of [1280, 390]) {
       else if (path.startsWith("bots/remote/git")) {
         const operation = path.slice("bots/remote/git".length);
         gitRequests.push(`${request.method()} ${operation || "/"}`);
-        if (!["", "/diff", "/stage", "/unstage", "/commit"].includes(operation)) {
+        if (!["", "/diff", "/stage", "/unstage", "/commit", "/tree-status", "/branches", "/graph", "/stashes", "/identity"].includes(operation)) {
           unsupportedRequests.push(path);
           await route.fulfill({ status: 501, json: { ok: false, error: { code: "remote_feature_unavailable", message: "Unsupported remote Git operation" } } });
           return;
@@ -45,7 +45,12 @@ for (const width of [1280, 390]) {
           await route.fulfill({ status: 503, json: { ok: false, error: { code: "remote_git_not_found", message: "Git unavailable" } } });
           return;
         }
-        if (operation === "/diff") data = { path: url.searchParams.get("path"), staged: url.searchParams.get("staged") === "true", diff: "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -0,0 +1 @@\n+remote change", truncated: false };
+        if (operation === "/tree-status") data = { repo_found: true, working_dir: remote.root, repo_path: remote.root, items: { "tracked.txt": "modified", "new.txt": "added" } };
+        else if (operation === "/branches") data = { current_branch: "main", branches: [{ name: "main", current: true, upstream: "origin/main", short_hash: "abcdef1", subject: "Remote graph title" }] };
+        else if (operation === "/graph") data = { repo_found: true, scope: url.searchParams.get("scope") || "all", nodes: [{ hash: "abcdef1234567890", short_hash: "abcdef1", parents: [], author_name: "Dev", authored_at: "2026-09-24T12:00:00Z", subject: "Remote graph title", message: "Remote graph title\n\nComplete remote commit message.", refs: [{ name: "main", kind: "local_branch", current: true }], graph: { column: 0, width: 1, edges: [] } }], has_more: false, next_cursor: "" };
+        else if (operation === "/stashes") data = { items: [{ ref: "stash@{0}", hash: "stash123", created_at: "2026-09-24", message: "Remote stash" }] };
+        else if (operation === "/identity") data = { repo_found: true, repo_path: remote.root, global: { name: "Remote Dev", email: "remote@example.com" }, local: { name: "Repo Dev", email: "repo@example.com" } };
+        else if (operation === "/diff") data = { path: url.searchParams.get("path"), staged: url.searchParams.get("staged") === "true", diff: "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -0,0 +1 @@\n+remote change", truncated: false };
         else if (operation === "/stage" || operation === "/unstage") {
           const paths = request.postDataJSON().paths as string[];
           expect(paths).toHaveLength(1);
@@ -74,6 +79,11 @@ for (const width of [1280, 390]) {
     await expect(guidance.getByRole("link", { name: "Windows 官方安装指南" })).toBeVisible();
     await guidance.getByRole("button", { name: "重试" }).click();
     await expect(page.getByText("Remote initial commit", { exact: true })).toBeVisible();
+    await expect(page.getByText(/origin\/main/)).toBeVisible();
+    await expect(page.getByText("Remote stash", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Complete remote commit message\./)).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Git 用户名", exact: true })).toHaveValue("Remote Dev");
+    await expect(page.getByRole("button", { name: /切换|新建分支|应用 stash|删除 stash|Fetch|Pull|Push|保存 Git 用户|初始化 Git 仓库|重置到此提交|智能提交/ })).toHaveCount(0);
     for (const path of ["staged.txt", "tracked.txt", "new.txt"]) {
       await page.getByRole("button", { name: `打开 diff ${path}`, exact: true }).click();
       if (width === 1280) await expect(page.getByRole("tab", { name: `${path}.diff`, exact: true })).toBeVisible();
@@ -91,7 +101,7 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: test.info().outputPath(`remote-git-${width}.png`) });
     await page.getByRole("button", { name: "文件", exact: true }).click();
     await expect(page.getByRole("button", { name: "打开 tracked.txt", exact: true })).toBeVisible();
-    expect(gitRequests).toEqual(["GET /", "GET /", "GET /diff", "GET /diff", "GET /diff", "POST /stage", "POST /unstage", "POST /commit"]);
+    expect(gitRequests).toEqual(expect.arrayContaining(["GET /", "GET /tree-status", "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /diff", "POST /stage", "POST /unstage", "POST /commit"]));
     expect(unsupportedRequests).toEqual([]);
   });
 }
