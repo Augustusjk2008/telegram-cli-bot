@@ -35,6 +35,9 @@ _LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 _GIT_OPTIONS = ["--no-pager", "--literal-pathspecs", "--no-optional-locks",
                 "-c", "core.quotepath=false", "-c", "core.fsmonitor=false",
                 "-c", "color.ui=false", "-c", "i18n.logOutputEncoding=UTF-8"]
+_STASH_REF_RE = re.compile(r"^stash@\{\d+\}$")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_UNMERGED_STATUSES = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
 
 
 def _windows_argument(value: str) -> str:
@@ -167,7 +170,24 @@ class RemoteGitService:
             raise RemoteWorkspaceError(413, "too_many_git_paths", "Git paths exceed the argument limit")
         return normalized
 
-    def _status(self) -> tuple[str, list[dict], bool]:
+    @staticmethod
+    def _porcelain_v2_original_paths(raw: str) -> dict[str, str]:
+        original_paths: dict[str, str] = {}
+        records = raw.split("\x00")
+        index = 0
+        while index < len(records):
+            record = records[index]
+            index += 1
+            if not record or not record.startswith("2 "):
+                continue
+            fields = record.split(" ", 9)
+            if len(fields) < 10 or index >= len(records) or not records[index]:
+                raise RemoteWorkspaceError(502, "remote_git_status_truncated", "Remote Git status was incomplete")
+            original_paths[fields[9]] = records[index]
+            index += 1
+        return original_paths
+
+    def _status(self, *, include_original: bool = False) -> tuple[str, list[dict], bool]:
         raw = self._git(["status", "--porcelain=v2", "--branch", "-z", "--no-renames",
                          "--untracked-files=no"], error="git_status_failed")["stdout"]
         untracked = self._git(["ls-files", "--others", "--exclude-standard", "-z"],
@@ -176,6 +196,8 @@ class RemoteGitService:
         if (not raw.endswith("\x00") or not any(record.startswith("# branch.oid ") for record in records)
                 or (untracked and not untracked.endswith("\x00"))):
             raise RemoteWorkspaceError(502, "remote_git_status_truncated", "Remote Git status was incomplete")
+        all_original_paths = self._porcelain_v2_original_paths(raw)
+        original_paths = all_original_paths if include_original else {}
         header, lines = _parse_porcelain_v2_z(raw)
         lines.extend("?? " + path for path in untracked.split("\x00") if path)
         files = []
@@ -184,6 +206,8 @@ class RemoteGitService:
             # line-oriented path trimming/rename handling corrupt a filename.
             item = _parse_changed_files([line[:3] + "file"])[0]
             item["path"] = line[3:]
+            if item["path"] in original_paths:
+                item["original_path"] = original_paths[item["path"]]
             item.update(_zero_changed_file_stats())
             files.append(item)
         return header, files, "# branch.oid (initial)" not in records
@@ -193,6 +217,189 @@ class RemoteGitService:
         available = {item["path"] for item in files if not staged or item["staged"]}
         if any(path not in available for path in paths):
             raise RemoteWorkspaceError(400, "invalid_git_path", "Select an exact changed file from the current Git status")
+
+    @staticmethod
+    def _normalize_branch_name(name: object) -> str:
+        if not isinstance(name, str):
+            raise RemoteWorkspaceError(400, "invalid_git_branch", "A Git branch name is required")
+        value = name.strip()
+        if (not value or len(value) > 120 or value.startswith("-")
+                or any(char.isspace() for char in value)
+                or "\x00" in value or "\\" in value or value.endswith(("/", "."))):
+            raise RemoteWorkspaceError(400, "invalid_git_branch", "Invalid Git branch name")
+        return value
+
+    def _assert_valid_branch_name(self, name: object) -> str:
+        value = self._normalize_branch_name(name)
+        result = self._git(
+            ["check-ref-format", "--branch", value],
+            allowed=(0, 1),
+            error="git_branch_validation_failed",
+        )
+        if result["returncode"]:
+            raise RemoteWorkspaceError(400, "invalid_git_branch", "Invalid Git branch name")
+        return value
+
+    def _resolve_commit_ref(self, ref: object) -> str:
+        value = ref.strip() if isinstance(ref, str) else ""
+        if not _COMMIT_SHA_RE.fullmatch(value):
+            raise RemoteWorkspaceError(400, "invalid_git_commit", "Invalid commit reference")
+        result = self._git(
+            ["rev-parse", "--verify", f"{value}^{{commit}}"],
+            allowed=(0, 128),
+            error="git_commit_lookup_failed",
+        )
+        if result["returncode"]:
+            raise RemoteWorkspaceError(400, "invalid_git_commit", "Commit does not exist")
+        full_sha = result["stdout"].strip()
+        if not full_sha:
+            raise RemoteWorkspaceError(400, "invalid_git_commit", "Commit does not exist")
+        return full_sha
+
+    @staticmethod
+    def _normalize_reset_mode(mode: object) -> str:
+        value = mode.strip().lower() if isinstance(mode, str) else "mixed" if mode is None else ""
+        if value not in {"soft", "mixed", "hard"}:
+            raise RemoteWorkspaceError(400, "invalid_git_reset_mode", "Invalid reset mode")
+        return value
+
+    @staticmethod
+    def _normalize_stash_ref(ref: object) -> str:
+        value = ref.strip() if isinstance(ref, str) else ""
+        if not _STASH_REF_RE.fullmatch(value):
+            raise RemoteWorkspaceError(400, "invalid_git_stash_ref", "Invalid stash reference")
+        return value
+
+    @staticmethod
+    def _normalize_identity_scope(scope: object) -> str:
+        value = scope.strip().lower() if isinstance(scope, str) else ""
+        if value not in {"global", "local"}:
+            raise RemoteWorkspaceError(400, "invalid_git_identity_scope", "Invalid Git identity scope")
+        return value
+
+    @staticmethod
+    def _normalize_identity_value(value: object, *, field: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise RemoteWorkspaceError(400, f"empty_git_{field}", "Git name and email are required")
+        if len(text) > 200 or "\x00" in text or "\n" in text or "\r" in text:
+            raise RemoteWorkspaceError(400, f"invalid_git_{field}", "Invalid Git name or email")
+        if field == "email" and ("@" not in text or any(char.isspace() for char in text)):
+            raise RemoteWorkspaceError(400, "invalid_git_email", "Invalid Git email")
+        return text
+
+    @staticmethod
+    def _has_conflict(files: list[dict]) -> bool:
+        return any(
+            str(item.get("status") or "") in _UNMERGED_STATUSES
+            or "U" in str(item.get("status") or "")
+            for item in files
+        )
+
+    @classmethod
+    def _require_clean_worktree(cls, files: list[dict]) -> None:
+        if cls._has_conflict(files):
+            raise RemoteWorkspaceError(409, "git_conflict", "The remote worktree contains unresolved conflicts")
+        if files:
+            raise RemoteWorkspaceError(409, "git_dirty_worktree", "The remote worktree has uncommitted changes")
+
+    def _require_branch(self, name: str) -> None:
+        result = self._git(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{name}"],
+            allowed=(0, 1),
+            error="git_branch_lookup_failed",
+        )
+        if result["returncode"]:
+            raise RemoteWorkspaceError(404, "git_branch_not_found", "The target branch does not exist")
+
+    def _require_stash(self, ref: str) -> None:
+        result = self._git(
+            ["rev-parse", "--verify", f"{ref}^{{commit}}"],
+            allowed=(0, 128),
+            error="git_stash_lookup_failed",
+        )
+        if result["returncode"]:
+            raise RemoteWorkspaceError(404, "git_stash_not_found", "The target stash does not exist")
+
+    @staticmethod
+    def _conflict_output(result: dict) -> bool:
+        output = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr")).lower()
+        return any(marker in output for marker in (
+            "conflict", "would be overwritten", "needs merge", "could not restore untracked",
+        ))
+
+    def _stash_mutation(self, args: list[str], *, error: str) -> dict:
+        result = self._git(
+            args,
+            allowed=(0, 1, 128),
+            error=error,
+            mutation=True,
+            truncated=True,
+        )
+        if result["returncode"]:
+            if self._conflict_output(result):
+                data = {}
+                try:
+                    data["overview"] = self._overview()
+                except RemoteWorkspaceError:
+                    pass
+                raise RemoteWorkspaceError(409, "git_conflict", "The stash operation produced merge conflicts", data)
+            message = (result["stderr"] or result["stdout"] or "Remote Git stash operation failed").strip()
+            raise RemoteWorkspaceError(400, error, message)
+        return result
+
+    def _stash_items(self) -> list[dict]:
+        raw = self._git([
+            "stash", "list", "--format=%gd%x00%H%x00%ci%x00%gs%x00",
+        ], error="git_stash_list_failed")["stdout"]
+        return [
+            {"ref": ref, "hash": full_hash[:12], "created_at": created_at, "message": message}
+            for ref, full_hash, created_at, message in self._parse_nul_fields(raw, 4)
+        ]
+
+    def _discard_entries(self, files: list[dict], has_head: bool, *, error: str) -> None:
+        if not files:
+            return
+
+        restore_paths: list[str] = []
+        remove_from_index_paths: list[str] = []
+        remove_from_worktree_paths: list[str] = []
+        untracked_paths: list[str] = []
+        for item in files:
+            path = item["path"]
+            status = str(item.get("status") or "")
+            if item.get("untracked"):
+                untracked_paths.append(path)
+            elif status.startswith("R"):
+                remove_from_index_paths.append(path)
+                remove_from_worktree_paths.append(path)
+                if item.get("original_path"):
+                    restore_paths.append(item["original_path"])
+            elif status.startswith("C"):
+                remove_from_index_paths.append(path)
+                remove_from_worktree_paths.append(path)
+            elif status.startswith("A"):
+                remove_from_index_paths.append(path)
+                remove_from_worktree_paths.append(path)
+            else:
+                restore_paths.append(path)
+
+        remove_from_index_paths = list(dict.fromkeys(remove_from_index_paths))
+        restore_paths = list(dict.fromkeys(restore_paths))
+        remove_from_worktree_paths = list(dict.fromkeys(remove_from_worktree_paths))
+        untracked_paths = list(dict.fromkeys(untracked_paths))
+        if remove_from_index_paths:
+            self._git(["rm", "--cached", "-f", "--", *remove_from_index_paths],
+                      error=error, mutation=True, truncated=True)
+        if restore_paths:
+            if not has_head:
+                raise RemoteWorkspaceError(400, error, "The initial repository has no commit to restore")
+            self._git(["restore", "--source=HEAD", "--staged", "--worktree", "--", *restore_paths],
+                      error=error, mutation=True, truncated=True)
+        clean_paths = [*remove_from_worktree_paths, *untracked_paths]
+        if clean_paths:
+            self._git(["clean", "-f", "--", *clean_paths],
+                      error=error, mutation=True, truncated=True)
 
     def _recent_commits(self, has_head: bool) -> list[dict]:
         if not has_head:
@@ -266,6 +473,8 @@ class RemoteGitService:
                     "tree_status": True,
                     "commit_graph": True,
                     "branches": True,
+                    "branch_mutation": True,
+                    "discard": True,
                     "stash": True,
                     "identity": True,
                 },
@@ -439,14 +648,7 @@ class RemoteGitService:
     def stashes(self) -> dict:
         with self._lock:
             self._require_repo()
-            raw = self._git([
-                "stash", "list", "--format=%gd%x00%H%x00%ci%x00%gs%x00",
-            ], error="git_stash_list_failed")["stdout"]
-            items = [
-                {"ref": ref, "hash": full_hash[:12], "created_at": created_at, "message": message}
-                for ref, full_hash, created_at, message in self._parse_nul_fields(raw, 4)
-            ]
-            return {"items": items}
+            return {"items": self._stash_items()}
 
     def identity(self) -> dict:
         with self._lock:
@@ -465,6 +667,140 @@ class RemoteGitService:
                     "email": read("local", "user.email") if repo_path else "",
                 },
             }
+
+    def branch_create(self, name: str, start_point: str = "") -> dict:
+        with self._lock:
+            self._require_repo()
+            branch_name = self._assert_valid_branch_name(name)
+            args = ["branch", branch_name]
+            if isinstance(start_point, str) and start_point.strip():
+                args.append(self._resolve_commit_ref(start_point))
+            elif start_point is not None and not (isinstance(start_point, str) and not start_point.strip()):
+                raise RemoteWorkspaceError(400, "invalid_git_commit", "Invalid commit reference")
+            self._git(args, error="git_branch_create_failed", mutation=True, truncated=True)
+            return self.branches()
+
+    def branch_switch(self, name: str) -> dict:
+        with self._lock:
+            self._require_repo()
+            branch_name = self._assert_valid_branch_name(name)
+            self._require_branch(branch_name)
+            _, files, _ = self._status()
+            self._require_clean_worktree(files)
+            self._git(["switch", branch_name], error="git_branch_switch_failed", mutation=True, truncated=True)
+            branches = self.branches()
+            return {"branches": branches["branches"], "current_branch": branches["current_branch"]}
+
+    def branch_reset(self, commit: str, mode: str = "mixed") -> dict:
+        with self._lock:
+            self._require_repo()
+            reset_mode = self._normalize_reset_mode(mode)
+            full_sha = self._resolve_commit_ref(commit)
+            head_result = self._git(
+                ["symbolic-ref", "--short", "HEAD"],
+                allowed=(0, 1),
+                error="git_head_probe_failed",
+            )
+            if head_result["returncode"] or not head_result["stdout"].strip():
+                raise RemoteWorkspaceError(409, "git_detached_head", "Cannot reset a detached HEAD")
+            _, files, _ = self._status()
+            self._require_clean_worktree(files)
+            ancestor = self._git(
+                ["merge-base", "--is-ancestor", full_sha, "HEAD"],
+                allowed=(0, 1),
+                error="git_branch_reset_failed",
+            )
+            if ancestor["returncode"]:
+                raise RemoteWorkspaceError(409, "git_commit_not_ancestor", "The target commit is not an ancestor of HEAD")
+            self._git(["reset", f"--{reset_mode}", full_sha],
+                      error="git_branch_reset_failed", mutation=True, truncated=True)
+            overview = self._overview()
+            branches = self.branches()
+            final_head = self._git(
+                ["rev-parse", "--verify", "HEAD^{commit}"],
+                allowed=(0, 128),
+                error="git_branch_reset_failed",
+            )
+            if final_head["returncode"] or not final_head["stdout"].strip():
+                raise RemoteWorkspaceError(400, "git_branch_reset_failed", "Reset completed without a readable HEAD")
+            return {
+                "message": "分支已重置",
+                "overview": overview,
+                "branches": branches["branches"],
+                "current_branch": branches["current_branch"],
+                "head_commit": final_head["stdout"].strip(),
+            }
+
+    def stash_apply(self, ref: str) -> dict:
+        stash_ref = self._normalize_stash_ref(ref)
+        with self._lock:
+            self._require_repo()
+            self._require_stash(stash_ref)
+            _, files, _ = self._status()
+            if self._has_conflict(files):
+                raise RemoteWorkspaceError(409, "git_conflict", "The remote worktree contains unresolved conflicts")
+            self._stash_mutation(["stash", "apply", stash_ref], error="git_stash_apply_failed")
+            return self._overview()
+
+    def stash_drop(self, ref: str) -> dict:
+        stash_ref = self._normalize_stash_ref(ref)
+        with self._lock:
+            self._require_repo()
+            self._require_stash(stash_ref)
+            self._stash_mutation(["stash", "drop", stash_ref], error="git_stash_drop_failed")
+            # A drop leaves the worktree untouched; reread the stash namespace
+            # before returning the refreshed overview so stale refs are never
+            # inferred from the mutation's exit status.
+            self._stash_items()
+            return self._overview()
+
+    def stash_pop(self) -> dict:
+        with self._lock:
+            self._require_repo()
+            items = self._stash_items()
+            if not items:
+                raise RemoteWorkspaceError(404, "git_stash_not_found", "No stash entry exists")
+            _, files, _ = self._status()
+            if self._has_conflict(files):
+                raise RemoteWorkspaceError(409, "git_conflict", "The remote worktree contains unresolved conflicts")
+            self._stash_mutation(["stash", "pop"], error="git_stash_pop_failed")
+            self._stash_items()
+            return self._overview()
+
+    def identity_update(self, *, scope: str, name: object, email: object) -> dict:
+        normalized_scope = self._normalize_identity_scope(scope)
+        normalized_name = self._normalize_identity_value(name, field="name")
+        normalized_email = self._normalize_identity_value(email, field="email")
+        with self._lock:
+            repo_path = self._repo_root()
+            if normalized_scope == "local" and repo_path is None:
+                raise RemoteWorkspaceError(409, "not_git_repo", "The remote workspace is not a Git repository")
+            self._git(["config", f"--{normalized_scope}", "user.name", normalized_name],
+                      error="git_identity_update_failed", mutation=True, truncated=True)
+            self._git(["config", f"--{normalized_scope}", "user.email", normalized_email],
+                      error="git_identity_update_failed", mutation=True, truncated=True)
+            return self.identity()
+
+    def discard(self, paths: list[str]) -> dict:
+        normalized = self._paths(paths)
+        with self._lock:
+            self._require_repo()
+            _, files, has_head = self._status(include_original=True)
+            self._select(normalized, files)
+            if self._has_conflict(files):
+                raise RemoteWorkspaceError(409, "git_conflict", "The remote worktree contains unresolved conflicts")
+            selected = [item for item in files if item["path"] in set(normalized)]
+            self._discard_entries(selected, has_head, error="git_discard_failed")
+            return self._overview()
+
+    def discard_all(self) -> dict:
+        with self._lock:
+            self._require_repo()
+            _, files, has_head = self._status(include_original=True)
+            if self._has_conflict(files):
+                raise RemoteWorkspaceError(409, "git_conflict", "The remote worktree contains unresolved conflicts")
+            self._discard_entries(files, has_head, error="git_discard_all_failed")
+            return self._overview()
 
     def init(self) -> dict:
         with self._lock:

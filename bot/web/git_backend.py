@@ -205,29 +205,47 @@ class RemoteGitBackend:
     def branches(self) -> dict[str, Any]:
         return self.service.branches()
 
+    def branch_create(self, name: str, start_point: str = "") -> dict[str, Any]:
+        return self.service.branch_create(name, start_point)
+
+    def branch_switch(self, name: str) -> dict[str, Any]:
+        return self.service.branch_switch(name)
+
+    def branch_reset(self, commit: str, mode: str = "mixed") -> dict[str, Any]:
+        return self.service.branch_reset(commit, mode)
+
     def stashes(self) -> dict[str, Any]:
         return self.service.stashes()
 
+    def stash_apply(self, ref: str) -> dict[str, Any]:
+        return self.service.stash_apply(ref)
+
+    def stash_drop(self, ref: str) -> dict[str, Any]:
+        return self.service.stash_drop(ref)
+
     def identity(self) -> dict[str, Any]:
         return self.service.identity()
+
+    def identity_update(self, *, scope: str, name: Any, email: Any) -> dict[str, Any]:
+        return self.service.identity_update(scope=scope, name=name, email=email)
+
+    def discard(self, paths: list[str]) -> dict[str, Any]:
+        return self.service.discard(paths)
+
+    def discard_all(self) -> dict[str, Any]:
+        return self.service.discard_all()
+
+    def stash_pop(self) -> dict[str, Any]:
+        return self.service.stash_pop()
 
     @staticmethod
     def _unsupported(*_args: Any, **_kwargs: Any):
         raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
 
-    branch_create = _unsupported
-    branch_switch = _unsupported
-    branch_reset = _unsupported
-    stash_apply = _unsupported
-    stash_drop = _unsupported
-    identity_update = _unsupported
-    discard = _unsupported
-    discard_all = _unsupported
     fetch = _unsupported
     pull = _unsupported
     push = _unsupported
     stash = _unsupported
-    stash_pop = _unsupported
     commit_message_config = _unsupported
     update_commit_message_config = _unsupported
     reset_commit_message_config = _unsupported

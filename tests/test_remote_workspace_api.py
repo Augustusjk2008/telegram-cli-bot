@@ -210,6 +210,73 @@ async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolatio
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,suffix,body,operation,args,payload,expected",
+    [
+        ("POST", "git/branches", {"name": "feature", "start_point": "a" * 40}, "branch_create",
+         ("feature", "a" * 40), {"branches": []}, {"branches": []}),
+        ("POST", "git/branches/switch", {"name": "feature"}, "branch_switch",
+         ("feature",), {"current_branch": "feature", "branches": []}, {"current_branch": "feature", "branches": []}),
+        ("POST", "git/branches/reset", {"commit": "a" * 40, "mode": "hard"}, "branch_reset",
+         ("a" * 40, "hard"), {"head_commit": "a" * 40}, {"head_commit": "a" * 40}),
+        ("POST", "git/stashes/apply", {"ref": "stash@{0}"}, "stash_apply",
+         ("stash@{0}",), {"repo_found": True}, {"message": "已应用 stash", "overview": {"repo_found": True}}),
+        ("POST", "git/stashes/drop", {"ref": "stash@{0}"}, "stash_drop",
+         ("stash@{0}",), {"repo_found": True}, {"message": "已删除 stash", "overview": {"repo_found": True}}),
+        ("POST", "git/discard", {"paths": ["a b.txt"]}, "discard",
+         (["a b.txt"],), {"repo_found": True}, {"message": "已丢弃所选文件改动", "overview": {"repo_found": True}}),
+        ("POST", "git/discard-all", {}, "discard_all",
+         (), {"repo_found": True}, {"message": "已丢弃全部改动", "overview": {"repo_found": True}}),
+        ("POST", "git/stash/pop", {}, "stash_pop",
+         (), {"repo_found": True}, {"message": "已恢复最近一次暂存", "overview": {"repo_found": True}}),
+        ("PUT", "git/identity", {"scope": "local", "name": "Name", "email": "name@example.com"},
+         "identity_update", (), {"repo_found": True}, {"repo_found": True}),
+    ],
+)
+async def test_remote_git_mutation_routes_delegate_body_response_and_permissions(
+    tmp_path, monkeypatch, method, suffix, body, operation, args, payload, expected,
+):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_GIT_OPS)
+    _forbid_local_git(monkeypatch)
+    service, connection, git = Mock(), Mock(), Mock()
+    service.get.return_value = connection
+    getattr(git, operation).return_value = payload
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
+    factory = Mock(return_value=git)
+    monkeypatch.setattr(git_backend, "RemoteGitService", factory)
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.request(method, f"/api/bots/main/{suffix}", json=body)
+        assert response.status == 200, await response.text()
+        assert (await response.json())["data"] == expected
+
+    factory.assert_called_once_with(connection, CONFIG["root"])
+    if operation == "identity_update":
+        getattr(git, operation).assert_called_once_with(
+            scope="local", name="Name", email="name@example.com",
+        )
+    else:
+        getattr(git, operation).assert_called_once_with(*args)
+
+
+@pytest.mark.asyncio
+async def test_remote_global_identity_update_requires_admin_capability(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_GIT_OPS)
+    service = Mock()
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.put(
+            "/api/bots/main/git/identity",
+            json={"scope": "global", "name": "Name", "email": "name@example.com"},
+        )
+        assert response.status == 403
+    service.get.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypatch):
     server, auth = _server(tmp_path, monkeypatch)
     auth.capabilities.add(CAP_GIT_OPS)
@@ -222,7 +289,11 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         ("GET", "git"), ("GET", "git/capabilities"), ("GET", "git/diff"),
         ("GET", "git/tree-status"), ("GET", "git/graph"), ("GET", "git/branches"),
         ("GET", "git/stashes"), ("GET", "git/identity"),
+        ("POST", "git/branches"), ("POST", "git/branches/switch"), ("POST", "git/branches/reset"),
+        ("POST", "git/stashes/apply"), ("POST", "git/stashes/drop"),
+        ("PUT", "git/identity"), ("POST", "git/discard"), ("POST", "git/discard-all"),
         ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit"),
+        ("POST", "git/stash/pop"),
     }
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
               if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]

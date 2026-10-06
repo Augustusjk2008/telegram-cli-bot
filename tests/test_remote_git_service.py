@@ -78,9 +78,23 @@ class Connection:
             return result(self.readonly_outputs.get("graph", ""))
         if args[:2] == ["rev-parse", "--verify"]:
             return result(self.readonly_outputs.get("head", ""), returncode=0 if self.readonly_outputs.get("head") else 128)
+        if args[0] == "check-ref-format":
+            return result()
+        if args[0] == "show-ref":
+            return result()
+        if args[0] == "symbolic-ref":
+            return result("main\n")
+        if args[0] == "merge-base":
+            return result()
         if args[:2] == ["stash", "list"]:
             return result(self.readonly_outputs.get("stashes", ""))
+        if args[0] == "stash":
+            return result()
         if args[0] == "config":
+            if "--get" not in args:
+                scope, key, value = args[1:4]
+                self.readonly_outputs.setdefault("config", {})[(scope, "--get", key)] = value + "\n"
+                return result()
             value = self.readonly_outputs.get("config", {}).get(tuple(args[1:]), "")
             return result(value, returncode=0 if value else 1)
         if args == ["init"]:
@@ -100,7 +114,7 @@ class Connection:
             if "--numstat" in args:
                 return result("2\t1\tfile.txt\x00")
             return result("diff --git a/file.txt b/file.txt\n+new\n", returncode=1 if "--no-index" in args else 0)
-        if args[0] in {"add", "rm", "reset", "commit"}:
+        if args[0] in {"add", "rm", "reset", "restore", "clean", "commit", "branch", "switch"}:
             return result()
         raise AssertionError(args)
 
@@ -125,11 +139,11 @@ def test_overview_preserves_shape_status_names_and_remote_commits():
     assert connection.calls[0][0] == ["--version"]
 
 
-def test_capabilities_only_probe_remote_git_version_and_mark_read_only_features():
+def test_capabilities_only_probe_remote_git_version_and_mark_supported_features():
     connection = Connection()
     capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
     assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
-    readable = {"tree_status", "commit_graph", "branches", "stash", "identity"}
+    readable = {"tree_status", "commit_graph", "branches", "branch_mutation", "discard", "stash", "identity"}
     assert all(
         item["available"] is (name in readable)
         and item["reason"] == ("" if name in readable else "remote_feature_unavailable")
@@ -549,6 +563,195 @@ def test_mutation_lock_is_shared_across_instances_and_isolated_by_connection_and
             release.set()
         assert pending.result(timeout=5)["repo_found"]
         assert waiting.result(timeout=5)["repo_found"]
+
+
+def test_remote_branch_mutations_validate_refs_and_refresh_remote_state():
+    connection = Connection(files={})
+    connection.readonly_outputs.update({
+        "head": OID + "\n",
+        "branches": nul_fields("main", "*", "", OID[:7], "main subject"),
+    })
+    service = remote.RemoteGitService(connection, ROOT)
+
+    created = service.branch_create("feature", OID)
+    switched = service.branch_switch("feature")
+    reset = service.branch_reset(OID, "hard")
+
+    assert created == {"current_branch": "main", "branches": [
+        {"name": "main", "current": True, "upstream": "", "short_hash": OID[:7], "subject": "main subject"},
+    ]}
+    assert switched == {"current_branch": "main", "branches": created["branches"]}
+    assert reset["head_commit"] == OID
+    assert reset["branches"] == created["branches"]
+    assert [call[0] for call in connection.calls if (
+        call[0][0] in {"check-ref-format", "branch", "show-ref", "switch", "symbolic-ref", "merge-base", "reset"}
+        or call[0][:2] == ["rev-parse", "--verify"]
+    )] == [
+        ["check-ref-format", "--branch", "feature"],
+        ["rev-parse", "--verify", OID + "^{commit}"],
+        ["branch", "feature", OID],
+        ["check-ref-format", "--branch", "feature"],
+        ["show-ref", "--verify", "--quiet", "refs/heads/feature"],
+        ["switch", "feature"],
+        ["rev-parse", "--verify", OID + "^{commit}"],
+        ["symbolic-ref", "--short", "HEAD"],
+        ["merge-base", "--is-ancestor", OID, "HEAD"],
+        ["reset", "--hard", OID],
+        ["rev-parse", "--verify", "HEAD^{commit}"],
+    ]
+    mutation_calls = [call for call in connection.calls if call[0][0] in {"branch", "switch", "reset"}]
+    assert all(call[2] == remote.MUTATION_TIMEOUT for call in mutation_calls)
+
+
+@pytest.mark.parametrize(
+    ("operation", "override", "expected_code"),
+    [
+        ("branch_switch", result(returncode=1), "git_branch_not_found"),
+        ("branch_reset", result(returncode=1), "git_detached_head"),
+    ],
+)
+def test_remote_branch_mutations_reject_missing_target_or_detached_head(operation, override, expected_code):
+    connection = Connection(files={})
+    connection.readonly_outputs["head"] = OID + "\n"
+    if operation == "branch_switch":
+        connection.overrides["show-ref"] = override
+        args = ("missing",)
+    else:
+        connection.overrides["symbolic-ref"] = override
+        args = (OID,)
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        getattr(remote.RemoteGitService(connection, ROOT), operation)(*args)
+
+    assert exc.value.code == expected_code
+    assert not any(call[0][0] in {"switch", "reset"} for call in connection.calls)
+
+
+@pytest.mark.parametrize(
+    ("files", "untracked", "mutation_args"),
+    [
+        ({"tracked.txt": ".M"}, (), ["restore", "--source=HEAD", "--staged", "--worktree", "--", "tracked.txt"]),
+        ({"added.txt": "A."}, (), ["rm", "--cached", "-f", "--", "added.txt"]),
+        ({}, ("new.txt",), ["clean", "-f", "--", "new.txt"]),
+        ({"deleted.txt": "D."}, (), ["restore", "--source=HEAD", "--staged", "--worktree", "--", "deleted.txt"]),
+    ],
+)
+def test_remote_discard_handles_each_exact_status_kind(files, untracked, mutation_args):
+    connection = Connection(files=files, untracked=untracked)
+    overview = remote.RemoteGitService(connection, ROOT).discard_all()
+
+    assert overview["repo_found"]
+    assert mutation_args in [call[0] for call in connection.calls]
+    mutations = [call for call in connection.calls if call[0][0] in {"rm", "restore", "clean"}]
+    assert mutations and all(call[2] == remote.MUTATION_TIMEOUT for call in mutations)
+
+
+def test_remote_discard_requires_complete_status_and_exact_paths():
+    connection = Connection(files={"tracked.txt": ".M"})
+    connection.overrides["status"] = result(truncated=True)
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).discard(["tracked.txt"])
+    assert exc.value.code == "remote_git_status_truncated"
+    assert not any(call[0][0] in {"rm", "restore", "clean"} for call in connection.calls)
+
+    connection = Connection(files={"tracked.txt": ".M"})
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).discard(["missing.txt"])
+    assert exc.value.code == "invalid_git_path"
+    assert not any(call[0][0] in {"rm", "restore", "clean"} for call in connection.calls)
+
+
+def test_remote_discard_restores_the_source_and_removes_a_reported_rename():
+    connection = Connection(files={})
+    connection.overrides["status"] = result(
+        f"# branch.oid {OID}\x00# branch.head main\x00"
+        f"2 R. N... 100644 100644 100644 {OID} {OID} R100 renamed.txt\x00original.txt\x00"
+    )
+
+    remote.RemoteGitService(connection, ROOT).discard(["renamed.txt"])
+
+    mutations = [call[0] for call in connection.calls if call[0][0] in {"rm", "restore", "clean"}]
+    assert mutations == [
+        ["rm", "--cached", "-f", "--", "renamed.txt"],
+        ["restore", "--source=HEAD", "--staged", "--worktree", "--", "original.txt"],
+        ["clean", "-f", "--", "renamed.txt"],
+    ]
+
+
+def test_remote_discard_rejects_a_status_record_missing_a_rename_source():
+    connection = Connection(files={})
+    connection.overrides["status"] = result(
+        f"# branch.oid {OID}\x00# branch.head main\x00"
+        f"2 R. N... 100644 100644 100644 {OID} {OID} R100 renamed.txt\x00"
+    )
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).discard(["renamed.txt"])
+    assert exc.value.code == "remote_git_status_truncated"
+    assert not any(call[0][0] in {"rm", "restore", "clean"} for call in connection.calls)
+
+
+def test_remote_stash_mutations_validate_refs_refresh_and_map_conflicts():
+    connection = Connection(files={})
+    connection.readonly_outputs.update({
+        "head": OID + "\n",
+        "stashes": nul_fields("stash@{0}", OID, "2026-10-06 12:00:00 +0800", "WIP"),
+    })
+    service = remote.RemoteGitService(connection, ROOT)
+
+    assert service.stash_apply("stash@{0}")["repo_found"]
+    assert service.stash_drop("stash@{0}")["repo_found"]
+    assert service.stash_pop()["repo_found"]
+    assert [call[0] for call in connection.calls if call[0][0] == "stash" and call[0][1] != "list"] == [
+        ["stash", "apply", "stash@{0}"],
+        ["stash", "drop", "stash@{0}"],
+        ["stash", "pop"],
+    ]
+    assert all(
+        call[2] == remote.MUTATION_TIMEOUT
+        for call in connection.calls
+        if call[0][0] == "stash" and call[0][1] != "list"
+    )
+
+    conflict = Connection(files={})
+    conflict.readonly_outputs.update({"head": OID + "\n", "stashes": nul_fields(
+        "stash@{0}", OID, "2026-10-06 12:00:00 +0800", "WIP",
+    )})
+    conflict.overrides["stash"] = result(stderr="CONFLICT (content): merge conflict", returncode=1)
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(conflict, ROOT).stash_apply("stash@{0}")
+    assert exc.value.code == "git_conflict"
+    assert sum(call[0] == ["stash", "apply", "stash@{0}"] for call in conflict.calls) == 1
+
+
+def test_remote_identity_update_validates_values_and_uses_remote_config_only():
+    connection = Connection(files={})
+    connection.readonly_outputs["config"] = {
+        ("--global", "--get", "user.name"): "Old Name\n",
+        ("--global", "--get", "user.email"): "old@example.com\n",
+        ("--local", "--get", "user.name"): "Local Name\n",
+        ("--local", "--get", "user.email"): "local@example.com\n",
+    }
+    identity = remote.RemoteGitService(connection, ROOT).identity_update(
+        scope="global", name="New Name", email="new@example.com",
+    )
+
+    assert identity["global"] == {"name": "New Name", "email": "new@example.com"}
+    updates = [call for call in connection.calls if call[0][0] == "config" and "--get" not in call[0]]
+    assert [call[0] for call in updates] == [
+        ["config", "--global", "user.name", "New Name"],
+        ["config", "--global", "user.email", "new@example.com"],
+    ]
+    assert all(call[2] == remote.MUTATION_TIMEOUT for call in updates)
+
+    for kwargs in (
+        {"scope": "other", "name": "Name", "email": "name@example.com"},
+        {"scope": "global", "name": "bad\nname", "email": "name@example.com"},
+        {"scope": "global", "name": "Name", "email": "invalid"},
+    ):
+        invalid = Connection(files={})
+        with pytest.raises(RemoteWorkspaceError):
+            remote.RemoteGitService(invalid, ROOT).identity_update(**kwargs)
+        assert not invalid.calls
 
 
 @pytest.mark.parametrize("path", [r"..\outside", r"C:\outside", r"\\server\share", "file:stream", "NUL.txt", "file. "])
