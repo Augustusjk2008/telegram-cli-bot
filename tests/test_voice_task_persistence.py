@@ -45,6 +45,9 @@ async def test_voice_task_persistence_is_runtime_owned_and_terminal_is_idempoten
         runtime,
     )
 
+    await coordinator.observe({"method": "thread/realtime/itemAdded", "params": {
+        "threadId": "thread-1", "item": {"type": "handoff_request", "input_transcript": "hello"},
+    }})
     await coordinator.observe({"method": "turn/started", "params": {
         "threadId": "thread-1", "turnId": "codex-turn",
     }})
@@ -86,6 +89,9 @@ async def test_unknown_runtime_close_keeps_unknown_state():
         "conversation",
         runtime,
     )
+    await coordinator.observe({"method": "thread/realtime/itemAdded", "params": {
+        "threadId": "thread-1", "item": {"type": "handoff_request", "input_transcript": "hello"},
+    }})
     await coordinator.observe({"method": "turn/started", "params": {
         "threadId": "thread-1", "turnId": "codex-turn",
     }})
@@ -94,3 +100,35 @@ async def test_unknown_runtime_close_keeps_unknown_state():
     assert service.completed[0][1]["completion_state"] == "unknown"
     await coordinator.close()
     assert len(service.completed) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_voice_turn_events_do_not_create_a_persisted_task():
+    runtime = SimpleNamespace(thread_id="thread-1", voice_lease=None, voice_events=VoiceEvents())
+    service = FakeService()
+    coordinator = VoiceTaskPersistence(
+        service,
+        SimpleNamespace(alias="main"),
+        _session(),
+        "conversation",
+        runtime,
+    )
+
+    await coordinator.observe({"method": "turn/started", "params": {
+        "threadId": "thread-1", "turnId": "text-turn",
+    }})
+    await coordinator.observe({"method": "item/userMessage/delta", "params": {
+        "threadId": "thread-1", "turnId": "text-turn", "itemId": "text-item", "delta": "hello",
+        "item": {"id": "text-item", "type": "userMessage"},
+    }})
+    await coordinator.observe({"method": "thread/realtime/itemAdded", "params": {
+        "threadId": "thread-1", "item": {"type": "handoff_request", "input_transcript": "   "},
+    }})
+    await coordinator.observe({"method": "turn/started", "params": {
+        "threadId": "thread-1", "turnId": "empty-voice-turn",
+    }})
+
+    assert coordinator.handle is None
+    assert coordinator.state == "idle"
+    assert service.events == []
+    assert service.completed == []

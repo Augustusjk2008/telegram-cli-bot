@@ -384,8 +384,8 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       }
       setView((value) => {
         let task = value.task;
-        if (name === "turn/started" && value.taskBinding?.state !== "unknown" && !isTerminalTaskState(value.taskBinding?.state || "active")) task = "running";
-        if (name === "turn/completed" && value.taskBinding?.state !== "unknown") {
+        if (name === "turn/started" && value.taskBinding?.state === "active") task = "running";
+        if (name === "turn/completed" && value.taskBinding?.state === "active") {
           const status = record(data.turn).status || data.status;
           task = status === "completed" || status === "failed" || status === "interrupted" ? status : "unknown";
         }

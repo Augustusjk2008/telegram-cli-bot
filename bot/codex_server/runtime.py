@@ -18,7 +18,7 @@ from bot.cli_params import CliParamsConfig
 from .client import CodexServerClient, CodexServerError, REALTIME_CONVERSATION_VERSION
 from .events import CodexServerEventMapper, TOKEN_FIELDS, tokens
 from .params import ServerParams, _config_value, check_git_directory, convert_params
-from .voice import VoiceError, VoiceEvents
+from .voice import VoiceError, VoiceEvents, voice_handoff_has_input
 
 
 @dataclass(frozen=True)
@@ -135,6 +135,7 @@ class CodexServerRuntime:
         self.voice_persistence: Any = None
         self._voice_task_state = "idle"
         self._voice_turn_id = ""
+        self._voice_handoff_pending = False
 
     @property
     def active(self) -> bool:
@@ -253,7 +254,17 @@ class CodexServerRuntime:
         incoming = str(payload.get("turnId") or turn.get("id") or "")
         if incoming and incoming in self._previous_turns:
             return
+        if method == "thread/realtime/itemAdded":
+            if voice_handoff_has_input(payload):
+                self._voice_handoff_pending = True
+            return
+        if method in {"thread/realtime/closed", "thread/realtime/error"}:
+            self._voice_handoff_pending = False
+            return
         if method == "turn/started":
+            if not incoming or not self._voice_handoff_pending:
+                return
+            self._voice_handoff_pending = False
             self._voice_turn_id = incoming
             self._voice_task_state = "active"
             self._voice_done.clear()

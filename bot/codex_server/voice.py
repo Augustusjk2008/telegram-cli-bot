@@ -37,6 +37,13 @@ def voice_capability(*, enabled: bool, cli_type: str, execution_mode: str,
     return {"enabled": reason == "available", "reason": reason}
 
 
+def voice_handoff_has_input(payload: dict) -> bool:
+    """Return true only for a realtime handoff carrying a new user utterance."""
+    item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+    text = item.get("input_transcript")
+    return item.get("type") == "handoff_request" and isinstance(text, str) and bool(text.strip())
+
+
 def validate_message(value: Any, seen: set[str]) -> dict:
     if not isinstance(value, dict):
         raise VoiceError("invalid_voice_message", "语音消息必须是 JSON 对象")

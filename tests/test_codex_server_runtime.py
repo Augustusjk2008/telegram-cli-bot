@@ -408,6 +408,9 @@ async def test_voice_turn_state_is_recorded_by_the_single_reader(runtime_setup, 
     runtime = await registry.open_or_create(replace(request, experimental_api=True))
     queue = runtime.subscribe_voice()
     try:
+        runtime.client.emit("thread/realtime/itemAdded", realtimeSessionId="realtime-1",
+                            item={"type": "handoff_request", "input_transcript": "hello"})
+        await asyncio.wait_for(queue.get(), 1)
         runtime.client.emit("turn/started", turn={"id": "voice-turn", "status": "inProgress"})
         await asyncio.wait_for(queue.get(), 1)
         await _wait_for_voice_state(runtime, "active")
@@ -426,12 +429,40 @@ async def test_regular_runtime_switch_does_not_destroy_active_voice_turn(runtime
     registry, request = runtime_setup
     runtime = await registry.open_or_create(replace(request, experimental_api=True))
     try:
+        runtime.client.emit("thread/realtime/itemAdded", realtimeSessionId="realtime-1",
+                            item={"type": "handoff_request", "input_transcript": "hello"})
+        await asyncio.sleep(0)
         runtime.client.emit("turn/started", turn={"id": "voice-turn", "status": "inProgress"})
         await _wait_for_voice_state(runtime, "active")
         with pytest.raises(CodexServerError, match="语音任务尚未完成"):
             await registry.open_or_create(request)
         assert runtime.alive
     finally:
+        await registry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_turn_started_without_nonempty_voice_handoff_does_not_create_voice_task(runtime_setup):
+    registry, request = runtime_setup
+    runtime = await registry.open_or_create(replace(request, experimental_api=True))
+    queue = runtime.subscribe_voice()
+    try:
+        runtime.client.emit("turn/started", turn={"id": "text-turn", "status": "inProgress"})
+        await asyncio.wait_for(queue.get(), 1)
+        await asyncio.sleep(0)
+        assert runtime.voice_task_state == "idle"
+        assert runtime.voice_turn_id == ""
+
+        runtime.client.emit("thread/realtime/itemAdded", realtimeSessionId="realtime-1",
+                            item={"type": "handoff_request", "input_transcript": "   "})
+        await asyncio.wait_for(queue.get(), 1)
+        runtime.client.emit("turn/started", turn={"id": "empty-voice-turn", "status": "inProgress"})
+        await asyncio.wait_for(queue.get(), 1)
+        await asyncio.sleep(0)
+        assert runtime.voice_task_state == "idle"
+        assert runtime.voice_turn_id == ""
+    finally:
+        runtime.unsubscribe_voice(queue)
         await registry.aclose()
 
 

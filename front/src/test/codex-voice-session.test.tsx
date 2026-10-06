@@ -115,6 +115,27 @@ describe("useCodexVoiceSession", () => {
     expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("已连接");
   });
 
+  test("does not show an unbound turn as a voice task", async () => {
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<Harness client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+
+    await act(async () => messages[0]({
+      type: "voice.event", seq: 1, name: "turn/started", data: { turn: { id: "text-turn" } },
+    }));
+    expect(screen.getByText("任务：空闲")).toBeInTheDocument();
+  });
+
   test("binds voice tasks, shows transcript persistence, and preserves unknown", async () => {
     const messages: Array<(message: CodexVoiceMessage) => void> = [];
     const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };

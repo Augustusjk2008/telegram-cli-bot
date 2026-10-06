@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from bot.codex_server.voice import voice_handoff_has_input
 from bot.models import BotProfile, UserSession
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import ChatTurnHandle
@@ -175,6 +176,7 @@ class VoiceTaskPersistence:
     _transcripts: dict[tuple[str, str], str] = field(default_factory=dict, repr=False)
     _terminal_seen: bool = False
     _completed: bool = False
+    _handoff_pending: bool = field(default=False, repr=False)
     _steer_results: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
 
     def cached_steer_result(self, request_id: str) -> dict[str, Any] | None:
@@ -252,6 +254,12 @@ class VoiceTaskPersistence:
         if payload.get("threadId") and str(payload.get("threadId")) != str(getattr(self.runtime, "thread_id", "")):
             return
         method = str(packet.get("method") or "").strip()
+        if method == "thread/realtime/itemAdded":
+            if voice_handoff_has_input(payload):
+                self._handoff_pending = True
+            return
+        if method in {"thread/realtime/closed", "thread/realtime/error", "runtime/closed", "runtime/error"}:
+            self._handoff_pending = False
         turn_id = _turn_id(payload, self.runtime)
         realtime_session_id = _realtime_session_id(payload, self.runtime)
         if self.handle is not None and self._terminal_seen and turn_id and turn_id != self.codex_turn_id:
@@ -267,8 +275,9 @@ class VoiceTaskPersistence:
             self._transcripts.clear()
             self._terminal_seen = False
             self._completed = False
-        if turn_id and not self.handle:
+        if turn_id and not self.handle and self._handoff_pending:
             await self._ensure(turn_id, realtime_session_id)
+            self._handoff_pending = False
         if self.handle is None:
             return
         async with self._lock:
