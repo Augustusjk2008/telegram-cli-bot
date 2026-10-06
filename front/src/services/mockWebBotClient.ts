@@ -1,6 +1,6 @@
 import { isCodexCli } from "../utils/cliType";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
-import { GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
+import { GIT_CAPABILITY_NAMES, GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
   BotChatTranslationConfig,
   ChatTranslationConfig,
@@ -100,6 +100,7 @@ import type {
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
+  GitCapabilities,
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
@@ -1720,6 +1721,13 @@ export class MockWebBotClient implements WebBotClient {
             unstagedAdditions: 96,
           },
         ],
+        changedFilesTruncated: false,
+        changedFilesTotalEstimate: 2,
+        statusTruncated: false,
+        untrackedFilesTruncated: false,
+        countLowerBound: 2,
+        countExact: true,
+        truncationReason: "",
         recentCommits: [
           {
             hash: "847b894",
@@ -1744,6 +1752,13 @@ export class MockWebBotClient implements WebBotClient {
         aheadCount: 0,
         behindCount: 0,
         changedFiles: [],
+        changedFilesTruncated: false,
+        changedFilesTotalEstimate: 0,
+        statusTruncated: false,
+        untrackedFilesTruncated: false,
+        countLowerBound: 0,
+        countExact: true,
+        truncationReason: "",
         recentCommits: [
           {
             hash: "cfb8d40",
@@ -6076,6 +6091,13 @@ export class MockWebBotClient implements WebBotClient {
         aheadCount: 0,
         behindCount: 0,
         changedFiles: [],
+        changedFilesTruncated: false,
+        changedFilesTotalEstimate: 0,
+        statusTruncated: false,
+        untrackedFilesTruncated: false,
+        countLowerBound: 0,
+        countExact: true,
+        truncationReason: "",
         recentCommits: [],
       };
     }
@@ -6083,6 +6105,16 @@ export class MockWebBotClient implements WebBotClient {
       ...overview,
       workingDir,
       repoPath: overview.repoPath || workingDir,
+    };
+  }
+
+  async getGitCapabilities(_botAlias: string): Promise<GitCapabilities> {
+    return {
+      capabilities: Object.fromEntries(GIT_CAPABILITY_NAMES.map((name) => [name, {
+        available: true,
+        reason: "",
+        requiresConfirmation: ["discard", "branch_mutation", "stash", "pull", "push", "smart_commit"].includes(name),
+      }])) as GitCapabilities["capabilities"],
     };
   }
 
@@ -6209,6 +6241,13 @@ export class MockWebBotClient implements WebBotClient {
       aheadCount: 0,
       behindCount: 0,
       changedFiles: [],
+      changedFilesTruncated: false,
+      changedFilesTotalEstimate: 0,
+      statusTruncated: false,
+      untrackedFilesTruncated: false,
+      countLowerBound: 0,
+      countExact: true,
+      truncationReason: "",
       recentCommits: [],
     };
     this.gitOverviews.set(botAlias, next);
@@ -6220,6 +6259,7 @@ export class MockWebBotClient implements WebBotClient {
       path,
       staged,
       diff: `diff --git a/${path} b/${path}\n@@ -1 +1 @@\n-old line\n+new line`,
+      truncated: false,
     };
   }
 

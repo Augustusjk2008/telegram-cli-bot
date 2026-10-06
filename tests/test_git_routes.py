@@ -12,7 +12,11 @@ from bot.manager import MultiBotManager
 
 from bot.models import BotProfile
 
+from bot.git_contract import GIT_CAPABILITIES_REQUIRING_CONFIRMATION, GIT_CAPABILITY_NAMES
+
 from bot.web.api_common import AuthContext
+
+from bot.web import git_service
 
 from bot.web.auth_store import CAP_GIT_OPS
 
@@ -91,3 +95,62 @@ async def test_git_commit_message_config_routes_reject_member_without_git_ops(
 
     assert response.status == 403
     assert payload["error"]["code"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_git_capabilities_route_requires_git_ops_and_returns_complete_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path)
+    server = _build_server(manager, monkeypatch)
+    auth = _auth_context()
+    monkeypatch.setattr(server, "_auth_context", lambda _request: auth)
+    monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: True)
+    monkeypatch.setattr(git_service, "_run_git", lambda *_args, **_kwargs: type("Result", (), {"returncode": 0})())
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get("/api/bots/main/git/capabilities")
+        assert response.status == 403
+        auth.capabilities.add(CAP_GIT_OPS)
+        response = await client.get("/api/bots/main/git/capabilities")
+        payload = await response.json()
+
+    assert response.status == 200
+    capabilities = payload["data"]["capabilities"]
+    assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
+    for name, capability in capabilities.items():
+        assert capability["available"] is True
+        assert capability["reason"] == ""
+        assert capability["requires_confirmation"] is (name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION)
+
+
+@pytest.mark.asyncio
+async def test_git_capabilities_reports_git_not_found_without_repository_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path)
+    server = _build_server(manager, monkeypatch)
+    auth = _auth_context(CAP_GIT_OPS)
+    monkeypatch.setattr(server, "_auth_context", lambda _request: auth)
+    monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: True)
+
+    def missing_git(*_args, **_kwargs):
+        raise git_service.WebApiError(500, "git_not_found", "hidden executable detail")
+
+    monkeypatch.setattr(git_service, "_run_git", missing_git)
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get("/api/bots/main/git/capabilities")
+        payload = await response.json()
+
+    assert response.status == 200
+    assert all(
+        capability == {
+            "available": False,
+            "reason": "git_not_found",
+            "requires_confirmation": name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION,
+        }
+        for name, capability in payload["data"]["capabilities"].items()
+    )

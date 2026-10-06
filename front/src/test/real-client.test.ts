@@ -216,6 +216,68 @@ describe("RealWebBotClient", () => {
     }
   });
 
+  test("maps Git capabilities and overview truncation fields", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        capabilities: {
+          tree_status: { available: true, reason: "", requires_confirmation: false },
+          commit_graph: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
+          branches: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
+          branch_mutation: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+          discard: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+          stash: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+          identity: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
+          fetch: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
+          pull: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+          push: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+          commit_message_generation: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
+          smart_commit: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+        },
+      }))
+      .mockResolvedValueOnce(jsonOk({
+        repo_found: true,
+        can_init: false,
+        working_dir: "/srv/project",
+        repo_path: "/srv/project",
+        repo_name: "project",
+        current_branch: "main",
+        is_clean: false,
+        ahead_count: 2,
+        behind_count: 1,
+        changed_files: [],
+        changed_files_truncated: true,
+        changed_files_total_estimate: 2010,
+        status_truncated: true,
+        untracked_files_truncated: true,
+        count_lower_bound: 2000,
+        count_exact: false,
+        truncation_reason: "status_output_limit",
+        recent_commits: [],
+      }));
+
+    const client = new RealWebBotClient();
+    const capabilities = await client.getGitCapabilities("remote");
+    const overview = await client.getGitOverview("remote");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/remote/git/capabilities");
+    expect(capabilities.capabilities.tree_status).toEqual({
+      available: true,
+      reason: "",
+      requiresConfirmation: false,
+    });
+    expect(capabilities.capabilities.branch_mutation.requiresConfirmation).toBe(true);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/bots/remote/git");
+    expect(overview).toMatchObject({
+      changedFilesTruncated: true,
+      changedFilesTotalEstimate: 2010,
+      statusTruncated: true,
+      untrackedFilesTruncated: true,
+      countLowerBound: 2000,
+      countExact: false,
+      truncationReason: "status_output_limit",
+    });
+  });
+
   test("maps the latest notifiable answer timestamp from bot summaries", async () => {
     fetchMock.mockResolvedValue(jsonOk([{
       alias: "main",

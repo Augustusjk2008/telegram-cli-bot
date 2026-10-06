@@ -56,6 +56,7 @@ import type {
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
+  GitCapabilities,
   GitSmartCommitJob,
   GitDiffPayload,
   GitIdentityConfig,
@@ -379,6 +380,7 @@ export interface WebBotClient {
     onProgress: (event: AppUpdateDownloadProgress) => void,
   ): Promise<AppUpdateStatus>;
   getGitOverview(botAlias: string): Promise<GitOverview>;
+  getGitCapabilities(botAlias: string): Promise<GitCapabilities>;
   getGitTreeStatus(botAlias: string): Promise<GitTreeStatus>;
   getGitCommitGraph(botAlias: string, options?: GitCommitGraphOptions): Promise<GitCommitGraphPayload>;
   initGitRepository(botAlias: string): Promise<GitOverview>;

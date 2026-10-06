@@ -261,7 +261,9 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   const resolve = vi.spyOn(client, "resolveFileOpenTarget");
   const git = vi.spyOn(client, "getGitOverview").mockResolvedValue({
     repoFound: true, canInit: false, workingDir: remote.root, repoPath: remote.root, repoName: "dev",
-    currentBranch: "main", isClean: true, aheadCount: 0, behindCount: 0, changedFiles: [], recentCommits: [],
+    currentBranch: "main", isClean: true, aheadCount: 0, behindCount: 0, changedFiles: [],
+    changedFilesTruncated: false, changedFilesTotalEstimate: 0, statusTruncated: false,
+    untrackedFilesTruncated: false, countLowerBound: 0, countExact: true, truncationReason: "", recentCommits: [],
   });
   const decorations = vi.spyOn(client, "getGitTreeStatus");
   const sync = vi.spyOn(client, "syncWorkspaceDocuments");

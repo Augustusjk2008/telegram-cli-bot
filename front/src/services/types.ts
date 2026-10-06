@@ -2698,6 +2698,33 @@ export type GitCommitGraphPayload = {
   nextCursor: string;
 };
 
+export const GIT_CAPABILITY_NAMES = [
+  "tree_status",
+  "commit_graph",
+  "branches",
+  "branch_mutation",
+  "discard",
+  "stash",
+  "identity",
+  "fetch",
+  "pull",
+  "push",
+  "commit_message_generation",
+  "smart_commit",
+] as const;
+
+export type GitCapabilityName = (typeof GIT_CAPABILITY_NAMES)[number];
+
+export type GitCapability = {
+  available: boolean;
+  reason: string;
+  requiresConfirmation: boolean;
+};
+
+export type GitCapabilities = {
+  capabilities: Record<GitCapabilityName, GitCapability>;
+};
+
 export type GitOverview = {
   repoFound: boolean;
   canInit: boolean;
@@ -2709,6 +2736,13 @@ export type GitOverview = {
   aheadCount: number;
   behindCount: number;
   changedFiles: GitChangedFile[];
+  changedFilesTruncated: boolean;
+  changedFilesTotalEstimate: number;
+  statusTruncated: boolean;
+  untrackedFilesTruncated: boolean;
+  countLowerBound: number;
+  countExact: boolean;
+  truncationReason: string;
   recentCommits: GitCommitSummary[];
 };
 
@@ -2716,7 +2750,7 @@ export type GitDiffPayload = {
   path: string;
   staged: boolean;
   diff: string;
-  truncated?: boolean;
+  truncated: boolean;
 };
 
 export type GitActionResult = {

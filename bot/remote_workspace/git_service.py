@@ -7,6 +7,7 @@ import shlex
 import threading
 import weakref
 
+from bot.git_contract import build_git_capabilities
 from bot.web.git_service import (
     GIT_OVERVIEW_CHANGED_FILES_LIMIT,
     _parse_changed_files,
@@ -247,6 +248,13 @@ class RemoteGitService:
             if self._repo_root() is None:
                 return self._empty_overview()
             return self._overview()
+
+    def capabilities(self) -> dict:
+        with self._lock:
+            result = self._git(["--version"], allowed=(0, 127))
+            if result["returncode"] == 127:
+                return build_git_capabilities(available=False, reason="remote_git_not_found")
+            return build_git_capabilities(available=False, reason="remote_feature_unavailable")
 
     def init(self) -> dict:
         with self._lock:

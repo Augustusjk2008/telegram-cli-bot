@@ -149,6 +149,7 @@ def _forbid_local_git(server, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,suffix,body,operation,args,kwargs", [
     ("GET", "git", None, "overview", (), {}),
+    ("GET", "git/capabilities", None, "capabilities", (), {}),
     ("POST", "git/init", None, "init", (), {}),
     ("GET", "git/diff?path=a%20b.txt&staged=true", None, "diff", ("a b.txt",), {"staged": True}),
     ("POST", "git/stage", {"paths": ["a b.txt"]}, "stage", (["a b.txt"],), {}),
@@ -165,7 +166,24 @@ async def test_remote_git_allowlist_permissions_and_local_isolation(
     service, connection, git = Mock(), Mock(), Mock()
     service.get.return_value = connection
     payload = {"path": "a b.txt", "diff": "remote diff", "staged": True, "truncated": False} if operation == "diff" else {
-        "repo_found": True, "working_dir": CONFIG["root"],
+        "repo_found": True,
+        "can_init": False,
+        "working_dir": CONFIG["root"],
+        "repo_path": CONFIG["root"],
+        "repo_name": "project",
+        "current_branch": "main",
+        "is_clean": False,
+        "ahead_count": 0,
+        "behind_count": 0,
+        "changed_files": [],
+        "changed_files_truncated": False,
+        "changed_files_total_estimate": 0,
+        "status_truncated": False,
+        "untracked_files_truncated": False,
+        "count_lower_bound": 0,
+        "count_exact": True,
+        "truncation_reason": "",
+        "recent_commits": [],
     }
     messages = {"stage": "已暂存所选文件", "unstage": "已取消暂存所选文件", "commit": "已创建提交"}
     expected = {"message": messages[operation], "overview": payload} if operation in messages else payload
@@ -201,7 +219,7 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
     service = Mock()
     monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
     app = server._build_app()
-    allowed = {("GET", "git"), ("GET", "git/diff"), ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
+    allowed = {("GET", "git"), ("GET", "git/capabilities"), ("GET", "git/diff"), ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
               if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]
     async with TestClient(TestServer(app)) as client:

@@ -2,6 +2,7 @@ import { mapChatTranslation, mapUserTranslationUpdate } from "../utils/chatTrans
 import { mapRemoteWorkspace, remoteConnectionBody } from "./remoteWorkspace";
 import { cliTypeLabel, isCodexCli } from "../utils/cliType";
 import {
+  GIT_CAPABILITY_NAMES,
   WebApiClientError,
 } from "./types";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
@@ -36,6 +37,8 @@ import type {
   GitCommitMessageCliConfig,
   GitCommitMessageCliConfigUpdateInput,
   GitCommitMessageGenerateResult,
+  GitCapabilities,
+  GitCapabilityName,
   GitCommitSummary,
   GitDiffPayload,
   GitIdentityConfig,
@@ -1256,7 +1259,24 @@ type RawGitOverview = {
   ahead_count: number;
   behind_count: number;
   changed_files: RawGitChangedFile[];
+  changed_files_truncated: boolean;
+  changed_files_total_estimate: number;
+  status_truncated: boolean;
+  untracked_files_truncated: boolean;
+  count_lower_bound: number;
+  count_exact: boolean;
+  truncation_reason: string;
   recent_commits: RawGitCommitSummary[];
+};
+
+type RawGitCapability = {
+  available?: boolean;
+  reason?: string;
+  requires_confirmation?: boolean;
+};
+
+type RawGitCapabilities = {
+  capabilities?: Partial<Record<GitCapabilityName, RawGitCapability>>;
 };
 
 type RawGitTreeStatus = {
@@ -1307,7 +1327,7 @@ type RawGitDiffPayload = {
   path: string;
   staged: boolean;
   diff: string;
-  truncated?: boolean;
+  truncated: boolean;
 };
 
 type RawGitActionResult = {
@@ -3073,7 +3093,30 @@ function mapGitOverview(raw: RawGitOverview): GitOverview {
     aheadCount: Number(raw.ahead_count || 0),
     behindCount: Number(raw.behind_count || 0),
     changedFiles: (raw.changed_files || []).map(mapGitChangedFile),
+    changedFilesTruncated: Boolean(raw.changed_files_truncated),
+    changedFilesTotalEstimate: Number(raw.changed_files_total_estimate || 0),
+    statusTruncated: Boolean(raw.status_truncated),
+    untrackedFilesTruncated: Boolean(raw.untracked_files_truncated),
+    countLowerBound: Number(raw.count_lower_bound || 0),
+    countExact: Boolean(raw.count_exact),
+    truncationReason: raw.truncation_reason || "",
     recentCommits: (raw.recent_commits || []).map(mapGitCommitSummary),
+  };
+}
+
+function mapGitCapabilities(raw: RawGitCapabilities): GitCapabilities {
+  const rawCapabilities = raw.capabilities || {};
+  return {
+    capabilities: Object.fromEntries(
+      GIT_CAPABILITY_NAMES.map((name) => {
+        const capability = rawCapabilities[name] || {};
+        return [name, {
+          available: Boolean(capability.available),
+          reason: capability.reason || "",
+          requiresConfirmation: Boolean(capability.requires_confirmation),
+        }];
+      }),
+    ) as GitCapabilities["capabilities"],
   };
 }
 
@@ -6401,6 +6444,11 @@ export class RealWebBotClient implements WebBotClient {
   async getGitOverview(botAlias: string): Promise<GitOverview> {
     const data = await this.requestJson<RawGitOverview>(`/api/bots/${encodeURIComponent(botAlias)}/git`);
     return mapGitOverview(data);
+  }
+
+  async getGitCapabilities(botAlias: string): Promise<GitCapabilities> {
+    const data = await this.requestJson<RawGitCapabilities>(`/api/bots/${encodeURIComponent(botAlias)}/git/capabilities`);
+    return mapGitCapabilities(data);
   }
 
   async getGitTreeStatus(botAlias: string): Promise<GitTreeStatus> {

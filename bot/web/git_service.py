@@ -33,6 +33,7 @@ from bot.codex_usage import (
     start_codex_rate_limit_capture,
 )
 from bot.app_settings import get_git_proxy_config_args
+from bot.git_contract import build_git_capabilities
 from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.manager import MultiBotManager
 from bot.platform.processes import attach_process_tree_job, build_hidden_process_kwargs, terminate_process_tree_sync
@@ -1606,6 +1607,19 @@ def get_git_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict
     working_dir = _get_git_working_dir(manager, alias)
     repo_root = _resolve_repo_root(working_dir)
     return _build_git_overview(working_dir, repo_root)
+
+
+def get_git_capabilities(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    working_dir = _get_git_working_dir(manager, alias)
+    try:
+        result = _run_git(working_dir, ["--version"], check=False)
+    except WebApiError as exc:
+        if exc.code == "git_not_found":
+            return build_git_capabilities(available=False, reason="git_not_found")
+        raise
+    if result.returncode != 0:
+        return build_git_capabilities(available=False, reason="git_not_found")
+    return build_git_capabilities(available=True)
 
 
 def get_git_commit_graph(

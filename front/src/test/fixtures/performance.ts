@@ -25,6 +25,13 @@ export function createGitChangesFixture(count: number): GitOverview {
     aheadCount: 0,
     behindCount: 0,
     changedFiles: Array.from({ length: count }, (_, index) => ({ path: `src/file-${index}.ts`, status: "modified", staged: false, unstaged: true, untracked: false, additions: 1, deletions: 0, stagedAdditions: 0, stagedDeletions: 0, unstagedAdditions: 1, unstagedDeletions: 0 })),
+    changedFilesTruncated: false,
+    changedFilesTotalEstimate: count,
+    statusTruncated: false,
+    untrackedFilesTruncated: false,
+    countLowerBound: count,
+    countExact: true,
+    truncationReason: "",
     recentCommits: [],
   };
 }

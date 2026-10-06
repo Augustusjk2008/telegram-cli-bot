@@ -71,6 +71,13 @@ const overview: GitOverview = {
       unstagedDeletions: 0,
     },
   ],
+  changedFilesTruncated: false,
+  changedFilesTotalEstimate: 3,
+  statusTruncated: false,
+  untrackedFilesTruncated: false,
+  countLowerBound: 3,
+  countExact: true,
+  truncationReason: "",
   recentCommits: [],
 };
 

@@ -17,6 +17,9 @@ for (const width of [1280, 390]) {
       repo_found: true, can_init: false, working_dir: remote.root, repo_path: remote.root,
       repo_name: "project", current_branch: "main", is_clean: files.length === 0,
       ahead_count: 0, behind_count: 0, changed_files: files,
+      changed_files_truncated: false, changed_files_total_estimate: files.length,
+      status_truncated: false, untracked_files_truncated: false,
+      count_lower_bound: files.length, count_exact: true, truncation_reason: "",
       recent_commits: [{ hash: "abc1234", short_hash: "abc1234", subject, author_name: "Dev", authored_at: "2026-09-24" }],
     });
     await page.route("**/api/**", async (route) => {

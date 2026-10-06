@@ -17,6 +17,7 @@ from bot.remote_workspace import git_service as remote
 from bot.remote_workspace import windows
 from bot.remote_workspace.transport import RemoteWorkspaceError
 from bot.web import git_service as local
+from bot.git_contract import GIT_CAPABILITIES_REQUIRING_CONFIRMATION, GIT_CAPABILITY_NAMES
 
 
 ROOT = "/srv/project"
@@ -102,6 +103,35 @@ def test_overview_preserves_shape_status_names_and_remote_commits():
     }
     assert overview["recent_commits"][1]["hash"] == "b" * 40
     assert connection.calls[0][0] == ["--version"]
+
+
+def test_capabilities_only_probe_remote_git_version_and_mark_unimplemented_features():
+    connection = Connection()
+    capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
+    assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
+    assert all(not item["available"] and item["reason"] == "remote_feature_unavailable" for item in capabilities.values())
+    assert all(
+        item["requires_confirmation"] is (name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION)
+        for name, item in capabilities.items()
+    )
+    assert [call[0] for call in connection.calls] == [["--version"]]
+
+
+def test_capabilities_report_missing_remote_git_without_repository_probe():
+    connection = Connection()
+    connection.overrides["--version"] = result(stderr="git: not found", returncode=127)
+    capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
+    assert all(item["reason"] == "remote_git_not_found" for item in capabilities.values())
+    assert [call[0] for call in connection.calls] == [["--version"]]
+
+
+def test_capabilities_preserve_remote_transport_errors():
+    connection = Connection()
+    error = RemoteWorkspaceError(502, "remote_timeout", "original")
+    connection.overrides["--version"] = error
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).capabilities()
+    assert exc.value is error
 
 
 def test_non_repository_offers_init_without_running_repository_commands():
