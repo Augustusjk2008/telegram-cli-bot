@@ -8,6 +8,7 @@ import type {
   GitBranchList,
   GitCommitGraphPayload,
   GitCommitMessageCliConfig,
+  GitCapabilities,
   GitDiffPayload,
   GitIdentityConfig,
   GitOverview,
@@ -105,6 +106,23 @@ const stashList: GitStashList = {
   items: [],
 };
 
+const remoteGitCapabilities: GitCapabilities = {
+  capabilities: {
+    tree_status: { available: true, reason: "", requiresConfirmation: false },
+    commit_graph: { available: true, reason: "", requiresConfirmation: false },
+    branches: { available: true, reason: "", requiresConfirmation: false },
+    branch_mutation: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
+    discard: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
+    stash: { available: true, reason: "", requiresConfirmation: false },
+    identity: { available: true, reason: "", requiresConfirmation: false },
+    fetch: { available: true, reason: "", requiresConfirmation: false },
+    pull: { available: true, reason: "", requiresConfirmation: true },
+    push: { available: true, reason: "", requiresConfirmation: true },
+    commit_message_generation: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: false },
+    smart_commit: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
+  },
+};
+
 const commitMessageConfig: GitCommitMessageCliConfig = {
   cliType: "codex",
   cliPath: "codex",
@@ -148,6 +166,7 @@ function createGitScreenClient() {
   const getGitCommitGraph = vi.fn(async () => graphPayload);
   const client = {
     getGitOverview,
+    getGitCapabilities: vi.fn(async () => remoteGitCapabilities),
     initGitRepository: vi.fn(async () => cloneOverview()),
     getGitCommitGraph,
     getGitIdentityConfig: vi.fn(async () => identityConfig),
@@ -162,6 +181,9 @@ function createGitScreenClient() {
     unstageGitPaths: vi.fn(async () => createActionResult()),
     discardGitPaths: vi.fn(async () => createActionResult()),
     commitGitChanges: vi.fn(async () => createActionResult()),
+    fetchGitRemote: vi.fn(async () => createActionResult()),
+    pullGitRemote: vi.fn(async () => createActionResult()),
+    pushGitRemote: vi.fn(async () => createActionResult()),
   };
   return {
     client: client as unknown as WebBotClient,
@@ -235,7 +257,11 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   await waitFor(() => expect(getGitOverview).toHaveBeenCalled());
   await screen.findByText("Remote commit");
 
-  expect(screen.queryByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|切换|Fetch|Pull|Push|智能提交|生成|重置/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|切换|智能提交|生成|重置/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Fetch" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Pull" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Push" })).toBeEnabled();
+  expect(screen.getByTestId("remote-git-credentials-hint")).toHaveTextContent("凭据由远程主机配置");
   expect(screen.getByTestId("git-version-tree-panel")).toBeInTheDocument();
   expect(screen.getByTestId("git-identity-panel")).toBeInTheDocument();
   expect(screen.queryByTestId("git-commit-cli-panel")).not.toBeInTheDocument();
@@ -245,6 +271,97 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   expect(client.listGitStashes).toHaveBeenCalledWith("remote");
   expect(client.getActiveGitSmartCommit).not.toHaveBeenCalled();
   expect(client.getGitCommitMessageConfig).not.toHaveBeenCalled();
+});
+
+test("remote Git capabilities disable actions and expose the server reason without sending requests", async () => {
+  const { client } = createGitScreenClient();
+  vi.mocked(client.getGitCapabilities).mockResolvedValue({
+    ...remoteGitCapabilities,
+    capabilities: {
+      ...remoteGitCapabilities.capabilities,
+      fetch: { available: false, reason: "git_remote_not_configured", requiresConfirmation: false },
+      pull: { available: false, reason: "git_upstream_not_configured", requiresConfirmation: true },
+    },
+  });
+  render(<GitScreen botAlias="remote" client={client} remote />);
+
+  const fetch = await screen.findByRole("button", { name: "Fetch" });
+  expect(fetch).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Pull" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Push" })).toBeEnabled();
+  expect(screen.getByTestId("remote-git-fetch-reason")).toHaveTextContent("git_remote_not_configured");
+  expect(screen.getByTestId("remote-git-pull-reason")).toHaveTextContent("git_upstream_not_configured");
+
+  fireEvent.click(fetch);
+  expect(client.fetchGitRemote).not.toHaveBeenCalled();
+  expect(client.pullGitRemote).not.toHaveBeenCalled();
+});
+
+test("remote Pull and Push only mutate after confirmation, while Fetch does not prompt", async () => {
+  const { client } = createGitScreenClient();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<GitScreen botAlias="remote" client={client} remote />);
+
+  await screen.findByRole("button", { name: "Fetch" });
+  fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+  fireEvent.click(screen.getByRole("button", { name: "Push" }));
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(client.pullGitRemote).not.toHaveBeenCalled();
+  expect(client.pushGitRemote).not.toHaveBeenCalled();
+
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+  await waitFor(() => expect(client.fetchGitRemote).toHaveBeenCalledOnce());
+  expect(confirm).toHaveBeenCalledTimes(2);
+});
+
+test("a successful remote Fetch refreshes overview, branches, graph, and stashes once", async () => {
+  const { client, getGitOverview, getGitCommitGraph } = createGitScreenClient();
+  render(<GitScreen botAlias="remote" client={client} remote />);
+  await screen.findByRole("button", { name: "Fetch" });
+  await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(getGitCommitGraph).toHaveBeenCalled());
+  const before = {
+    overview: getGitOverview.mock.calls.length,
+    branches: vi.mocked(client.listGitBranches).mock.calls.length,
+    graph: getGitCommitGraph.mock.calls.length,
+    stashes: vi.mocked(client.listGitStashes).mock.calls.length,
+  };
+
+  fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
+  await screen.findByText("ok");
+  await waitFor(() => {
+    expect(getGitOverview).toHaveBeenCalledTimes(before.overview + 1);
+    expect(client.listGitBranches).toHaveBeenCalledTimes(before.branches + 1);
+    expect(getGitCommitGraph).toHaveBeenCalledTimes(before.graph + 1);
+    expect(client.listGitStashes).toHaveBeenCalledTimes(before.stashes + 1);
+  });
+  expect(client.fetchGitRemote).toHaveBeenCalledOnce();
+});
+
+test.each([
+  ["fetch", "git_remote_credentials_unavailable", "请在远程主机配置 SSH key/agent"],
+  ["fetch", "git_remote_host_key_unverified", "host key 尚未确认"],
+  ["fetch", "git_remote_network_failed", "网络不可达"],
+  ["pull", "git_pull_requires_manual_resolution", "Pull 需要手动处理"],
+  ["push", "git_push_rejected", "Push 被远端拒绝"],
+] as const)("remote %s failure shows an actionable %s diagnostic and refreshes overview once", async (operation, code, diagnostic) => {
+  const { client, getGitOverview } = createGitScreenClient();
+  const mutation = operation === "fetch"
+    ? client.fetchGitRemote
+    : operation === "pull"
+      ? client.pullGitRemote
+      : client.pushGitRemote;
+  vi.mocked(mutation).mockRejectedValue(new WebApiClientError("server failure", { code }));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<GitScreen botAlias="remote" client={client} remote />);
+  await screen.findByRole("button", { name: operation === "fetch" ? "Fetch" : operation === "pull" ? "Pull" : "Push" });
+  await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: operation === "fetch" ? "Fetch" : operation === "pull" ? "Pull" : "Push" }));
+
+  expect(await screen.findByText(new RegExp(diagnostic))).toBeInTheDocument();
+  await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(2));
+  expect(mutation).toHaveBeenCalledOnce();
 });
 
 test("remote missing Git shows installation and SSH PATH guidance and retries only overview", async () => {

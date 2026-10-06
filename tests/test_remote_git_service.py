@@ -39,12 +39,15 @@ def nul_fields(*fields):
 class Connection:
     platform = "posix"
 
-    def __init__(self, *, repository=True, initial=False, files=None, untracked=()):
+    def __init__(self, *, repository=True, initial=False, files=None, untracked=(), remotes=("origin",), upstream="origin/main", branch="main"):
         self.config = {"connection_id": "ssh-one", "host": "remote.example", "username": "dev"}
         self.repository = repository
         self.initial = initial
         self.files = files if files is not None else {"file.txt": ".M"}
         self.untracked = list(untracked)
+        self.remotes = list(remotes)
+        self.upstream = upstream
+        self.branch = branch
         self.calls = []
         self.overrides = {}
         self.readonly_outputs = {}
@@ -68,6 +71,12 @@ class Connection:
             if not self.repository:
                 return result(stderr="fatal: not a git repository (or any of the parent directories): .git\n", returncode=128)
             return result(root + "\n")
+        if args == ["remote"]:
+            return result("".join(remote_name + "\n" for remote_name in self.remotes))
+        if args == ["symbolic-ref", "--quiet", "--short", "HEAD"]:
+            return result(self.branch + "\n", returncode=0 if self.branch else 1)
+        if args == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]:
+            return result(self.upstream + "\n", returncode=0 if self.upstream else 128)
         if args == ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"]:
             return result(self.readonly_outputs.get("tree_status", ""))
         if args[0] == "for-each-ref" and "refs/heads" in args and "refs/remotes" not in args:
@@ -103,7 +112,9 @@ class Connection:
             return result("Initialized empty Git repository\n")
         if args[0] == "status":
             return result(f"# branch.oid {'(initial)' if self.initial else OID}\x00"
-                          "# branch.head main\x00# branch.upstream origin/main\x00# branch.ab +2 -1\x00"
+                          f"# branch.head {self.branch or '(detached)'}\x00"
+                          + (f"# branch.upstream {self.upstream}\x00" if self.upstream else "")
+                          + "# branch.ab +2 -1\x00"
                           + "".join(tracked(path, xy) for path, xy in self.files.items()))
         if args[0] == "ls-files":
             return result("".join(path + "\x00" for path in self.untracked))
@@ -114,7 +125,7 @@ class Connection:
             if "--numstat" in args:
                 return result("2\t1\tfile.txt\x00")
             return result("diff --git a/file.txt b/file.txt\n+new\n", returncode=1 if "--no-index" in args else 0)
-        if args[0] in {"add", "rm", "reset", "restore", "clean", "commit", "branch", "switch"}:
+        if args[0] in {"add", "rm", "reset", "restore", "clean", "commit", "branch", "switch", "fetch", "pull", "push"}:
             return result()
         raise AssertionError(args)
 
@@ -139,11 +150,14 @@ def test_overview_preserves_shape_status_names_and_remote_commits():
     assert connection.calls[0][0] == ["--version"]
 
 
-def test_capabilities_only_probe_remote_git_version_and_mark_supported_features():
+def test_capabilities_probe_local_remote_config_and_mark_sync_features():
     connection = Connection()
     capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
     assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
-    readable = {"tree_status", "commit_graph", "branches", "branch_mutation", "discard", "stash", "identity"}
+    readable = {
+        "tree_status", "commit_graph", "branches", "branch_mutation", "discard", "stash", "identity",
+        "fetch", "pull", "push",
+    }
     assert all(
         item["available"] is (name in readable)
         and item["reason"] == ("" if name in readable else "remote_feature_unavailable")
@@ -153,7 +167,11 @@ def test_capabilities_only_probe_remote_git_version_and_mark_supported_features(
         item["requires_confirmation"] is (name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION)
         for name, item in capabilities.items()
     )
-    assert [call[0] for call in connection.calls] == [["--version"]]
+    assert [call[0] for call in connection.calls] == [
+        ["--version"], ["rev-parse", "--show-toplevel"], ["remote"],
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    ]
 
 
 def test_capabilities_report_missing_remote_git_without_repository_probe():
@@ -162,6 +180,138 @@ def test_capabilities_report_missing_remote_git_without_repository_probe():
     capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
     assert all(item["reason"] == "remote_git_not_found" for item in capabilities.values())
     assert [call[0] for call in connection.calls] == [["--version"]]
+
+
+def test_capabilities_report_remote_and_upstream_requirements_without_network_probe():
+    no_remote = remote.RemoteGitService(Connection(remotes=()), ROOT).capabilities()["capabilities"]
+    assert no_remote["fetch"]["reason"] == "git_remote_not_configured"
+    assert no_remote["pull"]["reason"] == "git_remote_not_configured"
+    assert no_remote["push"]["reason"] == "git_remote_not_configured"
+
+    no_upstream = remote.RemoteGitService(Connection(upstream=""), ROOT).capabilities()["capabilities"]
+    assert no_upstream["fetch"]["available"]
+    assert no_upstream["pull"]["reason"] == "git_upstream_not_configured"
+    assert no_upstream["push"]["reason"] == "git_upstream_not_configured"
+
+    no_repository = remote.RemoteGitService(Connection(repository=False), ROOT).capabilities()["capabilities"]
+    assert all(no_repository[name]["reason"] == "git_not_repository" for name in ("fetch", "pull", "push"))
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_args"),
+    [
+        ("fetch", ["fetch", "--all", "--prune"]),
+        ("pull", ["pull", "--ff-only"]),
+        ("push", ["push", "origin", "main:main"]),
+    ],
+)
+def test_remote_sync_commands_use_remote_root_timeout_and_single_mutation(operation, expected_args):
+    connection = Connection(files={})
+
+    overview = getattr(remote.RemoteGitService(connection, ROOT), operation)()
+
+    assert overview["repo_path"] == ROOT
+    mutations = [call for call in connection.calls if call[0][0] == operation]
+    assert [call[0] for call in mutations] == [expected_args]
+    assert mutations[0][1] == ROOT and mutations[0][2] == remote.MUTATION_TIMEOUT
+    assert len(mutations) == 1
+
+
+@pytest.mark.parametrize("operation", ["fetch", "pull", "push"])
+def test_remote_sync_prechecks_attach_not_started_error_data_and_do_not_mutate(operation):
+    connection = Connection(remotes=()) if operation == "fetch" else Connection(upstream="")
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        getattr(remote.RemoteGitService(connection, ROOT), operation)()
+
+    assert exc.value.code == (
+        "git_remote_not_configured" if operation == "fetch" else "git_upstream_not_configured"
+    )
+    assert exc.value.data == {"operation": operation, "outcome": "not_started", "refresh_required": False}
+    assert not any(call[0][0] == operation for call in connection.calls)
+
+
+def test_remote_sync_requires_a_remote_repository_before_remote_configuration():
+    connection = Connection(repository=False)
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).fetch()
+
+    assert exc.value.code == "git_not_repository"
+    assert exc.value.data == {"operation": "fetch", "outcome": "not_started", "refresh_required": False}
+    assert [call[0] for call in connection.calls] == [["--version"], ["rev-parse", "--show-toplevel"]]
+
+
+def test_remote_pull_requires_clean_worktree_and_maps_conflicts_to_manual_resolution():
+    dirty = Connection(files={"file.txt": ".M"})
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(dirty, ROOT).pull()
+    assert exc.value.code == "git_pull_requires_manual_resolution"
+    assert exc.value.data == {"operation": "pull", "outcome": "not_started", "refresh_required": False}
+    assert not any(call[0][0] == "pull" for call in dirty.calls)
+
+    conflict = Connection(files={"file.txt": "UU"})
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(conflict, ROOT).pull()
+    assert exc.value.code == "git_pull_requires_manual_resolution"
+    assert not any(call[0][0] == "pull" for call in conflict.calls)
+
+
+@pytest.mark.parametrize(
+    ("operation", "stderr", "expected_code", "outcome"),
+    [
+        (
+            "fetch",
+            "fatal: could not read Username for 'https://alice:secret@example.com/repo': terminal prompts disabled\nGIT_ASKPASS=askpass-secret",
+            "git_remote_credentials_unavailable",
+            "rejected",
+        ),
+        ("fetch", "ssh: Host key verification failed.", "git_remote_host_key_unverified", "rejected"),
+        ("fetch", "fatal: unable to access 'https://example.com/repo': Could not resolve host", "git_remote_network_failed", "unknown"),
+        ("pull", "fatal: Not possible to fast-forward, aborting.", "git_pull_requires_manual_resolution", "rejected"),
+        ("push", "! [rejected] main -> main (non-fast-forward)\nfailed to push some refs", "git_push_rejected", "rejected"),
+    ],
+)
+def test_remote_sync_classifies_failures_redacts_secrets_and_reports_outcome(operation, stderr, expected_code, outcome):
+    connection = Connection(files={})
+    connection.overrides[operation] = result(stderr=stderr, returncode=1)
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        getattr(remote.RemoteGitService(connection, ROOT), operation)()
+
+    assert exc.value.code == expected_code
+    assert exc.value.data["operation"] == operation
+    assert exc.value.data["outcome"] == outcome
+    assert exc.value.data["refresh_required"] is True
+    assert "secret" not in exc.value.message.lower()
+    assert "askpass-secret" not in str(exc.value.data).lower()
+    assert sum(call[0][0] == operation for call in connection.calls) == 1
+
+
+@pytest.mark.parametrize("transport_code", ["remote_timeout", "remote_disconnected"])
+def test_remote_sync_transport_failure_is_unknown_and_is_not_retried(transport_code):
+    connection = Connection(files={})
+    connection.overrides["fetch"] = RemoteWorkspaceError(504 if transport_code == "remote_timeout" else 502, transport_code, "transport failed")
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).fetch()
+
+    assert exc.value.code == "git_remote_network_failed"
+    assert exc.value.data == {"operation": "fetch", "outcome": "unknown", "refresh_required": True}
+    assert sum(call[0][0] == "fetch" for call in connection.calls) == 1
+
+
+@pytest.mark.parametrize("transport_code", ["host_key_confirmation_required", "host_key_mismatch"])
+def test_remote_sync_host_key_transport_errors_use_stable_diagnostic_code(transport_code):
+    connection = Connection(files={})
+    connection.overrides["fetch"] = RemoteWorkspaceError(409, transport_code, "SSH host key is not verified")
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).fetch()
+
+    assert exc.value.code == "git_remote_host_key_unverified"
+    assert exc.value.data == {"operation": "fetch", "outcome": "rejected", "refresh_required": True}
+    assert sum(call[0][0] == "fetch" for call in connection.calls) == 1
 
 
 def test_tree_status_parses_nul_records_without_losing_special_paths():

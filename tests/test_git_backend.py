@@ -73,6 +73,9 @@ def test_remote_backend_delegates_supported_views_and_mutations():
     backend.service.identity_update.return_value = {"repo_found": True}
     backend.service.discard.return_value = {"repo_found": True}
     backend.service.discard_all.return_value = {"repo_found": True}
+    backend.service.fetch.return_value = {"repo_found": True}
+    backend.service.pull.return_value = {"repo_found": True}
+    backend.service.push.return_value = {"repo_found": True}
 
     assert backend.tree_status() == {"items": {}}
     assert backend.graph("current", 2, "cursor") == {"nodes": []}
@@ -89,6 +92,9 @@ def test_remote_backend_delegates_supported_views_and_mutations():
     assert backend.identity_update(scope="global", name="Name", email="name@example.com") == {"repo_found": True}
     assert backend.discard(["file.txt"]) == {"repo_found": True}
     assert backend.discard_all() == {"repo_found": True}
+    assert backend.fetch() == {"repo_found": True}
+    assert backend.pull() == {"repo_found": True}
+    assert backend.push() == {"repo_found": True}
     backend.service.branch_create.assert_called_once_with("feature", "")
     backend.service.branch_switch.assert_called_once_with("feature")
     backend.service.branch_reset.assert_called_once_with("a" * 40, "mixed")
@@ -100,3 +106,6 @@ def test_remote_backend_delegates_supported_views_and_mutations():
     )
     backend.service.discard.assert_called_once_with(["file.txt"])
     backend.service.discard_all.assert_called_once_with()
+    backend.service.fetch.assert_called_once_with()
+    backend.service.pull.assert_called_once_with()
+    backend.service.push.assert_called_once_with()

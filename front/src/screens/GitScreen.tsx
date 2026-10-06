@@ -39,6 +39,8 @@ import type {
   GitCommitGraphPayload,
   GitCommitGraphRef,
   GitGraphScope,
+  GitCapabilities,
+  GitCapability,
   GitIdentityConfig,
   GitIdentityScope,
   GitOverview,
@@ -62,6 +64,24 @@ type Props = {
 type GitFileGroupKey = "staged" | "unstaged" | "untracked";
 type CommitLike = Pick<GitCommitGraphNode, "hash" | "shortHash" | "subject">;
 type SelectedGitDiff = GitDiffPayload & { label: string };
+type RemoteGitAction = "fetch" | "pull" | "push";
+
+const REMOTE_GIT_ACTIONS: RemoteGitAction[] = ["fetch", "pull", "push"];
+const REMOTE_GIT_ACTION_LABELS: Record<RemoteGitAction, string> = {
+  fetch: "Fetch",
+  pull: "Pull",
+  push: "Push",
+};
+
+const REMOTE_GIT_DIAGNOSTICS: Record<string, string> = {
+  git_remote_credentials_unavailable: "远程 Git 凭据不可用。请在远程主机配置 SSH key/agent 或 credential helper，并确认 remote URL 可访问。",
+  git_remote_host_key_unverified: "远程 Git 服务端 host key 尚未确认。请先在远程主机确认服务端指纹，再刷新 Git 状态。",
+  git_remote_network_failed: "远程 Git 网络不可达。请检查远程主机的 DNS、代理和防火墙，然后刷新 Git 状态。",
+  git_pull_requires_manual_resolution: "Pull 需要手动处理。请在远程主机处理 dirty worktree、冲突或非 fast-forward 状态，再刷新 Git 状态。",
+  git_push_rejected: "Push 被远端拒绝。请先 Fetch 检查 upstream 和远端保护规则，处理远端提示后再决定是否 Push。",
+  git_remote_not_configured: "远程仓库没有配置 remote。请在远程主机配置 Git remote 后刷新 Git 状态。",
+  git_upstream_not_configured: "当前分支没有配置 upstream。请在远程主机为当前分支设置 upstream 后刷新 Git 状态。",
+};
 
 const GIT_GRAPH_LIMIT = 50;
 const GIT_GRAPH_ROW_HEIGHT = 44;
@@ -76,6 +96,48 @@ function groupedFiles(overview: GitOverview | null) {
     unstaged: changedFiles.filter((item) => item.unstaged && !item.untracked),
     untracked: changedFiles.filter((item) => item.untracked),
   };
+}
+
+function remoteGitCapabilityReason(capability: GitCapability | undefined, loading = false) {
+  if (loading) {
+    return "正在读取服务端能力";
+  }
+  return capability?.reason || "服务端未提供原因";
+}
+
+function remoteGitErrorDiagnostic(error: unknown, operation: RemoteGitAction) {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  const code = String(candidate?.code || "").trim().toLowerCase();
+  if (REMOTE_GIT_DIAGNOSTICS[code]) {
+    return REMOTE_GIT_DIAGNOSTICS[code];
+  }
+
+  const signal = `${code} ${String(candidate?.message || (error instanceof Error ? error.message : "") || "")}`.toLowerCase();
+  if (signal.includes("credential") || signal.includes("authentication") || signal.includes("permission denied")) {
+    return REMOTE_GIT_DIAGNOSTICS.git_remote_credentials_unavailable;
+  }
+  if (signal.includes("host key") || signal.includes("known_hosts") || signal.includes("fingerprint")) {
+    return REMOTE_GIT_DIAGNOSTICS.git_remote_host_key_unverified;
+  }
+  if (operation === "pull" && (signal.includes("conflict") || signal.includes("dirty") || signal.includes("non-fast-forward"))) {
+    return REMOTE_GIT_DIAGNOSTICS.git_pull_requires_manual_resolution;
+  }
+  if (operation === "push" && (signal.includes("rejected") || signal.includes("non-fast-forward") || signal.includes("protected branch"))) {
+    return REMOTE_GIT_DIAGNOSTICS.git_push_rejected;
+  }
+  if (["timeout", "timed out", "unreachable", "no route", "connection refused", "network"].some((token) => signal.includes(token))) {
+    return REMOTE_GIT_DIAGNOSTICS.git_remote_network_failed;
+  }
+  return "";
+}
+
+function gitActionErrorMessage(error: unknown, fallback: string, operation?: RemoteGitAction) {
+  const rawMessage = error instanceof Error ? error.message : fallback;
+  if (!operation) {
+    return rawMessage;
+  }
+  const diagnostic = remoteGitErrorDiagnostic(error, operation);
+  return diagnostic ? `${diagnostic} ${rawMessage}` : rawMessage;
 }
 
 function countLabel(title: string, count: number) {
@@ -442,6 +504,9 @@ export function GitScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [remoteGitMissing, setRemoteGitMissing] = useState(false);
+  const [remoteGitCapabilities, setRemoteGitCapabilities] = useState<GitCapabilities | null>(null);
+  const [remoteGitCapabilitiesLoading, setRemoteGitCapabilitiesLoading] = useState(false);
+  const [remoteGitCapabilitiesError, setRemoteGitCapabilitiesError] = useState("");
   const [notice, setNotice] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -521,6 +586,19 @@ export function GitScreen({
     }
   }
 
+  async function loadGitCapabilities() {
+    setRemoteGitCapabilitiesLoading(true);
+    setRemoteGitCapabilitiesError("");
+    try {
+      setRemoteGitCapabilities(await client.getGitCapabilities(botAlias));
+    } catch (err) {
+      setRemoteGitCapabilities(null);
+      setRemoteGitCapabilitiesError(err instanceof Error ? err.message : "读取远程 Git 能力失败");
+    } finally {
+      setRemoteGitCapabilitiesLoading(false);
+    }
+  }
+
   async function refreshOverviewQuietly() {
     try {
       syncOverview(await client.getGitOverview(botAlias));
@@ -564,6 +642,15 @@ export function GitScreen({
   useEffect(() => {
     void loadOverview();
     void loadIdentityConfig("global");
+  }, [botAlias, client, remote]);
+
+  useEffect(() => {
+    if (!remote) {
+      setRemoteGitCapabilities(null);
+      setRemoteGitCapabilitiesError("");
+      return;
+    }
+    void loadGitCapabilities();
   }, [botAlias, client, remote]);
 
   useEffect(() => {
@@ -705,7 +792,12 @@ export function GitScreen({
   async function runAction(
     key: string,
     fn: () => Promise<{ message: string; overview: GitOverview }>,
-    options: { refreshWorkspace?: boolean } = {},
+    options: {
+      refreshWorkspace?: boolean;
+      refreshOverviewOnSuccess?: boolean;
+      refreshOverviewOnError?: boolean;
+      remoteOperation?: RemoteGitAction;
+    } = {},
   ) {
     setActionLoading(key);
     setError("");
@@ -715,6 +807,9 @@ export function GitScreen({
       const result = await fn();
       syncOverview(result.overview);
       if (options.refreshWorkspace) {
+        if (options.refreshOverviewOnSuccess) {
+          await refreshOverviewQuietly();
+        }
         await loadBranches();
         await loadGitGraph({ scope: graphScope });
         await loadStashes();
@@ -726,10 +821,35 @@ export function GitScreen({
       }
     } catch (err) {
       setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
-      setError(err instanceof Error ? err.message : "Git 操作失败");
+      const message = gitActionErrorMessage(err, "Git 操作失败", options.remoteOperation);
+      if (options.refreshOverviewOnError) {
+        await refreshOverviewQuietly();
+      }
+      setError(message);
     } finally {
       setActionLoading("");
     }
+  }
+
+  async function runRemoteGitAction(operation: RemoteGitAction) {
+    const capability = remoteGitCapabilities?.capabilities[operation];
+    if (!capability?.available || mutationBusy) {
+      return;
+    }
+    if (capability.requiresConfirmation && !window.confirm(`确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？远程主机将使用其已配置的 Git 凭据。`)) {
+      return;
+    }
+    const mutation = operation === "fetch"
+      ? () => client.fetchGitRemote(botAlias)
+      : operation === "pull"
+        ? () => client.pullGitRemote(botAlias)
+        : () => client.pushGitRemote(botAlias);
+    await runAction(`remote-${operation}`, mutation, {
+      refreshWorkspace: true,
+      refreshOverviewOnSuccess: true,
+      refreshOverviewOnError: true,
+      remoteOperation: operation,
+    });
   }
 
   async function loadBranches() {
@@ -1349,7 +1469,55 @@ export function GitScreen({
                   </div>
                 </section>
 
-                {!remote ? <section className={sectionClass("space-y-2")}>
+                {remote ? <section data-testid="remote-git-actions" className={sectionClass("space-y-2")}>
+                  <div className={sectionHeaderClass()}>
+                    <h2 className="text-sm font-semibold">远端同步</h2>
+                  </div>
+                  <p data-testid="remote-git-credentials-hint" className={sectionBodyClass("text-xs text-[var(--muted)]")}>
+                    凭据由远程主机配置（SSH key/agent、credential helper 或已配置的 SSH remote）。此页面不会输入或上传本地 token。
+                  </p>
+                  {remoteGitCapabilitiesLoading ? (
+                    <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>读取远程 Git 能力...</p>
+                  ) : null}
+                  {remoteGitCapabilitiesError ? (
+                    <div role="status" className={sectionBodyClass("text-xs text-[var(--status-danger)]")}>
+                      无法读取远程 Git 能力：{remoteGitCapabilitiesError}。请刷新 Git 状态后重试。
+                    </div>
+                  ) : null}
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                    {REMOTE_GIT_ACTIONS.map((operation) => {
+                      const capability = remoteGitCapabilities?.capabilities[operation];
+                      const label = REMOTE_GIT_ACTION_LABELS[operation];
+                      const reason = remoteGitCapabilityReason(capability, remoteGitCapabilitiesLoading);
+                      const unavailable = !capability?.available;
+                      return (
+                        <button
+                          key={operation}
+                          type="button"
+                          aria-label={label}
+                          title={unavailable ? `${label}：${reason}` : label}
+                          onClick={() => void runRemoteGitAction(operation)}
+                          disabled={mutationBusy || remoteGitCapabilitiesLoading || unavailable}
+                          className={buttonClass()}
+                        >
+                          {operation === "push" ? <UploadCloud className="h-3.5 w-3.5" /> : <DownloadCloud className="h-3.5 w-3.5" />}
+                          {actionLoading === `remote-${operation}` ? "处理中..." : label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {REMOTE_GIT_ACTIONS.map((operation) => {
+                    const capability = remoteGitCapabilities?.capabilities[operation];
+                    if (!capability || capability.available) {
+                      return null;
+                    }
+                    return (
+                      <p key={`${operation}-reason`} data-testid={`remote-git-${operation}-reason`} className="text-xs text-[var(--muted)]">
+                        {REMOTE_GIT_ACTION_LABELS[operation]} 不可用：{remoteGitCapabilityReason(capability)}
+                      </p>
+                    );
+                  })}
+                </section> : <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">远端</h2>
                   </div>
@@ -1391,7 +1559,7 @@ export function GitScreen({
                       Stash Push
                     </button>
                   </div>
-                </section> : null}
+                </section>}
 
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>

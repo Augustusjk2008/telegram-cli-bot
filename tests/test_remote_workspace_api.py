@@ -153,6 +153,9 @@ def _forbid_local_git(monkeypatch):
     ("POST", "git/stage", {"paths": ["a b.txt"]}, "stage", (["a b.txt"],), {}),
     ("POST", "git/unstage", {"paths": ["a b.txt"]}, "unstage", (["a b.txt"],), {}),
     ("POST", "git/commit", {"message": "remote commit"}, "commit", ("remote commit",), {}),
+    ("POST", "git/fetch", None, "fetch", (), {}),
+    ("POST", "git/pull", None, "pull", (), {}),
+    ("POST", "git/push", None, "push", (), {}),
 ])
 async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolation(
     tmp_path, monkeypatch, method, suffix, body, operation, args, kwargs,
@@ -183,7 +186,14 @@ async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolatio
         "truncation_reason": "",
         "recent_commits": [],
     }
-    messages = {"stage": "已暂存所选文件", "unstage": "已取消暂存所选文件", "commit": "已创建提交"}
+    messages = {
+        "stage": "已暂存所选文件",
+        "unstage": "已取消暂存所选文件",
+        "commit": "已创建提交",
+        "fetch": "已抓取远端更新",
+        "pull": "已拉取远端更新",
+        "push": "已推送本地提交",
+    }
     expected = {"message": messages[operation], "overview": payload} if operation in messages else payload
     getattr(git, operation).return_value = payload
     factory = Mock(return_value=git)
@@ -261,6 +271,31 @@ async def test_remote_git_mutation_routes_delegate_body_response_and_permissions
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["fetch", "pull", "push"])
+async def test_remote_git_sync_routes_preserve_error_code_and_data(tmp_path, monkeypatch, operation):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_GIT_OPS)
+    service, connection, git = Mock(), Mock(), Mock()
+    service.get.return_value = connection
+    error_data = {"operation": operation, "outcome": "unknown", "refresh_required": True}
+    getattr(git, operation).side_effect = RemoteWorkspaceError(502, "git_remote_network_failed", "network failed", error_data)
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
+    monkeypatch.setattr(git_backend, "RemoteGitService", Mock(return_value=git))
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post(f"/api/bots/main/git/{operation}")
+        payload = await response.json()
+
+    assert response.status == 502
+    assert payload["error"] == {
+        "code": "git_remote_network_failed",
+        "message": "network failed",
+        "data": error_data,
+    }
+    getattr(git, operation).assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_remote_global_identity_update_requires_admin_capability(tmp_path, monkeypatch):
     server, auth = _server(tmp_path, monkeypatch)
     auth.capabilities.add(CAP_GIT_OPS)
@@ -293,6 +328,7 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         ("POST", "git/stashes/apply"), ("POST", "git/stashes/drop"),
         ("PUT", "git/identity"), ("POST", "git/discard"), ("POST", "git/discard-all"),
         ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit"),
+        ("POST", "git/fetch"), ("POST", "git/pull"), ("POST", "git/push"),
         ("POST", "git/stash/pop"),
     }
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()

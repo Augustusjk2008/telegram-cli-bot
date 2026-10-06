@@ -38,6 +38,7 @@ _GIT_OPTIONS = ["--no-pager", "--literal-pathspecs", "--no-optional-locks",
 _STASH_REF_RE = re.compile(r"^stash@\{\d+\}$")
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _UNMERGED_STATUSES = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
+_SYNC_OPERATIONS = frozenset({"fetch", "pull", "push"})
 
 
 def _windows_argument(value: str) -> str:
@@ -120,6 +121,9 @@ class RemoteGitService:
                 "Git was not found in the SSH account's noninteractive PATH. Install Git on the remote machine "
                 "or update that account's PATH, then retry.",
             )
+        return self._repo_root_without_version()
+
+    def _repo_root_without_version(self) -> str | None:
         result = self._git(
             ["rev-parse", "--show-toplevel"],
             error="git_repo_probe_failed",
@@ -143,6 +147,42 @@ class RemoteGitService:
                                        "Select the repository root as the remote workspace to use Git.",
                                        {"repo_path": top, "working_dir": self.root})
         return top
+
+    def _remote_names(self) -> list[str]:
+        raw = self._git(["remote"], error="git_remote_probe_failed")["stdout"]
+        return [line.strip() for line in raw.splitlines() if line.strip()]
+
+    def _upstream_target(self, remotes: list[str]) -> tuple[str, str, str] | None:
+        head = self._git(
+            ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            allowed=(0, 1),
+            error="git_upstream_probe_failed",
+        )
+        if head["returncode"]:
+            return None
+        branch = head["stdout"].strip()
+        if not branch or "\n" in branch or "\r" in branch:
+            return None
+
+        upstream = self._git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            allowed=(0, 128),
+            error="git_upstream_probe_failed",
+        )
+        if upstream["returncode"]:
+            return None
+        upstream_name = upstream["stdout"].strip()
+        if not upstream_name or "\n" in upstream_name or "\r" in upstream_name:
+            return None
+
+        # Match the longest configured remote name so remotes containing a
+        # slash remain unambiguous. A local tracking branch is not a valid
+        # remote target for Pull/Push.
+        for remote_name in sorted(remotes, key=len, reverse=True):
+            prefix = remote_name + "/"
+            if upstream_name.startswith(prefix) and upstream_name[len(prefix):]:
+                return branch, remote_name, upstream_name[len(prefix):]
+        return None
 
     def _require_repo(self) -> None:
         if self._repo_root() is None:
@@ -468,7 +508,7 @@ class RemoteGitService:
             result = self._git(["--version"], allowed=(0, 127))
             if result["returncode"] == 127:
                 return build_git_capabilities(available=False, reason="remote_git_not_found")
-            return build_git_capabilities(
+            payload = build_git_capabilities(
                 available={
                     "tree_status": True,
                     "commit_graph": True,
@@ -480,6 +520,193 @@ class RemoteGitService:
                 },
                 reason="remote_feature_unavailable",
             )
+            capabilities = payload["capabilities"]
+            sync_available = {name: False for name in _SYNC_OPERATIONS}
+            sync_reason = "git_not_repository"
+            if self._repo_root_without_version() is not None:
+                remotes = self._remote_names()
+                if remotes:
+                    sync_available["fetch"] = True
+                    sync_reason = "git_upstream_not_configured"
+                    if self._upstream_target(remotes) is not None:
+                        sync_available["pull"] = sync_available["push"] = True
+                        sync_reason = ""
+                else:
+                    sync_reason = "git_remote_not_configured"
+            for name, available in sync_available.items():
+                capabilities[name]["available"] = available
+                capabilities[name]["reason"] = "" if available else sync_reason
+            return payload
+
+    @staticmethod
+    def _redact_remote_text(value: object) -> str:
+        text = str(value or "")
+        text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1", text)
+        text = re.sub(
+            r"(?i)(?<![\w])[^@\s/:]+@(?=[A-Za-z0-9._-]+(?::\d+)?[:/])",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?i)([?&](?:access[_-]?token|auth[_-]?token|password|passwd|secret|token)\s*=\s*)[^&\s]+",
+            r"\1<redacted>",
+            text,
+        )
+        text = re.sub(
+            r"(?i)(\b(?:authorization\s*:\s*bearer|(?:git|ssh)_askpass|askpass(?:_command)?|password|passwd|secret|token)\s*(?:[:=]|\s)\s*)[^\s\r\n]+",
+            r"\1<redacted>",
+            text,
+        )
+        return text
+
+    @classmethod
+    def _redact_remote_data(cls, value: object) -> object:
+        if isinstance(value, str):
+            return cls._redact_remote_text(value)
+        if isinstance(value, dict):
+            return {key: cls._redact_remote_data(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._redact_remote_data(item) for item in value]
+        return value
+
+    @classmethod
+    def _classify_sync_error(cls, operation: str, exc: RemoteWorkspaceError) -> str:
+        if exc.code in {
+            "git_not_repository",
+            "git_remote_not_configured",
+            "git_upstream_not_configured",
+            "git_pull_requires_manual_resolution",
+        }:
+            return exc.code
+        text = cls._redact_remote_text(
+            "\n".join([exc.code, exc.message, *(str(value) for value in exc.data.values())])
+        ).lower()
+        if exc.code in {"host_key_confirmation_required", "host_key_mismatch", "remote_host_key_unknown"} or any(
+            marker in text for marker in (
+                "host key verification failed", "host key has changed", "offending", "known_hosts",
+                "remote host identification has changed", "no matching host key type",
+            )
+        ):
+            return "git_remote_host_key_unverified"
+        if any(marker in text for marker in (
+            "authentication failed", "authentication required", "permission denied (publickey)",
+            "could not read username", "could not read password", "terminal prompts disabled",
+            "invalid username or token", "credential", "access denied",
+        )):
+            return "git_remote_credentials_unavailable"
+        if exc.code in {"remote_timeout", "remote_disconnected", "remote_connection_closed"} or any(
+            marker in text for marker in (
+                "could not resolve host", "failed to connect", "connection refused",
+                "connection timed out", "connection reset", "network is unreachable",
+                "no route to host", "name or service not known", "temporary failure in name resolution",
+                "timed out", "unable to access",
+            )
+        ):
+            return "git_remote_network_failed"
+        if operation == "pull" and any(marker in text for marker in (
+            "not possible to fast-forward", "cannot fast-forward", "diverg", "conflict",
+            "would be overwritten", "local changes to the following files",
+            "please commit your changes",
+        )):
+            return "git_pull_requires_manual_resolution"
+        if operation == "push" and any(marker in text for marker in (
+            "[rejected]", "rejected", "non-fast-forward", "failed to push some refs",
+            "remote rejected", "hook declined", "pre-receive hook declined",
+            "protected branch", "deny updating a hidden ref",
+        )):
+            return "git_push_rejected"
+        return exc.code
+
+    @classmethod
+    def _sync_error(
+        cls,
+        operation: str,
+        exc: RemoteWorkspaceError,
+        *,
+        executed: bool,
+    ) -> RemoteWorkspaceError:
+        code = cls._classify_sync_error(operation, exc)
+        if code == "git_remote_network_failed":
+            outcome, refresh_required = "unknown", True
+        elif not executed:
+            outcome, refresh_required = "not_started", False
+        else:
+            outcome, refresh_required = "rejected", True
+        data = cls._redact_remote_data(exc.data)
+        if not isinstance(data, dict):
+            data = {}
+        data.update({
+            "operation": operation,
+            "outcome": outcome,
+            "refresh_required": refresh_required,
+        })
+        return RemoteWorkspaceError(
+            exc.status,
+            code,
+            cls._redact_remote_text(exc.message),
+            data,
+        )
+
+    def _remote_sync_precheck(self, *, require_upstream: bool, require_clean: bool) -> tuple[str, str, str] | None:
+        self._require_repo()
+        remotes = self._remote_names()
+        if not remotes:
+            raise RemoteWorkspaceError(409, "git_remote_not_configured", "The remote repository has no configured remote")
+        target = self._upstream_target(remotes) if require_upstream else None
+        if require_upstream and target is None:
+            raise RemoteWorkspaceError(409, "git_upstream_not_configured", "The current branch has no configured upstream")
+        if require_clean:
+            _, files, _ = self._status()
+            if self._has_conflict(files) or files:
+                raise RemoteWorkspaceError(
+                    409,
+                    "git_pull_requires_manual_resolution",
+                    "Pull requires a clean worktree without unresolved conflicts",
+                )
+        return target
+
+    def _run_remote_sync(self, operation: str, args: list[str], *, require_upstream: bool = False,
+                         require_clean: bool = False) -> dict:
+        if operation not in _SYNC_OPERATIONS:
+            raise ValueError(f"Unsupported remote sync operation: {operation}")
+        with self._lock:
+            try:
+                target = self._remote_sync_precheck(
+                    require_upstream=require_upstream,
+                    require_clean=require_clean,
+                )
+            except RemoteWorkspaceError as exc:
+                raise self._sync_error(operation, exc, executed=False) from exc
+
+            if operation == "push":
+                assert target is not None
+                branch, remote_name, remote_branch = target
+                args = ["push", remote_name, f"{branch}:{remote_branch}"]
+            try:
+                result = self._git(
+                    args,
+                    error=f"git_{operation}_failed",
+                    allowed=tuple(range(256)),
+                    truncated=True,
+                    mutation=True,
+                )
+                if result["returncode"]:
+                    message = (result["stderr"] or result["stdout"] or "Remote Git command failed").strip()
+                    if result["output_truncated"]:
+                        message += "\n[Remote Git output truncated]"
+                    raise RemoteWorkspaceError(400, f"git_{operation}_failed", message)
+                return self._overview()
+            except RemoteWorkspaceError as exc:
+                raise self._sync_error(operation, exc, executed=True) from exc
+
+    def fetch(self) -> dict:
+        return self._run_remote_sync("fetch", ["fetch", "--all", "--prune"])
+
+    def pull(self) -> dict:
+        return self._run_remote_sync("pull", ["pull", "--ff-only"], require_upstream=True, require_clean=True)
+
+    def push(self) -> dict:
+        return self._run_remote_sync("push", ["push"], require_upstream=True)
 
     @staticmethod
     def _status_items(raw: str) -> dict[str, str]:

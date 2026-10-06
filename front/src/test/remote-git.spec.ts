@@ -32,10 +32,20 @@ for (const width of [1280, 390]) {
       else if (path === "bots/remote") data = { bot, session: { working_dir: "C:/control", is_processing: false, history_count: 0 }, agents: [{ id: "main", name: "main" }] };
       else if (path === "bots/remote/ls") data = { working_dir: remote.root, entries: [{ name: "tracked.txt", is_dir: false }] };
       else if (path === "bots/remote/pwd") data = { working_dir: remote.root };
+      else if (path === "bots/remote/git/capabilities") {
+        gitRequests.push(`${request.method()} /capabilities`);
+        data = {
+          capabilities: {
+            fetch: { available: true, reason: "", requires_confirmation: false },
+            pull: { available: true, reason: "", requires_confirmation: true },
+            push: { available: true, reason: "", requires_confirmation: true },
+          },
+        };
+      }
       else if (path.startsWith("bots/remote/git")) {
         const operation = path.slice("bots/remote/git".length);
         gitRequests.push(`${request.method()} ${operation || "/"}`);
-        if (!["", "/diff", "/stage", "/unstage", "/commit", "/tree-status", "/branches", "/graph", "/stashes", "/identity"].includes(operation)) {
+        if (!["", "/diff", "/stage", "/unstage", "/commit", "/tree-status", "/branches", "/graph", "/stashes", "/identity", "/fetch", "/pull", "/push"].includes(operation)) {
           unsupportedRequests.push(path);
           await route.fulfill({ status: 501, json: { ok: false, error: { code: "remote_feature_unavailable", message: "Unsupported remote Git operation" } } });
           return;
@@ -60,6 +70,8 @@ for (const width of [1280, 390]) {
           subject = request.postDataJSON().message;
           files = [];
           data = { message: "Committed", overview: overview() };
+        } else if (operation === "/fetch" || operation === "/pull" || operation === "/push") {
+          data = { message: `${operation.slice(1)} complete`, overview: overview() };
         } else data = overview();
       }
       else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 0, reset: false };
@@ -83,7 +95,17 @@ for (const width of [1280, 390]) {
     await expect(page.getByText("Remote stash", { exact: true })).toBeVisible();
     await expect(page.getByTestId("git-selected-commit-message")).toContainText("Complete remote commit message.");
     await expect(page.getByRole("textbox", { name: "Git 用户名", exact: true })).toHaveValue("Remote Dev");
-    await expect(page.getByRole("button", { name: /切换|新建分支|应用 stash|删除 stash|Fetch|Pull|Push|保存 Git 用户|初始化 Git 仓库|重置到此提交|智能提交/ })).toHaveCount(0);
+    await expect(page.getByTestId("remote-git-credentials-hint")).toContainText("凭据由远程主机配置");
+    await expect(page.getByRole("button", { name: "Fetch", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Pull", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Push", exact: true })).toBeEnabled();
+    page.on("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Fetch", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Fetch", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Pull", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pull", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Push", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Push", exact: true })).toBeEnabled();
     for (const path of ["staged.txt", "tracked.txt", "new.txt"]) {
       await page.getByRole("button", { name: `打开 diff ${path}`, exact: true }).click();
       if (width === 1280) await expect(page.getByRole("tab", { name: `${path}.diff`, exact: true })).toBeVisible();
@@ -96,12 +118,12 @@ for (const width of [1280, 390]) {
     await page.getByRole("textbox", { name: "commit message", exact: true }).fill("Manual remote commit");
     await page.getByRole("button", { name: "提交更改", exact: true }).click();
     await expect(page.getByText("Manual remote commit", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|Fetch|Pull|Push|智能提交|生成|重置到此提交/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|智能提交|生成|重置到此提交/ })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`remote-git-${width}.png`) });
     await page.getByRole("button", { name: "文件", exact: true }).click();
     await expect(page.getByRole("button", { name: "打开 tracked.txt", exact: true })).toBeVisible();
-    expect(gitRequests).toEqual(expect.arrayContaining(["GET /", "GET /tree-status", "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /diff", "POST /stage", "POST /unstage", "POST /commit"]));
+    expect(gitRequests).toEqual(expect.arrayContaining(["GET /capabilities", "GET /", "GET /tree-status", "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /diff", "POST /stage", "POST /unstage", "POST /commit", "POST /fetch", "POST /pull", "POST /push"]));
     expect(unsupportedRequests).toEqual([]);
   });
 }

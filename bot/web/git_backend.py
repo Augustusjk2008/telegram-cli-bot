@@ -235,6 +235,15 @@ class RemoteGitBackend:
     def discard_all(self) -> dict[str, Any]:
         return self.service.discard_all()
 
+    def fetch(self) -> dict[str, Any]:
+        return self.service.fetch()
+
+    def pull(self) -> dict[str, Any]:
+        return self.service.pull()
+
+    def push(self) -> dict[str, Any]:
+        return self.service.push()
+
     def stash_pop(self) -> dict[str, Any]:
         return self.service.stash_pop()
 
@@ -242,9 +251,6 @@ class RemoteGitBackend:
     def _unsupported(*_args: Any, **_kwargs: Any):
         raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
 
-    fetch = _unsupported
-    pull = _unsupported
-    push = _unsupported
     stash = _unsupported
     commit_message_config = _unsupported
     update_commit_message_config = _unsupported
