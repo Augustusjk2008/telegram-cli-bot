@@ -208,7 +208,7 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   expect(screen.getByText("main")).toBeInTheDocument();
   expect(await screen.findByText(/origin\/main/)).toBeInTheDocument();
   expect(await screen.findByText("Remote stash")).toBeInTheDocument();
-  expect((await screen.findAllByText(/Complete remote commit message\./)).length).toBeGreaterThan(0);
+  expect(await screen.findByTestId("git-selected-commit-message")).toHaveTextContent("Complete remote commit message.");
   expect(await screen.findByLabelText("Git 用户名")).toHaveValue("Remote Dev");
   expect(screen.getByLabelText("Git 用户名")).toHaveAttribute("readonly");
   expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();

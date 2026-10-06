@@ -81,7 +81,7 @@ for (const width of [1280, 390]) {
     await expect(page.getByText("Remote initial commit", { exact: true })).toBeVisible();
     await expect(page.getByText(/origin\/main/)).toBeVisible();
     await expect(page.getByText("Remote stash", { exact: true })).toBeVisible();
-    await expect(page.getByText(/Complete remote commit message\./)).toBeVisible();
+    await expect(page.getByTestId("git-selected-commit-message")).toContainText("Complete remote commit message.");
     await expect(page.getByRole("textbox", { name: "Git 用户名", exact: true })).toHaveValue("Remote Dev");
     await expect(page.getByRole("button", { name: /切换|新建分支|应用 stash|删除 stash|Fetch|Pull|Push|保存 Git 用户|初始化 Git 仓库|重置到此提交|智能提交/ })).toHaveCount(0);
     for (const path of ["staged.txt", "tracked.txt", "new.txt"]) {

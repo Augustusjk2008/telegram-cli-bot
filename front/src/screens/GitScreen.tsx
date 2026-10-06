@@ -420,11 +420,6 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
               <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]">
                 {node.subject || "-"}
               </div>
-              {node.message && node.message !== node.subject ? (
-                <div className="whitespace-pre-wrap break-words text-xs text-[var(--muted)]">
-                  {node.message}
-                </div>
-              ) : null}
             </div>
             </button>
           </TouchHint>
