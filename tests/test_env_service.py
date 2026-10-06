@@ -70,6 +70,24 @@ def test_env_service_exposes_fixed_forward_hub_fields(tmp_path: Path) -> None:
     assert items["TCB_HUB_FRPS_PORT"]["type"] == "number"
 
 
+def test_env_service_exposes_codex_server_voice_toggle(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+
+    item = next(item for item in service.snapshot()["items"] if item["key"] == "TCB_CODEX_SERVER_VOICE_ENABLED")
+    assert item["category"] == "web"
+    assert item["type"] == "boolean"
+    assert item["default"] == "false"
+    assert item["restartRequired"] is True
+
+    preview = service.reload_preview({"values": {"TCB_CODEX_SERVER_VOICE_ENABLED": True}})
+    assert preview["changedKeys"] == ["TCB_CODEX_SERVER_VOICE_ENABLED"]
+    assert preview["restartRequiredKeys"] == ["TCB_CODEX_SERVER_VOICE_ENABLED"]
+
+    service.patch({"values": {"TCB_CODEX_SERVER_VOICE_ENABLED": True}})
+    assert "TCB_CODEX_SERVER_VOICE_ENABLED=true" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:
     _write_env(
         tmp_path,

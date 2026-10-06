@@ -22,6 +22,22 @@ async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "Codex 额度" });
 }
 
+test("环境配置显示 Codex server 语音开关", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: "Web" }));
+
+  const voiceItem = screen.getByText("Codex server 语音").closest("article");
+  expect(voiceItem).toBeInTheDocument();
+  expect(voiceItem).toHaveTextContent("TCB_CODEX_SERVER_VOICE_ENABLED");
+  expect(voiceItem).toHaveTextContent("重启生效");
+});
+
 test("Codex 额度趋势隐藏已下线的次要额度桶", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();

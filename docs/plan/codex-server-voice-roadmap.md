@@ -1,8 +1,8 @@
 # Codex server 语音交互路线图
 
-日期：2026-10-06。状态：M0 已通过。
+日期：2026-10-06。状态：M0、P0 已通过；M1 待浏览器验收。
 
-当前已确认文字工具基线、实验 schema 字段、探测器的单 reader、鉴权、日志脱敏和停止操作契约，以及目标浏览器中的真实麦克风、WebRTC 媒体、语音字幕、语音工具任务、历史读取和中断结果。生产 codex_server 尚未接入 realtime。
+当前已确认文字工具基线、实验 schema 字段、探测器的单 reader、鉴权、日志脱敏和停止操作契约，以及目标浏览器中的真实麦克风、WebRTC 媒体、语音字幕、语音工具任务、历史读取和中断结果。产品侧 codex_server 已有 realtime 接入，功能开关默认关闭；M1–M4 仍待逐项真实验收。
 
 ## 1. 目标和范围
 
@@ -16,7 +16,7 @@
 
 - 本机 Codex CLI 为 0.160.0，realtime_conversation 已启用。
 - 本机实验 schema 可见 thread/realtime/start、appendAudio、appendText、appendSpeech、stop、listVoices、字幕和音频事件。schema 存在不等于账号、额度、媒体或部署可用。
-- CodexServerClient.start() 的 experimental_api 默认关闭。生产 runtime 当前只处理普通 turn，且无普通 turn 时会跳过多数事件。
+- CodexServerClient.start() 的 experimental_api 默认关闭。产品语音入口显式开启实验 API，runtime 由唯一 reader 分发普通 turn 和语音事件；功能开关 TCB_CODEX_SERVER_VOICE_ENABLED 默认关闭。
 - 探测器显式开启实验 API，使用独立 app-server、单一 client.events() reader、loopback 一次性 token、HttpOnly cookie 和脱敏 JSONL 日志。
 - 已验证的文字基线：--check-text 读取固定只读 fixture，工具结果和回答均包含 ORBIT-417。
 - 当前探测器使用 read-only sandbox、never approval、无网络和关闭的已配置 MCP server。它不能证明目标聊天的写操作权限、真实语音额度或生产部署可用。
@@ -47,7 +47,7 @@ schema 或 mock 通过时，不能把真实语音标记为通过。M0 的真实�
 
 ## 5. P0 设计闸门
 
-M0 通过、M1 开始实现前，必须形成并评审以下设计。未完成时不得把 M1 标记为可开发完成。
+P0 设计已于 2026-10-06 经用户确认通过。以下契约作为后续实现和验收依据；设计通过不等于 M1–M4 实测通过。
 
 - TCB 端点、请求体、事件 envelope、版本协商和错误码。端点必须复用现有 Bot 权限、CAP_CHAT_SEND、会话用户归一化、Bot 访问检查和 WebSocket Origin/CSRF 边界。
 - 会话租约的键、获取、续租、释放和过期行为。必须覆盖单连接、跨 conversation 隔离、跨标签页占用和客户端断线。
@@ -84,7 +84,7 @@ M0 只验证隔离探测器中的原生协议、真实媒体和真实语音工�
 schema/协议：
 
 - [x] 已确认 0.160.0 的 realtime 方法、WebRTC transport、远端 SDP 事件和停止请求形状；WebRTC 启动请求显式使用 `version=v3`，以匹配 AVAS 所需的 `quicksilver=v2`。
-- [x] 已确认 account 类型为 chatgpt、功能已启用；未确认语音额度、计费和真实服务结果。
+- [x] 已确认 account 类型为 chatgpt、功能已启用，真实服务链路已通过 M0；语音额度和计费尚未确认。
 - [x] 已在同一测试 thread 确认语音可附着已有 thread，以及语音任务 turn 的创建和完成路径。
 - [ ] 普通任务执行期间的补充和插话行为仍待后续阶段验证。
 
@@ -138,7 +138,7 @@ M0 必须同时满足三层证据：代码/单测通过；schema/协议字段与
 M1 只做当前聊天中的语音连接、控制条和 runtime 事件分发。M1 不做 TCB 任务持久化、统一历史或语音/文字混合输入。
 
 - [x] M0 通过。
-- [ ] P0 设计闸门已评审，M1 可开发。
+- [x] P0 设计闸门已评审，进入 M1 产品浏览器验收。
 - [ ] 按已确认协议接入 TCB 端点，保持版本兼容检查和功能开关。
 - [ ] runtime 在没有普通 turn 时仍由唯一 reader 分发语音连接、字幕、连接状态和控制事件。
 - [ ] 前端实现麦克风、播放、字幕、静音、停止播报、结束语音和设备释放。
