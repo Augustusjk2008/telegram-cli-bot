@@ -93,6 +93,7 @@ from bot.native_agent.legacy_migration import (
     is_legacy_execution_mode,
 )
 from bot.platform.runtime import get_default_shell
+from bot.remote_workspace.transport import RemoteWorkspaceError
 from bot.runtime_paths import (
     get_announcements_content_path,
     get_announcements_reads_path,
@@ -292,44 +293,8 @@ from .api_service import (
     verify_cluster_mcp_request,
 )
 from bot.migrations.runner import migration_diagnostics
-from .git_service import (
-    apply_git_stash,
-    commit_git_message,
-    commit_git_changes,
-    create_git_branch,
-    discard_all_git_changes,
-    discard_git_paths,
-    drop_git_stash,
-    fetch_git_remote,
-    generate_git_smart_commit_message,
-    generate_git_commit_message,
-    get_git_commit_graph,
-    get_git_commit_message_cli_config,
-    get_git_capabilities,
-    get_git_diff,
-    get_git_identity_config,
-    get_git_overview,
-    get_git_smart_commit_repo_hint,
-    get_git_tree_status,
-    git_service_diagnostics,
-    init_git_repository,
-    list_git_branches,
-    list_git_stashes,
-    preflight_git_smart_commit,
-    pop_git_stash,
-    pull_git_remote,
-    push_git_remote,
-    reset_git_commit_message_cli_config,
-    reset_git_branch_to_commit,
-    ensure_git_status_snapshot_unchanged,
-    stage_all_git_changes,
-    stage_git_paths,
-    stash_git_changes,
-    switch_git_branch,
-    unstage_git_paths,
-    update_git_commit_message_cli_config,
-    update_git_identity_config,
-)
+from .git_backend import resolve_git_backend
+from .git_service import git_service_diagnostics
 from .workspace_search_service import (
     build_file_outline,
     quick_open_files,
@@ -902,6 +867,12 @@ async def error_middleware(request: web.Request, handler):
         return await handler(request)
     except WebApiError as exc:
         return _error_response(exc)
+    except RemoteWorkspaceError as exc:
+        if exc.code == "host_key_confirmation_required":
+            return _error_response(WebApiError(409, "remote_host_key_unknown", exc.message, {
+                "fingerprint": exc.data.get("host_key_fingerprint", ""),
+            }))
+        return _error_response(WebApiError(exc.status, exc.code, exc.message, exc.data))
     except ChatStoreOverloadedError as exc:
         return _json(
             {"ok": False, "error": {"code": "chat_store_busy", "message": str(exc)}},
@@ -1333,6 +1304,9 @@ class WebApiServer:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         return alias
 
+    async def _get_git_backend(self, alias: str, user_id: int):
+        return await asyncio.to_thread(resolve_git_backend, self.manager, alias, user_id)
+
     def _normalize_bot_alias(self, alias: str) -> str:
         return str(alias or "").strip().lower()
 
@@ -1567,11 +1541,9 @@ class WebApiServer:
         repo_root = str(job.get("repo_root") or "")
         try:
             self._set_git_smart_commit_job(job, status="running", phase="preflight", error="")
+            backend = await self._get_git_backend(alias, user_id)
             _working_dir, repo_root, snapshot = await asyncio.to_thread(
-                preflight_git_smart_commit,
-                self.manager,
-                alias,
-                user_id,
+                backend.smart_commit_preflight,
             )
             lock_holder = self._git_smart_commit_repo_locks.get(repo_root)
             if lock_holder and lock_holder != job_id:
@@ -1580,23 +1552,18 @@ class WebApiServer:
             job["repo_root"] = repo_root
 
             self._set_git_smart_commit_job(job, phase="generating")
-            generated = await generate_git_smart_commit_message(
-                self.manager,
-                alias,
-                user_id,
-                repo_root=repo_root,
-            )
+            generated = await backend.generate_smart_commit_message(repo_root=repo_root)
             message = str(generated.get("message") or "").strip()
             self._set_git_smart_commit_job(job, message=message)
 
-            await asyncio.to_thread(ensure_git_status_snapshot_unchanged, repo_root, snapshot)
+            await asyncio.to_thread(backend.ensure_smart_commit_snapshot, repo_root, snapshot)
 
             self._set_git_smart_commit_job(job, phase="staging")
-            await asyncio.to_thread(stage_all_git_changes, repo_root)
+            await asyncio.to_thread(backend.stage_all_changes, repo_root)
 
             self._set_git_smart_commit_job(job, phase="committing")
-            await asyncio.to_thread(commit_git_message, repo_root, message)
-            overview = await asyncio.to_thread(get_git_overview, self.manager, alias, user_id)
+            await asyncio.to_thread(backend.commit_message, repo_root, message)
+            overview = await asyncio.to_thread(backend.overview)
 
             self._set_git_smart_commit_job(
                 job,
@@ -4031,23 +3998,23 @@ class WebApiServer:
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(get_git_overview, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.overview)
         return _json({"ok": True, "data": data})
 
     async def get_git_capabilities_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(get_git_capabilities, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.capabilities)
         return _json({"ok": True, "data": data})
 
     async def get_git_commit_graph_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
         data = await asyncio.to_thread(
-            get_git_commit_graph,
-            self.manager,
-            alias,
-            auth.user_id,
+            backend.graph,
             request.query.get("scope", "all"),
             request.query.get("limit", ""),
             request.query.get("cursor", ""),
@@ -4057,24 +4024,24 @@ class WebApiServer:
     async def get_git_tree_status_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(get_git_tree_status, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.tree_status)
         return _json({"ok": True, "data": data})
 
     async def get_git_branches_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(list_git_branches, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.branches)
         return _json({"ok": True, "data": data})
 
     async def post_git_branch_create(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
         data = await asyncio.to_thread(
-            create_git_branch,
-            self.manager,
-            alias,
-            auth.user_id,
+            backend.branch_create,
             str(body.get("name") or ""),
             str(body.get("start_point") or body.get("startPoint") or ""),
         )
@@ -4084,18 +4051,17 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await asyncio.to_thread(switch_git_branch, self.manager, alias, auth.user_id, str(body.get("name") or ""))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.branch_switch, str(body.get("name") or ""))
         return _json({"ok": True, "data": data})
 
     async def post_git_branch_reset(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
         data = await asyncio.to_thread(
-            reset_git_branch_to_commit,
-            self.manager,
-            alias,
-            auth.user_id,
+            backend.branch_reset,
             str(body.get("commit") or ""),
             str(body.get("mode") or "mixed"),
         )
@@ -4104,41 +4070,46 @@ class WebApiServer:
     async def get_git_stashes_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(list_git_stashes, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.stashes)
         return _json({"ok": True, "data": data})
 
     async def post_git_stash_apply(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = await asyncio.to_thread(apply_git_stash, self.manager, alias, auth.user_id, str(body.get("ref") or ""))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.stash_apply, str(body.get("ref") or ""))
         return _json({"ok": True, "data": {"message": "已应用 stash", "overview": overview}})
 
     async def post_git_stash_drop(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = await asyncio.to_thread(drop_git_stash, self.manager, alias, auth.user_id, str(body.get("ref") or ""))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.stash_drop, str(body.get("ref") or ""))
         return _json({"ok": True, "data": {"message": "已删除 stash", "overview": overview}})
 
     async def get_git_identity_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(get_git_identity_config, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.identity)
         return _json({"ok": True, "data": data})
 
     async def get_git_commit_message_config_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_GIT_OPS)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_git_commit_message_cli_config(self.manager, alias)})
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.commit_message_config)
+        return _json({"ok": True, "data": data})
 
     async def patch_git_commit_message_config_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_GIT_OPS)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await update_git_commit_message_cli_config(
-            self.manager,
-            alias,
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await backend.update_commit_message_config(
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
             params=body.get("params"),
@@ -4148,21 +4119,24 @@ class WebApiServer:
         return _json({"ok": True, "data": data})
 
     async def post_git_commit_message_config_reset_view(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_GIT_OPS)
+        auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await reset_git_commit_message_cli_config(self.manager, alias)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await backend.reset_commit_message_config()
         return _json({"ok": True, "data": data})
 
     async def post_git_commit_message_generate_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await generate_git_commit_message(self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await backend.generate_commit_message()
         return _json({"ok": True, "data": data})
 
     async def post_git_smart_commit(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        _working_dir, repo_root = await asyncio.to_thread(get_git_smart_commit_repo_hint, self.manager, alias)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        _working_dir, repo_root = await asyncio.to_thread(backend.smart_commit_repo_hint)
         if repo_root and self._git_smart_commit_repo_locks.get(repo_root):
             raise WebApiError(409, "git_smart_commit_conflict", "当前仓库已有智能提交任务在运行")
 
@@ -4183,7 +4157,8 @@ class WebApiServer:
     async def get_git_smart_commit_active(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        _ = auth
+        backend = await self._get_git_backend(alias, auth.user_id)
+        await asyncio.to_thread(backend.smart_commit_repo_hint)
         job_id = self._git_smart_commit_latest_by_alias.get(alias)
         if not job_id:
             return _json({"ok": True, "data": None})
@@ -4193,7 +4168,8 @@ class WebApiServer:
     async def get_git_smart_commit_job(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        _ = auth
+        backend = await self._get_git_backend(alias, auth.user_id)
+        await asyncio.to_thread(backend.smart_commit_repo_hint)
         job = self._get_git_smart_commit_job_or_raise(alias, request.match_info["job_id"])
         return _json({"ok": True, "data": self._git_smart_commit_snapshot(job)})
 
@@ -4206,11 +4182,9 @@ class WebApiServer:
         if scope != "global" and self._allows_readonly_bot_capability(request, CAP_GIT_OPS, auth):
             auth = auth.with_capabilities({*auth.capabilities, CAP_GIT_OPS})
         _require_capability(auth, CAP_ADMIN_OPS if scope == "global" else CAP_GIT_OPS)
+        backend = await self._get_git_backend(alias, auth.user_id)
         data = await asyncio.to_thread(
-            update_git_identity_config,
-            self.manager,
-            alias,
-            auth.user_id,
+            backend.identity_update,
             scope=scope,
             name=body.get("name", ""),
             email=body.get("email", ""),
@@ -4220,7 +4194,8 @@ class WebApiServer:
     async def post_git_init(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        data = await asyncio.to_thread(init_git_repository, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.init)
         return _json({"ok": True, "data": data})
 
     async def get_git_diff_view(self, request: web.Request) -> web.Response:
@@ -4228,71 +4203,82 @@ class WebApiServer:
         alias = self._manager_alias(request)
         path = request.query.get("path", "")
         staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
-        data = await asyncio.to_thread(get_git_diff, self.manager, alias, auth.user_id, path, staged=staged)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.diff, path, staged=staged)
         return _json({"ok": True, "data": data})
 
     async def post_git_stage(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = await asyncio.to_thread(stage_git_paths, self.manager, alias, auth.user_id, body.get("paths", []))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.stage, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已暂存所选文件", "overview": overview}})
 
     async def post_git_unstage(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = await asyncio.to_thread(unstage_git_paths, self.manager, alias, auth.user_id, body.get("paths", []))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.unstage, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已取消暂存所选文件", "overview": overview}})
 
     async def post_git_discard(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = await asyncio.to_thread(discard_git_paths, self.manager, alias, auth.user_id, body.get("paths", []))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.discard, body.get("paths", []))
         return _json({"ok": True, "data": {"message": "已丢弃所选文件改动", "overview": overview}})
 
     async def post_git_discard_all(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = await asyncio.to_thread(discard_all_git_changes, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.discard_all)
         return _json({"ok": True, "data": {"message": "已丢弃全部改动", "overview": overview}})
 
     async def post_git_commit(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        overview = await asyncio.to_thread(commit_git_changes, self.manager, alias, auth.user_id, body.get("message", ""))
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.commit, body.get("message", ""))
         return _json({"ok": True, "data": {"message": "已创建提交", "overview": overview}})
 
     async def post_git_fetch(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = await asyncio.to_thread(fetch_git_remote, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.fetch)
         return _json({"ok": True, "data": {"message": "已抓取远端更新", "overview": overview}})
 
     async def post_git_pull(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = await asyncio.to_thread(pull_git_remote, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.pull)
         return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
 
     async def post_git_push(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = await asyncio.to_thread(push_git_remote, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.push)
         return _json({"ok": True, "data": {"message": "已推送本地提交", "overview": overview}})
 
     async def post_git_stash(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = await asyncio.to_thread(stash_git_changes, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.stash)
         return _json({"ok": True, "data": {"message": "已暂存当前工作区", "overview": overview}})
 
     async def post_git_stash_pop(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        overview = await asyncio.to_thread(pop_git_stash, self.manager, alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        overview = await asyncio.to_thread(backend.stash_pop)
         return _json({"ok": True, "data": {"message": "已恢复最近一次暂存", "overview": overview}})
 
     async def upload_file(self, request: web.Request) -> web.Response:

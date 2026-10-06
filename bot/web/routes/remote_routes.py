@@ -12,25 +12,13 @@ from urllib.parse import quote
 from aiohttp import web
 
 from bot.platform.terminal import PtyWrapper
-from bot.remote_workspace.git_service import RemoteGitService
 from bot.remote_workspace.transport import RemoteWorkspaceError, get_remote_workspace_service, join_remote_path
 from bot.remote_workspace.tools import resolve_remote_directory
 from bot.web.api_common import WebApiError, _require_capability, get_profile_or_raise
 from bot.web.auth_store import (
-    CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_MUTATE_BROWSE_STATE, CAP_READ_FILE_CONTENT,
+    CAP_MANAGE_BOTS, CAP_MUTATE_BROWSE_STATE, CAP_READ_FILE_CONTENT,
     CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES,
 )
-
-
-_REMOTE_GIT_OPERATIONS = {
-    ("GET", "git"): "overview",
-    ("GET", "git/capabilities"): "capabilities",
-    ("POST", "git/init"): "init",
-    ("GET", "git/diff"): "diff",
-    ("POST", "git/stage"): "stage",
-    ("POST", "git/unstage"): "unstage",
-    ("POST", "git/commit"): "commit",
-}
 
 
 def _response(data: dict[str, Any]) -> web.Response:
@@ -88,26 +76,19 @@ def middleware(server):
 
     @web.middleware
     async def dispatch(request: web.Request, handler):
-        try:
-            alias = str(request.match_info.get("alias") or "").strip().lower()
-            profile = None if not alias else (
-                server.manager.main_profile if alias == server.manager.main_profile.alias
-                else server.manager.managed_profiles.get(alias)
-            )
-            if alias and profile is not None and profile.remote_workspace:
-                route = request.match_info.route.resource.canonical
-                marker = "/api/bots/{alias}/"
-                suffix = route.split(marker, 1)[-1] if marker in route else ""
-                result = await _workspace_request(server, request, profile, suffix, browse_dirs)
-                if result is not None:
-                    return result
-            return await handler(request)
-        except RemoteWorkspaceError as exc:
-            if exc.code == "host_key_confirmation_required":
-                raise WebApiError(409, "remote_host_key_unknown", exc.message, {
-                    "fingerprint": exc.data.get("host_key_fingerprint", ""),
-                }) from exc
-            raise WebApiError(exc.status, exc.code, exc.message, exc.data) from exc
+        alias = str(request.match_info.get("alias") or "").strip().lower()
+        profile = None if not alias else (
+            server.manager.main_profile if alias == server.manager.main_profile.alias
+            else server.manager.managed_profiles.get(alias)
+        )
+        if alias and profile is not None and profile.remote_workspace:
+            route = request.match_info.route.resource.canonical
+            marker = "/api/bots/{alias}/"
+            suffix = route.split(marker, 1)[-1] if marker in route else ""
+            result = await _workspace_request(server, request, profile, suffix, browse_dirs)
+            if result is not None:
+                return result
+        return await handler(request)
 
     return dispatch
 
@@ -130,18 +111,17 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         ("POST", "files/create"): CAP_WRITE_FILES,
         ("POST", "files/mkdir"): CAP_WRITE_FILES,
         ("POST", "exec"): CAP_TERMINAL_EXEC,
-        **{operation: CAP_GIT_OPS for operation in _REMOTE_GIT_OPERATIONS},
     }
     capability = operations.get((request.method, suffix))
     if capability is None:
         # Unsupported workspace features must never act on the local control
         # directory. Conversation/history storage remains local as intended.
         unsupported = suffix.startswith((
-            "files/", "workspace/", "git/", "debug/", "plugins/", "terminal-actions/",
+            "files/", "workspace/", "debug/", "plugins/", "terminal-actions/",
             "native-agent/history/", "workdir", "chat/attachments",
-        )) or suffix in {"git", "debug", "plugins"}
+        )) or suffix in {"debug", "plugins"}
         if unsupported:
-            await server._with_capability(request, CAP_GIT_OPS if suffix == "git" or suffix.startswith("git/") else CAP_VIEW_FILE_TREE)
+            await server._with_capability(request, CAP_VIEW_FILE_TREE)
             raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
         return None
     auth = await server._with_capability(request, capability)
@@ -154,23 +134,6 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         return _response({"working_dir": root})
     service = get_remote_workspace_service()
     connection = await asyncio.to_thread(service.get, config)
-    git_operation = _REMOTE_GIT_OPERATIONS.get((request.method, suffix))
-    if git_operation:
-        git = RemoteGitService(connection, root)
-        if git_operation == "overview":
-            return _response(await asyncio.to_thread(git.overview))
-        if git_operation == "capabilities":
-            return _response(await asyncio.to_thread(git.capabilities))
-        if git_operation == "init":
-            return _response(await asyncio.to_thread(git.init))
-        if git_operation == "diff":
-            staged = request.query.get("staged", "").strip().lower() in {"1", "true", "yes"}
-            return _response(await asyncio.to_thread(git.diff, request.query.get("path", ""), staged=staged))
-        body = await server._parse_json(request)
-        value = body.get("message", "") if git_operation == "commit" else body.get("paths", [])
-        overview = await asyncio.to_thread(getattr(git, git_operation), value)
-        message = {"stage": "已暂存所选文件", "unstage": "已取消暂存所选文件", "commit": "已创建提交"}[git_operation]
-        return _response({"message": message, "overview": overview})
     if suffix == "ls":
         return _response(await asyncio.to_thread(
             connection.list_directory, _relative_target(request.query.get("path"), current, platform), root=root,

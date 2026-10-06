@@ -8,7 +8,7 @@ import threading
 import weakref
 
 from bot.git_contract import build_git_capabilities
-from bot.web.git_service import (
+from bot.git_shared import (
     GIT_OVERVIEW_CHANGED_FILES_LIMIT,
     _parse_changed_files,
     _parse_porcelain_v2_z,

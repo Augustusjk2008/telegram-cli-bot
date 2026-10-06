@@ -14,6 +14,7 @@ from bot.web.api_common import AuthContext, WebApiError
 from bot.web.api_common import get_session_for_alias
 from bot.web.auth_store import CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
 from bot.web import api_service
+from bot.web import git_backend
 from bot.web.routes import remote_routes
 from bot.web.server import WebApiServer
 
@@ -139,10 +140,7 @@ async def test_remote_file_download_streams_sftp_bytes(tmp_path, monkeypatch):
     connection.stream_file.assert_called_once()
 
 
-def _forbid_local_git(server, monkeypatch):
-    for name in dir(server):
-        if name.startswith(("get_git_", "post_git_", "put_git_", "patch_git_")):
-            monkeypatch.setattr(server, name, AsyncMock(side_effect=AssertionError("remote request reached local Git")))
+def _forbid_local_git(monkeypatch):
     monkeypatch.setattr("bot.web.git_service._run_git", Mock(side_effect=AssertionError("local Git executed")))
 
 
@@ -156,11 +154,11 @@ def _forbid_local_git(server, monkeypatch):
     ("POST", "git/unstage", {"paths": ["a b.txt"]}, "unstage", (["a b.txt"],), {}),
     ("POST", "git/commit", {"message": "remote commit"}, "commit", ("remote commit",), {}),
 ])
-async def test_remote_git_allowlist_permissions_and_local_isolation(
+async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolation(
     tmp_path, monkeypatch, method, suffix, body, operation, args, kwargs,
 ):
     server, auth = _server(tmp_path, monkeypatch)
-    _forbid_local_git(server, monkeypatch)
+    _forbid_local_git(monkeypatch)
     local = Path(server.manager.main_profile.working_dir)
     before = {path.relative_to(local): path.read_bytes() for path in local.rglob("*") if path.is_file()}
     service, connection, git = Mock(), Mock(), Mock()
@@ -189,8 +187,8 @@ async def test_remote_git_allowlist_permissions_and_local_isolation(
     expected = {"message": messages[operation], "overview": payload} if operation in messages else payload
     getattr(git, operation).return_value = payload
     factory = Mock(return_value=git)
-    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
-    monkeypatch.setattr(remote_routes, "RemoteGitService", factory)
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
+    monkeypatch.setattr(git_backend, "RemoteGitService", factory)
     async with TestClient(TestServer(server._build_app())) as client:
         url = f"/api/bots/MAIN/{suffix}"
         response = await client.request(method, url, json=body)
@@ -215,9 +213,10 @@ async def test_remote_git_allowlist_permissions_and_local_isolation(
 async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypatch):
     server, auth = _server(tmp_path, monkeypatch)
     auth.capabilities.add(CAP_GIT_OPS)
-    _forbid_local_git(server, monkeypatch)
+    _forbid_local_git(monkeypatch)
     service = Mock()
-    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    service.get.return_value = Mock()
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
     app = server._build_app()
     allowed = {("GET", "git"), ("GET", "git/capabilities"), ("GET", "git/diff"), ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit")}
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
@@ -234,7 +233,7 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         auth.capabilities.remove(CAP_GIT_OPS)
         response = await client.post("/api/bots/main/git/init", json={})
         assert response.status == 403
-    service.get.assert_not_called()
+    assert service.get.call_count == len(routes) - len(allowed)
 
 
 @pytest.mark.asyncio
@@ -244,7 +243,7 @@ async def test_remote_git_preserves_error_codes(tmp_path, monkeypatch, status, c
     auth.capabilities.add(CAP_GIT_OPS)
     service = Mock()
     service.get.side_effect = remote_routes.RemoteWorkspaceError(status, code, "remote failure")
-    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
     async with TestClient(TestServer(server._build_app())) as client:
         response = await client.get("/api/bots/main/git")
         assert response.status == status
