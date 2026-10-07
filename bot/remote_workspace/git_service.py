@@ -1,6 +1,7 @@
 """The first-phase Git workbench, executed exclusively through an SSH connection."""
 from __future__ import annotations
 
+import hashlib
 import posixpath
 import re
 import shlex
@@ -518,25 +519,15 @@ class RemoteGitService:
                     "stash": True,
                     "stash_create": False,
                     "identity": True,
+                    "commit_message_generation": True,
+                    "smart_commit": True,
                 },
                 reason="remote_feature_unavailable",
             )
             capabilities = payload["capabilities"]
-            sync_available = {name: False for name in _SYNC_OPERATIONS}
-            sync_reason = "git_not_repository"
-            if self._repo_root_without_version() is not None:
-                remotes = self._remote_names()
-                if remotes:
-                    sync_available["fetch"] = True
-                    sync_reason = "git_upstream_not_configured"
-                    if self._upstream_target(remotes) is not None:
-                        sync_available["pull"] = sync_available["push"] = True
-                        sync_reason = ""
-                else:
-                    sync_reason = "git_remote_not_configured"
-            for name, available in sync_available.items():
-                capabilities[name]["available"] = available
-                capabilities[name]["reason"] = "" if available else sync_reason
+            for name in _SYNC_OPERATIONS:
+                capabilities[name]["available"] = True
+                capabilities[name]["reason"] = ""
             return payload
 
     @staticmethod
@@ -1097,3 +1088,84 @@ class RemoteGitService:
             self._require_repo()
             self._git(["commit", "-m", message.strip()], error="git_commit_failed", mutation=True, truncated=True)
             return self._overview()
+
+    def _smart_commit_outputs(self, *, allow_truncation: bool) -> tuple[str, list[str], list[bool], list[str]]:
+        self._require_repo()
+        status = self._git(
+            ["status", "--short", "--untracked-files=all"],
+            error="git_status_failed",
+            truncated=allow_truncation,
+        )
+        staged = self._git(
+            ["diff", "--cached", "--find-renames", "--binary"],
+            error="git_diff_failed",
+            truncated=allow_truncation,
+        )
+        unstaged = self._git(
+            ["diff", "--find-renames", "--binary"],
+            error="git_diff_failed",
+            truncated=allow_truncation,
+        )
+        _, files, _ = self._status()
+        untracked_diffs: list[str] = []
+        untracked_truncated: list[bool] = []
+        untracked_paths: list[str] = []
+        null_path = "NUL" if self.platform == "windows" else "/dev/null"
+        for item in files:
+            if not item.get("untracked"):
+                continue
+            path = self._path(str(item.get("path") or ""))
+            untracked_paths.append(path)
+            result = self._git(
+                [
+                    "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv",
+                    "--unified=1", "--", null_path, f"./{path}",
+                ],
+                allowed=(0, 1),
+                error="git_diff_failed",
+                truncated=allow_truncation,
+            )
+            untracked_diffs.append(result["stdout"])
+            untracked_truncated.append(bool(result["output_truncated"]))
+        return (
+            status["stdout"],
+            [staged["stdout"], unstaged["stdout"], *untracked_diffs],
+            [bool(staged["output_truncated"]), bool(unstaged["output_truncated"]), *untracked_truncated],
+            untracked_paths,
+        )
+
+    def smart_commit_context(self) -> dict:
+        with self._lock:
+            status_text, diffs, truncated, untracked_paths = self._smart_commit_outputs(allow_truncation=True)
+            sections: list[str] = []
+            if diffs[0].strip():
+                sections.append(f"=== STAGED DIFF ===\n{diffs[0]}")
+            if diffs[1].strip():
+                sections.append(f"=== UNSTAGED DIFF ===\n{diffs[1]}")
+            for path, diff in zip(untracked_paths, diffs[2:]):
+                if diff.strip():
+                    sections.append(f"=== UNTRACKED DIFF: {path} ===\n{diff}")
+            from bot.web.git_commit_message import truncate_diff_text
+
+            diff_text, diff_truncated = truncate_diff_text("\n\n".join(sections))
+            return {
+                "status_text": status_text,
+                "diff_text": diff_text,
+                "use_staged_diff": True,
+                "diff_truncated": diff_truncated or any(truncated),
+            }
+
+    def smart_commit_snapshot(self) -> str:
+        with self._lock:
+            status_text, diffs, truncated, _untracked_paths = self._smart_commit_outputs(allow_truncation=True)
+            digest = hashlib.sha256()
+            for value in [status_text, *diffs, *("1" if item else "0" for item in truncated)]:
+                encoded = value.encode("utf-8", errors="replace")
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
+            return digest.hexdigest()
+
+    def stage_all(self) -> None:
+        with self._lock:
+            self._require_repo()
+            self._git(["add", "-A"], error="git_stage_failed", mutation=True, truncated=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -121,3 +121,34 @@ def test_remote_backend_rejects_stash_create():
         backend.stash_create()
 
     assert exc.value.code == "remote_feature_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_remote_smart_commit_uses_local_agent_with_remote_context(monkeypatch):
+    manager = object()
+    profile = SimpleNamespace(working_dir="C:/control")
+    connection = Mock()
+    backend = git_backend.RemoteGitBackend(connection, CONFIG["root"], manager, "main", 42)
+    context = {
+        "status_text": " M remote.txt",
+        "diff_text": "diff --git a/remote.txt b/remote.txt\n+remote change",
+        "use_staged_diff": True,
+        "diff_truncated": False,
+    }
+    backend.service = Mock()
+    backend.service.smart_commit_context.return_value = context
+    generate = AsyncMock(return_value={"message": "fix: apply remote change"})
+    monkeypatch.setattr(git_backend, "get_profile_or_raise", lambda _manager, _alias: profile)
+    monkeypatch.setattr(git_backend.local_git, "_generate_git_commit_message_from_context", generate)
+
+    result = await backend.generate_smart_commit_message(repo_root=CONFIG["root"])
+
+    assert result == {"message": "fix: apply remote change"}
+    generate.assert_awaited_once_with(
+        manager,
+        "main",
+        42,
+        repo_root="C:/control",
+        context=context,
+    )
+    backend.service.smart_commit_context.assert_called_once_with()

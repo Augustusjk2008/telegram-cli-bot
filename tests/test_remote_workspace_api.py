@@ -324,12 +324,17 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         ("GET", "git"), ("GET", "git/capabilities"), ("GET", "git/diff"),
         ("GET", "git/tree-status"), ("GET", "git/graph"), ("GET", "git/branches"),
         ("GET", "git/stashes"), ("GET", "git/identity"),
+        ("GET", "git/commit-message/config"),
         ("POST", "git/branches"), ("POST", "git/branches/switch"), ("POST", "git/branches/reset"),
         ("POST", "git/stashes/apply"), ("POST", "git/stashes/drop"),
+        ("PATCH", "git/commit-message/config"), ("POST", "git/commit-message/config/reset"),
+        ("POST", "git/commit-message/generate"),
         ("PUT", "git/identity"), ("POST", "git/discard"), ("POST", "git/discard-all"),
         ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit"),
         ("POST", "git/fetch"), ("POST", "git/pull"), ("POST", "git/push"),
         ("POST", "git/stash/pop"),
+        ("POST", "git/smart-commit"), ("GET", "git/smart-commit/active"),
+        ("GET", "git/smart-commit/{job_id}"),
     }
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
               if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]

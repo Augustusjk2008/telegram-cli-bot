@@ -156,7 +156,7 @@ def test_capabilities_probe_local_remote_config_and_mark_sync_features():
     assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
     readable = {
         "tree_status", "commit_graph", "branches", "branch_mutation", "discard", "stash", "identity",
-        "fetch", "pull", "push",
+        "fetch", "pull", "push", "commit_message_generation", "smart_commit",
     }
     assert all(
         item["available"] is (name in readable)
@@ -174,9 +174,7 @@ def test_capabilities_probe_local_remote_config_and_mark_sync_features():
         "requires_confirmation": True,
     }
     assert [call[0] for call in connection.calls] == [
-        ["--version"], ["rev-parse", "--show-toplevel"], ["remote"],
-        ["symbolic-ref", "--quiet", "--short", "HEAD"],
-        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        ["--version"],
     ]
 
 
@@ -188,19 +186,44 @@ def test_capabilities_report_missing_remote_git_without_repository_probe():
     assert [call[0] for call in connection.calls] == [["--version"]]
 
 
-def test_capabilities_report_remote_and_upstream_requirements_without_network_probe():
-    no_remote = remote.RemoteGitService(Connection(remotes=()), ROOT).capabilities()["capabilities"]
-    assert no_remote["fetch"]["reason"] == "git_remote_not_configured"
-    assert no_remote["pull"]["reason"] == "git_remote_not_configured"
-    assert no_remote["push"]["reason"] == "git_remote_not_configured"
+def test_capabilities_do_not_probe_remote_or_upstream_state():
+    for connection in (
+        Connection(remotes=()),
+        Connection(upstream=""),
+        Connection(repository=False),
+    ):
+        capabilities = remote.RemoteGitService(connection, ROOT).capabilities()["capabilities"]
+        assert all(capabilities[name]["available"] for name in ("fetch", "pull", "push"))
+        assert [call[0] for call in connection.calls] == [["--version"]]
 
-    no_upstream = remote.RemoteGitService(Connection(upstream=""), ROOT).capabilities()["capabilities"]
-    assert no_upstream["fetch"]["available"]
-    assert no_upstream["pull"]["reason"] == "git_upstream_not_configured"
-    assert no_upstream["push"]["reason"] == "git_upstream_not_configured"
 
-    no_repository = remote.RemoteGitService(Connection(repository=False), ROOT).capabilities()["capabilities"]
-    assert all(no_repository[name]["reason"] == "git_not_repository" for name in ("fetch", "pull", "push"))
+def test_smart_commit_context_collects_remote_diffs_for_local_agent():
+    service = remote.RemoteGitService(Connection(), ROOT)
+    service._require_repo = lambda: None
+    service._status = lambda: (
+        "",
+        [{"path": "new.txt", "untracked": True}],
+        True,
+    )
+
+    def fake_git(args, **_kwargs):
+        if args[0] == "status":
+            return result(" M tracked.txt\n?? new.txt\n")
+        if args[:2] == ["diff", "--cached"]:
+            return result("diff --git a/staged.txt b/staged.txt\n+staged\n")
+        if args[:2] == ["diff", "--find-renames"]:
+            return result("diff --git a/tracked.txt b/tracked.txt\n+tracked\n")
+        if args[:2] == ["diff", "--no-index"]:
+            return result("diff --git a/NUL b/./new.txt\n+untracked\n", returncode=1)
+        raise AssertionError(args)
+
+    service._git = fake_git
+    context = service.smart_commit_context()
+
+    assert "staged" in context["diff_text"]
+    assert "tracked" in context["diff_text"]
+    assert "untracked" in context["diff_text"]
+    assert context["status_text"] == " M tracked.txt\n?? new.txt\n"
 
 
 @pytest.mark.parametrize(

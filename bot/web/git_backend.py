@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Protocol
 
 from bot.remote_workspace.git_service import RemoteGitService
@@ -174,9 +175,12 @@ class LocalGitBackend:
 
 
 class RemoteGitBackend:
-    def __init__(self, connection, root: str):
+    def __init__(self, connection, root: str, manager=None, alias: str = "", user_id: int = 0):
         self.connection = connection
         self.root = root
+        self.manager = manager
+        self.alias = alias
+        self.user_id = user_id
         self.service = RemoteGitService(connection, root)
 
     def overview(self) -> dict[str, Any]:
@@ -248,6 +252,56 @@ class RemoteGitBackend:
     def push(self) -> dict[str, Any]:
         return self.service.push()
 
+    def smart_commit_repo_hint(self) -> tuple[str, str]:
+        return self.root, self.root
+
+    def smart_commit_preflight(self) -> tuple[str, str, str]:
+        overview = self.service.overview()
+        if bool(overview.get("is_clean", True)):
+            raise WebApiError(409, "git_no_changes", "当前没有可提交的改动")
+        return self.root, self.root, self.service.smart_commit_snapshot()
+
+    def _local_agent_profile(self):
+        if self.manager is None or not self.alias:
+            raise WebApiError(409, "remote_feature_unavailable", "远程 Git 缺少本地 Agent 配置")
+        return get_profile_or_raise(self.manager, self.alias)
+
+    def commit_message_config(self) -> dict[str, Any]:
+        self._local_agent_profile()
+        return local_git.get_git_commit_message_cli_config(self.manager, self.alias)
+
+    async def update_commit_message_config(self, **values: Any) -> dict[str, Any]:
+        self._local_agent_profile()
+        return await local_git.update_git_commit_message_cli_config(self.manager, self.alias, **values)
+
+    async def reset_commit_message_config(self) -> dict[str, Any]:
+        self._local_agent_profile()
+        return await local_git.reset_git_commit_message_cli_config(self.manager, self.alias)
+
+    async def generate_commit_message(self) -> dict[str, Any]:
+        profile = self._local_agent_profile()
+        context = await asyncio.to_thread(self.service.smart_commit_context)
+        return await local_git._generate_git_commit_message_from_context(
+            self.manager,
+            self.alias,
+            self.user_id,
+            repo_root=profile.working_dir,
+            context=context,
+        )
+
+    async def generate_smart_commit_message(self, *, repo_root: str) -> dict[str, Any]:
+        return await self.generate_commit_message()
+
+    def ensure_smart_commit_snapshot(self, repo_root: str, snapshot: str) -> None:
+        if self.service.smart_commit_snapshot() != snapshot:
+            raise WebApiError(409, "git_worktree_changed", "生成期间远程工作区已变化，请重新生成提交说明")
+
+    def stage_all_changes(self, repo_root: str) -> None:
+        self.service.stage_all()
+
+    def commit_message(self, repo_root: str, message: str) -> None:
+        self.service.commit(message)
+
     def stash_create(self) -> dict[str, Any]:
         return self._unsupported()
 
@@ -259,16 +313,6 @@ class RemoteGitBackend:
         raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
 
     stash = _unsupported
-    commit_message_config = _unsupported
-    update_commit_message_config = _unsupported
-    reset_commit_message_config = _unsupported
-    generate_commit_message = _unsupported
-    smart_commit_repo_hint = _unsupported
-    smart_commit_preflight = _unsupported
-    generate_smart_commit_message = _unsupported
-    ensure_smart_commit_snapshot = _unsupported
-    stage_all_changes = _unsupported
-    commit_message = _unsupported
 
 
 def resolve_git_backend(manager, alias: str, user_id: int) -> GitBackend:
@@ -276,7 +320,7 @@ def resolve_git_backend(manager, alias: str, user_id: int) -> GitBackend:
     if profile.remote_workspace:
         config = dict(profile.remote_workspace)
         connection = get_remote_workspace_service().get(config)
-        return RemoteGitBackend(connection, str(config["root"]))
+        return RemoteGitBackend(connection, str(config["root"]), manager, alias, user_id)
     return LocalGitBackend(manager, alias, user_id)
 
 
