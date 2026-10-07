@@ -7,6 +7,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/plugins", server.get_plugins)
     app.router.add_get("/api/plugins/installable", server.get_installable_plugins)
     app.router.add_post("/api/plugins/install", server.post_install_plugin)
+    app.router.add_post("/api/plugins/install-directory", server.post_install_plugins_from_path)
     app.router.add_patch("/api/plugins/{plugin_id}", server.patch_plugin)
     app.router.add_delete("/api/plugins/{plugin_id}", server.delete_plugin)
     app.router.add_post("/api/bots/{alias}/plugins/resolve-file-target", server.resolve_file_plugin_target)

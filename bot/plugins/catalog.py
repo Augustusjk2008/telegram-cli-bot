@@ -35,6 +35,16 @@ def iter_source_plugin_dirs(root: Path) -> list[Path]:
     ]
 
 
+def iter_plugin_dirs_recursive(root: Path) -> list[Path]:
+    if not root.is_dir():
+        return []
+    manifest_paths = sorted(
+        (path for path in root.rglob("plugin.json") if path.is_file()),
+        key=lambda path: path.relative_to(root).as_posix().lower(),
+    )
+    return [path.parent for path in manifest_paths]
+
+
 def build_installable_plugin_payload(source_dir: Path, plugins_root: Path) -> dict[str, Any]:
     raw = read_manifest_json(source_dir / "plugin.json") or {}
     plugin_id = str(raw.get("id") or source_dir.name).strip() or source_dir.name

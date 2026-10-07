@@ -119,6 +119,7 @@ import type {
   RemoveBotOptions,
   RemoveBotResult,
   InstallablePluginSummary,
+  PluginInstallBatchResult,
   PluginRenderResult,
   PluginSummary,
   PluginUpdateInput,
@@ -206,6 +207,10 @@ export interface WebBotClient {
     force?: boolean;
     allowDevSourcePath?: boolean;
   }): Promise<PluginSummary>;
+  installPluginsFromPath(sourcePath: string, options?: {
+    force?: boolean;
+    allowDevSourcePath?: boolean;
+  }): Promise<PluginInstallBatchResult>;
   uninstallPlugin(pluginId: string): Promise<void>;
   updatePlugin(pluginId: string, input: PluginUpdateInput): Promise<PluginSummary>;
   listAgents(botAlias: string): Promise<AgentListResult>;

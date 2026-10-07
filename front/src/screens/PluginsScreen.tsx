@@ -111,16 +111,17 @@ export function PluginsScreen({
       });
   }
 
-  function installPluginFromPath(sourcePath: string) {
+  function installPluginsFromPath(sourcePath: string) {
     if (!canOperate) {
       return;
     }
     setInstallingPlugin(true);
     setError("");
     setNotice("");
-    client.installPlugin({ sourcePath, force: true, allowDevSourcePath: true })
-      .then((installed) => {
-        loadData(false, `${installed.name} 已安装`);
+    client.installPluginsFromPath(sourcePath, { force: true, allowDevSourcePath: true })
+      .then((result) => {
+        const count = result.installed.length;
+        loadData(false, count > 0 ? `已安装 ${count} 个插件` : "所选目录中没有可安装的插件");
       })
       .catch((err: unknown) => {
         setError(err instanceof Error && err.message ? err.message : "插件安装失败");
@@ -186,10 +187,10 @@ export function PluginsScreen({
     : uninstallDialog;
   const installPickerDialog = installPickerOpen && canOperate ? (
     <DirectoryPickerDialog
-      title="选择含 plugin.json 的插件根目录"
+      title="选择插件目录（递归查找 plugin.json）"
       botAlias={botAlias}
       client={client}
-      onPick={(path) => installPluginFromPath(path)}
+      onPick={(path) => installPluginsFromPath(path)}
       onClose={() => setInstallPickerOpen(false)}
     />
   ) : null;
@@ -208,7 +209,7 @@ export function PluginsScreen({
                   <Puzzle className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
                   <h1 className="text-lg font-semibold">插件</h1>
                 </div>
-                <p className="mt-1 truncate text-xs text-[var(--muted)]">安装时选直接包含 plugin.json 的插件根目录。</p>
+                <p className="mt-1 truncate text-xs text-[var(--muted)]">选择插件父目录后会递归查找并安装其中的 plugin.json。</p>
               </div>
               {headerActions}
             </div>
@@ -234,7 +235,7 @@ export function PluginsScreen({
                   />
                 </div>
                 <div className={sectionBodyClass("py-2")}>
-                  <p className="text-sm text-[var(--muted)]">安装时选直接包含 plugin.json 的插件根目录。</p>
+                  <p className="text-sm text-[var(--muted)]">选择插件父目录后会递归查找并安装其中的 plugin.json。</p>
                   {!canOperate ? <p className="mt-1 text-xs text-[var(--muted)]">只读模式</p> : null}
                 </div>
               </SurfacePanel>

@@ -727,6 +727,29 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/plugins/dev-plugin", expect.objectContaining({ method: "DELETE" }));
   });
 
+  test("uses the recursive plugin directory install route", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      sourcePath: "C:\\plugins",
+      discovered: 2,
+      installed: [],
+    }));
+
+    const result = await new RealWebBotClient().installPluginsFromPath("C:\\plugins", {
+      force: true,
+      allowDevSourcePath: true,
+    });
+
+    expect(result.discovered).toBe(2);
+    expect(fetchMock).toHaveBeenCalledWith("/api/plugins/install-directory", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        sourcePath: "C:\\plugins",
+        force: true,
+        allowDevSourcePath: true,
+      }),
+    }));
+  });
+
   test("uses AG-UI for native requests and keeps native trace out of legacy callbacks", async () => {
     fetchMock.mockResolvedValue(streamOk(
       "event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n",

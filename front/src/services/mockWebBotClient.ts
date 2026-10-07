@@ -131,6 +131,7 @@ import type {
   NotificationTestResult,
   HostEffect,
   InstallablePluginSummary,
+  PluginInstallBatchResult,
   OfflineUpdatePackageList,
   PluginAction,
   PluginActionInvokeInput,
@@ -3604,6 +3605,22 @@ export class MockWebBotClient implements WebBotClient {
       this.plugins = [...this.plugins, installed];
     }
     return this.clonePluginSummary(installed);
+  }
+
+  async installPluginsFromPath(sourcePath: string, options: {
+    force?: boolean;
+    allowDevSourcePath?: boolean;
+  } = {}): Promise<PluginInstallBatchResult> {
+    const force = Boolean(options.force);
+    const discovered = this.installablePlugins.length;
+    const installed: PluginSummary[] = [];
+    for (const plugin of this.installablePlugins) {
+      if (plugin.installed && !force) {
+        continue;
+      }
+      installed.push(await this.installPlugin({ pluginId: plugin.id, force }));
+    }
+    return { sourcePath, discovered, installed };
   }
 
   async uninstallPlugin(pluginId: string): Promise<void> {

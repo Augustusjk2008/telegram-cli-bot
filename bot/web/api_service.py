@@ -219,6 +219,7 @@ from bot.web.plugin_api_service import (
     get_plugin_artifact,
     get_plugin_view_window,
     install_plugin,
+    install_plugins_from_path,
     install_plugin_runtime,
     invoke_plugin_action,
     list_installable_plugins,

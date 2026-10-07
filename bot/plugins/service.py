@@ -14,6 +14,7 @@ from .audit import append_plugin_audit_event
 from .catalog import (
     build_installable_plugin_payload,
     iter_source_plugin_dirs,
+    iter_plugin_dirs_recursive,
     merge_bundled_manifest,
     read_manifest_json,
     resolve_install_source_dir,
@@ -396,6 +397,51 @@ class PluginService:
             except Exception:
                 pass
             raise
+
+    async def install_plugins_from_path(
+        self,
+        source_path: str | Path,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        source_root = Path(source_path).expanduser().resolve()
+        if not source_root.is_dir():
+            raise FileNotFoundError(f"插件目录不存在: {source_root}")
+
+        source_dirs = iter_plugin_dirs_recursive(source_root)
+        if not source_dirs:
+            raise FileNotFoundError(f"目录中未找到 plugin.json: {source_root}")
+
+        seen_plugin_ids: dict[str, Path] = {}
+        seen_target_names: dict[str, Path] = {}
+        for source_dir in source_dirs:
+            manifest = load_plugin_manifest(source_dir / "plugin.json")
+            if not manifest.plugin_id:
+                raise ValueError(f"插件 id 不能为空: {source_dir / 'plugin.json'}")
+            previous_id_path = seen_plugin_ids.get(manifest.plugin_id)
+            if previous_id_path is not None:
+                raise ValueError(
+                    f"插件 ID 重复: {manifest.plugin_id} ({previous_id_path}, {source_dir})"
+                )
+            seen_plugin_ids[manifest.plugin_id] = source_dir
+
+            target_name_key = source_dir.name.casefold()
+            previous_name_path = seen_target_names.get(target_name_key)
+            if previous_name_path is not None:
+                raise ValueError(
+                    f"插件目录名重复: {source_dir.name} ({previous_name_path}, {source_dir})"
+                )
+            seen_target_names[target_name_key] = source_dir
+
+        installed = [
+            await self.install_plugin(source_path=source_dir, force=force)
+            for source_dir in source_dirs
+        ]
+        return {
+            "sourcePath": str(source_root),
+            "discovered": len(source_dirs),
+            "installed": installed,
+        }
 
     async def uninstall_plugin(self, plugin_id: str) -> dict[str, Any]:
         self.registry.discover()

@@ -179,6 +179,7 @@ import type {
   PluginActionResult,
   PluginRuntimeInstallResult,
   InstallablePluginSummary,
+  PluginInstallBatchResult,
   OfflineUpdatePackageList,
   PluginViewWindowRequest,
   PluginViewWindowPayload,
@@ -4527,6 +4528,22 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
+    });
+  }
+
+  async installPluginsFromPath(sourcePath: string, options: {
+    force?: boolean;
+    allowDevSourcePath?: boolean;
+  } = {}): Promise<PluginInstallBatchResult> {
+    return this.requestJson<PluginInstallBatchResult>("/api/plugins/install-directory", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sourcePath,
+        ...options,
+      }),
     });
   }
 

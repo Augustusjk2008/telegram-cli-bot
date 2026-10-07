@@ -1832,6 +1832,12 @@ class WebApiServer:
         body["_local_request"] = _is_loopback_request(request)
         return _json({"ok": True, "data": await install_plugin(self.manager, auth, dict(body or {}))})
 
+    async def post_install_plugins_from_path(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_RUN_PLUGINS)
+        body = await self._parse_json(request)
+        body["_local_request"] = _is_loopback_request(request)
+        return _json({"ok": True, "data": await install_plugins_from_path(self.manager, auth, dict(body or {}))})
+
     async def patch_plugin(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_RUN_PLUGINS)
         plugin_id = request.match_info.get("plugin_id", "").strip()

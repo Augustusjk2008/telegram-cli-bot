@@ -1655,6 +1655,12 @@ export type InstallablePluginSummary = {
   installed: boolean;
 };
 
+export type PluginInstallBatchResult = {
+  sourcePath: string;
+  discovered: number;
+  installed: PluginSummary[];
+};
+
 export type PluginUpdateInput = {
   enabled?: boolean;
   config?: Record<string, unknown>;

@@ -61,6 +61,15 @@ async def list_installable_plugins(manager: MultiBotManager, auth: AuthContext) 
     return manager.plugin_service.list_installable_plugins()
 
 
+def _get_dev_source_path(body: dict[str, Any], auth: AuthContext) -> str:
+    source_path = str(body.get("sourcePath") or body.get("source_path") or "").strip()
+    if source_path:
+        dev_enabled = bool(body.get("dev") or body.get("devMode") or body.get("allowDevSourcePath"))
+        if not (auth.is_local_admin and bool(body.get("_local_request")) and dev_enabled):
+            _raise(403, "plugin_source_path_forbidden", "仅本机管理员开发模式可从目录安装插件")
+    return source_path
+
+
 async def install_plugin(
     manager: MultiBotManager,
     auth: AuthContext,
@@ -68,11 +77,7 @@ async def install_plugin(
 ) -> dict[str, Any]:
     _require_capability(auth, CAP_RUN_PLUGINS)
     plugin_id = str(body.get("pluginId") or body.get("plugin_id") or body.get("id") or "").strip()
-    source_path = str(body.get("sourcePath") or body.get("source_path") or "").strip()
-    if source_path:
-        dev_enabled = bool(body.get("dev") or body.get("devMode") or body.get("allowDevSourcePath"))
-        if not (auth.is_local_admin and bool(body.get("_local_request")) and dev_enabled):
-            _raise(403, "plugin_source_path_forbidden", "仅本机管理员开发模式可从目录安装插件")
+    source_path = _get_dev_source_path(body, auth)
     if not plugin_id and not source_path:
         _raise(400, "missing_plugin_id", "插件 ID 不能为空")
     install_args = {}
@@ -89,6 +94,24 @@ async def install_plugin(
         _raise(400, "invalid_plugin_source", str(exc))
     except FileExistsError as exc:
         _raise(409, "plugin_already_installed", str(exc))
+    except ValueError as exc:
+        _raise(400, "invalid_plugin_request", str(exc))
+
+
+async def install_plugins_from_path(
+    manager: MultiBotManager,
+    auth: AuthContext,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    _require_capability(auth, CAP_RUN_PLUGINS)
+    source_path = _get_dev_source_path(body, auth)
+    if not source_path:
+        _raise(400, "missing_source_path", "插件目录不能为空")
+    force = bool(body.get("force") or body.get("overwrite"))
+    try:
+        return await manager.plugin_service.install_plugins_from_path(source_path, force=force)
+    except FileNotFoundError as exc:
+        _raise(400, "invalid_plugin_source", str(exc))
     except ValueError as exc:
         _raise(400, "invalid_plugin_request", str(exc))
 
