@@ -48,7 +48,7 @@ for (const width of [1280, 390]) {
             pull: { available: true, reason: "", requires_confirmation: true },
             push: { available: true, reason: "", requires_confirmation: true },
             commit_message_generation: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
-            smart_commit: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+            smart_commit: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
           },
         };
       }

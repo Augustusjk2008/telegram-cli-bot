@@ -338,7 +338,8 @@ test("mobile remote workspace exposes Files and Git with the remote Git request 
   await screen.findByRole("button", { name: "SSH 连接" });
   expect(screen.getByRole("button", { name: "文件" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Git" }));
-  expect(await screen.findByRole("heading", { name: "最近提交" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "提交图" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "最近提交" })).not.toBeInTheDocument();
   expect(git).toHaveBeenCalledWith("main");
   expect(graph).toHaveBeenCalledWith("main", expect.objectContaining({ scope: "all" }));
   await user.click(screen.getByRole("button", { name: "文件" }));

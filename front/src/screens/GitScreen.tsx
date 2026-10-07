@@ -2017,17 +2017,6 @@ export function GitScreen({
                   {renderCapabilityReason("smart_commit", "智能提交")}
                 </section>
 
-                <section className={sectionClass()}>
-                  <div className={sectionHeaderClass()}><h2 className="text-sm font-semibold">最近提交</h2></div>
-                  <div className={sectionBodyClass(listClass())}>
-                    {overview.recentCommits.length === 0 ? <div className={emptyStateClass()}>暂无提交</div> : overview.recentCommits.map((commit) => (
-                      <div key={commit.hash} className={listRowClass("block text-xs")}>
-                        <div className="break-words font-medium">{commit.subject}</div>
-                        <div className="mt-1 break-words text-[var(--muted)]">{commit.shortHash} · {commit.authorName} · {commit.authoredAt}</div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
                 <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass("flex-wrap")}>
                     <div>

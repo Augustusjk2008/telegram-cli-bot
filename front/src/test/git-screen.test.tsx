@@ -120,7 +120,7 @@ const remoteGitCapabilities: GitCapabilities = {
     pull: { available: true, reason: "", requiresConfirmation: true },
     push: { available: true, reason: "", requiresConfirmation: true },
     commit_message_generation: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: false },
-    smart_commit: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
+    smart_commit: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: false },
   },
 };
 
@@ -131,7 +131,7 @@ const localGitCapabilities: GitCapabilities = {
     discard: { available: true, reason: "", requiresConfirmation: true },
     stash_create: { available: true, reason: "", requiresConfirmation: true },
     commit_message_generation: { available: true, reason: "", requiresConfirmation: false },
-    smart_commit: { available: true, reason: "", requiresConfirmation: true },
+    smart_commit: { available: true, reason: "", requiresConfirmation: false },
   },
 };
 
@@ -184,6 +184,16 @@ function createGitScreenClient(capabilities: GitCapabilities = localGitCapabilit
     getGitIdentityConfig: vi.fn(async () => identityConfig),
     updateGitIdentityConfig: vi.fn(async () => identityConfig),
     getActiveGitSmartCommit: vi.fn(async () => null),
+    startGitSmartCommit: vi.fn(async () => ({
+      jobId: "git-smart-test",
+      alias: "main",
+      userId: 1,
+      status: "succeeded",
+      phase: "done",
+      message: "",
+      error: "",
+      overview: { ...cloneOverview(), isClean: true, changedFiles: [] },
+    })),
     listGitBranches: vi.fn(async () => branchList),
     listGitStashes: vi.fn(async () => stashList),
     getGitDiff,
@@ -239,9 +249,9 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   vi.mocked(client.commitGitChanges).mockResolvedValue({ message: "已提交", overview: committed });
   render(<GitScreen botAlias="remote" client={client} remote />);
 
-  expect(await screen.findByText("Remote commit")).toBeInTheDocument();
-  expect(screen.getAllByText("main").length).toBeGreaterThan(0);
   expect(await screen.findByText(/origin\/main/)).toBeInTheDocument();
+  expect(screen.queryByText("Remote commit")).not.toBeInTheDocument();
+  expect(screen.getAllByText("main").length).toBeGreaterThan(0);
   expect(await screen.findByText("Remote stash")).toBeInTheDocument();
   expect(await screen.findByTestId("git-selected-commit-message")).toHaveTextContent("Complete remote commit message.");
   expect(await screen.findByLabelText("Git 用户名")).toHaveValue("Remote Dev");
@@ -268,7 +278,7 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   expect(screen.getByText("工作区干净")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "刷新 Git 状态" }));
   await waitFor(() => expect(getGitOverview).toHaveBeenCalled());
-  await screen.findByText("Remote commit");
+  await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(2));
 
   expect(screen.getByLabelText("丢弃 src/deep/same.ts")).toBeEnabled();
   expect(screen.getByRole("button", { name: "暂存全部" })).toBeEnabled();
@@ -416,6 +426,18 @@ test("remote Pull and Push only mutate after confirmation, while Fetch does not 
   fireEvent.click(screen.getByRole("button", { name: "Fetch" }));
   await waitFor(() => expect(client.fetchGitRemote).toHaveBeenCalledOnce());
   expect(confirm).toHaveBeenCalledTimes(2);
+});
+
+test("smart commit starts without confirmation", async () => {
+  const { client } = createGitScreenClient(localGitCapabilities);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<GitScreen botAlias="main" client={client} />);
+
+  const smartCommit = await screen.findByRole("button", { name: "智能提交" });
+  fireEvent.click(smartCommit);
+
+  await waitFor(() => expect(client.startGitSmartCommit).toHaveBeenCalledWith("main"));
+  expect(confirm).not.toHaveBeenCalled();
 });
 
 test("a successful remote Fetch refreshes overview, branches, graph, and stashes once", async () => {

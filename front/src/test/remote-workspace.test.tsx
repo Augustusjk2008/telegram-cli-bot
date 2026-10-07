@@ -297,7 +297,8 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   await waitFor(() => expect(create).toHaveBeenCalledWith("remote", "new.txt", "", remote.root));
   expect(await screen.findByRole("tab", { name: "new.txt" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Git" }));
-  expect(await screen.findByRole("heading", { name: "最近提交" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "提交图" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "最近提交" })).not.toBeInTheDocument();
   expect(git).toHaveBeenCalledWith("remote");
   fireEvent.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();

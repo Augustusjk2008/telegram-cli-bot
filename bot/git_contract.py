@@ -30,7 +30,6 @@ GIT_CAPABILITIES_REQUIRING_CONFIRMATION = frozenset(
         "stash_create",
         "pull",
         "push",
-        "smart_commit",
     }
 )
 
