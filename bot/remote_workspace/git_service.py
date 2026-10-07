@@ -40,6 +40,7 @@ _STASH_REF_RE = re.compile(r"^stash@\{\d+\}$")
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _UNMERGED_STATUSES = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
 _SYNC_OPERATIONS = frozenset({"fetch", "pull", "push"})
+_REMOTE_FILE_PERMISSION_ERRORS = ("permission denied", "access is denied")
 
 
 def _windows_argument(value: str) -> str:
@@ -106,6 +107,20 @@ class RemoteGitService:
                 message += "\n[Remote Git output truncated]"
             raise RemoteWorkspaceError(400, error, message)
         return result
+
+    @staticmethod
+    def _is_unreadable_file_error(message: str) -> bool:
+        text = str(message or "").lower()
+        return any(marker in text for marker in _REMOTE_FILE_PERMISSION_ERRORS)
+
+    @staticmethod
+    def _unreadable_untracked_diff(path: str) -> str:
+        return (
+            f"diff --git a/{path} b/{path}\n"
+            "change scope: untracked\n"
+            f"--- {path} ---\n"
+            "[unreadable]"
+        )
 
     @staticmethod
     def _is_not_repository(message: str) -> bool:
@@ -1116,15 +1131,26 @@ class RemoteGitService:
                 continue
             path = self._path(str(item.get("path") or ""))
             untracked_paths.append(path)
-            result = self._git(
-                [
-                    "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv",
-                    "--unified=1", "--", null_path, f"./{path}",
-                ],
-                allowed=(0, 1),
-                error="git_diff_failed",
-                truncated=allow_truncation,
-            )
+            try:
+                result = self._git(
+                    [
+                        "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv",
+                        "--unified=1", "--", null_path, f"./{path}",
+                    ],
+                    allowed=(0, 1),
+                    error="git_diff_failed",
+                    truncated=allow_truncation,
+                )
+            except RemoteWorkspaceError as exc:
+                if exc.code != "git_diff_failed" or not self._is_unreadable_file_error(exc.message):
+                    raise
+                untracked_diffs.append(self._unreadable_untracked_diff(path))
+                untracked_truncated.append(False)
+                continue
+            if self._is_unreadable_file_error(result.get("stderr", "")):
+                untracked_diffs.append(self._unreadable_untracked_diff(path))
+                untracked_truncated.append(False)
+                continue
             untracked_diffs.append(result["stdout"])
             untracked_truncated.append(bool(result["output_truncated"]))
         return (

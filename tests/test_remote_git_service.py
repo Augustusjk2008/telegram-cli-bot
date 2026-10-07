@@ -226,6 +226,64 @@ def test_smart_commit_context_collects_remote_diffs_for_local_agent():
     assert context["status_text"] == " M tracked.txt\n?? new.txt\n"
 
 
+def test_smart_commit_context_marks_unreadable_untracked_files():
+    service = remote.RemoteGitService(Connection(), ROOT)
+    service._require_repo = lambda: None
+    service._status = lambda: (
+        "",
+        [{"path": "backups/compose.before.yaml", "untracked": True}],
+        True,
+    )
+
+    def fake_git(args, **_kwargs):
+        if args[0] == "status":
+            return result("?? backups/compose.before.yaml\n")
+        if args[:2] == ["diff", "--cached"]:
+            return result("")
+        if args[:2] == ["diff", "--find-renames"]:
+            return result("")
+        if args[:2] == ["diff", "--no-index"]:
+            return result(
+                stderr='error: open("./backups/compose.before.yaml"): Permission denied\n'
+                "fatal: cannot hash ./backups/compose.before.yaml",
+                returncode=128,
+            )
+        raise AssertionError(args)
+
+    service._git = fake_git
+
+    context = service.smart_commit_context()
+
+    assert "backups/compose.before.yaml" in context["diff_text"]
+    assert "[unreadable]" in context["diff_text"]
+
+
+def test_smart_commit_context_preserves_non_permission_untracked_diff_errors():
+    service = remote.RemoteGitService(Connection(), ROOT)
+    service._require_repo = lambda: None
+    service._status = lambda: (
+        "",
+        [{"path": "new.txt", "untracked": True}],
+        True,
+    )
+
+    def fake_git(args, **_kwargs):
+        if args[0] == "status":
+            return result("?? new.txt\n")
+        if args[:2] in (["diff", "--cached"], ["diff", "--find-renames"]):
+            return result("")
+        if args[:2] == ["diff", "--no-index"]:
+            raise RemoteWorkspaceError(400, "git_diff_failed", "fatal: remote filesystem failure")
+        raise AssertionError(args)
+
+    service._git = fake_git
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        service.smart_commit_context()
+
+    assert exc.value.code == "git_diff_failed"
+
+
 @pytest.mark.parametrize(
     ("operation", "expected_args"),
     [
