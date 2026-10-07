@@ -111,15 +111,27 @@ const remoteGitCapabilities: GitCapabilities = {
     tree_status: { available: true, reason: "", requiresConfirmation: false },
     commit_graph: { available: true, reason: "", requiresConfirmation: false },
     branches: { available: true, reason: "", requiresConfirmation: false },
-    branch_mutation: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
-    discard: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
-    stash: { available: true, reason: "", requiresConfirmation: false },
+    branch_mutation: { available: true, reason: "", requiresConfirmation: true },
+    discard: { available: true, reason: "", requiresConfirmation: true },
+    stash: { available: true, reason: "", requiresConfirmation: true },
+    stash_create: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
     identity: { available: true, reason: "", requiresConfirmation: false },
     fetch: { available: true, reason: "", requiresConfirmation: false },
     pull: { available: true, reason: "", requiresConfirmation: true },
     push: { available: true, reason: "", requiresConfirmation: true },
     commit_message_generation: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: false },
     smart_commit: { available: false, reason: "remote_feature_unavailable", requiresConfirmation: true },
+  },
+};
+
+const localGitCapabilities: GitCapabilities = {
+  capabilities: {
+    ...remoteGitCapabilities.capabilities,
+    branch_mutation: { available: true, reason: "", requiresConfirmation: true },
+    discard: { available: true, reason: "", requiresConfirmation: true },
+    stash_create: { available: true, reason: "", requiresConfirmation: true },
+    commit_message_generation: { available: true, reason: "", requiresConfirmation: false },
+    smart_commit: { available: true, reason: "", requiresConfirmation: true },
   },
 };
 
@@ -146,7 +158,7 @@ function createActionResult(): GitActionResult {
   };
 }
 
-function createGitScreenClient() {
+function createGitScreenClient(capabilities: GitCapabilities = localGitCapabilities) {
   const getGitOverview = vi.fn(async () => cloneOverview());
   const getGitDiff = vi.fn(async (_botAlias: string, path: string, staged = false): Promise<GitDiffPayload> => ({
     path,
@@ -166,10 +178,11 @@ function createGitScreenClient() {
   const getGitCommitGraph = vi.fn(async () => graphPayload);
   const client = {
     getGitOverview,
-    getGitCapabilities: vi.fn(async () => remoteGitCapabilities),
+    getGitCapabilities: vi.fn(async () => capabilities),
     initGitRepository: vi.fn(async () => cloneOverview()),
     getGitCommitGraph,
     getGitIdentityConfig: vi.fn(async () => identityConfig),
+    updateGitIdentityConfig: vi.fn(async () => identityConfig),
     getActiveGitSmartCommit: vi.fn(async () => null),
     listGitBranches: vi.fn(async () => branchList),
     listGitStashes: vi.fn(async () => stashList),
@@ -194,7 +207,7 @@ function createGitScreenClient() {
 }
 
 test("remote Git supports overview, all three diffs, individual staging and manual commit without local-only requests", async () => {
-  const { client, getGitOverview, getGitDiff, getGitCommitGraph } = createGitScreenClient();
+  const { client, getGitOverview, getGitDiff, getGitCommitGraph } = createGitScreenClient(remoteGitCapabilities);
   const recentCommit = { hash: "abc1234", shortHash: "abc1234", subject: "Remote commit", authorName: "Dev", authoredAt: "2026-09-24" };
   getGitOverview.mockResolvedValue({ ...cloneOverview(), recentCommits: [recentCommit] });
   getGitCommitGraph.mockResolvedValue({
@@ -227,12 +240,12 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   render(<GitScreen botAlias="remote" client={client} remote />);
 
   expect(await screen.findByText("Remote commit")).toBeInTheDocument();
-  expect(screen.getByText("main")).toBeInTheDocument();
+  expect(screen.getAllByText("main").length).toBeGreaterThan(0);
   expect(await screen.findByText(/origin\/main/)).toBeInTheDocument();
   expect(await screen.findByText("Remote stash")).toBeInTheDocument();
   expect(await screen.findByTestId("git-selected-commit-message")).toHaveTextContent("Complete remote commit message.");
   expect(await screen.findByLabelText("Git 用户名")).toHaveValue("Remote Dev");
-  expect(screen.getByLabelText("Git 用户名")).toHaveAttribute("readonly");
+  expect(screen.getByLabelText("Git 用户名")).toBeEnabled();
   expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();
   for (const [path, staged] of [["docs/same.ts", true], ["src/deep/same.ts", false], ["new/folder/file.txt", false]] as const) {
     fireEvent.click(screen.getByRole("button", { name: `打开 diff ${path}` }));
@@ -257,14 +270,20 @@ test("remote Git supports overview, all three diffs, individual staging and manu
   await waitFor(() => expect(getGitOverview).toHaveBeenCalled());
   await screen.findByText("Remote commit");
 
-  expect(screen.queryByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|切换|智能提交|生成|重置/ })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("丢弃 src/deep/same.ts")).toBeEnabled();
+  expect(screen.getByRole("button", { name: "暂存全部" })).toBeEnabled();
+  expect(screen.getAllByRole("button", { name: "新建分支" }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+  expect(screen.getByRole("button", { name: "切换" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "智能提交" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "生成 commit message" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Stash Push" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Fetch" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Pull" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Push" })).toBeEnabled();
   expect(screen.getByTestId("remote-git-credentials-hint")).toHaveTextContent("凭据由远程主机配置");
   expect(screen.getByTestId("git-version-tree-panel")).toBeInTheDocument();
   expect(screen.getByTestId("git-identity-panel")).toBeInTheDocument();
-  expect(screen.queryByTestId("git-commit-cli-panel")).not.toBeInTheDocument();
+  expect(screen.getByTestId("git-commit-cli-panel")).toHaveTextContent("remote_feature_unavailable");
   expect(client.getGitCommitGraph).toHaveBeenCalledWith("remote", expect.objectContaining({ scope: "all" }));
   expect(client.getGitIdentityConfig).toHaveBeenCalledWith("remote");
   expect(client.listGitBranches).toHaveBeenCalledWith("remote");
@@ -274,7 +293,7 @@ test("remote Git supports overview, all three diffs, individual staging and manu
 });
 
 test("remote Git capabilities disable actions and expose the server reason without sending requests", async () => {
-  const { client } = createGitScreenClient();
+  const { client } = createGitScreenClient(remoteGitCapabilities);
   vi.mocked(client.getGitCapabilities).mockResolvedValue({
     ...remoteGitCapabilities,
     capabilities: {
@@ -297,8 +316,92 @@ test("remote Git capabilities disable actions and expose the server reason witho
   expect(client.pullGitRemote).not.toHaveBeenCalled();
 });
 
+test("the same capability matrix keeps local and remote Git controls mounted", async () => {
+  const local = createGitScreenClient(localGitCapabilities);
+  const localView = render(<GitScreen botAlias="main" client={local.client} />);
+  await localView.findByTestId("git-changes-panel");
+  for (const name of ["Fetch", "Pull", "Push", "Stash Push", "暂存全部", "丢弃全部", "智能提交", "生成 commit message"]) {
+    expect(screen.getByRole("button", { name })).toBeInTheDocument();
+  }
+  localView.unmount();
+
+  const remote = createGitScreenClient(localGitCapabilities);
+  render(<GitScreen botAlias="remote" client={remote.client} remote />);
+  await screen.findByTestId("git-changes-panel");
+  for (const name of ["Fetch", "Pull", "Push", "Stash Push", "暂存全部", "丢弃全部", "智能提交", "生成 commit message"]) {
+    expect(screen.getByRole("button", { name })).toBeInTheDocument();
+  }
+});
+
+test("capability read failure disables actions and prevents follow-up requests", async () => {
+  const { client } = createGitScreenClient(localGitCapabilities);
+  vi.mocked(client.getGitCapabilities).mockRejectedValueOnce(new Error("capability timeout"));
+  render(<GitScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByTestId("git-capability-reason-discard")).toHaveTextContent("capability timeout");
+  const fetch = screen.getByRole("button", { name: "Fetch" });
+  expect(fetch).toBeDisabled();
+  fireEvent.click(fetch);
+  expect(client.fetchGitRemote).not.toHaveBeenCalled();
+  expect(client.listGitBranches).not.toHaveBeenCalled();
+  expect(client.getGitIdentityConfig).not.toHaveBeenCalled();
+});
+
+test("identity editing follows account permissions while the identity section stays visible", async () => {
+  const { client } = createGitScreenClient(localGitCapabilities);
+  render(<GitScreen botAlias="main" client={client} sessionCapabilities={["git_ops"]} />);
+
+  const name = await screen.findByLabelText("Git 用户名");
+  expect(name).toBeDisabled();
+  expect(screen.getByRole("button", { name: "保存 Git 用户" })).toBeDisabled();
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "当前仓库" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "当前仓库" }));
+  expect(screen.getByLabelText("Git 用户名")).toBeEnabled();
+  fireEvent.change(screen.getByLabelText("Git 用户名"), { target: { value: "Repo Dev" } });
+  fireEvent.change(screen.getByLabelText("Git 邮箱"), { target: { value: "repo@example.com" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存 Git 用户" }));
+  await waitFor(() => expect(client.updateGitIdentityConfig).toHaveBeenCalledWith("main", {
+    scope: "local",
+    name: "Repo Dev",
+    email: "repo@example.com",
+  }));
+});
+
+test("a stale workspace response cannot overwrite the newly bound Git state", async () => {
+  let resolveOld!: (value: GitOverview) => void;
+  let resolveNew!: (value: GitOverview) => void;
+  const oldOverview = new Promise<GitOverview>((resolve) => { resolveOld = resolve; });
+  const newOverview = new Promise<GitOverview>((resolve) => { resolveNew = resolve; });
+  const { client } = createGitScreenClient(localGitCapabilities);
+  vi.mocked(client.getGitOverview)
+    .mockImplementationOnce(async () => oldOverview)
+    .mockImplementationOnce(async () => newOverview);
+
+  const view = render(
+    <GitScreen
+      botAlias="old"
+      client={client}
+      workspaceIdentity={{ accountId: "acct", botAlias: "old", root: "C:/old", connectionId: "", platform: "windows" }}
+    />,
+  );
+  view.rerender(
+    <GitScreen
+      botAlias="new"
+      client={client}
+      workspaceIdentity={{ accountId: "acct", botAlias: "new", root: "C:/new", connectionId: "", platform: "windows" }}
+    />,
+  );
+
+  resolveNew({ ...cloneOverview(), workingDir: "C:/new", repoPath: "C:/new", currentBranch: "new" });
+  expect((await screen.findAllByText("new")).length).toBeGreaterThan(0);
+  resolveOld({ ...cloneOverview(), workingDir: "C:/old", repoPath: "C:/old", currentBranch: "old" });
+  await waitFor(() => expect(screen.getAllByText("new").length).toBeGreaterThan(0));
+  expect(screen.queryByText("C:/old")).not.toBeInTheDocument();
+});
+
 test("remote Pull and Push only mutate after confirmation, while Fetch does not prompt", async () => {
-  const { client } = createGitScreenClient();
+  const { client } = createGitScreenClient(remoteGitCapabilities);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   render(<GitScreen botAlias="remote" client={client} remote />);
 
@@ -316,7 +419,7 @@ test("remote Pull and Push only mutate after confirmation, while Fetch does not 
 });
 
 test("a successful remote Fetch refreshes overview, branches, graph, and stashes once", async () => {
-  const { client, getGitOverview, getGitCommitGraph } = createGitScreenClient();
+  const { client, getGitOverview, getGitCommitGraph } = createGitScreenClient(remoteGitCapabilities);
   render(<GitScreen botAlias="remote" client={client} remote />);
   await screen.findByRole("button", { name: "Fetch" });
   await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(1));
@@ -346,7 +449,7 @@ test.each([
   ["pull", "git_pull_requires_manual_resolution", "Pull 需要手动处理"],
   ["push", "git_push_rejected", "Push 被远端拒绝"],
 ] as const)("remote %s failure shows an actionable %s diagnostic and refreshes overview once", async (operation, code, diagnostic) => {
-  const { client, getGitOverview } = createGitScreenClient();
+  const { client, getGitOverview } = createGitScreenClient(remoteGitCapabilities);
   const mutation = operation === "fetch"
     ? client.fetchGitRemote
     : operation === "pull"
@@ -365,7 +468,7 @@ test.each([
 });
 
 test("remote missing Git shows installation and SSH PATH guidance and retries only overview", async () => {
-  const { client, getGitOverview } = createGitScreenClient();
+  const { client, getGitOverview } = createGitScreenClient(remoteGitCapabilities);
   getGitOverview.mockRejectedValueOnce(new WebApiClientError("Git is unavailable", { status: 503, code: "remote_git_not_found" }));
   render(<GitScreen botAlias="remote" client={client} remote embedded />);
   const guidance = await screen.findByRole("alert");
@@ -380,24 +483,24 @@ test("remote missing Git shows installation and SSH PATH guidance and retries on
 });
 
 test("remote SSH errors remain distinct from missing Git", async () => {
-  const { client, getGitOverview } = createGitScreenClient();
+  const { client, getGitOverview } = createGitScreenClient(remoteGitCapabilities);
   getGitOverview.mockRejectedValue(new WebApiClientError("SSH authentication failed", { status: 401, code: "remote_auth_failed" }));
   render(<GitScreen botAlias="remote" client={client} remote />);
   expect(await screen.findByText("SSH authentication failed")).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: /官方安装指南/ })).not.toBeInTheDocument();
 });
 
-test("remote non-repository keeps unsupported initialization unavailable", async () => {
-  const { client, getGitOverview } = createGitScreenClient();
+test("remote non-repository exposes initialization through the capability matrix", async () => {
+  const { client, getGitOverview } = createGitScreenClient(remoteGitCapabilities);
   getGitOverview.mockResolvedValue({ ...cloneOverview(), repoFound: false, canInit: true });
   render(<GitScreen botAlias="remote" client={client} remote />);
   expect(await screen.findByText("远程工作区根目录还没有 Git 仓库。")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "初始化 Git 仓库" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "初始化 Git 仓库" })).toBeEnabled();
   expect(client.initGitRepository).not.toHaveBeenCalled();
 });
 
 test("a failed remote commit preserves the draft and does not retry the mutation", async () => {
-  const { client } = createGitScreenClient();
+  const { client } = createGitScreenClient(remoteGitCapabilities);
   vi.mocked(client.commitGitChanges).mockRejectedValue(new Error("SSH command timed out"));
   render(<GitScreen botAlias="remote" client={client} remote />);
   fireEvent.change(await screen.findByRole("textbox", { name: "commit message" }), { target: { value: "Keep this draft" } });

@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -41,6 +41,7 @@ import type {
   GitGraphScope,
   GitCapabilities,
   GitCapability,
+  GitCapabilityName,
   GitIdentityConfig,
   GitIdentityScope,
   GitOverview,
@@ -48,6 +49,7 @@ import type {
   GitResetMode,
   GitSmartCommitJob,
   GitStashList,
+  GitWorkspaceIdentity,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -56,6 +58,8 @@ type Props = {
   client?: WebBotClient;
   embedded?: boolean;
   remote?: boolean;
+  workspaceIdentity?: GitWorkspaceIdentity;
+  reconnectRevision?: number;
   onOpenDiff?: (path: string, staged: boolean) => void | Promise<void>;
   onOverviewChange?: (overview: GitOverview | null) => void;
   sessionCapabilities?: string[];
@@ -98,12 +102,30 @@ function groupedFiles(overview: GitOverview | null) {
   };
 }
 
-function remoteGitCapabilityReason(capability: GitCapability | undefined, loading = false) {
+function gitCapabilityReason(capability: GitCapability | undefined, loading = false) {
   if (loading) {
     return "正在读取服务端能力";
   }
   return capability?.reason || "服务端未提供原因";
 }
+
+const CAPABILITY_READ_FAILURE_REASON = "无法读取服务端 Git 能力，已禁用相关操作";
+
+const GIT_CAPABILITY_LABELS: Partial<Record<GitCapabilityName, string>> = {
+  tree_status: "Git 工作区操作",
+  commit_graph: "提交图",
+  branches: "分支操作",
+  branch_mutation: "分支变更",
+  discard: "丢弃改动",
+  stash: "Stash 操作",
+  stash_create: "Stash Push",
+  identity: "Git 身份配置",
+  fetch: "Fetch",
+  pull: "Pull",
+  push: "Push",
+  commit_message_generation: "提交说明生成",
+  smart_commit: "智能提交",
+};
 
 function remoteGitErrorDiagnostic(error: unknown, operation: RemoteGitAction) {
   const candidate = error as { code?: unknown; message?: unknown } | null;
@@ -496,6 +518,8 @@ export function GitScreen({
   client = new MockWebBotClient(),
   embedded = false,
   remote = false,
+  workspaceIdentity,
+  reconnectRevision = 0,
   onOpenDiff,
   onOverviewChange,
   sessionCapabilities = [],
@@ -504,9 +528,9 @@ export function GitScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [remoteGitMissing, setRemoteGitMissing] = useState(false);
-  const [remoteGitCapabilities, setRemoteGitCapabilities] = useState<GitCapabilities | null>(null);
-  const [remoteGitCapabilitiesLoading, setRemoteGitCapabilitiesLoading] = useState(false);
-  const [remoteGitCapabilitiesError, setRemoteGitCapabilitiesError] = useState("");
+  const [gitCapabilities, setGitCapabilities] = useState<GitCapabilities | null>(null);
+  const [gitCapabilitiesLoading, setGitCapabilitiesLoading] = useState(false);
+  const [gitCapabilitiesError, setGitCapabilitiesError] = useState("");
   const [notice, setNotice] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [actionLoading, setActionLoading] = useState("");
@@ -533,8 +557,18 @@ export function GitScreen({
   const [identityEmail, setIdentityEmail] = useState("");
   const [identityLoading, setIdentityLoading] = useState(false);
   const [smartCommitJob, setSmartCommitJob] = useState<GitSmartCommitJob | null>(null);
+  const workspaceEpochRef = useRef(0);
+  const workspaceKey = useMemo(() => [
+    workspaceIdentity?.accountId || "",
+    workspaceIdentity?.botAlias || botAlias,
+    workspaceIdentity?.root || "",
+    workspaceIdentity?.connectionId || "",
+    workspaceIdentity?.platform || "",
+  ].join("\n"), [botAlias, workspaceIdentity]);
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canManageGitCommitCli = canManageBotRuntime || sessionCapabilities.includes("git_ops");
+  const canManageGlobalGitIdentity = canManageBotRuntime;
+  const canManageLocalGitIdentity = sessionCapabilities.length === 0 || sessionCapabilities.includes("git_ops");
   const isGeneratingCommitMessage = actionLoading === "generate-commit-message";
   const isSmartCommitRunning = isGitSmartCommitRunning(smartCommitJob);
   const mutationBusy = actionLoading !== "" || isSmartCommitRunning;
@@ -557,12 +591,54 @@ export function GitScreen({
     [graphPayload, selectedGraphHash],
   );
 
-  function confirmDiscardPath(path: string) {
-    return window.confirm(`确定丢弃 ${path} 的改动吗？`);
+  function isCurrentWorkspace(epoch: number) {
+    return workspaceEpochRef.current === epoch;
   }
 
-  function confirmDiscardAll(count: number) {
-    return window.confirm(`确定丢弃全部 ${count} 个文件的改动吗？`);
+  function getCapability(name: GitCapabilityName): GitCapability {
+    if (gitCapabilitiesLoading) {
+      return { available: false, reason: "正在读取服务端能力", requiresConfirmation: false };
+    }
+    if (gitCapabilitiesError) {
+      return { available: false, reason: gitCapabilitiesError || CAPABILITY_READ_FAILURE_REASON, requiresConfirmation: false };
+    }
+    return gitCapabilities?.capabilities[name] || {
+      available: false,
+      reason: CAPABILITY_READ_FAILURE_REASON,
+      requiresConfirmation: false,
+    };
+  }
+
+  function isCapabilityAvailable(name: GitCapabilityName) {
+    return getCapability(name).available;
+  }
+
+  function capabilityReason(name: GitCapabilityName) {
+    const capability = getCapability(name);
+    return gitCapabilityReason(capability, gitCapabilitiesLoading);
+  }
+
+  async function runCapabilityAction<T>(
+    name: GitCapabilityName,
+    action: () => Promise<T>,
+    options: { confirmationMessage?: string } = {},
+  ): Promise<T | undefined> {
+    const epoch = workspaceEpochRef.current;
+    const capability = getCapability(name);
+    if (!capability.available || mutationBusy) {
+      return undefined;
+    }
+    if (capability.requiresConfirmation) {
+      const label = GIT_CAPABILITY_LABELS[name] || name;
+      const message = options.confirmationMessage || `确定执行${label}吗？`;
+      if (!window.confirm(message)) {
+        return undefined;
+      }
+    }
+    if (!isCurrentWorkspace(epoch)) {
+      return undefined;
+    }
+    return action();
   }
 
   function syncOverview(next: GitOverview | null) {
@@ -570,44 +646,81 @@ export function GitScreen({
     onOverviewChange?.(next);
   }
 
-  async function loadOverview() {
+  async function loadOverview(epoch = workspaceEpochRef.current): Promise<GitOverview | null> {
+    if (!isCurrentWorkspace(epoch)) return null;
     setLoading(true);
     setError("");
     setRemoteGitMissing(false);
     try {
       const next = await client.getGitOverview(botAlias);
+      if (!isCurrentWorkspace(epoch)) {
+        return null;
+      }
       syncOverview(next);
+      return next;
     } catch (err) {
+      if (!isCurrentWorkspace(epoch)) {
+        return null;
+      }
       syncOverview(null);
       setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
       setError(err instanceof Error ? err.message : "加载 Git 状态失败");
+      return null;
     } finally {
-      setLoading(false);
+      if (isCurrentWorkspace(epoch)) {
+        setLoading(false);
+      }
     }
   }
 
-  async function loadGitCapabilities() {
-    setRemoteGitCapabilitiesLoading(true);
-    setRemoteGitCapabilitiesError("");
+  async function loadGitCapabilities(epoch = workspaceEpochRef.current): Promise<GitCapabilities | null> {
+    if (!isCurrentWorkspace(epoch)) return null;
+    setGitCapabilitiesLoading(true);
+    setGitCapabilitiesError("");
     try {
-      setRemoteGitCapabilities(await client.getGitCapabilities(botAlias));
+      const next = await client.getGitCapabilities(botAlias);
+      if (!isCurrentWorkspace(epoch)) {
+        return null;
+      }
+      setGitCapabilities(next);
+      return next;
     } catch (err) {
-      setRemoteGitCapabilities(null);
-      setRemoteGitCapabilitiesError(err instanceof Error ? err.message : "读取远程 Git 能力失败");
+      if (!isCurrentWorkspace(epoch)) {
+        return null;
+      }
+      setGitCapabilities(null);
+      setGitCapabilitiesError(err instanceof Error ? err.message : CAPABILITY_READ_FAILURE_REASON);
+      return null;
     } finally {
-      setRemoteGitCapabilitiesLoading(false);
+      if (isCurrentWorkspace(epoch)) {
+        setGitCapabilitiesLoading(false);
+      }
     }
   }
 
-  async function refreshOverviewQuietly() {
+  async function refreshOverviewQuietly(epoch = workspaceEpochRef.current): Promise<GitOverview | null> {
+    if (!isCurrentWorkspace(epoch)) return null;
+    setRemoteGitMissing(false);
     try {
-      syncOverview(await client.getGitOverview(botAlias));
+      const next = await client.getGitOverview(botAlias);
+      if (!isCurrentWorkspace(epoch)) {
+        return null;
+      }
+      syncOverview(next);
+      return next;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 Git 状态失败");
+      if (isCurrentWorkspace(epoch)) {
+        setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
+        setError(err instanceof Error ? err.message : "加载 Git 状态失败");
+      }
+      return null;
     }
   }
 
-  async function loadGitGraph(options: { scope?: GitGraphScope; cursor?: string; append?: boolean } = {}) {
+  async function loadGitGraph(options: { scope?: GitGraphScope; cursor?: string; append?: boolean } = {}, epoch = workspaceEpochRef.current) {
+    if (!isCurrentWorkspace(epoch) || !isCapabilityAvailable("commit_graph")) {
+      return;
+    }
     const scope = options.scope || graphScope;
     setGraphLoading(true);
     try {
@@ -616,6 +729,9 @@ export function GitScreen({
         limit: GIT_GRAPH_LIMIT,
         cursor: options.cursor,
       });
+      if (!isCurrentWorkspace(epoch)) {
+        return;
+      }
       setGraphPayload((current) => options.append && current
         ? { ...next, nodes: [...current.nodes, ...next.nodes] }
         : next);
@@ -623,46 +739,99 @@ export function GitScreen({
         ? current || next.nodes[0]?.hash || ""
         : next.nodes.some((node) => node.hash === current) ? current : next.nodes[0]?.hash || "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载提交图失败");
+      if (isCurrentWorkspace(epoch)) {
+        setError(err instanceof Error ? err.message : "加载提交图失败");
+      }
     } finally {
-      setGraphLoading(false);
+      if (isCurrentWorkspace(epoch)) {
+        setGraphLoading(false);
+      }
     }
   }
 
   async function refreshGitWorkspace(options: { graph?: boolean } = {}) {
-    await refreshOverviewQuietly();
-    await loadBranches();
-    if (options.graph !== false) {
-      await loadGitGraph({ scope: graphScope });
+    const epoch = workspaceEpochRef.current;
+    const nextOverview = await refreshOverviewQuietly(epoch);
+    if (!isCurrentWorkspace(epoch)) {
+      return;
     }
-    await loadStashes();
-    await loadIdentityConfig(identityScope);
+    if (!nextOverview?.repoFound) {
+      setBranches({ currentBranch: "", branches: [] });
+      setSelectedBranch("");
+      setStashes({ items: [] });
+      setGraphPayload(null);
+      setSelectedGraphHash("");
+      await loadIdentityConfig(identityScope, epoch);
+      return;
+    }
+    await loadBranches(epoch);
+    if (options.graph !== false) {
+      await loadGitGraph({ scope: graphScope }, epoch);
+    }
+    await loadStashes(epoch);
+    await loadIdentityConfig(identityScope, epoch);
   }
 
   useEffect(() => {
-    void loadOverview();
-    void loadIdentityConfig("global");
-  }, [botAlias, client, remote]);
+    const epoch = workspaceEpochRef.current + 1;
+    workspaceEpochRef.current = epoch;
+    setLoading(true);
+    setError("");
+    setNotice("");
+    setActionLoading("");
+    setRemoteGitMissing(false);
+    setGitCapabilities(null);
+    setGitCapabilitiesError("");
+    setGitCapabilitiesLoading(false);
+    setBranchesLoading(false);
+    setStashesLoading(false);
+    setGraphLoading(false);
+    setIdentityLoading(false);
+    setDiffLoadingPath("");
+    setOverview(null);
+    setBranches({ currentBranch: "", branches: [] });
+    setSelectedBranch("");
+    setStashes({ items: [] });
+    setGraphPayload(null);
+    setSelectedGraphHash("");
+    setIdentityConfig(null);
+    setIdentityScope("global");
+    setIdentityName("");
+    setIdentityEmail("");
+    setSelectedDiff(null);
+    setDiffError("");
+    setSmartCommitJob(null);
+    void loadGitCapabilities(epoch);
+    void loadOverview(epoch);
+    return () => {
+      if (workspaceEpochRef.current === epoch) {
+        workspaceEpochRef.current += 1;
+      }
+    };
+  }, [botAlias, client, reconnectRevision, workspaceKey]);
 
   useEffect(() => {
-    if (!remote) {
-      setRemoteGitCapabilities(null);
-      setRemoteGitCapabilitiesError("");
+    if (gitCapabilitiesLoading || !gitCapabilities) {
       return;
     }
-    void loadGitCapabilities();
-  }, [botAlias, client, remote]);
-
-  useEffect(() => {
+    const epoch = workspaceEpochRef.current;
     if (overview?.repoFound) {
-      void loadGitGraph({ scope: graphScope });
+      void loadBranches(epoch);
+      void loadStashes(epoch);
     } else {
       setGraphPayload(null);
       setSelectedGraphHash("");
     }
-  }, [botAlias, client, overview?.repoFound, graphScope, remote]);
+    void loadIdentityConfig("global", epoch);
+    if (overview?.repoFound) {
+      void loadGitGraph({ scope: graphScope }, epoch);
+    }
+  }, [gitCapabilities, gitCapabilitiesLoading, graphScope, overview?.repoFound, workspaceKey]);
 
-  async function applySmartCommitJob(job: GitSmartCommitJob, options?: { refreshOverview?: boolean }) {
+  async function applySmartCommitJob(job: GitSmartCommitJob, options?: { refreshOverview?: boolean }, epoch = workspaceEpochRef.current) {
+    if (!isCurrentWorkspace(epoch)) {
+      return;
+    }
     setSmartCommitJob(job);
     if (job.message && job.status !== "succeeded") {
       setCommitMessage(job.message);
@@ -672,8 +841,9 @@ export function GitScreen({
     }
     if (job.status === "succeeded") {
       if (options?.refreshOverview !== false) {
-        await refreshOverviewQuietly();
+        await refreshOverviewQuietly(epoch);
       }
+      if (!isCurrentWorkspace(epoch)) return;
       setCommitMessage("");
       setError("");
       const hash = gitSmartCommitSuccessHash(job);
@@ -682,16 +852,18 @@ export function GitScreen({
     }
     if (job.status === "failed") {
       if (options?.refreshOverview !== false) {
-        await refreshOverviewQuietly();
+        await refreshOverviewQuietly(epoch);
       }
+      if (!isCurrentWorkspace(epoch)) return;
       setNotice("");
       setError(job.error || "智能提交失败");
       return;
     }
     if (job.status === "canceled") {
       if (options?.refreshOverview !== false) {
-        await refreshOverviewQuietly();
+        await refreshOverviewQuietly(epoch);
       }
+      if (!isCurrentWorkspace(epoch)) return;
       setNotice("");
       setError(job.error || "智能提交已取消");
       return;
@@ -700,17 +872,17 @@ export function GitScreen({
 
   useEffect(() => {
     let cancelled = false;
-    setSmartCommitJob(null);
-    if (remote) return;
+    if (gitCapabilitiesLoading || !gitCapabilities || !isCapabilityAvailable("smart_commit")) return;
+    const epoch = workspaceEpochRef.current;
     async function restoreSmartCommit() {
       try {
         const job = await client.getActiveGitSmartCommit(botAlias);
-        if (cancelled || !job) {
+        if (cancelled || !isCurrentWorkspace(epoch) || !job) {
           return;
         }
-        await applySmartCommitJob(job);
+        await applySmartCommitJob(job, undefined, epoch);
       } catch (err) {
-        if (cancelled) {
+        if (cancelled || !isCurrentWorkspace(epoch)) {
           return;
         }
         setError(err instanceof Error ? err.message : "加载智能提交状态失败");
@@ -720,35 +892,23 @@ export function GitScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client, remote]);
+  }, [botAlias, client, gitCapabilities, gitCapabilitiesLoading, workspaceKey]);
 
   useEffect(() => {
-    if (overview?.repoFound) {
-      void loadBranches();
-      void loadStashes();
-    } else {
-      setBranches({ currentBranch: "", branches: [] });
-      setSelectedBranch("");
-      setStashes({ items: [] });
-      setSelectedDiff(null);
-      setDiffError("");
-    }
-  }, [botAlias, client, overview?.repoFound, remote]);
-
-  useEffect(() => {
-    if (remote || !smartCommitJob?.jobId || !isSmartCommitRunning) {
+    if (gitCapabilitiesLoading || !gitCapabilities || !isCapabilityAvailable("smart_commit") || !smartCommitJob?.jobId || !isSmartCommitRunning) {
       return;
     }
     let cancelled = false;
+    const epoch = workspaceEpochRef.current;
     const timer = window.setTimeout(async () => {
       try {
         const next = await client.getGitSmartCommitJob(botAlias, smartCommitJob.jobId);
-        if (cancelled) {
+        if (cancelled || !isCurrentWorkspace(epoch)) {
           return;
         }
-        await applySmartCommitJob(next);
+        await applySmartCommitJob(next, undefined, epoch);
       } catch (err) {
-        if (cancelled) {
+        if (cancelled || !isCurrentWorkspace(epoch)) {
           return;
         }
         setNotice("");
@@ -759,7 +919,7 @@ export function GitScreen({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [botAlias, client, isSmartCommitRunning, smartCommitJob, remote]);
+  }, [botAlias, client, gitCapabilities, gitCapabilitiesLoading, isSmartCommitRunning, smartCommitJob, workspaceKey]);
 
   function applyIdentityDraft(config: GitIdentityConfig, scope: GitIdentityScope) {
     const nextScope = scope === "local" && !config.repoFound ? "global" : scope;
@@ -769,16 +929,26 @@ export function GitScreen({
     setIdentityEmail(identity?.email || "");
   }
 
-  async function loadIdentityConfig(preferredScope = identityScope) {
+  async function loadIdentityConfig(preferredScope = identityScope, epoch = workspaceEpochRef.current) {
+    if (!isCurrentWorkspace(epoch) || !isCapabilityAvailable("identity")) {
+      return;
+    }
     setIdentityLoading(true);
     try {
       const next = await client.getGitIdentityConfig(botAlias);
+      if (!isCurrentWorkspace(epoch)) {
+        return;
+      }
       setIdentityConfig(next);
       applyIdentityDraft(next, preferredScope);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 Git 用户失败");
+      if (isCurrentWorkspace(epoch)) {
+        setError(err instanceof Error ? err.message : "加载 Git 用户失败");
+      }
     } finally {
-      setIdentityLoading(false);
+      if (isCurrentWorkspace(epoch)) {
+        setIdentityLoading(false);
+      }
     }
   }
 
@@ -797,48 +967,64 @@ export function GitScreen({
       refreshOverviewOnSuccess?: boolean;
       refreshOverviewOnError?: boolean;
       remoteOperation?: RemoteGitAction;
+      capability?: GitCapabilityName;
+      confirmationMessage?: string;
     } = {},
   ) {
-    setActionLoading(key);
-    setError("");
-    setRemoteGitMissing(false);
-    setNotice("");
-    try {
-      const result = await fn();
-      syncOverview(result.overview);
-      if (options.refreshWorkspace) {
-        if (options.refreshOverviewOnSuccess) {
+    const epoch = workspaceEpochRef.current;
+    const execute = async () => {
+      if (!isCurrentWorkspace(epoch)) {
+        return;
+      }
+      setActionLoading(key);
+      setError("");
+      setRemoteGitMissing(false);
+      setNotice("");
+      try {
+        const result = await fn();
+        if (!isCurrentWorkspace(epoch)) {
+          return;
+        }
+        syncOverview(result.overview);
+        if (options.refreshWorkspace) {
+          if (options.refreshOverviewOnSuccess) {
+            await refreshOverviewQuietly();
+          }
+          await loadBranches();
+          await loadGitGraph({ scope: graphScope });
+          await loadStashes();
+          await loadIdentityConfig(identityScope);
+        }
+        setNotice(result.message || "Git 操作完成");
+        if (key === "commit") {
+          setCommitMessage("");
+        }
+      } catch (err) {
+        if (!isCurrentWorkspace(epoch)) {
+          return;
+        }
+        setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
+        const message = gitActionErrorMessage(err, "Git 操作失败", options.remoteOperation);
+        if (options.refreshOverviewOnError) {
           await refreshOverviewQuietly();
         }
-        await loadBranches();
-        await loadGitGraph({ scope: graphScope });
-        await loadStashes();
-        await loadIdentityConfig(identityScope);
+        setError(message);
+      } finally {
+        if (isCurrentWorkspace(epoch)) {
+          setActionLoading("");
+        }
       }
-      setNotice(result.message || "Git 操作完成");
-      if (key === "commit") {
-        setCommitMessage("");
-      }
-    } catch (err) {
-      setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
-      const message = gitActionErrorMessage(err, "Git 操作失败", options.remoteOperation);
-      if (options.refreshOverviewOnError) {
-        await refreshOverviewQuietly();
-      }
-      setError(message);
-    } finally {
-      setActionLoading("");
+    };
+    if (options.capability) {
+      await runCapabilityAction(options.capability, execute, {
+        confirmationMessage: options.confirmationMessage,
+      });
+      return;
     }
+    await execute();
   }
 
   async function runRemoteGitAction(operation: RemoteGitAction) {
-    const capability = remoteGitCapabilities?.capabilities[operation];
-    if (!capability?.available || mutationBusy) {
-      return;
-    }
-    if (capability.requiresConfirmation && !window.confirm(`确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？远程主机将使用其已配置的 Git 凭据。`)) {
-      return;
-    }
     const mutation = operation === "fetch"
       ? () => client.fetchGitRemote(botAlias)
       : operation === "pull"
@@ -849,30 +1035,53 @@ export function GitScreen({
       refreshOverviewOnSuccess: true,
       refreshOverviewOnError: true,
       remoteOperation: operation,
+      capability: operation,
+      confirmationMessage: `确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？远程主机将使用其已配置的 Git 凭据。`,
     });
   }
 
-  async function loadBranches() {
+  async function loadBranches(epoch = workspaceEpochRef.current) {
+    if (!isCurrentWorkspace(epoch) || !isCapabilityAvailable("branches")) {
+      return;
+    }
     setBranchesLoading(true);
     try {
       const next = await client.listGitBranches(botAlias);
+      if (!isCurrentWorkspace(epoch)) {
+        return;
+      }
       setBranches(next);
       setSelectedBranch(next.currentBranch || next.branches[0]?.name || "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载分支失败");
+      if (isCurrentWorkspace(epoch)) {
+        setError(err instanceof Error ? err.message : "加载分支失败");
+      }
     } finally {
-      setBranchesLoading(false);
+      if (isCurrentWorkspace(epoch)) {
+        setBranchesLoading(false);
+      }
     }
   }
 
-  async function loadStashes() {
+  async function loadStashes(epoch = workspaceEpochRef.current) {
+    if (!isCurrentWorkspace(epoch) || !isCapabilityAvailable("stash")) {
+      return;
+    }
     setStashesLoading(true);
     try {
-      setStashes(await client.listGitStashes(botAlias));
+      const next = await client.listGitStashes(botAlias);
+      if (!isCurrentWorkspace(epoch)) {
+        return;
+      }
+      setStashes(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 stash 失败");
+      if (isCurrentWorkspace(epoch)) {
+        setError(err instanceof Error ? err.message : "加载 stash 失败");
+      }
     } finally {
-      setStashesLoading(false);
+      if (isCurrentWorkspace(epoch)) {
+        setStashesLoading(false);
+      }
     }
   }
 
@@ -882,21 +1091,27 @@ export function GitScreen({
       setError("分支名不能为空");
       return;
     }
-    setActionLoading("branch-create");
-    setError("");
-    setNotice("");
-    try {
-      const next = await client.createGitBranch(botAlias, name, "");
-      setBranches(next);
-      setBranchDraft("");
-      await refreshGitWorkspace();
-      setSelectedBranch(name);
-      setNotice("分支已创建");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "创建分支失败");
-    } finally {
-      setActionLoading("");
-    }
+    await runCapabilityAction("branch_mutation", async () => {
+      const epoch = workspaceEpochRef.current;
+      setActionLoading("branch-create");
+      setError("");
+      setNotice("");
+      try {
+        const next = await client.createGitBranch(botAlias, name, "");
+        if (!isCurrentWorkspace(epoch)) return;
+        setBranches(next);
+        setBranchDraft("");
+        await refreshGitWorkspace();
+        setSelectedBranch(name);
+        setNotice("分支已创建");
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "创建分支失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    }, { confirmationMessage: `确定创建分支 ${name} 吗？` });
   }
 
   async function createBranchFromTarget(commit: CommitLike, name: string, onSuccess?: () => void) {
@@ -904,21 +1119,27 @@ export function GitScreen({
       setError("分支名不能为空");
       return;
     }
-    setActionLoading(`branch-create:${commit.hash}`);
-    setError("");
-    setNotice("");
-    try {
-      const next = await client.createGitBranch(botAlias, name, commit.hash);
-      setBranches(next);
-      onSuccess?.();
-      await refreshGitWorkspace();
-      setSelectedBranch(name);
-      setNotice(`分支已从 ${commit.shortHash} 创建`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "创建分支失败");
-    } finally {
-      setActionLoading("");
-    }
+    await runCapabilityAction("branch_mutation", async () => {
+      setActionLoading(`branch-create:${commit.hash}`);
+      const epoch = workspaceEpochRef.current;
+      setError("");
+      setNotice("");
+      try {
+        const next = await client.createGitBranch(botAlias, name, commit.hash);
+        if (!isCurrentWorkspace(epoch)) return;
+        setBranches(next);
+        onSuccess?.();
+        await refreshGitWorkspace();
+        setSelectedBranch(name);
+        setNotice(`分支已从 ${commit.shortHash} 创建`);
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "创建分支失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    }, { confirmationMessage: `确定从 ${commit.shortHash} 创建分支 ${name} 吗？` });
   }
 
   async function createBranchFromGraphNode() {
@@ -931,27 +1152,27 @@ export function GitScreen({
 
   async function resetBranchToTarget(commit: CommitLike, mode: GitResetMode) {
     const currentBranch = overview?.currentBranch || branches.currentBranch || "当前分支";
-    const confirmed = window.confirm(
-      `确定将 ${currentBranch} 重置到 ${commit.shortHash}（${commit.subject}）吗？\n模式：${mode}`,
-    );
-    if (!confirmed) {
-      return;
-    }
-    setActionLoading(`branch-reset:${commit.hash}`);
-    setError("");
-    setNotice("");
-    try {
-      const result = await client.resetGitBranch(botAlias, commit.hash, mode);
-      syncOverview(result.overview);
-      setBranches({ currentBranch: result.currentBranch, branches: result.branches });
-      setSelectedBranch(result.currentBranch);
-      await refreshGitWorkspace();
-      setNotice(result.message || `已重置到 ${commit.shortHash}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重置分支失败");
-    } finally {
-      setActionLoading("");
-    }
+    await runCapabilityAction("branch_mutation", async () => {
+      const epoch = workspaceEpochRef.current;
+      setActionLoading(`branch-reset:${commit.hash}`);
+      setError("");
+      setNotice("");
+      try {
+        const result = await client.resetGitBranch(botAlias, commit.hash, mode);
+        if (!isCurrentWorkspace(epoch)) return;
+        syncOverview(result.overview);
+        setBranches({ currentBranch: result.currentBranch, branches: result.branches });
+        setSelectedBranch(result.currentBranch);
+        await refreshGitWorkspace();
+        setNotice(result.message || `已重置到 ${commit.shortHash}`);
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "重置分支失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    }, { confirmationMessage: `确定将 ${currentBranch} 重置到 ${commit.shortHash}（${commit.subject}）吗？\n模式：${mode}` });
   }
 
   async function resetBranchToGraphNode() {
@@ -966,43 +1187,63 @@ export function GitScreen({
       setError("请选择要切换的分支");
       return;
     }
-    setActionLoading("branch-switch");
-    setError("");
-    setNotice("");
-    try {
-      const next = await client.switchGitBranch(botAlias, selectedBranch);
-      setBranches(next);
-      await refreshGitWorkspace();
-      setNotice(`已切换到 ${selectedBranch}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "切换分支失败");
-    } finally {
-      setActionLoading("");
-    }
+    await runCapabilityAction("branch_mutation", async () => {
+      const epoch = workspaceEpochRef.current;
+      setActionLoading("branch-switch");
+      setError("");
+      setNotice("");
+      try {
+        const next = await client.switchGitBranch(botAlias, selectedBranch);
+        if (!isCurrentWorkspace(epoch)) return;
+        setBranches(next);
+        await refreshGitWorkspace();
+        setNotice(`已切换到 ${selectedBranch}`);
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "切换分支失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    }, { confirmationMessage: `确定切换到分支 ${selectedBranch} 吗？` });
   }
 
   async function stashChanges() {
-    await runAction("stash", () => client.stashGitChanges(botAlias));
+    await runAction("stash", () => client.stashGitChanges(botAlias), {
+      capability: "stash_create",
+      confirmationMessage: "确定将当前改动保存到 Stash 吗？",
+    });
     await loadStashes();
   }
 
   async function applyStash(ref: string) {
-    await runAction(`stash-apply:${ref}`, () => client.applyGitStash(botAlias, ref));
+    await runAction(`stash-apply:${ref}`, () => client.applyGitStash(botAlias, ref), {
+      capability: "stash",
+      confirmationMessage: `确定应用 ${ref} 吗？`,
+    });
     await loadStashes();
   }
 
   async function dropStash(ref: string) {
-    await runAction(`stash-drop:${ref}`, () => client.dropGitStash(botAlias, ref));
+    await runAction(`stash-drop:${ref}`, () => client.dropGitStash(botAlias, ref), {
+      capability: "stash",
+      confirmationMessage: `确定删除 ${ref} 吗？`,
+    });
     await loadStashes();
   }
 
   async function openChangedDiff(path: string, staged: boolean) {
+    if (!isCapabilityAvailable("tree_status")) {
+      return;
+    }
+    const epoch = workspaceEpochRef.current;
     setNotice("");
     setDiffError("");
     if (onOpenDiff) {
       try {
         await onOpenDiff(path, staged);
       } catch (err) {
+        if (!isCurrentWorkspace(epoch)) return;
         setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
         setError(err instanceof Error ? err.message : "打开 diff 失败");
       }
@@ -1013,13 +1254,15 @@ export function GitScreen({
     setDiffLoadingPath(loadingKey);
     try {
       const diff = await client.getGitDiff(botAlias, path, staged);
+      if (!isCurrentWorkspace(epoch)) return;
       setSelectedDiff({ ...diff, label: displayGitPath(diff.path || path) });
     } catch (err) {
+      if (!isCurrentWorkspace(epoch)) return;
       setSelectedDiff(null);
       setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
       setDiffError(err instanceof Error ? err.message : "加载 diff 失败");
     } finally {
-      setDiffLoadingPath("");
+      if (isCurrentWorkspace(epoch)) setDiffLoadingPath("");
     }
   }
 
@@ -1034,48 +1277,84 @@ export function GitScreen({
       setError("当前目录不在 Git 仓库中，无法保存局部配置");
       return;
     }
-    setActionLoading("git-identity");
-    setError("");
-    setNotice("");
-    try {
-      const next = await client.updateGitIdentityConfig(botAlias, { scope: identityScope, name, email });
-      setIdentityConfig(next);
-      applyIdentityDraft(next, identityScope);
-      setNotice(identityScope === "local" ? "当前仓库 Git 用户已保存" : "全局 Git 用户已保存");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存 Git 用户失败");
-    } finally {
-      setActionLoading("");
+    const canManageIdentity = identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity;
+    if (!canManageIdentity) {
+      return;
     }
+    await runCapabilityAction("identity", async () => {
+      const epoch = workspaceEpochRef.current;
+      setActionLoading("git-identity");
+      setError("");
+      setNotice("");
+      try {
+        const next = await client.updateGitIdentityConfig(botAlias, { scope: identityScope, name, email });
+        if (!isCurrentWorkspace(epoch)) return;
+        setIdentityConfig(next);
+        applyIdentityDraft(next, identityScope);
+        setNotice(identityScope === "local" ? "当前仓库 Git 用户已保存" : "全局 Git 用户已保存");
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "保存 Git 用户失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    });
   }
 
   async function generateCommitMessage() {
-    setActionLoading("generate-commit-message");
-    setError("");
-    setNotice("");
-    try {
-      const result = await client.generateGitCommitMessage(botAlias);
-      setCommitMessage(result.message);
-      setNotice("已生成提交说明");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "生成提交说明失败");
-    } finally {
-      setActionLoading("");
-    }
+    await runCapabilityAction("commit_message_generation", async () => {
+      const epoch = workspaceEpochRef.current;
+      setActionLoading("generate-commit-message");
+      setError("");
+      setNotice("");
+      try {
+        const result = await client.generateGitCommitMessage(botAlias);
+        if (!isCurrentWorkspace(epoch)) return;
+        setCommitMessage(result.message);
+        setNotice("已生成提交说明");
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "生成提交说明失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    });
   }
 
   async function startSmartCommit() {
-    setActionLoading("smart-commit");
-    setError("");
-    setNotice("");
-    try {
-      const job = await client.startGitSmartCommit(botAlias);
-      await applySmartCommitJob(job, { refreshOverview: false });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "发起智能提交失败");
-    } finally {
-      setActionLoading("");
+    await runCapabilityAction("smart_commit", async () => {
+      const epoch = workspaceEpochRef.current;
+      setActionLoading("smart-commit");
+      setError("");
+      setNotice("");
+      try {
+        const job = await client.startGitSmartCommit(botAlias);
+        await applySmartCommitJob(job, { refreshOverview: false }, epoch);
+      } catch (err) {
+        if (isCurrentWorkspace(epoch)) {
+          setError(err instanceof Error ? err.message : "发起智能提交失败");
+        }
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
+    });
+  }
+
+  function renderCapabilityReason(name: GitCapabilityName, label = GIT_CAPABILITY_LABELS[name] || name) {
+    if (isCapabilityAvailable(name)) {
+      return null;
     }
+    return (
+      <p
+        id={`git-capability-reason-${name}`}
+        data-testid={`git-capability-reason-${name}`}
+        className="text-xs text-[var(--muted)]"
+      >
+        {label}不可用：{capabilityReason(name)}
+      </p>
+    );
   }
 
   const renderChangeRow = useCallback((item: GitChangedFile, key: GitFileGroupKey) => {
@@ -1092,10 +1371,11 @@ export function GitScreen({
         <button
           type="button"
           aria-label={`打开 diff ${item.path}`}
-          title={item.path}
+          title={!isCapabilityAvailable("tree_status") ? `${item.path}：${capabilityReason("tree_status")}` : item.path}
+          aria-describedby="git-capability-reason-tree_status"
           data-full-path={item.path}
           onClick={() => void openChangedDiff(item.path, stagedDiff)}
-          disabled={diffLoading}
+          disabled={diffLoading || !isCapabilityAvailable("tree_status")}
           className="min-w-0 truncate text-left font-medium text-[var(--text)] hover:text-[var(--accent)] disabled:opacity-60"
         >
           {diffLoading ? (
@@ -1119,9 +1399,10 @@ export function GitScreen({
             <button
               type="button"
               aria-label={`暂存 ${item.path}`}
-              title={`暂存 ${item.path}`}
-              onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]), { refreshWorkspace: true })}
-              disabled={mutationBusy}
+              title={!isCapabilityAvailable("tree_status") ? `暂存 ${item.path}：${capabilityReason("tree_status")}` : `暂存 ${item.path}`}
+              aria-describedby="git-capability-reason-tree_status"
+              onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]), { refreshWorkspace: true, capability: "tree_status" })}
+              disabled={mutationBusy || !isCapabilityAvailable("tree_status")}
               className={iconButtonClass()}
             >
               <Plus className="h-3 w-3" />
@@ -1131,33 +1412,33 @@ export function GitScreen({
             <button
               type="button"
               aria-label={`取消暂存 ${item.path}`}
-              title={`取消暂存 ${item.path}`}
-              onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]), { refreshWorkspace: true })}
-              disabled={mutationBusy}
+              title={!isCapabilityAvailable("tree_status") ? `取消暂存 ${item.path}：${capabilityReason("tree_status")}` : `取消暂存 ${item.path}`}
+              aria-describedby="git-capability-reason-tree_status"
+              onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]), { refreshWorkspace: true, capability: "tree_status" })}
+              disabled={mutationBusy || !isCapabilityAvailable("tree_status")}
               className={iconButtonClass()}
             >
               <Minus className="h-3 w-3" />
             </button>
           ) : null}
-          {!remote ? <button
+          <button
             type="button"
             aria-label={`丢弃 ${item.path}`}
-            title={`丢弃 ${item.path}`}
-            onClick={() => {
-              if (!confirmDiscardPath(item.path)) {
-                return;
-              }
-              void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]));
-            }}
-            disabled={mutationBusy}
+            title={!isCapabilityAvailable("discard") ? `丢弃 ${item.path}：${capabilityReason("discard")}` : `丢弃 ${item.path}`}
+            aria-describedby="git-capability-reason-discard"
+            onClick={() => void runAction(`discard:${item.path}`, () => client.discardGitPaths(botAlias, [item.path]), {
+              capability: "discard",
+              confirmationMessage: `确定丢弃 ${item.path} 的改动吗？`,
+            })}
+            disabled={mutationBusy || !isCapabilityAvailable("discard")}
             className={iconButtonClass()}
           >
             <Trash2 className="h-3 w-3" />
-          </button> : null}
+          </button>
         </div>
       </div>
     );
-  }, [botAlias, client, diffLoadingPath, mutationBusy, remote]);
+  }, [botAlias, client, diffLoadingPath, gitCapabilities, gitCapabilitiesError, gitCapabilitiesLoading, mutationBusy]);
 
   return (
     <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
@@ -1173,7 +1454,7 @@ export function GitScreen({
             </div>
             <button
               type="button"
-              onClick={() => void loadOverview()}
+              onClick={() => void refreshGitWorkspace()}
               className={buttonClass()}
             >
               <RefreshCw className="h-3.5 w-3.5" />
@@ -1211,7 +1492,7 @@ export function GitScreen({
                   <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/windows" target="_blank" rel="noreferrer">Windows 官方安装指南</a>
                 </div>
                 <p>安装或更新 PATH 后，可重新连接 SSH，再重试检查。</p>
-                <button type="button" onClick={() => void loadOverview()} disabled={loading} className={buttonClass()}>重试</button>
+                <button type="button" onClick={() => void refreshGitWorkspace()} disabled={loading} className={buttonClass()}>重试</button>
               </div>
             </section>
           ) : null}
@@ -1228,26 +1509,40 @@ export function GitScreen({
                 <p className="break-all text-sm text-[var(--muted)]">{overview.workingDir}</p>
               </div>
               {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>远程工作区根目录还没有 Git 仓库。</p> : null}
-              {!remote ? <button
+              {renderCapabilityReason("tree_status")}
+              <button
                 type="button"
                 onClick={async () => {
+                  const epoch = workspaceEpochRef.current;
+                  if (!isCurrentWorkspace(epoch) || mutationBusy || !isCapabilityAvailable("tree_status")) {
+                    return;
+                  }
                   setActionLoading("init");
                   setError("");
                   try {
                     const next = await client.initGitRepository(botAlias);
+                    if (!isCurrentWorkspace(epoch)) {
+                      return;
+                    }
                     syncOverview(next);
                     setNotice("Git 仓库已初始化");
                   } catch (err) {
-                    setError(err instanceof Error ? err.message : "初始化 Git 仓库失败");
+                    if (isCurrentWorkspace(epoch)) {
+                      setError(err instanceof Error ? err.message : "初始化 Git 仓库失败");
+                    }
                   } finally {
-                    setActionLoading("");
+                    if (isCurrentWorkspace(epoch)) {
+                      setActionLoading("");
+                    }
                   }
                 }}
-                disabled={actionLoading === "init" || !overview.canInit}
+                disabled={mutationBusy || !overview.canInit || !isCapabilityAvailable("tree_status")}
+                title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "初始化 Git 仓库"}
+                aria-describedby="git-capability-reason-tree_status"
                 className={clsx("ml-3 mt-4", buttonClass("primary"))}
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
-              </button> : null}
+              </button>
             </section>
           ) : null}
 
@@ -1269,7 +1564,7 @@ export function GitScreen({
                     <button
                       type="button"
                       aria-label="刷新 Git 状态"
-                      onClick={() => void loadOverview()}
+                      onClick={() => void refreshGitWorkspace()}
                       className={iconButtonClass()}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
@@ -1319,6 +1614,8 @@ export function GitScreen({
                         )}
                       </div>
                     ))}
+                    {renderCapabilityReason("tree_status")}
+                    {renderCapabilityReason("discard")}
                     {diffError ? (
                       <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                         {diffError}
@@ -1398,13 +1695,20 @@ export function GitScreen({
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">分支</h2>
-                    <button type="button" onClick={() => void loadBranches()} className={buttonClass()}>
+                    <button
+                      type="button"
+                      onClick={() => void loadBranches()}
+                      disabled={!isCapabilityAvailable("branches")}
+                      title={!isCapabilityAvailable("branches") ? capabilityReason("branches") : "刷新分支"}
+                      aria-describedby="git-capability-reason-branches"
+                      className={buttonClass()}
+                    >
                       <RefreshCw className="h-3.5 w-3.5" />
                       刷新
                     </button>
                   </div>
                   {branchesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载分支...</p> : null}
-                  {!remote ? <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <label className="min-w-[180px] flex-1">
                       <span className="sr-only">切换分支</span>
                       <select
@@ -1423,14 +1727,16 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void switchBranch()}
-                      disabled={mutationBusy || !selectedBranch}
+                      disabled={mutationBusy || !selectedBranch || !isCapabilityAvailable("branch_mutation")}
+                      title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "切换分支"}
+                      aria-describedby="git-capability-reason-branch_mutation"
                       className={buttonClass()}
                     >
                       <GitPullRequest className="h-3.5 w-3.5" />
                       切换
                     </button>
-                  </div> : null}
-                  {!remote ? <div className={sectionBodyClass("flex flex-wrap gap-2")}>
+                  </div>
+                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <label className="min-w-[180px] flex-1">
                       <span className="sr-only">新建分支名</span>
                       <input
@@ -1444,13 +1750,17 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => void createBranch()}
-                      disabled={mutationBusy || !branchDraft.trim()}
+                      disabled={mutationBusy || !branchDraft.trim() || !isCapabilityAvailable("branch_mutation")}
+                      title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "新建分支"}
+                      aria-describedby="git-capability-reason-branch_mutation"
                       className={buttonClass()}
                     >
                       <GitFork className="h-3.5 w-3.5" />
                       新建分支
                     </button>
-                  </div> : null}
+                  </div>
+                  {renderCapabilityReason("branches")}
+                  {renderCapabilityReason("branch_mutation")}
                   <div className={sectionBodyClass(listClass())}>
                     {branches.branches.map((branch) => (
                       <div
@@ -1469,35 +1779,36 @@ export function GitScreen({
                   </div>
                 </section>
 
-                {remote ? <section data-testid="remote-git-actions" className={sectionClass("space-y-2")}>
+                <section data-testid="remote-git-actions" className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">远端同步</h2>
                   </div>
-                  <p data-testid="remote-git-credentials-hint" className={sectionBodyClass("text-xs text-[var(--muted)]")}>
+                  {remote ? <p data-testid="remote-git-credentials-hint" className={sectionBodyClass("text-xs text-[var(--muted)]")}>
                     凭据由远程主机配置（SSH key/agent、credential helper 或已配置的 SSH remote）。此页面不会输入或上传本地 token。
-                  </p>
-                  {remoteGitCapabilitiesLoading ? (
-                    <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>读取远程 Git 能力...</p>
+                  </p> : null}
+                  {gitCapabilitiesLoading ? (
+                    <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>读取 Git 能力...</p>
                   ) : null}
-                  {remoteGitCapabilitiesError ? (
+                  {gitCapabilitiesError ? (
                     <div role="status" className={sectionBodyClass("text-xs text-[var(--status-danger)]")}>
-                      无法读取远程 Git 能力：{remoteGitCapabilitiesError}。请刷新 Git 状态后重试。
+                      无法读取服务端 Git 能力：{gitCapabilitiesError}。相关操作已禁用，请刷新 Git 状态后重试。
                     </div>
                   ) : null}
                   <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     {REMOTE_GIT_ACTIONS.map((operation) => {
-                      const capability = remoteGitCapabilities?.capabilities[operation];
+                      const capability = getCapability(operation);
                       const label = REMOTE_GIT_ACTION_LABELS[operation];
-                      const reason = remoteGitCapabilityReason(capability, remoteGitCapabilitiesLoading);
-                      const unavailable = !capability?.available;
+                      const reason = gitCapabilityReason(capability, gitCapabilitiesLoading);
+                      const unavailable = !capability.available;
                       return (
                         <button
                           key={operation}
                           type="button"
                           aria-label={label}
                           title={unavailable ? `${label}：${reason}` : label}
+                          aria-describedby={`git-capability-reason-${operation}`}
                           onClick={() => void runRemoteGitAction(operation)}
-                          disabled={mutationBusy || remoteGitCapabilitiesLoading || unavailable}
+                          disabled={mutationBusy || unavailable}
                           className={buttonClass()}
                         >
                           {operation === "push" ? <UploadCloud className="h-3.5 w-3.5" /> : <DownloadCloud className="h-3.5 w-3.5" />}
@@ -1505,71 +1816,50 @@ export function GitScreen({
                         </button>
                       );
                     })}
-                  </div>
-                  {REMOTE_GIT_ACTIONS.map((operation) => {
-                    const capability = remoteGitCapabilities?.capabilities[operation];
-                    if (!capability || capability.available) {
-                      return null;
-                    }
-                    return (
-                      <p key={`${operation}-reason`} data-testid={`remote-git-${operation}-reason`} className="text-xs text-[var(--muted)]">
-                        {REMOTE_GIT_ACTION_LABELS[operation]} 不可用：{remoteGitCapabilityReason(capability)}
-                      </p>
-                    );
-                  })}
-                </section> : <section className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="text-sm font-semibold">远端</h2>
-                  </div>
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
                     <button
                       type="button"
-                      onClick={() => void runAction("fetch", () => client.fetchGitRemote(botAlias), { refreshWorkspace: true })}
-                      disabled={mutationBusy}
-                      className={buttonClass()}
-                    >
-                      <DownloadCloud className="h-3.5 w-3.5" />
-                      Fetch
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void runAction("pull", () => client.pullGitRemote(botAlias), { refreshWorkspace: true })}
-                      disabled={mutationBusy}
-                      className={buttonClass()}
-                    >
-                      <DownloadCloud className="h-3.5 w-3.5" />
-                      Pull
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void runAction("push", () => client.pushGitRemote(botAlias))}
-                      disabled={mutationBusy}
-                      className={buttonClass()}
-                    >
-                      <UploadCloud className="h-3.5 w-3.5" />
-                      Push
-                    </button>
-                    <button
-                      type="button"
+                      aria-label="Stash Push"
+                      title={!isCapabilityAvailable("stash_create") ? `Stash Push：${capabilityReason("stash_create")}` : "Stash Push"}
+                      aria-describedby="git-capability-reason-stash_create"
                       onClick={() => void stashChanges()}
-                      disabled={mutationBusy}
+                      disabled={mutationBusy || !isCapabilityAvailable("stash_create")}
                       className={buttonClass()}
                     >
                       <Archive className="h-3.5 w-3.5" />
                       Stash Push
                     </button>
                   </div>
-                </section>}
+                  {REMOTE_GIT_ACTIONS.map((operation) => {
+                    const capability = getCapability(operation);
+                    if (capability.available) {
+                      return null;
+                    }
+                    return (
+                      <p key={`${operation}-reason`} data-testid={`remote-git-${operation}-reason`} className="text-xs text-[var(--muted)]">
+                        {REMOTE_GIT_ACTION_LABELS[operation]} 不可用：{gitCapabilityReason(capability, gitCapabilitiesLoading)}
+                      </p>
+                    );
+                  })}
+                  {renderCapabilityReason("stash_create", "Stash Push")}
+                </section>
 
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">Stash</h2>
-                    <button type="button" onClick={() => void loadStashes()} className={buttonClass()}>
+                    <button
+                      type="button"
+                      onClick={() => void loadStashes()}
+                      disabled={!isCapabilityAvailable("stash")}
+                      title={!isCapabilityAvailable("stash") ? capabilityReason("stash") : "刷新 stash"}
+                      aria-describedby="git-capability-reason-stash"
+                      className={buttonClass()}
+                    >
                       <RefreshCw className="h-3.5 w-3.5" />
                       刷新
                     </button>
                   </div>
                   {stashesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 stash...</p> : null}
+                  {renderCapabilityReason("stash")}
                   {stashes.items.length === 0 ? (
                     <div className={sectionBodyClass()}>
                       <div className={emptyStateClass()}>
@@ -1588,13 +1878,14 @@ export function GitScreen({
                                 {stash.hash || "-"} · {stash.createdAt || "-"}
                               </div>
                             </div>
-                            {!remote ? <div className="flex shrink-0 gap-1">
+                            <div className="flex shrink-0 gap-1">
                               <button
                                 type="button"
                                 aria-label={`应用 ${stash.ref}`}
-                                title={`应用 ${stash.ref}`}
+                                title={!isCapabilityAvailable("stash") ? `应用 ${stash.ref}：${capabilityReason("stash")}` : `应用 ${stash.ref}`}
+                                aria-describedby="git-capability-reason-stash"
                                 onClick={() => void applyStash(stash.ref)}
-                                disabled={mutationBusy}
+                                disabled={mutationBusy || !isCapabilityAvailable("stash")}
                                 className={iconButtonClass()}
                               >
                                 <ArchiveRestore className="h-3 w-3" />
@@ -1602,14 +1893,15 @@ export function GitScreen({
                               <button
                                 type="button"
                                 aria-label={`删除 ${stash.ref}`}
-                                title={`删除 ${stash.ref}`}
+                                title={!isCapabilityAvailable("stash") ? `删除 ${stash.ref}：${capabilityReason("stash")}` : `删除 ${stash.ref}`}
+                                aria-describedby="git-capability-reason-stash"
                                 onClick={() => void dropStash(stash.ref)}
-                                disabled={mutationBusy}
+                                disabled={mutationBusy || !isCapabilityAvailable("stash")}
                                 className={iconButtonClass()}
                               >
                                 <Trash2 className="h-3 w-3" />
                               </button>
-                            </div> : null}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -1621,12 +1913,13 @@ export function GitScreen({
                 <section className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass()}>
                     <h2 className="text-sm font-semibold">提交更改</h2>
-                    {!remote ? <button
+                    <button
                       type="button"
                       aria-label="生成 commit message"
-                      title="生成 commit message"
+                      title={!isCapabilityAvailable("commit_message_generation") ? capabilityReason("commit_message_generation") : "生成 commit message"}
+                      aria-describedby="git-capability-reason-commit_message_generation"
                       onClick={() => void generateCommitMessage()}
-                      disabled={mutationBusy || overview.isClean}
+                      disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("commit_message_generation")}
                       className={buttonClass()}
                     >
                       {isGeneratingCommitMessage ? (
@@ -1635,20 +1928,20 @@ export function GitScreen({
                         <Sparkles className="h-3.5 w-3.5" />
                       )}
                       生成
-                    </button> : null}
+                    </button>
                   </div>
                   <div className={sectionBodyClass()}>
                     <textarea
                       value={commitMessage}
                       onChange={(event) => setCommitMessage(event.target.value)}
                       rows={5}
-                      disabled={isSmartCommitRunning}
+                      disabled={isSmartCommitRunning || !isCapabilityAvailable("tree_status")}
                       placeholder="输入 commit message"
                       aria-label="commit message"
                       className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
                   </div>
-                  {!remote && smartCommitJob ? (
+                  {smartCommitJob ? (
                     <div className={sectionBodyClass("mx-3 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-xs")} data-testid="git-smart-commit-status">
                       <div className="font-medium text-[var(--text)]">{gitSmartCommitStatusText(smartCommitJob, overview)}</div>
                       {smartCommitJob.message && smartCommitJob.status !== "succeeded" ? (
@@ -1660,7 +1953,6 @@ export function GitScreen({
                     </div>
                   ) : null}
                   <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                    {!remote ? <>
                     <button
                       type="button"
                       onClick={() => void runAction("stage-all", async () => {
@@ -1669,8 +1961,10 @@ export function GitScreen({
                           message: "已暂存全部改动",
                           overview: result.overview,
                         };
-                      })}
-                      disabled={mutationBusy || stageAllPaths.length === 0}
+                      }, { capability: "tree_status" })}
+                      disabled={mutationBusy || stageAllPaths.length === 0 || !isCapabilityAvailable("tree_status")}
+                      title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "暂存全部"}
+                      aria-describedby="git-capability-reason-tree_status"
                       className={buttonClass()}
                     >
                       <CheckCircle2 className="h-3.5 w-3.5" />
@@ -1679,31 +1973,36 @@ export function GitScreen({
                     <button
                       type="button"
                       onClick={() => {
-                        if (!confirmDiscardAll(totalChanges)) {
-                          return;
-                        }
-                        void runAction("discard-all", () => client.discardAllGitChanges(botAlias));
+                        void runAction("discard-all", () => client.discardAllGitChanges(botAlias), {
+                          capability: "discard",
+                          confirmationMessage: `确定丢弃全部 ${totalChanges} 个文件的改动吗？`,
+                        });
                       }}
-                      disabled={mutationBusy || overview.isClean}
+                      disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("discard")}
+                      title={!isCapabilityAvailable("discard") ? capabilityReason("discard") : "丢弃全部"}
+                      aria-describedby="git-capability-reason-discard"
                       className={buttonClass()}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       丢弃全部
                     </button>
-                    </> : null}
                     <button
                       type="button"
-                      onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage), { refreshWorkspace: true })}
-                      disabled={mutationBusy || overview.isClean || (remote && (!groups.staged.length || !commitMessage.trim()))}
+                      onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage), { refreshWorkspace: true, capability: "tree_status" })}
+                      disabled={mutationBusy || overview.isClean || !groups.staged.length || !commitMessage.trim() || !isCapabilityAvailable("tree_status")}
+                      title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "提交更改"}
+                      aria-describedby="git-capability-reason-tree_status"
                       className={buttonClass("primary")}
                     >
                       <SendHorizontal className="h-3.5 w-3.5" />
                       {actionLoading === "commit" ? "提交中..." : "提交更改"}
                     </button>
-                    {!remote ? <button
+                    <button
                       type="button"
                       onClick={() => void startSmartCommit()}
-                      disabled={mutationBusy || overview.isClean}
+                      disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("smart_commit")}
+                      title={!isCapabilityAvailable("smart_commit") ? capabilityReason("smart_commit") : "智能提交"}
+                      aria-describedby="git-capability-reason-smart_commit"
                       className={buttonClass()}
                     >
                       {isSmartCommitRunning ? (
@@ -1712,23 +2011,23 @@ export function GitScreen({
                         <Sparkles className="h-3.5 w-3.5" />
                       )}
                       智能提交
-                    </button> : null}
+                    </button>
                   </div>
+                  {renderCapabilityReason("commit_message_generation", "提交说明生成")}
+                  {renderCapabilityReason("smart_commit", "智能提交")}
                 </section>
 
-                {remote ? (
-                  <section className={sectionClass()}>
-                    <div className={sectionHeaderClass()}><h2 className="text-sm font-semibold">最近提交</h2></div>
-                    <div className={sectionBodyClass(listClass())}>
-                      {overview.recentCommits.length === 0 ? <div className={emptyStateClass()}>暂无提交</div> : overview.recentCommits.map((commit) => (
-                        <div key={commit.hash} className={listRowClass("block text-xs")}>
-                          <div className="break-words font-medium">{commit.subject}</div>
-                          <div className="mt-1 break-words text-[var(--muted)]">{commit.shortHash} · {commit.authorName} · {commit.authoredAt}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
+                <section className={sectionClass()}>
+                  <div className={sectionHeaderClass()}><h2 className="text-sm font-semibold">最近提交</h2></div>
+                  <div className={sectionBodyClass(listClass())}>
+                    {overview.recentCommits.length === 0 ? <div className={emptyStateClass()}>暂无提交</div> : overview.recentCommits.map((commit) => (
+                      <div key={commit.hash} className={listRowClass("block text-xs")}>
+                        <div className="break-words font-medium">{commit.subject}</div>
+                        <div className="mt-1 break-words text-[var(--muted)]">{commit.shortHash} · {commit.authorName} · {commit.authoredAt}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
                 <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
                   <div className={sectionHeaderClass("flex-wrap")}>
                     <div>
@@ -1747,7 +2046,9 @@ export function GitScreen({
                             key={scope}
                             type="button"
                             onClick={() => setGraphScope(scope)}
-                            disabled={mutationBusy || graphLoading}
+                            disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
+                            title={!isCapabilityAvailable("commit_graph") ? capabilityReason("commit_graph") : label}
+                            aria-describedby="git-capability-reason-commit_graph"
                             className={clsx(
                               "rounded px-2 py-1 text-xs transition-colors",
                               graphScope === scope
@@ -1762,7 +2063,9 @@ export function GitScreen({
                       <button
                         type="button"
                         onClick={() => void loadGitGraph({ scope: graphScope })}
-                        disabled={mutationBusy || graphLoading}
+                        disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
+                        title={!isCapabilityAvailable("commit_graph") ? capabilityReason("commit_graph") : "刷新提交图"}
+                        aria-describedby="git-capability-reason-commit_graph"
                         className={buttonClass()}
                       >
                         {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
@@ -1813,21 +2116,23 @@ export function GitScreen({
                               {selectedGraphNode.message || selectedGraphNode.subject}
                             </div>
                           </div>
-                          {!remote ? <label className="min-w-[150px] flex-1 sm:flex-none">
+                          <label className="min-w-[150px] flex-1 sm:flex-none">
                             <span className="sr-only">从提交图新建分支名</span>
                             <input
                               aria-label="从提交图新建分支名"
                               value={graphBranchDraft}
                               onChange={(event) => setGraphBranchDraft(event.target.value)}
                               placeholder="feature/name"
-                              disabled={mutationBusy}
+                              disabled={mutationBusy || !isCapabilityAvailable("branch_mutation")}
                               className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
                             />
-                          </label> : null}
-                          {!remote ? <button
+                          </label>
+                          <button
                             type="button"
                             onClick={() => void createBranchFromGraphNode()}
-                            disabled={mutationBusy || !graphBranchDraft.trim()}
+                            disabled={mutationBusy || !graphBranchDraft.trim() || !isCapabilityAvailable("branch_mutation")}
+                            title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "新建分支"}
+                            aria-describedby="git-capability-reason-branch_mutation"
                             className={buttonClass()}
                           >
                             {actionLoading === `branch-create:${selectedGraphNode.hash}` ? (
@@ -1836,25 +2141,27 @@ export function GitScreen({
                               <GitFork className="h-3.5 w-3.5" />
                             )}
                             新建分支
-                          </button> : null}
-                          {!remote ? <label>
+                          </button>
+                          <label>
                             <span className="sr-only">提交图重置模式</span>
                             <select
                               aria-label="提交图重置模式"
                               value={graphResetMode}
                               onChange={(event) => setGraphResetMode(event.target.value as GitResetMode)}
-                              disabled={mutationBusy}
+                              disabled={mutationBusy || !isCapabilityAvailable("branch_mutation")}
                               className="h-8 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
                             >
                               <option value="soft">soft</option>
                               <option value="mixed">mixed</option>
                               <option value="hard">hard</option>
                             </select>
-                          </label> : null}
-                          {!remote ? <button
+                          </label>
+                          <button
                             type="button"
                             onClick={() => void resetBranchToGraphNode()}
-                            disabled={mutationBusy || selectedGraphNode.canReset === false}
+                            disabled={mutationBusy || selectedGraphNode.canReset === false || !isCapabilityAvailable("branch_mutation")}
+                            title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "重置到此提交"}
+                            aria-describedby="git-capability-reason-branch_mutation"
                             className={buttonClass()}
                           >
                             {actionLoading === `branch-reset:${selectedGraphNode.hash}` ? (
@@ -1863,14 +2170,16 @@ export function GitScreen({
                               <RotateCcw className="h-3.5 w-3.5" />
                             )}
                             重置到此提交
-                          </button> : null}
+                          </button>
                         </div>
                       ) : null}
+                      {renderCapabilityReason("commit_graph")}
+                      {renderCapabilityReason("branch_mutation")}
                       {graphPayload?.hasMore ? (
                         <button
                           type="button"
                           onClick={() => void loadGitGraph({ scope: graphScope, cursor: graphPayload.nextCursor, append: true })}
-                          disabled={mutationBusy || graphLoading}
+                          disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
                           className={buttonClass()}
                         >
                           {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -1900,7 +2209,14 @@ export function GitScreen({
                       {identityScope === "local" ? identityConfig?.repoPath || "当前仓库" : "全局配置"}
                     </p>
                   </div>
-                  <button type="button" onClick={() => void loadIdentityConfig(identityScope)} className={buttonClass()}>
+                  <button
+                    type="button"
+                    onClick={() => void loadIdentityConfig(identityScope)}
+                    disabled={!isCapabilityAvailable("identity")}
+                    title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "刷新 Git 用户"}
+                    aria-describedby="git-capability-reason-identity"
+                    className={buttonClass()}
+                  >
                     <RefreshCw className="h-3.5 w-3.5" />
                     刷新
                   </button>
@@ -1912,6 +2228,8 @@ export function GitScreen({
                   <button
                     type="button"
                     onClick={() => selectIdentityScope("global")}
+                    disabled={!isCapabilityAvailable("identity")}
+                    title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "全局配置"}
                     className={clsx(buttonClass(identityScope === "global" ? "primary" : "plain"), "min-w-20")}
                   >
                     全局
@@ -1919,7 +2237,8 @@ export function GitScreen({
                   <button
                     type="button"
                     onClick={() => selectIdentityScope("local")}
-                    disabled={!identityConfig?.repoFound}
+                    disabled={!identityConfig?.repoFound || !isCapabilityAvailable("identity")}
+                    title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "当前仓库配置"}
                     className={clsx(buttonClass(identityScope === "local" ? "primary" : "plain"), "min-w-24")}
                   >
                     当前仓库
@@ -1933,7 +2252,7 @@ export function GitScreen({
                       aria-label="Git 用户名"
                       value={identityName}
                       onChange={(event) => setIdentityName(event.target.value)}
-                      readOnly={remote}
+                      disabled={!isCapabilityAvailable("identity") || !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity)}
                       placeholder="Your Name"
                       className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
@@ -1944,7 +2263,7 @@ export function GitScreen({
                       aria-label="Git 邮箱"
                       value={identityEmail}
                       onChange={(event) => setIdentityEmail(event.target.value)}
-                      readOnly={remote}
+                      disabled={!isCapabilityAvailable("identity") || !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity)}
                       placeholder="you@example.com"
                       className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
                     />
@@ -1955,27 +2274,36 @@ export function GitScreen({
                   <p className="text-xs text-[var(--muted)]">
                     {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
                   </p>
-                  {!remote ? <button
+                  <button
                     type="button"
                     onClick={() => void saveGitIdentity()}
-                    disabled={mutationBusy || identityLoading || !identityName.trim() || !identityEmail.trim()}
+                    disabled={mutationBusy || identityLoading || !identityName.trim() || !identityEmail.trim() || !isCapabilityAvailable("identity") || !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity)}
+                    title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity) ? (identityScope === "global" ? "需要 admin_ops 才能保存全局 Git 用户" : "需要 git_ops 才能保存当前仓库 Git 用户") : "保存 Git 用户"}
+                    aria-describedby="git-capability-reason-identity"
                     className={buttonClass("primary")}
                   >
                     <Save className="h-3.5 w-3.5" />
                     {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
-                  </button> : null}
+                  </button>
                 </div>
+                {!canManageGlobalGitIdentity || !canManageLocalGitIdentity ? (
+                  <p className="text-xs text-[var(--muted)]">全局身份配置需要 admin_ops；当前仓库身份配置需要 git_ops。</p>
+                ) : null}
+                {renderCapabilityReason("identity")}
               </section>
 
-              {!remote ? <section className={sectionClass("space-y-3")}>
+              <section className={sectionClass("space-y-3")}>
                 <div className={sectionBodyClass("pb-3")}>
                   <GitCommitCliConfigPanel
                     botAlias={botAlias}
                     client={client}
-                    canManage={canManageGitCommitCli}
+                    canManage={canManageGitCommitCli && isCapabilityAvailable("commit_message_generation")}
+                    disabledReason={!isCapabilityAvailable("commit_message_generation")
+                      ? capabilityReason("commit_message_generation")
+                      : !canManageGitCommitCli ? "需要 git_ops 或 admin_ops 才能配置本地 Commit Message CLI" : ""}
                   />
                 </div>
-              </section> : null}
+              </section>
             </div>
           ) : null}
         </div>

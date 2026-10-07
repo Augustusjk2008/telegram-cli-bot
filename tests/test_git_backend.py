@@ -4,8 +4,11 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.web.api_common import WebApiError
 from bot.web import git_backend
 
 
@@ -109,3 +112,12 @@ def test_remote_backend_delegates_supported_views_and_mutations():
     backend.service.fetch.assert_called_once_with()
     backend.service.pull.assert_called_once_with()
     backend.service.push.assert_called_once_with()
+
+
+def test_remote_backend_rejects_stash_create():
+    backend = git_backend.RemoteGitBackend(Mock(), CONFIG["root"])
+
+    with pytest.raises(WebApiError) as exc:
+        backend.stash_create()
+
+    assert exc.value.code == "remote_feature_unavailable"

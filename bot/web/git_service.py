@@ -1337,6 +1337,34 @@ def get_git_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict
     return _build_git_overview(working_dir, repo_root)
 
 
+def _local_git_sync_capabilities(repo_root: Optional[str]) -> tuple[dict[str, bool], str]:
+    if not repo_root:
+        return {"fetch": False, "pull": False, "push": False}, "git_not_repository"
+
+    try:
+        remotes = [
+            line.strip()
+            for line in str(getattr(_run_git(repo_root, ["remote"], check=False), "stdout", "") or "").splitlines()
+            if line.strip()
+        ]
+    except GitCommandError:
+        remotes = []
+    if not remotes:
+        return {"fetch": False, "pull": False, "push": False}, "git_remote_not_configured"
+
+    try:
+        upstream = _run_git(
+            repo_root,
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            check=False,
+        )
+    except GitCommandError:
+        upstream = None
+    if upstream is not None and upstream.returncode == 0 and (getattr(upstream, "stdout", "") or "").strip():
+        return {"fetch": True, "pull": True, "push": True}, ""
+    return {"fetch": True, "pull": False, "push": False}, "git_upstream_not_configured"
+
+
 def get_git_capabilities(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
     working_dir = _get_git_working_dir(manager, alias)
     try:
@@ -1347,7 +1375,12 @@ def get_git_capabilities(manager: MultiBotManager, alias: str, user_id: int) -> 
         raise
     if result.returncode != 0:
         return build_git_capabilities(available=False, reason="git_not_found")
-    return build_git_capabilities(available=True)
+    payload = build_git_capabilities(available=True)
+    sync_available, sync_reason = _local_git_sync_capabilities(_resolve_repo_root(working_dir))
+    for name, available in sync_available.items():
+        payload["capabilities"][name]["available"] = available
+        payload["capabilities"][name]["reason"] = "" if available else sync_reason
+    return payload
 
 
 def get_git_commit_graph(

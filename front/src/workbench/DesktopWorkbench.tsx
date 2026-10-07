@@ -12,6 +12,7 @@ import type {
   CodeNavigationIntent,
   CodeNavigationKind,
   GitTreeStatus,
+  GitWorkspaceIdentity,
   HostEffect,
   LanguageServerProviderId,
   PluginOpenTarget,
@@ -142,6 +143,8 @@ type Props = {
   accountId?: string;
   botAlias: string;
   remoteWorkspace?: RemoteWorkspace;
+  gitWorkspaceIdentity?: GitWorkspaceIdentity;
+  reconnectRevision?: number;
   client?: WebBotClient;
   structureOnly?: boolean;
   canWriteFiles?: boolean;
@@ -184,6 +187,7 @@ type Props = {
   onLogout?: () => void;
   onDirtyTabsChange?: (hasDirtyTabs: boolean) => void;
   onChatPaneVisibilityChange?: (visible: boolean) => void;
+  onRemoteReconnect?: () => void;
 };
 
 export function DesktopWorkbench({
@@ -192,6 +196,8 @@ export function DesktopWorkbench({
   client = new MockWebBotClient(),
   botAlias,
   remoteWorkspace,
+  gitWorkspaceIdentity,
+  reconnectRevision = 0,
   structureOnly = false,
   canWriteFiles = true,
   canBrowseExternalPaths = false,
@@ -233,6 +239,7 @@ export function DesktopWorkbench({
   onLogout,
   onDirtyTabsChange,
   onChatPaneVisibilityChange,
+  onRemoteReconnect,
 }: Props) {
   const { paneState, toggleSidebar, toggleEditor, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace), platform: remoteWorkspace?.platform });
@@ -267,6 +274,9 @@ export function DesktopWorkbench({
   previewScopeIdentityRef.current = previewScopeIdentity;
   const previewLoader = useFilePreviewLoader(client, botAlias, htmlPreviewScopeIdentity);
   const previousPreviewScopeRef = useRef(htmlPreviewScopeIdentity);
+  const gitWorkspaceIdentityKey = JSON.stringify(gitWorkspaceIdentity || null);
+  const gitDecorationIdentityRef = useRef(gitWorkspaceIdentityKey);
+  gitDecorationIdentityRef.current = gitWorkspaceIdentityKey;
   useEffect(() => {
     if (previousPreviewScopeRef.current !== htmlPreviewScopeIdentity) {
       previousPreviewScopeRef.current = htmlPreviewScopeIdentity;
@@ -508,21 +518,22 @@ export function DesktopWorkbench({
   const refreshGitDecorations = useCallback(async () => {
     const requestId = gitDecorationRequestRef.current + 1;
     gitDecorationRequestRef.current = requestId;
+    const requestIdentity = gitWorkspaceIdentityKey;
     try {
       const next = await client.getGitTreeStatus(botAlias);
-      if (gitDecorationRequestRef.current !== requestId) {
+      if (gitDecorationRequestRef.current !== requestId || gitDecorationIdentityRef.current !== requestIdentity) {
         return;
       }
       setGitDecorations(next.repoFound ? next.items : {});
       setGitRepoPath(next.repoFound ? next.repoPath || "" : "");
     } catch {
-      if (gitDecorationRequestRef.current !== requestId) {
+      if (gitDecorationRequestRef.current !== requestId || gitDecorationIdentityRef.current !== requestIdentity) {
         return;
       }
       setGitDecorations({});
       setGitRepoPath("");
     }
-  }, [botAlias, client, remoteWorkspace]);
+  }, [botAlias, client, gitWorkspaceIdentityKey, reconnectRevision, remoteWorkspace]);
 
   const refreshWorkspaceChrome = useCallback(async (options?: { preserveExpandedPaths?: boolean; rootPath?: string; gitDelayMs?: number }) => {
     const nextRootPath = await fileTree.refreshTreeAndRoot({
@@ -1352,6 +1363,8 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           remote={Boolean(remoteWorkspace)}
+          workspaceIdentity={gitWorkspaceIdentity}
+          reconnectRevision={reconnectRevision}
           embedded
           sessionCapabilities={sessionCapabilities}
           onOpenDiff={openGitDiffInEditor}
@@ -1448,7 +1461,7 @@ export function DesktopWorkbench({
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
         announcementAction={announcementAction}
-        workspaceAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate || !canManageRemoteConnection} onConnected={() => { void fileTree.refreshRoot({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root }); }} /> : undefined}
+        workspaceAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate || !canManageRemoteConnection} onConnected={() => { onRemoteReconnect?.(); void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root }); }} /> : undefined}
         sidebarVisible={!layoutState.sidebarCollapsed}
         editorVisible={!structureOnly && !layoutState.editorCollapsed}
         terminalVisible={!structureOnly && !layoutState.terminalCollapsed}

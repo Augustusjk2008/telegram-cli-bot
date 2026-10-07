@@ -516,6 +516,7 @@ class RemoteGitService:
                     "branch_mutation": True,
                     "discard": True,
                     "stash": True,
+                    "stash_create": False,
                     "identity": True,
                 },
                 reason="remote_feature_unavailable",

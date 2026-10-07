@@ -2705,6 +2705,7 @@ export const GIT_CAPABILITY_NAMES = [
   "branch_mutation",
   "discard",
   "stash",
+  "stash_create",
   "identity",
   "fetch",
   "pull",
@@ -2723,6 +2724,14 @@ export type GitCapability = {
 
 export type GitCapabilities = {
   capabilities: Record<GitCapabilityName, GitCapability>;
+};
+
+export type GitWorkspaceIdentity = {
+  accountId: string;
+  botAlias: string;
+  root: string;
+  connectionId: string;
+  platform: string;
 };
 
 export type GitOverview = {

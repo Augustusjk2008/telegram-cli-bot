@@ -36,7 +36,7 @@ import { AnnouncementButton } from "../components/AnnouncementButton";
 import { AnnouncementDialog } from "../components/AnnouncementDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
-import type { AnnouncementListResult, BotStatus, BotSummary, PublicHostInfo, SessionState } from "../services/types";
+import type { AnnouncementListResult, BotStatus, BotSummary, GitWorkspaceIdentity, PublicHostInfo, SessionState } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { ChatScreen } from "../screens/ChatScreen";
 import { LoginScreen } from "../screens/LoginScreen";
@@ -345,6 +345,15 @@ export function App() {
       ? ""
       : "你无权限使用此智能体终端";
   const accountKey = sessionAccountKey(session);
+  const gitWorkspaceIdentity = useMemo<GitWorkspaceIdentity | undefined>(() => currentBot
+    ? {
+      accountId: accountKey,
+      botAlias: currentBot,
+      root: remoteWorkspace?.root || currentBotSummary?.workingDir || "",
+      connectionId: remoteWorkspace?.connectionId || "",
+      platform: remoteWorkspace?.platform || "windows",
+    }
+    : undefined, [accountKey, currentBot, currentBotSummary?.workingDir, remoteWorkspace?.connectionId, remoteWorkspace?.platform, remoteWorkspace?.root]);
   const chatInstanceKey = chatInstanceKeyFor(accountKey, currentBot);
   const productModeKey = currentBot ? soloModeStorageKey(accountKey, currentBot) : "";
   const currentBotSupportedExecutionModes = currentBotSummary?.supportedExecutionModes || [];
@@ -1141,6 +1150,8 @@ export function App() {
           botAlias={currentBot}
           client={client}
           remote={Boolean(remoteWorkspace)}
+          workspaceIdentity={gitWorkspaceIdentity}
+          reconnectRevision={remoteReconnectRevision}
           sessionCapabilities={session?.capabilities}
         />
       </div>
@@ -1281,6 +1292,8 @@ export function App() {
               client={client}
               structureOnly={structureOnly}
               canWriteFiles={canWriteCurrentBotFiles}
+              gitWorkspaceIdentity={gitWorkspaceIdentity}
+              reconnectRevision={remoteReconnectRevision}
               canBrowseExternalPaths={!remoteWorkspace && hasCapability(session, "admin_ops") && canOperateCurrentBot}
               canOpenSystemFolder={!remoteWorkspace && Boolean(session?.isLocalAdmin) && hasCapability(session, "admin_ops") && canOperateCurrentBot}
               canUseInlineCompletion={!remoteWorkspace && canOperateCurrentBot && canUseInlineCompletion}
@@ -1330,6 +1343,7 @@ export function App() {
               onLogout={handleLogout}
               onDirtyTabsChange={setDesktopHasDirtyTabs}
               onChatPaneVisibilityChange={handleDesktopChatPaneVisibilityChange}
+              onRemoteReconnect={() => setRemoteReconnectRevision((revision) => revision + 1)}
             />
           )}
           </Suspense>

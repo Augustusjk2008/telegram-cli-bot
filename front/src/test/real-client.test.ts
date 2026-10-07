@@ -226,6 +226,7 @@ describe("RealWebBotClient", () => {
           branch_mutation: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
           discard: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
           stash: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+          stash_create: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
           identity: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
           fetch: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
           pull: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
@@ -266,6 +267,11 @@ describe("RealWebBotClient", () => {
       requiresConfirmation: false,
     });
     expect(capabilities.capabilities.branch_mutation.requiresConfirmation).toBe(true);
+    expect(capabilities.capabilities.stash_create).toEqual({
+      available: false,
+      reason: "remote_feature_unavailable",
+      requiresConfirmation: true,
+    });
     expect(fetchMock.mock.calls[1][0]).toBe("/api/bots/remote/git");
     expect(overview).toMatchObject({
       changedFilesTruncated: true,

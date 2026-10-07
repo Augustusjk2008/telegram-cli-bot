@@ -36,9 +36,19 @@ for (const width of [1280, 390]) {
         gitRequests.push(`${request.method()} /capabilities`);
         data = {
           capabilities: {
+            tree_status: { available: true, reason: "", requires_confirmation: false },
+            commit_graph: { available: true, reason: "", requires_confirmation: false },
+            branches: { available: true, reason: "", requires_confirmation: true },
+            branch_mutation: { available: true, reason: "", requires_confirmation: true },
+            discard: { available: true, reason: "", requires_confirmation: true },
+            stash: { available: true, reason: "", requires_confirmation: true },
+            stash_create: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
+            identity: { available: true, reason: "", requires_confirmation: false },
             fetch: { available: true, reason: "", requires_confirmation: false },
             pull: { available: true, reason: "", requires_confirmation: true },
             push: { available: true, reason: "", requires_confirmation: true },
+            commit_message_generation: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
+            smart_commit: { available: false, reason: "remote_feature_unavailable", requires_confirmation: true },
           },
         };
       }
@@ -118,7 +128,10 @@ for (const width of [1280, 390]) {
     await page.getByRole("textbox", { name: "commit message", exact: true }).fill("Manual remote commit");
     await page.getByRole("button", { name: "提交更改", exact: true }).click();
     await expect(page.getByText("Manual remote commit", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: /丢弃|暂存全部|初始化|新建分支|智能提交|生成|重置到此提交/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stash Push", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "智能提交", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "生成 commit message", exact: true })).toBeDisabled();
+    await expect(page.getByTestId("git-capability-reason-stash_create")).toContainText("remote_feature_unavailable");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`remote-git-${width}.png`) });
     await page.getByRole("button", { name: "文件", exact: true }).click();

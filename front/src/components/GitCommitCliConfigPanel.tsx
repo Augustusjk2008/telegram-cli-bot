@@ -14,6 +14,7 @@ type Props = {
   botAlias: string;
   client?: WebBotClient;
   canManage?: boolean;
+  disabledReason?: string;
   className?: string;
 };
 
@@ -68,6 +69,7 @@ export function GitCommitCliConfigPanel({
   botAlias,
   client = new MockWebBotClient(),
   canManage = true,
+  disabledReason = "",
   className = "",
 }: Props) {
   const [config, setConfig] = useState<GitCommitMessageCliConfig | null>(null);
@@ -85,6 +87,13 @@ export function GitCommitCliConfigPanel({
     setLoading(true);
     setError("");
     setNotice("");
+    if (disabledReason) {
+      setConfig(null);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     void client.getGitCommitMessageConfig(botAlias)
       .then((payload) => {
         if (cancelled) {
@@ -108,7 +117,7 @@ export function GitCommitCliConfigPanel({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client]);
+  }, [botAlias, client, disabledReason]);
 
   const entries = useMemo(() => Object.entries(config?.schema || {}), [config]);
   const baseDrafts = useMemo(() => (config ? buildDraftValues(config) : {}), [config]);
@@ -185,7 +194,7 @@ export function GitCommitCliConfigPanel({
         <div>
           <h2 className="text-sm font-semibold">Commit Message CLI</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            {canManage ? "全局生成提交说明配置" : "当前模式只读"}
+            {disabledReason || (canManage ? "全局生成提交说明配置" : "当前模式只读")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -42,6 +42,24 @@ def _use_small_git_stdout_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_local_git_capabilities_include_stash_create(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(git_service, "_get_git_working_dir", lambda *_args: ".")
+    monkeypatch.setattr(
+        git_service,
+        "_run_git",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=""),
+    )
+
+    capabilities = git_service.get_git_capabilities(None, "main", 42)["capabilities"]
+
+    assert capabilities["stash_create"]["available"] is True
+    assert capabilities["fetch"] == {
+        "available": False,
+        "reason": "git_not_repository",
+        "requires_confirmation": False,
+    }
+
+
 @pytest.mark.parametrize(
     "read_context",
     [

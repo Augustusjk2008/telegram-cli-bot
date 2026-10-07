@@ -37,6 +37,7 @@ class GitBackend(Protocol):
     def fetch(self) -> dict[str, Any]: ...
     def pull(self) -> dict[str, Any]: ...
     def push(self) -> dict[str, Any]: ...
+    def stash_create(self) -> dict[str, Any]: ...
     def stash(self) -> dict[str, Any]: ...
     def stash_pop(self) -> dict[str, Any]: ...
 
@@ -132,6 +133,9 @@ class LocalGitBackend:
 
     def stash(self) -> dict[str, Any]:
         return local_git.stash_git_changes(self.manager, self.alias, self.user_id)
+
+    def stash_create(self) -> dict[str, Any]:
+        return self.stash()
 
     def stash_pop(self) -> dict[str, Any]:
         return local_git.pop_git_stash(self.manager, self.alias, self.user_id)
@@ -243,6 +247,9 @@ class RemoteGitBackend:
 
     def push(self) -> dict[str, Any]:
         return self.service.push()
+
+    def stash_create(self) -> dict[str, Any]:
+        return self._unsupported()
 
     def stash_pop(self) -> dict[str, Any]:
         return self.service.stash_pop()

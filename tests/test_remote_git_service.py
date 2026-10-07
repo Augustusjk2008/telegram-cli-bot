@@ -167,6 +167,12 @@ def test_capabilities_probe_local_remote_config_and_mark_sync_features():
         item["requires_confirmation"] is (name in GIT_CAPABILITIES_REQUIRING_CONFIRMATION)
         for name, item in capabilities.items()
     )
+    assert capabilities["stash"]["available"] is True
+    assert capabilities["stash_create"] == {
+        "available": False,
+        "reason": "remote_feature_unavailable",
+        "requires_confirmation": True,
+    }
     assert [call[0] for call in connection.calls] == [
         ["--version"], ["rev-parse", "--show-toplevel"], ["remote"],
         ["symbolic-ref", "--quiet", "--short", "HEAD"],

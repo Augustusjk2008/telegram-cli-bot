@@ -6113,7 +6113,7 @@ export class MockWebBotClient implements WebBotClient {
       capabilities: Object.fromEntries(GIT_CAPABILITY_NAMES.map((name) => [name, {
         available: true,
         reason: "",
-        requiresConfirmation: ["discard", "branch_mutation", "stash", "pull", "push", "smart_commit"].includes(name),
+        requiresConfirmation: ["discard", "branch_mutation", "stash", "stash_create", "pull", "push", "smart_commit"].includes(name),
       }])) as GitCapabilities["capabilities"],
     };
   }
