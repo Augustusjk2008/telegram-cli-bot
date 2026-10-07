@@ -226,6 +226,14 @@ def test_smart_commit_context_collects_remote_diffs_for_local_agent():
     assert context["status_text"] == " M tracked.txt\n?? new.txt\n"
 
 
+def test_status_skips_untracked_directory_entries():
+    connection = Connection(files={}, untracked=["new-api-src/", "new.txt"])
+
+    _header, files, _has_head = remote.RemoteGitService(connection, ROOT)._status()
+
+    assert [item["path"] for item in files] == ["new.txt"]
+
+
 def test_smart_commit_context_marks_unreadable_untracked_files():
     service = remote.RemoteGitService(Connection(), ROOT)
     service._require_repo = lambda: None

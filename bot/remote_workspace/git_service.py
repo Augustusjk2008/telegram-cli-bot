@@ -255,7 +255,11 @@ class RemoteGitService:
         all_original_paths = self._porcelain_v2_original_paths(raw)
         original_paths = all_original_paths if include_original else {}
         header, lines = _parse_porcelain_v2_z(raw)
-        lines.extend("?? " + path for path in untracked.split("\x00") if path)
+        lines.extend(
+            "?? " + path
+            for path in untracked.split("\x00")
+            if path and not path.endswith("/")
+        )
         files = []
         for line in lines:
             # Reuse the pure status flags parser, but do not let its legacy
