@@ -91,6 +91,19 @@ def resolve_install_source_dir(
     return source_dir
 
 
+def _bundled_plugin_files_match(source_dir: Path, installed_dir: Path) -> bool:
+    try:
+        for source_path in source_dir.rglob("*"):
+            relative = source_path.relative_to(source_dir)
+            if relative == Path("plugin.json") or "__pycache__" in relative.parts or source_path.suffix == ".pyc":
+                continue
+            if source_path.is_file() and source_path.read_bytes() != (installed_dir / relative).read_bytes():
+                return False
+    except OSError:
+        return False
+    return True
+
+
 def sync_bundled_plugin_manifests(source_plugins_root: Path, plugins_root: Path) -> None:
     if not source_plugins_root.exists() or not plugins_root.exists():
         return
@@ -104,6 +117,9 @@ def sync_bundled_plugin_manifests(source_plugins_root: Path, plugins_root: Path)
             continue
         merged = merge_bundled_manifest(source_raw, installed_raw)
         if merged == installed_raw:
+            continue
+        # Runtime contracts may change without a version bump; keep each manifest paired with its code.
+        if not _bundled_plugin_files_match(source_dir, target_manifest_path.parent):
             continue
         target_manifest_path.write_text(
             json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
