@@ -243,9 +243,12 @@ export type EnvConfigPatchInput = {
 
 export type EnvConfigPatchResult = {
   changedKeys: string[];
+  reloadedKeys?: string[];
   restartRequiredKeys: string[];
   rebuildRequiredKeys: string[];
   backupPath: string;
+  projectEnvReloaded?: boolean;
+  systemEnvironmentReloaded?: boolean;
 };
 
 export type CliErrorStatsItem = {

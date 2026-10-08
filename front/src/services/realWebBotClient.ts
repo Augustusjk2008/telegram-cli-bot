@@ -1128,12 +1128,18 @@ type RawEnvConfigSnapshot = {
 type RawEnvConfigPatchResult = {
   changedKeys?: string[];
   changed_keys?: string[];
+  reloadedKeys?: string[];
+  reloaded_keys?: string[];
   restartRequiredKeys?: string[];
   restart_required_keys?: string[];
   rebuildRequiredKeys?: string[];
   rebuild_required_keys?: string[];
   backupPath?: string;
   backup_path?: string;
+  projectEnvReloaded?: boolean;
+  project_env_reloaded?: boolean;
+  systemEnvironmentReloaded?: boolean;
+  system_environment_reloaded?: boolean;
 };
 
 type RawAnnouncementSection = {
@@ -2908,9 +2914,16 @@ function mapEnvPatchInput(input: EnvConfigPatchInput) {
 function mapEnvPatchResult(raw: RawEnvConfigPatchResult): EnvConfigPatchResult {
   return {
     changedKeys: raw.changed_keys || raw.changedKeys || [],
+    reloadedKeys: raw.reloaded_keys || raw.reloadedKeys || [],
     restartRequiredKeys: raw.restart_required_keys || raw.restartRequiredKeys || [],
     rebuildRequiredKeys: raw.rebuild_required_keys || raw.rebuildRequiredKeys || [],
     backupPath: String(raw.backup_path || raw.backupPath || ""),
+    ...(typeof raw.project_env_reloaded === "boolean" || typeof raw.projectEnvReloaded === "boolean"
+      ? { projectEnvReloaded: raw.project_env_reloaded ?? raw.projectEnvReloaded }
+      : {}),
+    ...(typeof raw.system_environment_reloaded === "boolean" || typeof raw.systemEnvironmentReloaded === "boolean"
+      ? { systemEnvironmentReloaded: raw.system_environment_reloaded ?? raw.systemEnvironmentReloaded }
+      : {}),
   };
 }
 
@@ -4457,6 +4470,13 @@ export class RealWebBotClient implements WebBotClient {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(mapEnvPatchInput(input)),
+    });
+    return mapEnvPatchResult(data);
+  }
+
+  async reloadEnvConfig(): Promise<EnvConfigPatchResult> {
+    const data = await this.requestJson<RawEnvConfigPatchResult>("/api/admin/env/reload", {
+      method: "POST",
     });
     return mapEnvPatchResult(data);
   }

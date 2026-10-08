@@ -169,6 +169,25 @@ from .terminal_manager import (
 )
 from .tunnel_service import TunnelService
 from .html_preview_service import HtmlPreviewStore
+
+_RUNTIME_ENV_BINDINGS = (
+    "ALLOWED_USER_IDS",
+    "CHAT_COMPLETION_NOTIFY_ENABLED",
+    "PUSHPLUS_API_URL",
+    "PUSHPLUS_CHANNEL",
+    "PUSHPLUS_ENABLED",
+    "PUSHPLUS_PREVIEW_CHARS",
+    "PUSHPLUS_TEMPLATE",
+    "PUSHPLUS_TIMEOUT_SECONDS",
+    "PUSHPLUS_TOKEN",
+    "PUSHPLUS_TOPIC",
+    "WEB_ALLOWED_ORIGINS",
+    "WEB_API_TOKEN",
+    "WEB_DEFAULT_USER_ID",
+    "WEB_FIXED_PUBLIC_FORWARD_URL",
+    "WEB_PUBLIC_URL",
+)
+
 from .routes import (
     admin_routes,
     announcement_routes,
@@ -5015,6 +5034,31 @@ class WebApiServer:
         body = await self._parse_json(request)
         try:
             data = self.env_config_service.reload_preview(body)
+        except EnvValidationError as exc:
+            raise WebApiError(400, exc.code, exc.message, exc.data) from exc
+        return _json({"ok": True, "data": data})
+
+    def _apply_runtime_env_bindings(self) -> None:
+        for name in _RUNTIME_ENV_BINDINGS:
+            globals()[name] = getattr(config, name)
+
+        self._notification_service.enabled = bool(config.CHAT_COMPLETION_NOTIFY_ENABLED)
+        self._notification_service.preview_chars = max(0, int(config.PUSHPLUS_PREVIEW_CHARS or 0))
+        self._notification_service.pushplus = PushPlusClient(
+            enabled=config.PUSHPLUS_ENABLED,
+            token=config.PUSHPLUS_TOKEN,
+            topic=config.PUSHPLUS_TOPIC,
+            template=config.PUSHPLUS_TEMPLATE,
+            channel=config.PUSHPLUS_CHANNEL,
+            api_url=config.PUSHPLUS_API_URL,
+            timeout_seconds=config.PUSHPLUS_TIMEOUT_SECONDS,
+        )
+
+    async def admin_env_reload(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = self.env_config_service.reload_runtime()
+            self._apply_runtime_env_bindings()
         except EnvValidationError as exc:
             raise WebApiError(400, exc.code, exc.message, exc.data) from exc
         return _json({"ok": True, "data": data})

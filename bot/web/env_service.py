@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bot import config
+
 
 class EnvValidationError(ValueError):
     """Invalid env admin payload."""
@@ -402,6 +404,24 @@ class EnvConfigService:
             "restartRequiredKeys": self._impact_keys(changed_keys, restart=True),
             "rebuildRequiredKeys": self._impact_keys(changed_keys, rebuild=True),
             "backupPath": "",
+        }
+
+    def reload_runtime(self) -> dict[str, Any]:
+        """Reload the project .env into the current process environment."""
+        try:
+            result = config.reload_project_env(self.env_path)
+        except (OSError, TypeError, ValueError, OverflowError) as exc:
+            raise EnvValidationError("invalid_env_runtime", f"重新加载环境变量失败: {exc}") from exc
+
+        changed_keys = self._ordered_keys(result.get("changed_keys", []))
+        return {
+            "changedKeys": changed_keys,
+            "reloadedKeys": changed_keys,
+            "restartRequiredKeys": self._impact_keys(changed_keys, restart=True),
+            "rebuildRequiredKeys": self._impact_keys(changed_keys, rebuild=True),
+            "backupPath": "",
+            "projectEnvReloaded": True,
+            "systemEnvironmentReloaded": False,
         }
 
     def patch(self, payload: dict[str, Any]) -> dict[str, Any]:

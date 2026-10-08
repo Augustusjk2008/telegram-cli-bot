@@ -353,6 +353,7 @@ export function AdminCenterScreen({
   const [activeEnvCategory, setActiveEnvCategory] = useState("");
   const [envPreview, setEnvPreview] = useState<EnvConfigPatchResult | null>(null);
   const [envSaving, setEnvSaving] = useState(false);
+  const [envReloading, setEnvReloading] = useState(false);
   const [envRestarting, setEnvRestarting] = useState(false);
   const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
@@ -1238,6 +1239,22 @@ export function AdminCenterScreen({
     }
   };
 
+  const reloadEnvConfig = async () => {
+    setEnvReloading(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await client.reloadEnvConfig();
+      setEnvSavedImpact(result);
+      await loadEnvConfig("已重新加载项目 .env", true);
+      setEnvSavedImpact(result);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "重新加载环境配置失败"));
+    } finally {
+      setEnvReloading(false);
+    }
+  };
+
   const requestEnvRestart = async () => {
     setEnvRestarting(true);
     setError("");
@@ -2060,14 +2077,24 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">环境配置</h2>
-                <p className="text-sm text-[var(--muted)]">保存写入 .env；运行时配置多需重启服务，VITE_* 需重新 build。</p>
+                <p className="text-sm text-[var(--muted)]">保存写入 .env；重新加载会刷新项目 .env 到当前进程，系统环境变量仍需重启。</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">监听地址/端口、前端 VITE_*、隧道和已建立的原生会话仍按提示重启或重新 build。</p>
                 <p className="mt-1 break-all text-xs text-[var(--muted)]">文件: {envConfig?.envPath || ".env"}</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
+                  onClick={() => void reloadEnvConfig()}
+                  disabled={envSaving || envReloading || envChangedItems.length > 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4${envReloading ? " animate-spin" : ""}`} />
+                  {envReloading ? "加载中..." : "重新加载 .env"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => void previewEnvChanges()}
-                  disabled={envSaving || envChangedItems.length === 0 || Boolean(envConflictMessage)}
+                  disabled={envSaving || envReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
                   className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                 >
                   预览 diff
@@ -2075,7 +2102,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <button
                   type="button"
                   onClick={() => void saveEnvChanges()}
-                  disabled={envSaving || envChangedItems.length === 0 || Boolean(envConflictMessage)}
+                  disabled={envSaving || envReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
@@ -2149,7 +2176,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <button
                   type="button"
                   onClick={() => void saveEnvChanges()}
-                  disabled={envSaving || Boolean(envConflictMessage)}
+                  disabled={envSaving || envReloading || Boolean(envConflictMessage)}
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />

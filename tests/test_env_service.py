@@ -88,6 +88,28 @@ def test_env_service_exposes_codex_server_voice_toggle(tmp_path: Path) -> None:
     assert "TCB_CODEX_SERVER_VOICE_ENABLED=true" in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
+def test_env_service_reload_runtime_reports_reload_and_restart_impact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+    monkeypatch.setattr(
+        config,
+        "reload_project_env",
+        lambda path: {"changed_keys": ["PUSHPLUS_TOKEN", "VITE_BASE_PATH"]},
+    )
+
+    result = service.reload_runtime()
+
+    assert result["changedKeys"] == ["VITE_BASE_PATH", "PUSHPLUS_TOKEN"]
+    assert result["reloadedKeys"] == result["changedKeys"]
+    assert result["restartRequiredKeys"] == ["VITE_BASE_PATH", "PUSHPLUS_TOKEN"]
+    assert result["rebuildRequiredKeys"] == ["VITE_BASE_PATH"]
+    assert result["projectEnvReloaded"] is True
+    assert result["systemEnvironmentReloaded"] is False
+
+
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:
     _write_env(
         tmp_path,
