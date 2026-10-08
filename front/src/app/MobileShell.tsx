@@ -6,7 +6,6 @@ import {
   Menu,
   MessageSquare,
   MonitorSmartphone,
-  Puzzle,
   Settings,
   SquareTerminal,
   type LucideIcon,
@@ -17,7 +16,7 @@ import type { SessionState } from "../services/types";
 import { isGuest } from "../utils/capabilities";
 import { AppLogo } from "../components/AppLogo";
 
-export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "plugins" | "settings";
+export type AppTab = "chat" | "files" | "debug" | "terminal" | "git" | "settings";
 
 const VIEW_MODE_OPTIONS: Array<{ value: ViewMode; label: string; shortLabel: string }> = [
   { value: "auto", label: "自动", shortLabel: "Auto" },
@@ -83,7 +82,6 @@ export function MobileShell({
     { tab: "debug", label: "调试", Icon: Bug },
     { tab: "terminal", label: "终端", Icon: SquareTerminal },
     { tab: "git", label: "Git", Icon: GitBranch },
-    { tab: "plugins", label: "插件", Icon: Puzzle },
     { tab: "settings", label: "设置", Icon: Settings },
   ];
   const navItems = isGuest(session)
@@ -91,7 +89,7 @@ export function MobileShell({
     : fullNavItems.filter((item) => (
         allowedTabs
           ? allowedTabs.includes(item.tab)
-          : item.tab !== "plugins" || session?.capabilities.includes("view_plugins")
+          : true
       ));
 
   return (

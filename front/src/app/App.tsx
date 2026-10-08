@@ -74,7 +74,6 @@ import {
   LazyFilesScreen as FilesScreen,
   LazyGitScreen as GitScreen,
   LazyMobileDebugScreen as MobileDebugScreen,
-  LazyPluginsScreen as PluginsScreen,
   LazySettingsScreen as SettingsScreen,
   LazySoloWorkbench as SoloWorkbench,
   LazyTerminalScreen as TerminalScreen,
@@ -302,7 +301,6 @@ export function App() {
   const canUseTerminal = hasCapability(session, "terminal_exec");
   const canUseDebug = hasCapability(session, "debug_exec");
   const canUseGit = hasCapability(session, "git_ops");
-  const canViewPlugins = hasCapability(session, "view_plugins");
   const canUseInlineCompletion = hasCapability(session, "inline_completion");
   const canUseHostSettings = hasCapability(session, "admin_ops");
   const canManageBots = hasCapability(session, "manage_bots") || hasCapability(session, "admin_ops");
@@ -517,14 +515,11 @@ export function App() {
     if (canUseGit) {
       nextTabs.push("git");
     }
-    if (canViewPlugins && !remoteWorkspace) {
-      nextTabs.push("plugins");
-    }
     if (canUseSettings) {
       nextTabs.push("settings");
     }
     return nextTabs;
-  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, canViewPlugins, remoteWorkspace]);
+  }, [canUseDebug, canUseGit, canUseSettings, canUseTerminal, remoteWorkspace]);
 
   useEffect(() => {
     if (!isLoggedIn) {
@@ -1153,17 +1148,6 @@ export function App() {
           workspaceIdentity={gitWorkspaceIdentity}
           reconnectRevision={remoteReconnectRevision}
           sessionCapabilities={session?.capabilities}
-        />
-      </div>
-    );
-  } else if (currentTab === "plugins" && canViewPlugins && !remoteWorkspace) {
-    activeScreen = (
-      <div className="absolute inset-0">
-        <PluginsScreen
-          key={`plugins-${currentBot}`}
-          client={client}
-          botAlias={currentBot}
-          canOperate={canOperateCurrentBot}
         />
       </div>
     );
