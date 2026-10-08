@@ -354,6 +354,7 @@ export function AdminCenterScreen({
   const [envPreview, setEnvPreview] = useState<EnvConfigPatchResult | null>(null);
   const [envSaving, setEnvSaving] = useState(false);
   const [envReloading, setEnvReloading] = useState(false);
+  const [envSystemReloading, setEnvSystemReloading] = useState(false);
   const [envRestarting, setEnvRestarting] = useState(false);
   const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
@@ -1255,6 +1256,25 @@ export function AdminCenterScreen({
     }
   };
 
+  const reloadSystemEnvConfig = async () => {
+    setEnvSystemReloading(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await client.reloadSystemEnvConfig();
+      setEnvSavedImpact(result);
+      const message = result.systemEnvironmentSupported === false
+        ? "当前运行环境不支持重新加载 Windows 系统环境变量"
+        : "已重新加载 Windows 系统环境变量和项目 .env";
+      await loadEnvConfig(message, true);
+      setEnvSavedImpact(result);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "重新加载系统环境变量失败"));
+    } finally {
+      setEnvSystemReloading(false);
+    }
+  };
+
   const requestEnvRestart = async () => {
     setEnvRestarting(true);
     setError("");
@@ -2077,15 +2097,24 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">环境配置</h2>
-                <p className="text-sm text-[var(--muted)]">保存写入 .env；重新加载会刷新项目 .env 到当前进程，系统环境变量仍需重启。</p>
-                <p className="mt-1 text-xs text-[var(--muted)]">监听地址/端口、前端 VITE_*、隧道和已建立的原生会话仍按提示重启或重新 build。</p>
+                <p className="text-sm text-[var(--muted)]">保存写入 .env；可分别重新加载项目 .env 或 Windows 用户/系统环境变量。</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">只影响当前进程和之后创建的子进程；监听地址/端口、前端 VITE_*、隧道和已建立的原生会话仍按提示重启或重新 build。</p>
                 <p className="mt-1 break-all text-xs text-[var(--muted)]">文件: {envConfig?.envPath || ".env"}</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
+                  onClick={() => void reloadSystemEnvConfig()}
+                  disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length > 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4${envSystemReloading ? " animate-spin" : ""}`} />
+                  {envSystemReloading ? "加载中..." : "重新加载 Windows 环境"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => void reloadEnvConfig()}
-                  disabled={envSaving || envReloading || envChangedItems.length > 0}
+                  disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length > 0}
                   className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                 >
                   <RefreshCw className={`h-4 w-4${envReloading ? " animate-spin" : ""}`} />
@@ -2094,7 +2123,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <button
                   type="button"
                   onClick={() => void previewEnvChanges()}
-                  disabled={envSaving || envReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
+                  disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
                   className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
                 >
                   预览 diff
@@ -2102,7 +2131,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <button
                   type="button"
                   onClick={() => void saveEnvChanges()}
-                  disabled={envSaving || envReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
+                  disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />
@@ -2176,7 +2205,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <button
                   type="button"
                   onClick={() => void saveEnvChanges()}
-                  disabled={envSaving || envReloading || Boolean(envConflictMessage)}
+                  disabled={envSaving || envReloading || envSystemReloading || Boolean(envConflictMessage)}
                   className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
                 >
                   <Save className="h-4 w-4" />

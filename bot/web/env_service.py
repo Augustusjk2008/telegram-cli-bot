@@ -424,6 +424,26 @@ class EnvConfigService:
             "systemEnvironmentReloaded": False,
         }
 
+    def reload_system_runtime(self) -> dict[str, Any]:
+        """Reload Windows user/system environment and the project .env."""
+        try:
+            result = config.reload_system_environment(self.env_path)
+        except (OSError, TypeError, ValueError, OverflowError) as exc:
+            raise EnvValidationError("invalid_system_env_runtime", f"重新加载系统环境变量失败: {exc}") from exc
+
+        changed_keys = self._ordered_keys(result.get("changed_keys", []))
+        supported = bool(result.get("supported", False))
+        return {
+            "changedKeys": changed_keys,
+            "reloadedKeys": changed_keys,
+            "restartRequiredKeys": self._impact_keys(changed_keys, restart=True),
+            "rebuildRequiredKeys": self._impact_keys(changed_keys, rebuild=True),
+            "backupPath": "",
+            "projectEnvReloaded": supported,
+            "systemEnvironmentReloaded": supported,
+            "systemEnvironmentSupported": supported,
+        }
+
     def patch(self, payload: dict[str, Any]) -> dict[str, Any]:
         changes = self._prepare_changes(payload)
         changed_keys = self._ordered_keys(changes)

@@ -1140,6 +1140,8 @@ type RawEnvConfigPatchResult = {
   project_env_reloaded?: boolean;
   systemEnvironmentReloaded?: boolean;
   system_environment_reloaded?: boolean;
+  systemEnvironmentSupported?: boolean;
+  system_environment_supported?: boolean;
 };
 
 type RawAnnouncementSection = {
@@ -2924,6 +2926,9 @@ function mapEnvPatchResult(raw: RawEnvConfigPatchResult): EnvConfigPatchResult {
     ...(typeof raw.system_environment_reloaded === "boolean" || typeof raw.systemEnvironmentReloaded === "boolean"
       ? { systemEnvironmentReloaded: raw.system_environment_reloaded ?? raw.systemEnvironmentReloaded }
       : {}),
+    ...(typeof raw.system_environment_supported === "boolean" || typeof raw.systemEnvironmentSupported === "boolean"
+      ? { systemEnvironmentSupported: raw.system_environment_supported ?? raw.systemEnvironmentSupported }
+      : {}),
   };
 }
 
@@ -4476,6 +4481,13 @@ export class RealWebBotClient implements WebBotClient {
 
   async reloadEnvConfig(): Promise<EnvConfigPatchResult> {
     const data = await this.requestJson<RawEnvConfigPatchResult>("/api/admin/env/reload", {
+      method: "POST",
+    });
+    return mapEnvPatchResult(data);
+  }
+
+  async reloadSystemEnvConfig(): Promise<EnvConfigPatchResult> {
+    const data = await this.requestJson<RawEnvConfigPatchResult>("/api/admin/env/reload-system", {
       method: "POST",
     });
     return mapEnvPatchResult(data);

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,49 @@ from bot.web.env_service import EnvConfigService, EnvValidationError
 def _write_env(root: Path, text: str) -> None:
     (root / ".env").write_text(text, encoding="utf-8")
     (root / ".env.example").write_text("", encoding="utf-8")
+
+
+def test_windows_registry_environment_merges_path_and_expands_values() -> None:
+    class FakeKey:
+        def __init__(self, values):
+            self.values = values
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeRegistry:
+        HKEY_LOCAL_MACHINE = "machine"
+        HKEY_CURRENT_USER = "user"
+
+        def __init__(self):
+            self.data = {
+                (self.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"): [
+                    ("SystemRoot", r"C:\Windows", 1),
+                    ("Path", r"%SystemRoot%\System32", 2),
+                ],
+                (self.HKEY_CURRENT_USER, "Environment"): [
+                    ("Path", r"C:\Tools", 1),
+                    ("ToolHome", r"%SystemRoot%\Tools", 2),
+                ],
+            }
+
+        def OpenKey(self, root, subkey):
+            return FakeKey(self.data[(root, subkey)])
+
+        def QueryInfoKey(self, key):
+            return (0, len(key.values), None)
+
+        def EnumValue(self, key, index):
+            return key.values[index]
+
+    values = config._read_windows_environment(FakeRegistry())
+
+    assert values is not None
+    assert values["Path"] == os.pathsep.join([r"C:\Windows\System32", r"C:\Tools"])
+    assert values["ToolHome"] == r"C:\Windows\Tools"
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
@@ -108,6 +152,27 @@ def test_env_service_reload_runtime_reports_reload_and_restart_impact(
     assert result["rebuildRequiredKeys"] == ["VITE_BASE_PATH"]
     assert result["projectEnvReloaded"] is True
     assert result["systemEnvironmentReloaded"] is False
+
+
+def test_env_service_system_reload_reports_windows_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+    monkeypatch.setattr(
+        config,
+        "reload_system_environment",
+        lambda path: {"supported": True, "changed_keys": ["PUSHPLUS_TOKEN", "WEB_API_TOKEN"]},
+    )
+
+    result = service.reload_system_runtime()
+
+    assert result["changedKeys"] == ["WEB_API_TOKEN", "PUSHPLUS_TOKEN"]
+    assert result["reloadedKeys"] == result["changedKeys"]
+    assert result["projectEnvReloaded"] is True
+    assert result["systemEnvironmentReloaded"] is True
+    assert result["systemEnvironmentSupported"] is True
 
 
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:

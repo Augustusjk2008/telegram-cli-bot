@@ -5063,6 +5063,16 @@ class WebApiServer:
             raise WebApiError(400, exc.code, exc.message, exc.data) from exc
         return _json({"ok": True, "data": data})
 
+    async def admin_env_reload_system(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = self.env_config_service.reload_system_runtime()
+            if data.get("systemEnvironmentSupported"):
+                self._apply_runtime_env_bindings()
+        except EnvValidationError as exc:
+            raise WebApiError(400, exc.code, exc.message, exc.data) from exc
+        return _json({"ok": True, "data": data})
+
     async def admin_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         self._schedule_restart_request()

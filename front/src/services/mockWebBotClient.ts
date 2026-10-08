@@ -3557,6 +3557,22 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  async reloadSystemEnvConfig(): Promise<EnvConfigPatchResult> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权重新加载系统环境变量", { status: 403, code: "forbidden" });
+    }
+    return {
+      changedKeys: [],
+      reloadedKeys: [],
+      restartRequiredKeys: [],
+      rebuildRequiredKeys: [],
+      backupPath: "",
+      projectEnvReloaded: true,
+      systemEnvironmentReloaded: true,
+      systemEnvironmentSupported: true,
+    };
+  }
+
   async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {
     const aliases = Array.from(this.bots.keys());
     const visibleAliases = this.session.role === "guest"

@@ -12,8 +12,19 @@ from typing import Any, List, Optional, Set
 from bot.cli_params import normalize_cli_model_options
 from bot.native_agent.legacy_migration import resolve_pi_agent_env
 
+try:
+    import winreg as _WINREG
+except ImportError:
+    _WINREG = None
+
+_WINDOWS_SYSTEM_ENV_SUBKEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+_WINDOWS_ENV_REF_RE = re.compile(r"%([^%]+)%")
+
 # 加载 .env 文件中的环境变量
 _INITIAL_PROCESS_ENV = dict(os.environ)
+_INITIAL_PROCESS_ENV_KEYS = {key.casefold() for key in _INITIAL_PROCESS_ENV}
+_INITIAL_PROCESS_ENV_NAMES = {key.casefold(): key for key in _INITIAL_PROCESS_ENV}
+_RUNTIME_SYSTEM_ENV_NAMES: dict[str, str] = {}
 try:
     from dotenv import dotenv_values, load_dotenv
     _DOTENV_VALUES = {
@@ -274,6 +285,78 @@ def _refresh_environment_config() -> None:
 _refresh_environment_config()
 
 
+def _read_windows_registry_values(registry: Any, root: Any, subkey: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        with registry.OpenKey(root, subkey) as key:
+            value_count = registry.QueryInfoKey(key)[1]
+            for index in range(value_count):
+                name, value, _value_kind = registry.EnumValue(key, index)
+                if not isinstance(name, str):
+                    continue
+                if isinstance(value, bytes):
+                    value = value.decode(errors="replace")
+                if isinstance(value, (str, int, float)):
+                    values[name] = str(value)
+    except FileNotFoundError:
+        return {}
+    return values
+
+
+def _expand_windows_environment_values(values: dict[str, str]) -> dict[str, str]:
+    by_key = {key.casefold(): value for key, value in os.environ.items()}
+    by_key.update({key.casefold(): value for key, value in values.items()})
+    expanded = dict(values)
+    for _ in range(10):
+        changed = False
+        for key, value in expanded.items():
+            next_value = _WINDOWS_ENV_REF_RE.sub(
+                lambda match: by_key.get(match.group(1).casefold(), match.group(0)),
+                value,
+            )
+            if next_value != value:
+                expanded[key] = next_value
+                by_key[key.casefold()] = next_value
+                changed = True
+        if not changed:
+            break
+    return expanded
+
+
+def _read_windows_environment(registry: Any | None = None) -> dict[str, str] | None:
+    registry = registry or _WINREG
+    if registry is None:
+        return None
+
+    system_values = _read_windows_registry_values(
+        registry,
+        registry.HKEY_LOCAL_MACHINE,
+        _WINDOWS_SYSTEM_ENV_SUBKEY,
+    )
+    user_values = _read_windows_registry_values(
+        registry,
+        registry.HKEY_CURRENT_USER,
+        "Environment",
+    )
+    merged: dict[str, str] = {}
+    merged_by_key: dict[str, str] = {}
+    for name, value in system_values.items():
+        merged[name] = value
+        merged_by_key[name.casefold()] = name
+    for name, value in user_values.items():
+        normalized_name = name.casefold()
+        previous_name = merged_by_key.get(normalized_name)
+        if normalized_name == "path" and previous_name:
+            system_path = merged[previous_name].strip()
+            user_path = value.strip()
+            value = os.pathsep.join(item for item in (system_path, user_path) if item)
+        if previous_name and previous_name != name:
+            merged.pop(previous_name, None)
+        merged[name] = value
+        merged_by_key[normalized_name] = name
+    return _expand_windows_environment_values(merged)
+
+
 def reload_project_env(env_path: str | os.PathLike[str] | None = None) -> dict[str, list[str]]:
     """Reload project dotenv values while preserving startup process overrides.
 
@@ -292,7 +375,12 @@ def reload_project_env(env_path: str | os.PathLike[str] | None = None) -> dict[s
         if value is not None
     }
     previous_dotenv_values = dict(_DOTENV_VALUES)
-    managed_keys = (set(previous_dotenv_values) | set(parsed_values)) - set(_INITIAL_PROCESS_ENV)
+    managed_keys = {
+        key
+        for key in (set(previous_dotenv_values) | set(parsed_values))
+        if key.casefold() not in _INITIAL_PROCESS_ENV_KEYS
+        and key.casefold() not in _RUNTIME_SYSTEM_ENV_NAMES
+    }
     before_values = {key: os.environ.get(key) for key in managed_keys}
     try:
         for key in managed_keys:
@@ -318,6 +406,57 @@ def reload_project_env(env_path: str | os.PathLike[str] | None = None) -> dict[s
         if before_values.get(key) != os.environ.get(key)
     ]
     return {"changed_keys": sorted(changed_keys)}
+
+
+def reload_system_environment(env_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """Reload Windows user/system environment values into this process."""
+    global _RUNTIME_SYSTEM_ENV_NAMES
+    registry_values = _read_windows_environment()
+    if registry_values is None:
+        return {"supported": False, "changed_keys": []}
+
+    previous_names = dict(_RUNTIME_SYSTEM_ENV_NAMES)
+    next_names = {key.casefold(): key for key in registry_values}
+    all_keys = set(previous_names) | set(next_names)
+    before_values = {
+        key: os.environ.get(previous_names.get(key) or next_names.get(key) or key)
+        for key in all_keys
+    }
+    try:
+        _RUNTIME_SYSTEM_ENV_NAMES = next_names
+        for name, value in registry_values.items():
+            os.environ[name] = value
+        for key, name in previous_names.items():
+            if key in next_names:
+                continue
+            initial_name = _INITIAL_PROCESS_ENV_NAMES.get(key)
+            if initial_name is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = _INITIAL_PROCESS_ENV[initial_name]
+        project_result = reload_project_env(env_path)
+    except Exception:
+        for key in all_keys:
+            name = previous_names.get(key) or next_names.get(key) or key
+            previous_value = before_values.get(key)
+            if previous_value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous_value
+        _RUNTIME_SYSTEM_ENV_NAMES = previous_names
+        _refresh_environment_config()
+        raise
+
+    changed_keys = [
+        next_names.get(key) or previous_names.get(key) or key
+        for key in all_keys
+        if before_values.get(key) != os.environ.get(next_names.get(key) or previous_names.get(key) or key)
+    ]
+    changed_keys.extend(project_result.get("changed_keys", []))
+    return {
+        "supported": True,
+        "changed_keys": sorted(set(changed_keys)),
+    }
 
 
 def default_cli_path(cli_type: str) -> str:

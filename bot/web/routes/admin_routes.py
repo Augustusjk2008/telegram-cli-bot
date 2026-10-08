@@ -42,6 +42,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_patch("/api/admin/env", server.admin_env_patch)
     app.router.add_post("/api/admin/env/reload-preview", server.admin_env_reload_preview)
     app.router.add_post("/api/admin/env/reload", server.admin_env_reload)
+    app.router.add_post("/api/admin/env/reload-system", server.admin_env_reload_system)
     app.router.add_post("/api/admin/restart", server.admin_restart)
     app.router.add_get("/api/admin/tunnel", server.admin_tunnel)
     app.router.add_post("/api/admin/tunnel/start", server.admin_tunnel_start)

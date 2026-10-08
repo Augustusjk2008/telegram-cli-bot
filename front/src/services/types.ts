@@ -249,6 +249,7 @@ export type EnvConfigPatchResult = {
   backupPath: string;
   projectEnvReloaded?: boolean;
   systemEnvironmentReloaded?: boolean;
+  systemEnvironmentSupported?: boolean;
 };
 
 export type CliErrorStatsItem = {

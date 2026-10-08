@@ -192,6 +192,7 @@ export interface WebBotClient {
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   reloadEnvConfig(): Promise<EnvConfigPatchResult>;
+  reloadSystemEnvConfig(): Promise<EnvConfigPatchResult>;
   getNativeAgentConfig(): Promise<NativeAgentConfigPayload>;
   runNativeAgentPreflight(options?: { cwd?: string; piCommand?: string }): Promise<NativeAgentPreflightResult>;
   updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload>;
