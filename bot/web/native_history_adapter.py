@@ -268,6 +268,62 @@ def _codex_command_execution_event(payload: dict[str, Any], *, event_type: str) 
     return None
 
 
+def _codex_mcp_tool_event(payload: dict[str, Any], *, event_type: str) -> dict[str, Any] | None:
+    payload_type = str(payload.get("type") or "").strip().replace("-", "_").lower()
+    if payload_type not in {"mcp_tool_call", "mcptoolcall"}:
+        return None
+
+    server = _stringify_value(payload.get("server"))
+    tool = _stringify_value(payload.get("tool")) or "mcp_tool_call"
+    tool_name = f"mcp__{server}__{tool}" if server else tool
+    arguments = payload.get("arguments")
+    call_id = _stringify_value(payload.get("id") or payload.get("call_id"))
+    status = _stringify_value(payload.get("status")).lower()
+    is_started = event_type == "item.started" or (
+        event_type in {"response_item", "event_msg"}
+        and status in {"", "in_progress", "started"}
+        and "result" not in payload
+        and "error" not in payload
+    )
+    if is_started:
+        return _trace_event(
+            "tool_call",
+            raw_type="mcp_tool_call",
+            title=tool_name,
+            tool_name=tool_name,
+            call_id=call_id,
+            summary=_summarize_tool_payload(tool_name, arguments),
+            payload={
+                "server": server,
+                "tool": tool,
+                "arguments": arguments,
+                "status": status,
+            },
+        )
+
+    result = payload.get("error") or payload.get("result")
+    summary = ""
+    if isinstance(result, dict):
+        summary = "\n".join(_extract_text_blocks(result.get("content")))
+        if not summary:
+            summary = _stringify_value(result.get("structured_content") or result.get("structuredContent"))
+    if not summary:
+        summary = _stringify_value(result)
+    return _trace_event(
+        "tool_result",
+        raw_type="mcp_tool_call",
+        call_id=call_id,
+        summary=summary or "工具调用已返回",
+        payload={
+            "server": server,
+            "tool": tool,
+            "arguments": arguments,
+            "status": status,
+            "result": result,
+        },
+    )
+
+
 def _extract_claude_message_blocks(item: dict[str, Any]) -> list[dict[str, Any]]:
     message = item.get("message") if isinstance(item.get("message"), dict) else {}
     content = message.get("content")
@@ -500,6 +556,10 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
             return
         if payload_type == "reasoning":
             return
+        mcp_event = _codex_mcp_tool_event(payload, event_type=item_type)
+        if mcp_event is not None:
+            _append_trace_event(turn, mcp_event, include_trace=include_trace)
+            return
         if payload_type == "message":
             payload_role = _stringify_value(payload.get("role")).lower()
             if payload_role in {"developer", "system"}:
@@ -630,6 +690,10 @@ def _consume_codex_line(item: dict[str, Any], turn: dict[str, Any], *, include_t
 
     if item_type in {"item.started", "item.completed"}:
         payload = _resolve_payload(item)
+        mcp_event = _codex_mcp_tool_event(payload, event_type=item_type)
+        if mcp_event is not None:
+            _append_trace_event(turn, mcp_event, include_trace=include_trace)
+            return
         command_event = _codex_command_execution_event(payload, event_type=item_type)
         if command_event is not None:
             _append_trace_event(turn, command_event, include_trace=include_trace)
@@ -843,6 +907,10 @@ def _stream_event_key(event: dict[str, Any]) -> tuple[str, str, str, str]:
 def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     event_type = str(item.get("type") or "").strip()
     if event_type in {"response_item", "event_msg"}:
+        payload = _resolve_payload(item)
+        mcp_event = _codex_mcp_tool_event(payload, event_type=event_type)
+        if mcp_event is not None:
+            return [mcp_event]
         turn = _new_turn_state()
         _consume_codex_line(item, turn, include_trace=True)
         return [dict(event) for event in turn["trace"]]
@@ -851,6 +919,9 @@ def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
 
     payload = _resolve_payload(item)
     payload_type = str(payload.get("type") or "").strip()
+    mcp_event = _codex_mcp_tool_event(payload, event_type=event_type)
+    if mcp_event is not None:
+        return [mcp_event]
     command_event = _codex_command_execution_event(payload, event_type=event_type)
     if command_event is not None:
         return [command_event]

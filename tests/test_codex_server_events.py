@@ -57,6 +57,45 @@ def test_commentary_final_tools_compaction_and_once_only_completion():
     assert not any(e.get("summary") == "finished" for e in trace)
 
 
+def test_regular_codex_stream_exposes_mcp_tool_call_and_result():
+    state = {"seen": set()}
+    lines = [
+        {
+            "type": "response_item",
+            "item": {
+                "type": "mcp_tool_call",
+                "id": "remote-call",
+                "server": "tcb-remote",
+                "tool": "exec",
+                "arguments": {"commands": ["pwd"]},
+                "status": "in_progress",
+            },
+        },
+        {
+            "type": "response_item",
+            "item": {
+                "type": "mcp_tool_call",
+                "id": "remote-call",
+                "server": "tcb-remote",
+                "tool": "exec",
+                "arguments": {"commands": ["pwd"]},
+                "status": "completed",
+                "result": {"content": [{"type": "text", "text": "/srv/project"}]},
+            },
+        },
+    ]
+
+    trace = []
+    for item in lines:
+        trace.extend(consume_stream_trace_chunk("codex", json.dumps(item) + "\n", state))
+
+    assert [event["kind"] for event in trace] == ["tool_call", "tool_result"]
+    assert trace[0]["tool_name"] == "mcp__tcb-remote__exec"
+    assert trace[0]["call_id"] == trace[1]["call_id"] == "remote-call"
+    assert trace[0]["summary"] == '{"commands": ["pwd"]}'
+    assert trace[1]["summary"] == "/srv/project"
+
+
 def test_cumulative_usage_delta_duplicates_stale_and_failure_preserved():
     mapper = CodexServerEventMapper("thread", tokens({"inputTokens": 100, "outputTokens": 10, "cachedInputTokens": 50}))
     mapper.turn_id = "turn"
