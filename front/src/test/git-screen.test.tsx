@@ -253,7 +253,8 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
   expect(screen.queryByText("Remote commit")).not.toBeInTheDocument();
   expect(screen.getAllByText("main").length).toBeGreaterThan(0);
   expect(await screen.findByText("Remote stash")).toBeInTheDocument();
-  expect(await screen.findByTestId("git-selected-commit-message")).toHaveTextContent("Complete remote commit message.");
+  expect(await screen.findByTestId("git-selected-commit-hash")).toHaveTextContent("abcdef1");
+  expect(screen.queryByText("Complete remote commit message.")).not.toBeInTheDocument();
   expect(await screen.findByLabelText("Git 用户名")).toHaveValue("Remote Dev");
   expect(screen.getByLabelText("Git 用户名")).toBeEnabled();
   expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();

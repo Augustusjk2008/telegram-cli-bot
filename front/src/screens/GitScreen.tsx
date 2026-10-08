@@ -2043,10 +2043,8 @@ export function GitScreen({
                       {selectedGraphNode ? (
                         <div data-testid="git-version-tree-actions" className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-2">
                           <div className="min-w-0 flex-1 text-xs">
-                            <div className="font-mono font-semibold text-[var(--accent)]">{selectedGraphNode.shortHash}</div>
-                            <div className="truncate text-[var(--muted)]">{selectedGraphNode.subject}</div>
-                            <div data-testid="git-selected-commit-message" className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[var(--text)]">
-                              {selectedGraphNode.message || selectedGraphNode.subject}
+                            <div data-testid="git-selected-commit-hash" className="font-mono font-semibold text-[var(--accent)]">
+                              {(selectedGraphNode.shortHash || selectedGraphNode.hash).slice(0, 7)}
                             </div>
                           </div>
                           <label className="min-w-[150px] flex-1 sm:flex-none">
