@@ -3,7 +3,7 @@ import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { AlertTriangle, Bell, LogOut, Save, SlidersHorizontal, Square } from "lucide-react";
+import { Bell, LogOut, Save, SlidersHorizontal } from "lucide-react";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
@@ -183,8 +183,6 @@ export function SettingsScreen({
   const [workdirDraft, setWorkdirDraft] = useState("");
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
-  const [showKillConfirm, setShowKillConfirm] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
@@ -278,21 +276,6 @@ export function SettingsScreen({
     setWorkdirDraft(normalizePathInput(prefilledWorkdir));
     setPendingWorkdirConflict(null);
   }, [prefilledWorkdir]);
-
-  const confirmKill = async () => {
-    setActionLoading("kill");
-    setError("");
-    setNotice("");
-    try {
-      const message = await client.killTask(botAlias);
-      setNotice(message || "已发送终止任务请求");
-      setShowKillConfirm(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "终止任务失败");
-    } finally {
-      setActionLoading("");
-    }
-  };
 
   const saveRuntimeConfig = async () => {
     const nextCliPath = cliPathDraft.trim();
@@ -878,15 +861,6 @@ export function SettingsScreen({
         ) : null}
 
         <div className={settingsActionPanelClass("divide-y divide-[var(--workbench-hairline)]")}>
-          <button
-            onClick={() => setShowKillConfirm(true)}
-            className="flex w-full items-center justify-between px-3 py-2.5 text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
-          >
-            <span className="flex items-center gap-3">
-              <Square className="w-5 h-5" />
-              终止当前任务
-            </span>
-          </button>
           {embedded ? null : (
             <button
               onClick={onLogout}
@@ -938,33 +912,6 @@ export function SettingsScreen({
                 className="tcb-solid-danger rounded-full px-4 py-2 text-sm hover:opacity-90 disabled:opacity-60"
               >
                 {savingWorkdir ? "切换中..." : "确认并切换"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showKillConfirm ? (
-        <div className="fixed inset-0 bg-[var(--overlay-backdrop-50)] flex items-center justify-center p-4 z-50">
-          <div className="bg-[var(--surface)] rounded-2xl p-6 max-w-sm w-full shadow-[var(--shadow-card)]">
-            <div className="flex items-center gap-3 text-[var(--danger)] mb-4">
-              <AlertTriangle className="w-6 h-6" />
-              <h2 className="text-lg font-bold">终止任务</h2>
-            </div>
-            <p className="text-[var(--text)] mb-6">确定要终止当前正在运行的任务吗？</p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowKillConfirm(false)}
-                className="px-4 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-strong)]"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => void confirmKill()}
-                disabled={actionLoading === "kill"}
-                className="tcb-solid-danger px-4 py-2 rounded-lg hover:opacity-90"
-              >
-                {actionLoading === "kill" ? "终止中..." : "确定终止"}
               </button>
             </div>
           </div>
