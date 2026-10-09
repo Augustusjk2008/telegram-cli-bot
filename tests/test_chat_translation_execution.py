@@ -174,6 +174,7 @@ async def test_plan_and_slash_are_prepared_after_translation(chat, monkeypatch):
     events = await chat.run("请解释", task_mode="plan")
     assert service.translate.call_args.args == ("请解释",)
     assert "Explain this" in chat.sent[0]
+    assert "<PLAN_TITLE>" in chat.sent[0]
     assert "<PLAN_DRAFT>" in chat.sent[0]
     assert "请解释" not in chat.sent[0]
     assert len(chat.sent) == 1

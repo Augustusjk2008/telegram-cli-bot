@@ -1,6 +1,11 @@
 const PLAN_DRAFT_OPEN = "<PLAN_DRAFT>";
 const PLAN_DRAFT_CLOSE = "</PLAN_DRAFT>";
 
+export function extractPlanTitle(text: string): string {
+  const match = String(text || "").match(/<PLAN_TITLE>([\s\S]*?)<\/PLAN_TITLE>/);
+  return match?.[1].trim() || "";
+}
+
 export function extractPlanDraft(text: string): string {
   const value = String(text || "");
   const start = value.indexOf(PLAN_DRAFT_OPEN);

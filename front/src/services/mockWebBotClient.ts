@@ -4588,6 +4588,9 @@ export class MockWebBotClient implements WebBotClient {
 
     if (options?.taskMode === "plan") {
       const summary = [
+        "<PLAN_TITLE>",
+        text.trim().split(/\r?\n/)[0].slice(0, 48) || "当前任务",
+        "</PLAN_TITLE>",
         "<PLAN_DRAFT>",
         "# 执行方案",
         "",

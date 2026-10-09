@@ -80,7 +80,7 @@ import {
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import type { SoloSessionSnapshot } from "../workbench/soloTypes";
-import { extractPlanDraft, stripPlanDraftTags } from "../utils/planDraft";
+import { extractPlanDraft, extractPlanTitle, stripPlanDraftTags } from "../utils/planDraft";
 import { EventType, type AgUiEvent } from "../services/agUiProtocol";
 import {
   buildAgUiMessageMeta,
@@ -4385,6 +4385,7 @@ export function ChatScreen({
     if (!planContent) {
       return;
     }
+    const planTitle = extractPlanTitle(itemsRef.current.find((item) => item.id === messageId)?.text || "");
     setPlanMode(false);
     setExecutingPlanMessageId(messageId);
     setPlanExecuteError("");
@@ -4395,7 +4396,7 @@ export function ChatScreen({
       const nativeSend = currentExecutionMode === "native_agent";
       const result = await client.executePlan(botAlias, {
         content: planContent,
-        title: "执行方案",
+        title: planTitle,
         agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
       });

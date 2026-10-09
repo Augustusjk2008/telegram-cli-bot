@@ -98,7 +98,7 @@ test("shows the voice bar only for an enabled codex_server CLI scope", async () 
   expect(await screen.findByTestId("codex-voice-bar")).toBeInTheDocument();
 });
 
-test("leaves plan mode as soon as plan execution starts", async () => {
+test.each([true, false])("executes the edited plan and leaves plan mode (structured title: %s)", async (hasTitle) => {
   const user = userEvent.setup();
   const executionGate = deferred<void>();
   const backingClient = new MockWebBotClient();
@@ -118,7 +118,7 @@ test("leaves plan mode as soon as plan execution starts", async () => {
       items: [{
         id: "assistant-plan-draft",
         role: "assistant",
-        text: "<PLAN_DRAFT>\n# 执行这个方案\n\n完成目标改动。\n</PLAN_DRAFT>",
+        text: `${hasTitle ? "<PLAN_TITLE>\n修复计划文件命名\n</PLAN_TITLE>\n" : ""}<PLAN_DRAFT>\n# 执行这个方案\n\n完成目标改动。\n</PLAN_DRAFT>`,
         createdAt: "2026-08-27T01:59:00Z",
         state: "done",
       }],
@@ -132,8 +132,16 @@ test("leaves plan mode as soon as plan execution starts", async () => {
 
   const planModeButton = await screen.findByRole("button", { name: "计划模式" });
   expect(planModeButton).toHaveAttribute("aria-pressed", "true");
+  await user.click(await screen.findByRole("button", { name: "修改方案" }));
+  const planEditor = screen.getByRole("textbox", { name: "方案内容" });
+  expect(planEditor).toHaveValue("# 执行这个方案\n\n完成目标改动。");
+  fireEvent.change(planEditor, { target: { value: "# 更新后的方案\n\n完成改动并验证。" } });
   await user.click(await screen.findByRole("button", { name: "执行方案" }));
   await waitFor(() => expect(executePlan).toHaveBeenCalledTimes(1));
+  expect(executePlan).toHaveBeenCalledWith("main", expect.objectContaining({
+    title: hasTitle ? "修复计划文件命名" : "",
+    content: "# 更新后的方案\n\n完成改动并验证。",
+  }));
 
   expect(planModeButton).toHaveAttribute("aria-pressed", "false");
   expect(window.localStorage.getItem("tcb.planMode.main")).toBeNull();

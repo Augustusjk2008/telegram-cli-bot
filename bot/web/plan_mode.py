@@ -9,6 +9,8 @@ from bot.prompts import render_prompt
 from bot.remote_workspace.transport import RemoteConnection, RemoteWorkspaceError
 
 PLAN_MODE_TASK_MODE = "plan"
+PLAN_TITLE_OPEN = "<PLAN_TITLE>"
+PLAN_TITLE_CLOSE = "</PLAN_TITLE>"
 PLAN_DRAFT_OPEN = "<PLAN_DRAFT>"
 PLAN_DRAFT_CLOSE = "</PLAN_DRAFT>"
 PLAN_EXECUTION_PROMPT_PREFIX = "Please execute the plan. Plan file:"
@@ -29,6 +31,8 @@ def build_plan_mode_prompt(user_text: str, *, cluster_active: bool = False) -> s
     )
     return render_prompt(
         "plan_mode",
+        plan_title_open=PLAN_TITLE_OPEN,
+        plan_title_close=PLAN_TITLE_CLOSE,
         plan_draft_open=PLAN_DRAFT_OPEN,
         plan_draft_close=PLAN_DRAFT_CLOSE,
         cluster_rule=cluster_rule,
@@ -47,7 +51,7 @@ def extract_plan_draft(text: str) -> str:
 
 def slugify_plan_title(title: str, *, fallback: str = "plan") -> str:
     value = str(title or "").lower()
-    value = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    value = re.sub(r"[\W_]+", "-", value).strip("-")
     value = re.sub(r"-{2,}", "-", value)
     return (value or fallback)[:48].strip("-") or fallback
 
