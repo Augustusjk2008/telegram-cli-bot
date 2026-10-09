@@ -16,6 +16,7 @@ from .models import (
     SECONDARY_CODEX_RATE_LIMIT_ID,
     CodexRateLimitSample,
     SQLITE_INT64_MAX,
+    normalize_credits_balance,
 )
 
 
@@ -55,6 +56,10 @@ def _sample_from_snapshot(
     plan_type = snapshot.get("planType")
     if plan_type is not None and not isinstance(plan_type, str):
         return None
+    credits = snapshot.get("credits")
+    credits_balance = normalize_credits_balance(
+        credits.get("balance") if isinstance(credits, Mapping) else None
+    )
     try:
         return CodexRateLimitSample(
             sampled_at=datetime.now(timezone.utc),
@@ -63,6 +68,7 @@ def _sample_from_snapshot(
             resets_at=datetime.fromtimestamp(resets_at, timezone.utc),
             plan_type=plan_type,
             limit_id=limit_id,
+            credits_balance=credits_balance,
         )
     except (OSError, OverflowError, ValueError):
         return None

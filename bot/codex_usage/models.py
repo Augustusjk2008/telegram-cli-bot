@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 
@@ -18,6 +19,21 @@ KNOWN_CODEX_RATE_LIMIT_IDS = (
 SQLITE_INT64_MAX = 2**63 - 1
 
 
+def normalize_credits_balance(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        parsed = Decimal(normalized)
+    except InvalidOperation:
+        return None
+    if not parsed.is_finite() or parsed < 0:
+        return None
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class CodexRateLimitSample:
     sampled_at: datetime
@@ -26,6 +42,7 @@ class CodexRateLimitSample:
     resets_at: datetime
     plan_type: str | None = None
     limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID
+    credits_balance: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("sampled_at", "resets_at"):
@@ -62,6 +79,11 @@ class CodexRateLimitSample:
             raise ValueError("window_minutes 必须是 SQLite 有符号 64 位正整数")
         if self.plan_type is not None and not isinstance(self.plan_type, str):
             raise ValueError("plan_type 必须是字符串或空值")
+        if self.credits_balance is not None:
+            normalized_credits_balance = normalize_credits_balance(self.credits_balance)
+            if normalized_credits_balance is None:
+                raise ValueError("credits_balance 必须是非负十进制字符串或空值")
+            object.__setattr__(self, "credits_balance", normalized_credits_balance)
         normalized_limit_id = str(self.limit_id or "").strip()
         if not normalized_limit_id:
             raise ValueError("limit_id 不能为空")

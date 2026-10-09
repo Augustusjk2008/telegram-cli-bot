@@ -335,6 +335,7 @@ export type CodexRateLimitSample = {
   windowMinutes: number;
   resetsAt: string;
   planType: string | null;
+  creditsBalance?: string | null;
 };
 
 export type CodexUsageConfig = {

@@ -13,6 +13,7 @@ from .models import (
     SECONDARY_CODEX_RATE_LIMIT_ID,
     SQLITE_INT64_MAX,
     CodexRateLimitSample,
+    normalize_credits_balance,
 )
 
 
@@ -119,6 +120,10 @@ def _codex_rate_limit_sample(
         return None
     if isinstance(resets_at, bool) or not isinstance(resets_at, int) or resets_at < 0:
         return None
+    credits = rate_limits.get("credits")
+    credits_balance = normalize_credits_balance(
+        credits.get("balance") if isinstance(credits, Mapping) else None
+    )
     try:
         reset_time = datetime.fromtimestamp(resets_at, timezone.utc)
         return CodexRateLimitSample(
@@ -128,6 +133,7 @@ def _codex_rate_limit_sample(
             resets_at=reset_time,
             plan_type=rate_limits.get("plan_type"),
             limit_id=limit_id,
+            credits_balance=credits_balance,
         )
     except (OSError, OverflowError, ValueError):
         return None

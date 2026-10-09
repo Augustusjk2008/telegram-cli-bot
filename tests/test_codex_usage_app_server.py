@@ -27,6 +27,11 @@ def test_resolve_account_rate_limits_reads_known_buckets_in_one_process(monkeypa
                                     "windowDurationMins": 10_080,
                                     "resetsAt": 1_787_011_285,
                                 },
+                                "credits": {
+                                    "hasCredits": True,
+                                    "unlimited": False,
+                                    "balance": "1234.50",
+                                },
                             },
                             "codex_bengalfox": {
                                 "limitId": "codex_bengalfox",
@@ -101,6 +106,7 @@ def test_resolve_account_rate_limits_reads_known_buckets_in_one_process(monkeypa
     ]
     assert [sample.used_percent for sample in samples] == [17, 64, 23]
     assert [sample.window_minutes for sample in samples] == [10_080, 10_080, 10_080]
+    assert samples[0].credits_balance == "1234.50"
     request_text = process.stdin.getvalue()
     assert '"method":"account/rateLimits/read"' in request_text
     assert '"params":null' in request_text

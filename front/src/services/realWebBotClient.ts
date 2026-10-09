@@ -1502,6 +1502,7 @@ type RawCodexRateLimitSample = {
   window_minutes?: unknown;
   resets_at?: unknown;
   plan_type?: unknown;
+  credits_balance?: unknown;
 };
 
 type RawCodexUsageConfig = {
@@ -3609,6 +3610,9 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   const planType = typeof raw.plan_type === "string" && raw.plan_type.trim()
     ? raw.plan_type.trim()
     : null;
+  const creditsBalance = typeof raw.credits_balance === "string" && raw.credits_balance.trim()
+    ? raw.credits_balance.trim()
+    : undefined;
   const limitId = typeof raw.limit_id === "string" ? raw.limit_id.trim() : "";
   if (!limitId) {
     return null;
@@ -3620,6 +3624,7 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
     windowMinutes,
     resetsAt,
     planType,
+    ...(creditsBalance ? { creditsBalance } : {}),
   };
 }
 

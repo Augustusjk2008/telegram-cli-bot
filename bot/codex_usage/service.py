@@ -395,6 +395,7 @@ def _rate_limit_payload(sample: CodexRateLimitSample) -> dict[str, Any]:
         "window_minutes": sample.window_minutes,
         "resets_at": sample.resets_at.astimezone().isoformat(),
         "plan_type": sample.plan_type,
+        "credits_balance": sample.credits_balance,
     }
 
 

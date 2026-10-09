@@ -25,9 +25,10 @@ def _rate_limit_payload(
     used_percent: object = 42,
     window_minutes: object = 10_080,
     resets_at: object = 1_800_000_000,
+    credits_balance: str | None = None,
 ) -> dict[str, object]:
     window_name = "secondary" if limit_id == SECONDARY_CODEX_RATE_LIMIT_ID else "primary"
-    return {
+    payload: dict[str, object] = {
         "type": "token_count",
         "rate_limits": {
             "limit_id": limit_id,
@@ -39,6 +40,13 @@ def _rate_limit_payload(
             },
         },
     }
+    if credits_balance is not None:
+        payload["rate_limits"]["credits"] = {
+            "has_credits": True,
+            "unlimited": False,
+            "balance": credits_balance,
+        }
+    return payload
 
 
 def test_read_turn_rate_limit_uses_target_turn_only(tmp_path: Path) -> None:
@@ -98,6 +106,30 @@ def test_secondary_bucket_uses_secondary_window_and_requests_general_refresh(
     assert resolution.sample is not None
     assert resolution.sample.limit_id == SECONDARY_CODEX_RATE_LIMIT_ID
     assert resolution.sample.used_percent == 64
+
+
+def test_rollout_rate_limit_captures_remaining_credits(tmp_path: Path) -> None:
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                _event("2026-08-10T08:00:01Z", {"type": "task_started"}),
+                _event(
+                    "2026-08-10T08:00:02Z",
+                    _rate_limit_payload(credits_balance="987.65"),
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    sample = read_turn_rate_limit(
+        rollout,
+        started_at=datetime(2026, 8, 10, 8, tzinfo=timezone.utc),
+    )
+
+    assert sample is not None
+    assert sample.credits_balance == "987.65"
 
 
 def test_gpt_reserve_bucket_uses_primary_window(tmp_path: Path) -> None:

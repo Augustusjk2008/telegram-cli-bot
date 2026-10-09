@@ -312,7 +312,8 @@
 
 .codex-usage-rate-limit-quota-axis-title,
 .codex-usage-rate-limit-consumption-axis-title,
-.codex-usage-rate-limit-duration-axis-title {
+.codex-usage-rate-limit-duration-axis-title,
+.codex-usage-rate-limit-credits-axis-title {
   font-size: 12px;
   font-weight: 700;
 }
@@ -329,7 +330,9 @@
 .codex-usage-rate-limit-duration-axis-title,
 .codex-usage-rate-limit-duration-tick,
 .codex-usage-rate-limit-consumption-axis-title,
-.codex-usage-rate-limit-consumption-tick {
+.codex-usage-rate-limit-consumption-tick,
+.codex-usage-rate-limit-credits-axis-title,
+.codex-usage-rate-limit-credits-tick {
   fill: var(--accent-strong);
 }
 
@@ -340,14 +343,16 @@
 
 .codex-usage-rate-limit-quota-axis,
 .codex-usage-rate-limit-consumption-axis,
-.codex-usage-rate-limit-duration-axis {
+.codex-usage-rate-limit-duration-axis,
+.codex-usage-rate-limit-credits-axis {
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-quota-tick,
 .codex-usage-rate-limit-consumption-tick,
-.codex-usage-rate-limit-duration-tick {
+.codex-usage-rate-limit-duration-tick,
+.codex-usage-rate-limit-credits-tick {
   font-size: 11px;
 }
 
@@ -368,6 +373,15 @@
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
   stroke-dasharray: 7 5;
+}
+
+.codex-usage-rate-limit-credits-line {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-consumption-bar {

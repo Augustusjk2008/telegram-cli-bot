@@ -19,6 +19,7 @@ def _sample(
     window_minutes: int = 10_080,
     used_percent: float = 35,
     plan_type: str = "pro",
+    credits_balance: str | None = None,
 ) -> CodexRateLimitSample:
     sampled = sampled_at or datetime(2026, 8, 10, 8, tzinfo=timezone.utc)
     return CodexRateLimitSample(
@@ -28,6 +29,7 @@ def _sample(
         resets_at=sampled + timedelta(days=3),
         plan_type=plan_type,
         limit_id=limit_id,
+        credits_balance=credits_balance,
     )
 
 
@@ -112,7 +114,10 @@ def test_schema_6_removes_usage_tables_and_preserves_quota_data(tmp_path: Path) 
 
 def test_store_records_and_queries_only_supported_long_term_quota_samples(tmp_path: Path) -> None:
     store = CodexUsageStore(tmp_path / "usage.sqlite3")
-    general = _sample(sampled_at=datetime(2026, 8, 10, 8, tzinfo=timezone.utc))
+    general = _sample(
+        sampled_at=datetime(2026, 8, 10, 8, tzinfo=timezone.utc),
+        credits_balance="123.45",
+    )
     weekly = _sample(
         sampled_at=datetime(2026, 8, 10, 9, tzinfo=timezone.utc),
         limit_id=SECONDARY_CODEX_RATE_LIMIT_ID,

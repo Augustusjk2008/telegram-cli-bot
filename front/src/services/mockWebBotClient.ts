@@ -1901,6 +1901,7 @@ export class MockWebBotClient implements WebBotClient {
         windowMinutes: 10080,
         resetsAt: "2026-07-27T09:00:00+08:00",
         planType: "pro",
+        creditsBalance: "1000",
       },
       {
         limitId: GENERAL_CODEX_RATE_LIMIT_ID,
@@ -1909,6 +1910,7 @@ export class MockWebBotClient implements WebBotClient {
         windowMinutes: 10080,
         resetsAt: "2026-07-27T09:00:00+08:00",
         planType: "pro",
+        creditsBalance: "760",
       },
       {
         limitId: GENERAL_CODEX_RATE_LIMIT_ID,
@@ -1917,6 +1919,7 @@ export class MockWebBotClient implements WebBotClient {
         windowMinutes: 10080,
         resetsAt: "2026-08-02T09:00:00+08:00",
         planType: "pro",
+        creditsBalance: "520",
       },
     ],
   };

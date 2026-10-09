@@ -13,7 +13,7 @@ from .models import (
 )
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _SETTING_ENABLED = "enabled"
 _LONG_TERM_LIMIT_WINDOW_MINUTES = 7 * 24 * 60
 
@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS rate_limit_samples (
         CHECK (window_minutes > 0),
     resets_at INTEGER NOT NULL
         CHECK (resets_at >= 0),
-    plan_type TEXT
+    plan_type TEXT,
+    credits_balance TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_day_time
@@ -84,7 +85,7 @@ class CodexUsageStore:
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version not in {0, 1, 2, 3, 4, 5, SCHEMA_VERSION}:
+        if version not in {0, 1, 2, 3, 4, 5, 6, SCHEMA_VERSION}:
             raise RuntimeError(f"不支持的 Codex quota schema 版本: {version}")
         connection.executescript(_SCHEMA_SQL)
         if version == 3:
@@ -112,6 +113,15 @@ class CodexUsageStore:
                     END
                     """
                 )
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(rate_limit_samples)")
+        }
+        if "credits_balance" not in columns:
+            with connection:
+                connection.execute(
+                    "ALTER TABLE rate_limit_samples ADD COLUMN credits_balance TEXT"
+                )
         if version != SCHEMA_VERSION:
             with connection:
                 connection.execute("DROP TABLE IF EXISTS daily_model_usage")
@@ -132,6 +142,7 @@ class CodexUsageStore:
             resets_at=epoch + timedelta(seconds=int(row["resets_at"])),
             plan_type=row["plan_type"],
             limit_id=str(row["limit_id"]),
+            credits_balance=row["credits_balance"],
         )
 
     def get_enabled(self) -> bool:
@@ -189,8 +200,8 @@ class CodexUsageStore:
                     """
                     INSERT INTO rate_limit_samples(
                         day, limit_id, sampled_at_ms, used_percent,
-                        window_minutes, resets_at, plan_type
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        window_minutes, resets_at, plan_type, credits_balance
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sample_day,
@@ -200,6 +211,7 @@ class CodexUsageStore:
                         sample.window_minutes,
                         resets_at,
                         sample.plan_type,
+                        sample.credits_balance,
                     ),
                 )
 
@@ -215,7 +227,7 @@ class CodexUsageStore:
             rows = connection.execute(
                 """
                 SELECT limit_id, sampled_at_ms, used_percent, window_minutes,
-                       resets_at, plan_type
+                       resets_at, plan_type, credits_balance
                 FROM rate_limit_samples
                 WHERE day >= ? AND day <= ?
                   AND window_minutes >= ?

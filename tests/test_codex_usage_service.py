@@ -20,6 +20,7 @@ def _sample(
     *,
     limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID,
     used_percent: float = 35,
+    credits_balance: str | None = None,
 ) -> CodexRateLimitSample:
     sampled_at = datetime(2026, 8, 10, 8, tzinfo=timezone.utc)
     return CodexRateLimitSample(
@@ -29,6 +30,7 @@ def _sample(
         resets_at=sampled_at + timedelta(days=3),
         plan_type="pro",
         limit_id=limit_id,
+        credits_balance=credits_balance,
     )
 
 
@@ -144,7 +146,7 @@ async def test_query_stats_contains_only_quota_contract(tmp_path: Path) -> None:
         resolver=_Resolver(_provider()),
     )
     await service.set_enabled(True)
-    service._store.record_rate_limit_sample(_sample())
+    service._store.record_rate_limit_sample(_sample(credits_balance="321.00"))
 
     payload = await service.query_stats(
         start_date=date(2026, 8, 10),
@@ -159,6 +161,7 @@ async def test_query_stats_contains_only_quota_contract(tmp_path: Path) -> None:
         "rate_limit_samples",
     }
     assert payload["rate_limit_samples"][0]["used_percent"] == 35
+    assert payload["rate_limit_samples"][0]["credits_balance"] == "321.00"
     assert "totals" not in payload
     assert "by_provider" not in payload
 

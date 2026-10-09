@@ -140,6 +140,30 @@ test("右轴可切换消耗速度柱状图，保留额度曲线及重置过渡",
   expect(chart.querySelector(".codex-usage-rate-limit-consumption-bar")).toBeNull();
 });
 
+test("周额度可切换 Credits 趋势，默认隐藏 Credits 曲线", async () => {
+  const client = new MockWebBotClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = [
+    sample(0, 10, { creditsBalance: "1000" }),
+    sample(2, 20, { creditsBalance: "640" }),
+  ];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  render(<CodexUsagePanel client={client} />);
+  const chart = await screen.findByRole("img", { name: /通用 Codex.*剩余额度与剩余时长趋势/ });
+  const toggle = screen.getByRole("button", { name: "Credits" });
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(chart.querySelector(".codex-usage-rate-limit-credits-line")).toBeNull();
+  expect(screen.getByText("剩余 Credits 640")).toBeInTheDocument();
+
+  await userEvent.setup().click(toggle);
+
+  expect(toggle).toHaveAttribute("aria-pressed", "true");
+  expect(chart).toHaveAccessibleName(/剩余额度与Credits趋势/);
+  expect(chart.querySelector(".codex-usage-rate-limit-credits-line")).toBeInTheDocument();
+  expect(chart.querySelector(".codex-usage-rate-limit-duration-line")).toBeNull();
+});
+
 test("最新区间跨重置时不把过去的消耗速度显示为最近速度", async () => {
   const client = new MockWebBotClient();
   const stats = await client.getCodexUsageStats();

@@ -384,6 +384,7 @@ describe("RealWebBotClient", () => {
           window_minutes: 10080,
           resets_at: "2026-08-18T08:01:25+08:00",
           plan_type: "pro",
+          credits_balance: "1234.50",
         },
         {
           limit_id: "codex",
@@ -414,6 +415,7 @@ describe("RealWebBotClient", () => {
         windowMinutes: 10080,
         resetsAt: "2026-08-18T08:01:25+08:00",
         planType: "pro",
+        creditsBalance: "1234.50",
       },
       {
         limitId: "codex",

@@ -21,6 +21,7 @@ type Props = {
 };
 
 const numberFormat = new Intl.NumberFormat("zh-CN");
+const creditsValueFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
 
 const providerResolutionLabels: Record<NonNullable<CodexUsageProvider["resolution"]>, string> = {
   resolved: "已解析",
@@ -62,6 +63,7 @@ const durationDaysFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigit
 const consumptionRateFormat = new Intl.NumberFormat("zh-CN", { maximumSignificantDigits: 3 });
 const RATE_LIMIT_AXIS_STEP_PERCENT = 10;
 const RATE_LIMIT_AXIS_INTERVALS = 4;
+const WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
 const CONSUMPTION_BAR_TARGET = 32;
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -84,7 +86,7 @@ const CONSUMPTION_INTERVALS_MS = [
   14 * DAY_MS,
   30 * DAY_MS,
 ];
-type RateLimitSecondaryMetric = "duration" | "consumption";
+type RateLimitSecondaryMetric = "duration" | "consumption" | "credits";
 
 function formatPercentValue(value: number) {
   return `${percentValueFormat.format(value)}%`;
@@ -92,6 +94,35 @@ function formatPercentValue(value: number) {
 
 function remainingPercent(sample: CodexRateLimitSample) {
   return Math.min(100, Math.max(0, 100 - sample.usedPercent));
+}
+
+function creditsValue(sample: CodexRateLimitSample) {
+  if (typeof sample.creditsBalance !== "string" || !sample.creditsBalance.trim()) return null;
+  const value = Number(sample.creditsBalance);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function formatCreditsValue(value: number | null) {
+  return value === null ? "—" : creditsValueFormat.format(value);
+}
+
+function creditsAxisBounds(samples: CodexRateLimitSample[]) {
+  const values = samples
+    .map(creditsValue)
+    .filter((value): value is number => value !== null);
+  if (!values.length) return null;
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (min === max) {
+    const padding = Math.max(max * 0.1, 1);
+    min = Math.max(0, min - padding);
+    max += padding;
+  } else {
+    const padding = (max - min) * 0.1;
+    min = Math.max(0, min - padding);
+    max += padding;
+  }
+  return { min, max };
 }
 
 function remainingDurationMs(sample: CodexRateLimitSample) {
@@ -627,12 +658,21 @@ function CodexRateLimitBucketChart({
   const timestampRange = maxTimestamp - minTimestamp;
   const axisBounds = rateLimitAxisBounds(orderedSamples);
   const axisRange = axisBounds.max - axisBounds.min;
+  const creditSamples = orderedSamples.filter((sample) => (
+    sample.windowMinutes === WEEKLY_WINDOW_MINUTES && creditsValue(sample) !== null
+  ));
+  const creditsBounds = creditsAxisBounds(creditSamples);
   const axisTicks = Array.from(
     { length: RATE_LIMIT_AXIS_INTERVALS + 1 },
     (_, index) => axisBounds.min + (axisRange * index) / RATE_LIMIT_AXIS_INTERVALS,
   );
   const yForPercent = (value: number) => (
     top + ((axisBounds.max - value) / axisRange) * plotHeight
+  );
+  const yForCredits = (value: number) => (
+    creditsBounds
+      ? top + ((creditsBounds.max - value) / (creditsBounds.max - creditsBounds.min)) * plotHeight
+      : top + plotHeight / 2
   );
   const points = orderedSamples.map((sample, index) => ({
     x: left + Math.min(1, Math.max(0, (
@@ -645,6 +685,9 @@ function CodexRateLimitBucketChart({
     timestamp: hasValidTimestamps ? timestamps[index] : index,
     quotaY: yForPercent(remainingPercent(sample)),
     durationY: yForPercent(remainingDurationPercent(sample)),
+    creditsY: sample.windowMinutes === WEEKLY_WINDOW_MINUTES && creditsValue(sample) !== null
+      ? yForCredits(creditsValue(sample) as number)
+      : null,
   }));
   const resetBoundaryPairs = new Set<string>();
   // The exact reset instant is not sampled.  The nearest observations on its
@@ -683,6 +726,11 @@ function CodexRateLimitBucketChart({
   );
   const quotaPath = quotaCurvePath(quotaCurve);
   const durationPath = linearPath(points.map(({ x, durationY }) => ({ x, y: durationY })));
+  const creditsPath = linearPath(
+    points
+      .filter(({ creditsY }) => creditsY !== null)
+      .map(({ x, creditsY }) => ({ x, y: creditsY as number })),
+  );
   // Screen y grows as quota falls, so this is -d(remaining percent)/d(hours).
   const consumptionCurve = codexConsumptionCurve(
     quotaCurve,
@@ -710,16 +758,24 @@ function CodexRateLimitBucketChart({
   const rateAxisMin = 0;
   const rateAxisMax = Math.max(rateAxisMin + rateStep * RATE_LIMIT_AXIS_INTERVALS, Math.ceil(maxRate / rateStep) * rateStep);
   const yForRate = (rate: number) => top + (rateAxisMax - rate) / (rateAxisMax - rateAxisMin) * plotHeight;
+  const showCredits = secondaryMetric === "credits" && creditsBounds !== null;
   const showConsumption = secondaryMetric === "consumption";
-  const secondaryClass = showConsumption ? "consumption" : "duration";
-  const secondaryLabel = showConsumption ? "消耗速度" : "剩余时长";
+  const secondaryClass = showCredits ? "credits" : showConsumption ? "consumption" : "duration";
+  const secondaryLabel = showCredits ? "Credits" : showConsumption ? "消耗速度" : "剩余时长";
+  const secondaryAxisTicks = showCredits
+    ? Array.from(
+        { length: RATE_LIMIT_AXIS_INTERVALS + 1 },
+        (_, index) => creditsBounds.min + ((creditsBounds.max - creditsBounds.min) * index) / RATE_LIMIT_AXIS_INTERVALS,
+      )
+    : null;
   const latestRemaining = remainingPercent(latest);
   const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
   const durationWindowDays = latest.windowMinutes / 1440;
   const durationDaysForPercent = (remaining: number) => (
     durationDaysFormat.format((remaining / 100) * durationWindowDays)
   );
-  const accessibleLabel = `${label} 剩余额度与${secondaryLabel}趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}，最近消耗 ${latestRateText}`;
+  const latestCredits = creditSamples.length ? creditsValue(creditSamples.at(-1)!) : null;
+  const accessibleLabel = `${label} 剩余额度与${secondaryLabel}趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}，剩余 Credits ${formatCreditsValue(latestCredits)}，最近消耗 ${latestRateText}`;
 
   return (
     <article className="codex-usage-rate-limit-group">
@@ -735,6 +791,7 @@ function CodexRateLimitBucketChart({
             最近消耗 {latestRateText}
           </span>
           <span>剩余时长 {latestDuration}</span>
+          {latestCredits !== null ? <span>剩余 Credits {formatCreditsValue(latestCredits)}</span> : null}
           <span>已用 {formatPercentValue(latest.usedPercent)}</span>
           <span>{formatWindow(latest.windowMinutes)}窗口</span>
           <span>重置时间 {formatServerLocalTime(latest.resetsAt)}</span>
@@ -744,7 +801,9 @@ function CodexRateLimitBucketChart({
         <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
           <title>{label} 剩余额度与{secondaryLabel}趋势</title>
           <desc>
-            {showConsumption
+            {showCredits
+              ? `按采样时间展示该额度桶的剩余额度与 Credits；右轴为剩余 Credits，从 ${formatCreditsValue(creditsBounds.min)} 到 ${formatCreditsValue(creditsBounds.max)}。`
+              : showConsumption
               ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；柱高为固定时间区间内平滑额度曲线负导数的平均值，随横轴范围变化；重置间隔为过渡估计，数据不足处留空。`
               : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
           </desc>
@@ -776,7 +835,7 @@ function CodexRateLimitBucketChart({
             y={18}
             textAnchor="end"
           >
-            {showConsumption ? "消耗速度（百分点/小时）" : "剩余时长"}
+            {showCredits ? "Credits" : showConsumption ? "消耗速度（百分点/小时）" : "剩余时长"}
           </text>
           {axisTicks.map((remaining, index) => {
             const y = yForPercent(remaining);
@@ -799,6 +858,8 @@ function CodexRateLimitBucketChart({
                 >
                   {showConsumption
                     ? consumptionRateFormat.format(rateAxisMin + index * (rateAxisMax - rateAxisMin) / RATE_LIMIT_AXIS_INTERVALS)
+                    : showCredits
+                      ? formatCreditsValue(secondaryAxisTicks?.[index] ?? null)
                     : `${durationDaysForPercent(remaining)} 天`}
                 </text>
               </g>
@@ -830,7 +891,9 @@ function CodexRateLimitBucketChart({
                     )}，${consumptionRateFormat.format(bar.rate)}%每小时`}</title>
                   </rect>
                 );
-              }) : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
+              }) : showCredits
+                ? <path className="codex-usage-rate-limit-credits-line" d={creditsPath} />
+                : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
               <path className="codex-usage-rate-limit-line" d={quotaPath} />
             </>
           ) : null}
@@ -857,6 +920,14 @@ function CodexRateLimitBucketChart({
 
 function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   const [secondaryMetric, setSecondaryMetric] = useState<RateLimitSecondaryMetric>("duration");
+  const hasWeeklyCredits = samples.some((sample) => (
+    sample.limitId === GENERAL_CODEX_RATE_LIMIT_ID
+    && sample.windowMinutes === WEEKLY_WINDOW_MINUTES
+    && creditsValue(sample) !== null
+  ));
+  const activeSecondaryMetric = secondaryMetric === "credits" && !hasWeeklyCredits
+    ? "duration"
+    : secondaryMetric;
   const limitGroups = useMemo(() => {
     const grouped = new Map<string, {
       limitId: string;
@@ -912,6 +983,15 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
                 {metric === "duration" ? "剩余时长" : "消耗速度"}
               </button>
             ))}
+            {hasWeeklyCredits ? (
+              <button
+                type="button"
+                aria-pressed={secondaryMetric === "credits"}
+                onClick={() => setSecondaryMetric("credits")}
+              >
+                Credits
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -921,7 +1001,7 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
             key={`${limitId}:${planType || "empty"}`}
             label={limitSamples.length ? `${limitLabel(limitId)} · ${formatPlanType(planType)}` : limitLabel(limitId)}
             samples={limitSamples}
-            secondaryMetric={secondaryMetric}
+            secondaryMetric={activeSecondaryMetric}
           />
         ))}
       </div>
