@@ -129,6 +129,9 @@ import type {
   LanChatStatus,
   NotificationSettingsStatus,
   NotificationTestResult,
+  StorageMigrationPreview,
+  StorageMigrationSnapshot,
+  StorageMigrationStatus,
   HostEffect,
   InstallablePluginSummary,
   PluginInstallBatchResult,
@@ -1795,6 +1798,19 @@ export class MockWebBotClient implements WebBotClient {
   private gitSmartCommitActiveJobs = new Map<string, string>();
   private gitSmartCommitJobSeq = 1;
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
+  private storageMigration: StorageMigrationSnapshot = {
+    state: "completed",
+    maintenance: false,
+    available: true,
+    canMigrate: true,
+    currentRoot: "C:\\Users\\demo\\.tcb\\orbit-safe-claw",
+    sources: [
+      { id: "app-data", label: "应用数据", path: "C:\\Users\\demo\\.tcb\\orbit-safe-claw", exists: true, sizeBytes: 64 * 1024 * 1024, fileCount: 128 },
+      { id: "chat-history", label: "聊天历史", path: "C:\\Users\\demo\\.tcb\\chat-history", exists: true, sizeBytes: 18 * 1024 * 1024, fileCount: 42 },
+    ],
+    totalBytes: 82 * 1024 * 1024,
+  };
+  private storageMigrationPlanTarget = "";
   private cliErrorStats: CliErrorStatsResult = {
     summary: {
       total: 3,
@@ -7314,6 +7330,63 @@ export class MockWebBotClient implements WebBotClient {
 
   async restartTunnel(): Promise<TunnelSnapshot> {
     return this.getTunnelStatus();
+  }
+
+  async getStorageMigrationSnapshot(): Promise<StorageMigrationSnapshot> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看存储迁移", { status: 403, code: "forbidden" });
+    }
+    return {
+      ...this.storageMigration,
+      sources: this.storageMigration.sources.map((item) => ({ ...item })),
+    };
+  }
+
+  async previewStorageMigration(targetRoot: string): Promise<StorageMigrationPreview> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权预览存储迁移", { status: 403, code: "forbidden" });
+    }
+    const planId = "mock-storage-plan";
+    this.storageMigrationPlanTarget = targetRoot.trim();
+    return {
+      ...(await this.getStorageMigrationSnapshot()),
+      planId,
+      targetRoot: targetRoot.trim(),
+      warnings: ["迁移前会停止全部智能体进程。"],
+    };
+  }
+
+  async startStorageMigration(planId: string, confirmStopAllAgents: boolean): Promise<StorageMigrationStatus> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权执行存储迁移", { status: 403, code: "forbidden" });
+    }
+    if (planId !== "mock-storage-plan" || !confirmStopAllAgents) {
+      throw new WebApiClientError("请确认停止全部智能体", { status: 409, code: "confirm_stop_all_agents_required" });
+    }
+    this.storageMigration = {
+      ...this.storageMigration,
+      state: "awaiting_restart",
+      maintenance: true,
+      targetRoot: this.storageMigrationPlanTarget,
+      restartRequired: true,
+      message: "迁移已完成校验，重启服务后继续清理原始数据。",
+    };
+    return this.getStorageMigrationSnapshot();
+  }
+
+  async retryStorageMigrationCleanup(): Promise<StorageMigrationStatus> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权重试存储清理", { status: 403, code: "forbidden" });
+    }
+    this.storageMigration = {
+      ...this.storageMigration,
+      state: "completed",
+      maintenance: false,
+      cleanupPending: false,
+      restartRequired: false,
+      message: "原始数据清理已完成。",
+    };
+    return this.getStorageMigrationSnapshot();
   }
 
 }

@@ -727,16 +727,17 @@ def list_agents(manager: MultiBotManager, alias: str, user_id: int | None = None
 
 
 def _cluster_token_path() -> Path:
-    return Path.home() / ".tcb" / "cluster-mcp" / "token"
+    return _cluster_mcp_config_path().with_name("token")
 
 
 def _cluster_launcher_path() -> Path:
     launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
-    return Path.home() / ".tcb" / "bin" / launcher_name
+    return _cluster_mcp_config_path().parent.parent / "bin" / launcher_name
 
 
 def _cluster_mcp_config_path() -> Path:
-    return Path.home() / ".tcb" / "cluster-mcp" / "config.json"
+    from bot.cluster.setup import get_cluster_mcp_config_path
+    return get_cluster_mcp_config_path()
 
 
 def _cluster_bridge_url() -> str:
@@ -3263,7 +3264,7 @@ def _append_missing_cli_arg_pairs(
 def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsConfig) -> CliParamsConfig:
     cli_type = normalize_cli_type(profile.cli_type)
     launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
-    home_root = Path.home() / ".tcb"
+    home_root = _cluster_mcp_config_path().parent.parent
     launcher_path = home_root / "bin" / launcher_name
     params = params_config.to_dict()
     cli_params = params.setdefault(cli_type, {})
@@ -3289,7 +3290,7 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
     elif cli_type == "claude":
         extra_args = _filter_claude_host_cluster_extra_args(extra_args)
         config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}
-        config_path = home_root / "cluster-mcp" / "mcp_config.json"
+        config_path = _cluster_mcp_config_path().with_name("mcp_config.json")
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         injection = ["--mcp-config", str(config_path), "--strict-mcp-config"]

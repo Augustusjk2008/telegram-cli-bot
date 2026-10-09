@@ -169,6 +169,7 @@ from .terminal_manager import (
 )
 from .tunnel_service import TunnelService
 from .html_preview_service import HtmlPreviewStore
+from .storage_migration_api import StorageMigrationApi, StorageMigrationApiError
 
 _RUNTIME_ENV_BINDINGS = (
     "ALLOWED_USER_IDS",
@@ -1019,6 +1020,8 @@ class WebApiServer:
         language_server_manager: LanguageServerRuntimeManager | None = None,
         external_source_registry: ExternalSourceRegistry | None = None,
         instance_id: str | None = None,
+        storage_migration_service: Any | None = None,
+        storage_migration_stop_all_agents: Any | None = None,
     ):
         self.manager = manager
         self.html_preview_store = HtmlPreviewStore()
@@ -1028,6 +1031,10 @@ class WebApiServer:
             bridge_host = "[::1]" if self._host in {"::", "::1"} else "127.0.0.1"
             manager.remote_bridge_url = f"http://{bridge_host}:{self._port}"
         self._instance_id = str(instance_id or "").strip() or uuid.uuid4().hex
+        self.storage_migration_api = StorageMigrationApi(
+            storage_migration_service,
+            stop_all_agents=storage_migration_stop_all_agents,
+        )
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._loop_lag_task: asyncio.Task[None] | None = None
@@ -5121,6 +5128,56 @@ class WebApiServer:
         )
         await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
         return _json({"ok": True, "data": snapshot})
+
+    @staticmethod
+    def _storage_migration_error(exc: StorageMigrationApiError) -> WebApiError:
+        return WebApiError(exc.status, exc.code, exc.message, exc.data)
+
+    async def admin_storage(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = await self.storage_migration_api.snapshot()
+        except StorageMigrationApiError as exc:
+            raise self._storage_migration_error(exc) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_storage_preview(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        target_root = body.get("targetRoot", body.get("target_root", ""))
+        if not isinstance(target_root, str):
+            raise WebApiError(400, "invalid_target_root", "targetRoot 必须是字符串")
+        try:
+            data = await self.storage_migration_api.preview(target_root)
+        except StorageMigrationApiError as exc:
+            raise self._storage_migration_error(exc) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_storage_migrate(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        plan_id = body.get("planId", body.get("plan_id", ""))
+        if not isinstance(plan_id, str) or not plan_id.strip():
+            raise WebApiError(400, "invalid_plan_id", "planId 不能为空")
+        confirmation = body.get("confirmStopAllAgents", body.get("confirm_stop_all_agents"))
+        if type(confirmation) is not bool:
+            raise WebApiError(400, "invalid_confirmation", "confirmStopAllAgents 必须是布尔值")
+        try:
+            data = await self.storage_migration_api.begin(
+                plan_id,
+                confirm_stop_all_agents=confirmation,
+            )
+        except StorageMigrationApiError as exc:
+            raise self._storage_migration_error(exc) from exc
+        return _json({"ok": True, "data": data}, status=202)
+
+    async def admin_storage_cleanup_retry(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = await self.storage_migration_api.retry()
+        except StorageMigrationApiError as exc:
+            raise self._storage_migration_error(exc) from exc
+        return _json({"ok": True, "data": data})
 
     async def admin_single_bot(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_ADMIN_OPS)

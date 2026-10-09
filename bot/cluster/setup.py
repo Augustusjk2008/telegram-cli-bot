@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from bot.runtime_paths import get_tcb_home_root
+
 CLUSTER_MCP_SERVER_NAME = "tcb-cluster"
 
 
@@ -25,8 +27,8 @@ def build_pi_mcp_settings_snippet(launcher_path: Path) -> dict[str, Any]:
 
 
 def get_cluster_mcp_config_path(*, home_dir: Path | None = None) -> Path:
-    root = home_dir or Path.home()
-    return root / ".tcb" / "cluster-mcp" / "config.json"
+    root = get_tcb_home_root() if home_dir is None or home_dir == Path.home() else home_dir / ".tcb"
+    return root / "cluster-mcp" / "config.json"
 
 
 def get_pi_cluster_extension_source_path(repo_root: Path | None = None) -> Path:
@@ -111,10 +113,10 @@ def prepare_cluster_mcp_launcher(
     python_executable: Path | None = None,
 ) -> ClusterMcpLauncher:
     python_executable = python_executable or Path(sys.executable)
-    bin_dir = home_dir / ".tcb" / "bin"
-    mcp_dir = home_dir / ".tcb" / "cluster-mcp"
-    launcher_path = bin_dir / ("tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh")
     config_path = get_cluster_mcp_config_path(home_dir=home_dir)
+    mcp_dir = config_path.parent
+    bin_dir = mcp_dir.parent / "bin"
+    launcher_path = bin_dir / ("tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh")
     token_path = mcp_dir / "token"
 
     mcp_dir.mkdir(parents=True, exist_ok=True)

@@ -48,3 +48,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/admin/tunnel/start", server.admin_tunnel_start)
     app.router.add_post("/api/admin/tunnel/stop", server.admin_tunnel_stop)
     app.router.add_post("/api/admin/tunnel/restart", server.admin_tunnel_restart)
+    app.router.add_get("/api/admin/storage", server.admin_storage)
+    app.router.add_post("/api/admin/storage/preview", server.admin_storage_preview)
+    app.router.add_post("/api/admin/storage/migrate", server.admin_storage_migrate)
+    app.router.add_post("/api/admin/storage/cleanup/retry", server.admin_storage_cleanup_retry)

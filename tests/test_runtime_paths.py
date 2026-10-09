@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 from pathlib import Path
+
+import pytest
 
 import bot.runtime_paths as runtime_paths
 from bot.web.chat_store import ChatStore
@@ -80,3 +83,60 @@ def test_normalize_workspace_dir_collapses_windows_path_variants(monkeypatch):
     monkeypatch.setattr(runtime_paths.os.path, "normcase", lambda value: str(value).lower())
 
     assert runtime_paths.normalize_workspace_dir("C:/Repo/") == runtime_paths.normalize_workspace_dir("c:\\repo")
+
+
+def test_locator_is_authoritative_after_a_fresh_process(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    home.mkdir()
+    target.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    old_root = runtime_paths.get_app_data_root()
+
+    runtime_paths.get_storage_locator_path().parent.mkdir(parents=True, exist_ok=True)
+    runtime_paths.get_storage_locator_path().write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "datasetIdentity": "tcb",
+                "state": "completed",
+                "targetRoot": str(target),
+                "appDataRoot": str(target / "orbit-safe-claw"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert runtime_paths.get_app_data_root() == old_root
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    assert runtime_paths.get_app_data_root() == target / "orbit-safe-claw"
+
+
+def test_conflicting_tcb_data_dir_is_rejected_after_locator(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    target = tmp_path / "target"
+    home.mkdir()
+    target.mkdir()
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    locator_path = runtime_paths.get_storage_locator_path()
+    locator_path.parent.mkdir(parents=True, exist_ok=True)
+    locator_path.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "datasetIdentity": "tcb",
+                "state": "completed",
+                "targetRoot": str(target),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "old-root"))
+
+    with pytest.raises(runtime_paths.StoragePathError):
+        runtime_paths.reset_runtime_path_cache_for_tests()
+        runtime_paths.get_app_data_root()

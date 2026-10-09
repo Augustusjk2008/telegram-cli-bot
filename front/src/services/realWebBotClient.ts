@@ -230,6 +230,10 @@ import type {
   NotificationSubscription,
   NotificationSubscriptionOptions,
   NotificationTestResult,
+  StorageMigrationPreview,
+  StorageMigrationSnapshot,
+  StorageMigrationState,
+  StorageMigrationStatus,
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
@@ -3876,6 +3880,67 @@ function mapNotificationSettings(data: RawNotificationSettings | null | undefine
   };
 }
 
+const STORAGE_MIGRATION_STATES: StorageMigrationState[] = [
+  "stopping",
+  "copying",
+  "verifying",
+  "awaiting_restart",
+  "cleanup_pending",
+  "completed",
+  "failed",
+];
+
+function mapStorageMigrationSource(value: unknown): StorageMigrationSnapshot["sources"][number] {
+  const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    id: String(item.id || item.key || item.kind || ""),
+    label: String(item.label || item.name || ""),
+    path: String(item.path || item.source_path || item.sourcePath || ""),
+    exists: Boolean(item.exists),
+    sizeBytes: Number(item.sizeBytes ?? item.size_bytes ?? item.bytes ?? 0) || 0,
+    fileCount: Number(item.fileCount ?? item.file_count ?? 0) || 0,
+  };
+}
+
+function mapStorageMigrationSnapshot(value: unknown): StorageMigrationSnapshot {
+  const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const rawState = String(data.state || data.status || "failed") as StorageMigrationState;
+  const state = STORAGE_MIGRATION_STATES.includes(rawState) ? rawState : "failed";
+  return {
+    state,
+    maintenance: Boolean(data.maintenance),
+    available: data.available === undefined ? true : Boolean(data.available),
+    ...(data.canMigrate !== undefined ? { canMigrate: Boolean(data.canMigrate) } : {}),
+    currentRoot: String(data.currentRoot || data.current_root || ""),
+    sources: Array.isArray(data.sources) ? data.sources.map(mapStorageMigrationSource) : [],
+    totalBytes: Number(data.totalBytes ?? data.total_bytes ?? 0) || 0,
+    ...(Array.isArray(data.blockers) ? { blockers: data.blockers.map((item) => String(item)) } : {}),
+    ...(Array.isArray(data.warnings) ? { warnings: data.warnings.map((item) => String(item)) } : {}),
+    ...(data.planId || data.plan_id ? { planId: String(data.planId || data.plan_id) } : {}),
+    ...(data.targetRoot || data.target_root ? { targetRoot: String(data.targetRoot || data.target_root) } : {}),
+    ...(data.progress !== undefined
+      ? { progress: Number(data.progress) || 0 }
+      : data.progressBytes !== undefined && (data.totalBytes || data.total_bytes)
+        ? { progress: Math.min(1, Math.max(0, Number(data.progressBytes) / Number(data.totalBytes || data.total_bytes))) }
+        : {}),
+    ...(data.message ? { message: String(data.message) } : {}),
+    ...(data.error ? { error: String(data.error) } : {}),
+    ...(data.errorCode || data.error_code ? { errorCode: String(data.errorCode || data.error_code) } : {}),
+    ...(data.restartRequired || data.restart_required ? { restartRequired: Boolean(data.restartRequired || data.restart_required) } : {}),
+    ...(data.cleanupPending || data.cleanup_pending ? { cleanupPending: Boolean(data.cleanupPending || data.cleanup_pending) } : {}),
+  };
+}
+
+function mapStorageMigrationPreview(value: unknown): StorageMigrationPreview {
+  const snapshot = mapStorageMigrationSnapshot(value);
+  const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    ...snapshot,
+    planId: String(data.planId || data.plan_id || snapshot.planId || ""),
+    targetRoot: String(data.targetRoot || data.target_root || snapshot.targetRoot || ""),
+  };
+}
+
 function buildWebSocketUrl(path: string) {
   return buildWsUrl(path);
 }
@@ -4460,6 +4525,32 @@ export class RealWebBotClient implements WebBotClient {
   async getEnvConfig(): Promise<EnvConfigSnapshot> {
     const data = await this.requestJson<RawEnvConfigSnapshot>("/api/admin/env");
     return mapEnvConfigSnapshot(data);
+  }
+
+  async getStorageMigrationSnapshot(): Promise<StorageMigrationSnapshot> {
+    return mapStorageMigrationSnapshot(await this.requestJson("/api/admin/storage"));
+  }
+
+  async previewStorageMigration(targetRoot: string): Promise<StorageMigrationPreview> {
+    return mapStorageMigrationPreview(await this.requestJson("/api/admin/storage/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetRoot }),
+    }));
+  }
+
+  async startStorageMigration(planId: string, confirmStopAllAgents: boolean): Promise<StorageMigrationStatus> {
+    return mapStorageMigrationSnapshot(await this.requestJson("/api/admin/storage/migrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planId, confirmStopAllAgents }),
+    }));
+  }
+
+  async retryStorageMigrationCleanup(): Promise<StorageMigrationStatus> {
+    return mapStorageMigrationSnapshot(await this.requestJson("/api/admin/storage/cleanup/retry", {
+      method: "POST",
+    }));
   }
 
   async previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult> {

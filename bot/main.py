@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from pathlib import Path
 
 # Windows 电源管理常量
 ES_SYSTEM_REQUIRED = 0x00000001
@@ -42,6 +43,9 @@ from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
 from bot.native_agent.service import get_native_agent_service
+from bot.storage_lifecycle import stop_all_agent_processes
+from bot.storage_migration import StorageMigrationService
+from bot.storage_runtime import AsyncStorageMigrationService
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
@@ -429,7 +433,23 @@ async def run_all_bots():
         allow_port_fallback=_allow_runtime_port_fallback(),
     )
     _write_web_runtime_state(runtime_bind)
-    web_server = WebApiServer(manager, host=runtime_bind.host, port=runtime_bind.actual_port)
+    storage_migration_service = StorageMigrationService(Path(__file__).resolve().parent.parent)
+    async_storage_migration_service = AsyncStorageMigrationService(
+        storage_migration_service,
+        on_committed=config.request_restart,
+        on_failed=config.request_restart,
+    )
+
+    async def stop_all_agents_for_storage_migration():
+        return await stop_all_agent_processes(web_server)
+
+    web_server = WebApiServer(
+        manager,
+        host=runtime_bind.host,
+        port=runtime_bind.actual_port,
+        storage_migration_service=async_storage_migration_service,
+        storage_migration_stop_all_agents=stop_all_agents_for_storage_migration,
+    )
     try:
         await web_server.start()
         logger.debug("Web API 已附加到主进程")

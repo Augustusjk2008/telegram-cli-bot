@@ -77,6 +77,9 @@ import type {
   NotificationSubscription,
   NotificationSubscriptionOptions,
   NotificationPresenceUpdate,
+  StorageMigrationPreview,
+  StorageMigrationSnapshot,
+  StorageMigrationStatus,
   WebNotificationEvent,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
@@ -451,4 +454,8 @@ export interface WebBotClient {
   startTunnel(): Promise<TunnelSnapshot>;
   stopTunnel(): Promise<TunnelSnapshot>;
   restartTunnel(): Promise<TunnelSnapshot>;
+  getStorageMigrationSnapshot(): Promise<StorageMigrationSnapshot>;
+  previewStorageMigration(targetRoot: string): Promise<StorageMigrationPreview>;
+  startStorageMigration(planId: string, confirmStopAllAgents: boolean): Promise<StorageMigrationStatus>;
+  retryStorageMigrationCleanup(): Promise<StorageMigrationStatus>;
 }

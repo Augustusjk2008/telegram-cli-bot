@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -36,6 +36,31 @@ test("环境配置显示 Codex server 语音开关", async () => {
   expect(voiceItem).toBeInTheDocument();
   expect(voiceItem).toHaveTextContent("TCB_CODEX_SERVER_VOICE_ENABLED");
   expect(voiceItem).toHaveTextContent("重启生效");
+});
+
+test("数据迁移先预览并明确确认停止全部智能体", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const startMigration = vi.spyOn(client, "startStorageMigration");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "数据迁移" }));
+  await screen.findByRole("heading", { name: "TCB 数据迁移" });
+  expect(screen.getByText(/当前数据根目录:/)).toBeInTheDocument();
+  expect(screen.getByText("聊天历史")).toBeInTheDocument();
+
+  await user.type(screen.getByRole("textbox", { name: "存储迁移目标目录" }), "D:\\OrbitData");
+  await user.click(screen.getByRole("button", { name: "预览并校验" }));
+  await screen.findByRole("heading", { name: "迁移预览" });
+  await user.click(screen.getByRole("button", { name: "确认并迁移" }));
+
+  expect(screen.getByRole("dialog", { name: "确认数据迁移" })).toHaveTextContent("停止全部智能体进程");
+  expect(screen.getByRole("dialog", { name: "确认数据迁移" })).toHaveTextContent("删除已验证的原始数据");
+  await user.click(screen.getByRole("button", { name: "我确认停止全部智能体并继续" }));
+
+  await waitFor(() => expect(startMigration).toHaveBeenCalledWith("mock-storage-plan", true));
+  expect(await screen.findByText(/请重启服务使新数据根目录生效/)).toBeInTheDocument();
 });
 
 test("Codex 额度趋势隐藏已下线的次要额度桶", async () => {

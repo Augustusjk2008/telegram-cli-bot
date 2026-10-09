@@ -252,6 +252,53 @@ export type EnvConfigPatchResult = {
   systemEnvironmentSupported?: boolean;
 };
 
+export type StorageMigrationState =
+  | "stopping"
+  | "copying"
+  | "verifying"
+  | "awaiting_restart"
+  | "cleanup_pending"
+  | "completed"
+  | "failed";
+
+export type StorageMigrationSource = {
+  id: string;
+  label: string;
+  path: string;
+  exists: boolean;
+  sizeBytes: number;
+  fileCount: number;
+};
+
+export type StorageMigrationSnapshot = {
+  state: StorageMigrationState;
+  maintenance: boolean;
+  available?: boolean;
+  canMigrate?: boolean;
+  currentRoot: string;
+  sources: StorageMigrationSource[];
+  totalBytes: number;
+  blockers?: string[];
+  warnings?: string[];
+  planId?: string;
+  targetRoot?: string;
+  progress?: number;
+  message?: string;
+  error?: string;
+  errorCode?: string;
+  restartRequired?: boolean;
+  cleanupPending?: boolean;
+};
+
+export type StorageMigrationPreview = StorageMigrationSnapshot & {
+  planId: string;
+  targetRoot: string;
+};
+
+export type StorageMigrationStatus = StorageMigrationSnapshot & {
+  planId?: string;
+};
+
 export type CliErrorStatsItem = {
   botAlias: string;
   cliType: CliType | string;

@@ -30,6 +30,9 @@ import type {
   RegisterCodeCreateResult,
   RegisterCodeItem,
   NotificationSettingsStatus,
+  StorageMigrationPreview,
+  StorageMigrationSnapshot,
+  StorageMigrationState,
   TunnelSnapshot,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -61,6 +64,7 @@ type AdminCenterTab =
   | "inline-completion"
   | "lan-chat"
   | "native-agent"
+  | "storage"
   | "env";
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
@@ -146,6 +150,25 @@ function formatShortTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatStorageBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  return `${(value / (1024 ** index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function storageMigrationStateText(state: StorageMigrationState) {
+  return {
+    stopping: "正在停止智能体",
+    copying: "正在复制数据",
+    verifying: "正在校验数据",
+    awaiting_restart: "等待重启",
+    cleanup_pending: "等待清理原始数据",
+    completed: "已完成",
+    failed: "失败",
+  }[state];
 }
 
 function nativePreflightStatus(preflight?: NativeAgentPreflightResult) {
@@ -346,6 +369,11 @@ export function AdminCenterScreen({
   const [nativeAgentSystemPromptDraft, setNativeAgentSystemPromptDraft] = useState("");
   const [nativeAgentSaving, setNativeAgentSaving] = useState(false);
   const [nativeAgentPreflightRunning, setNativeAgentPreflightRunning] = useState(false);
+  const [storageSnapshot, setStorageSnapshot] = useState<StorageMigrationSnapshot | null>(null);
+  const [storagePreview, setStoragePreview] = useState<StorageMigrationPreview | null>(null);
+  const [storageTargetRoot, setStorageTargetRoot] = useState("");
+  const [storageAction, setStorageAction] = useState<"" | "preview" | "migrate" | "retry">("");
+  const [storageConfirmOpen, setStorageConfirmOpen] = useState(false);
   const [envConfig, setEnvConfig] = useState<EnvConfigSnapshot | null>(null);
   const [envDraft, setEnvDraft] = useState<Record<string, EnvConfigValue>>({});
   const [envVisibleSecrets, setEnvVisibleSecrets] = useState<Record<string, boolean>>({});
@@ -370,6 +398,7 @@ export function AdminCenterScreen({
     "chat-translation": false,
     "lan-chat": false,
     "native-agent": false,
+    storage: false,
     env: false,
   });
   const [manualPackagePath, setManualPackagePath] = useState("");
@@ -399,6 +428,7 @@ export function AdminCenterScreen({
       "chat-translation",
       "lan-chat",
       "native-agent",
+      "storage",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
     ],
     [canManageEnvConfig, canManageRegisterCodes],
@@ -746,6 +776,34 @@ export function AdminCenterScreen({
     }
   }
 
+  async function loadStorageMigration(nextNotice = "", refresh = false) {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+    if (!nextNotice) {
+      setNotice("");
+    }
+    try {
+      const snapshot = await client.getStorageMigrationSnapshot();
+      setStorageSnapshot(snapshot);
+      setLoadedTabs((prev) => ({ ...prev, storage: true }));
+      if (snapshot.targetRoot) {
+        setStorageTargetRoot(snapshot.targetRoot);
+      }
+      if (nextNotice) {
+        setNotice(nextNotice);
+      }
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "加载存储迁移状态失败"));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   async function refreshActiveTab(nextNotice = "", refresh = false) {
     if (activeTab === "users") {
       await loadUsers(nextNotice, refresh);
@@ -774,6 +832,8 @@ export function AdminCenterScreen({
       await loadLanChat(nextNotice, refresh);
     } else if (activeTab === "native-agent") {
       await loadNativeAgentConfig(nextNotice, refresh);
+    } else if (activeTab === "storage") {
+      await loadStorageMigration(nextNotice, refresh);
     } else if (activeTab === "env" && canManageEnvConfig) {
       await loadEnvConfig(nextNotice, refresh);
     } else {
@@ -787,6 +847,24 @@ export function AdminCenterScreen({
     }
     void refreshActiveTab();
   }, [activeTab, canManageEnvConfig, canManageRegisterCodes, client, loadedTabs]);
+
+  useEffect(() => {
+    if (activeTab !== "storage" || !storageSnapshot?.maintenance) {
+      return undefined;
+    }
+    let active = true;
+    const timer = window.setInterval(() => {
+      void client.getStorageMigrationSnapshot().then((snapshot) => {
+        if (active) {
+          setStorageSnapshot(snapshot);
+        }
+      }).catch(() => undefined);
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [activeTab, client, storageSnapshot?.maintenance]);
 
   const appendUpdateLog = (message?: string) => {
     if (!message) {
@@ -1289,6 +1367,61 @@ export function AdminCenterScreen({
     }
   };
 
+  const previewStorageMigration = async () => {
+    const target = storageTargetRoot.trim();
+    if (!target) {
+      setError("目标目录不能为空");
+      return;
+    }
+    setStorageAction("preview");
+    setError("");
+    setNotice("");
+    try {
+      const preview = await client.previewStorageMigration(target);
+      setStoragePreview(preview);
+      setNotice("迁移预览已生成，请确认影响范围");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "生成迁移预览失败"));
+    } finally {
+      setStorageAction("");
+    }
+  };
+
+  const startStorageMigration = async () => {
+    if (!storagePreview?.planId) {
+      setError("请先生成迁移预览");
+      return;
+    }
+    setStorageAction("migrate");
+    setError("");
+    setNotice("");
+    try {
+      const status = await client.startStorageMigration(storagePreview.planId, true);
+      setStorageSnapshot(status);
+      setStorageConfirmOpen(false);
+      setNotice(status.state === "awaiting_restart" ? "迁移已完成校验，请重启服务继续清理原始数据" : "存储迁移已开始");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "启动存储迁移失败"));
+    } finally {
+      setStorageAction("");
+    }
+  };
+
+  const retryStorageCleanup = async () => {
+    setStorageAction("retry");
+    setError("");
+    setNotice("");
+    try {
+      const status = await client.retryStorageMigrationCleanup();
+      setStorageSnapshot(status);
+      setNotice(status.state === "completed" ? "原始数据清理已完成" : "已重试原始数据清理");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "重试原始数据清理失败"));
+    } finally {
+      setStorageAction("");
+    }
+  };
+
   const removeAnnouncement = async (id: string) => {
     setAnnouncementDeletingId(id);
     setError("");
@@ -1354,6 +1487,8 @@ export function AdminCenterScreen({
                       ? "补全"
                     : tab === "native-agent"
                       ? "原生 Agent"
+                      : tab === "storage"
+                        ? "数据迁移"
                       : tab === "env"
                         ? "环境配置"
                         : "联机聊天"}
@@ -2089,6 +2224,135 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 )}
               </div>
             </div>
+          </section>
+        ) : null}
+
+        {!loading && activeTab === "storage" ? (
+          <section aria-labelledby="storage-migration-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 id="storage-migration-title" className="text-base font-semibold text-[var(--text)]">TCB 数据迁移</h2>
+                <p className="mt-1 text-sm text-[var(--muted)]">迁移聊天历史、附件、插件和集群 MCP 等运行数据。</p>
+              </div>
+              <span className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--muted)]">
+                {storageSnapshot?.canMigrate ? "可开始迁移" : storageSnapshot ? storageMigrationStateText(storageSnapshot.state) : "未读取"}
+              </span>
+            </div>
+
+            <div className="grid gap-3 text-sm sm:grid-cols-2">
+              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                当前数据根目录: <span className="text-[var(--text)]">{storageSnapshot?.currentRoot || "-"}</span>
+              </p>
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+                已发现数据: <span className="font-medium text-[var(--text)]">{formatStorageBytes(storageSnapshot?.totalBytes || 0)}</span>
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium text-[var(--text)]">数据来源</h3>
+              {(storageSnapshot?.sources || []).map((source) => (
+                <div key={source.id} className="grid gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm sm:grid-cols-[1fr_auto]">
+                  <div>
+                    <p className="font-medium text-[var(--text)]">{source.label || source.id}</p>
+                    <p className="break-all text-xs text-[var(--muted)]">{source.path || "路径由服务管理"}</p>
+                  </div>
+                  <p className="text-[var(--muted)]">{source.exists ? formatStorageBytes(source.sizeBytes) : "不存在"} · {source.fileCount} 个文件</p>
+                </div>
+              ))}
+              {!storageSnapshot?.sources.length ? <p className="text-sm text-[var(--muted)]">暂无可迁移数据</p> : null}
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+              <label className="space-y-1">
+                <span className="text-sm font-medium text-[var(--text)]">目标目录</span>
+                <input
+                  aria-label="存储迁移目标目录"
+                  value={storageTargetRoot}
+                  onChange={(event) => {
+                    setStorageTargetRoot(event.target.value);
+                    setStoragePreview(null);
+                  }}
+                  placeholder="例如 D:\\OrbitData"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void previewStorageMigration()}
+                disabled={storageAction !== "" || !storageTargetRoot.trim()}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {storageAction === "preview" ? "校验中..." : "预览并校验"}
+              </button>
+            </div>
+
+            {storagePreview ? (
+              <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold">迁移预览</h3>
+                    <p className="mt-1 break-all">目标: {storagePreview.targetRoot}</p>
+                    <p>预计迁移: {formatStorageBytes(storagePreview.totalBytes)}</p>
+                  </div>
+                  <span className="font-mono text-xs">planId: {storagePreview.planId}</span>
+                </div>
+                {storagePreview.blockers?.map((blocker) => <p key={blocker} className="font-medium text-red-800">无法迁移: {blocker}</p>)}
+                {storagePreview.warnings?.map((warning) => <p key={warning}>提示: {warning}</p>)}
+                <button
+                  type="button"
+                  onClick={() => setStorageConfirmOpen(true)}
+                  disabled={storageAction !== "" || storageSnapshot?.maintenance || Boolean(storagePreview.blockers?.length)}
+                  className="rounded-lg bg-amber-700 px-3 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-60"
+                >
+                  确认并迁移
+                </button>
+              </div>
+            ) : null}
+
+            {storageSnapshot?.maintenance || storageSnapshot?.state === "awaiting_restart" ? (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+                <p className="font-medium">当前状态: {storageMigrationStateText(storageSnapshot.state)}</p>
+                {storageSnapshot.progress !== undefined ? <p className="mt-1">进度: {Math.round(storageSnapshot.progress * 100)}%</p> : null}
+                {storageSnapshot.message ? <p className="mt-1">{storageSnapshot.message}</p> : null}
+                {storageSnapshot.state === "awaiting_restart" ? <p className="mt-1 font-medium">请重启服务使新数据根目录生效，然后再处理原始数据清理。</p> : null}
+              </div>
+            ) : null}
+
+            {storageSnapshot?.state === "cleanup_pending" ? (
+              <button
+                type="button"
+                onClick={() => void retryStorageCleanup()}
+                disabled={storageAction !== ""}
+                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+              >
+                {storageAction === "retry" ? "重试中..." : "重试原始数据清理"}
+              </button>
+            ) : null}
+
+            {storageConfirmOpen ? (
+              <div role="dialog" aria-label="确认数据迁移" className="rounded-xl border-2 border-red-300 bg-red-50 p-4 text-sm text-red-900">
+                <h3 className="font-semibold">确认停止全部智能体并迁移数据？</h3>
+                <p className="mt-2">迁移开始前会停止全部智能体进程并 flush 未写入数据。校验通过后，系统会删除已验证的原始数据。迁移期间请勿关闭服务。</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void startStorageMigration()}
+                    disabled={storageAction !== ""}
+                    className="rounded-lg bg-red-700 px-3 py-2 font-medium text-white hover:bg-red-800 disabled:opacity-60"
+                  >
+                    {storageAction === "migrate" ? "启动中..." : "我确认停止全部智能体并继续"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStorageConfirmOpen(false)}
+                    disabled={storageAction !== ""}
+                    className="rounded-lg border border-red-300 px-3 py-2 hover:bg-red-100 disabled:opacity-60"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </section>
         ) : null}
 
