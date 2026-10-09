@@ -3899,6 +3899,7 @@ function mapStorageMigrationSource(value: unknown): StorageMigrationSnapshot["so
     exists: Boolean(item.exists),
     sizeBytes: Number(item.sizeBytes ?? item.size_bytes ?? item.bytes ?? 0) || 0,
     fileCount: Number(item.fileCount ?? item.file_count ?? 0) || 0,
+    ...(item.sizePending || item.size_pending ? { sizePending: true } : {}),
   };
 }
 
@@ -3914,6 +3915,7 @@ function mapStorageMigrationSnapshot(value: unknown): StorageMigrationSnapshot {
     currentRoot: String(data.currentRoot || data.current_root || ""),
     sources: Array.isArray(data.sources) ? data.sources.map(mapStorageMigrationSource) : [],
     totalBytes: Number(data.totalBytes ?? data.total_bytes ?? 0) || 0,
+    ...(data.sizePending || data.size_pending ? { sizePending: true } : {}),
     ...(Array.isArray(data.blockers) ? { blockers: data.blockers.map((item) => String(item)) } : {}),
     ...(Array.isArray(data.warnings) ? { warnings: data.warnings.map((item) => String(item)) } : {}),
     ...(data.planId || data.plan_id ? { planId: String(data.planId || data.plan_id) } : {}),

@@ -268,6 +268,7 @@ export type StorageMigrationSource = {
   exists: boolean;
   sizeBytes: number;
   fileCount: number;
+  sizePending?: boolean;
 };
 
 export type StorageMigrationSnapshot = {
@@ -278,6 +279,7 @@ export type StorageMigrationSnapshot = {
   currentRoot: string;
   sources: StorageMigrationSource[];
   totalBytes: number;
+  sizePending?: boolean;
   blockers?: string[];
   warnings?: string[];
   planId?: string;

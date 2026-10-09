@@ -56,6 +56,24 @@ def _execute(service: StorageMigrationService, target: Path) -> dict[str, object
     return service.execute(str(plan["id"]))
 
 
+def test_snapshot_only_checks_source_roots_and_defers_full_inventory(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, repo, _target = migration_context
+    _make_sources(home, with_sqlite=False)
+
+    def fail_full_walk(*_args: object, **_kwargs: object) -> tuple[list[dict[str, object]], int]:
+        raise AssertionError("snapshot must not recursively scan source files")
+
+    monkeypatch.setattr(migration_module, "_walk_source", fail_full_walk)
+    snapshot = StorageMigrationService(repo).snapshot()
+
+    assert snapshot["canMigrate"] is True
+    assert snapshot["sizePending"] is True
+    assert snapshot["totalBytes"] == 0
+
+
 def test_success_copies_sqlite_and_deletes_sources_after_startup(
     migration_context: tuple[Path, Path, Path],
 ) -> None:

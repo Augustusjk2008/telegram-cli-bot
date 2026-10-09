@@ -396,8 +396,13 @@ def _validate_sqlite(path: Path, *, checkpoint: bool) -> None:
         raise StorageMigrationError(f"SQLite 数据库不可迁移: {path}") from exc
 
 
-def _public_source(spec: dict[str, str], entries: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def _public_source(
+    spec: dict[str, str],
+    entries: list[dict[str, Any]],
+    *,
+    size_pending: bool = False,
+) -> dict[str, Any]:
+    result = {
         "kind": spec["kind"],
         "label": spec["label"],
         "path": spec["path"],
@@ -405,6 +410,9 @@ def _public_source(spec: dict[str, str], entries: list[dict[str, Any]]) -> dict[
         "fileCount": sum(1 for entry in entries if entry["type"] == "file"),
         "exists": bool(entries),
     }
+    if size_pending:
+        result["sizePending"] = True
+    return result
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -435,32 +443,47 @@ class StorageMigrationService:
             locator = runtime_paths.read_storage_locator()
             journal = self._read_journal()
             specs = _source_specs()
-            entries_by_label: dict[str, list[dict[str, Any]]] = {}
             blockers: list[str] = []
+            existing_sources: set[str] = set()
             for spec in specs:
-                try:
-                    entries, _ = _walk_source(Path(spec["path"]), hash_files=False)
-                    entries_by_label[spec["label"]] = entries
-                except StorageMigrationError as exc:
-                    blockers.append(str(exc))
-                    entries_by_label[spec["label"]] = []
+                root = Path(spec["path"]).expanduser().absolute()
+                if not root.exists():
+                    continue
+                if _is_link(root):
+                    blockers.append(f"源目录包含符号链接或 junction: {root}")
+                    continue
+                if not root.is_dir():
+                    blockers.append(f"源路径不是目录: {root}")
+                    continue
+                if not os.access(root, os.R_OK | os.X_OK):
+                    blockers.append(f"源目录不可读: {root}")
+                    continue
+                existing_sources.add(spec["label"])
             if locator is not None:
                 blockers.append("TCB 存储已提交迁移，需在新进程中继续清理")
-            elif not any(entries_by_label.values()):
+            elif not existing_sources:
                 blockers.append("未发现可迁移的 TCB 数据")
 
-            blockers.extend(self._source_root_blockers(specs))
+            blockers.extend(self._source_root_blockers(specs, deep=False))
             warnings = self._excluded_warnings()
             current_root = (
                 str(locator.get("appDataRoot"))
                 if locator is not None
                 else str(runtime_paths.get_legacy_app_data_root())
             )
-            sources = [_public_source(spec, entries_by_label.get(spec["label"], [])) for spec in specs]
+            sources = [
+                _public_source(
+                    spec,
+                    [{"type": "dir", "size": 0}] if spec["label"] in existing_sources else [],
+                    size_pending=spec["label"] in existing_sources,
+                )
+                for spec in specs
+            ]
             return {
                 "currentRoot": current_root,
                 "sources": sources,
-                "totalBytes": sum(int(source["bytes"]) for source in sources),
+                "totalBytes": 0,
+                "sizePending": bool(existing_sources),
                 "canMigrate": locator is None and not blockers,
                 "blockers": sorted(set(blockers)),
                 "warnings": warnings,
@@ -655,20 +678,25 @@ class StorageMigrationService:
     def _write_journal(self, journal: dict[str, Any]) -> None:
         _atomic_write_json(runtime_paths.get_storage_journal_path(), journal)
 
-    def _source_root_blockers(self, specs: list[dict[str, str]]) -> list[str]:
+    def _source_root_blockers(self, specs: list[dict[str, str]], *, deep: bool = True) -> list[str]:
         blockers: list[str] = []
         roots: list[Path] = []
         for spec in specs:
-            root = _canonical(spec["path"])
+            lexical_root = Path(spec["path"]).expanduser().absolute()
+            root = _canonical(lexical_root)
             if root in roots:
                 blockers.append(f"源目录重复: {root}")
             for other in roots:
                 if _path_overlap(root, other):
                     blockers.append(f"源目录互相重叠: {root}")
             roots.append(root)
+            if lexical_root.exists() and _is_link(lexical_root):
+                blockers.append(f"源目录包含符号链接或 junction: {lexical_root}")
+            if root.exists() and not root.is_dir():
+                blockers.append(f"源路径不是目录: {root}")
             if root.exists() and not os.access(root, os.R_OK | os.X_OK):
                 blockers.append(f"源目录不可读: {root}")
-            for entry in root.rglob("pyvenv.cfg") if root.exists() and root.is_dir() and not _has_link_ancestor(root) else ():
+            for entry in root.rglob("pyvenv.cfg") if deep and root.exists() and root.is_dir() and not _has_link_ancestor(root) else ():
                 if any(part.casefold() in {"venv", ".venv"} for part in entry.relative_to(root).parts[:-1]):
                     blockers.append(f"检测到无法安全搬迁的虚拟环境: {entry.parent}")
                     break

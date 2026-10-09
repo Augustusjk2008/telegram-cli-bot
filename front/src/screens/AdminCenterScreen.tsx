@@ -2244,7 +2244,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 当前数据根目录: <span className="text-[var(--text)]">{storageSnapshot?.currentRoot || "-"}</span>
               </p>
               <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-                已发现数据: <span className="font-medium text-[var(--text)]">{formatStorageBytes(storageSnapshot?.totalBytes || 0)}</span>
+                已发现数据: <span className="font-medium text-[var(--text)]">
+                  {storageSnapshot?.sizePending ? "点击“预览并校验”计算" : formatStorageBytes(storageSnapshot?.totalBytes || 0)}
+                </span>
               </p>
             </div>
 
@@ -2256,7 +2258,10 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     <p className="font-medium text-[var(--text)]">{source.label || source.id}</p>
                     <p className="break-all text-xs text-[var(--muted)]">{source.path || "路径由服务管理"}</p>
                   </div>
-                  <p className="text-[var(--muted)]">{source.exists ? formatStorageBytes(source.sizeBytes) : "不存在"} · {source.fileCount} 个文件</p>
+                  <p className="text-[var(--muted)]">
+                    {source.exists ? (source.sizePending ? "待预览计算" : formatStorageBytes(source.sizeBytes)) : "不存在"}
+                    {source.sizePending ? "" : ` · ${source.fileCount} 个文件`}
+                  </p>
                 </div>
               ))}
               {!storageSnapshot?.sources.length ? <p className="text-sm text-[var(--muted)]">暂无可迁移数据</p> : null}

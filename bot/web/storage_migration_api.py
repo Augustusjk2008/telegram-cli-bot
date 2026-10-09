@@ -105,6 +105,7 @@ class StorageMigrationApi:
             "exists": bool(cls._field(source, "exists", default=False)),
             "sizeBytes": max(0, int(cls._field(source, "size_bytes", "sizeBytes", "bytes", default=0) or 0)),
             "fileCount": max(0, int(cls._field(source, "file_count", "fileCount", default=0) or 0)),
+            "sizePending": bool(cls._field(source, "size_pending", "sizePending", default=False)),
         }
 
     @classmethod
