@@ -10,6 +10,7 @@ import threading
 import time
 import unicodedata
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ DATASET_IDENTITY = "tcb"
 TARGET_MANIFEST_NAME = ".tcb-storage-manifest.json"
 STORAGE_LOCK_NAME = ".storage.lock"
 _CHUNK_BYTES = 1024 * 1024
+_JOURNAL_BYTES = 32 * 1024 * 1024
+_JOURNAL_SECONDS = 0.3
 _JSON_REFERENCE_KEYS = {
     "path",
     "root",
@@ -65,6 +68,65 @@ _WINDOWS_RESERVED_NAMES = {
     "lpt8",
     "lpt9",
 }
+
+
+def _migration_workers() -> int:
+    try:
+        from bot import config
+
+        value = int(getattr(config, "TCB_STORAGE_MIGRATION_WORKERS", 2))
+    except (ImportError, TypeError, ValueError):
+        value = 2
+    return min(4, max(1, value))
+
+
+def _bounded_map(items: list[Any], worker: Any, on_result: Any = None) -> list[Any]:
+    """Run at most the configured number of filesystem jobs at once."""
+    if not items:
+        return []
+    worker_count = _migration_workers()
+    executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="tcb-storage")
+    active: dict[Any, int] = {}
+    results: list[Any] = [None] * len(items)
+    next_index = 0
+    first_error: BaseException | None = None
+
+    def submit_available() -> None:
+        nonlocal next_index
+        while first_error is None and next_index < len(items) and len(active) < worker_count:
+            future = executor.submit(worker, items[next_index])
+            active[future] = next_index
+            next_index += 1
+
+    try:
+        submit_available()
+        while active:
+            done, _ = wait(tuple(active), return_when=FIRST_COMPLETED)
+            for future in done:
+                index = active.pop(future)
+                try:
+                    results[index] = future.result()
+                    if on_result is not None:
+                        on_result(index, results[index])
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+            if first_error is not None:
+                for future in active:
+                    future.cancel()
+                for future in active:
+                    try:
+                        future.result()
+                    except BaseException:
+                        pass
+                active.clear()
+                break
+            submit_available()
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+    if first_error is not None:
+        raise first_error
+    return results
 
 
 class StorageMigrationError(RuntimeError):
@@ -294,6 +356,7 @@ def _walk_source(root: Path, *, hash_files: bool) -> tuple[list[dict[str, Any]],
             "size": 0,
             "sha256": "",
             "mode": stat.S_IMODE(root.stat().st_mode),
+            "mtimeNs": int(root.stat().st_mtime_ns),
         }
     ]
     total_bytes = 0
@@ -327,6 +390,7 @@ def _walk_source(root: Path, *, hash_files: bool) -> tuple[list[dict[str, Any]],
                         "size": 0,
                         "sha256": "",
                         "mode": stat.S_IMODE(child_stat.st_mode),
+                        "mtimeNs": int(child_stat.st_mtime_ns),
                     }
                 )
                 stack.append(child_path)
@@ -337,14 +401,24 @@ def _walk_source(root: Path, *, hash_files: bool) -> tuple[list[dict[str, Any]],
                         "relativePath": relative,
                         "type": "file",
                         "size": size,
-                        "sha256": _hash_file(child_path) if hash_files else "",
+                        "sha256": "",
                         "mode": stat.S_IMODE(child_stat.st_mode),
+                        "mtimeNs": int(child_stat.st_mtime_ns),
                     }
                 )
                 total_bytes += size
             else:
                 raise StorageMigrationError(f"源数据包含不支持的文件类型: {child_path}")
     entries.sort(key=lambda item: (item["relativePath"].count("/"), item["relativePath"].casefold(), item["type"]))
+    if hash_files:
+        hash_jobs = [
+            (index, root / Path(*str(entry["relativePath"]).split("/")))
+            for index, entry in enumerate(entries)
+            if entry["type"] == "file"
+        ]
+        hashes = _bounded_map(hash_jobs, lambda item: _hash_file(item[1]))
+        for (index, _path), digest in zip(hash_jobs, hashes):
+            entries[index]["sha256"] = str(digest)
     return entries, total_bytes
 
 
@@ -396,6 +470,17 @@ def _validate_sqlite(path: Path, *, checkpoint: bool) -> None:
         raise StorageMigrationError(f"SQLite 数据库不可迁移: {path}") from exc
 
 
+def _validate_sqlite_many(paths: list[Path], *, checkpoint: bool) -> list[str]:
+    def validate(path: Path) -> str:
+        try:
+            _validate_sqlite(path, checkpoint=checkpoint)
+        except StorageMigrationError as exc:
+            return str(exc)
+        return ""
+
+    return [error for error in _bounded_map(paths, validate) if error]
+
+
 def _public_source(
     spec: dict[str, str],
     entries: list[dict[str, Any]],
@@ -437,11 +522,17 @@ class StorageMigrationService:
         self.storage_guard = StorageExclusiveGuard(self._home_root / STORAGE_LOCK_NAME)
         self.guard = self.storage_guard
         self._plans: dict[str, dict[str, Any]] = {}
+        self._journal_lock = threading.RLock()
+        self._live_journal: dict[str, Any] | None = None
+        self._journal_last_disk_write = 0.0
+        self._journal_last_disk_bytes = 0
+        self._sqlite_copy_locks: dict[str, threading.Lock] = {}
+        self._sqlite_copy_locks_guard = threading.Lock()
 
     def snapshot(self) -> dict[str, Any]:
         with self.storage_guard:
             locator = runtime_paths.read_storage_locator()
-            journal = self._read_journal()
+            journal = self._live_or_disk_journal()
             specs = _source_specs()
             blockers: list[str] = []
             existing_sources: set[str] = set()
@@ -496,6 +587,7 @@ class StorageMigrationService:
             if locator is not None:
                 raise StorageMigrationError("TCB 存储已经提交迁移")
             specs = _source_specs()
+            plan_id = uuid.uuid4().hex
             blockers: list[str] = []
             try:
                 target = self._validate_target(target_root, specs)
@@ -503,30 +595,114 @@ class StorageMigrationService:
                 target = _canonical(target_root)
                 blockers.append(str(exc))
 
+            preparing = {
+                "id": plan_id,
+                "targetRoot": str(target),
+                "sourceSpecs": specs,
+                "entries": [],
+                "sourceFingerprint": "",
+                "sourceRootMetadata": self._source_root_metadata(specs),
+                "totalBytes": 0,
+                "requiredBytes": 0,
+                "freeBytes": self._free_bytes(target),
+                "blockers": [],
+            }
+            self._plans[plan_id] = preparing
+            self._write_journal(
+                self._journal_payload(
+                    preparing,
+                    "preparing",
+                    "preparing",
+                    message="正在扫描源目录",
+                ),
+                force=True,
+            )
+
             entries_by_label: dict[str, list[dict[str, Any]]] = {}
             total_bytes = 0
-            for spec in specs:
+
+            def scan_source(spec: dict[str, str]) -> tuple[str, list[dict[str, Any]], int, str]:
                 try:
-                    entries, size = _walk_source(Path(spec["path"]), hash_files=True)
-                    entries_by_label[spec["label"]] = entries
-                    total_bytes += size
-                except StorageMigrationError as exc:
-                    entries_by_label[spec["label"]] = []
-                    blockers.append(str(exc))
+                    entries, size = _walk_source(Path(spec["path"]), hash_files=False)
+                    return spec["label"], entries, size, ""
+                except (OSError, StorageMigrationError) as exc:
+                    return spec["label"], [], 0, str(exc)
+
+            scanned = _bounded_map(specs, scan_source)
+            for label, entries, size, error in scanned:
+                entries_by_label[label] = entries
+                total_bytes += size
+                if error:
+                    blockers.append(error)
+            # Validate SQLite before hashing so any passive WAL checkpoint is
+            # included in the previewed source hashes.
+            blockers.extend(_validate_sqlite_many(_sqlite_paths(specs, entries_by_label), checkpoint=True))
+
+            hash_jobs = [
+                (
+                    label,
+                    index,
+                    Path(spec["path"]) / Path(*str(entry["relativePath"]).split("/")),
+                    int(entry["size"]),
+                )
+                for spec in specs
+                for label in [spec["label"]]
+                for index, entry in enumerate(entries_by_label.get(label, []))
+                if entry["type"] == "file"
+            ]
+
+            progress = self._live_or_disk_journal()
+            if progress is not None:
+                progress.update(
+                    {
+                        "totalBytes": total_bytes,
+                        "completedBytes": 0,
+                        "completedFiles": 0,
+                        "totalFiles": len(hash_jobs),
+                        "currentItem": str(hash_jobs[0][2]) if hash_jobs else "",
+                        "message": "正在计算文件校验",
+                    }
+                )
+                self._write_journal(progress)
+
+            def hash_source(job: tuple[str, int, Path, int]) -> tuple[str, int, str, str, int]:
+                label, index, path, size = job
+                try:
+                    return label, index, _hash_file(path), "", size
+                except (OSError, StorageMigrationError) as exc:
+                    return label, index, "", str(exc), size
+
+            hash_progress = {"bytes": 0, "files": 0}
+
+            def on_hash_result(_index: int, result: tuple[str, int, str, str, int]) -> None:
+                hash_progress["bytes"] += result[4]
+                hash_progress["files"] += 1
+                current = self._live_or_disk_journal()
+                if current is not None:
+                    current.update(
+                        {
+                            "completedBytes": hash_progress["bytes"],
+                            "progressBytes": hash_progress["bytes"],
+                            "completedFiles": hash_progress["files"],
+                            "currentItem": str(hash_jobs[_index][2]),
+                            "message": "正在计算文件校验",
+                        }
+                    )
+                    self._write_journal(current)
+
+            hashed = _bounded_map(hash_jobs, hash_source, on_result=on_hash_result)
+            for label, index, digest, error, _size in hashed:
+                entries_by_label[label][index]["sha256"] = digest
+                if error:
+                    blockers.append(error)
             blockers.extend(self._source_root_blockers(specs))
             if not any(entries_by_label.values()):
                 blockers.append("未发现可迁移的 TCB 数据")
-            for path in _sqlite_paths(specs, entries_by_label):
-                try:
-                    _validate_sqlite(path, checkpoint=True)
-                except StorageMigrationError as exc:
-                    blockers.append(str(exc))
             free_bytes = self._free_bytes(target)
             required_bytes = total_bytes
             if free_bytes < required_bytes:
                 blockers.append(f"目标磁盘空间不足: 需要 {required_bytes} 字节，可用 {free_bytes} 字节")
 
-            plan_id = uuid.uuid4().hex
             entries = self._plan_entries(specs, entries_by_label, target)
             plan = {
                 "id": plan_id,
@@ -534,15 +710,29 @@ class StorageMigrationService:
                 "sourceSpecs": specs,
                 "entries": entries,
                 "sourceFingerprint": _fingerprint(specs, entries_by_label),
+                "sourceRootMetadata": self._source_root_metadata(specs),
                 "totalBytes": total_bytes,
                 "requiredBytes": required_bytes,
                 "freeBytes": free_bytes,
                 "blockers": sorted(set(blockers)),
             }
             self._plans[plan_id] = plan
-            self._write_journal(self._journal_payload(plan, "preview", "preview"))
+            total_files = sum(1 for entry in entries if entry["type"] == "file")
+            final_preview = self._journal_payload(
+                plan,
+                "preparing",
+                "preparing",
+                completed_bytes=total_bytes,
+                total_files=total_files,
+                completed_files=total_files,
+                current_item="",
+                message="预览完成，可确认迁移",
+            )
+            final_preview["previewReady"] = True
+            self._write_journal(final_preview, force=True)
             return {
                 "id": plan_id,
+                "jobId": plan_id,
                 "targetRoot": str(target),
                 "sources": [_public_source(spec, entries_by_label.get(spec["label"], [])) for spec in specs],
                 "totalBytes": total_bytes,
@@ -550,6 +740,16 @@ class StorageMigrationService:
                 "freeBytes": free_bytes,
                 "warnings": self._excluded_warnings(),
                 "blockers": sorted(set(blockers)),
+                "state": "preparing",
+                "phase": "preparing",
+                "completedBytes": total_bytes,
+                "completedFiles": total_files,
+                "totalFiles": total_files,
+                "currentItem": "",
+                "speedBytesPerSecond": 0,
+                "etaSeconds": 0,
+                "message": "预览完成，可确认迁移",
+                "previewReady": True,
             }
 
     def begin(self, plan_id: str) -> dict[str, Any]:
@@ -560,9 +760,15 @@ class StorageMigrationService:
             plan = self._load_plan(plan_id)
             if plan["blockers"]:
                 raise StorageMigrationError("迁移计划存在阻断项: " + "; ".join(plan["blockers"]))
-            self._refresh_plan_entries(plan)
-            journal = self._journal_payload(plan, "stopping", "stopping")
-            self._write_journal(journal)
+            self._validate_plan_sources(plan)
+            self._validate_target(plan["targetRoot"], plan["sourceSpecs"])
+            journal = self._journal_payload(
+                plan,
+                "stopping",
+                "stopping",
+                message="等待停止智能体",
+            )
+            self._write_journal(journal, force=True)
             return self._public_job(journal)
 
     def execute(self, plan_id: str) -> dict[str, Any]:
@@ -572,37 +778,58 @@ class StorageMigrationService:
             if not journal or journal.get("id") != plan_id or journal.get("state") != "stopping":
                 raise StorageMigrationError("迁移必须先通过 begin 进入 stopping 状态")
             try:
-                self._refresh_plan_entries(plan)
+                self._validate_plan_sources(plan)
                 target = self._validate_target(plan["targetRoot"], plan["sourceSpecs"])
-                copying = self._journal_payload(plan, "copying", "copying")
-                self._write_journal(copying)
+                copying = self._journal_payload(
+                    plan,
+                    "copying",
+                    "copying",
+                    message="正在复制文件",
+                )
+                self._write_journal(copying, force=True)
                 target.mkdir(parents=True, exist_ok=True)
                 self._copy_entries(plan, target)
+                rewriting = self._journal_payload(
+                    plan,
+                    "rewriting",
+                    "rewriting",
+                    completed_bytes=int(plan["totalBytes"]),
+                    completed_files=self._file_count(plan),
+                    total_files=self._file_count(plan),
+                    message="正在重写路径",
+                )
+                self._write_journal(rewriting, force=True)
                 self._rewrite_structured_paths(plan, target)
                 verifying = self._journal_payload(
                     plan,
                     "verifying",
                     "verifying",
-                    progress_bytes=int(plan["totalBytes"]),
+                    completed_bytes=int(plan["totalBytes"]),
+                    completed_files=self._file_count(plan),
+                    total_files=self._file_count(plan),
+                    message="正在验证复制结果",
                 )
-                self._write_journal(verifying)
+                self._write_journal(verifying, force=True)
                 manifest = self._build_manifest(plan, target)
                 _atomic_write_json(target / TARGET_MANIFEST_NAME, manifest)
-                self._verify_target_manifest(target, manifest)
-                self._verify_sources_unchanged(plan, allow_missing=False)
+                self._verify_target_manifest(target, manifest, verify_hashes=False)
+                self._validate_plan_sources(plan)
                 locator = self._build_locator(plan, target)
                 _atomic_write_json(runtime_paths.get_storage_locator_path(), locator)
                 awaiting = self._journal_payload(
                     plan,
                     "awaiting_restart",
                     "committed",
-                    progress_bytes=int(plan["totalBytes"]),
+                    completed_bytes=int(plan["totalBytes"]),
+                    completed_files=self._file_count(plan),
+                    total_files=self._file_count(plan),
+                    message="等待重启完成最终验证",
                 )
-                self._write_journal(awaiting)
+                self._write_journal(awaiting, force=True)
                 return self._public_job(awaiting)
             except Exception as exc:
                 failed = self._journal_payload(plan, "failed", "failed", error=str(exc))
-                self._write_journal(failed)
+                self._write_journal(failed, force=True)
                 raise
 
     def finalize_startup(self) -> dict[str, Any]:
@@ -610,7 +837,7 @@ class StorageMigrationService:
             locator = runtime_paths.read_storage_locator()
             journal = self._read_journal()
             if locator is None:
-                if journal and journal.get("state") in {"stopping", "copying", "verifying", "failed"}:
+                if journal and journal.get("state") in {"preparing", "stopping", "copying", "rewriting", "verifying", "failed"}:
                     return self._public_job(journal)
                 raise StorageMigrationError("没有已提交的 TCB 迁移可完成")
             try:
@@ -628,8 +855,8 @@ class StorageMigrationService:
                     raise StorageMigrationError(f"迁移目标缺少清单: {manifest_path}")
                 self._verify_target_manifest(target, manifest)
                 cleanup = self._journal_from_locator(locator, journal, "cleanup_pending", "cleanup")
-                self._write_journal(cleanup)
-                self._verify_sources_unchanged_from_manifest(manifest, allow_missing=True)
+                self._write_journal(cleanup, force=True)
+                self._verify_sources_unchanged_from_manifest(manifest, allow_missing=True, verify_hashes=True)
                 deleted_bytes = self._cleanup_sources(manifest, cleanup)
                 completed = self._journal_from_locator(
                     locator,
@@ -638,7 +865,7 @@ class StorageMigrationService:
                     "completed",
                     deleted_bytes=deleted_bytes,
                 )
-                self._write_journal(completed)
+                self._write_journal(completed, force=True)
                 locator["state"] = "completed"
                 _atomic_write_json(runtime_paths.get_storage_locator_path(), locator)
                 return self._public_job(completed)
@@ -650,7 +877,7 @@ class StorageMigrationService:
                     "cleanup",
                     error=str(exc),
                 )
-                self._write_journal(error_job)
+                self._write_journal(error_job, force=True)
                 locator["state"] = "cleanup_pending"
                 _atomic_write_json(runtime_paths.get_storage_locator_path(), locator)
                 raise
@@ -658,9 +885,26 @@ class StorageMigrationService:
     def retry_cleanup(self) -> dict[str, Any]:
         return self.finalize_startup()
 
+    def status(self) -> dict[str, Any]:
+        """Return the latest journal state without waiting for the storage lock."""
+        journal = self._live_or_disk_journal()
+        if journal is None or journal.get("state") not in self._public_states():
+            return {}
+        return self._public_job(journal)
+
     @staticmethod
     def _public_states() -> set[str]:
-        return {"stopping", "copying", "verifying", "awaiting_restart", "cleanup_pending", "completed", "failed"}
+        return {
+            "preparing",
+            "stopping",
+            "copying",
+            "rewriting",
+            "verifying",
+            "awaiting_restart",
+            "cleanup_pending",
+            "completed",
+            "failed",
+        }
 
     def _read_journal(self) -> dict[str, Any] | None:
         path = runtime_paths.get_storage_journal_path()
@@ -675,8 +919,39 @@ class StorageMigrationService:
             raise StorageMigrationError("TCB 迁移日志版本或数据集不匹配")
         return journal
 
-    def _write_journal(self, journal: dict[str, Any]) -> None:
-        _atomic_write_json(runtime_paths.get_storage_journal_path(), journal)
+    def _live_or_disk_journal(self) -> dict[str, Any] | None:
+        with self._journal_lock:
+            if self._live_journal is not None:
+                return dict(self._live_journal)
+        return self._read_journal()
+
+    def _write_journal(self, journal: dict[str, Any], *, force: bool = False) -> None:
+        payload = dict(journal)
+        now = time.monotonic()
+        progress_bytes = int(payload.get("completedBytes", payload.get("progressBytes", 0)) or 0)
+        started_at = float(payload.get("progressStartedAt") or time.time())
+        elapsed = max(0.0, time.time() - started_at)
+        speed = progress_bytes / elapsed if elapsed > 0 else 0.0
+        total_bytes = int(payload.get("totalBytes", 0) or 0)
+        payload["progressStartedAt"] = started_at
+        payload["speedBytesPerSecond"] = speed
+        payload["etaSeconds"] = int(round(max(0, total_bytes - progress_bytes) / speed)) if speed > 0 else None
+        with self._journal_lock:
+            previous = self._live_journal
+            self._live_journal = payload
+            stage_changed = previous is None or (
+                previous.get("state") != payload.get("state")
+                or previous.get("phase") != payload.get("phase")
+            )
+            should_write = force or stage_changed or (
+                progress_bytes - self._journal_last_disk_bytes >= _JOURNAL_BYTES
+                or now - self._journal_last_disk_write >= _JOURNAL_SECONDS
+            )
+            if not should_write:
+                return
+            _atomic_write_json(runtime_paths.get_storage_journal_path(), payload)
+            self._journal_last_disk_write = now
+            self._journal_last_disk_bytes = progress_bytes
 
     def _source_root_blockers(self, specs: list[dict[str, str]], *, deep: bool = True) -> list[str]:
         blockers: list[str] = []
@@ -802,28 +1077,103 @@ class StorageMigrationService:
                 entries.append(item)
         return entries
 
+    @staticmethod
+    def _file_count(plan: dict[str, Any]) -> int:
+        return sum(1 for entry in plan.get("entries", []) if entry.get("type") == "file")
+
+    @staticmethod
+    def _source_root_metadata(specs: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
+        metadata: dict[str, dict[str, Any]] = {}
+        for spec in specs:
+            root = Path(spec["path"])
+            try:
+                stat_result = root.stat(follow_symlinks=False)
+                metadata[spec["label"]] = {
+                    "exists": True,
+                    "isDir": stat.S_ISDIR(stat_result.st_mode),
+                    "mtimeNs": int(stat_result.st_mtime_ns),
+                    "size": int(stat_result.st_size),
+                }
+            except FileNotFoundError:
+                metadata[spec["label"]] = {"exists": False}
+            except OSError:
+                metadata[spec["label"]] = {"exists": False, "unreadable": True}
+        return metadata
+
+    def _validate_plan_sources(self, plan: dict[str, Any]) -> None:
+        expected_metadata = plan.get("sourceRootMetadata")
+        if not isinstance(expected_metadata, dict):
+            expected_metadata = {}
+        current_metadata = self._source_root_metadata(plan["sourceSpecs"])
+        for spec in plan["sourceSpecs"]:
+            label = spec["label"]
+            root = Path(spec["path"])
+            expected = expected_metadata.get(label)
+            current = current_metadata.get(label, {"exists": False})
+            if isinstance(expected, dict) and expected and current != expected:
+                raise StorageMigrationError(f"确认迁移后源目录发生变化，请重新预览: {root}")
+            if not root.exists():
+                if expected and expected.get("exists"):
+                    raise StorageMigrationError(f"复制前源目录不可用: {root}")
+                continue
+            if _is_link(root) or not root.is_dir():
+                raise StorageMigrationError(f"源目录不可用: {root}")
+            if not os.access(root, os.R_OK | os.X_OK):
+                raise StorageMigrationError(f"源目录不可读: {root}")
+
     def _journal_payload(
         self,
         plan: dict[str, Any],
         state: str,
         phase: str,
         *,
-        progress_bytes: int = 0,
+        progress_bytes: int | None = None,
+        completed_bytes: int | None = None,
+        completed_files: int | None = None,
+        total_files: int | None = None,
+        current_item: str = "",
         deleted_bytes: int = 0,
         error: str = "",
+        message: str = "",
     ) -> dict[str, Any]:
+        if completed_bytes is None:
+            completed_bytes = 0 if progress_bytes is None else progress_bytes
+        if total_files is None:
+            total_files = self._file_count(plan)
+        if completed_files is None:
+            completed_files = 0
+        completed_bytes = max(0, int(completed_bytes))
+        total_bytes = max(0, int(plan["totalBytes"]))
+        completed_files = max(0, int(completed_files))
+        total_files = max(0, int(total_files))
+        started_at = float(plan.get("progressStartedAt") or time.time())
+        plan["progressStartedAt"] = started_at
+        elapsed = max(0.0, time.time() - started_at)
+        speed = completed_bytes / elapsed if elapsed > 0 else 0.0
+        remaining = max(0, total_bytes - completed_bytes)
+        eta = int(round(remaining / speed)) if speed > 0 else None
         return {
             "schema": STORAGE_SCHEMA,
             "datasetIdentity": DATASET_IDENTITY,
             "id": plan["id"],
+            "jobId": plan["id"],
             "state": state,
             "phase": phase,
             "targetRoot": plan["targetRoot"],
             "sourceSpecs": plan["sourceSpecs"],
             "sourceFingerprint": plan["sourceFingerprint"],
-            "totalBytes": int(plan["totalBytes"]),
+            "sourceRootMetadata": plan.get("sourceRootMetadata", {}),
+            "totalBytes": total_bytes,
             "requiredBytes": int(plan["requiredBytes"]),
-            "progressBytes": int(progress_bytes),
+            "progressBytes": completed_bytes,
+            "completedBytes": completed_bytes,
+            "completedFiles": completed_files,
+            "totalFiles": total_files,
+            "currentItem": current_item,
+            "speedBytesPerSecond": speed,
+            "etaSeconds": eta,
+            "message": message,
+            "progressStartedAt": started_at,
             "deletedBytes": int(deleted_bytes),
             "error": error,
             "manifestPath": str(Path(plan["targetRoot"]) / TARGET_MANIFEST_NAME),
@@ -832,10 +1182,13 @@ class StorageMigrationService:
                 "targetRoot": plan["targetRoot"],
                 "sourceSpecs": plan["sourceSpecs"],
                 "sourceFingerprint": plan["sourceFingerprint"],
+                "sourceRootMetadata": plan.get("sourceRootMetadata", {}),
+                "entries": plan.get("entries", []),
                 "totalBytes": plan["totalBytes"],
                 "requiredBytes": plan["requiredBytes"],
                 "freeBytes": plan["freeBytes"],
                 "blockers": plan["blockers"],
+                "progressStartedAt": started_at,
             },
         }
 
@@ -853,6 +1206,12 @@ class StorageMigrationService:
         restored = dict(plan)
         restored["sourceSpecs"] = [dict(item) for item in source_specs]
         restored.setdefault("blockers", [])
+        entries = restored.get("entries")
+        if not isinstance(entries, list):
+            raise StorageMigrationError("迁移计划缺少可复用的源清单")
+        restored["entries"] = [dict(item) for item in entries if isinstance(item, dict)]
+        metadata = restored.get("sourceRootMetadata")
+        restored["sourceRootMetadata"] = dict(metadata) if isinstance(metadata, dict) else {}
         self._plans[normalized_id] = restored
         return restored
 
@@ -863,8 +1222,9 @@ class StorageMigrationService:
             entries, size = _walk_source(Path(spec["path"]), hash_files=True)
             entries_by_label[spec["label"]] = entries
             total_bytes += size
-        for path in _sqlite_paths(plan["sourceSpecs"], entries_by_label):
-            _validate_sqlite(path, checkpoint=True)
+        errors = _validate_sqlite_many(_sqlite_paths(plan["sourceSpecs"], entries_by_label), checkpoint=True)
+        if errors:
+            raise StorageMigrationError(errors[0])
         current_fingerprint = _fingerprint(plan["sourceSpecs"], entries_by_label)
         if current_fingerprint != plan["sourceFingerprint"]:
             raise StorageMigrationError("确认迁移后源数据发生变化，请重新预览")
@@ -882,7 +1242,6 @@ class StorageMigrationService:
                     shutil.copystat(source, destination, follow_symlinks=False)
                 except OSError as exc:
                     raise StorageMigrationError(f"无法保留目录属性: {destination}") from exc
-        progress = 0
         for entry in sorted(entries, key=lambda item: (item["type"] != "dir", item["targetRelativePath"].casefold())):
             source = Path(entry["sourceRoot"]) / Path(*entry["relativePath"].split("/")) if entry["relativePath"] else Path(entry["sourceRoot"])
             destination = target / Path(*entry["targetRelativePath"].split("/"))
@@ -892,22 +1251,84 @@ class StorageMigrationService:
                     shutil.copystat(source, destination, follow_symlinks=False)
                 except OSError as exc:
                     raise StorageMigrationError(f"无法保留目录属性: {destination}") from exc
-                continue
-            if _has_link_ancestor(source) or not source.is_file():
-                raise StorageMigrationError(f"复制前源文件不可用: {source}")
-            self._ensure_target_directory(destination.parent)
-            shutil.copyfile(source, destination)
+
+        files = [entry for entry in entries if entry["type"] == "file"]
+        progress = {
+            "bytes": 0,
+            "files": 0,
+        }
+
+        def on_result(_index: int, result: dict[str, Any]) -> None:
+            entry = result["entry"]
+            entry["targetSha256"] = result["targetSha256"]
+            entry["targetSize"] = result["targetSize"]
+            progress["bytes"] += int(result["targetSize"])
+            progress["files"] += 1
+            journal = self._live_or_disk_journal()
+            if journal is None:
+                return
+            journal.update(
+                {
+                    "progressBytes": progress["bytes"],
+                    "completedBytes": progress["bytes"],
+                    "completedFiles": progress["files"],
+                    "totalFiles": len(files),
+                    "currentItem": str(entry["targetRelativePath"]),
+                    "message": "正在复制文件",
+                }
+            )
+            self._write_journal(journal)
+
+        _bounded_map(
+            list(enumerate(files)),
+            lambda job: self._copy_file(job[1], target),
+            on_result=on_result,
+        )
+
+    def _sqlite_copy_lock(self, source: Path) -> threading.Lock:
+        key = str(source).lower()
+        for suffix in ("-wal", "-shm"):
+            if key.endswith(suffix):
+                key = key[: -len(suffix)]
+                break
+        with self._sqlite_copy_locks_guard:
+            return self._sqlite_copy_locks.setdefault(key, threading.Lock())
+
+    def _copy_file(self, entry: dict[str, Any], target: Path) -> dict[str, Any]:
+        source = Path(entry["sourceRoot"]) / Path(*str(entry["relativePath"]).split("/"))
+        with self._sqlite_copy_lock(source):
+            return self._copy_file_locked(entry, target)
+
+    def _copy_file_locked(self, entry: dict[str, Any], target: Path) -> dict[str, Any]:
+        source = Path(entry["sourceRoot"]) / Path(*str(entry["relativePath"]).split("/"))
+        destination = target / Path(*str(entry["targetRelativePath"]).split("/"))
+        if _has_link_ancestor(source) or not source.is_file():
+            raise StorageMigrationError(f"复制前源文件不可用: {source}")
+        self._ensure_target_directory(destination.parent)
+        temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            shutil.copyfile(source, temporary)
+            if temporary.stat().st_size != int(entry["size"]):
+                raise StorageMigrationError(f"复制校验失败: {destination}")
+            copied_hash = _hash_file(temporary)
+            if copied_hash != str(entry["sourceSha256"] or ""):
+                raise StorageMigrationError(f"复制校验失败: {destination}")
             try:
-                shutil.copystat(source, destination, follow_symlinks=False)
+                shutil.copystat(source, temporary, follow_symlinks=False)
             except OSError as exc:
                 raise StorageMigrationError(f"无法保留文件属性: {destination}") from exc
-            if destination.stat().st_size != int(entry["size"]) or _hash_file(destination) != entry["sourceSha256"]:
-                raise StorageMigrationError(f"复制校验失败: {destination}")
-            progress += int(entry["size"])
-            journal = self._read_journal()
-            if journal is not None:
-                journal["progressBytes"] = progress
-                self._write_journal(journal)
+            os.replace(temporary, destination)
+            _fsync_directory(destination.parent)
+            return {
+                "entry": entry,
+                "targetSha256": copied_hash,
+                "targetSize": int(entry["size"]),
+            }
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _ensure_target_directory(path: Path) -> None:
@@ -922,19 +1343,52 @@ class StorageMigrationService:
             (_canonical(spec["path"]), target / Path(*spec["targetRelativeRoot"].split("/")))
             for spec in plan["sourceSpecs"]
         ]
-        for entry in plan["entries"]:
-            if entry["type"] != "file" or not str(entry["relativePath"]).lower().endswith(".json"):
-                continue
-            path = target / Path(*entry["targetRelativePath"].split("/"))
-            try:
-                if path.stat().st_size > 1024 * 1024:
-                    continue
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                continue
-            changed, rewritten = self._rewrite_json_value(payload, mappings, depth=0, nodes=[0])
-            if changed:
-                _atomic_write_json(path, rewritten)
+        json_entries = [
+            entry
+            for entry in plan["entries"]
+            if entry["type"] == "file" and str(entry["relativePath"]).lower().endswith(".json")
+        ]
+
+        def on_result(_index: int, result: dict[str, Any]) -> None:
+            entry = result["entry"]
+            if result.get("changed"):
+                entry["targetSha256"] = result["targetSha256"]
+                entry["targetSize"] = result["targetSize"]
+            journal = self._live_or_disk_journal()
+            if journal is not None:
+                journal["currentItem"] = str(entry["targetRelativePath"])
+                journal["message"] = "正在重写路径"
+                self._write_journal(journal)
+
+        _bounded_map(
+            json_entries,
+            lambda entry: self._rewrite_json_entry(entry, mappings, target),
+            on_result=on_result,
+        )
+
+    def _rewrite_json_entry(
+        self,
+        entry: dict[str, Any],
+        mappings: list[tuple[Path, Path]],
+        target: Path,
+    ) -> dict[str, Any]:
+        path = target / Path(*str(entry["targetRelativePath"]).split("/"))
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                return {"entry": entry, "changed": False}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {"entry": entry, "changed": False}
+        changed, rewritten = self._rewrite_json_value(payload, mappings, depth=0, nodes=[0])
+        if not changed:
+            return {"entry": entry, "changed": False}
+        _atomic_write_json(path, rewritten)
+        return {
+            "entry": entry,
+            "changed": True,
+            "targetSha256": _hash_file(path),
+            "targetSize": path.stat().st_size,
+        }
 
     def _rewrite_json_value(
         self,
@@ -994,8 +1448,12 @@ class StorageMigrationService:
             item = dict(entry)
             if item["type"] == "file":
                 destination = target / Path(*_safe_manifest_relative(str(item["targetRelativePath"])))
-                item["targetSha256"] = _hash_file(destination)
-                item["targetSize"] = destination.stat().st_size
+                if not destination.is_file():
+                    raise StorageMigrationError(f"目标文件缺失: {destination}")
+                item["targetSha256"] = str(item.get("targetSha256") or "")
+                item["targetSize"] = int(item.get("targetSize", item.get("size", -1)))
+                if not item["targetSha256"] or destination.stat().st_size != item["targetSize"]:
+                    raise StorageMigrationError(f"目标文件复制结果无效: {destination}")
             entries.append(item)
         return {
             "schema": STORAGE_SCHEMA,
@@ -1009,7 +1467,13 @@ class StorageMigrationService:
             "entries": entries,
         }
 
-    def _verify_target_manifest(self, target: Path, manifest: dict[str, Any]) -> None:
+    def _verify_target_manifest(
+        self,
+        target: Path,
+        manifest: dict[str, Any],
+        *,
+        verify_hashes: bool = True,
+    ) -> None:
         if int(manifest.get("schema", 0) or 0) != STORAGE_SCHEMA or manifest.get("datasetIdentity") != DATASET_IDENTITY:
             raise StorageMigrationError("目标清单版本或数据集不匹配")
         entries = manifest.get("entries")
@@ -1034,7 +1498,7 @@ class StorageMigrationService:
             elif entry.get("type") == "file":
                 if not path.is_file() or path.stat().st_size != int(entry.get("targetSize", entry.get("size", -1))):
                     raise StorageMigrationError(f"目标文件大小不匹配: {path}")
-                if _hash_file(path) != str(entry.get("targetSha256") or ""):
+                if verify_hashes and _hash_file(path) != str(entry.get("targetSha256") or ""):
                     raise StorageMigrationError(f"目标文件哈希不匹配: {path}")
                 expected[relative] = "file"
             else:
@@ -1042,11 +1506,15 @@ class StorageMigrationService:
         actual = self._walk_target(target)
         if actual != expected:
             raise StorageMigrationError("目标内容与清单不一致")
+        sqlite_targets: list[Path] = []
         for entry in entries:
             if entry.get("type") != "file" or str(entry.get("relativePath") or "").lower().endswith(("-wal", "-shm")):
                 continue
             if Path(str(entry.get("relativePath") or "")).suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
-                _validate_sqlite(target / Path(*_safe_manifest_relative(str(entry["targetRelativePath"]))), checkpoint=False)
+                sqlite_targets.append(target / Path(*_safe_manifest_relative(str(entry["targetRelativePath"]))))
+        errors = _validate_sqlite_many(sqlite_targets, checkpoint=False)
+        if errors:
+            raise StorageMigrationError(errors[0])
 
     @staticmethod
     def _walk_target(root: Path) -> dict[str, str]:
@@ -1081,9 +1549,15 @@ class StorageMigrationService:
             "sourceSpecs": plan["sourceSpecs"],
             "entries": plan["entries"],
         }
-        self._verify_sources_unchanged_from_manifest(manifest, allow_missing=allow_missing)
+        self._verify_sources_unchanged_from_manifest(manifest, allow_missing=allow_missing, verify_hashes=False)
 
-    def _verify_sources_unchanged_from_manifest(self, manifest: dict[str, Any], *, allow_missing: bool) -> None:
+    def _verify_sources_unchanged_from_manifest(
+        self,
+        manifest: dict[str, Any],
+        *,
+        allow_missing: bool,
+        verify_hashes: bool = False,
+    ) -> None:
         specs = manifest.get("sourceSpecs")
         entries = manifest.get("entries")
         if not isinstance(specs, list) or not isinstance(entries, list):
@@ -1099,7 +1573,7 @@ class StorageMigrationService:
             root = Path(str(spec.get("path") or ""))
             expected = expected_by_label.get(label, {})
             try:
-                actual_entries, _ = _walk_source(root, hash_files=True)
+                actual_entries, _ = _walk_source(root, hash_files=False)
             except StorageMigrationError:
                 if allow_missing and not root.exists():
                     continue
@@ -1111,7 +1585,17 @@ class StorageMigrationService:
                     if allow_missing:
                         continue
                     raise StorageMigrationError(f"源数据在校验期间消失: {root / relative}")
-                if current.get("type") != expected_entry.get("type") or current.get("size") != expected_entry.get("size") or current.get("sha256") != expected_entry.get("sourceSha256", expected_entry.get("sha256")):
+                if (
+                    current.get("type") != expected_entry.get("type")
+                    or current.get("size") != expected_entry.get("size")
+                ):
+                    raise StorageMigrationError(f"源数据在校验期间发生变化: {root / relative}")
+                if (
+                    verify_hashes
+                    and current.get("type") == "file"
+                    and _hash_file(root / Path(*relative.split("/")))
+                    != expected_entry.get("sourceSha256", expected_entry.get("sha256"))
+                ):
                     raise StorageMigrationError(f"源数据在校验期间发生变化: {root / relative}")
             unexpected = set(actual) - set(expected)
             if unexpected:
@@ -1141,11 +1625,24 @@ class StorageMigrationService:
         error: str = "",
     ) -> dict[str, Any]:
         base = dict(previous or {})
+        previous_state = str(base.get("state") or "")
+        if state == "cleanup_pending" and previous_state != "cleanup_pending":
+            base.update(
+                {
+                    "progressBytes": 0,
+                    "completedBytes": 0,
+                    "completedFiles": 0,
+                    "currentItem": "",
+                    "speedBytesPerSecond": 0,
+                    "etaSeconds": None,
+                }
+            )
         base.update(
             {
                 "schema": STORAGE_SCHEMA,
                 "datasetIdentity": DATASET_IDENTITY,
                 "id": str(locator.get("migrationId") or base.get("id") or ""),
+                "jobId": str(locator.get("migrationId") or base.get("jobId") or base.get("id") or ""),
                 "state": state,
                 "phase": phase,
                 "targetRoot": str(locator["targetRoot"]),
@@ -1154,31 +1651,51 @@ class StorageMigrationService:
                 "totalBytes": int(base.get("totalBytes", 0) or 0),
                 "requiredBytes": int(base.get("requiredBytes", 0) or 0),
                 "progressBytes": int(base.get("progressBytes", base.get("totalBytes", 0)) or 0),
+                "completedBytes": int(base.get("completedBytes", base.get("progressBytes", 0)) or 0),
+                "completedFiles": int(base.get("completedFiles", 0) or 0),
+                "totalFiles": int(base.get("totalFiles", 0) or 0),
+                "currentItem": str(base.get("currentItem") or ""),
+                "speedBytesPerSecond": float(base.get("speedBytesPerSecond", 0) or 0),
+                "etaSeconds": base.get("etaSeconds"),
+                "message": str(base.get("message") or ""),
                 "deletedBytes": int(base.get("deletedBytes", 0) if deleted_bytes is None else deleted_bytes),
                 "error": error,
                 "manifestPath": str(locator.get("manifestPath") or Path(locator["targetRoot"]) / TARGET_MANIFEST_NAME),
             }
         )
+        if state == "completed":
+            base["progressBytes"] = int(base.get("totalBytes", 0) or 0)
+            base["completedBytes"] = int(base.get("totalBytes", 0) or 0)
+            base["completedFiles"] = int(base.get("totalFiles", 0) or 0)
+            base["currentItem"] = ""
+            base["message"] = "迁移完成"
         return base
 
     def _cleanup_sources(self, manifest: dict[str, Any], journal: dict[str, Any]) -> int:
         specs = [item for item in manifest.get("sourceSpecs", []) if isinstance(item, dict)]
         entries = [item for item in manifest.get("entries", []) if isinstance(item, dict)]
-        deleted_bytes = 0
-        for entry in entries:
-            if entry.get("type") == "file":
-                root = Path(str(entry.get("sourceRoot") or ""))
-                relative = str(entry.get("relativePath") or "")
-                path = root / Path(*_safe_manifest_relative(relative)) if relative else root
-                if not path.exists():
-                    deleted_bytes += int(entry.get("size", 0) or 0)
-                    continue
-                if _is_link(path) or not path.is_file():
-                    raise StorageMigrationError(f"源文件清理目标类型不匹配: {path}")
-                path.unlink()
-                deleted_bytes += int(entry.get("size", 0) or 0)
-                journal["deletedBytes"] = deleted_bytes
-                self._write_journal(journal)
+        deleted_bytes = int(journal.get("deletedBytes", 0) or 0)
+        deleted_files = int(journal.get("completedFiles", 0) or 0)
+        files = [entry for entry in entries if entry.get("type") == "file"]
+
+        def on_result(_index: int, result: dict[str, Any]) -> None:
+            nonlocal deleted_bytes, deleted_files
+            deleted_bytes += int(result.get("deletedBytes", 0) or 0)
+            deleted_files += 1
+            journal.update(
+                {
+                    "deletedBytes": deleted_bytes,
+                    "progressBytes": deleted_bytes,
+                    "completedBytes": deleted_bytes,
+                    "completedFiles": deleted_files,
+                    "totalFiles": len(files),
+                    "currentItem": str(result["relativePath"]),
+                    "message": "正在清理原数据",
+                }
+            )
+            self._write_journal(journal)
+
+        _bounded_map(files, self._delete_source_file, on_result=on_result)
         directories = sorted(
             (entry for entry in entries if entry.get("type") == "dir" and entry.get("relativePath")),
             key=lambda item: str(item.get("relativePath")).count("/"),
@@ -1193,6 +1710,8 @@ class StorageMigrationService:
                     path.rmdir()
                 except OSError as exc:
                     raise StorageMigrationError(f"源目录清理失败: {path}") from exc
+            journal["currentItem"] = str(entry["relativePath"])
+            self._write_journal(journal)
         for spec in specs:
             root = Path(str(spec.get("path") or ""))
             if root.exists():
@@ -1204,16 +1723,41 @@ class StorageMigrationService:
                     raise StorageMigrationError(f"源根仍有未清理内容: {root}") from exc
         return deleted_bytes
 
+    @staticmethod
+    def _delete_source_file(entry: dict[str, Any]) -> dict[str, Any]:
+        root = Path(str(entry.get("sourceRoot") or ""))
+        relative = str(entry.get("relativePath") or "")
+        path = root / Path(*_safe_manifest_relative(relative)) if relative else root
+        if not path.exists():
+            return {"relativePath": relative, "deletedBytes": 0}
+        if _is_link(path) or not path.is_file():
+            raise StorageMigrationError(f"源文件清理目标类型不匹配: {path}")
+        path.unlink()
+        return {"relativePath": relative, "deletedBytes": int(entry.get("size", 0) or 0)}
+
     def _public_job(self, journal: dict[str, Any]) -> dict[str, Any]:
         specs = journal.get("sourceSpecs") or []
-        return {
+        completed_bytes = int(journal.get("completedBytes", journal.get("progressBytes", 0)) or 0)
+        total_bytes = int(journal.get("totalBytes", 0) or 0)
+        result = {
             "id": str(journal.get("id") or ""),
+            "jobId": str(journal.get("jobId", journal.get("id", "")) or ""),
             "state": str(journal.get("state") or ""),
             "phase": str(journal.get("phase") or ""),
             "targetRoot": str(journal.get("targetRoot") or ""),
             "sourceRoots": [str(item.get("path")) for item in specs if isinstance(item, dict) and item.get("path")],
-            "progressBytes": int(journal.get("progressBytes", 0) or 0),
-            "totalBytes": int(journal.get("totalBytes", 0) or 0),
+            "progressBytes": completed_bytes,
+            "completedBytes": completed_bytes,
+            "totalBytes": total_bytes,
+            "completedFiles": int(journal.get("completedFiles", 0) or 0),
+            "totalFiles": int(journal.get("totalFiles", 0) or 0),
+            "currentItem": str(journal.get("currentItem") or ""),
+            "speedBytesPerSecond": float(journal.get("speedBytesPerSecond", 0) or 0),
+            "etaSeconds": journal.get("etaSeconds"),
+            "message": str(journal.get("message") or ""),
             "deletedBytes": int(journal.get("deletedBytes", 0) or 0),
             "error": str(journal.get("error") or ""),
         }
+        if journal.get("previewReady") is True:
+            result["previewReady"] = True
+        return result

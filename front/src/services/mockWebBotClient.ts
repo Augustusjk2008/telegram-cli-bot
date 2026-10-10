@@ -1800,6 +1800,7 @@ export class MockWebBotClient implements WebBotClient {
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private storageMigration: StorageMigrationSnapshot = {
     state: "completed",
+    phase: "completed",
     maintenance: false,
     available: true,
     canMigrate: true,
@@ -1811,6 +1812,8 @@ export class MockWebBotClient implements WebBotClient {
     totalBytes: 82 * 1024 * 1024,
   };
   private storageMigrationPlanTarget = "";
+  private storageMigrationPreviewJobId = "";
+  private storageMigrationPreviewPolls = 0;
   private cliErrorStats: CliErrorStatsResult = {
     summary: {
       total: 3,
@@ -7336,6 +7339,26 @@ export class MockWebBotClient implements WebBotClient {
     if (!this.hasAdminOps()) {
       throw new WebApiClientError("无权查看存储迁移", { status: 403, code: "forbidden" });
     }
+    if (this.storageMigrationPreviewJobId && !this.storageMigration.planId) {
+      this.storageMigrationPreviewPolls += 1;
+      if (this.storageMigrationPreviewPolls >= 1) {
+        this.storageMigration = {
+          ...this.storageMigration,
+          state: "preparing",
+          phase: "preparing",
+          previewReady: true,
+          planId: "mock-storage-plan",
+          progress: 0.4,
+          completedBytes: Math.round(this.storageMigration.totalBytes * 0.4),
+          totalFiles: 170,
+          completedFiles: 68,
+          currentItem: "chat-history/workspaces/demo/chat.sqlite",
+          speedBytesPerSecond: 4 * 1024 * 1024,
+          etaSeconds: 12,
+          message: "预览完成，可确认迁移。",
+        };
+      }
+    }
     return {
       ...this.storageMigration,
       sources: this.storageMigration.sources.map((item) => ({ ...item })),
@@ -7346,11 +7369,32 @@ export class MockWebBotClient implements WebBotClient {
     if (!this.hasAdminOps()) {
       throw new WebApiClientError("无权预览存储迁移", { status: 403, code: "forbidden" });
     }
-    const planId = "mock-storage-plan";
+    const jobId = "mock-storage-job";
     this.storageMigrationPlanTarget = targetRoot.trim();
+    this.storageMigrationPreviewJobId = jobId;
+    this.storageMigrationPreviewPolls = 0;
+    this.storageMigration = {
+      ...this.storageMigration,
+      state: "preparing",
+      phase: "preparing",
+      maintenance: false,
+      planId: undefined,
+      jobId,
+      targetRoot: targetRoot.trim(),
+      progress: 0,
+      completedBytes: 0,
+      totalFiles: 170,
+      completedFiles: 0,
+      currentItem: "正在扫描源目录",
+      speedBytesPerSecond: 0,
+      etaSeconds: null,
+      message: "正在扫描源目录。",
+    };
     return {
-      ...(await this.getStorageMigrationSnapshot()),
-      planId,
+      ...this.storageMigration,
+      sources: this.storageMigration.sources.map((item) => ({ ...item })),
+      jobId,
+      planId: "",
       targetRoot: targetRoot.trim(),
       warnings: ["迁移前会停止全部智能体进程。"],
     };
@@ -7366,7 +7410,14 @@ export class MockWebBotClient implements WebBotClient {
     this.storageMigration = {
       ...this.storageMigration,
       state: "awaiting_restart",
+      phase: "awaiting_restart",
       maintenance: true,
+      planId,
+      progress: 1,
+      completedBytes: this.storageMigration.totalBytes,
+      completedFiles: this.storageMigration.totalFiles,
+      currentItem: "",
+      etaSeconds: 0,
       targetRoot: this.storageMigrationPlanTarget,
       restartRequired: true,
       message: "迁移已完成校验，重启服务后继续清理原始数据。",
@@ -7381,6 +7432,7 @@ export class MockWebBotClient implements WebBotClient {
     this.storageMigration = {
       ...this.storageMigration,
       state: "completed",
+      phase: "completed",
       maintenance: false,
       cleanupPending: false,
       restartRequired: false,

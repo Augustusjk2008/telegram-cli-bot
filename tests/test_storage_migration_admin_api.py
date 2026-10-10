@@ -54,6 +54,15 @@ class FakeStorageMigrationService:
         return {"state": "completed"}
 
 
+async def _wait_for_preview(api: StorageMigrationApi) -> dict[str, object]:
+    for _ in range(20):
+        status = await api.snapshot()
+        if status.get("planId"):
+            return status
+        await asyncio.sleep(0)
+    raise AssertionError("preview did not complete")
+
+
 @pytest.mark.asyncio
 async def test_preview_binds_server_side_plan_and_migration_stops_all_agents() -> None:
     service = FakeStorageMigrationService()
@@ -61,8 +70,10 @@ async def test_preview_binds_server_side_plan_and_migration_stops_all_agents() -
     api = StorageMigrationApi(service, stop_all_agents=stop_all_agents)
 
     preview = await api.preview("C:/new")
-    assert preview["planId"] == "plan-1"
-    assert preview["sources"][0]["path"] == ""
+    assert preview["jobId"]
+    assert "planId" not in preview
+    preview_status = await _wait_for_preview(api)
+    assert preview_status["planId"] == "plan-1"
 
     status = await api.begin("plan-1", confirm_stop_all_agents=True)
     assert status["state"] == "copying"
@@ -79,10 +90,69 @@ async def test_preview_binds_server_side_plan_and_migration_stops_all_agents() -
 
 
 @pytest.mark.asyncio
+async def test_preview_returns_job_immediately_and_exposes_live_progress() -> None:
+    class DelayedStorageMigrationService:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def preview(self, _target: str) -> dict[str, object]:
+            self.started.set()
+            await self.release.wait()
+            return {
+                "id": "plan-live",
+                "state": "preparing",
+                "previewReady": True,
+                "totalBytes": 100,
+                "completedBytes": 100,
+                "totalFiles": 2,
+                "completedFiles": 2,
+            }
+
+        async def status(self) -> dict[str, object]:
+            return {
+                "state": "preparing",
+                "phase": "preparing",
+                "completedBytes": 40,
+                "totalBytes": 100,
+                "completedFiles": 1,
+                "totalFiles": 2,
+                "currentItem": "chat-history/chat.sqlite",
+                "message": "正在计算文件校验",
+            }
+
+        def snapshot(self) -> dict[str, object]:
+            return {
+                "state": "preparing",
+                "totalBytes": 100,
+                "completedBytes": 100,
+                "totalFiles": 2,
+                "completedFiles": 2,
+            }
+
+    service = DelayedStorageMigrationService()
+    api = StorageMigrationApi(service)
+    initial = await api.preview("C:/new")
+    assert initial["jobId"]
+    assert "planId" not in initial
+
+    await service.started.wait()
+    progress = await api.snapshot()
+    assert progress["jobId"] == initial["jobId"]
+    assert progress["completedBytes"] == 40
+    assert progress["currentItem"] == "chat-history/chat.sqlite"
+
+    service.release.set()
+    ready = await _wait_for_preview(api)
+    assert ready["planId"] == "plan-live"
+
+
+@pytest.mark.asyncio
 async def test_migration_rejects_unknown_plan_and_unready_stop_hook() -> None:
     service = FakeStorageMigrationService()
     api = StorageMigrationApi(service, stop_all_agents=AsyncMock(return_value=False))
     await api.preview("C:/new")
+    await _wait_for_preview(api)
 
     with pytest.raises(StorageMigrationApiError) as unknown:
         await api.begin("other", confirm_stop_all_agents=True)
@@ -166,7 +236,9 @@ async def test_storage_handlers_require_admin_and_ignore_client_source_list() ->
     request = make_mocked_request("POST", "/api/admin/storage/preview")
 
     response = await server.admin_storage_preview(request)
-    assert response.status == 200
+    assert response.status == 202
+    assert service.calls == []
+    await asyncio.sleep(0)
     assert service.calls == [("preview", "C:/new")]
     server._with_capability.assert_awaited_once_with(request, CAP_ADMIN_OPS)
 

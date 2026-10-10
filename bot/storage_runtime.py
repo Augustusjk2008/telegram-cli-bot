@@ -37,6 +37,13 @@ class AsyncStorageMigrationService:
             )
         return result
 
+    async def status(self) -> dict[str, Any]:
+        """Read the live migration journal without contending with its lock."""
+        method = getattr(self._service, "status", None)
+        if not callable(method):
+            return {}
+        return await asyncio.to_thread(method)
+
     async def preview(self, target_root: str) -> dict[str, Any]:
         return await asyncio.to_thread(self._service.preview, target_root)
 

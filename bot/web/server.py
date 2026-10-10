@@ -5151,7 +5151,7 @@ class WebApiServer:
             data = await self.storage_migration_api.preview(target_root)
         except StorageMigrationApiError as exc:
             raise self._storage_migration_error(exc) from exc
-        return _json({"ok": True, "data": data})
+        return _json({"ok": True, "data": data}, status=202)
 
     async def admin_storage_migrate(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

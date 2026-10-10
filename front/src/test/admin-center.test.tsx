@@ -53,6 +53,14 @@ test("数据迁移先预览并明确确认停止全部智能体", async () => {
   await user.type(screen.getByRole("textbox", { name: "存储迁移目标目录" }), "D:\\OrbitData");
   await user.click(screen.getByRole("button", { name: "预览并校验" }));
   await screen.findByRole("heading", { name: "迁移预览" });
+  await waitFor(() => expect(screen.getByTestId("storage-migration-progress")).toHaveTextContent("正在扫描源目录"), {
+    timeout: 3000,
+  });
+  expect(screen.getByTestId("storage-migration-progress")).toHaveTextContent("已处理大小");
+  expect(screen.getByTestId("storage-migration-progress")).toHaveTextContent("当前项");
+  await waitFor(() => expect(screen.getByRole("button", { name: "确认并迁移" })).toBeEnabled(), {
+    timeout: 3000,
+  });
   await user.click(screen.getByRole("button", { name: "确认并迁移" }));
 
   expect(screen.getByRole("dialog", { name: "确认数据迁移" })).toHaveTextContent("停止全部智能体进程");
@@ -61,6 +69,41 @@ test("数据迁移先预览并明确确认停止全部智能体", async () => {
 
   await waitFor(() => expect(startMigration).toHaveBeenCalledWith("mock-storage-plan", true));
   expect(await screen.findByText(/请重启服务使新数据根目录生效/)).toBeInTheDocument();
+});
+
+test("数据迁移刷新后从状态接口恢复进度", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const baseSnapshot = await client.getStorageMigrationSnapshot();
+  const inProgressSnapshot = {
+    ...baseSnapshot,
+    state: "copying" as const,
+    phase: "copying" as const,
+    maintenance: true,
+    jobId: "storage-job-1",
+    planId: "storage-plan-1",
+    totalBytes: 100 * 1024 * 1024,
+    completedBytes: 40 * 1024 * 1024,
+    totalFiles: 200,
+    completedFiles: 80,
+    currentItem: "chat-history/workspaces/demo/chat.sqlite",
+    speedBytesPerSecond: 4 * 1024 * 1024,
+    etaSeconds: 15,
+  };
+  Object.assign(client, {
+    getStorageMigrationSnapshot: vi.fn(async () => inProgressSnapshot),
+  });
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "数据迁移" }));
+
+  const progress = await screen.findByTestId("storage-migration-progress");
+  expect(progress).toHaveTextContent("正在复制文件");
+  expect(progress).toHaveTextContent("40%");
+  expect(progress).toHaveTextContent("已处理文件: 80 / 200");
+  expect(progress).toHaveTextContent("chat-history/workspaces/demo/chat.sqlite");
+  expect(progress).toHaveTextContent("预计剩余: 15 秒");
 });
 
 test("Codex 额度趋势隐藏已下线的次要额度桶", async () => {

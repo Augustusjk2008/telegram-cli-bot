@@ -74,6 +74,61 @@ def test_snapshot_only_checks_source_roots_and_defers_full_inventory(
     assert snapshot["totalBytes"] == 0
 
 
+def test_preview_persists_manifest_and_execute_reuses_it(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, repo, target = migration_context
+    _make_sources(home, with_sqlite=False)
+    service = StorageMigrationService(repo)
+    plan = service.preview(str(target))
+
+    journal = json.loads(runtime_paths.get_storage_journal_path().read_text(encoding="utf-8"))
+    assert journal["state"] == "preparing"
+    assert journal["plan"]["entries"]
+    assert {"completedBytes", "totalBytes", "completedFiles", "totalFiles", "currentItem", "speedBytesPerSecond", "etaSeconds", "message"} <= set(journal)
+
+    def fail_inventory(*_args: object, **_kwargs: object) -> tuple[list[dict[str, object]], int]:
+        raise AssertionError("begin/execute must reuse the persisted preview manifest")
+
+    monkeypatch.setattr(migration_module, "_walk_source", fail_inventory)
+    restarted = StorageMigrationService(repo)
+    assert restarted.begin(str(plan["id"]))["state"] == "stopping"
+    job = restarted.execute(str(plan["id"]))
+    assert job["state"] == "awaiting_restart"
+    assert job["completedBytes"] == job["totalBytes"]
+    assert job["completedFiles"] == job["totalFiles"]
+
+
+def test_journal_progress_is_throttled_until_stage_changes(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _home, repo, _target = migration_context
+    service = StorageMigrationService(repo)
+    writes: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        migration_module,
+        "_atomic_write_json",
+        lambda _path, payload: writes.append(dict(payload)),
+    )
+    journal: dict[str, object] = {
+        "state": "copying",
+        "phase": "copying",
+        "totalBytes": 64 * 1024 * 1024,
+        "completedBytes": 0,
+    }
+    service._write_journal(journal, force=True)
+    journal["completedBytes"] = 1
+    service._write_journal(journal)
+    assert len(writes) == 1
+
+    journal["state"] = "rewriting"
+    journal["phase"] = "rewriting"
+    service._write_journal(journal)
+    assert len(writes) == 2
+
+
 def test_success_copies_sqlite_and_deletes_sources_after_startup(
     migration_context: tuple[Path, Path, Path],
 ) -> None:

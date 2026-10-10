@@ -253,8 +253,10 @@ export type EnvConfigPatchResult = {
 };
 
 export type StorageMigrationState =
+  | "preparing"
   | "stopping"
   | "copying"
+  | "rewriting"
   | "verifying"
   | "awaiting_restart"
   | "cleanup_pending"
@@ -273,21 +275,31 @@ export type StorageMigrationSource = {
 
 export type StorageMigrationSnapshot = {
   state: StorageMigrationState;
+  phase?: StorageMigrationState;
   maintenance: boolean;
   available?: boolean;
   canMigrate?: boolean;
   currentRoot: string;
   sources: StorageMigrationSource[];
   totalBytes: number;
+  jobId?: string;
+  completedBytes?: number;
+  totalFiles?: number;
+  completedFiles?: number;
+  currentItem?: string;
+  speedBytesPerSecond?: number;
+  etaSeconds?: number | null;
   sizePending?: boolean;
   blockers?: string[];
   warnings?: string[];
   planId?: string;
+  previewReady?: boolean;
   targetRoot?: string;
   progress?: number;
   message?: string;
   error?: string;
   errorCode?: string;
+  recoveryMessage?: string;
   restartRequired?: boolean;
   cleanupPending?: boolean;
 };

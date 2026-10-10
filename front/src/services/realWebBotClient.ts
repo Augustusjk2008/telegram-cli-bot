@@ -3881,8 +3881,10 @@ function mapNotificationSettings(data: RawNotificationSettings | null | undefine
 }
 
 const STORAGE_MIGRATION_STATES: StorageMigrationState[] = [
+  "preparing",
   "stopping",
   "copying",
+  "rewriting",
   "verifying",
   "awaiting_restart",
   "cleanup_pending",
@@ -3905,29 +3907,78 @@ function mapStorageMigrationSource(value: unknown): StorageMigrationSnapshot["so
 
 function mapStorageMigrationSnapshot(value: unknown): StorageMigrationSnapshot {
   const data = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const rawState = String(data.state || data.status || "failed") as StorageMigrationState;
+  const rawPhase = String(data.phase || "").trim() as StorageMigrationState;
+  const rawState = String(data.state || data.status || rawPhase || (data.jobId || data.job_id ? "preparing" : "failed")) as StorageMigrationState;
   const state = STORAGE_MIGRATION_STATES.includes(rawState) ? rawState : "failed";
+  const totalBytes = Number(data.totalBytes ?? data.total_bytes ?? 0) || 0;
+  const completedBytes = Number(
+    data.completedBytes
+      ?? data.completed_bytes
+      ?? data.progressBytes
+      ?? data.progress_bytes
+      ?? data.processedBytes
+      ?? data.processed_bytes
+      ?? 0,
+  ) || 0;
+  const totalFiles = Number(data.totalFiles ?? data.total_files ?? data.fileCount ?? data.file_count ?? 0) || 0;
+  const completedFiles = Number(
+    data.completedFiles
+      ?? data.completed_files
+      ?? data.processedFiles
+      ?? data.processed_files
+      ?? 0,
+  ) || 0;
+  const rawEta = data.etaSeconds ?? data.eta_seconds ?? data.eta;
+  const progress = data.progress !== undefined
+    ? Number(data.progress) || 0
+    : totalBytes > 0
+      ? completedBytes / totalBytes
+      : totalFiles > 0
+        ? completedFiles / totalFiles
+        : undefined;
   return {
     state,
+    ...(rawPhase && STORAGE_MIGRATION_STATES.includes(rawPhase) ? { phase: rawPhase } : { phase: state }),
     maintenance: Boolean(data.maintenance),
     available: data.available === undefined ? true : Boolean(data.available),
     ...(data.canMigrate !== undefined ? { canMigrate: Boolean(data.canMigrate) } : {}),
     currentRoot: String(data.currentRoot || data.current_root || ""),
     sources: Array.isArray(data.sources) ? data.sources.map(mapStorageMigrationSource) : [],
-    totalBytes: Number(data.totalBytes ?? data.total_bytes ?? 0) || 0,
+    totalBytes,
+    ...(data.jobId || data.job_id ? { jobId: String(data.jobId || data.job_id) } : {}),
+    ...(completedBytes > 0 || data.completedBytes !== undefined || data.completed_bytes !== undefined || data.progressBytes !== undefined || data.progress_bytes !== undefined
+      ? { completedBytes: Math.max(0, completedBytes) }
+      : {}),
+    ...(totalFiles > 0 || data.totalFiles !== undefined || data.total_files !== undefined || data.fileCount !== undefined || data.file_count !== undefined
+      ? { totalFiles: Math.max(0, totalFiles) }
+      : {}),
+    ...(completedFiles > 0 || data.completedFiles !== undefined || data.completed_files !== undefined || data.processedFiles !== undefined || data.processed_files !== undefined
+      ? { completedFiles: Math.max(0, completedFiles) }
+      : {}),
+    ...(data.currentItem || data.current_item || data.currentPath || data.current_path
+      ? { currentItem: String(data.currentItem || data.current_item || data.currentPath || data.current_path) }
+      : {}),
+    ...(data.speedBytesPerSecond !== undefined || data.speed_bytes_per_second !== undefined || data.speed !== undefined
+      ? { speedBytesPerSecond: Number(data.speedBytesPerSecond ?? data.speed_bytes_per_second ?? data.speed) || 0 }
+      : {}),
+    ...(data.etaSeconds !== undefined || data.eta_seconds !== undefined || data.eta !== undefined
+      ? { etaSeconds: rawEta === null ? null : Number(rawEta) || 0 }
+      : {}),
     ...(data.sizePending || data.size_pending ? { sizePending: true } : {}),
     ...(Array.isArray(data.blockers) ? { blockers: data.blockers.map((item) => String(item)) } : {}),
     ...(Array.isArray(data.warnings) ? { warnings: data.warnings.map((item) => String(item)) } : {}),
     ...(data.planId || data.plan_id ? { planId: String(data.planId || data.plan_id) } : {}),
+    ...(data.previewReady !== undefined || data.preview_ready !== undefined
+      ? { previewReady: Boolean(data.previewReady ?? data.preview_ready) }
+      : {}),
     ...(data.targetRoot || data.target_root ? { targetRoot: String(data.targetRoot || data.target_root) } : {}),
-    ...(data.progress !== undefined
-      ? { progress: Number(data.progress) || 0 }
-      : data.progressBytes !== undefined && (data.totalBytes || data.total_bytes)
-        ? { progress: Math.min(1, Math.max(0, Number(data.progressBytes) / Number(data.totalBytes || data.total_bytes))) }
-        : {}),
+    ...(progress !== undefined ? { progress: Math.min(1, Math.max(0, progress > 1 ? progress / 100 : progress)) } : {}),
     ...(data.message ? { message: String(data.message) } : {}),
     ...(data.error ? { error: String(data.error) } : {}),
     ...(data.errorCode || data.error_code ? { errorCode: String(data.errorCode || data.error_code) } : {}),
+    ...(data.recoveryMessage || data.recovery_message || data.recoveryHint || data.recovery_hint
+      ? { recoveryMessage: String(data.recoveryMessage || data.recovery_message || data.recoveryHint || data.recovery_hint) }
+      : {}),
     ...(data.restartRequired || data.restart_required ? { restartRequired: Boolean(data.restartRequired || data.restart_required) } : {}),
     ...(data.cleanupPending || data.cleanup_pending ? { cleanupPending: Boolean(data.cleanupPending || data.cleanup_pending) } : {}),
   };
@@ -4534,11 +4585,15 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async previewStorageMigration(targetRoot: string): Promise<StorageMigrationPreview> {
-    return mapStorageMigrationPreview(await this.requestJson("/api/admin/storage/preview", {
+    const preview = mapStorageMigrationPreview(await this.requestJson("/api/admin/storage/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ targetRoot }),
     }));
+    return {
+      ...preview,
+      targetRoot: preview.targetRoot || targetRoot.trim(),
+    };
   }
 
   async startStorageMigration(planId: string, confirmStopAllAgents: boolean): Promise<StorageMigrationStatus> {

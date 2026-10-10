@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 
 STORAGE_MIGRATION_STATES = frozenset(
     {
+        "preparing",
         "stopping",
         "copying",
+        "rewriting",
         "verifying",
         "awaiting_restart",
         "cleanup_pending",
@@ -57,6 +60,8 @@ class StorageMigrationApi:
             "available": False,
             "maintenance": False,
         }
+        self._preview_task: asyncio.Task[None] | None = None
+        self._begin_in_progress = False
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -122,9 +127,19 @@ class StorageMigrationApi:
         aliases = {
             "id": "planId",
             "plan_id": "planId",
+            "job_id": "jobId",
             "target_root": "targetRoot",
             "source_root": "sourceRoot",
             "total_bytes": "totalBytes",
+            "progress_bytes": "progressBytes",
+            "completed_bytes": "completedBytes",
+            "completed_files": "completedFiles",
+            "total_files": "totalFiles",
+            "current_item": "currentItem",
+            "speed_bytes_per_second": "speedBytesPerSecond",
+            "eta_seconds": "etaSeconds",
+            "preview_ready": "previewReady",
+            "deleted_bytes": "deletedBytes",
             "file_count": "fileCount",
             "cleanup_pending": "cleanupPending",
             "restart_required": "restartRequired",
@@ -137,10 +152,15 @@ class StorageMigrationApi:
                 data[public_name] = data[source_name]
             data.pop(source_name, None)
         data["state"] = state
+        raw_has_plan_id = any(name in raw for name in ("planId", "plan_id"))
+        if state == "preparing" and not bool(data.get("previewReady")) and not raw_has_plan_id:
+            data.pop("planId", None)
         if "sources" in data and isinstance(data["sources"], list):
             data["sources"] = [cls._publicize_source(item) for item in data["sources"]]
         if "totalBytes" not in data and isinstance(data.get("sources"), list):
             data["totalBytes"] = sum(int(item.get("sizeBytes", 0) or 0) for item in data["sources"] if isinstance(item, Mapping))
+        if "progress" not in data and "completedBytes" in data and "progressBytes" not in data:
+            data["progressBytes"] = data["completedBytes"]
         if "progress" not in data and "progressBytes" in data:
             total = int(data.get("totalBytes", 0) or 0)
             data["progress"] = min(1.0, max(0.0, int(data.get("progressBytes", 0) or 0) / total)) if total else 0.0
@@ -149,6 +169,17 @@ class StorageMigrationApi:
         if maintenance is not None:
             data["maintenance"] = maintenance
         return data
+
+    async def _service_status(self) -> dict[str, Any] | None:
+        service = self._require_service()
+        method = getattr(service, "status", None)
+        if not callable(method):
+            return None
+        try:
+            value = await self._maybe_await(method())
+        except Exception:
+            return None
+        return self._mapping(value) or None
 
     async def _call(self, name: str, *args: object, **kwargs: object) -> object:
         service = self._require_service()
@@ -213,11 +244,29 @@ class StorageMigrationApi:
         return dict(self._status)
 
     async def snapshot(self) -> dict[str, Any]:
-        data = self._status_from(await self._call("snapshot"), fallback=self._status)
+        running = (
+            self._maintenance
+            or self._begin_in_progress
+            or (self._preview_task is not None and not self._preview_task.done())
+            or (self._task is not None and not self._task.done())
+        )
+        service_status = await self._service_status() if running and not self._begin_in_progress else None
+        if self._begin_in_progress:
+            data = self._status_from(self._status, fallback=self._status)
+        elif service_status is not None:
+            data = self._status_from({**self._status, **self._publicize(service_status)}, fallback=self._status)
+        elif running:
+            data = self._status_from(self._status, fallback=self._status)
+        else:
+            snapshot = self._publicize(await self._call("snapshot"))
+            data = self._status_from({**self._status, **snapshot}, fallback=self._status)
         if data["state"] in _PERSISTENT_MAINTENANCE_STATES:
             self._maintenance = True
+        if self._preview_task is not None and self._preview_task.done():
+            self._preview_task = None
         data["maintenance"] = self._maintenance
         data.setdefault("planId", self._status.get("planId", ""))
+        self._status = {**self._status, **data}
         return data
 
     async def preview(self, target_root: str) -> dict[str, Any]:
@@ -232,18 +281,35 @@ class StorageMigrationApi:
                 {"state": self._status.get("state", "stopping"), "maintenance": True},
             )
         async with self._lock:
-            if self._maintenance:
+            if self._maintenance or (self._preview_task is not None and not self._preview_task.done()):
                 raise StorageMigrationApiError(409, "storage_migration_busy", "存储迁移正在进行中")
-            data = self._publicize(await self._call("preview", target))
-            plan_id = str(self._field(data, "planId", "plan_id", "id", default="")).strip()
-            if not plan_id:
-                raise StorageMigrationApiError(502, "storage_migration_invalid_plan", "迁移预览未返回 planId")
-            data["planId"] = plan_id
-            data["targetRoot"] = str(self._field(data, "targetRoot", "target_root", default=target))
-            if "state" not in data and "status" not in data:
-                data["state"] = "verifying"
-            self._plans[plan_id] = data
-            return {**data, "maintenance": False}
+            job_id = uuid.uuid4().hex
+            self._status.pop("planId", None)
+            self._status.pop("previewReady", None)
+            self._status.pop("blockers", None)
+            self._status.pop("warnings", None)
+            self._status.pop("error", None)
+            self._status.pop("errorCode", None)
+            self._status = {
+                **self._status,
+                "jobId": job_id,
+                "state": "preparing",
+                "phase": "preparing",
+                "targetRoot": target,
+                "completedBytes": 0,
+                "totalBytes": 0,
+                "completedFiles": 0,
+                "totalFiles": 0,
+                "currentItem": "",
+                "speedBytesPerSecond": 0,
+                "etaSeconds": None,
+                "message": "正在扫描源目录",
+                "previewReady": False,
+                "maintenance": False,
+                "available": True,
+            }
+            self._preview_task = asyncio.create_task(self._run_preview(job_id, target))
+            return dict(self._status)
 
     @staticmethod
     def _stop_ready(value: object) -> bool:
@@ -302,6 +368,50 @@ class StorageMigrationApi:
         finally:
             self._task = None
 
+    async def _run_preview(self, job_id: str, target: str) -> None:
+        try:
+            raw_result = self._mapping(await self._call("preview", target))
+            result = self._publicize(raw_result)
+            plan_id = str(self._field(raw_result, "planId", "plan_id", "id", default="")).strip()
+            if not plan_id:
+                raise StorageMigrationApiError(502, "storage_migration_invalid_plan", "迁移预览未返回 planId")
+            result.update(
+                {
+                    "jobId": job_id,
+                    "planId": plan_id,
+                    "targetRoot": str(self._field(result, "targetRoot", "target_root", default=target)),
+                    "state": "preparing",
+                    "phase": "preparing",
+                    "previewReady": True,
+                    "maintenance": False,
+                    "message": "预览完成，可确认迁移",
+                }
+            )
+            self._plans[plan_id] = dict(result)
+            self._status = self._status_from(result)
+            self._status.update({"jobId": job_id, "previewReady": True, "maintenance": False})
+        except StorageMigrationApiError as exc:
+            self._status = {
+                **self._status,
+                "jobId": job_id,
+                "state": "failed",
+                "errorCode": exc.code,
+                "error": exc.message,
+                "message": exc.message,
+                "maintenance": False,
+            }
+        except Exception as exc:
+            self._status = {
+                **self._status,
+                "jobId": job_id,
+                "state": "failed",
+                "error": str(exc),
+                "message": str(exc),
+                "maintenance": False,
+            }
+        finally:
+            self._preview_task = None
+
     async def begin(self, plan_id: str, *, confirm_stop_all_agents: bool) -> dict[str, Any]:
         normalized_plan_id = str(plan_id or "").strip()
         if not normalized_plan_id:
@@ -314,7 +424,11 @@ class StorageMigrationApi:
                 {"state": "stopping", "maintenance": False},
             )
         async with self._lock:
-            if self._maintenance or (self._task is not None and not self._task.done()):
+            if (
+                self._maintenance
+                or (self._task is not None and not self._task.done())
+                or (self._preview_task is not None and not self._preview_task.done())
+            ):
                 raise StorageMigrationApiError(
                     409,
                     "storage_migration_busy",
@@ -323,14 +437,25 @@ class StorageMigrationApi:
                 )
             plan = self._plans.get(normalized_plan_id)
             if plan is None:
+                service_status = await self._service_status()
+                if service_status:
+                    candidate = self._publicize(service_status)
+                    if str(candidate.get("planId") or "") == normalized_plan_id:
+                        plan = candidate
+                        self._plans[normalized_plan_id] = candidate
+            if plan is None:
                 raise StorageMigrationApiError(409, "storage_migration_plan_invalid", "planId 无效或预览已失效")
             self._maintenance = True
             self._status = {
+                **self._status,
                 **plan,
                 "state": "stopping",
+                "phase": "stopping",
+                "previewReady": False,
                 "maintenance": True,
                 "available": True,
             }
+            self._begin_in_progress = True
             try:
                 await self._ensure_agents_stopped()
                 result = await self._call_plan("begin", normalized_plan_id)
@@ -339,6 +464,8 @@ class StorageMigrationApi:
                 self._maintenance = False
                 self._status["maintenance"] = False
                 raise
+            finally:
+                self._begin_in_progress = False
             status = self._set_status(result, fallback=self._status)
             if status["state"] not in {"awaiting_restart", "cleanup_pending", "failed", "completed"}:
                 self._task = asyncio.create_task(self._run_plan(normalized_plan_id))

@@ -159,16 +159,85 @@ function formatStorageBytes(value: number) {
   return `${(value / (1024 ** index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
+function formatStorageDuration(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return "-";
+  const seconds = Math.round(value);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`;
+}
+
+const STORAGE_MIGRATION_ACTIVE_STATES: StorageMigrationState[] = [
+  "preparing",
+  "stopping",
+  "copying",
+  "rewriting",
+  "verifying",
+];
+
 function storageMigrationStateText(state: StorageMigrationState) {
   return {
+    preparing: "正在扫描源目录",
     stopping: "正在停止智能体",
-    copying: "正在复制数据",
-    verifying: "正在校验数据",
+    copying: "正在复制文件",
+    rewriting: "正在重写路径",
+    verifying: "正在验证新目录",
     awaiting_restart: "等待重启",
     cleanup_pending: "等待清理原始数据",
     completed: "已完成",
     failed: "失败",
   }[state];
+}
+
+function isStorageMigrationActive(snapshot: StorageMigrationSnapshot | null) {
+  return Boolean(
+    snapshot
+    && STORAGE_MIGRATION_ACTIVE_STATES.includes(snapshot.state)
+    && (snapshot.maintenance || Boolean(snapshot.jobId && !snapshot.planId)),
+  );
+}
+
+function isStoragePreviewReady(snapshot: StorageMigrationSnapshot | null): snapshot is StorageMigrationPreview {
+  return Boolean(
+    snapshot
+    && snapshot.planId
+    && snapshot.targetRoot
+    && !snapshot.maintenance
+    && snapshot.canMigrate !== false
+    && (snapshot.previewReady || snapshot.state === "preparing" || snapshot.state === "verifying"),
+  );
+}
+
+function storageProgress(snapshot: StorageMigrationSnapshot | null) {
+  if (!snapshot) return 0;
+  if (snapshot.progress !== undefined && Number.isFinite(snapshot.progress)) {
+    return Math.min(1, Math.max(0, snapshot.progress > 1 ? snapshot.progress / 100 : snapshot.progress));
+  }
+  if (snapshot.totalBytes > 0 && snapshot.completedBytes !== undefined) {
+    return Math.min(1, Math.max(0, snapshot.completedBytes / snapshot.totalBytes));
+  }
+  if (snapshot.totalFiles && snapshot.completedFiles !== undefined) {
+    return Math.min(1, Math.max(0, snapshot.completedFiles / snapshot.totalFiles));
+  }
+  return 0;
+}
+
+function mergeStorageMigrationSnapshot(
+  previous: StorageMigrationSnapshot | null,
+  next: StorageMigrationSnapshot,
+): StorageMigrationSnapshot {
+  if (!previous) return next;
+  return {
+    ...previous,
+    ...next,
+    currentRoot: next.currentRoot || previous.currentRoot,
+    sources: next.sources.length ? next.sources : previous.sources,
+    totalBytes: next.totalBytes || previous.totalBytes,
+    targetRoot: next.targetRoot || previous.targetRoot,
+  };
 }
 
 function nativePreflightStatus(preflight?: NativeAgentPreflightResult) {
@@ -793,6 +862,11 @@ export function AdminCenterScreen({
       if (snapshot.targetRoot) {
         setStorageTargetRoot(snapshot.targetRoot);
       }
+      if (
+        isStoragePreviewReady(snapshot)
+      ) {
+        setStoragePreview({ ...snapshot, planId: snapshot.planId, targetRoot: snapshot.targetRoot });
+      }
       if (nextNotice) {
         setNotice(nextNotice);
       }
@@ -849,22 +923,37 @@ export function AdminCenterScreen({
   }, [activeTab, canManageEnvConfig, canManageRegisterCodes, client, loadedTabs]);
 
   useEffect(() => {
-    if (activeTab !== "storage" || !storageSnapshot?.maintenance) {
+    if (activeTab !== "storage" || !isStorageMigrationActive(storageSnapshot)) {
       return undefined;
     }
     let active = true;
     const timer = window.setInterval(() => {
       void client.getStorageMigrationSnapshot().then((snapshot) => {
-        if (active) {
-          setStorageSnapshot(snapshot);
+        if (!active) return;
+        setStorageSnapshot(snapshot);
+        if (isStoragePreviewReady(snapshot)) {
+          setStoragePreview((previous) => previous
+            ? {
+              ...previous,
+              ...snapshot,
+              planId: snapshot.planId,
+              targetRoot: snapshot.targetRoot || previous.targetRoot,
+            }
+            : { ...snapshot, planId: snapshot.planId, targetRoot: snapshot.targetRoot });
+          if (storagePreview?.jobId && !storagePreview.planId) {
+            setStorageAction("");
+            setNotice("迁移预览已生成，请确认影响范围");
+          }
+        } else if (storagePreview?.jobId && !storagePreview.planId && snapshot.state === "failed") {
+          setStorageAction("");
         }
       }).catch(() => undefined);
-    }, 1500);
+    }, 750);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [activeTab, client, storageSnapshot?.maintenance]);
+  }, [activeTab, client, storagePreview?.jobId, storagePreview?.planId, isStorageMigrationActive(storageSnapshot)]);
 
   const appendUpdateLog = (message?: string) => {
     if (!message) {
@@ -1376,14 +1465,19 @@ export function AdminCenterScreen({
     setStorageAction("preview");
     setError("");
     setNotice("");
+    let waitingForPlan = false;
     try {
       const preview = await client.previewStorageMigration(target);
       setStoragePreview(preview);
-      setNotice("迁移预览已生成，请确认影响范围");
+      setStorageSnapshot((previous) => mergeStorageMigrationSnapshot(previous, preview));
+      waitingForPlan = Boolean(preview.jobId && !preview.planId);
+      setNotice(waitingForPlan ? "预览任务已提交，正在扫描源目录..." : "迁移预览已生成，请确认影响范围");
     } catch (nextError) {
       setError(getErrorMessage(nextError, "生成迁移预览失败"));
     } finally {
-      setStorageAction("");
+      if (!waitingForPlan) {
+        setStorageAction("");
+      }
     }
   };
 
@@ -1398,6 +1492,7 @@ export function AdminCenterScreen({
     try {
       const status = await client.startStorageMigration(storagePreview.planId, true);
       setStorageSnapshot(status);
+      setStoragePreview(null);
       setStorageConfirmOpen(false);
       setNotice(status.state === "awaiting_restart" ? "迁移已完成校验，请重启服务继续清理原始数据" : "存储迁移已开始");
     } catch (nextError) {
@@ -2235,7 +2330,13 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 <p className="mt-1 text-sm text-[var(--muted)]">迁移聊天历史、附件、插件和集群 MCP 等运行数据。</p>
               </div>
               <span className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--muted)]">
-                {storageSnapshot?.canMigrate ? "可开始迁移" : storageSnapshot ? storageMigrationStateText(storageSnapshot.state) : "未读取"}
+                {storageSnapshot && isStorageMigrationActive(storageSnapshot)
+                  ? storageMigrationStateText(storageSnapshot.phase || storageSnapshot.state)
+                  : storageSnapshot?.canMigrate
+                    ? "可开始迁移"
+                    : storageSnapshot
+                      ? storageMigrationStateText(storageSnapshot.state)
+                      : "未读取"}
               </span>
             </div>
 
@@ -2287,7 +2388,9 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 disabled={storageAction !== "" || !storageTargetRoot.trim()}
                 className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
               >
-                {storageAction === "preview" ? "校验中..." : "预览并校验"}
+                {storageAction === "preview"
+                  ? (storagePreview?.jobId && !storagePreview.planId ? "扫描中..." : "校验中...")
+                  : "预览并校验"}
               </button>
             </div>
 
@@ -2298,15 +2401,21 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     <h3 className="font-semibold">迁移预览</h3>
                     <p className="mt-1 break-all">目标: {storagePreview.targetRoot}</p>
                     <p>预计迁移: {formatStorageBytes(storagePreview.totalBytes)}</p>
+                    <p>当前阶段: {storageMigrationStateText(storagePreview.phase || storagePreview.state)}</p>
                   </div>
-                  <span className="font-mono text-xs">planId: {storagePreview.planId}</span>
+                  <span className="font-mono text-xs">
+                    {storagePreview.planId ? `planId: ${storagePreview.planId}` : `jobId: ${storagePreview.jobId || "-"}`}
+                  </span>
                 </div>
+                {storagePreview.jobId && !storagePreview.planId ? (
+                  <p>预览任务正在后台执行，完成后才能确认迁移。</p>
+                ) : null}
                 {storagePreview.blockers?.map((blocker) => <p key={blocker} className="font-medium text-red-800">无法迁移: {blocker}</p>)}
                 {storagePreview.warnings?.map((warning) => <p key={warning}>提示: {warning}</p>)}
                 <button
                   type="button"
                   onClick={() => setStorageConfirmOpen(true)}
-                  disabled={storageAction !== "" || storageSnapshot?.maintenance || Boolean(storagePreview.blockers?.length)}
+                  disabled={storageAction !== "" || !storagePreview.planId || storageSnapshot?.maintenance || Boolean(storagePreview.blockers?.length)}
                   className="rounded-lg bg-amber-700 px-3 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-60"
                 >
                   确认并迁移
@@ -2314,12 +2423,49 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             ) : null}
 
-            {storageSnapshot?.maintenance || storageSnapshot?.state === "awaiting_restart" ? (
-              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
-                <p className="font-medium">当前状态: {storageMigrationStateText(storageSnapshot.state)}</p>
-                {storageSnapshot.progress !== undefined ? <p className="mt-1">进度: {Math.round(storageSnapshot.progress * 100)}%</p> : null}
-                {storageSnapshot.message ? <p className="mt-1">{storageSnapshot.message}</p> : null}
-                {storageSnapshot.state === "awaiting_restart" ? <p className="mt-1 font-medium">请重启服务使新数据根目录生效，然后再处理原始数据清理。</p> : null}
+            {storageSnapshot && (
+              isStorageMigrationActive(storageSnapshot)
+              || storageSnapshot.maintenance
+              || storageSnapshot.state === "awaiting_restart"
+              || storageSnapshot.state === "cleanup_pending"
+              || storageSnapshot.state === "failed"
+              || storageSnapshot.progress !== undefined
+            ) ? (
+              <div data-testid="storage-migration-progress" className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium">当前阶段: {storageMigrationStateText(storageSnapshot.phase || storageSnapshot.state)}</p>
+                  {storageSnapshot.jobId ? <span className="font-mono text-xs">jobId: {storageSnapshot.jobId}</span> : null}
+                </div>
+                <div>
+                  <div className="flex justify-between gap-3 text-xs">
+                    <span>总进度</span>
+                    <span>{Math.round(storageProgress(storageSnapshot) * 100)}%</span>
+                  </div>
+                  <progress
+                    aria-label="迁移总进度"
+                    className="mt-1 h-2 w-full accent-blue-600"
+                    max={1}
+                    value={storageProgress(storageSnapshot)}
+                  />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <p>
+                    已处理大小: {formatStorageBytes(storageSnapshot.completedBytes || Math.round(storageProgress(storageSnapshot) * storageSnapshot.totalBytes))}
+                    {" / "}{formatStorageBytes(storageSnapshot.totalBytes)}
+                  </p>
+                  <p>
+                    已处理文件: {storageSnapshot.completedFiles || 0}
+                    {" / "}{storageSnapshot.totalFiles ?? storageSnapshot.sources.reduce((sum, source) => sum + source.fileCount, 0)}
+                  </p>
+                  <p className="break-all sm:col-span-2">当前项: {storageSnapshot.currentItem || "-"}</p>
+                  <p>速度: {formatStorageBytes(storageSnapshot.speedBytesPerSecond || 0)}/秒</p>
+                  <p>预计剩余: {formatStorageDuration(storageSnapshot.etaSeconds)}</p>
+                </div>
+                {storageSnapshot.message ? <p>{storageSnapshot.message}</p> : null}
+                {storageSnapshot.error ? <p className="font-medium text-red-800">错误: {storageSnapshot.error}</p> : null}
+                {storageSnapshot.recoveryMessage ? <p className="font-medium">恢复提示: {storageSnapshot.recoveryMessage}</p> : null}
+                {storageSnapshot.state === "awaiting_restart" ? <p className="font-medium">请重启服务使新数据根目录生效，然后再处理原始数据清理。</p> : null}
+                {storageSnapshot.state === "cleanup_pending" ? <p className="font-medium">原始数据尚未清理完成，可以在服务恢复后重试。</p> : null}
               </div>
             ) : null}
 
