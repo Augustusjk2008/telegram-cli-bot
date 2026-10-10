@@ -451,6 +451,10 @@ def _sqlite_paths(specs: list[dict[str, str]], entries_by_label: dict[str, list[
     return paths
 
 
+def _is_sqlite_sidecar(path: Path) -> bool:
+    return path.name.casefold().endswith(("-wal", "-shm"))
+
+
 def _validate_sqlite(path: Path, *, checkpoint: bool) -> None:
     try:
         connection = sqlite3.connect(str(path), timeout=1.0)
@@ -636,7 +640,7 @@ class StorageMigrationService:
                     blockers.append(error)
             # Validate SQLite before hashing so any passive WAL checkpoint is
             # included in the previewed source hashes.
-            blockers.extend(_validate_sqlite_many(_sqlite_paths(specs, entries_by_label), checkpoint=True))
+            blockers.extend(_validate_sqlite_many(_sqlite_paths(specs, entries_by_label), checkpoint=False))
 
             hash_jobs = [
                 (
@@ -691,10 +695,31 @@ class StorageMigrationService:
                     self._write_journal(current)
 
             hashed = _bounded_map(hash_jobs, hash_source, on_result=on_hash_result)
+            transient_sidecars: set[tuple[str, int]] = set()
+            source_roots = {spec["label"]: Path(spec["path"]) for spec in specs}
             for label, index, digest, error, _size in hashed:
                 entries_by_label[label][index]["sha256"] = digest
                 if error:
-                    blockers.append(error)
+                    sidecar_path = source_roots[label] / Path(
+                        *str(entries_by_label[label][index]["relativePath"]).split("/")
+                    )
+                    if _is_sqlite_sidecar(sidecar_path) and not sidecar_path.exists():
+                        transient_sidecars.add((label, index))
+                    else:
+                        blockers.append(error)
+            if transient_sidecars:
+                for label, entries in entries_by_label.items():
+                    entries_by_label[label] = [
+                        entry
+                        for index, entry in enumerate(entries)
+                        if (label, index) not in transient_sidecars
+                    ]
+                total_bytes = sum(
+                    int(entry.get("size", 0) or 0)
+                    for entries in entries_by_label.values()
+                    for entry in entries
+                    if entry.get("type") == "file"
+                )
             blockers.extend(self._source_root_blockers(specs))
             if not any(entries_by_label.values()):
                 blockers.append("未发现可迁移的 TCB 数据")

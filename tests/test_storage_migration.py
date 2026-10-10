@@ -100,6 +100,30 @@ def test_preview_persists_manifest_and_execute_reuses_it(
     assert job["completedFiles"] == job["totalFiles"]
 
 
+def test_preview_ignores_sqlite_sidecar_that_closes_during_inventory(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, repo, target = migration_context
+    app, _history = _make_sources(home, with_sqlite=False)
+    sidecar = app / "usage.sqlite3-wal"
+    sidecar.write_bytes(b"volatile WAL")
+    service = StorageMigrationService(repo)
+    original_hash = migration_module._hash_file
+
+    def disappear_during_hash(path: Path) -> str:
+        if path == sidecar:
+            sidecar.unlink()
+            raise OSError(2, "No such file or directory", str(path))
+        return original_hash(path)
+
+    monkeypatch.setattr(migration_module, "_hash_file", disappear_during_hash)
+    plan = service.preview(str(target))
+
+    assert plan["blockers"] == []
+    assert all(entry["relativePath"] != sidecar.name for entry in service._plans[plan["id"]]["entries"])
+
+
 def test_journal_progress_is_throttled_until_stage_changes(
     migration_context: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
