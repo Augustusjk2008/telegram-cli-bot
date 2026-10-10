@@ -19,6 +19,7 @@ const stateLabels: Record<string, string> = {
 
 export function CodexVoiceBar({ session, disabled = false, busy = false }: Props) {
   const active = session.connected;
+  const blockedByBusy = busy && session.taskBinding?.state !== "active";
   const hasCaption = session.captions.length > 0;
   return (
     <section
@@ -77,7 +78,7 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
           </>
         )}
       </div>
-      {busy ? <p className="mt-1 text-[var(--status-warning)]">{VOICE_BUSY_REASON}</p> : null}
+      {blockedByBusy ? <p className="mt-1 text-[var(--status-warning)]">{VOICE_BUSY_REASON}</p> : null}
       {session.playback === "blocked" ? <button type="button" onClick={session.resumePlayback} className="mt-1 text-[var(--accent)]">允许播放音频</button> : null}
       {active ? <p className="mt-1 text-[var(--muted)]">媒体：{session.peer} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
       {session.error ? <p role="alert" className="mt-1 text-[var(--status-danger)]">{session.error}</p> : null}

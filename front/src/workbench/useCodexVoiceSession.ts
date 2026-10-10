@@ -557,8 +557,6 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     } catch { finish(session, "unknown", "结束语音结果待确认，设备已释放"); }
   }, [finish]);
 
-  useEffect(() => { if (busy) end(); }, [busy, end]);
-
   const toggleMute = useCallback(() => {
     const session = current.current;
     if (!session?.mic || session.stopping) return;

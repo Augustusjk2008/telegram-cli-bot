@@ -195,6 +195,44 @@ describe("useCodexVoiceSession", () => {
     expect(screen.getByText("字幕已保存")).toBeInTheDocument();
   });
 
+  test("keeps the voice session open when its own task makes the chat busy", async () => {
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    const connection: CodexVoiceConnection = {
+      ready: Promise.resolve(),
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const client = clientWithVoice(connection);
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    const view = render(<Harness client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+
+    await act(async () => {
+      messages[0]({ type: "voice.state", seq: 1, state: "active" });
+      messages[0]({
+        type: "voice.task",
+        seq: 2,
+        tcb_turn_id: "tcb-turn-1",
+        state: "active",
+        transcript_state: "syncing",
+      });
+    });
+    view.rerender(<Harness client={client} busy />);
+
+    expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("已连接");
+    expect(screen.getByText("任务：运行中")).toBeInTheDocument();
+    expect(screen.queryByText("当前有活动任务，语音任务/混合输入将在 M2 支持")).not.toBeInTheDocument();
+    expect(connection.send).not.toHaveBeenLastCalledWith({ op: "stop_voice" });
+    expect(connection.close).not.toHaveBeenCalled();
+  });
+
   test("passes the current voice scope to the connection", async () => {
     const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
     const connect = vi.fn(() => connection);
