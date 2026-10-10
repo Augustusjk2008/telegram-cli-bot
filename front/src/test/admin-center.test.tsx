@@ -227,6 +227,38 @@ test("Codex 额度趋势按套餐拆分相同额度桶", async () => {
   expect(screen.getByRole("img", { name: /通用 Codex · Free.*共 1 个样本，当前剩余 100%/ })).toBeInTheDocument();
 });
 
+test("Codex 额度趋势将缺少套餐字段的样本归入唯一已知套餐", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  stats.rateLimitSamples = [
+    {
+      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
+      sampledAt: "2026-08-27T18:00:00+08:00",
+      usedPercent: 57,
+      windowMinutes: 10080,
+      resetsAt: "2026-09-01T22:15:24+08:00",
+      planType: "pro",
+    },
+    {
+      limitId: GENERAL_CODEX_RATE_LIMIT_ID,
+      sampledAt: "2026-08-27T19:00:00+08:00",
+      usedPercent: 58,
+      windowMinutes: 10080,
+      resetsAt: "2026-09-01T22:15:24+08:00",
+      planType: null,
+    },
+  ];
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+
+  expect(await screen.findByRole("heading", { name: "通用 Codex · Pro", level: 4 })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "通用 Codex · 套餐未知", level: 4 })).not.toBeInTheDocument();
+  expect(screen.getByRole("img", { name: /通用 Codex · Pro.*共 2 个样本/ })).toBeInTheDocument();
+});
+
 test("Codex Free 额度趋势按 30 天窗口显示剩余时长", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();

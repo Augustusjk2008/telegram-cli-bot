@@ -938,8 +938,22 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
       sample.limitId !== GPT_RESERVE_RATE_LIMIT_ID
       && sample.limitId !== SECONDARY_CODEX_RATE_LIMIT_ID
     ));
+    const knownPlanTypesByLimitId = new Map<string, Set<string>>();
     for (const sample of visibleSamples) {
-      const planType = sample.planType?.trim().toLowerCase() || null;
+      const planType = sample.planType?.trim().toLowerCase();
+      if (!planType) continue;
+      const knownPlanTypes = knownPlanTypesByLimitId.get(sample.limitId) || new Set<string>();
+      knownPlanTypes.add(planType);
+      knownPlanTypesByLimitId.set(sample.limitId, knownPlanTypes);
+    }
+    for (const sample of visibleSamples) {
+      let planType = sample.planType?.trim().toLowerCase() || null;
+      if (!planType) {
+        const knownPlanTypes = knownPlanTypesByLimitId.get(sample.limitId);
+        if (knownPlanTypes?.size === 1) {
+          planType = [...knownPlanTypes][0];
+        }
+      }
       const key = `${sample.limitId}\u0000${planType || ""}`;
       const group = grouped.get(key) || { limitId: sample.limitId, planType, samples: [] };
       group.samples.push(sample);
