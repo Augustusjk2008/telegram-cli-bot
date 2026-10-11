@@ -7,6 +7,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import logging
 import os
 import threading
 from collections import deque
@@ -19,6 +20,9 @@ from .client import CodexServerClient, CodexServerError, REALTIME_CONVERSATION_V
 from .events import CodexServerEventMapper, TOKEN_FIELDS, tokens
 from .params import ServerParams, _config_value, check_git_directory, convert_params
 from .voice import VoiceError, VoiceEvents, voice_handoff_has_input
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,11 @@ class CodexServerRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            logger.exception(
+                "Codex app-server reader failed: thread_id=%s voice_task_state=%s",
+                self.thread_id,
+                self._voice_task_state,
+            )
             self._finish_failure(exc)
             if self.voice_task_active:
                 self._voice_task_state = "unknown"

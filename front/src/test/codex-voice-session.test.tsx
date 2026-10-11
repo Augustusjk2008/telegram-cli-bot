@@ -11,7 +11,7 @@ function Harness({ client, enabled = true, busy = false, scopeKey = "main" }: { 
     <>
       <CodexVoiceBar session={voice} busy={busy} />
       <output data-testid="voice-error">{voice.error}</output>
-      <output data-testid="voice-caption">{voice.captions.map((caption) => caption.text).join("|")}</output>
+      <output data-testid="voice-caption">{voice.captions.map((caption) => `${caption.role}:${caption.text}`).join("|")}</output>
     </>
   );
 }
@@ -115,6 +115,42 @@ describe("useCodexVoiceSession", () => {
     expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("已连接");
   });
 
+  test("coalesces item and flat transcript events while keeping consecutive repeats", async () => {
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<Harness client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+
+    const emitSegment = (seq: number, itemId: string) => {
+      messages[0]({ type: "voice.event", seq, name: "thread/realtime/item/started", item_id: itemId,
+        data: { item: { id: itemId, type: "transcriptSegment", role: "user", text: "" } } });
+      messages[0]({ type: "voice.event", seq: seq + 1, name: "thread/realtime/item/transcript/delta", item_id: itemId,
+        data: { itemId, delta: "你好" } });
+      messages[0]({ type: "voice.event", seq: seq + 2, name: "thread/realtime/transcript/delta",
+        data: { role: "user", delta: "你好" } });
+      messages[0]({ type: "voice.event", seq: seq + 3, name: "thread/realtime/item/completed", item_id: itemId,
+        data: { item: { id: itemId, type: "transcriptSegment", role: "user", text: "你好" } } });
+      messages[0]({ type: "voice.event", seq: seq + 4, name: "thread/realtime/transcript/done",
+        data: { role: "user", text: "你好" } });
+    };
+    await act(async () => {
+      emitSegment(1, "item-1");
+      emitSegment(6, "item-2");
+    });
+
+    expect(screen.getByTestId("voice-caption")).toHaveTextContent("user:你好|user:你好");
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:你好|user:你好");
+  });
+
   test("does not show an unbound turn as a voice task", async () => {
     const messages: Array<(message: CodexVoiceMessage) => void> = [];
     const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
@@ -195,6 +231,31 @@ describe("useCodexVoiceSession", () => {
     expect(screen.getByText("字幕已保存")).toBeInTheDocument();
   });
 
+  test("accepts a new voice task after a terminal task and ignores an old task event", async () => {
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<Harness client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+
+    await act(async () => {
+      messages[0]({ type: "voice.task", seq: 1, tcb_turn_id: "tcb-1", codex_turn_id: "codex-1", state: "active", transcript_state: "syncing" });
+      messages[0]({ type: "voice.task", seq: 2, tcb_turn_id: "tcb-1", codex_turn_id: "codex-1", state: "completed", transcript_state: "syncing" });
+      messages[0]({ type: "voice.task", seq: 3, tcb_turn_id: "tcb-2", codex_turn_id: "codex-2", state: "active", transcript_state: "syncing" });
+      messages[0]({ type: "voice.task", seq: 4, tcb_turn_id: "tcb-1", codex_turn_id: "codex-1", state: "failed", transcript_state: "syncing" });
+    });
+
+    expect(screen.getByText("任务：运行中")).toBeInTheDocument();
+  });
+
   test("keeps the voice session open when its own task makes the chat busy", async () => {
     const messages: Array<(message: CodexVoiceMessage) => void> = [];
     const connection: CodexVoiceConnection = {
@@ -231,6 +292,12 @@ describe("useCodexVoiceSession", () => {
     expect(screen.queryByText("当前有活动任务，语音任务/混合输入将在 M2 支持")).not.toBeInTheDocument();
     expect(connection.send).not.toHaveBeenLastCalledWith({ op: "stop_voice" });
     expect(connection.close).not.toHaveBeenCalled();
+
+    await act(async () => messages[0]({
+      type: "voice.task", seq: 3, tcb_turn_id: "tcb-turn-1", state: "completed", transcript_state: "syncing",
+    }));
+    view.rerender(<Harness client={client} busy />);
+    expect(screen.queryByText("当前有活动任务，语音任务/混合输入将在 M2 支持")).not.toBeInTheDocument();
   });
 
   test("passes the current voice scope to the connection", async () => {

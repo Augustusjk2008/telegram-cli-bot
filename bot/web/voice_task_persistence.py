@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import inspect
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,6 +24,10 @@ _TRACE_ITEM_MARKERS = (
     "websearch",
     "filechange",
     "collabagenttoolcall",
+)
+_REALTIME_DELEGATION_INPUT_RE = re.compile(
+    r"<realtime_delegation>\s*<input>(.*?)</input>",
+    re.DOTALL,
 )
 
 
@@ -100,10 +106,9 @@ def _event_id(method: str, payload: dict[str, Any], turn_id: str, item_id: str) 
     return "voice:" + hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()[:48]
 
 
-def _turn_id(payload: dict[str, Any], runtime: Any) -> str:
+def _turn_id(payload: dict[str, Any]) -> str:
     turn = _record(payload.get("turn"))
-    return str(payload.get("turnId") or payload.get("turn_id") or turn.get("id")
-               or getattr(runtime, "voice_turn_id", "") or "").strip()
+    return str(payload.get("turnId") or payload.get("turn_id") or turn.get("id") or "").strip()
 
 
 def _realtime_session_id(payload: dict[str, Any], runtime: Any) -> str:
@@ -113,10 +118,21 @@ def _realtime_session_id(payload: dict[str, Any], runtime: Any) -> str:
                                                              "realtime_session_id", "") or "").strip()
 
 
-def _transcript_event(method: str, payload: dict[str, Any], item_id: str) -> tuple[str, str, bool] | None:
+def _transcript_event(
+    method: str,
+    payload: dict[str, Any],
+    item_id: str,
+) -> tuple[str, str, bool] | None:
     item = _record(payload.get("item"))
     role = _item_role(item, method)
+    payload_role = str(payload.get("role") or "").strip().lower()
+    if not role and payload_role in {"user", "assistant"}:
+        role = payload_role
     method_key = method.replace("_", "").replace("-", "").lower()
+    if method.startswith("thread/realtime/transcript/"):
+        # Item-scoped events carry the stable item ID and are the canonical
+        # history source. Flat realtime events are browser caption updates.
+        return None
     has_transcript_marker = any(marker in method_key for marker in (
         "transcript", "transcription", "agentmessagedelta", "usermessagedelta",
     ))
@@ -132,6 +148,12 @@ def _transcript_event(method: str, payload: dict[str, Any], item_id: str) -> tup
     transcript = _text(value)
     if not transcript:
         return None
+    if role == "user":
+        delegated = _REALTIME_DELEGATION_INPUT_RE.search(transcript)
+        if delegated:
+            transcript = html.unescape(delegated.group(1)).strip()
+            if not transcript:
+                return None
     final = method in {"item/completed", "item/complete", "transcript.completed", "response.audio_transcript.done"}
     final = final or bool(payload.get("final") or payload.get("isFinal") or payload.get("is_final"))
     return role, transcript[:4 * 1024 * 1024], final
@@ -260,8 +282,17 @@ class VoiceTaskPersistence:
             return
         if method in {"thread/realtime/closed", "thread/realtime/error", "runtime/closed", "runtime/error"}:
             self._handoff_pending = False
-        turn_id = _turn_id(payload, self.runtime)
+        if method.startswith("thread/realtime/"):
+            # Realtime transcript segments are live speech captions. The
+            # delegated Codex turn has canonical item/* messages for history;
+            # persisting both streams would overwrite user/assistant messages.
+            return
+        turn_id = _turn_id(payload)
         realtime_session_id = _realtime_session_id(payload, self.runtime)
+        if self.handle is not None and not turn_id and method.startswith("item/"):
+            # An item without a turn binding cannot be assigned safely after a
+            # realtime session starts another delegated turn.
+            return
         if self.handle is not None and self._terminal_seen and turn_id and turn_id != self.codex_turn_id:
             # A single realtime session can contain multiple Codex turns.
             # Retain the completed row in ChatStore and start a fresh binding.

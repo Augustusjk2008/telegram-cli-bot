@@ -103,6 +103,90 @@ async def test_unknown_runtime_close_keeps_unknown_state():
 
 
 @pytest.mark.asyncio
+async def test_realtime_captions_do_not_overwrite_delegated_chat_messages():
+    runtime = SimpleNamespace(thread_id="thread-1", voice_lease=None, voice_events=VoiceEvents())
+    service = FakeService()
+    coordinator = VoiceTaskPersistence(
+        service,
+        SimpleNamespace(alias="main"),
+        _session(),
+        "conversation",
+        runtime,
+    )
+
+    await coordinator.observe({"method": "thread/realtime/itemAdded", "params": {
+        "threadId": "thread-1", "item": {"type": "handoff_request", "input_transcript": "what model"},
+    }})
+    await coordinator.observe({"method": "turn/started", "params": {
+        "threadId": "thread-1", "turnId": "codex-turn",
+    }})
+    await coordinator.observe({"method": "item/started", "params": {
+        "threadId": "thread-1", "turnId": "codex-turn", "itemId": "user-item",
+        "item": {"id": "user-item", "type": "userMessage", "content": [{
+            "type": "text",
+            "text": "<realtime_delegation><input>what model</input><transcript_delta>assistant: hi</transcript_delta></realtime_delegation>",
+        }]},
+    }})
+    await coordinator.observe({"method": "item/agentMessage/delta", "params": {
+        "threadId": "thread-1", "turnId": "codex-turn", "itemId": "assistant-item", "delta": "GPT-6",
+        "item": {"id": "assistant-item", "type": "agentMessage"},
+    }})
+    await coordinator.observe({"method": "thread/realtime/item/started", "params": {
+        "threadId": "thread-1", "item": {
+            "id": "speech-item", "type": "transcriptSegment", "role": "assistant", "text": "",
+        },
+    }})
+    await coordinator.observe({"method": "thread/realtime/item/transcript/delta", "params": {
+        "threadId": "thread-1", "itemId": "speech-item", "delta": "GPT-6",
+    }})
+    await coordinator.observe({"method": "thread/realtime/transcript/delta", "params": {
+        "threadId": "thread-1", "role": "assistant", "delta": "GPT-6",
+    }})
+
+    transcript_events = [event for _handle, event in service.events if event.get("transcript_text")]
+    assert [(event["role"], event["transcript_text"]) for event in transcript_events] == [
+        ("user", "what model"),
+        ("assistant", "GPT-6"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unbound_late_item_does_not_enter_new_voice_turn():
+    runtime = SimpleNamespace(thread_id="thread-1", voice_lease=None, voice_events=VoiceEvents())
+    service = FakeService()
+    coordinator = VoiceTaskPersistence(
+        service,
+        SimpleNamespace(alias="main"),
+        _session(),
+        "conversation",
+        runtime,
+    )
+
+    await coordinator.observe({"method": "thread/realtime/itemAdded", "params": {
+        "threadId": "thread-1", "item": {"type": "handoff_request", "input_transcript": "first"},
+    }})
+    await coordinator.observe({"method": "turn/started", "params": {
+        "threadId": "thread-1", "turnId": "turn-1",
+    }})
+    await coordinator.observe({"method": "turn/completed", "params": {
+        "threadId": "thread-1", "turnId": "turn-1", "turn": {"id": "turn-1", "status": "completed"},
+    }})
+    await coordinator.observe({"method": "thread/realtime/itemAdded", "params": {
+        "threadId": "thread-1", "item": {"type": "handoff_request", "input_transcript": "second"},
+    }})
+    await coordinator.observe({"method": "turn/started", "params": {
+        "threadId": "thread-1", "turnId": "turn-2",
+    }})
+    before = len(service.events)
+    await coordinator.observe({"method": "item/agentMessage/delta", "params": {
+        "threadId": "thread-1", "itemId": "late-item", "delta": "old response",
+        "item": {"id": "late-item", "type": "agentMessage"},
+    }})
+
+    assert len(service.events) == before
+
+
+@pytest.mark.asyncio
 async def test_non_voice_turn_events_do_not_create_a_persisted_task():
     runtime = SimpleNamespace(thread_id="thread-1", voice_lease=None, voice_events=VoiceEvents())
     service = FakeService()

@@ -10,6 +10,14 @@ import type { WebBotClient } from "../services/webBotClient";
 export const VOICE_BUSY_REASON = "当前有活动任务，语音任务/混合输入将在 M2 支持";
 
 type Caption = { id: string; role: string; text: string; done: boolean };
+type CaptionItem = { captionId: string; role: string; done: boolean };
+type CaptionTracker = {
+  items: Map<string, CaptionItem>;
+  activeByRole: Map<string, string>;
+  pendingFlatByRole: Map<string, string>;
+  flatByRole: Map<string, string>;
+  nextId: number;
+};
 type VoiceView = {
   state: CodexVoiceState;
   mic: "off" | "requesting" | "on" | "muted";
@@ -73,6 +81,7 @@ type Session = {
   tracks: Set<MediaStreamTrack>;
   abort: AbortController;
   seen: Set<string>;
+  captions: CaptionTracker;
   seq: number;
   started: boolean;
   stopping: boolean;
@@ -184,27 +193,106 @@ function responseIdOf(data: Record<string, unknown>): string {
   return String(data.response_id ?? data.responseId ?? response.id ?? data.id ?? "").trim();
 }
 
-function updateCaptions(captions: Caption[], name: string, data: Record<string, unknown>, itemId?: string): Caption[] {
+function taskTurnKey(binding: VoiceTaskBinding | null): string | undefined {
+  if (!binding) return undefined;
+  const tcbTurnId = binding.tcbTurnId?.trim() || "";
+  const codexTurnId = binding.codexTurnId?.trim() || "";
+  return tcbTurnId || codexTurnId ? `${tcbTurnId}\u0000${codexTurnId}` : undefined;
+}
+
+function shouldApplyTaskBinding(current: VoiceTaskBinding | null, incoming: VoiceTaskBinding): boolean {
+  if (!current) return true;
+  const currentTurn = taskTurnKey(current);
+  const incomingTurn = taskTurnKey(incoming);
+  const sameTurn = !currentTurn || !incomingTurn || currentTurn === incomingTurn;
+  if (sameTurn) {
+    if (current.state === "unknown" && incoming.state !== "unknown") return false;
+    if (isTerminalTaskState(current.state) && incoming.state === "active") return false;
+    return true;
+  }
+  if (current.state === "active" && incoming.state !== "active") return false;
+  if (current.seq !== undefined && incoming.seq !== undefined && incoming.seq < current.seq) return false;
+  return true;
+}
+
+function updateCaptions(
+  captions: Caption[],
+  name: string,
+  data: Record<string, unknown>,
+  itemId: string | undefined,
+  tracker: CaptionTracker,
+): Caption[] {
   const item = record(data.item);
   const native = /^thread\/realtime\/(?:transcript\/(?:delta|done)|item\/(?:started|completed|transcript\/delta)|itemStarted|itemCompleted|itemTranscriptDelta)$/.test(name);
   const standard = /^(?:conversation\.item\.input_audio_transcription\.(?:delta|completed)|response\.(?:audio_transcript|output_audio_transcript|output_text)\.(?:delta|done))$/.test(name);
   if ((!native && !standard) || (item.type && item.type !== "transcriptSegment")) return captions;
-  const role = String(item.role || data.role || (name.startsWith("conversation.") ? "user" : standard ? "assistant" : "unknown"));
-  const stableId = item.id || data.itemId || data.item_id || itemId || data.response_id;
-  const previous = stableId
-    ? captions.find((caption) => caption.id === String(stableId))
-    : [...captions].reverse().find((caption) => caption.role === role && !caption.done);
-  const fullText = item.text ?? data.text ?? data.transcript;
-  const text = typeof fullText === "string" ? fullText
-    : (previous?.text || "") + (!previous?.done && typeof data.delta === "string" ? data.delta : "");
-  if (!text) return captions;
-  const caption: Caption = {
-    id: previous?.id || String(stableId || crypto.randomUUID()),
-    role: role === "unknown" ? previous?.role || role : role,
-    text: text.slice(-4000),
-    done: Boolean(previous?.done || /(?:done|completed|itemCompleted)$/.test(name)),
+  const itemKey = String(item.id || data.itemId || data.item_id || itemId || "").trim();
+  const itemEvent = Boolean(itemKey) && (name.includes("/item/") || name === "thread/realtime/itemStarted"
+    || name === "thread/realtime/itemCompleted" || name === "thread/realtime/itemTranscriptDelta"
+    || name.startsWith("conversation.item."));
+  const itemStarted = /(?:item\/started|itemStarted)$/.test(name);
+  const itemCompleted = /(?:item\/completed|itemCompleted|input_audio_transcription\.completed)$/.test(name);
+  const itemDelta = /(?:item\/transcript\/delta|itemTranscriptDelta|input_audio_transcription\.delta)$/.test(name);
+  const captionDone = /(?:transcript\/done|\.done|\.completed|itemCompleted)$/.test(name);
+  const explicitRole = String(item.role || data.role || "").trim();
+  const fallbackRole = name.startsWith("conversation.") ? "user" : standard ? "assistant" : "unknown";
+
+  const upsert = (captionId: string, role: string, text: string, done: boolean) => {
+    if (!text) return captions;
+    const previous = captions.find((caption) => caption.id === captionId);
+    const caption: Caption = {
+      id: captionId,
+      role: role === "unknown" ? previous?.role || role : role,
+      text: text.slice(-4000),
+      done: Boolean(previous?.done || done),
+    };
+    return (previous ? captions.map((row) => row.id === caption.id ? caption : row) : [...captions, caption]).slice(-30);
   };
-  return (previous ? captions.map((row) => row.id === caption.id ? caption : row) : [...captions, caption]).slice(-30);
+
+  if (itemEvent) {
+    const current = tracker.items.get(itemKey);
+    const role = explicitRole || current?.role || fallbackRole;
+    const state = current || { captionId: itemKey, role, done: false };
+    state.role = role;
+    tracker.items.set(itemKey, state);
+    if (itemStarted) tracker.activeByRole.set(role, itemKey);
+    if (itemDelta) tracker.activeByRole.set(role, itemKey);
+    const previous = captions.find((caption) => caption.id === state.captionId);
+    const fullText = item.text ?? data.text ?? data.transcript;
+    const text = typeof fullText === "string"
+      ? fullText
+      : (previous?.text || "") + (typeof data.delta === "string" ? data.delta : "");
+    if (itemCompleted) {
+      state.done = true;
+      if (tracker.activeByRole.get(role) === itemKey) tracker.activeByRole.delete(role);
+      tracker.pendingFlatByRole.set(role, itemKey);
+    }
+    return upsert(state.captionId, role, text, itemCompleted);
+  }
+
+  const role = explicitRole || fallbackRole;
+  const linkedItemKey = tracker.activeByRole.get(role) || tracker.pendingFlatByRole.get(role);
+  const linkedItem = linkedItemKey ? tracker.items.get(linkedItemKey) : undefined;
+  if (linkedItem) {
+    if (captionDone) {
+      const fullText = data.text ?? data.transcript;
+      tracker.pendingFlatByRole.delete(role);
+      linkedItem.done = true;
+      const previous = captions.find((caption) => caption.id === linkedItem.captionId);
+      return upsert(linkedItem.captionId, linkedItem.role, typeof fullText === "string" ? fullText : previous?.text || "", true);
+    }
+    return captions;
+  }
+
+  const flatId = tracker.flatByRole.get(role) || `flat:${role}:${tracker.nextId++}`;
+  tracker.flatByRole.set(role, flatId);
+  const previous = captions.find((caption) => caption.id === flatId);
+  const fullText = data.text ?? data.transcript;
+  const text = typeof fullText === "string"
+    ? fullText
+    : (previous?.text || "") + (typeof data.delta === "string" ? data.delta : "");
+  if (captionDone) tracker.flatByRole.delete(role);
+  return upsert(flatId, role, text, captionDone);
 }
 
 export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conversationId: requestedConversationId, sessionEpoch: requestedSessionEpoch, taskBinding: restoredTaskBinding, enabled, busy = false }: {
@@ -250,14 +338,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       return;
     }
     setView((value) => {
-      if (value.taskBinding?.state === "unknown" && restoredTaskBinding.state !== "unknown") {
-        return value;
-      }
-      if (isTerminalTaskState(value.taskBinding?.state || "active")
-        && value.taskBinding?.state !== restoredTaskBinding.state
-        && value.taskBinding?.seq === undefined) {
-        return value;
-      }
+      if (!shouldApplyTaskBinding(value.taskBinding, restoredTaskBinding)) return value;
       return {
         ...value,
         task: taskLabelState(restoredTaskBinding),
@@ -303,7 +384,9 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     if (current.current) return;
     if (busy) { setView((value) => ({ ...value, error: VOICE_BUSY_REASON })); return; }
     const session: Session = {
-      abort: new AbortController(), tracks: new Set(), seen: new Set(), seq: -1,
+      abort: new AbortController(), tracks: new Set(), seen: new Set(),
+      captions: { items: new Map(), activeByRole: new Map(), pendingFlatByRole: new Map(), flatByRole: new Map(), nextId: 0 },
+      seq: -1,
       started: false, stopping: false, applyingSdp: false, suppressed: false, released: false,
       playbackGeneration: 0,
     };
@@ -335,12 +418,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         ...(sessionEpoch !== undefined ? { sessionEpoch } : {}),
       };
       setView((value) => {
-        if (value.taskBinding?.state === "unknown" && binding.state !== "unknown") {
-          return value;
-        }
-        if (isTerminalTaskState(value.taskBinding?.state || "active") && binding.state === "active") {
-          return value;
-        }
+        if (!shouldApplyTaskBinding(value.taskBinding, binding)) return value;
         return {
           ...value,
           task: taskLabelState(binding),
@@ -394,7 +472,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
           : name === "output_audio_buffer.stopped" || name === "thread/realtime/started" ? "等待语音" : value.activity;
         return { ...value, task, activity,
           playback: name === "output_audio_buffer.stopped" ? "idle" : value.playback,
-          captions: updateCaptions(value.captions, name, data, itemId),
+          captions: updateCaptions(value.captions, name, data, itemId, session.captions),
         };
       });
     };

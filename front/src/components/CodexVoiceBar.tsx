@@ -19,7 +19,7 @@ const stateLabels: Record<string, string> = {
 
 export function CodexVoiceBar({ session, disabled = false, busy = false }: Props) {
   const active = session.connected;
-  const blockedByBusy = busy && session.taskBinding?.state !== "active";
+  const blockedByBusy = !active && busy && session.taskBinding?.state !== "active";
   const hasCaption = session.captions.length > 0;
   return (
     <section
