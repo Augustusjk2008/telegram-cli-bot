@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "id": "media-player",
+  "name": "音视频播放器",
+  "version": "0.1.0",
+  "description": "使用浏览器原生控件播放工作区中的常见音频和视频文件。",
+  "enabled": true,
+  "config": {},
+  "runtime": {
+    "type": "python",
+    "entry": "backend/main.py",
+    "protocol": "jsonrpc-stdio",
+    "permissions": {}
+  },
+  "views": [
+    {
+      "id": "player",
+      "title": "音视频播放",
+      "renderer": "media",
+      "viewMode": "snapshot",
+      "dataProfile": "light"
+    }
+  ],
+  "fileHandlers": [
+    {
+      "id": "audio-video-file",
+      "label": "播放音视频",
+      "extensions": [
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".oga",
+        ".m4a",
+        ".aac",
+        ".flac",
+        ".opus",
+        ".mp4",
+        ".webm",
+        ".ogv"
+      ],
+      "viewId": "player"
+    }
+  ]
+}

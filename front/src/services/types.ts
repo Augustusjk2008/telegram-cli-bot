@@ -1571,7 +1571,7 @@ export type FileWriteResult = {
   encoding?: string;
 };
 
-export type PluginViewRenderer = "waveform" | "table" | "tree" | "document" | "hex";
+export type PluginViewRenderer = "waveform" | "table" | "tree" | "document" | "hex" | "media";
 export type PluginViewMode = "snapshot" | "session";
 export type PluginViewDataProfile = "light" | "heavy";
 
@@ -2186,6 +2186,11 @@ export type HexViewPayload = {
   rows: HexRow[];
 };
 
+export type MediaViewPayload = {
+  path: string;
+  mediaType: "audio" | "video";
+};
+
 export type PluginViewWindowRequest = Record<string, unknown>;
 export type PluginViewWindowPayload = Record<string, unknown>;
 
@@ -2245,6 +2250,15 @@ export type HexSnapshotRenderResult = {
   payload: HexViewPayload;
 };
 
+export type MediaSnapshotRenderResult = {
+  pluginId: string;
+  viewId: string;
+  title: string;
+  renderer: "media";
+  mode: "snapshot";
+  payload: MediaViewPayload;
+};
+
 export type WaveformSessionRenderResult = {
   pluginId: string;
   viewId: string;
@@ -2283,7 +2297,8 @@ export type PluginSnapshotRenderResult =
   | TableSnapshotRenderResult
   | TreeSnapshotRenderResult
   | DocumentSnapshotRenderResult
-  | HexSnapshotRenderResult;
+  | HexSnapshotRenderResult
+  | MediaSnapshotRenderResult;
 
 export type PluginSessionRenderResult =
   | WaveformSessionRenderResult

@@ -155,6 +155,7 @@ def _xlsx_bytes() -> bytes:
         ("hex-preview", "sample.bin", b"\x00hello", "hex", "hex"),
         ("zip-preview", "sample.zip", b"", "archive-tree", "tree"),
         ("xlsx-preview", "sample.xlsx", _xlsx_bytes(), "document", "document"),
+        ("media-player", "sample.mp3", b"audio", "player", "media"),
     ],
 )
 async def test_simple_bundled_plugins_run_from_copied_directories(
@@ -206,6 +207,8 @@ async def test_simple_bundled_plugins_run_from_copied_directories(
         else:
             result = await runtime.render_view("main", manifest, view_id, {"path": filename})
         assert result["renderer"] == renderer
+        if plugin_id == "media-player":
+            assert result["payload"] == {"path": filename, "mediaType": "audio"}
     finally:
         await runtime.shutdown()
 

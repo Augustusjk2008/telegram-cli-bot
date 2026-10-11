@@ -9,6 +9,7 @@ import getpass
 import ipaddress
 import json
 import logging
+import mimetypes
 import os
 import platform
 import re
@@ -4505,9 +4506,14 @@ class WebApiServer:
             filename,
             allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
         )
+        content_type = str(metadata.get("content_type") or "application/octet-stream")
+        disposition = "inline" if request.query.get("inline") == "1" and content_type.startswith(("audio/", "video/")) else "attachment"
         return web.FileResponse(
             path=metadata["path"],
-            headers={"Content-Disposition": f'attachment; filename="{metadata["filename"]}"'},
+            headers={
+                "Content-Type": content_type,
+                "Content-Disposition": f'{disposition}; filename="{metadata["filename"]}"',
+            },
         )
 
     async def read_file(self, request: web.Request) -> web.Response:

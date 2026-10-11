@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import mimetypes
 import ntpath
 import os
 import re
@@ -981,7 +982,7 @@ def get_file_metadata(
         "filename": filename,
         "path": file_path,
         "size": os.path.getsize(file_path),
-        "content_type": "application/octet-stream",
+        "content_type": mimetypes.guess_type(file_path)[0] or "application/octet-stream",
     }
 
 

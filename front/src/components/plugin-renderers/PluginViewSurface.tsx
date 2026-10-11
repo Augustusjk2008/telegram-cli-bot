@@ -10,6 +10,7 @@ import type {
 import { runPluginAction } from "../plugins/pluginActions";
 import { DocumentView } from "./DocumentView";
 import { HexView } from "./HexView";
+import { MediaView } from "./MediaView";
 import { TableView } from "./TableView";
 import { TreeView } from "./TreeView";
 import { WaveformView } from "./WaveformView";
@@ -130,6 +131,10 @@ export function PluginViewSurface({
 
   if (view.renderer === "hex") {
     return <HexView title={view.title} payload={view.payload} />;
+  }
+
+  if (view.renderer === "media") {
+    return <MediaView botAlias={botAlias} view={view} inputPayload={inputPayload} />;
   }
 
   return (

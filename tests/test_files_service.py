@@ -1,8 +1,13 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock
+from aiohttp.test_utils import make_mocked_request
 
 from bot.web import files_service
-from bot.web.api_common import WebApiError
+from bot.web.api_common import AuthContext, WebApiError
+from bot.web.auth_store import CAP_READ_FILE_CONTENT
+from bot.web.server import WebApiServer
 
 
 def test_browsing_directories_preserves_chat_session(monkeypatch, tmp_path):
@@ -76,3 +81,34 @@ def test_absolute_file_paths_require_explicit_external_access(tmp_path):
     with pytest.raises(WebApiError) as relative_escape_error:
         files_service.resolve_action_parent_dir(session, "..", allow_external_paths=True)
     assert relative_escape_error.value.code == "unsafe_write_path"
+
+
+@pytest.mark.asyncio
+async def test_media_download_uses_inline_disposition_and_media_mime(monkeypatch, tmp_path):
+    media = tmp_path / "sample.mp3"
+    media.write_bytes(b"audio")
+    auth = AuthContext(user_id=1, token_used=True, capabilities={CAP_READ_FILE_CONTENT})
+    server = SimpleNamespace(
+        manager=MagicMock(),
+        _with_capability=AsyncMock(return_value=auth),
+        _manager_alias=lambda request: request.match_info["alias"],
+        _chat_user_id=lambda current_auth: current_auth.user_id,
+    )
+    monkeypatch.setattr(
+        "bot.web.server.get_file_metadata",
+        lambda *_args, **_kwargs: {
+            "path": str(media),
+            "filename": "sample.mp3",
+            "content_type": "audio/mpeg",
+        },
+    )
+
+    request = make_mocked_request(
+        "GET",
+        "/api/bots/main/files/download?filename=sample.mp3&inline=1",
+        match_info={"alias": "main"},
+    )
+    response = await WebApiServer.download_file(server, request)
+
+    assert response.headers["Content-Type"] == "audio/mpeg"
+    assert response.headers["Content-Disposition"] == 'inline; filename="sample.mp3"'

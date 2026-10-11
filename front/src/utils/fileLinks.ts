@@ -161,7 +161,10 @@ export function resolveMarkdownImagePath(src: string, markdownPath: string, plat
   return normalizePath(joinedPath).replace(/^\.\//, "");
 }
 
-export function buildFileDownloadUrl(botAlias: string, filename: string) {
+export function buildFileDownloadUrl(botAlias: string, filename: string, inline = false) {
   const params = new URLSearchParams({ filename });
+  if (inline) {
+    params.set("inline", "1");
+  }
   return withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`);
 }
