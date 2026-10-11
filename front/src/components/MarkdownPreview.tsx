@@ -262,7 +262,7 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--chat-markdown-text,var(--text))]"
     : isDesktopPreview
-      ? "h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]"
+      ? "markdown-preview-scroll h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]"
       : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]";
 
   function activateLocalLink(

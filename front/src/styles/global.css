@@ -307,6 +307,12 @@ select:disabled {
   min-width: max-content;
 }
 
+.markdown-preview-scroll {
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .terminal-shell {
   width: 100%;
   min-width: 0;
