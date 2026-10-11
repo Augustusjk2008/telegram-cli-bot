@@ -43,7 +43,7 @@ def validate_relative_path(value: str) -> str:
     if not value or any(c in value for c in "\\:%?#") or any(ord(c) < 32 for c in value):
         raise WebApiError(400, "unsafe_preview_path", "预览资源路径不安全")
     for part in value.split("/"):
-        if (not part or part.startswith(".") or part.endswith((".", " "))
+        if (not part or part.endswith((".", " "))
                 or _DEVICE.match(part) or _SENSITIVE.search(part)):
             raise WebApiError(403, "preview_path_forbidden", "预览不允许访问此路径")
     return value

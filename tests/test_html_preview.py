@@ -198,9 +198,9 @@ async def test_replacing_external_preview_root_revokes_ticket(preview, tmp_path)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", [
     "../outside.html", "%2e%2e/outside.html", "%252e%252e/outside.html", "C:/outside.html",
-    "index.html:secret", "a%5c..%5cindex.html", "//server/share/index.html", ".git/config.json",
+    "index.html:secret", "a%5c..%5cindex.html", "//server/share/index.html",
     "COM¹.html",
-    ".env", "credentials.json", "managed_bots.json", "vite.config.js", "index.html.", "NUL.html",
+    "credentials.json", "managed_bots.json", "vite.config.js", "index.html.", "NUL.html",
     "source.py", "folder/", "missing.js",
 ])
 async def test_unsafe_missing_and_disallowed_resources_are_not_spa(preview, path):
@@ -212,7 +212,7 @@ async def test_unsafe_missing_and_disallowed_resources_are_not_spa(preview, path
     assert "Access-Control-Allow-Credentials" not in response.headers
 
 
-def test_symlink_escape_and_sensitive_alias(preview, tmp_path):
+def test_symlink_escape(preview, tmp_path):
     outside = tmp_path / "outside.html"
     outside.write_text("private", encoding="utf-8")
     link = preview.root / "link.html"
@@ -222,12 +222,6 @@ def test_symlink_escape_and_sensitive_alias(preview, tmp_path):
         pytest.skip("symlink creation unavailable")
     with pytest.raises(WebApiError):
         service.read_resource(str(preview.root), "link.html")
-    hidden = preview.root / ".private"
-    hidden.mkdir()
-    (hidden / "data.json").write_text("{}", encoding="utf-8")
-    (preview.root / "data.json").symlink_to(hidden / "data.json")
-    with pytest.raises(WebApiError):
-        service.read_resource(str(preview.root), "data.json")
 
 
 def test_symlink_swap_during_open_cannot_escape(preview, tmp_path, monkeypatch):

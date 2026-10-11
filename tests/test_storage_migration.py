@@ -124,6 +124,39 @@ def test_preview_ignores_sqlite_sidecar_that_closes_during_inventory(
     assert all(entry["relativePath"] != sidecar.name for entry in service._plans[plan["id"]]["entries"])
 
 
+def test_copy_accepts_changed_sqlite_shared_memory_snapshot(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, repo, target = migration_context
+    app, _history = _make_sources(home)
+    usage_db = app / "usage.sqlite3"
+    connection = sqlite3.connect(usage_db)
+    connection.execute("CREATE TABLE samples (value TEXT NOT NULL)")
+    connection.execute("INSERT INTO samples VALUES ('kept')")
+    connection.commit()
+    connection.close()
+    sidecar = app / "usage.sqlite3-shm"
+    sidecar.write_bytes(b"preview shared memory")
+
+    service = StorageMigrationService(repo)
+    plan = service.preview(str(target))
+    service.begin(str(plan["id"]))
+    original_copyfile = migration_module.shutil.copyfile
+
+    def copy_with_changed_shared_memory(source: str | Path, destination: str | Path) -> str:
+        result = original_copyfile(source, destination)
+        if Path(source) == sidecar:
+            Path(destination).write_bytes(b"runtime shared memory")
+        return result
+
+    monkeypatch.setattr(migration_module.shutil, "copyfile", copy_with_changed_shared_memory)
+    job = service.execute(str(plan["id"]))
+
+    assert job["state"] == "awaiting_restart"
+    assert (target / "orbit-safe-claw" / "usage.sqlite3-shm").read_bytes() == b"runtime shared memory"
+
+
 def test_journal_progress_is_throttled_until_stage_changes(
     migration_context: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,

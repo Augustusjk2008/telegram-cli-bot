@@ -455,6 +455,10 @@ def _is_sqlite_sidecar(path: Path) -> bool:
     return path.name.casefold().endswith(("-wal", "-shm"))
 
 
+def _is_sqlite_shared_memory(path: Path) -> bool:
+    return path.name.casefold().endswith("-shm")
+
+
 def _validate_sqlite(path: Path, *, checkpoint: bool) -> None:
     try:
         connection = sqlite3.connect(str(path), timeout=1.0)
@@ -1327,27 +1331,37 @@ class StorageMigrationService:
     def _copy_file_locked(self, entry: dict[str, Any], target: Path) -> dict[str, Any]:
         source = Path(entry["sourceRoot"]) / Path(*str(entry["relativePath"]).split("/"))
         destination = target / Path(*str(entry["targetRelativePath"]).split("/"))
+        shared_memory = _is_sqlite_shared_memory(source)
         if _has_link_ancestor(source) or not source.is_file():
             raise StorageMigrationError(f"复制前源文件不可用: {source}")
         self._ensure_target_directory(destination.parent)
         temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         try:
             shutil.copyfile(source, temporary)
-            if temporary.stat().st_size != int(entry["size"]):
-                raise StorageMigrationError(f"复制校验失败: {destination}")
+            copied_size = temporary.stat().st_size
             copied_hash = _hash_file(temporary)
-            if copied_hash != str(entry["sourceSha256"] or ""):
+            if not shared_memory and (
+                copied_size != int(entry["size"])
+                or copied_hash != str(entry["sourceSha256"] or "")
+            ):
                 raise StorageMigrationError(f"复制校验失败: {destination}")
+            if shared_memory:
+                # SQLite recreates -shm when needed. Its lock state can change
+                # after preview, so only the copied snapshot is authoritative.
+                entry["size"] = copied_size
+                entry["sha256"] = copied_hash
+                entry["sourceSha256"] = copied_hash
             try:
                 shutil.copystat(source, temporary, follow_symlinks=False)
             except OSError as exc:
-                raise StorageMigrationError(f"无法保留文件属性: {destination}") from exc
+                if not shared_memory or source.exists():
+                    raise StorageMigrationError(f"无法保留文件属性: {destination}") from exc
             os.replace(temporary, destination)
             _fsync_directory(destination.parent)
             return {
                 "entry": entry,
                 "targetSha256": copied_hash,
-                "targetSize": int(entry["size"]),
+                "targetSize": copied_size,
             }
         finally:
             try:
