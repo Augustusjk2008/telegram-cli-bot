@@ -946,10 +946,10 @@ export function FileTreePane({
   focused,
   onToggleFocus,
 }: Props) {
-  const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
-  const [pendingFileName, setPendingFileName] = useState("");
-  const [createFileBusy, setCreateFileBusy] = useState(false);
-  const [createFileError, setCreateFileError] = useState("");
+  const [createKind, setCreateKind] = useState<"file" | "directory" | null>(null);
+  const [pendingName, setPendingName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameTargetPath, setRenameTargetPath] = useState("");
   const [renameValue, setRenameValue] = useState("");
@@ -1140,24 +1140,34 @@ export function FileTreePane({
     openContextMenu(entry, absolutePath, rect.left + 12, rect.bottom + 4);
   }
 
-  async function handleCreateFile() {
+  function openCreateDialog(kind: "file" | "directory") {
+    setPendingName("");
+    setCreateError("");
+    setCreateKind(kind);
+  }
+
+  async function handleCreateEntry() {
     if (!canMutateFiles) {
-      setCreateFileError("无文件写入权限");
+      setCreateError("无文件写入权限");
       return;
     }
-    setCreateFileBusy(true);
-    setCreateFileError("");
+    setCreateBusy(true);
+    setCreateError("");
     setActionError("");
     try {
-      const result = await tree.createFile(pendingFileName.trim(), "", resolveCreateParentPath());
-      setShowCreateFileDialog(false);
-      setPendingFileName("");
-      onCreatedFile(result.path, "", result.lastModifiedNs);
+      if (createKind === "directory") {
+        await tree.createDirectory(pendingName.trim(), resolveCreateParentPath());
+      } else {
+        const result = await tree.createFile(pendingName.trim(), "", resolveCreateParentPath());
+        onCreatedFile(result.path, "", result.lastModifiedNs);
+      }
+      setCreateKind(null);
+      setPendingName("");
       await onRefreshGitDecorations();
     } catch (error) {
-      setCreateFileError(error instanceof Error ? error.message : "新建文件失败");
+      setCreateError(error instanceof Error ? error.message : createKind === "directory" ? "新建文件夹失败" : "新建文件失败");
     } finally {
-      setCreateFileBusy(false);
+      setCreateBusy(false);
     }
   }
 
@@ -1181,24 +1191,6 @@ export function FileTreePane({
       setRenameError(error instanceof Error ? error.message : "重命名失败");
     } finally {
       setRenameBusy(false);
-    }
-  }
-
-  async function handleCreateDirectory() {
-    if (!canMutateFiles) {
-      setActionError("无文件写入权限");
-      return;
-    }
-    const name = window.prompt("请输入新文件夹名称", "")?.trim();
-    if (!name) {
-      return;
-    }
-    setActionError("");
-    try {
-      await tree.createDirectory(name, resolveCreateParentPath());
-      await onRefreshGitDecorations();
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "新建文件夹失败");
     }
   }
 
@@ -1668,11 +1660,7 @@ export function FileTreePane({
                 type="button"
                 aria-label="新建文件"
                 title="新建文件"
-                onClick={() => {
-                  setPendingFileName("");
-                  setCreateFileError("");
-                  setShowCreateFileDialog(true);
-                }}
+                onClick={() => openCreateDialog("file")}
                 className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
               >
                 <FilePlus className="h-3.5 w-3.5" />
@@ -1681,7 +1669,7 @@ export function FileTreePane({
                 type="button"
                 aria-label="新建文件夹"
                 title="新建文件夹"
-                onClick={() => void handleCreateDirectory()}
+                onClick={() => openCreateDialog("directory")}
                 className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
               >
                 <FolderPlus className="h-3.5 w-3.5" />
@@ -2016,23 +2004,23 @@ export function FileTreePane({
         </div>
       ) : null}
 
-      {canMutateFiles && showCreateFileDialog ? (
+      {canMutateFiles && createKind ? (
         <FileNameDialog
-          title="新建文件"
-          label="文件名"
-          value={pendingFileName}
+          title={createKind === "directory" ? "新建文件夹" : "新建文件"}
+          label={createKind === "directory" ? "文件夹名" : "文件名"}
+          value={pendingName}
           confirmText="创建"
-          busy={createFileBusy}
-          error={createFileError}
-          onChange={setPendingFileName}
-          onConfirm={() => void handleCreateFile()}
+          busy={createBusy}
+          error={createError}
+          onChange={setPendingName}
+          onConfirm={() => void handleCreateEntry()}
           onClose={() => {
-            if (createFileBusy) {
+            if (createBusy) {
               return;
             }
-            setShowCreateFileDialog(false);
-            setPendingFileName("");
-            setCreateFileError("");
+            setCreateKind(null);
+            setPendingName("");
+            setCreateError("");
           }}
         />
       ) : null}

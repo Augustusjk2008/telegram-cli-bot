@@ -258,6 +258,7 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   vi.spyOn(client, "revealFileTreePath").mockResolvedValue({ rootPath: remote.root, highlightPath: "README.md", expandedPaths: [], branches: { "": entries } });
   const read = vi.spyOn(client, "readFileFull").mockResolvedValue({ mode: "cat", content: "remote text", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" });
   const create = vi.spyOn(client, "createTextFile").mockResolvedValue({ path: "/home/dev/new.txt", fileSizeBytes: 0, lastModifiedNs: "sha256:new" });
+  const createDirectory = vi.spyOn(client, "createDirectory").mockResolvedValue(undefined);
   const resolve = vi.spyOn(client, "resolveFileOpenTarget");
   const git = vi.spyOn(client, "getGitOverview").mockResolvedValue({
     repoFound: true, canInit: false, workingDir: remote.root, repoPath: remote.root, repoName: "dev",
@@ -296,6 +297,11 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   fireEvent.click(screen.getByRole("button", { name: "创建" }));
   await waitFor(() => expect(create).toHaveBeenCalledWith("remote", "new.txt", "", remote.root));
   expect(await screen.findByRole("tab", { name: "new.txt" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "新建文件夹" }));
+  const folderNameInput = screen.getByRole("textbox", { name: "文件夹名" });
+  fireEvent.change(folderNameInput, { target: { value: "docs" } });
+  fireEvent.keyDown(folderNameInput, { key: "Enter", code: "Enter" });
+  await waitFor(() => expect(createDirectory).toHaveBeenCalledWith("remote", "docs", remote.root));
   fireEvent.click(screen.getByRole("button", { name: "Git" }));
   expect(await screen.findByRole("heading", { name: "提交图" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "最近提交" })).not.toBeInTheDocument();

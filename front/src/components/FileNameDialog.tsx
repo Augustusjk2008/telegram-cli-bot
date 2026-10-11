@@ -30,7 +30,15 @@ export function FileNameDialog({
       aria-modal="true"
       aria-label={title}
     >
-      <div className="w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
+      <form
+        className="w-full max-w-md rounded-2xl bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!busy && value.trim()) {
+            onConfirm();
+          }
+        }}
+      >
         <div className="mb-4 flex items-center justify-between gap-4">
           <h2 className="text-lg font-semibold text-[var(--text)]">{title}</h2>
           <button
@@ -49,20 +57,32 @@ export function FileNameDialog({
           autoFocus
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") {
+              return;
+            }
+            if (event.nativeEvent.isComposing || event.keyCode === 229) {
+              event.preventDefault();
+              return;
+            }
+            event.preventDefault();
+            if (!busy && value.trim()) {
+              onConfirm();
+            }
+          }}
           className="mt-2 w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
         />
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
+            type="submit"
+            disabled={busy || !value.trim()}
             className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-60"
           >
             {busy ? "处理中..." : confirmText}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);

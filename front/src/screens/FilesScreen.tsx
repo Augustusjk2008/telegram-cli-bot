@@ -266,10 +266,10 @@ export function FilesScreen({
   const [codeNavigationCandidates, setCodeNavigationCandidates] = useState<CodeLocation[]>([]);
   const [codeNavigationMessage, setCodeNavigationMessage] = useState("");
   const [codeNavigationSource, setCodeNavigationSource] = useState("");
-  const [showCreateFileDialog, setShowCreateFileDialog] = useState(false);
-  const [pendingFileName, setPendingFileName] = useState("");
-  const [createFileBusy, setCreateFileBusy] = useState(false);
-  const [createFileError, setCreateFileError] = useState("");
+  const [createKind, setCreateKind] = useState<"file" | "directory" | null>(null);
+  const [pendingName, setPendingName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameTargetPath, setRenameTargetPath] = useState("");
   const [renameTargetIsDir, setRenameTargetIsDir] = useState(false);
@@ -579,28 +579,6 @@ export function FilesScreen({
       setExternalPath("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "跳转目录失败");
-      setStatusText("");
-    }
-  };
-
-  const handleCreateDirectory = async () => {
-    if (!canMutateFiles) {
-      setError("无文件写入权限");
-      setStatusText("");
-      return;
-    }
-    const name = window.prompt("请输入新文件夹名称", "")?.trim();
-    if (!name) {
-      return;
-    }
-
-    setError("");
-    setStatusText("");
-    try {
-      await client.createDirectory(botAlias, name);
-      await loadListing();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "新建文件夹失败");
       setStatusText("");
     }
   };
@@ -961,49 +939,55 @@ export function FilesScreen({
     }
   };
 
-  const handleOpenCreateFileDialog = () => {
+  const handleOpenCreateDialog = (kind: "file" | "directory") => {
     if (!canMutateFiles) {
       setError("无文件写入权限");
       setStatusText("");
       return;
     }
-    setPendingFileName("");
-    setCreateFileError("");
-    setShowCreateFileDialog(true);
+    setPendingName("");
+    setCreateError("");
+    setCreateKind(kind);
   };
 
-  const handleCloseCreateFileDialog = () => {
-    if (createFileBusy) {
+  const handleCloseCreateDialog = () => {
+    if (createBusy) {
       return;
     }
-    setShowCreateFileDialog(false);
-    setPendingFileName("");
-    setCreateFileError("");
+    setCreateKind(null);
+    setPendingName("");
+    setCreateError("");
   };
 
-  const handleCreateFile = async () => {
+  const handleCreateEntry = async () => {
     if (!canMutateFiles) {
-      setCreateFileError("无文件写入权限");
+      setCreateError("无文件写入权限");
       return;
     }
-    setCreateFileBusy(true);
-    setCreateFileError("");
+    setCreateBusy(true);
+    setCreateError("");
+    setError("");
+    setStatusText("");
     try {
-      const result = await client.createTextFile(botAlias, pendingFileName.trim(), "");
-      setShowCreateFileDialog(false);
-      setPendingFileName("");
-      syncCurrentEditorDocumentSnapshot(result.path, "");
-      setEditorPath(result.path);
-      setEditorContent("");
-      setSavedContent("");
-      setEditorError("");
-      setEditorStatusText("");
-      setEditorLastModifiedNs(result.lastModifiedNs);
+      if (createKind === "directory") {
+        await client.createDirectory(botAlias, pendingName.trim());
+      } else {
+        const result = await client.createTextFile(botAlias, pendingName.trim(), "");
+        syncCurrentEditorDocumentSnapshot(result.path, "");
+        setEditorPath(result.path);
+        setEditorContent("");
+        setSavedContent("");
+        setEditorError("");
+        setEditorStatusText("");
+        setEditorLastModifiedNs(result.lastModifiedNs);
+      }
+      setCreateKind(null);
+      setPendingName("");
       await loadListing();
     } catch (err) {
-      setCreateFileError(err instanceof Error ? err.message : "新建文件失败");
+      setCreateError(err instanceof Error ? err.message : createKind === "directory" ? "新建文件夹失败" : "新建文件失败");
     } finally {
-      setCreateFileBusy(false);
+      setCreateBusy(false);
     }
   };
 
@@ -1128,7 +1112,7 @@ export function FilesScreen({
                 type="button"
                 aria-label="新建文件"
                 title="新建文件"
-                onClick={() => void handleOpenCreateFileDialog()}
+                onClick={() => handleOpenCreateDialog("file")}
                 size="icon"
                 variant="plain"
               >
@@ -1140,7 +1124,7 @@ export function FilesScreen({
                 type="button"
                 aria-label="新建文件夹"
                 title="新建文件夹"
-                onClick={() => void handleCreateDirectory()}
+                onClick={() => handleOpenCreateDialog("directory")}
                 size="icon"
                 variant="plain"
               >
@@ -1352,17 +1336,17 @@ export function FilesScreen({
           downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}
-      {canMutateFiles && showCreateFileDialog ? (
+      {canMutateFiles && createKind ? (
         <FileNameDialog
-          title="新建文件"
-          label="文件名"
-          value={pendingFileName}
+          title={createKind === "directory" ? "新建文件夹" : "新建文件"}
+          label={createKind === "directory" ? "文件夹名" : "文件名"}
+          value={pendingName}
           confirmText="创建"
-          busy={createFileBusy}
-          error={createFileError}
-          onChange={setPendingFileName}
-          onConfirm={() => void handleCreateFile()}
-          onClose={handleCloseCreateFileDialog}
+          busy={createBusy}
+          error={createError}
+          onChange={setPendingName}
+          onConfirm={() => void handleCreateEntry()}
+          onClose={handleCloseCreateDialog}
         />
       ) : null}
       {canMutateFiles && showRenameDialog ? (
