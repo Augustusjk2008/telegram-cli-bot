@@ -434,12 +434,12 @@ test("a stale workspace response cannot overwrite the newly bound Git state", as
   expect(screen.queryByText("C:/old")).not.toBeInTheDocument();
 });
 
-test("remote Pull and Push still require confirmation without capability gating", async () => {
-  const { client } = createGitScreenClient(remoteGitCapabilities);
+test.each([false, true])("Pull and Push require one confirmation per action (remote=%s)", async (remote) => {
+  const { client } = createGitScreenClient(remote ? remoteGitCapabilities : localGitCapabilities);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  render(<GitScreen botAlias="remote" client={client} remote />);
+  render(<GitScreen botAlias={remote ? "remote" : "main"} client={client} remote={remote} />);
 
-  await screen.findByRole("button", { name: "Fetch" });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Pull" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Pull" }));
   expect(confirm).toHaveBeenCalledTimes(1);
   expect(client.pullGitRemote).not.toHaveBeenCalled();
@@ -450,9 +450,11 @@ test("remote Pull and Push still require confirmation without capability gating"
   confirm.mockReturnValue(true);
   fireEvent.click(screen.getByRole("button", { name: "Pull" }));
   await waitFor(() => expect(client.pullGitRemote).toHaveBeenCalledOnce());
+  expect(confirm).toHaveBeenCalledTimes(3);
   await screen.findByText("ok");
   fireEvent.click(screen.getByRole("button", { name: "Push" }));
   await waitFor(() => expect(client.pushGitRemote).toHaveBeenCalledOnce());
+  expect(confirm).toHaveBeenCalledTimes(4);
 });
 
 test("smart commit starts without confirmation", async () => {

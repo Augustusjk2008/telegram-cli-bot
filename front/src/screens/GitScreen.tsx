@@ -988,7 +988,7 @@ export function GitScreen({
       : operation === "pull"
         ? () => client.pullGitRemote(botAlias)
         : () => client.pushGitRemote(botAlias);
-    if (operation !== "fetch" && !window.confirm(`确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？`)) {
+    if (remote && operation !== "fetch" && !window.confirm(`确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？`)) {
       return;
     }
     await runAction(`remote-${operation}`, mutation, {
