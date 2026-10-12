@@ -2686,19 +2686,14 @@ export function ChatScreen({
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
     const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
     const requestedAgentId = "main";
-    const loadAgents = typeof client.listAgents === "function"
-      ? client.listAgents(botAlias).catch(() => ({ items: fallbackAgents() }))
-      : Promise.resolve({ items: fallbackAgents() });
-
     Promise.all([
-      loadAgents,
       listScopedMessages(client, botAlias, requestedAgentId, requestedExecutionMode),
       getScopedOverview(client, botAlias, requestedAgentId, requestedExecutionMode),
       listScopedConversations(client, botAlias, "", requestedAgentId, requestedExecutionMode),
     ])
-      .then(async ([agentData, initialSnapshot, initialOverview, initialConversationData]) => {
+      .then(async ([initialSnapshot, initialOverview, initialConversationData]) => {
         if (cancelled) return;
-        const nextAgents = agentData.items.length > 0 ? agentData.items : fallbackAgents();
+        const nextAgents = initialOverview.agents?.length ? initialOverview.agents : fallbackAgents();
         const supportedModes = getSupportedExecutionModes(initialOverview);
         const nextExecutionMode = forcedExecutionMode && supportedModes.includes(forcedExecutionMode)
           ? forcedExecutionMode

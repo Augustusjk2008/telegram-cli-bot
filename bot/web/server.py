@@ -1884,7 +1884,8 @@ class WebApiServer:
         _require_capability(auth, CAP_VIEW_BOT_STATUS)
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = get_overview(
+        data = await run_chat_store_io(
+            get_overview,
             self.manager,
             alias,
             auth.user_id,
