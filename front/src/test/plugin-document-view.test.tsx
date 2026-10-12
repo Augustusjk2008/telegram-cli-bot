@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DocumentView } from "../components/plugin-renderers/DocumentView";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
-import type { DocumentBlock, DocumentSessionRenderResult, DocumentViewPayload } from "../services/types";
+import type { DocumentBlock, DocumentSessionRenderResult, DocumentViewPayload, DocumentWindowPayload } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 function renderDocument(payload: Omit<DocumentViewPayload, "path">, client = {} as WebBotClient) {
@@ -211,48 +211,97 @@ function paragraph(text: string): DocumentBlock {
 }
 
 describe("DocumentView sessions", () => {
-  it("lists sections, requests only the selected section, and bounds rendered blocks", async () => {
+  const view: DocumentSessionRenderResult = {
+    pluginId: "document-test",
+    viewId: "preview",
+    title: "Preview",
+    renderer: "document",
+    mode: "session",
+    sessionId: "document-session",
+    summary: {
+      path: "sample.docx",
+      sections: [
+        { id: "intro", title: "Introduction" },
+        { id: "details", title: "Details" },
+        { id: "appendix", title: "Appendix" },
+      ],
+    },
+    initialWindow: { sectionId: "intro", blocks: [paragraph("intro body")] },
+  };
+
+  it("appends sections automatically and jumps to pending or cached chapters", async () => {
     const user = userEvent.setup();
-    const query = vi.fn().mockImplementation((_botAlias, _pluginId, _sessionId, request: { sectionId: string }) => Promise.resolve({
-      sectionId: request.sectionId,
-      blocks: [paragraph(`${request.sectionId} body`)],
-    }));
+    let resolveAppendix!: (value: DocumentWindowPayload) => void;
+    const appendix = new Promise<DocumentWindowPayload>((resolve) => { resolveAppendix = resolve; });
+    const query = vi.fn().mockImplementation((_botAlias, _pluginId, _sessionId, request: { sectionId: string }) =>
+      request.sectionId === "appendix" ? appendix : Promise.resolve({
+        sectionId: request.sectionId,
+        blocks: [paragraph(`${request.sectionId} body`)],
+      }));
     const client = { queryPluginViewWindow: query } as unknown as WebBotClient;
-    const view: DocumentSessionRenderResult = {
-      pluginId: "document-test",
-      viewId: "preview",
-      title: "Preview",
-      renderer: "document",
-      mode: "session",
-      sessionId: "document-session",
-      summary: {
-        path: "sample.docx",
-        sections: [
-          { id: "intro", title: "Introduction" },
-          { id: "details", title: "Details" },
-        ],
-      },
-      initialWindow: { sectionId: "intro", blocks: [paragraph("intro body")] },
-    };
 
     render(<PluginViewSurface botAlias="main" client={client} view={view} />);
+    const scrollTo = vi.fn();
+    screen.getByTestId("document-view").scrollTo = scrollTo;
 
-    expect(screen.getByTestId("document-section-list")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Introduction" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Introduction" })).toHaveAttribute("aria-current", "location");
+    await screen.findByText("details body");
     expect(screen.getByText("intro body")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Details" }));
-    expect(screen.queryByText("intro body")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("details body")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Appendix" }));
+    expect(screen.getByText("intro body")).toBeInTheDocument();
+    expect(scrollTo).not.toHaveBeenCalled();
+    await act(async () => resolveAppendix({ sectionId: "appendix", blocks: [paragraph("appendix body")] }));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Appendix" })).toHaveAttribute("aria-current", "location");
+    await user.click(screen.getByRole("button", { name: "Introduction" }));
+    expect(scrollTo).toHaveBeenCalledTimes(2);
 
-    expect(query).toHaveBeenCalledWith(
+    expect(query).toHaveBeenNthCalledWith(
+      1,
       "main",
       "document-test",
       "document-session",
       { sectionId: "details" },
       expect.any(AbortSignal),
     );
-    expect(screen.getByTestId("document-section-content").querySelectorAll("p")).toHaveLength(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(Array.from(screen.getByTestId("document-section-content").querySelectorAll("p"), (element) => element.textContent))
+      .toEqual(["intro body", "details body", "appendix body"]);
+  });
+
+  it("keeps loaded content after a failed request and resumes on retry", async () => {
+    const query = vi.fn()
+      .mockRejectedValueOnce(new Error("connection interrupted"))
+      .mockImplementation((_botAlias, _pluginId, _sessionId, request: { sectionId: string }) => Promise.resolve({
+        sectionId: request.sectionId, blocks: [paragraph(`${request.sectionId} body`)],
+      }));
+    render(<DocumentView botAlias="main" client={{ queryPluginViewWindow: query } as unknown as WebBotClient} view={view} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("connection interrupted");
+    expect(screen.getByText("intro body")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "重试" }));
+    await screen.findByText("appendix body");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(query.mock.calls.map((call) => call[3].sectionId)).toEqual(["details", "details", "appendix"]);
+  });
+
+  it("discards pending sections when a different document session opens", async () => {
+    let resolveOld!: (value: DocumentWindowPayload) => void;
+    const query = vi.fn().mockReturnValue(new Promise<DocumentWindowPayload>((resolve) => { resolveOld = resolve; }));
+    const client = { queryPluginViewWindow: query } as unknown as WebBotClient;
+    const { rerender } = render(<DocumentView botAlias="main" client={client} view={view} />);
+    const signal = query.mock.calls[0][4] as AbortSignal;
+    rerender(<DocumentView botAlias="main" client={client} view={{
+      ...view,
+      sessionId: "new-session",
+      summary: { ...view.summary, sections: [{ id: "intro", title: "New document" }] },
+      initialWindow: { sectionId: "intro", blocks: [paragraph("new body")] },
+    }} />);
+    expect(signal.aborted).toBe(true);
+    await act(async () => resolveOld({ sectionId: "details", blocks: [paragraph("stale body")] }));
+    expect(screen.getByText("new body")).toBeInTheDocument();
+    expect(screen.queryByText("stale body")).not.toBeInTheDocument();
+    expect(screen.queryByText("intro body")).not.toBeInTheDocument();
   });
 
   it("keeps artifact image loading lazy and reports decode failures", async () => {

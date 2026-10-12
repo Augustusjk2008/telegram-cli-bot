@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "@playwright/test";
-import type { DocumentViewPayload } from "../services/types";
+import { expect, test, type Page } from "@playwright/test";
+import type { DocumentViewPayload, DocumentWindowPayload, PluginRenderResult } from "../services/types";
 
 // A parser-produced payload can also be checked without installing the plugin.
 const payload: DocumentViewPayload = process.env.DOCX_PREVIEW_PAYLOAD_FILE
@@ -20,7 +20,11 @@ const payload: DocumentViewPayload = process.env.DOCX_PREVIEW_PAYLOAD_FILE
     ],
   };
 
-test("document formatting stays selectable and legible across themes and viewport widths", async ({ page }) => {
+async function openDocument(
+  page: Page,
+  result: Extract<PluginRenderResult, { renderer: "document" }>,
+  windows: Record<string, DocumentWindowPayload> = {},
+) {
   const bot = { alias: "main", name: "main", cli_type: "codex", status: "running", working_dir: "C:\\workspace", supported_execution_modes: ["cli"] };
   const entries = [{ name: "formatting.docx", is_dir: false, size: 1024 }];
   await page.addInitScript(() => localStorage.setItem("web-view-mode", "desktop"));
@@ -35,7 +39,8 @@ test("document formatting stays selectable and legible across themes and viewpor
     else if (path === "bots/main/pwd") data = { working_dir: "C:\\workspace" };
     else if (path === "bots/main/files/reveal") data = { root_path: "C:\\workspace", highlight_path: "formatting.docx", branches: { "": entries } };
     else if (path === "bots/main/plugins/resolve-file-target") data = { kind: "plugin_view", pluginId: "docx-preview", viewId: "document", title: "formatting.docx", input: { path: "formatting.docx" } };
-    else if (path.endsWith("/views/document/open")) data = { pluginId: "docx-preview", viewId: "document", renderer: "document", mode: "snapshot", title: "formatting.docx", payload };
+    else if (path.endsWith("/views/document/open")) data = result;
+    else if (path.endsWith("/window")) data = windows[route.request().postDataJSON().sectionId];
     else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 1 };
     else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
     else if (path.endsWith("/agents")) data = { items: [{ id: "main", name: "main" }], active_agent_id: "main" };
@@ -49,6 +54,13 @@ test("document formatting stays selectable and legible across themes and viewpor
   const view = page.getByTestId("document-view");
   await expect(view).toBeVisible();
   await page.getByRole("button", { name: "聚焦编辑器", exact: true }).click();
+  return view;
+}
+
+test("document formatting stays selectable and legible across themes and viewport widths", async ({ page }) => {
+  const view = await openDocument(page, {
+    pluginId: "docx-preview", viewId: "document", renderer: "document", mode: "snapshot", title: "formatting.docx", payload,
+  });
   for (const theme of ["classic", "deep-space"]) {
     await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
     for (const width of [1440, 390]) {
@@ -102,5 +114,71 @@ test("document formatting stays selectable and legible across themes and viewpor
       await view.screenshot({ path: screenshot });
       await test.info().attach(`${theme}-${width}`, { path: screenshot, contentType: "image/png" });
     }
+  }
+});
+
+test("document contents stay continuous with a compact sticky chapter index", async ({ page }) => {
+  const titles = ["概览与目标", "详细内容", "设计说明", "验证结果", "附录资料", "结语"];
+  const windows: Record<string, DocumentWindowPayload> = Object.fromEntries(titles.map((title, index) => [
+    `section-${index}`,
+    {
+      sectionId: `section-${index}`,
+      blocks: [
+        { type: "heading", level: 1, runs: [{ text: title }] },
+        ...Array.from({ length: index === titles.length - 1 ? 2 : 20 }, (_, line) => ({
+          type: "paragraph" as const,
+          runs: [{ text: `${title} · 正文第 ${line + 1} 段，支持连续阅读和章节定位。` }],
+        })),
+      ],
+    },
+  ]));
+  const view = await openDocument(page, {
+    pluginId: "docx-preview", viewId: "document", renderer: "document", mode: "session", title: "formatting.docx",
+    sessionId: "document-navigation",
+    summary: { path: "formatting.docx", sections: titles.map((title, index) => ({ id: `section-${index}`, title })) },
+    initialWindow: windows["section-0"],
+  }, windows);
+  const contents = view.getByTestId("document-section-content");
+  await expect(contents.getByRole("heading")).toHaveCount(titles.length);
+  const navigation = view.getByRole("navigation", { name: "文档章节" });
+
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await view.evaluate((element, viewportWidth) => {
+      element.parentElement!.style.width = viewportWidth === 390 ? "382px" : "";
+      element.scrollTop = 0;
+    }, width);
+    expect((await navigation.boundingBox())!.height).toBeLessThan(60);
+    expect(await view.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    if (width === 390) {
+      expect(await navigation.locator("div").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    }
+
+    await navigation.getByRole("button", { name: "设计说明", exact: true }).click();
+    const heading = contents.getByRole("heading", { name: "设计说明", exact: true });
+    await expect.poll(async () => {
+      const bounds = (await navigation.boundingBox())!;
+      return (await heading.boundingBox())!.y - bounds.y - bounds.height;
+    }).toBeGreaterThanOrEqual(0);
+    const bounds = (await navigation.boundingBox())!;
+    expect((await heading.boundingBox())!.y - bounds.y - bounds.height).toBeLessThan(24);
+    await expect(navigation.getByRole("button", { name: "设计说明", exact: true })).toHaveAttribute("aria-current", "location");
+    expect(Math.abs((await navigation.boundingBox())!.y - (await view.boundingBox())!.y)).toBeLessThan(2);
+
+    await view.evaluate((element) => {
+      const target = element.querySelector('[data-section-id="section-3"]')!;
+      const navigation = element.querySelector("nav")!;
+      element.scrollTop += target.getBoundingClientRect().top - navigation.getBoundingClientRect().bottom - 12;
+    });
+    await expect(navigation.getByRole("button", { name: "验证结果", exact: true })).toHaveAttribute("aria-current", "location");
+
+    await navigation.getByRole("button", { name: "结语", exact: true }).click();
+    await expect(contents.getByRole("heading", { name: "结语", exact: true })).toBeInViewport();
+    await expect(navigation.getByRole("button", { name: "结语", exact: true })).toHaveAttribute("aria-current", "location");
+    await navigation.getByRole("button", { name: "概览与目标", exact: true }).click();
+    await expect(contents.getByRole("heading", { name: "概览与目标", exact: true })).toBeInViewport();
+    const screenshot = test.info().outputPath(`document-navigation-${width}.png`);
+    await view.screenshot({ path: screenshot });
+    await test.info().attach(`navigation-${width}`, { path: screenshot, contentType: "image/png" });
   }
 });

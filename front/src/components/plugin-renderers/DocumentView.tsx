@@ -547,7 +547,8 @@ export function DocumentView(props: Props) {
       </Suspense>
     );
   }
-  return <DocumentContent {...props} />;
+  const contentKey = `${botAlias}:${view.pluginId}:${view.viewId}:${view.mode}:${view.mode === "session" ? view.sessionId : view.payload.path}`;
+  return <DocumentContent key={contentKey} {...props} />;
 }
 
 function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
@@ -557,94 +558,116 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
   const initialWindow: DocumentWindowPayload = session
     ? session.initialWindow
     : { sectionId: "snapshot", blocks: snapshot!.payload.blocks };
-  const [selectedSectionId, setSelectedSectionId] = useState(() => initialWindow.sectionId);
-  const [windowState, setWindowState] = useState<DocumentWindowPayload | null>(() => initialWindow);
-  const [windowLoading, setWindowLoading] = useState(false);
+  const initialSectionId = initialWindow.sectionId || sectionId(summary.sections[0], 0);
+  const [selectedSectionId, setSelectedSectionId] = useState(initialSectionId);
+  const [windows, setWindows] = useState(() => new Map([[initialSectionId, { ...initialWindow, sectionId: initialSectionId }]]));
   const [windowError, setWindowError] = useState("");
-  const requestIdRef = useRef(0);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const navigationRef = useRef<HTMLElement>(null);
+  const sectionRefs = useRef(new Map<string, HTMLDivElement>());
+  const pendingSectionRef = useRef<string | null>(null);
+  const sectionIds = summary.sections.map(sectionId);
+  const nextSectionId = session ? sectionIds.find((id) => !windows.has(id)) : undefined;
 
   useEffect(() => {
-    const nextWindow: DocumentWindowPayload = view.mode === "session"
-      ? view.initialWindow
-      : { sectionId: "snapshot", blocks: view.payload.blocks };
-    const nextSectionId = view.mode === "session"
-      ? nextWindow.sectionId || sectionId(view.summary.sections[0], 0)
-      : nextWindow.sectionId;
-    requestIdRef.current += 1;
-    setSelectedSectionId(nextSectionId);
-    setWindowState(nextWindow);
-    setWindowLoading(false);
-    setWindowError("");
-  }, [view]);
-
-  useEffect(() => {
-    if (!session || !selectedSectionId || windowState?.sectionId === selectedSectionId) {
+    if (!session || !nextSectionId) {
       return;
     }
     const controller = new AbortController();
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    setWindowLoading(true);
     setWindowError("");
 
     void client.queryPluginViewWindow(
       botAlias,
       view.pluginId,
       session.sessionId,
-      { sectionId: selectedSectionId },
+      { sectionId: nextSectionId },
       controller.signal,
     ).then((payload) => {
-      if (requestIdRef.current !== requestId) {
+      if (controller.signal.aborted) {
         return;
       }
       const next = payload as DocumentWindowPayload;
-      setWindowState({
+      setWindows((previous) => new Map(previous).set(nextSectionId, {
         ...next,
-        sectionId: next.sectionId || selectedSectionId,
+        sectionId: nextSectionId,
         blocks: Array.isArray(next.blocks) ? next.blocks : [],
-      });
-      setWindowLoading(false);
+      }));
     }).catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (controller.signal.aborted) {
         return;
       }
-      if (requestIdRef.current !== requestId) {
-        return;
-      }
-      setWindowLoading(false);
       setWindowError(error instanceof Error && error.message ? error.message : "加载文档章节失败");
     });
 
     return () => controller.abort();
-  }, [botAlias, client, selectedSectionId, session?.sessionId, view.pluginId, windowState?.sectionId]);
+  }, [botAlias, client, nextSectionId, session?.sessionId, view.pluginId, loadAttempt]);
 
-  function selectSection(nextSectionId: string) {
-    if (nextSectionId === selectedSectionId) {
+  function scrollToSection(id: string) {
+    const container = scrollRef.current;
+    const target = sectionRefs.current.get(id);
+    if (!container || !target) {
+      return false;
+    }
+    container.scrollTo({
+      top: container.scrollTop + target.getBoundingClientRect().top - container.getBoundingClientRect().top
+        - (navigationRef.current?.offsetHeight || 0) - 12,
+      behavior: "auto",
+    });
+    return true;
+  }
+
+  useEffect(() => {
+    const pending = pendingSectionRef.current;
+    if (pending && scrollToSection(pending)) {
+      pendingSectionRef.current = null;
+    }
+  }, [windows]);
+
+  function selectSection(id: string) {
+    setSelectedSectionId(id);
+    pendingSectionRef.current = scrollToSection(id) ? null : id;
+  }
+
+  function updateCurrentSection() {
+    const container = scrollRef.current;
+    if (!container || pendingSectionRef.current) {
       return;
     }
-    requestIdRef.current += 1;
-    setSelectedSectionId(nextSectionId);
-    setWindowState(null);
-    setWindowLoading(true);
-    setWindowError("");
+    const top = container.getBoundingClientRect().top + (navigationRef.current?.offsetHeight || 0) + 16;
+    let current = initialSectionId;
+    for (const id of sectionIds) {
+      const target = sectionRefs.current.get(id);
+      if (!target || target.getBoundingClientRect().top > top) {
+        break;
+      }
+      current = id;
+    }
+    if (container.scrollTop > 0 && Math.ceil(container.scrollTop + container.clientHeight) >= container.scrollHeight) {
+      current = sectionIds.filter((id) => windows.has(id)).at(-1) || current;
+    }
+    setSelectedSectionId(current);
   }
 
   const document = summary.formatting === "document";
   const actions = session ? summary.actions : snapshot!.payload.actions;
-  const blocks = windowState?.blocks || [];
+  const visibleWindows = session
+    ? (sectionIds.length ? sectionIds : [initialSectionId]).flatMap((id) => windows.has(id) ? [windows.get(id)!] : [])
+    : [initialWindow];
+  const hasBlocks = visibleWindows.some((window) => window.blocks.length);
   return (
-    <div data-testid="document-view" className="flex h-full min-h-0 flex-col overflow-y-auto p-5">
-      <PluginActionBar actions={actions} onRunAction={(action) => onRunAction?.(action)} />
-      <div className="mb-4">
+    <div ref={scrollRef} onScroll={updateCurrentSection} data-testid="document-view" className="flex h-full min-h-0 flex-col overflow-y-auto px-5 pb-5">
+      <div className="mb-4 shrink-0 pt-5">
+        <PluginActionBar actions={actions} onRunAction={(action) => onRunAction?.(action)} />
         <div className="text-lg font-semibold text-[var(--text)]">{summary.title || view.title}</div>
         <div className="mt-1 text-xs text-[var(--muted)]">{summary.path}</div>
         {summary.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{summary.statsText}</div> : null}
       </div>
 
       {session && summary.sections.length ? (
-        <nav data-testid="document-section-list" aria-label="文档章节" className="mb-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
-          <div className="px-2 pb-1 text-xs font-medium text-[var(--muted)]">章节</div>
-          <div className="flex flex-wrap gap-1">
+        <nav ref={navigationRef} data-testid="document-section-list" aria-label="文档章节" className="sticky top-0 z-10 mb-3 flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)]">
+          <span className="shrink-0 text-xs text-[var(--muted)]">目录</span>
+          <div className="flex min-w-0 gap-4 overflow-x-auto">
             {summary.sections.map((section, index) => {
               const currentSectionId = sectionId(section, index);
               const active = currentSectionId === selectedSectionId;
@@ -652,11 +675,12 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
                 <button
                   key={currentSectionId}
                   type="button"
-                  aria-current={active ? "page" : undefined}
+                  aria-current={active ? "location" : undefined}
+                  title={sectionTitle(section, index)}
                   onClick={() => selectSection(currentSectionId)}
-                  className={`rounded-md border px-2.5 py-1.5 text-sm ${active
-                    ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
-                    : "border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface-strong)]"}`}
+                  className={`max-w-56 shrink-0 truncate border-b-2 py-2 text-sm ${active
+                    ? "border-[var(--accent)] text-[var(--accent)]"
+                    : "border-transparent text-[var(--muted)] hover:text-[var(--text)]"}`}
                 >
                   {sectionTitle(section, index)}
                 </button>
@@ -666,15 +690,8 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
         </nav>
       ) : null}
 
-      {windowError ? (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{windowError}</div>
-      ) : null}
-
-      {windowLoading && !windowState ? (
-        <div className="text-sm text-[var(--muted)]">章节加载中...</div>
-      ) : blocks.length ? (
+      {hasBlocks || nextSectionId ? (
         <div
-          key={windowState?.sectionId || selectedSectionId}
           data-testid="document-section-content"
           className={document ? "flow-root shrink-0 p-4" : "space-y-4 pb-6"}
           style={document ? {
@@ -687,11 +704,32 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
             lineHeight: "normal",
           } : undefined}
         >
-          {blocks.map((block, index) => renderBlock(block, index, botAlias, client, document))}
+          {session ? visibleWindows.map((window) => (
+            <div
+              key={window.sectionId}
+              ref={(element) => {
+                if (element) sectionRefs.current.set(window.sectionId, element);
+                else sectionRefs.current.delete(window.sectionId);
+              }}
+              data-section-id={window.sectionId}
+              className={document ? "flow-root" : "space-y-4"}
+            >
+              {window.blocks.map((block, index) => renderBlock(block, index, botAlias, client, document))}
+            </div>
+          )) : initialWindow.blocks.map((block, index) => renderBlock(block, index, botAlias, client, document))}
         </div>
       ) : windowError ? null : (
         <div className="text-sm text-[var(--muted)]">文档暂无可预览内容</div>
       )}
+
+      {windowError ? (
+        <div role="alert" className="flex shrink-0 items-center gap-3 py-3 text-sm text-red-600">
+          <span>{windowError}</span>
+          <button type="button" className="shrink-0 text-[var(--accent)] hover:underline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>重试</button>
+        </div>
+      ) : nextSectionId ? (
+        <div role="status" className="shrink-0 py-3 text-sm text-[var(--muted)]">正在加载后续内容…</div>
+      ) : null}
     </div>
   );
 }
