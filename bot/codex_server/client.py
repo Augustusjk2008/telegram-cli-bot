@@ -26,7 +26,7 @@ class CodexServerError(RuntimeError):
 class CodexServerUnknownOutcome(CodexServerError):
     """A realtime control request timed out; the shared runtime remains usable."""
 
-APP_SERVER_VERSION = "0.160.0"
+APP_SERVER_VERSION = "0.160.0"  # Minimum supported CLI version and protocol baseline.
 REALTIME_CONVERSATION_VERSION = "v3"
 
 
@@ -100,8 +100,12 @@ class CodexServerClient:
                 "capabilities": {"experimentalApi": experimental_api},
             })
             user_agent = result.get("userAgent")
-            if not isinstance(user_agent, str) or not re.search(rf"(?:/|\b){re.escape(APP_SERVER_VERSION)}(?:\b|\s|$)", user_agent):
-                raise CodexServerError(f"不兼容的 app-server initialize 响应（已验证版本 {APP_SERVER_VERSION}）")
+            version = (
+                re.match(r"[^/\s]+/(\d+)\.(\d+)\.(\d+)(?:\b|\s|$)", user_agent)
+                if isinstance(user_agent, str) else None
+            )
+            if version is None or tuple(map(int, version.groups())) < tuple(map(int, APP_SERVER_VERSION.split("."))):
+                raise CodexServerError(f"不兼容的 app-server initialize 响应（最低版本 {APP_SERVER_VERSION}）")
             await client.notify("initialized")
             return client
         except BaseException:

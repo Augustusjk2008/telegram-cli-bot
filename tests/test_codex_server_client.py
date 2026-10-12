@@ -58,9 +58,9 @@ for line in sys.stdin:
 '''
 
 
-async def start_fake(tmp_path, *, experimental_api=False, **env):
+async def start_fake(tmp_path, *, user_agent="codex/0.160.0", experimental_api=False, **env):
     path = tmp_path / "fake_server.py"
-    path.write_text(FAKE_SERVER, encoding="utf-8")
+    path.write_text(FAKE_SERVER.replace("'codex/0.160.0'", repr(user_agent)), encoding="utf-8")
     return await CodexServerClient.start([sys.executable, "-u", str(path)], cwd=str(tmp_path),
                                          env={**os.environ, **env}, timeout=1,
                                          experimental_api=experimental_api)
@@ -97,18 +97,28 @@ async def test_matching_interleaving_and_single_reader(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user_agent", [
+    "codex/0.160.0", "codex/0.160.1", "codex/0.161.0", "codex/1.0.0",
+    "orbit_safe_claw/0.161.0 (Windows 10.0.26200; x86_64)",
+])
 @pytest.mark.parametrize("experimental_api", [False, True])
-async def test_incompatible_server_version_is_rejected(tmp_path, experimental_api):
-    path = tmp_path / "bad_version_server.py"
-    path.write_text(FAKE_SERVER.replace("codex/0.160.0", "codex/0.159.2"), encoding="utf-8")
+async def test_supported_server_versions_initialize(tmp_path, user_agent, experimental_api):
+    client = await start_fake(tmp_path, user_agent=user_agent, experimental_api=experimental_api)
+    try:
+        assert await client.request("ping", {}) == {}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_agent", [
+    "codex/0.159.999", "codex/0.99.999",
+    "codex/unknown (Windows 10.0.26200; x86_64)", None,
+])
+@pytest.mark.parametrize("experimental_api", [False, True])
+async def test_incompatible_server_version_is_rejected(tmp_path, user_agent, experimental_api):
     with pytest.raises(CodexServerError, match="不兼容"):
-        await CodexServerClient.start(
-            [sys.executable, "-u", str(path)],
-            cwd=str(tmp_path),
-            env={**os.environ},
-            timeout=1,
-            experimental_api=experimental_api,
-        )
+        await start_fake(tmp_path, user_agent=user_agent, experimental_api=experimental_api)
 
 
 @pytest.mark.asyncio
