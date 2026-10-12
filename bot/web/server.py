@@ -234,6 +234,7 @@ from .api_service import (
     install_plugin_runtime,
     invoke_plugin_action,
     install_plugin,
+    install_plugins_from_path,
     uninstall_plugin,
     get_directory_listing,
     get_file_metadata,

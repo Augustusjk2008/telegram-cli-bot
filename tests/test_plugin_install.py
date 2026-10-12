@@ -3,10 +3,18 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
 
 from bot.plugins.service import PluginService
+from bot.web.api_common import AuthContext
+from bot.web.auth_store import CAP_RUN_PLUGINS
+from bot.web.routes import plugin_routes
+from bot.web.server import WebApiServer
 
 
 def _write_plugin(root: Path, folder: str, plugin_id: str) -> Path:
@@ -107,3 +115,36 @@ async def test_install_plugins_from_path_rejects_duplicate_ids_before_copying(tm
         await service.shutdown()
 
     assert not plugins_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_install_directory_route_installs_media_player(tmp_path: Path, monkeypatch) -> None:
+    source = Path(__file__).resolve().parents[1] / "examples/plugins/media-player"
+    service = PluginService(
+        tmp_path, plugins_root=tmp_path / "installed", source_plugins_root=source.parent,
+    )
+    server = object.__new__(WebApiServer)
+    server.manager = SimpleNamespace(
+        main_profile=SimpleNamespace(alias="main"), managed_profiles={}, plugin_service=service,
+    )
+    auth = AuthContext(user_id=1, token_used=True, capabilities={CAP_RUN_PLUGINS}, is_local_admin=True)
+    monkeypatch.setattr(server, "_auth_context", lambda request: auth)
+    app = web.Application()
+    plugin_routes.register(app, server)
+    app.freeze()
+    request = make_mocked_request(
+        "POST", "/api/plugins/install-directory", app=app, headers={"Host": "localhost"},
+        transport=Mock(get_extra_info=Mock(return_value=("127.0.0.1", 12345))),
+    )
+    request._match_info = await app.router.resolve(request)
+    request.json = AsyncMock(return_value={"sourcePath": str(source), "dev": True, "force": True})
+
+    try:
+        response = await request.match_info.handler(request)
+        payload = json.loads(response.text)
+        assert response.status == 200 and payload["ok"] is True
+        assert [plugin["id"] for plugin in payload["data"]["installed"]] == ["media-player"]
+        assert (service.plugins_root / "media-player/backend/main.py").is_file()
+        assert service.resolve_file_target("sample.mp3")["pluginId"] == "media-player"
+    finally:
+        await service.shutdown()
