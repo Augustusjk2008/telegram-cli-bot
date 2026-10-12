@@ -459,9 +459,11 @@ async def run_all_bots():
     finally:
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
         await get_native_agent_service().shutdown()
-        # 保存所有会话到持久化存储
-        from bot.sessions import save_all_sessions
-        save_all_sessions()
+        # Migration already flushed these sessions before copying. The current
+        # process still resolves the old root until the supervised restart.
+        if storage_migration_service.status().get("state") != "awaiting_restart":
+            from bot.sessions import save_all_sessions
+            save_all_sessions()
         _clear_web_runtime_state()
         config.RESTART_EVENT = None
         # 注意：主bot关闭时不恢复睡眠，保持系统阻止睡眠状态

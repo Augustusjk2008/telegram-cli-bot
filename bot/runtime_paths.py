@@ -22,6 +22,7 @@ APP_DATA_DIR_NAME: Final = "orbit-safe-claw"
 STORAGE_LOCATOR_SCHEMA: Final = 1
 STORAGE_LOCATOR_FILENAME: Final = "storage.json"
 STORAGE_JOURNAL_FILENAME: Final = "storage-migration.json"
+STORAGE_PROGRESS_FILENAME: Final = "storage-migration-progress.json"
 
 
 class StoragePathError(RuntimeError):
@@ -58,6 +59,12 @@ def get_storage_journal_path() -> Path:
     """Return the migration journal kept outside the movable data roots."""
 
     return _legacy_tcb_home_root() / STORAGE_JOURNAL_FILENAME
+
+
+def get_storage_progress_path() -> Path:
+    """Return the small live-progress file kept outside the movable roots."""
+
+    return _legacy_tcb_home_root() / STORAGE_PROGRESS_FILENAME
 
 
 def _canonical_path(value: str | Path) -> Path:

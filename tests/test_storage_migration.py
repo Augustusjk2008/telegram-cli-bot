@@ -74,12 +74,14 @@ def test_snapshot_only_checks_source_roots_and_defers_full_inventory(
     assert snapshot["totalBytes"] == 0
 
 
+@pytest.mark.parametrize("with_sqlite", [False, True])
 def test_preview_persists_manifest_and_execute_reuses_it(
     migration_context: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
+    with_sqlite: bool,
 ) -> None:
     home, repo, target = migration_context
-    _make_sources(home, with_sqlite=False)
+    _make_sources(home, with_sqlite=with_sqlite)
     service = StorageMigrationService(repo)
     plan = service.preview(str(target))
 
@@ -184,6 +186,201 @@ def test_journal_progress_is_throttled_until_stage_changes(
     journal["phase"] = "rewriting"
     service._write_journal(journal)
     assert len(writes) == 2
+
+
+@pytest.mark.parametrize("next_phase", ["copying", "rewriting"])
+def test_live_progress_uses_small_restart_safe_sidecar(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    next_phase: str,
+) -> None:
+    _home, repo, _target = migration_context
+    service = StorageMigrationService(repo)
+    journal: dict[str, object] = {
+        "schema": migration_module.STORAGE_SCHEMA,
+        "datasetIdentity": migration_module.DATASET_IDENTITY,
+        "id": "progress-job",
+        "state": "copying",
+        "phase": "copying",
+        "totalBytes": 64 * 1024 * 1024,
+        "completedBytes": 0,
+    }
+    service._write_journal(journal, force=True)
+    monkeypatch.setattr(migration_module, "_JOURNAL_SECONDS", 0.0)
+    journal["completedBytes"] = 1
+    service._write_journal(journal)
+
+    progress_path = runtime_paths.get_storage_progress_path()
+    assert progress_path.is_file()
+    old_progress = progress_path.read_bytes()
+    restarted = StorageMigrationService(repo)
+    assert restarted.status()["completedBytes"] == 1
+
+    journal["state"] = journal["phase"] = next_phase
+    journal["completedBytes"] = 2
+    service._write_journal(journal, force=True)
+    assert not progress_path.exists()
+    progress_path.write_bytes(old_progress)
+    recovered = StorageMigrationService(repo).status()
+    assert recovered["state"] == next_phase
+    assert recovered["completedBytes"] == 2
+
+
+def test_copy_progress_does_not_rewrite_full_inventory(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, repo, target = migration_context
+    _make_sources(home, with_sqlite=False)
+    service = StorageMigrationService(repo)
+    preview = service.preview(str(target))
+    service.begin(str(preview["id"]))
+    plan = service._plans[str(preview["id"])]
+    journal = service._journal_payload(plan, "copying", "copying")
+    clock = [100.0]
+    writes: list[tuple[Path, dict[str, object]]] = []
+
+    def write(_path: Path, payload: dict[str, object]) -> None:
+        writes.append((_path, dict(payload)))
+        clock[0] += 1.0  # Serializing a large inventory takes longer than one tick.
+
+    monkeypatch.setattr(migration_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(migration_module, "_atomic_write_json", write)
+    service._write_journal(journal, force=True)
+    for completed in range(1, 6):
+        clock[0] += 10.0
+        journal["completedBytes"] = completed
+        service._write_journal(journal)
+
+    assert service.status()["completedBytes"] == 5
+    journal_writes = [path for path, _payload in writes if path == runtime_paths.get_storage_journal_path()]
+    assert len(journal_writes) == 1
+    assert writes[0][1]["plan"]["entries"]
+    assert all("plan" not in payload for path, payload in writes if path == runtime_paths.get_storage_progress_path())
+    journal["state"] = journal["phase"] = "rewriting"
+    service._write_journal(journal)
+    assert len([path for path, _payload in writes if path == runtime_paths.get_storage_journal_path()]) == 2
+
+
+def test_copy_speed_excludes_preview_confirmation_wait(
+    migration_context: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, repo, target = migration_context
+    _make_sources(home, with_sqlite=False)
+    service = StorageMigrationService(repo)
+    clock = [100.0]
+    monkeypatch.setattr(migration_module.time, "time", lambda: clock[0])
+    preview = service.preview(str(target))
+    clock[0] += 3600
+    service.begin(str(preview["id"]))
+    plan = service._plans[str(preview["id"])]
+    plan["totalBytes"] = 4096
+    journal = service._journal_payload(plan, "copying", "copying")
+    service._write_journal(journal, force=True)
+    clock[0] += 2
+    journal["completedBytes"] = 2048
+    service._write_journal(journal)
+
+    assert service.status()["speedBytesPerSecond"] == 1024
+    assert service.status()["etaSeconds"] == 2
+
+
+@pytest.mark.parametrize("close_before_copy,nested", [(True, True), (False, True), (True, False)])
+def test_migration_preserves_sqlite_writes_flushed_after_preview(
+    migration_context: tuple[Path, Path, Path],
+    close_before_copy: bool,
+    nested: bool,
+) -> None:
+    home, repo, target = migration_context
+    app, _history = _make_sources(home, with_sqlite=False)
+    sessions = app / "sessions" if nested else app
+    sessions.mkdir(exist_ok=True)
+    source = sessions / "session_store.sqlite3"
+    connection = sqlite3.connect(source)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE messages (text TEXT NOT NULL)")
+        connection.execute("INSERT INTO messages VALUES ('before preview')")
+        connection.commit()
+        service = StorageMigrationService(repo)
+        preview = service.preview(str(target))
+        assert preview["blockers"] == []
+        connection.execute("INSERT INTO messages VALUES ('flushed on stop')")
+        connection.commit()
+        if close_before_copy:
+            connection.close()
+
+        service.begin(str(preview["id"]))
+        assert service.execute(str(preview["id"]))["state"] == "awaiting_restart"
+    finally:
+        connection.close()
+
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    assert StorageMigrationService(repo).finalize_startup()["state"] == "completed"
+    copied = target / "orbit-safe-claw" / source.relative_to(app)
+    with sqlite3.connect(copied) as migrated:
+        assert migrated.execute("SELECT text FROM messages ORDER BY rowid").fetchall() == [
+            ("before preview",), ("flushed on stop",),
+        ]
+    assert not app.exists()
+
+
+def test_busy_sqlite_checkpoint_preserves_sources(
+    migration_context: tuple[Path, Path, Path],
+) -> None:
+    home, repo, target = migration_context
+    app, history = _make_sources(home)
+    connection = sqlite3.connect(history / "chat.sqlite")
+    reader = sqlite3.connect(history / "chat.sqlite")
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        service = StorageMigrationService(repo)
+        preview = service.preview(str(target))
+        reader.execute("BEGIN")
+        reader.execute("SELECT * FROM messages").fetchall()
+        connection.execute("INSERT INTO messages VALUES ('last write')")
+        connection.commit()
+        service.begin(str(preview["id"]))
+        with pytest.raises(StorageMigrationError, match="WAL 合并"):
+            service.execute(str(preview["id"]))
+        assert not runtime_paths.get_storage_locator_path().exists()
+        assert app.exists()
+        assert connection.execute("SELECT count(*) FROM messages").fetchone() == (2,)
+    finally:
+        reader.close()
+        connection.close()
+
+
+@pytest.mark.parametrize("change", ["source_write", "target_wal_removed", "target_wal_corrupt"])
+def test_wal_change_blocks_cleanup(
+    migration_context: tuple[Path, Path, Path],
+    change: str,
+) -> None:
+    home, repo, target = migration_context
+    app, history = _make_sources(home)
+    connection = sqlite3.connect(history / "chat.sqlite")
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("INSERT INTO messages VALUES ('copied')")
+        connection.commit()
+        _execute(StorageMigrationService(repo), target)
+        target_wal = target / "chat-history" / "workspaces" / "workspace-key" / "chat.sqlite-wal"
+        if change == "source_write":
+            connection.execute("INSERT INTO messages VALUES ('keep this write')")
+            connection.commit()
+        elif change == "target_wal_removed":
+            target_wal.unlink()
+        else:
+            target_wal.write_bytes(b"corrupt WAL")
+
+        runtime_paths.reset_runtime_path_cache_for_tests()
+        with pytest.raises(StorageMigrationError):
+            StorageMigrationService(repo).finalize_startup()
+        assert app.exists()
+        assert (history / "chat.sqlite").exists()
+    finally:
+        connection.close()
 
 
 def test_success_copies_sqlite_and_deletes_sources_after_startup(

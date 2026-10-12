@@ -24,6 +24,12 @@ STORAGE_LOCK_NAME = ".storage.lock"
 _CHUNK_BYTES = 1024 * 1024
 _JOURNAL_BYTES = 32 * 1024 * 1024
 _JOURNAL_SECONDS = 0.3
+_PROGRESS_FIELDS = (
+    "totalBytes", "progressBytes", "completedBytes", "completedFiles", "totalFiles",
+    "currentItem", "speedBytesPerSecond", "etaSeconds", "message", "progressStartedAt",
+    "deletedBytes", "error",
+)
+_PROGRESS_ID_FIELDS = ("schema", "datasetIdentity", "id", "state", "phase", "checkpointId")
 _JSON_REFERENCE_KEYS = {
     "path",
     "root",
@@ -459,17 +465,23 @@ def _is_sqlite_shared_memory(path: Path) -> bool:
     return path.name.casefold().endswith("-shm")
 
 
-def _validate_sqlite(path: Path, *, checkpoint: bool) -> None:
+def _validate_sqlite(path: Path, *, checkpoint: bool, snapshot: bool = False) -> None:
     try:
-        connection = sqlite3.connect(str(path), timeout=1.0)
+        uri = path.resolve().as_uri() + ("?mode=rw" if checkpoint else "?mode=ro")
+        wal = path.with_name(path.name + "-wal")
+        if snapshot and (not wal.exists() or wal.stat().st_size == 0):
+            # Copied, checkpointed databases must not create or mutate sidecars
+            # during validation. A nonempty WAL still needs SQLite's WAL reader.
+            uri += "&immutable=1"
+        connection = sqlite3.connect(uri, uri=True, timeout=1.0)
         try:
+            if checkpoint:
+                result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if not result or result[0] != 0:
+                    raise StorageMigrationError(f"SQLite 仍被占用，无法完成 WAL 合并: {path}")
             result = connection.execute("PRAGMA integrity_check").fetchone()
             if not result or str(result[0]).lower() != "ok":
                 raise StorageMigrationError(f"SQLite 完整性校验失败: {path}")
-            if checkpoint:
-                # PASSIVE never deletes WAL frames.  The caller has already
-                # stopped writers; the sidecar remains part of the manifest.
-                connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
         finally:
             connection.close()
     except StorageMigrationError:
@@ -478,10 +490,10 @@ def _validate_sqlite(path: Path, *, checkpoint: bool) -> None:
         raise StorageMigrationError(f"SQLite 数据库不可迁移: {path}") from exc
 
 
-def _validate_sqlite_many(paths: list[Path], *, checkpoint: bool) -> list[str]:
+def _validate_sqlite_many(paths: list[Path], *, checkpoint: bool, snapshot: bool = False) -> list[str]:
     def validate(path: Path) -> str:
         try:
-            _validate_sqlite(path, checkpoint=checkpoint)
+            _validate_sqlite(path, checkpoint=checkpoint, snapshot=snapshot)
         except StorageMigrationError as exc:
             return str(exc)
         return ""
@@ -642,8 +654,6 @@ class StorageMigrationService:
                 total_bytes += size
                 if error:
                     blockers.append(error)
-            # Validate SQLite before hashing so any passive WAL checkpoint is
-            # included in the previewed source hashes.
             blockers.extend(_validate_sqlite_many(_sqlite_paths(specs, entries_by_label), checkpoint=False))
 
             hash_jobs = [
@@ -789,7 +799,9 @@ class StorageMigrationService:
             plan = self._load_plan(plan_id)
             if plan["blockers"]:
                 raise StorageMigrationError("迁移计划存在阻断项: " + "; ".join(plan["blockers"]))
-            self._validate_plan_sources(plan)
+            # The API calls this only after every writer has been stopped and
+            # flushed. Database sidecars can disappear at that boundary.
+            self._validate_plan_sources(plan, check_metadata=False)
             self._validate_target(plan["targetRoot"], plan["sourceSpecs"])
             journal = self._journal_payload(
                 plan,
@@ -807,7 +819,8 @@ class StorageMigrationService:
             if not journal or journal.get("id") != plan_id or journal.get("state") != "stopping":
                 raise StorageMigrationError("迁移必须先通过 begin 进入 stopping 状态")
             try:
-                self._validate_plan_sources(plan)
+                self._validate_plan_sources(plan, check_metadata=False)
+                self._refresh_sqlite_entries(plan)
                 target = self._validate_target(plan["targetRoot"], plan["sourceSpecs"])
                 copying = self._journal_payload(
                     plan,
@@ -946,6 +959,16 @@ class StorageMigrationService:
             raise StorageMigrationError("TCB 迁移日志版本无效") from exc
         if journal_schema != STORAGE_SCHEMA or journal.get("datasetIdentity") != DATASET_IDENTITY:
             raise StorageMigrationError("TCB 迁移日志版本或数据集不匹配")
+        try:
+            progress = _read_json(runtime_paths.get_storage_progress_path())
+        except StorageMigrationError:
+            progress = None  # The full journal is the durable recovery point.
+        if (
+            progress is not None
+            and journal.get("checkpointId")
+            and all(progress.get(key) == journal.get(key) for key in _PROGRESS_ID_FIELDS)
+        ):
+            journal.update({key: progress[key] for key in _PROGRESS_FIELDS if key in progress})
         return journal
 
     def _live_or_disk_journal(self) -> dict[str, Any] | None:
@@ -967,19 +990,26 @@ class StorageMigrationService:
         payload["etaSeconds"] = int(round(max(0, total_bytes - progress_bytes) / speed)) if speed > 0 else None
         with self._journal_lock:
             previous = self._live_journal
-            self._live_journal = payload
             stage_changed = previous is None or (
-                previous.get("state") != payload.get("state")
+                previous.get("id") != payload.get("id")
+                or previous.get("state") != payload.get("state")
                 or previous.get("phase") != payload.get("phase")
             )
+            payload["checkpointId"] = uuid.uuid4().hex if force or stage_changed else previous["checkpointId"]
+            self._live_journal = payload
             should_write = force or stage_changed or (
                 progress_bytes - self._journal_last_disk_bytes >= _JOURNAL_BYTES
                 or now - self._journal_last_disk_write >= _JOURNAL_SECONDS
             )
             if not should_write:
                 return
-            _atomic_write_json(runtime_paths.get_storage_journal_path(), payload)
-            self._journal_last_disk_write = now
+            if force or stage_changed:
+                _atomic_write_json(runtime_paths.get_storage_journal_path(), payload)
+                runtime_paths.get_storage_progress_path().unlink(missing_ok=True)
+            else:
+                progress_payload = {key: payload[key] for key in _PROGRESS_ID_FIELDS + _PROGRESS_FIELDS if key in payload}
+                _atomic_write_json(runtime_paths.get_storage_progress_path(), progress_payload)
+            self._journal_last_disk_write = time.monotonic()
             self._journal_last_disk_bytes = progress_bytes
 
     def _source_root_blockers(self, specs: list[dict[str, str]], *, deep: bool = True) -> list[str]:
@@ -1018,6 +1048,7 @@ class StorageMigrationService:
             "bin",
             runtime_paths.STORAGE_LOCATOR_FILENAME,
             runtime_paths.STORAGE_JOURNAL_FILENAME,
+            runtime_paths.STORAGE_PROGRESS_FILENAME,
             STORAGE_LOCK_NAME,
         }
         if self._home_root.exists():
@@ -1129,7 +1160,7 @@ class StorageMigrationService:
                 metadata[spec["label"]] = {"exists": False, "unreadable": True}
         return metadata
 
-    def _validate_plan_sources(self, plan: dict[str, Any]) -> None:
+    def _validate_plan_sources(self, plan: dict[str, Any], *, check_metadata: bool = True) -> None:
         expected_metadata = plan.get("sourceRootMetadata")
         if not isinstance(expected_metadata, dict):
             expected_metadata = {}
@@ -1139,7 +1170,7 @@ class StorageMigrationService:
             root = Path(spec["path"])
             expected = expected_metadata.get(label)
             current = current_metadata.get(label, {"exists": False})
-            if isinstance(expected, dict) and expected and current != expected:
+            if check_metadata and isinstance(expected, dict) and expected and current != expected:
                 raise StorageMigrationError(f"确认迁移后源目录发生变化，请重新预览: {root}")
             if not root.exists():
                 if expected and expected.get("exists"):
@@ -1149,6 +1180,20 @@ class StorageMigrationService:
                 raise StorageMigrationError(f"源目录不可用: {root}")
             if not os.access(root, os.R_OK | os.X_OK):
                 raise StorageMigrationError(f"源目录不可读: {root}")
+            if not check_metadata and expected and current != expected:
+                root_entries = [
+                    entry for entry in plan["entries"]
+                    if entry["sourceLabel"] == label and entry["relativePath"] and "/" not in entry["relativePath"]
+                ]
+                expected_names = {entry["relativePath"] for entry in root_entries}
+                sqlite_sidecars = {
+                    entry["relativePath"] + suffix
+                    for entry in root_entries
+                    if entry["type"] == "file" and Path(entry["relativePath"]).suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+                    for suffix in ("-wal", "-shm")
+                }
+                if ({child.name for child in root.iterdir()} ^ expected_names) - sqlite_sidecars:
+                    raise StorageMigrationError(f"确认迁移后源目录发生变化，请重新预览: {root}")
 
     def _journal_payload(
         self,
@@ -1175,6 +1220,9 @@ class StorageMigrationService:
         total_bytes = max(0, int(plan["totalBytes"]))
         completed_files = max(0, int(completed_files))
         total_files = max(0, int(total_files))
+        if plan.get("progressPhase") != phase:
+            plan["progressPhase"] = phase
+            plan["progressStartedAt"] = time.time()
         started_at = float(plan.get("progressStartedAt") or time.time())
         plan["progressStartedAt"] = started_at
         elapsed = max(0.0, time.time() - started_at)
@@ -1244,21 +1292,60 @@ class StorageMigrationService:
         self._plans[normalized_id] = restored
         return restored
 
-    def _refresh_plan_entries(self, plan: dict[str, Any]) -> None:
-        entries_by_label: dict[str, list[dict[str, Any]]] = {}
-        total_bytes = 0
-        for spec in plan["sourceSpecs"]:
-            entries, size = _walk_source(Path(spec["path"]), hash_files=True)
-            entries_by_label[spec["label"]] = entries
-            total_bytes += size
-        errors = _validate_sqlite_many(_sqlite_paths(plan["sourceSpecs"], entries_by_label), checkpoint=True)
-        if errors:
-            raise StorageMigrationError(errors[0])
-        current_fingerprint = _fingerprint(plan["sourceSpecs"], entries_by_label)
-        if current_fingerprint != plan["sourceFingerprint"]:
-            raise StorageMigrationError("确认迁移后源数据发生变化，请重新预览")
-        plan["entries"] = self._plan_entries(plan["sourceSpecs"], entries_by_label, Path(plan["targetRoot"]))
-        plan["totalBytes"] = total_bytes
+    def _refresh_sqlite_entries(self, plan: dict[str, Any]) -> None:
+        databases = [
+            entry for entry in plan["entries"]
+            if entry["type"] == "file" and Path(entry["relativePath"]).suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+        ]
+        if not databases:
+            return
+
+        def refresh(entry: dict[str, Any]) -> list[dict[str, Any]]:
+            source = Path(entry["sourceRoot"]) / Path(*entry["relativePath"].split("/"))
+            family = [source.with_name(source.name + suffix) for suffix in ("", "-wal", "-shm")]
+            for path in family:
+                if _has_link_ancestor(path) or (path.exists() and not path.is_file()):
+                    raise StorageMigrationError(f"SQLite 源文件不可用: {path}")
+            _validate_sqlite(source, checkpoint=True)
+            refreshed: list[dict[str, Any]] = []
+            for suffix, path in zip(("", "-wal", "-shm"), family):
+                if suffix and not path.exists():
+                    continue
+                metadata = path.stat()
+                if suffix == "-wal" and metadata.st_size:
+                    raise StorageMigrationError(f"SQLite WAL 在停止写入后仍有变化: {path}")
+                digest = _hash_file(path)
+                refreshed.append({
+                    **entry,
+                    "relativePath": entry["relativePath"] + suffix,
+                    "targetRelativePath": entry["targetRelativePath"] + suffix,
+                    "size": metadata.st_size,
+                    "mode": stat.S_IMODE(metadata.st_mode),
+                    "mtimeNs": metadata.st_mtime_ns,
+                    "sha256": digest,
+                    "sourceSha256": digest,
+                })
+            return refreshed
+
+        refreshed = _bounded_map(databases, refresh)
+        replaced = {
+            (entry["sourceLabel"], entry["relativePath"] + suffix)
+            for entry in databases for suffix in ("", "-wal", "-shm")
+        }
+        plan["entries"] = [
+            entry for entry in plan["entries"]
+            if (entry["sourceLabel"], entry["relativePath"]) not in replaced
+        ] + [entry for family in refreshed for entry in family]
+        plan["sourceRootMetadata"] = self._source_root_metadata(plan["sourceSpecs"])
+        plan["totalBytes"] = sum(
+            int(entry["size"]) for entry in plan["entries"] if entry["type"] == "file"
+        )
+        plan["requiredBytes"] = plan["totalBytes"]
+        plan["freeBytes"] = self._free_bytes(Path(plan["targetRoot"]))
+        if plan["freeBytes"] < plan["requiredBytes"]:
+            raise StorageMigrationError(
+                f"目标磁盘空间不足: 需要 {plan['requiredBytes']} 字节，可用 {plan['freeBytes']} 字节"
+            )
 
     def _copy_entries(self, plan: dict[str, Any], target: Path) -> None:
         entries = plan["entries"]
@@ -1551,7 +1638,7 @@ class StorageMigrationService:
                 continue
             if Path(str(entry.get("relativePath") or "")).suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
                 sqlite_targets.append(target / Path(*_safe_manifest_relative(str(entry["targetRelativePath"]))))
-        errors = _validate_sqlite_many(sqlite_targets, checkpoint=False)
+        errors = _validate_sqlite_many(sqlite_targets, checkpoint=False, snapshot=True)
         if errors:
             raise StorageMigrationError(errors[0])
 
@@ -1674,6 +1761,7 @@ class StorageMigrationService:
                     "currentItem": "",
                     "speedBytesPerSecond": 0,
                     "etaSeconds": None,
+                    "progressStartedAt": time.time(),
                 }
             )
         base.update(

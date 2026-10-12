@@ -15,7 +15,8 @@ def _prevent_real_browser_open(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restart_requested", [False, True])
-async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, restart_requested):
+@pytest.mark.parametrize("migration_state", ["completed", "failed", "awaiting_restart"])
+async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, restart_requested, migration_state):
     import bot.main as main_module
     fake_manager = MagicMock()
     fake_web_server = MagicMock()
@@ -26,6 +27,11 @@ async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, re
     monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
     fake_native_service = MagicMock()
     fake_native_service.shutdown = AsyncMock()
+    migration_service = MagicMock()
+    migration_service.status.return_value = {"state": migration_state}
+    save_sessions = MagicMock()
+    monkeypatch.setattr(main_module, "StorageMigrationService", lambda _repo: migration_service)
+    monkeypatch.setattr("bot.sessions.save_all_sessions", save_sessions)
 
     class FakeEvent:
         async def wait(self):
@@ -39,6 +45,7 @@ async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, re
     fake_web_server.start.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=restart_requested)
     fake_native_service.shutdown.assert_awaited_once()
+    assert save_sessions.call_count == (0 if migration_state == "awaiting_restart" else 1)
 
 @pytest.mark.asyncio
 async def test_run_all_bots_requires_web_runtime(monkeypatch):
