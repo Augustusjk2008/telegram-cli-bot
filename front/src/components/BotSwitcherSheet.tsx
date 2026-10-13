@@ -3,12 +3,14 @@ import { BotSummary } from "../services/types";
 import { clsx } from "clsx";
 import { Settings2, ShieldCheck, X } from "lucide-react";
 import { BotActivitySummary } from "./BotActivitySummary";
+import { BotSwitcherCounts } from "./BotSwitcherCounts";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
 import { getBotAccentStyle } from "../utils/botVisual";
 
 type Props = {
   bots: BotSummary[];
+  allBots: BotSummary[];
   currentAlias: string | null;
   onSelect: (alias: string) => boolean | Promise<boolean>;
   onManage: () => void;
@@ -21,6 +23,7 @@ type Props = {
 
 export function BotSwitcherSheet({
   bots,
+  allBots,
   currentAlias,
   onSelect,
   onManage,
@@ -41,9 +44,9 @@ export function BotSwitcherSheet({
         className="relative flex max-h-[82dvh] flex-col rounded-t-xl bg-[var(--bg)] shadow-lg animate-in slide-in-from-bottom-full duration-200"
       >
         <div className="flex min-h-12 items-center justify-between border-b border-[var(--border)] px-3 py-1.5">
-          <div className="flex min-w-0 items-baseline gap-2">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <h2 className="text-base font-semibold">智能体切换</h2>
-            <span className="text-xs text-[var(--muted)]">{bots.length} 个</span>
+            <BotSwitcherCounts bots={allBots} />
           </div>
           <button
             type="button"

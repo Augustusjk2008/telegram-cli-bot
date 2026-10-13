@@ -69,6 +69,43 @@ test("main bot switcher hides archived non-main bots but keeps the main bot", ()
   ).toEqual(["main", "team3"]);
 });
 
+test("bot switcher counts running, stopped and archived bots separately", async () => {
+  const user = userEvent.setup();
+  const bot = (alias: string, overrides: Partial<BotSummary> = {}): BotSummary => ({
+    alias,
+    cliType: "codex",
+    status: "running",
+    workingDir: `C:\\workspace\\${alias}`,
+    lastActiveText: "运行中",
+    ...overrides,
+  });
+  const bots = [
+    bot("main"),
+    bot("busy", { status: "busy" }),
+    bot("unread", { status: "unread" }),
+    bot("stopped", { status: "unread", serviceStatus: "offline" }),
+    bot("archived", { status: "offline", archived: true }),
+  ];
+  const listBots = vi.spyOn(MockWebBotClient.prototype, "listBots")
+    .mockImplementation(async (options) => bots.filter((item) => options?.includeArchived || !item.archived));
+  render(<App />);
+
+  await user.type(screen.getByLabelText("访问口令"), "member");
+  await user.type(screen.getByLabelText("密码"), "password");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+  const switchButton = await screen.findByRole("button", { name: "main" });
+  const closeAnnouncement = screen.queryByRole("button", { name: "关闭公告" });
+  if (closeAnnouncement) {
+    await user.click(closeAnnouncement);
+  }
+  await user.click(switchButton);
+
+  const switcher = await screen.findByRole("dialog", { name: "智能体切换" });
+  expect(await within(switcher).findByText("运行 3 / 停止 1 / 归档 1")).toBeInTheDocument();
+  expect(listBots).toHaveBeenLastCalledWith({ includeArchived: true });
+  expect(within(switcher).queryByRole("button", { name: /archived/ })).not.toBeInTheDocument();
+});
+
 test("restores the current bot unread after login until it is explicitly opened", async () => {
   const user = userEvent.setup();
   reconcileStoredChatUnread("member", [
@@ -302,6 +339,7 @@ test("opening the desktop chat pane acknowledges that bot unread", async () => {
 
 test("guest session exposes browsing but withholds member and admin entry points", async () => {
   const user = userEvent.setup();
+  const listBots = vi.spyOn(MockWebBotClient.prototype, "listBots");
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: "以 guest 进入" }));
@@ -312,6 +350,7 @@ test("guest session exposes browsing but withholds member and admin entry points
 
   await user.click(screen.getByRole("button", { name: "main" }));
   expect(await screen.findByRole("dialog", { name: "智能体切换" })).toBeInTheDocument();
+  expect(listBots).toHaveBeenLastCalledWith({ includeArchived: false });
   expect(screen.queryByRole("button", { name: "智能体管理" })).not.toBeInTheDocument();
 });
 

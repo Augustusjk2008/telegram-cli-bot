@@ -447,7 +447,7 @@ export function App() {
     setBotSwitcherAnchorRect(anchorRect || null);
     setShowSwitcher(true);
     try {
-      const nextBots = await client.listBots();
+      const nextBots = await client.listBots({ includeArchived: canManageBots });
       setBots(nextBots);
     } catch {
       // Keep the current list so the switcher can open immediately even if refresh fails.
@@ -1181,6 +1181,7 @@ export function App() {
     effectiveLayoutMode === "desktop" ? (
       <DesktopBotSwitcherPopover
         bots={displayBots}
+        allBots={bots}
         currentAlias={currentBot}
         anchorRect={botSwitcherAnchorRect}
         onSelect={(alias) => {
@@ -1204,6 +1205,7 @@ export function App() {
     ) : (
       <BotSwitcherSheet
         bots={displayBots}
+        allBots={bots}
         currentAlias={currentBot}
         onSelect={(alias) => {
           return requestBotSelection(alias);

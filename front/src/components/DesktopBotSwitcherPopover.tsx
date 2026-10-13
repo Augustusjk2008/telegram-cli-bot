@@ -6,6 +6,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { BotStatus, BotSummary } from "../services/types";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { BotActivitySummary, getBotActivityText } from "./BotActivitySummary";
+import { BotSwitcherCounts } from "./BotSwitcherCounts";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
 import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
@@ -14,6 +15,7 @@ type StatusFilter = "all" | BotStatus;
 
 type Props = {
   bots: BotSummary[];
+  allBots: BotSummary[];
   currentAlias: string | null;
   anchorRect?: DOMRect | null;
   onSelect: (alias: string) => boolean | Promise<boolean>;
@@ -94,6 +96,7 @@ function busyNames(bot: BotSummary) {
 
 export function DesktopBotSwitcherPopover({
   bots,
+  allBots,
   currentAlias,
   anchorRect,
   onSelect,
@@ -199,10 +202,6 @@ export function DesktopBotSwitcherPopover({
     void navigator.clipboard?.writeText(workspaceLabel(focusedBot));
   }
 
-  const filteredCountText = query || statusFilter !== "all"
-    ? `${filteredBots.length} / ${bots.length}`
-    : `${bots.length}`;
-
   return (
     <div className="fixed inset-0 z-50" onKeyDown={handleKeyDown}>
       <motion.div className="absolute inset-0 bg-[var(--overlay-backdrop-20)]" onClick={onClose} {...backdropMotion} />
@@ -245,7 +244,7 @@ export function DesktopBotSwitcherPopover({
               </button>
             ))}
           </div>
-          <span className="w-12 text-right text-xs text-[var(--muted)]">{filteredCountText}</span>
+          <BotSwitcherCounts bots={allBots} />
           <button
             type="button"
             onClick={onClose}
