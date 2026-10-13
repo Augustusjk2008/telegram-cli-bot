@@ -650,6 +650,7 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
   }
 
   const document = summary.formatting === "document";
+  const [documentZoom, setDocumentZoom] = useState("1");
   const actions = session ? summary.actions : snapshot!.payload.actions;
   const visibleWindows = session
     ? (sectionIds.length ? sectionIds : [initialSectionId]).flatMap((id) => windows.has(id) ? [windows.get(id)!] : [])
@@ -662,6 +663,23 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
         <div className="text-lg font-semibold text-[var(--text)]">{summary.title || view.title}</div>
         <div className="mt-1 text-xs text-[var(--muted)]">{summary.path}</div>
         {summary.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{summary.statsText}</div> : null}
+        {document ? (
+          <div role="toolbar" aria-label="文档阅读工具" className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+            <label className="flex items-center gap-1">
+              <span>缩放</span>
+              <select
+                aria-label="缩放"
+                value={documentZoom}
+                onChange={(event) => setDocumentZoom(event.target.value)}
+                className="rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-1"
+              >
+                {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((scale) => (
+                  <option key={scale} value={scale}>{scale * 100}%</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
       </div>
 
       {session && summary.sections.length ? (
@@ -702,6 +720,7 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
             fontWeight: "normal",
             fontStyle: "normal",
             lineHeight: "normal",
+            zoom: Number(documentZoom),
           } : undefined}
         >
           {session ? visibleWindows.map((window) => (

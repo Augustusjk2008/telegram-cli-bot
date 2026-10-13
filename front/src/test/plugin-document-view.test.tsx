@@ -53,6 +53,23 @@ describe("DocumentView formatting", () => {
     expect(screen.getByText("unhighlighted").closest("strong")!.parentElement).toHaveStyle({ backgroundColor: "#aabbcc" });
   });
 
+  it("allows Word previews to scale the document content", async () => {
+    const user = userEvent.setup();
+    renderDocument({
+      formatting: "document",
+      blocks: [{ type: "paragraph", runs: [{ text: "readable" }] }],
+    });
+    const select = screen.getByRole("combobox", { name: "缩放" });
+    const content = screen.getByTestId("document-section-content");
+    expect(select).toHaveValue("1");
+    expect(content).toHaveStyle({ zoom: "1" });
+
+    await user.selectOptions(select, "2");
+
+    expect(select).toHaveValue("2");
+    expect(content).toHaveStyle({ zoom: "2" });
+  });
+
   it("quotes font names and renders markup as selectable text", () => {
     const text = "<img src=x onerror=alert(1)>";
     const { container } = renderDocument({
