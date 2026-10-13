@@ -11,6 +11,10 @@ Write the complete plan in Markdown here.
 {plan_draft_close}
 Do not use these tags for ordinary conversation, questions, or interim analysis.
 The final plan should include the goal, scope of changes, implementation steps, and validation steps. The plan should be detailed and executable.{cluster_rule}
+The plan will be executed in a new conversation that does not inherit this planning discussion. Make the plan self-contained.
+Include the problem background, current and desired behavior, key findings, reasons for the chosen approach, confirmed constraints, and acceptance criteria.
+Preserve concrete file paths for all source code, configuration, documents, and attachments needed to understand or execute the task. Explain the purpose of each referenced file, and include symbol names or line numbers when useful.
+Avoid references that require this conversation to interpret, such as "the file mentioned earlier" or "as discussed above".
 
 User request:
 {user_text}
