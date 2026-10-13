@@ -6,6 +6,7 @@ import ntpath
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import uuid
@@ -17,7 +18,7 @@ from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.runtime_paths import get_chat_attachments_dir
 from bot.web import workspace_index_service
-from bot.web.api_common import _raise, get_profile_or_raise, get_session_for_alias
+from bot.web.api_common import WebApiError, _raise, get_profile_or_raise, get_session_for_alias
 from bot.web.text_encoding import UnsupportedTextEncoding, read_text_file, read_text_file_head, write_text_file
 
 _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
@@ -771,6 +772,27 @@ def move_path(
     }
 
 
+def _find_readonly_paths(path: str) -> list[str]:
+    if sys.platform != "win32":
+        return []
+
+    readonly_paths = []
+
+    def visit(current_path: str) -> None:
+        info = os.stat(current_path, follow_symlinks=False)
+        if info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            return
+        if info.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+            readonly_paths.append(current_path)
+        if stat.S_ISDIR(info.st_mode):
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    visit(entry.path)
+
+    visit(path)
+    return readonly_paths
+
+
 def delete_path(
     manager: MultiBotManager,
     alias: str,
@@ -778,6 +800,7 @@ def delete_path(
     path: str,
     *,
     allow_external_paths: bool = False,
+    confirm_readonly: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
@@ -790,12 +813,24 @@ def delete_path(
         _raise(404, "path_not_found", "文件或文件夹不存在")
 
     try:
+        readonly_paths = _find_readonly_paths(target_path)
+        if readonly_paths and not confirm_readonly:
+            message = (
+                f"文件夹 “{path}” 或其中的内容为只读。确定取消只读并删除整个文件夹吗？"
+                if os.path.isdir(target_path)
+                else f"文件 “{path}” 为只读文件。确定取消只读并删除吗？"
+            )
+            _raise(409, "readonly_confirmation_required", message)
+        for readonly_path in readonly_paths:
+            os.chmod(readonly_path, stat.S_IWRITE)
         if os.path.isdir(target_path):
             shutil.rmtree(target_path)
             deleted_type = "directory"
         else:
             os.remove(target_path)
             deleted_type = "file"
+    except WebApiError:
+        raise
     except Exception as exc:
         _raise(500, "delete_path_failed", str(exc))
 

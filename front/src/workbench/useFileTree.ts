@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCopyResult, FileCreateResult, FileDownloadProgress, FileMoveResult, FileRenameResult, RemoteWorkspace } from "../services/types";
+import type { FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileMoveResult, FileRenameResult, RemoteWorkspace } from "../services/types";
 import { joinRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage, isAbortError } from "../utils/errorMessage";
@@ -59,7 +59,7 @@ export type UseFileTreeResult = {
   renameFile: (path: string, newName: string) => Promise<FileRenameResult>;
   copyFile: (path: string) => Promise<FileCopyResult>;
   moveFile: (path: string, targetParentPath: string) => Promise<FileMoveResult>;
-  deletePath: (path: string) => Promise<void>;
+  deletePath: (path: string, options?: FileDeleteOptions) => Promise<void>;
   downloadFile: (path: string) => Promise<void>;
   cancelDownload: () => void;
 };
@@ -628,14 +628,14 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     return parentPath;
   }
 
-  async function deletePath(path: string) {
+  async function deletePath(path: string, options?: FileDeleteOptions) {
     const selectedBeforeDelete = selectedPathRef.current;
     const shouldMoveSelection = selectedBeforeDelete
       ? isSameOrDescendantPath(selectedBeforeDelete, path)
       : false;
     const nextSelectedPath = shouldMoveSelection ? resolveSelectionAfterDelete(path) : selectedBeforeDelete;
 
-    await client.deletePath(botAlias, path);
+    await client.deletePath(botAlias, path, options);
     updateExpandedPathsSynced((current) => current.filter((item) => item !== path && !item.startsWith(`${path}/`)));
     setBranchesSynced((current) => Object.fromEntries(
       Object.entries(current).filter(([key]) => key !== path && !key.startsWith(`${path}/`)),

@@ -2331,6 +2331,10 @@ export type FileMoveResult = {
   path: string;
 };
 
+export type FileDeleteOptions = {
+  confirmReadonly?: boolean;
+};
+
 export type WorkspaceQuickOpenItem = {
   path: string;
   score: number;

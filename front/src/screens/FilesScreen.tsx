@@ -29,6 +29,7 @@ import {
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isAbortError } from "../utils/errorMessage";
 import { isAbsolutePathInput } from "../utils/pathInput";
+import { deletePathWithReadonlyConfirmation } from "../utils/deletePath";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
@@ -599,7 +600,9 @@ export function FilesScreen({
     setError("");
     setStatusText("");
     try {
-      await client.deletePath(botAlias, file.name);
+      if (!await deletePathWithReadonlyConfirmation((options) => client.deletePath(botAlias, file.name, options))) {
+        return;
+      }
       if (previewName === file.name) {
         closePreview();
       }

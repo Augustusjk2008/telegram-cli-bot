@@ -39,6 +39,7 @@ import type {
   ExternalSourceReadResult,
   FileCopyResult,
   FileCreateResult,
+  FileDeleteOptions,
   FileDownloadProgress,
   FileMoveResult,
   FileReadResult,
@@ -315,7 +316,7 @@ export interface WebBotClient {
   changeDirectory(botAlias: string, path: string): Promise<string>;
   createDirectory(botAlias: string, name: string, parentPath?: string): Promise<void>;
   createWorkdirDirectory(botAlias: string, parentPath: string, name: string): Promise<void>;
-  deletePath(botAlias: string, path: string): Promise<void>;
+  deletePath(botAlias: string, path: string, options?: FileDeleteOptions): Promise<void>;
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
   createHtmlPreview(botAlias: string, filename: string, options?: AgentScopedOptions): Promise<HtmlPreviewSession>;
   closeHtmlPreview(botAlias: string, sessionId: string, options?: AgentScopedOptions): Promise<void>;

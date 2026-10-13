@@ -1,3 +1,5 @@
+import os
+import stat
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -6,7 +8,7 @@ from aiohttp.test_utils import make_mocked_request
 
 from bot.web import files_service
 from bot.web.api_common import AuthContext, WebApiError
-from bot.web.auth_store import CAP_READ_FILE_CONTENT
+from bot.web.auth_store import CAP_READ_FILE_CONTENT, CAP_WRITE_FILES
 from bot.web.server import WebApiServer
 
 
@@ -51,6 +53,80 @@ def test_rename_path_renames_directory_with_contents(monkeypatch, tmp_path):
     assert result == {"old_path": "old-folder", "path": "new-folder"}
     assert not source_dir.exists()
     assert (tmp_path / "new-folder" / "nested.txt").read_text(encoding="utf-8") == "content"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read-only file attributes")
+@pytest.mark.parametrize("is_directory", [False, True])
+def test_readonly_deletion_requires_confirmation(monkeypatch, tmp_path, is_directory):
+    target = tmp_path / ("docs" if is_directory else "reference.pdf")
+    if is_directory:
+        target.mkdir()
+        (target / "ordinary.txt").write_text("keep until confirmed", encoding="utf-8")
+        (target / "nested").mkdir()
+    readonly_file = target / "nested" / "reference.pdf" if is_directory else target
+    readonly_file.write_bytes(b"reference")
+    readonly_file.chmod(stat.S_IREAD)
+    session = MagicMock(browse_dir=str(tmp_path), working_dir=str(tmp_path))
+    monkeypatch.setattr(files_service, "ensure_file_browser_supported", lambda *_args: None)
+    monkeypatch.setattr(files_service, "get_session_for_alias", lambda *_args: session)
+    monkeypatch.setattr(files_service, "invalidate_workspace_indexes", lambda *_args: None)
+
+    try:
+        with pytest.raises(WebApiError) as error:
+            files_service.delete_path(MagicMock(), "main", 1, target.name)
+
+        assert error.value.status == 409
+        assert error.value.code == "readonly_confirmation_required"
+        assert readonly_file.read_bytes() == b"reference"
+        assert readonly_file.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+        if is_directory:
+            assert (target / "ordinary.txt").exists()
+
+        result = files_service.delete_path(MagicMock(), "main", 1, target.name, confirm_readonly=True)
+        assert result["deleted_type"] == ("directory" if is_directory else "file")
+        assert not target.exists()
+    finally:
+        if readonly_file.exists():
+            readonly_file.chmod(stat.S_IWRITE)
+
+
+def test_readonly_confirmation_preserves_other_deletion_errors(monkeypatch, tmp_path):
+    (tmp_path / "locked.pdf").write_bytes(b"reference")
+    session = MagicMock(browse_dir=str(tmp_path), working_dir=str(tmp_path))
+    monkeypatch.setattr(files_service, "ensure_file_browser_supported", lambda *_args: None)
+    monkeypatch.setattr(files_service, "get_session_for_alias", lambda *_args: session)
+    remove = MagicMock(side_effect=PermissionError("file is locked"))
+    monkeypatch.setattr(files_service.os, "remove", remove)
+
+    with pytest.raises(WebApiError) as error:
+        files_service.delete_path(MagicMock(), "main", 1, "locked.pdf", confirm_readonly=True)
+
+    assert error.value.code == "delete_path_failed"
+    assert error.value.message == "file is locked"
+    remove.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("confirmation", "expected"), [(None, False), (True, True), ("true", False)])
+async def test_delete_path_view_forwards_explicit_readonly_confirmation(monkeypatch, confirmation, expected):
+    auth = AuthContext(user_id=1, token_used=True, capabilities={CAP_WRITE_FILES})
+    manager = MagicMock()
+    server = SimpleNamespace(
+        manager=manager,
+        _with_capability=AsyncMock(return_value=auth),
+        _manager_alias=lambda request: request.match_info["alias"],
+        _chat_user_id=lambda _auth: 7,
+        _parse_json=AsyncMock(return_value={"path": "reference.pdf", "confirm_readonly": confirmation}),
+    )
+    delete = MagicMock(return_value={"path": "reference.pdf", "deleted_type": "file"})
+    monkeypatch.setattr("bot.web.server.delete_path", delete)
+    request = make_mocked_request("POST", "/api/bots/main/files/delete", match_info={"alias": "main"})
+
+    await WebApiServer.delete_path_view(server, request)
+
+    delete.assert_called_once_with(
+        manager, "main", 7, "reference.pdf", allow_external_paths=False, confirm_readonly=expected,
+    )
 
 
 def test_absolute_file_paths_require_explicit_external_access(tmp_path):

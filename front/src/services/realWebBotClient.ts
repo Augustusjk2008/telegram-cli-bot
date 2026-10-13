@@ -158,6 +158,7 @@ import type {
   FileTreeRevealResult,
   FileCopyResult,
   FileCreateResult,
+  FileDeleteOptions,
   FileDownloadProgress,
   FileEntry,
   FileMoveResult,
@@ -5974,13 +5975,13 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async deletePath(botAlias: string, path: string): Promise<void> {
+  async deletePath(botAlias: string, path: string, options: FileDeleteOptions = {}): Promise<void> {
     await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/files/delete`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, ...(options.confirmReadonly ? { confirm_readonly: true } : {}) }),
     });
   }
 

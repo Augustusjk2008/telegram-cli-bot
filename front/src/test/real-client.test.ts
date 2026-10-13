@@ -192,6 +192,18 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test.each([false, true])("sends explicit read-only deletion confirmation=%s", async (confirmed) => {
+    fetchMock.mockResolvedValue(jsonOk({}));
+    const client = new RealWebBotClient();
+
+    await client.deletePath("main", "reference.pdf", confirmed ? { confirmReadonly: true } : undefined);
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/bots/main/files/delete", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ path: "reference.pdf", ...(confirmed ? { confirm_readonly: true } : {}) }),
+    }));
+  });
+
   test.each([true, false])("preserves directory listing paths with URLSearchParams.size support=%s", async (supportsSize) => {
     const descriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, "size");
     if (!supportsSize) {

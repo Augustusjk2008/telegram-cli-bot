@@ -20,6 +20,7 @@ import { VirtualList } from "../components/virtual/VirtualList";
 import type { GitTreeDecorationKind, RemoteWorkspace } from "../services/types";
 import { joinRemotePath } from "../services/remoteWorkspace";
 import { isAbsolutePathInput } from "../utils/pathInput";
+import { deletePathWithReadonlyConfirmation } from "../utils/deletePath";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
 type Props = {
@@ -1208,7 +1209,9 @@ export function FileTreePane({
 
     setActionError("");
     try {
-      await tree.deletePath(entry.path);
+      if (!await deletePathWithReadonlyConfirmation((options) => tree.deletePath(entry.path, options))) {
+        return;
+      }
       onDeletedFile(entry.path);
       await onRefreshGitDecorations();
     } catch (error) {

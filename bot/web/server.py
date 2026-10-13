@@ -4494,6 +4494,7 @@ class WebApiServer:
             self._chat_user_id(auth),
             body.get("path", ""),
             allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+            confirm_readonly=body.get("confirm_readonly") is True,
         )
         return _json({"ok": True, "data": data})
 
