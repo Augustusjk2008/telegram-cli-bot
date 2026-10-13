@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from .models import (
@@ -122,6 +123,12 @@ class CodexUsageStore:
                 connection.execute(
                     "ALTER TABLE rate_limit_samples ADD COLUMN credits_balance TEXT"
                 )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_bucket_time
+            ON rate_limit_samples(limit_id, window_minutes, sampled_at_ms, sample_id)
+            """
+        )
         if version != SCHEMA_VERSION:
             with connection:
                 connection.execute("DROP TABLE IF EXISTS daily_model_usage")
@@ -196,7 +203,7 @@ class CodexUsageStore:
             connection = self._get_connection(create=True)
             assert connection is not None
             with connection:
-                connection.execute(
+                cursor = connection.execute(
                     """
                     INSERT INTO rate_limit_samples(
                         day, limit_id, sampled_at_ms, used_percent,
@@ -214,6 +221,33 @@ class CodexUsageStore:
                         sample.credits_balance,
                     ),
                 )
+                rows = connection.execute(
+                    """
+                    SELECT sample_id, used_percent, credits_balance, resets_at, plan_type
+                    FROM rate_limit_samples
+                    WHERE limit_id = ? AND window_minutes = ?
+                    ORDER BY sampled_at_ms DESC, sample_id DESC
+                    LIMIT 3
+                    """,
+                    (sample.limit_id, sample.window_minutes),
+                ).fetchall()
+                if len(rows) == 3 and rows[0]["sample_id"] == cursor.lastrowid:
+                    states = [
+                        (
+                            row["used_percent"],
+                            Decimal(row["credits_balance"])
+                            if row["credits_balance"] is not None
+                            else None,
+                            row["resets_at"],
+                            row["plan_type"],
+                        )
+                        for row in rows
+                    ]
+                    if states[0] == states[1] == states[2]:
+                        connection.execute(
+                            "DELETE FROM rate_limit_samples WHERE sample_id = ?",
+                            (rows[1]["sample_id"],),
+                        )
 
     def query(self, start_day: DayLike, end_day: DayLike) -> tuple[CodexRateLimitSample, ...]:
         start = day_number(start_day)

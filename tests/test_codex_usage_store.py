@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from bot.codex_usage.models import (
     GENERAL_CODEX_RATE_LIMIT_ID,
@@ -147,6 +150,106 @@ def test_store_records_and_queries_only_supported_long_term_quota_samples(tmp_pa
         monthly_free,
     )
     assert store.available_range() == (date(2026, 8, 10), date(2026, 8, 11))
+
+
+@pytest.mark.parametrize(
+    "balances",
+    [(None, None, None, None), ("123.45", "123.450", "1.2345E2", "123.4500")],
+)
+def test_store_keeps_flat_quota_endpoints(
+    tmp_path: Path, balances: tuple[str | None, ...]
+) -> None:
+    db_path = tmp_path / "usage.sqlite3"
+    store = CodexUsageStore(db_path)
+    base = _sample()
+    samples = [
+        replace(
+            base,
+            sampled_at=base.sampled_at + timedelta(minutes=index),
+            credits_balance=balance,
+        )
+        for index, balance in enumerate(balances)
+    ]
+    day = base.sampled_at.date()
+
+    for index, sample in enumerate(samples):
+        store.record_rate_limit_sample(sample)
+        expected = tuple(samples[: index + 1]) if index < 2 else (samples[0], sample)
+        assert store.query(day, day) == expected
+        store.close()
+        store = CodexUsageStore(db_path)
+
+    assert store.query(day, day) == (samples[0], samples[-1])
+    store.close()
+
+
+@pytest.mark.parametrize("changed_index", [0, 1, 2])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"used_percent": 36},
+        {"credits_balance": "123.45000000000000001"},
+        {"credits_balance": None},
+        {"resets_at": datetime(2026, 8, 14, 8, tzinfo=timezone.utc)},
+        {"plan_type": "free"},
+    ],
+)
+def test_store_preserves_quota_changes(
+    tmp_path: Path, changed_index: int, changes: dict[str, object]
+) -> None:
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+    base = _sample(credits_balance="123.45")
+    samples = [
+        replace(base, sampled_at=base.sampled_at + timedelta(minutes=index))
+        for index in range(3)
+    ]
+    samples[changed_index] = replace(samples[changed_index], **changes)
+
+    for sample in samples:
+        store.record_rate_limit_sample(sample)
+
+    day = base.sampled_at.date()
+    assert store.query(day, day) == tuple(samples)
+
+
+def test_store_compacts_quota_buckets_and_windows_independently(tmp_path: Path) -> None:
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+    base = _sample()
+    buckets = [
+        base,
+        replace(base, limit_id=SECONDARY_CODEX_RATE_LIMIT_ID),
+        replace(base, window_minutes=43_200),
+    ]
+    samples = [
+        replace(bucket, sampled_at=base.sampled_at + timedelta(minutes=index * 3 + offset))
+        for index in range(3)
+        for offset, bucket in enumerate(buckets)
+    ]
+
+    for sample in samples:
+        store.record_rate_limit_sample(sample)
+
+    day = base.sampled_at.date()
+    assert store.query(day, day) == tuple(samples[:3] + samples[-3:])
+
+
+def test_store_preserves_existing_points_when_quota_arrives_out_of_order(tmp_path: Path) -> None:
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+    base = _sample()
+    samples = [
+        replace(
+            base,
+            sampled_at=base.sampled_at + timedelta(minutes=index),
+            used_percent=0 if index == 0 else 35,
+        )
+        for index in range(4)
+    ]
+
+    for index in (0, 2, 3, 1):
+        store.record_rate_limit_sample(samples[index])
+
+    day = base.sampled_at.date()
+    assert store.query(day, day) == tuple(samples)
 
 
 def test_schema_6_preserves_v3_general_quota_sample(tmp_path: Path) -> None:
