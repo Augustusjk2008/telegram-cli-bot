@@ -68,6 +68,7 @@ from bot.prompts import render_prompt
 from bot import config
 from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
 from bot.cli import (
+    AntigravityJsonStreamParser,
     ClaudeJsonStreamParser,
     CodexJsonStreamParser,
     build_cli_command,
@@ -413,10 +414,12 @@ def _clear_all_native_sessions_locked(session: UserSession) -> bool:
     changed = bool(
         session.codex_session_id
         or session.claude_session_id
+        or session.antigravity_conversation_id
         or session.claude_session_initialized
     )
     session.codex_session_id = None
     session.claude_session_id = None
+    session.antigravity_conversation_id = None
     session.claude_session_initialized = False
     session._cluster_prompt_state = None
     return _clear_native_agent_session_locked(session) or changed
@@ -788,6 +791,10 @@ def _cluster_inactive_target_status() -> dict[str, str]:
     return {"state": "not_checked", "message": "未使用"}
 
 
+def _cluster_unsupported_target_status() -> dict[str, str]:
+    return {"state": "unsupported", "message": "Antigravity CLI 暂不支持集群 MCP"}
+
+
 def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, str]:
     if cli_data_provider(cli_type) != cli_data_provider(active_cli_type):
         return _cluster_inactive_target_status()
@@ -889,6 +896,11 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
             "runtime": _cluster_runtime_mcp_status(),
             "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
             "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
+            "antigravity": (
+                _cluster_unsupported_target_status()
+                if active_cli_type == "antigravity"
+                else _cluster_inactive_target_status()
+            ),
             "pi": _cluster_pi_mcp_target_status(active_cli_type=active_cli_type),
         },
         "agents": [
@@ -909,12 +921,22 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
 
 def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
+    active_cli_type = _profile_cluster_active_cli_type(profile)
+    if active_cli_type == "antigravity":
+        return {
+            "server_name": CLUSTER_MCP_SERVER_NAME,
+            "unsupported": True,
+            "code": "cluster_unsupported_cli",
+            "message": "Antigravity CLI 暂不支持集群 MCP",
+            "install_command": [],
+            "verify_command": [],
+            "remove_command": [],
+        }
     launcher = prepare_cluster_mcp_launcher(
         home_dir=Path.home(),
         repo_root=_REPO_ROOT,
         bridge_url=_cluster_bridge_url(),
     )
-    active_cli_type = _profile_cluster_active_cli_type(profile)
     if active_cli_type == "pi":
         extension_path = write_pi_cluster_extension(repo_root=_REPO_ROOT)
         return {
@@ -945,6 +967,8 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
             source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
             profile = get_profile_or_raise(manager, alias)
             next_config = normalize_bot_cluster_config(source)
+            if next_config.enabled and normalize_cli_type(profile.cli_type) == "antigravity":
+                _raise(409, "cluster_unsupported_cli", "Antigravity CLI 暂不支持集群 MCP")
             current_size = max(1, int(profile.cluster.max_parallel_agents or 1))
             target_size = max(1, int(next_config.max_parallel_agents or 1))
             if target_size < current_size:
@@ -1328,7 +1352,9 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
 
     try:
         params = profile.cli_params.get_params(resolved_cli_type)
-        schema = _apply_cli_model_options(get_params_schema(resolved_cli_type))
+        schema = get_params_schema(resolved_cli_type)
+        if resolved_cli_type != "antigravity":
+            schema = _apply_cli_model_options(schema)
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
@@ -2068,6 +2094,8 @@ def _select_conversation_locked(
         if native_provider == "claude":
             session.claude_session_id = native_session_id or None
             session.claude_session_initialized = bool(native_session_id)
+        if native_provider == "antigravity":
+            session.antigravity_conversation_id = native_session_id or None
         if native_provider == NATIVE_AGENT_PROVIDER:
             session.native_agent_session_id = native_session_id or None
             session.native_agent_server_key = None
@@ -2212,6 +2240,9 @@ def _delete_conversation_locked(
             elif native_provider == "claude" and session.claude_session_id == native_session_id:
                 session.claude_session_id = None
                 session.claude_session_initialized = False
+                native_cleared = True
+            elif native_provider == "antigravity" and session.antigravity_conversation_id == native_session_id:
+                session.antigravity_conversation_id = None
                 native_cleared = True
             elif native_provider == NATIVE_AGENT_PROVIDER and session.native_agent_session_id == native_session_id:
                 _clear_native_agent_session_locked(session)
@@ -2590,6 +2621,9 @@ def delete_all_conversations(
                 if session.claude_session_id is not None:
                     session.claude_session_id = None
                     session.claude_session_initialized = False
+                    native_cleared = True
+                if session.antigravity_conversation_id is not None:
+                    session.antigravity_conversation_id = None
                     native_cleared = True
     session.persist()
 
@@ -3413,6 +3447,8 @@ def _start_cluster_run_if_requested(
     del cluster  # Legacy clients may still send this field; orchestration is Bot-scoped.
     if not profile.cluster.enabled:
         return None
+    if execution_mode == EXECUTION_MODE_CLI and normalize_cli_type(profile.cli_type) == "antigravity":
+        _raise(409, "cluster_unsupported_cli", "Antigravity CLI 暂不支持集群 MCP")
     if str(agent_id or "main").strip().lower() != "main" or solo_mode or internal_continuation:
         return None
     saved_team_state = team_state if isinstance(team_state, dict) else {}
@@ -3804,6 +3840,8 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
         return str(session.codex_session_id or "").strip()
     if normalized == "claude":
         return str(session.claude_session_id or "").strip()
+    if normalized == "antigravity":
+        return str(session.antigravity_conversation_id or "").strip()
     return ""
 
 
@@ -3835,6 +3873,12 @@ def _status_context_session_id(
             return candidate
         with session._lock:
             return str(session.claude_session_id or "").strip()
+    if normalized == "antigravity":
+        candidate = str(attempt.cli_session_id or "").strip()
+        if candidate:
+            return candidate
+        with session._lock:
+            return str(session.antigravity_conversation_id or "").strip()
     return ""
 
 
@@ -3916,6 +3960,29 @@ def _with_turn_model(
     return {**context_usage, "model": normalized_model}
 
 
+def _build_antigravity_context_usage(
+    usage: dict[str, Any] | None,
+    *,
+    model: str,
+    session_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(usage, dict) or not usage:
+        return None
+    result: dict[str, Any] = {
+        "provider": "antigravity",
+        "source": "antigravity_stream_json",
+        "session_id": str(session_id or "").strip(),
+    }
+    normalized_model = str(model or "").strip()
+    if normalized_model:
+        result["model"] = normalized_model
+    for key in ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens", "total_tokens"):
+        value = usage.get(key)
+        if type(value) is int and value >= 0:
+            result[key] = value
+    return result if len(result) > 3 else None
+
+
 async def _resolve_cli_context_usage_bounded(
     cli_type: str,
     session_id: str | None,
@@ -3927,6 +3994,8 @@ async def _resolve_cli_context_usage_bounded(
     if not normalized_session_id:
         return None
     normalized_cli_type = cli_data_provider(cli_type)
+    if normalized_cli_type == "antigravity":
+        return None
     loop = asyncio.get_running_loop()
     task = loop.run_in_executor(
         _CLI_CONTEXT_USAGE_EXECUTOR,
@@ -3993,6 +4062,11 @@ def _prepare_cli_attempt_state(session: UserSession, cli_type: str) -> CliAttemp
                 cli_session_id=session.claude_session_id,
                 resume_session=session.claude_session_initialized,
             )
+        if cli_type == "antigravity":
+            return CliAttemptState(
+                cli_session_id=session.antigravity_conversation_id,
+                resume_session=bool(session.antigravity_conversation_id),
+            )
     return CliAttemptState(cli_session_id=None, resume_session=False)
 
 
@@ -4008,6 +4082,11 @@ def _clear_invalid_cli_session(session: UserSession, cli_type: str) -> bool:
             session.claude_session_id = None
             session.claude_session_initialized = False
             return changed
+        if cli_type == "antigravity":
+            if session.antigravity_conversation_id is None:
+                return False
+            session.antigravity_conversation_id = None
+            return True
     return False
 
 
@@ -4148,7 +4227,13 @@ def _parse_codex_event_dict(event: dict[str, Any]) -> dict[str, Optional[str]]:
 class _StreamPreviewState:
     def __init__(self, cli_type: str):
         self.cli_type = cli_type
-        parser_type = CodexJsonStreamParser if cli_data_provider(cli_type) == "codex" else ClaudeJsonStreamParser
+        parser_type = (
+            CodexJsonStreamParser
+            if cli_data_provider(cli_type) == "codex"
+            else AntigravityJsonStreamParser
+            if cli_type == "antigravity"
+            else ClaudeJsonStreamParser
+        )
         self._parser = parser_type(
             raw_tail_max_bytes=_CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
             final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
@@ -4463,6 +4548,7 @@ def _build_terminal_trace(
     stop_requested: bool,
     returncode: int,
     error_detail: str = "",
+    force_error: bool = False,
 ) -> list[dict[str, Any]]:
     trace = _merge_trace_events(live_trace)
     if stop_requested:
@@ -4470,8 +4556,8 @@ def _build_terminal_trace(
             trace,
             [{"kind": "cancelled", "source": "runtime", "summary": "用户终止输出"}],
         )
-    if isinstance(returncode, int) and returncode not in (0,):
-        summary = f"命令退出码 {returncode}"
+    if force_error or (isinstance(returncode, int) and returncode not in (0,)):
+        summary = f"命令退出码 {returncode}" if isinstance(returncode, int) and returncode not in (0,) else "CLI 返回失败状态"
         detail = str(error_detail or "").strip()
         if detail:
             summary = f"{summary}\n{detail[-2000:]}"
@@ -4567,6 +4653,7 @@ def _resolve_completion_state(
     *,
     returncode: int,
     response_text: str,
+    force_error: bool = False,
 ) -> str:
     with session._lock:
         stop_requested = bool(session.stop_requested)
@@ -4577,6 +4664,8 @@ def _resolve_completion_state(
         return "completed"
     if stop_requested:
         return "cancelled"
+    if force_error:
+        return "error"
     if isinstance(returncode, int) and returncode not in (0,):
         return "error"
     return "completed"
@@ -4740,6 +4829,54 @@ class _ProcessStdoutReader:
             self.done.set()
 
 
+class _ProcessStderrReader:
+    """Continuously consume diagnostic stderr without feeding the JSON parser."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen,
+        *,
+        max_bytes: int,
+    ) -> None:
+        self.process = process
+        self._buffer = _BoundedOutputBuffer(max_bytes)
+        self.done = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="cli-stderr-reader", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def request_stop(self) -> None:
+        self._stop.set()
+
+    def stop(self) -> None:
+        self.request_stop()
+
+    def join(self, timeout: float | None = None) -> None:
+        self._thread.join(timeout)
+
+    @property
+    def text(self) -> str:
+        return self._buffer.text()
+
+    def _run(self) -> None:
+        try:
+            stderr = getattr(self.process, "stderr", None)
+            if stderr is None or not hasattr(stderr, "readline"):
+                return
+            while not self._stop.is_set():
+                line = stderr.readline(4096)
+                if not line:
+                    break
+                self._buffer.append(str(line))
+        except Exception:
+            if not self._stop.is_set():
+                logger.debug("CLI stderr reader failed", exc_info=True)
+        finally:
+            self.done.set()
+
+
 def _request_process_stdout_reader_stop(reader: Any) -> None:
     request_stop = getattr(reader, "request_stop", None)
     if callable(request_stop):
@@ -4748,6 +4885,26 @@ def _request_process_stdout_reader_stop(reader: Any) -> None:
     stop = getattr(reader, "stop", None)
     if callable(stop):
         stop()
+
+
+def _request_process_stderr_reader_stop(reader: Any) -> None:
+    request_stop = getattr(reader, "request_stop", None)
+    if callable(request_stop):
+        request_stop()
+        return
+    stop = getattr(reader, "stop", None)
+    if callable(stop):
+        stop()
+
+
+def _start_process_stderr_reader(
+    process: subprocess.Popen,
+    *,
+    max_bytes: int = _CLI_OUTPUT_LIMITS.raw_tail_max_bytes,
+) -> _ProcessStderrReader:
+    reader = _ProcessStderrReader(process, max_bytes=max_bytes)
+    reader.start()
+    return reader
 
 
 def _start_process_stdout_reader(
@@ -4777,6 +4934,7 @@ class _CliProcessLifecycle:
     process: Any
     process_tree: ProcessTreeHandle
     reader: _ProcessStdoutReader | None = None
+    stderr_reader: _ProcessStderrReader | None = None
     cleanup_task: asyncio.Task[None] | None = field(default=None, repr=False)
     state_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     streams_closed: bool = False
@@ -4824,6 +4982,15 @@ def _deferred_cli_stream_cleanup(lifecycle: _CliProcessLifecycle) -> None:
             )
             return
         reader.join(0.1)
+    stderr_reader = lifecycle.stderr_reader
+    if stderr_reader is not None:
+        if not stderr_reader.done.wait(_CLI_DEFERRED_CLEANUP_TIMEOUT_SECONDS):
+            logger.warning(
+                "CLI stderr reader 清理超时，保留流以避免跨线程 close: pid=%s",
+                getattr(lifecycle.process, "pid", 0),
+            )
+            return
+        stderr_reader.join(0.1)
     _close_cli_process_streams_once(lifecycle)
 
 
@@ -4853,6 +5020,7 @@ async def _run_cli_process_lifecycle_cleanup(lifecycle: _CliProcessLifecycle) ->
     await asyncio.to_thread(lifecycle.process_tree.close)
 
     reader = lifecycle.reader
+    stderr_reader = lifecycle.stderr_reader
     if reader is not None:
         reader_done = await asyncio.to_thread(
             reader.done.wait,
@@ -4862,6 +5030,16 @@ async def _run_cli_process_lifecycle_cleanup(lifecycle: _CliProcessLifecycle) ->
             _start_deferred_cli_stream_cleanup(lifecycle)
             return
         await asyncio.to_thread(reader.join, 0.1)
+
+    if stderr_reader is not None:
+        stderr_done = await asyncio.to_thread(
+            stderr_reader.done.wait,
+            _CLI_READER_CLEANUP_TIMEOUT_SECONDS,
+        )
+        if not stderr_done:
+            _start_deferred_cli_stream_cleanup(lifecycle)
+            return
+        await asyncio.to_thread(stderr_reader.join, 0.1)
 
     await asyncio.to_thread(_close_cli_process_streams_once, lifecycle)
 
@@ -4873,6 +5051,8 @@ async def _cleanup_cli_process_lifecycle(
 ) -> None:
     if abort and lifecycle.reader is not None:
         _request_process_stdout_reader_stop(lifecycle.reader)
+    if abort and lifecycle.stderr_reader is not None:
+        _request_process_stderr_reader_stop(lifecycle.stderr_reader)
     cleanup_task = lifecycle.cleanup_task
     if cleanup_task is None:
         cleanup_task = asyncio.create_task(
@@ -5288,6 +5468,11 @@ async def _stream_cli_chat(
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    cli_type = normalize_cli_type(profile.cli_type)
+    if getattr(profile, "remote_workspace", None) and cli_type == "antigravity":
+        _raise(409, "remote_workspace_unsupported_cli", "Antigravity CLI 暂不支持远程工作区")
+    if cli_type == "antigravity" and (cluster_run_id or profile.cluster.enabled):
+        _raise(409, "cluster_unsupported_cli", "Antigravity CLI 暂不支持集群 MCP")
 
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
     if getattr(profile, "remote_workspace", None):
@@ -5298,8 +5483,6 @@ async def _stream_cli_chat(
         _raise(400, "empty_message", "消息不能为空")
     is_plan_mode = _is_plan_request(request)
     stage_durations = _new_stage_durations()
-
-    cli_type = normalize_cli_type(profile.cli_type)
 
     def prepare_prompt(*, force_full_cluster_prompt: bool = False):
         prepared = _apply_cluster_prompt(
@@ -5419,6 +5602,7 @@ async def _stream_cli_chat(
             server_runtime = None
             process = None
             process_lifecycle = None
+            stderr_output = ""
             quota_capture = None
             turn_cost = CliTurnCost(cli_data_provider(cli_type), turn_model)
             if cli_type == "codex_server":
@@ -5478,7 +5662,7 @@ async def _stream_cli_chat(
                         cmd,
                         stdin=subprocess.PIPE if use_stdin else None,
                         stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
+                        stderr=subprocess.PIPE if cli_type == "antigravity" else subprocess.STDOUT,
                         text=True,
                         bufsize=1,
                         cwd=session.working_dir,
@@ -5488,6 +5672,8 @@ async def _stream_cli_chat(
                         **build_chat_cli_process_kwargs(suspended=True),
                     )
                     process_lifecycle = _create_cli_process_lifecycle(process)
+                    if cli_type == "antigravity":
+                        process_lifecycle.stderr_reader = _start_process_stderr_reader(process)
                     active_lifecycle = process_lifecycle
                     with session._lock:
                         session.process = process
@@ -5598,11 +5784,11 @@ async def _stream_cli_chat(
                 cost_model = str((context_usage or {}).get("model") or turn_model).strip()
                 cost_session_id = parsed.session_id or _current_native_session_id(session, cli_type)
                 estimated_cost = None
-                if cost_model and parsed.terminal_usage is not None:
+                if cli_type != "antigravity" and cost_model and parsed.terminal_usage is not None:
                     estimated_cost = estimate_usage_cost(
                         cost_model, parsed.terminal_usage, protocol=cli_data_provider(cli_type), scope="turn",
                     )
-                elif parsed.terminal_usage is None:
+                elif cli_type != "antigravity" and parsed.terminal_usage is None:
                     try:
                         estimated_cost = await asyncio.wait_for(
                             asyncio.to_thread(turn_cost.estimate_partial, cost_session_id),
@@ -5688,6 +5874,14 @@ async def _stream_cli_chat(
                         text_chunk = str(item)
                         output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
                         preview_state.consume(text_chunk)
+                        if cli_type == "antigravity":
+                            parsed_preview = preview_state.result()
+                            if parsed_preview.session_id:
+                                with session._lock:
+                                    if session.antigravity_conversation_id != parsed_preview.session_id:
+                                        session.antigravity_conversation_id = parsed_preview.session_id
+                                        session_id_changed = True
+                                attempt.cli_session_id = parsed_preview.session_id
                         turn_cost.observe(text_chunk)
                         for trace_event in consume_stream_trace_chunk(cli_data_provider(cli_type), text_chunk, trace_state):
                             appended_trace = append_live_trace_event(trace_event)
@@ -5809,6 +6003,12 @@ async def _stream_cli_chat(
                         last_context_usage_resolved_session_id = status_session_id
                     elif status_session_id and status_session_id == last_context_usage_session_id:
                         status_context_usage = last_context_usage
+                    if cli_type == "antigravity":
+                        status_context_usage = _build_antigravity_context_usage(
+                            preview_state.result().terminal_usage,
+                            model=turn_model,
+                            session_id=status_session_id,
+                        )
                     if status_context_usage:
                         status_context_usage = _with_turn_model(status_context_usage, turn_model)
                         await load_compaction_session(status_session_id)
@@ -5865,7 +6065,7 @@ async def _stream_cli_chat(
                 else:
                     waited_returncode = await loop.run_in_executor(None, _wait_for_process_exit_sync, process, 1.0)
                     returncode = _resolve_process_returncode(process, waited_returncode)
-                    if done_terminate_started_at is not None:
+                    if done_terminate_started_at is not None and cli_type != "antigravity":
                         returncode = 0
             except asyncio.CancelledError:
                 cleanup_abort = True
@@ -5890,6 +6090,8 @@ async def _stream_cli_chat(
                             active_server_reader = None
                         else:
                             await _cleanup_cli_process_lifecycle(process_lifecycle, abort=cleanup_abort)
+                            if cli_type == "antigravity" and process_lifecycle.stderr_reader is not None:
+                                stderr_output = process_lifecycle.stderr_reader.text
                     finally:
                         with session._lock:
                             session.process = None
@@ -5925,6 +6127,23 @@ async def _stream_cli_chat(
                 if returncode != 0:
                     error_detail = parsed_result.error_text or ""
                     response = error_detail or response
+            elif cli_type == "antigravity":
+                response = parsed_result.final_text.strip()
+                terminal_failed = bool(
+                    parsed_result.terminal_error
+                    or parsed_result.denied_actions
+                    or str(parsed_result.terminal_status or "").upper() not in {"", "SUCCESS"}
+                )
+                if terminal_failed or returncode != 0:
+                    error_detail = "\n".join(
+                        part
+                        for part in (
+                            str(parsed_result.terminal_error or parsed_result.error_text or "").strip(),
+                            str(stderr_output or "").strip(),
+                        )
+                        if part
+                    ).strip()
+                    response = error_detail or response
             else:
                 response = parsed_result.final_text.strip()
                 if returncode != 0:
@@ -5932,6 +6151,15 @@ async def _stream_cli_chat(
 
             response = response or msg("chat", "no_output")
             should_force_error_output = False
+            antigravity_failed = bool(
+                cli_type == "antigravity"
+                and (
+                    parsed_result.terminal_error
+                    or parsed_result.denied_actions
+                    or str(parsed_result.terminal_status or "").upper() not in {"", "SUCCESS"}
+                    or returncode != 0
+                )
+            )
 
             if (
                 cli_type == "claude"
@@ -5965,6 +6193,11 @@ async def _stream_cli_chat(
                             session.claude_session_id = None
                             session.claude_session_initialized = False
                             session_id_changed = True
+            elif cli_type == "antigravity":
+                with session._lock:
+                    if parsed_result.session_id and session.antigravity_conversation_id != parsed_result.session_id:
+                        session.antigravity_conversation_id = parsed_result.session_id
+                        session_id_changed = True
             if cli_data_provider(cli_type) == "codex":
                 response, should_force_error_output = _decorate_codex_resume_error(
                     response,
@@ -5981,6 +6214,7 @@ async def _stream_cli_chat(
                 session,
                 returncode=returncode,
                 response_text=response,
+                force_error=antigravity_failed,
             )
             display_response = _format_cli_error_display(
                 response,
@@ -5994,6 +6228,7 @@ async def _stream_cli_chat(
                 stop_requested=stop_requested,
                 returncode=returncode,
                 error_detail=(error_detail or response) if completion_state == "error" else error_detail,
+                force_error=antigravity_failed,
             )
             final_trace_count = len(final_trace)
             for trace_event in final_trace[len(live_trace_events):]:
@@ -6027,6 +6262,12 @@ async def _stream_cli_chat(
                 context_usage = server_runtime.context_usage
             if context_usage is None and native_session_id == last_context_usage_session_id:
                 context_usage = last_context_usage
+            if cli_type == "antigravity":
+                context_usage = _build_antigravity_context_usage(
+                    parsed_result.terminal_usage,
+                    model=turn_model,
+                    session_id=native_session_id,
+                ) or context_usage
             context_usage = _with_turn_model(context_usage, turn_model)
             await load_compaction_session(native_session_id)
             (

@@ -334,6 +334,7 @@ export function BotListScreen({
                   <option value="codex">codex</option>
                   <option value="codex_server">codex server</option>
                   <option value="claude">claude</option>
+                  <option value="antigravity">Antigravity CLI</option>
                 </select>
               </label>
             </div>

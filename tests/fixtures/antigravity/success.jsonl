@@ -1,0 +1,4 @@
+{"event":"init","conversation_id":"agy-conv-success","init":{"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conv-success","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"OK"}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conv-success","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n"}}
+{"event":"result","result":{"conversation_id":"agy-conv-success","status":"SUCCESS","response":"OK\n","usage":{"input_tokens":11,"output_tokens":2,"thinking_tokens":3,"cache_read_tokens":4,"total_tokens":20}}}

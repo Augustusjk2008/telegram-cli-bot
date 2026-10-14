@@ -59,7 +59,7 @@ def _parse_cli_global_extra_args(raw_value: str) -> dict[str, list[str]]:
     parsed: dict[str, list[str]] = {}
     for key, args in payload.items():
         cli_type = str(key or "").strip().lower()
-        if cli_type not in {"codex", "codex_server", "claude"}:
+        if cli_type not in {"codex", "codex_server", "claude", "antigravity"}:
             logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：不支持的 CLI 类型", key)
             continue
         if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
@@ -157,7 +157,7 @@ def _effective_frontend_base_path(name: str, web_base_path: str) -> str:
 DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server"}
+SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity"}
 
 
 def _refresh_environment_config() -> None:
@@ -195,7 +195,11 @@ def _refresh_environment_config() -> None:
     ALLOWED_USER_IDS = allowed_user_ids
 
     CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
-    CLI_PATH = _get_project_config("CLI_PATH", "codex")
+    configured_cli_path = _get_project_config("CLI_PATH", "").strip()
+    CLI_PATH = configured_cli_path or {
+        "claude": "claude",
+        "antigravity": "agy",
+    }.get(CLI_TYPE, "codex")
     TCB_CODEX_SERVER_VOICE_ENABLED = _get_project_bool("TCB_CODEX_SERVER_VOICE_ENABLED", False)
     NATIVE_AGENT_BACKEND = "pi"
     NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "").strip()
@@ -464,7 +468,11 @@ def reload_system_environment(env_path: str | os.PathLike[str] | None = None) ->
 def default_cli_path(cli_type: str) -> str:
     if cli_type == CLI_TYPE:
         return CLI_PATH
-    return "claude" if cli_type == "claude" else "codex"
+    if cli_type == "claude":
+        return "claude"
+    if cli_type == "antigravity":
+        return "agy"
+    return "codex"
 
 
 DANGEROUS_COMMANDS: Set[str] = {

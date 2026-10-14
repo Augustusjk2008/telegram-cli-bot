@@ -209,6 +209,8 @@ class RemoteChatConfig:
             return ["--mcp-config", json.dumps({"mcpServers": {SERVER_NAME: server}})]
         if cli_type == "pi":
             return ["--no-builtin-tools", "--extension", str(Path(__file__).with_name("pi_extension.ts"))]
+        if cli_type == "antigravity":
+            raise ValueError("Remote workspace does not support Antigravity CLI")
         raise ValueError("Remote chat supports codex, codex_server, claude or pi")
 
 

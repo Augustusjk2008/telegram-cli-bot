@@ -1,9 +1,13 @@
 export function defaultCliPathForType(cliType: string) {
-  return cliType === "claude" ? "claude" : "codex";
+  if (cliType === "claude") return "claude";
+  if (cliType === "antigravity") return "agy";
+  return "codex";
 }
 
 export function cliTypeLabel(cliType: string) {
-  return cliType === "codex_server" ? "codex server" : cliType;
+  if (cliType === "codex_server") return "codex server";
+  if (cliType === "antigravity") return "Antigravity CLI";
+  return cliType;
 }
 
 export function isCodexCli(cliType: string | undefined) {

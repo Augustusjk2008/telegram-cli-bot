@@ -12,10 +12,12 @@ from unittest.mock import patch
 import pytest
 
 from bot.cli import (
+    AntigravityJsonStreamParser,
     ClaudeJsonStreamParser,
     CliStreamParseResult,
     CodexJsonStreamParser,
     build_cli_command,
+    parse_antigravity_json_output,
     parse_codex_json_line,
 )
 from bot.cli_params import (
@@ -24,6 +26,10 @@ from bot.cli_params import (
     get_cli_output_limits,
     get_default_params,
 )
+from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
+
+
+ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
 
 
 @pytest.mark.parametrize("cli_type", ["codex", "claude"])
@@ -282,3 +288,83 @@ class TestIncrementalCliParsers:
         assert limits.max_total_bytes == 16
         assert limits.raw_tail_max_bytes == 1
         assert limits.final_text_max_bytes == 32
+
+
+def test_antigravity_command_uses_prompt_stream_json_and_conversation() -> None:
+    params = CliParamsConfig.from_dict({
+        "antigravity": {
+            "model": "gemini-3.8-flash-medium",
+            "effort": "high",
+            "agent": "reviewer",
+            "sandbox": True,
+            "yolo": True,
+            "print_timeout": 30,
+            "extra_args": ["--log-file", "agy.log"],
+        },
+    })
+    command, use_stdin = build_cli_command(
+        cli_type="antigravity",
+        resolved_cli="agy.exe",
+        user_text="hello world",
+        env={},
+        params_config=params,
+        session_id="conversation-1",
+    )
+
+    assert use_stdin is False
+    assert command == [
+        "agy.exe", "-p", "hello world", "--output-format", "stream-json",
+        "--model", "gemini-3.8-flash-medium", "--effort", "high",
+        "--agent", "reviewer", "--sandbox", "--dangerously-skip-permissions",
+        "--print-timeout", "30", "--conversation", "conversation-1",
+        "--log-file", "agy.log",
+    ]
+
+
+def test_antigravity_parser_reads_nested_stream_events_and_usage() -> None:
+    raw = (ANTIGRAVITY_FIXTURE_DIR / "success.jsonl").read_text(encoding="utf-8")
+    result = parse_antigravity_json_output(raw)
+
+    assert result.final_text == "OK"
+    assert result.session_id == "agy-conv-success"
+    assert result.terminal_status == "SUCCESS"
+    assert result.terminal_usage == {
+        "input_tokens": 11,
+        "output_tokens": 2,
+        "thinking_tokens": 3,
+        "cache_read_tokens": 4,
+        "total_tokens": 20,
+    }
+    assert result.error_text is None
+
+
+def test_antigravity_parser_marks_soft_permission_denial_as_failure() -> None:
+    raw = (ANTIGRAVITY_FIXTURE_DIR / "denied.jsonl").read_text(encoding="utf-8")
+    result = parse_antigravity_json_output(raw)
+
+    assert result.terminal_status == "SUCCESS"
+    assert result.denied_actions == [{"action": "command", "display_name": "RunCommand"}]
+    assert result.terminal_error == "command — RunCommand"
+    assert result.error_text == "command — RunCommand"
+
+
+def test_antigravity_parser_preserves_structured_error() -> None:
+    raw = (ANTIGRAVITY_FIXTURE_DIR / "error.jsonl").read_text(encoding="utf-8")
+    result = parse_antigravity_json_output(raw)
+
+    assert result.terminal_status == "ERROR"
+    assert result.terminal_error == "invalid model selection"
+    assert result.error_text == "invalid model selection"
+
+
+def test_antigravity_tool_step_maps_to_call_and_result_trace() -> None:
+    raw = (ANTIGRAVITY_FIXTURE_DIR / "tool.jsonl").read_text(encoding="utf-8")
+    state = create_stream_trace_state("antigravity")
+    events = []
+    for line in raw.splitlines(keepends=True):
+        events.extend(consume_stream_trace_chunk("antigravity", line, state))
+
+    assert [event["kind"] for event in events] == ["tool_call", "tool_result"]
+    assert events[0]["tool_name"] == "run_command"
+    assert events[0]["call_id"] == "agy-conv-tool:4:run_command"
+    assert events[1]["call_id"] == events[0]["call_id"]

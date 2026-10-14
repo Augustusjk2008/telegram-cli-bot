@@ -65,6 +65,9 @@ class CliStreamParseResult:
     total_bytes: int
     truncated: bool
     terminal_usage: Optional[Dict[str, Any]] = None
+    terminal_status: Optional[str] = None
+    terminal_error: Optional[str] = None
+    denied_actions: Optional[List[Any]] = None
 
 
 def _parse_terminal_usage(line: str, *, cli_type: str) -> Optional[Dict[str, Any]]:
@@ -259,6 +262,240 @@ class ClaudeJsonStreamParser:
                 for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)
             ),
         )
+
+
+def _extract_antigravity_conversation_id(event: Dict[str, Any]) -> Optional[str]:
+    candidate_paths = (
+        ("conversation_id",),
+        ("init", "conversation_id"),
+        ("result", "conversation_id"),
+        ("step_update", "conversation_id"),
+    )
+    for path in candidate_paths:
+        value = _extract_nested_nonempty_str(event, *path)
+        if value:
+            return value
+    return None
+
+
+def _extract_antigravity_error_text(event: Dict[str, Any]) -> Optional[str]:
+    values: list[str] = []
+
+    def append(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+        elif isinstance(value, dict):
+            for key in ("message", "detail", "error", "reason", "code"):
+                append(value.get(key))
+        elif isinstance(value, list):
+            for item in value:
+                append(item)
+
+    append(event.get("error"))
+    append(event.get("message"))
+    append(event.get("detail"))
+    result = event.get("result")
+    if isinstance(result, dict):
+        append(result.get("error"))
+        append(result.get("message"))
+        append(result.get("detail"))
+    return "\n".join(dict.fromkeys(values)).strip() or None
+
+
+def _normalize_antigravity_usage(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "thinking_tokens",
+        "cache_read_tokens",
+        "total_tokens",
+    )
+    selected: Dict[str, Any] = {}
+    for key in fields:
+        if key not in value:
+            continue
+        token_value = value[key]
+        if type(token_value) is not int or token_value < 0:
+            return None
+        selected[key] = token_value
+    return selected or None
+
+
+def _format_antigravity_denied_actions(value: Any) -> Optional[str]:
+    if not isinstance(value, list) or not value:
+        return None
+    rendered: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            rendered.append(item.strip())
+            continue
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("action") or item.get("tool") or "").strip()
+            reason = str(
+                item.get("reason")
+                or item.get("message")
+                or item.get("display_name")
+                or ""
+            ).strip()
+            text = " — ".join(part for part in (name, reason) if part)
+            if text:
+                rendered.append(text)
+    return "\n".join(rendered).strip() or "存在被拒绝的工具操作"
+
+
+def parse_antigravity_json_line(line: str) -> Dict[str, Any]:
+    """解析 Antigravity stream-json 的单行事件。"""
+    result: Dict[str, Any] = {
+        "conversation_id": None,
+        "completed_text": None,
+        "delta_text": None,
+        "error_text": None,
+        "terminal_status": None,
+        "terminal_error": None,
+        "denied_actions": None,
+    }
+    try:
+        event: Any = json.loads(line)
+    except json.JSONDecodeError:
+        return result
+    if not isinstance(event, dict):
+        return result
+
+    result["conversation_id"] = _extract_antigravity_conversation_id(event)
+    event_type = str(event.get("event") or "").strip().lower()
+    if event_type == "step_update":
+        step = event.get("step_update") if isinstance(event.get("step_update"), dict) else event
+        step_type = str(step.get("step_type") or "").strip().lower()
+        if step_type == "agent_response":
+            text_delta = step.get("text_delta")
+            if isinstance(text_delta, str) and text_delta:
+                result["delta_text"] = text_delta
+        return result
+
+    if event_type != "result":
+        return result
+
+    result_payload = event.get("result") if isinstance(event.get("result"), dict) else event
+    status = str(event.get("status") or result_payload.get("status") or "").strip().upper()
+    if status:
+        result["terminal_status"] = status
+    response = result_payload.get("response")
+    if isinstance(response, str) and response.strip():
+        result["completed_text"] = response.strip()
+
+    usage = _normalize_antigravity_usage(result_payload.get("usage", event.get("usage")))
+    if usage is not None:
+        result["terminal_usage"] = usage
+
+    denied_actions = result_payload.get("denied_actions", event.get("denied_actions"))
+    if isinstance(denied_actions, list) and denied_actions:
+        result["denied_actions"] = denied_actions
+        denied_text = _format_antigravity_denied_actions(denied_actions)
+        if denied_text:
+            result["terminal_error"] = denied_text
+
+    error_text = _extract_antigravity_error_text(result_payload if result_payload is not event else event)
+    if error_text:
+        result["terminal_error"] = error_text
+    if status and status != "SUCCESS" and not result["terminal_error"]:
+        result["terminal_error"] = f"Antigravity 返回状态: {status}"
+    if result["terminal_error"]:
+        result["error_text"] = result["terminal_error"]
+    return result
+
+
+class AntigravityJsonStreamParser:
+    def __init__(
+        self,
+        *,
+        raw_tail_max_bytes: int,
+        final_text_max_bytes: int,
+    ) -> None:
+        self._raw_tail = _BoundedText(raw_tail_max_bytes)
+        self._completed = _BoundedText(final_text_max_bytes)
+        self._delta = _BoundedText(final_text_max_bytes)
+        self._errors = _BoundedText(raw_tail_max_bytes)
+        self._plain = _BoundedText(raw_tail_max_bytes)
+        self.session_id: Optional[str] = None
+        self.terminal_usage: Optional[Dict[str, Any]] = None
+        self.terminal_status: Optional[str] = None
+        self.terminal_error: Optional[str] = None
+        self.denied_actions: list[Any] = []
+        self.total_bytes = 0
+
+    def consume_line(self, line: str) -> Dict[str, Any]:
+        value = str(line or "")
+        self.total_bytes += len(value.encode("utf-8", errors="replace"))
+        self._raw_tail.append(value)
+        stripped = value.strip()
+        if not stripped:
+            return {
+                "conversation_id": None,
+                "completed_text": None,
+                "delta_text": None,
+                "error_text": None,
+            }
+        parsed = parse_antigravity_json_line(stripped)
+        if parsed.get("conversation_id"):
+            self.session_id = parsed["conversation_id"]
+        if parsed.get("completed_text"):
+            self._completed.replace(parsed["completed_text"])
+        if parsed.get("delta_text"):
+            self._delta.append(parsed["delta_text"])
+        if parsed.get("error_text"):
+            self._errors.append(parsed["error_text"], separator="\n")
+        if parsed.get("terminal_usage") is not None:
+            self.terminal_usage = parsed["terminal_usage"]
+        if parsed.get("terminal_status"):
+            self.terminal_status = parsed["terminal_status"]
+        if parsed.get("terminal_error"):
+            self.terminal_error = self._errors.text.strip()
+        if parsed.get("denied_actions"):
+            self.denied_actions = list(parsed["denied_actions"])
+        if not stripped.startswith("{"):
+            self._plain.append(stripped, separator="\n")
+        return parsed
+
+    @property
+    def preview_text(self) -> Optional[str]:
+        value = self._delta.text or self._completed.text or self._errors.text or self._plain.text
+        return value.strip() or None
+
+    def result(self) -> CliStreamParseResult:
+        selected = next(
+            (item for item in (self._completed, self._delta, self._errors, self._plain) if item.text.strip()),
+            None,
+        )
+        final_text = selected.text.strip() if selected is not None else "(无输出)"
+        if selected is not None and selected.truncated:
+            final_text = f"[回复前部已截断]\n{final_text}"
+        error_text = self._errors.text.strip() or self._plain.text.strip() or None
+        if self.terminal_error and self.terminal_error not in (error_text or ""):
+            error_text = "\n".join(item for item in (error_text, self.terminal_error) if item)
+        if error_text and (self._errors.truncated or self._plain.truncated):
+            error_text = f"[错误输出前部已截断]\n{error_text}"
+        return CliStreamParseResult(
+            final_text=final_text,
+            session_id=self.session_id,
+            error_text=error_text,
+            raw_tail=self._raw_tail.text,
+            total_bytes=self.total_bytes,
+            terminal_usage=self.terminal_usage,
+            terminal_status=self.terminal_status,
+            terminal_error=self.terminal_error,
+            denied_actions=list(self.denied_actions) or None,
+            truncated=any(item.truncated for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)),
+        )
+
+
+def parse_antigravity_json_output(raw_output: str) -> CliStreamParseResult:
+    output_size = max(1, len(str(raw_output or "").encode("utf-8", errors="replace")))
+    parser = AntigravityJsonStreamParser(raw_tail_max_bytes=output_size, final_text_max_bytes=output_size)
+    for line in str(raw_output or "").splitlines(keepends=True):
+        parser.consume_line(line)
+    return parser.result()
 
 
 def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> Optional[str]:

@@ -1628,7 +1628,7 @@ function serializePromptPresets(presets: PromptPreset[]) {
 }
 
 function mapCliType(value: unknown): CliType {
-  return value === "claude" || value === "codex_server" ? value : "codex";
+  return value === "claude" || value === "codex_server" || value === "antigravity" ? value : "codex";
 }
 
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
@@ -1840,6 +1840,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       runtime: mapTarget(mcp.runtime),
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
+      antigravity: mcp.antigravity ? mapTarget(mcp.antigravity) : undefined,
       pi: mcp.pi ? mapTarget(mcp.pi) : undefined,
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
@@ -1970,6 +1971,9 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     piExtensionPath: String(value.pi_extension_path || value.piExtensionPath || ""),
     piExtensionName: String(value.pi_extension_name || value.piExtensionName || ""),
     selfTestCommand: list("self_test_command", "selfTestCommand"),
+    unsupported: value.unsupported === true,
+    code: String(value.code || ""),
+    message: String(value.message || ""),
   };
 }
 
@@ -3274,7 +3278,9 @@ function mapGitIdentityConfig(raw: RawGitIdentityConfig): GitIdentityConfig {
 }
 
 function defaultCliPathForType(cliType: CliType) {
-  return cliType === "claude" ? "claude" : "codex";
+  if (cliType === "claude") return "claude";
+  if (cliType === "antigravity") return "agy";
+  return "codex";
 }
 
 function mapGitCommitMessageCliConfig(raw: RawGitCommitMessageCliConfig): GitCommitMessageCliConfig {

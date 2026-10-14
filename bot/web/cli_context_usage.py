@@ -456,7 +456,7 @@ def resolve_cli_context_usage(
 ) -> dict[str, Any] | None:
     provider = normalize_cli_type(str(cli_type or ""))
     normalized_session_id = str(session_id or "").strip()
-    if not normalized_session_id:
+    if not normalized_session_id or provider == "antigravity":
         return None
 
     try:

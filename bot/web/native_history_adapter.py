@@ -1006,6 +1006,69 @@ def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(event) for event in turn["trace"]]
 
 
+def _bounded_antigravity_payload(value: Any, *, limit: int = 8_000) -> Any:
+    serialized = _safe_json_dumps(value)
+    if len(serialized) <= limit:
+        return value
+    return serialized[:limit] + "…"
+
+
+def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]:
+    if str(item.get("event") or "").strip().lower() != "step_update":
+        return []
+    step = item.get("step_update") if isinstance(item.get("step_update"), dict) else item
+    step_type = str(step.get("step_type") or "").strip().lower()
+    if step_type != "tool":
+        return []
+    tool_info = step.get("tool_info")
+    if not isinstance(tool_info, dict):
+        return [
+            _trace_event(
+                "process",
+                raw_type="step_update.tool",
+                title="tool",
+                summary="Antigravity 工具事件",
+                payload=_bounded_antigravity_payload(item),
+            )
+        ]
+
+    name = _stringify_value(tool_info.get("name") or step.get("tool_name")) or "tool"
+    parameters = tool_info.get("parameters")
+    normalized_parameters = _parse_jsonish(parameters)
+    conversation_id = _stringify_value(step.get("conversation_id") or item.get("conversation_id"))
+    step_index = _stringify_value(step.get("step_index"))
+    call_id = ":".join(part for part in (conversation_id, step_index, name) if part) or name
+
+    events: list[dict[str, Any]] = []
+    if parameters is not None or not any(key in tool_info for key in ("output", "error")):
+        events.append(
+            _trace_event(
+                "tool_call",
+                raw_type="antigravity_tool",
+                title=name,
+                tool_name=name,
+                call_id=call_id,
+                summary=_summarize_tool_payload(name, normalized_parameters)[:8_000],
+                payload=_bounded_antigravity_payload({"parameters": normalized_parameters}),
+            )
+        )
+
+    output = tool_info.get("output")
+    error = tool_info.get("error")
+    if output is not None or error is not None:
+        result_value = error if error is not None else output
+        events.append(
+            _trace_event(
+                "tool_result",
+                raw_type="antigravity_tool_result",
+                call_id=call_id,
+                summary=_stringify_value(result_value)[:8_000] or "工具调用已返回",
+                payload=_bounded_antigravity_payload({"output": output, "error": error}),
+            )
+        )
+    return events
+
+
 def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     state["buffer"] = str(state.get("buffer") or "") + str(chunk or "")
@@ -1036,6 +1099,8 @@ def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any])
             candidate_events = _consume_live_codex_line(item)
         elif provider == "claude":
             candidate_events = _consume_live_claude_line(item)
+        elif provider == "antigravity":
+            candidate_events = _consume_live_antigravity_line(item)
         else:
             candidate_events = []
 

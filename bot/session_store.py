@@ -201,6 +201,7 @@ def _snapshot_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
     session_count = (
         int(bool(snapshot.get("codex_session_id")))
         + int(bool(snapshot.get("claude_session_id")))
+        + int(bool(snapshot.get("antigravity_conversation_id")))
         + int(bool(snapshot.get("native_agent_session_id")))
     )
     session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
@@ -255,6 +256,8 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         merged.pop("codex_session_id", None)
     if not merged.get("claude_session_id"):
         merged.pop("claude_session_id", None)
+    if not merged.get("antigravity_conversation_id"):
+        merged.pop("antigravity_conversation_id", None)
     merged.pop("kimi_session_id", None)
     if not merged.get("native_agent_session_id"):
         merged.pop("native_agent_session_id", None)
@@ -367,6 +370,7 @@ def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_worki
     next_data["browse_dir"] = next_data.get("browse_dir") or next_data["working_dir"]
     next_data["codex_session_id"] = None
     next_data["claude_session_id"] = None
+    next_data["antigravity_conversation_id"] = None
     next_data["native_agent_session_id"] = None
     next_data.pop("kimi_session_id", None)
     next_data.pop("native_agent_server_key", None)
@@ -400,6 +404,7 @@ def save_session(
     running_started_at: Optional[str] = None,
     running_updated_at: Optional[str] = None,
     agent_id: str = "main",
+    antigravity_conversation_id: Optional[str] = None,
 ):
     """保存会话信息到持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id, agent_id)
@@ -409,6 +414,8 @@ def save_session(
         session_data["codex_session_id"] = codex_session_id
     if claude_session_id:
         session_data["claude_session_id"] = claude_session_id
+    if antigravity_conversation_id:
+        session_data["antigravity_conversation_id"] = antigravity_conversation_id
     if native_agent_session_id:
         session_data["native_agent_session_id"] = native_agent_session_id
     if isinstance(working_dir, str) and working_dir:

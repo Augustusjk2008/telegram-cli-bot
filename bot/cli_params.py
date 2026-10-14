@@ -105,11 +105,22 @@ DEFAULT_CODEX_PARAMS = {
     "extra_args": [],                # 额外参数列表
 }
 
+DEFAULT_ANTIGRAVITY_PARAMS = {
+    "model": None,
+    "effort": "low",
+    "agent": None,
+    "sandbox": False,
+    "yolo": False,
+    "print_timeout": 0,
+    "extra_args": [],
+}
+
 # CLI 类型到默认参数的映射
 DEFAULT_PARAMS_MAP = {
     "claude": DEFAULT_CLAUDE_PARAMS,
     "codex": DEFAULT_CODEX_PARAMS,
     "codex_server": DEFAULT_CODEX_PARAMS,
+    "antigravity": DEFAULT_ANTIGRAVITY_PARAMS,
 }
 
 # 支持的 CLI 类型
@@ -141,6 +152,23 @@ PARAM_SCHEMA_MAP = {
         "model": {"type": "string", "description": "模型选择", "nullable": True},
         "extra_args": {"type": "string_list", "description": "额外参数"},
     },
+    "antigravity": {
+        "model": {"type": "string", "description": "模型选择", "nullable": True},
+        "effort": {
+            "type": "string",
+            "description": "推理努力程度",
+            "enum": ["low", "medium", "high"],
+        },
+        "agent": {"type": "string", "description": "Agent", "nullable": True},
+        "sandbox": {"type": "boolean", "description": "启用终端沙箱"},
+        "yolo": {"type": "boolean", "description": "跳过权限确认"},
+        "print_timeout": {
+            "type": "number",
+            "description": "打印模式超时时间（秒）",
+            "integer": True,
+        },
+        "extra_args": {"type": "string_list", "description": "额外参数"},
+    },
 }
 
 
@@ -151,6 +179,7 @@ class CliParamsConfig:
     claude: Dict[str, Any] = field(default_factory=lambda: get_default_params("claude"))
     codex: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex"))
     codex_server: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex_server"))
+    antigravity: Dict[str, Any] = field(default_factory=lambda: get_default_params("antigravity"))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
@@ -158,6 +187,7 @@ class CliParamsConfig:
             "claude": copy.deepcopy(self.claude),
             "codex": copy.deepcopy(self.codex),
             "codex_server": copy.deepcopy(self.codex_server),
+            "antigravity": copy.deepcopy(self.antigravity),
         }
     
     @classmethod
@@ -201,6 +231,7 @@ class CliParamsConfig:
             self.claude = get_default_params("claude")
             self.codex = get_default_params("codex")
             self.codex_server = get_default_params("codex_server")
+            self.antigravity = get_default_params("antigravity")
         else:
             cli_type = cli_type.lower().strip()
             if cli_type not in SUPPORTED_CLI_TYPES:
@@ -217,6 +248,8 @@ def get_default_params(cli_type: str) -> Dict[str, Any]:
     if cli_type not in SUPPORTED_CLI_TYPES:
         raise ValueError(f"不支持的 CLI 类型: {cli_type}")
     params = copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type])
+    if cli_type == "antigravity":
+        return params
     model = normalize_cli_model_options(CLI_MODEL_OPTIONS)[0]
     params["model"] = None if model.lower() == MODEL_OPTION_NONE else model
     return params
@@ -290,9 +323,11 @@ def _filter_unsafe_extra_args(cli_type: str, extra_args: Any) -> list[str]:
     deny_single = {
         "claude": {"--dangerously-skip-permissions"},
         "codex": {"--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto"},
+        "antigravity": {"--dangerously-skip-permissions"},
     }.get(cli_type, set())
     deny_value_flags = {
         "claude": {"--permission-mode"},
+        "antigravity": {"--mode"},
         "codex": {
             "-a", "--ask-for-approval", "--approval-policy", "-s", "--sandbox", "--add-dir",
             "-c", "--config",  # All config overrides require permission, regardless of key.
@@ -376,6 +411,8 @@ def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
             coerced = int(value) if field.get("integer") else float(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"参数 {key} 需要数字") from exc
+        if cli_type == "antigravity" and key == "print_timeout" and coerced < 0:
+            raise ValueError("打印模式超时时间必须大于或等于 0")
     elif field_type == "string_list":
         if value is None:
             coerced = []
@@ -449,7 +486,65 @@ def build_cli_args_from_config(
     if cli_type == "codex":
         return _build_codex_args(resolved_cli, params, user_text, is_cli_subcommand, session_id, working_dir)
 
+    if cli_type == "antigravity":
+        return _build_antigravity_args(resolved_cli, params, user_text, session_id)
+
     raise ValueError(f"不支持的 CLI 类型: {cli_type}")
+
+
+def _build_antigravity_args(
+    resolved_cli: str,
+    params: Dict[str, Any],
+    user_text: str,
+    session_id: Optional[str],
+) -> Tuple[List[str], bool]:
+    """构建 Antigravity print/stream-json 命令。"""
+    cli_invocation = build_executable_invocation(resolved_cli)
+    cmd = [*cli_invocation, "-p", user_text, "--output-format", "stream-json"]
+
+    if params.get("model"):
+        cmd.extend(["--model", str(params["model"])])
+    if params.get("effort"):
+        cmd.extend(["--effort", str(params["effort"])])
+    if params.get("agent"):
+        cmd.extend(["--agent", str(params["agent"])])
+    if params.get("sandbox"):
+        cmd.append("--sandbox")
+    if params.get("yolo"):
+        cmd.append("--dangerously-skip-permissions")
+    if params.get("print_timeout") is not None:
+        cmd.extend(["--print-timeout", str(params["print_timeout"])])
+    if session_id:
+        cmd.extend(["--conversation", session_id])
+    cmd.extend(_filter_antigravity_extra_args(params.get("extra_args") or []))
+    return cmd, False
+
+
+def _filter_antigravity_extra_args(extra_args: Sequence[Any]) -> List[str]:
+    """Keep the host prompt, stream format and conversation binding authoritative."""
+    reserved_value_flags = {
+        "-p", "--print", "--prompt", "-i", "--prompt-interactive",
+        "--output-format", "--input-format", "--conversation",
+    }
+    reserved_single_flags = {"-c", "--continue", "--remote-control"}
+    filtered: List[str] = []
+    skip_next = False
+    for item in extra_args:
+        arg = str(item).strip()
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--":
+            break
+        flag, has_equals, _ = arg.partition("=")
+        if flag in reserved_single_flags:
+            continue
+        if flag in reserved_value_flags:
+            skip_next = not has_equals
+            continue
+        if arg:
+            filtered.append(arg)
+    return filtered
 
 
 def _build_claude_args(
@@ -661,6 +756,35 @@ def get_params_help(cli_type: str) -> str:
 <code>extra_args</code> - 额外参数 (字符串列表)
   默认: []
   示例: ["--timeout", "120"]
+""",
+        "antigravity": """
+<b>Antigravity CLI 可配置参数:</b>
+
+<code>model</code> - 模型选择 (字符串)
+  默认: None
+  对应参数: --model
+
+<code>effort</code> - 推理努力程度 (字符串)
+  默认: "low"
+  对应参数: --effort
+  可选值: "low", "medium", "high"
+
+<code>agent</code> - Agent (字符串)
+  对应参数: --agent
+
+<code>sandbox</code> - 启用终端沙箱 (布尔值)
+  对应参数: --sandbox
+
+<code>yolo</code> - 跳过权限确认 (布尔值)
+  默认: False
+  对应参数: --dangerously-skip-permissions
+
+<code>print_timeout</code> - 打印模式超时时间（秒）
+  默认: 0
+  对应参数: --print-timeout
+
+<code>extra_args</code> - 额外参数 (字符串列表)
+  默认: []
 """,
     }
 

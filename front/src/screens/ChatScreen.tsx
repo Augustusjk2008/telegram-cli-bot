@@ -4959,7 +4959,9 @@ export function ChatScreen({
   const selectedModel = nativeExecutionMode
     ? nativeSelectedModel
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
-  const cliReasoningParamKey = cliParams?.cliType === "claude" ? "effort" : "reasoning_effort";
+  const cliReasoningParamKey = cliParams?.cliType === "claude" || cliParams?.cliType === "antigravity"
+    ? "effort"
+    : "reasoning_effort";
   const cliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
   const cliSelectedReasoningEffort = String(
     cliParams?.params[cliReasoningParamKey]

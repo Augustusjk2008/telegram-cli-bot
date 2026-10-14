@@ -1834,6 +1834,8 @@ async def _generate_git_commit_message_from_context(
     profile = get_profile_or_raise(manager, alias)
     cli_config = manager.get_git_commit_cli_config(alias)
     cli_type = str(cli_config.cli_type or "").strip().lower()
+    if cli_type == "antigravity":
+        _raise(400, "git_commit_unsupported_cli", "Antigravity CLI 暂不支持生成 Git commit message")
     cli_path = str(cli_config.cli_path or "").strip()
     resolved_cli = resolve_cli_executable(cli_path, repo_root)
     if not resolved_cli:

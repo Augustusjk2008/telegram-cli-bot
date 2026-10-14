@@ -70,7 +70,7 @@ class TestManagerLoadSave:
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("cli_type", ["codex", "claude"])
+    @pytest.mark.parametrize("cli_type", ["codex", "claude", "antigravity"])
     async def test_add_bot_defaults_without_persisting_cli_params(self, temp_dir: Path, monkeypatch, cli_type):
         monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", ["first-model", "second-model", "none"])
         storage = temp_dir / "bots.json"
@@ -87,11 +87,12 @@ class TestManagerLoadSave:
 
         data = json.loads(storage.read_text(encoding="utf-8"))
         assert profile.cli_params.get_param(cli_type, "yolo") is False
-        assert profile.cli_params.get_param(cli_type, "model") == "first-model"
+        expected_model = None if cli_type == "antigravity" else "first-model"
+        assert profile.cli_params.get_param(cli_type, "model") == expected_model
         assert "cli_params" not in data["bots"][0]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("cli_type", ["codex", "claude"])
+    @pytest.mark.parametrize("cli_type", ["codex", "claude", "antigravity"])
     async def test_add_bot_persists_bypass_approval_and_sandbox_yolo(self, temp_dir: Path, cli_type: str):
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
@@ -114,6 +115,18 @@ class TestManagerLoadSave:
 
 class TestManagerValidation:
     """测试验证逻辑"""
+
+    @pytest.mark.asyncio
+    async def test_antigravity_uses_agy_default_path(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main"), str(storage))
+
+        with patch("bot.manager.resolve_cli_executable", return_value="agy"):
+            profile = await manager.add_bot("agybot", "antigravity", None, str(temp_dir))
+
+        assert profile.cli_path == "agy"
+        assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["cli_path"] == "agy"
 
     @pytest.mark.asyncio
     async def test_main_bot_workdir_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):

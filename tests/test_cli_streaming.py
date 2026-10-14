@@ -835,6 +835,75 @@ async def test_stream_cli_chat_persists_terminal_estimated_cost_once_per_turn(
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = usage_manager.main_profile
+    profile.cli_type = "antigravity"
+    profile.cli_path = "agy"
+    profile.cli_params.set_param("antigravity", "model", "gemini-3.8-flash-medium")
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        '{"event":"init","conversation_id":"agy-stream-session","init":{}}\n',
+        '{"event":"step_update","step_update":{"conversation_id":"agy-stream-session","step_type":"agent_response","text_delta":"OK"}}\n',
+        '{"event":"result","result":{"conversation_id":"agy-stream-session","status":"SUCCESS","response":"OK","usage":{"input_tokens":11,"output_tokens":2,"thinking_tokens":3,"cache_read_tokens":4,"total_tokens":20}}}\n',
+    ])
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "agy")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["agy"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: pytest.fail("Antigravity must not query private transcripts"))
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
+    done = next(event for event in events if event["type"] == "done")
+    statuses = [event for event in events if event["type"] == "status"]
+
+    assert done["output"] == "OK"
+    assert done["returncode"] == 0
+    assert done["message"]["meta"]["context_usage"] == {
+        "provider": "antigravity",
+        "source": "antigravity_stream_json",
+        "session_id": "agy-stream-session",
+        "model": "gemini-3.8-flash-medium",
+        "input_tokens": 11,
+        "output_tokens": 2,
+        "thinking_tokens": 3,
+        "cache_read_tokens": 4,
+        "total_tokens": 20,
+    }
+    assert any(event.get("preview_text") == "OK" for event in statuses)
+    assert done["session"]["session_ids"]["antigravity_conversation_id"] == "agy-stream-session"
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_treats_antigravity_soft_denial_as_error(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = usage_manager.main_profile
+    profile.cli_type = "antigravity"
+    profile.cli_path = "agy"
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        '{"event":"init","conversation_id":"agy-denied-session","init":{}}\n',
+        '{"event":"result","result":{"conversation_id":"agy-denied-session","status":"SUCCESS","response":"","denied_actions":[{"action":"command","display_name":"RunCommand"}]}}\n',
+    ])
+    process.stderr = _StreamingStdout(["permission denied: RunCommand\n"])
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "agy")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["agy"], False))
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "run a command")]
+    done = next(event for event in events if event["type"] == "done")
+
+    assert done["returncode"] == 0
+    assert done["message"]["state"] == "error"
+    assert done["message"]["meta"]["completion_state"] == "error"
+    assert "RunCommand" in done["output"]
+    assert "permission denied" in done["output"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cli_type", ["codex", "claude"])
 @pytest.mark.parametrize("exit_kind", ["error", "cancelled", "reader_error"])
 async def test_stream_cli_chat_preserves_partial_cost_on_abnormal_exit(

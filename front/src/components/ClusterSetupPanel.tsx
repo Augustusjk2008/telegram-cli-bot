@@ -17,6 +17,7 @@ const CLI_LABELS: Record<string, string> = {
   claude: "Claude",
   codex: "Codex",
   codex_server: "codex server",
+  antigravity: "Antigravity CLI",
   pi: "Pi",
 };
 
@@ -29,12 +30,16 @@ function targetStatus(status: ClusterStatus) {
     ? "pi"
     : status.mcp.activeCliType === "claude"
       ? "claude"
-      : status.mcp.activeCliType === "codex_server" ? "codex_server" : "codex";
+      : status.mcp.activeCliType === "antigravity"
+        ? "antigravity"
+        : status.mcp.activeCliType === "codex_server" ? "codex_server" : "codex";
   const activeStatus = activeCliType === "pi"
     ? status.mcp.pi
     : activeCliType === "claude"
       ? status.mcp.claude
-      : status.mcp.codex;
+      : activeCliType === "antigravity"
+        ? status.mcp.antigravity
+        : status.mcp.codex;
   return { activeCliType, activeStatus };
 }
 
@@ -117,6 +122,11 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
       ) : null}
       {prepare ? (
         <div className="mt-4 space-y-3">
+          {prepare.unsupported ? (
+            <div className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--status-warning)]">
+              {prepare.message || "当前 CLI 暂不支持集群 MCP"}
+            </div>
+          ) : null}
           {prepare.installCommand.length > 0 ? <div>
             <div className="text-sm font-medium text-[var(--text)]">安装命令</div>
             <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.installCommand)}</pre>

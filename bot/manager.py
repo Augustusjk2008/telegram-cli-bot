@@ -216,7 +216,11 @@ class MultiBotManager:
             return env_cli_path
 
         profiles = [self.main_profile, *[self.managed_profiles[alias] for alias in sorted(self.managed_profiles.keys())]]
-        default_cli_path = "codex" if normalized_cli_type == "codex_server" else normalized_cli_type
+        default_cli_path = (
+            "codex" if normalized_cli_type == "codex_server"
+            else "agy" if normalized_cli_type == "antigravity"
+            else normalized_cli_type
+        )
         for profile in profiles:
             profile_cli_path = str(profile.cli_path or "").strip()
             if profile.cli_type == normalized_cli_type and profile_cli_path and profile_cli_path != default_cli_path:
@@ -243,9 +247,11 @@ class MultiBotManager:
         if self._git_commit_cli_config is not None:
             return GitCommitMessageCliConfig.from_dict(self._git_commit_cli_config.to_dict())
         profile = self.main_profile
+        cli_type = profile.cli_type if profile.cli_type != "antigravity" else "codex"
+        cli_path = profile.cli_path if profile.cli_type != "antigravity" else "codex"
         return GitCommitMessageCliConfig(
-            cli_type=profile.cli_type,
-            cli_path=profile.cli_path,
+            cli_type=cli_type,
+            cli_path=cli_path,
             cli_params=CliParamsConfig.from_dict(profile.cli_params.to_dict()),
         )
 
@@ -718,8 +724,11 @@ class MultiBotManager:
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
             current = self.get_git_commit_cli_config(normalized_alias)
+            resolved_cli_type = validate_cli_type(cli_type or current.cli_type or profile.cli_type)
+            if resolved_cli_type == "antigravity":
+                raise ValueError("Git commit CLI 不支持 Antigravity CLI")
             next_config = GitCommitMessageCliConfig(
-                cli_type=validate_cli_type(cli_type or current.cli_type or profile.cli_type),
+                cli_type=resolved_cli_type,
                 cli_path=str(cli_path if cli_path is not None else current.cli_path or profile.cli_path).strip(),
                 cli_params=cli_params or current.cli_params,
             )

@@ -926,6 +926,7 @@ class ChatHistoryService:
             "session_ids": {
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
+                "antigravity_conversation_id": session.antigravity_conversation_id,
                 "native_agent_session_id": session.native_agent_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },

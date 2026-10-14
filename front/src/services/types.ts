@@ -1,4 +1,4 @@
-export type CliType = "claude" | "codex" | "codex_server";
+export type CliType = "claude" | "codex" | "codex_server" | "antigravity";
 export type ChatExecutionMode = "cli" | "native_agent";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
@@ -637,7 +637,8 @@ export type ClusterMcpState =
   | "installed"
   | "stale"
   | "broken"
-  | "app_not_running";
+  | "app_not_running"
+  | "unsupported";
 
 export type ClusterMcpTargetStatus = {
   state: ClusterMcpState;
@@ -664,6 +665,7 @@ export type ClusterStatus = {
     runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
+    antigravity?: ClusterMcpTargetStatus;
     pi?: ClusterMcpTargetStatus;
   };
   agents: ClusterAgentStatus[];
@@ -771,6 +773,9 @@ export type ClusterSetupPrepareResult = {
   piExtensionPath?: string;
   piExtensionName?: string;
   selfTestCommand?: string[];
+  unsupported?: boolean;
+  code?: string;
+  message?: string;
 };
 
 export type ClusterConfigUpdateInput = {

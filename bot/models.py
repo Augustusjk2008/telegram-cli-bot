@@ -430,6 +430,8 @@ class GitCommitMessageCliConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GitCommitMessageCliConfig":
         cli_type = normalize_cli_type_config(data.get("cli_type", CLI_TYPE))
+        if cli_type == "antigravity":
+            cli_type = "codex"
         return cls(
             cli_type=cli_type,
             cli_path=str(data.get("cli_path") or default_cli_path(cli_type)),
@@ -628,6 +630,7 @@ class UserSession:
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
     claude_session_id: Optional[str] = None
+    antigravity_conversation_id: Optional[str] = None
     native_agent_session_id: Optional[str] = None
     native_agent_run_id: Optional[str] = None
     native_agent_server_key: Optional[str] = None
@@ -792,6 +795,7 @@ class UserSession:
         with self._lock:
             self.codex_session_id = None
             self.claude_session_id = None
+            self.antigravity_conversation_id = None
             self.native_agent_session_id = None
             self.native_agent_run_id = None
             self.native_agent_server_key = None

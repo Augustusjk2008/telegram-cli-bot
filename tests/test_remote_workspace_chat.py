@@ -89,6 +89,13 @@ def test_instructions_and_cli_config_keep_secrets_out_of_prompt(remote_profile):
     assert prepared.cli_args("codex_server") == prepared.cli_args("codex")
 
 
+def test_remote_chat_rejects_antigravity(remote_profile):
+    prepared = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
+
+    with pytest.raises(ValueError, match="Antigravity"):
+        prepared.cli_args("antigravity")
+
+
 @pytest.mark.parametrize("tool,args", [
     ("exec", {"commands": []}), ("exec", {"commands": ["pwd"] * 17}),
     ("exec", {"commands": ["pwd"], "timeout_seconds": 301}),

@@ -297,10 +297,37 @@ const DEFAULT_AGENT_CLUSTER = {
 };
 
 function defaultCliPathForType(cliType: string) {
-  return cliType === "claude" ? "claude" : "codex";
+  if (cliType === "claude") return "claude";
+  if (cliType === "antigravity") return "agy";
+  return "codex";
 }
 
 function buildMockCliParams(cliType: string): CliParamsPayload {
+  if (cliType === "antigravity") {
+    const params = {
+      model: "none",
+      effort: "low",
+      agent: "",
+      sandbox: false,
+      yolo: false,
+      print_timeout: 0,
+      extra_args: [],
+    };
+    return {
+      cliType: "antigravity",
+      params,
+      defaults: { ...params, extra_args: [] },
+      schema: {
+        model: { type: "string", description: "模型 slug", nullable: true },
+        effort: { type: "string", description: "推理努力程度", enum: ["low", "medium", "high"] },
+        agent: { type: "string", description: "Agent", nullable: true },
+        sandbox: { type: "boolean", description: "启用终端沙箱" },
+        yolo: { type: "boolean", description: "跳过权限确认" },
+        print_timeout: { type: "number", description: "打印模式超时时间（秒）", integer: true },
+        extra_args: { type: "string_list", description: "额外参数" },
+      },
+    };
+  }
   return {
     cliType: cliType === "claude" || cliType === "codex_server" ? cliType : "codex",
     params: {
@@ -417,6 +444,7 @@ function createMockEnvItems(): EnvConfigItem[] {
         { value: "codex", label: "codex" },
         { value: "codex_server", label: "codex server" },
         { value: "claude", label: "claude" },
+        { value: "antigravity", label: "Antigravity CLI" },
       ],
     },
     {
@@ -3752,6 +3780,7 @@ export class MockWebBotClient implements WebBotClient {
         runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: isCodexCli(activeCliType) ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        antigravity: activeCliType === "antigravity" ? { state: "unsupported", message: "Antigravity CLI 暂不支持集群 MCP" } : { state: "not_checked", message: "未使用" },
         pi: activeCliType === "pi" ? { state: "installed", message: "Pi 集群扩展已配置" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
@@ -3794,6 +3823,20 @@ export class MockWebBotClient implements WebBotClient {
       && bot.supportedExecutionModes.length === 1
       && bot.supportedExecutionModes[0] === "native_agent"
     ) ? "pi" : bot.cliType;
+    if (activeCliType === "antigravity") {
+      return {
+        serverName: "tcb-cluster",
+        launcherPath: "",
+        configPath: "",
+        tokenPath: "",
+        installCommand: [],
+        verifyCommand: [],
+        removeCommand: [],
+        unsupported: true,
+        code: "cluster_unsupported_cli",
+        message: "Antigravity CLI 暂不支持集群 MCP",
+      };
+    }
     if (activeCliType === "pi") {
       return {
         serverName: "tcb-cluster",

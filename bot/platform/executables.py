@@ -70,6 +70,13 @@ def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> 
                 if found:
                     return found
 
+        if path.lower() == "agy":
+            local_app_data = os.getenv("LOCALAPPDATA")
+            if local_app_data:
+                found = _existing_file(os.path.join(local_app_data, "agy", "bin", "agy.exe"))
+                if found:
+                    return found
+
     return None
 
 

@@ -1,0 +1,4 @@
+{"event":"init","conversation_id":"agy-conv-tool","init":{"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conv-tool","step_index":4,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"echo hello"},"output":"hello\r\n"}}}
+{"event":"step_update","step_update":{"conversation_id":"agy-conv-tool","step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"完成"}}
+{"event":"result","result":{"conversation_id":"agy-conv-tool","status":"SUCCESS","response":"完成\n","usage":{"input_tokens":20,"output_tokens":3,"thinking_tokens":1,"cache_read_tokens":0,"total_tokens":24}}}

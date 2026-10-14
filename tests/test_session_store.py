@@ -71,6 +71,20 @@ class TestSaveAndLoadSession:
         assert data is not None
         assert data["native_agent_session_id"] == "native-session-1"
 
+    def test_save_and_load_antigravity_conversation_id(self, temp_dir: Path):
+        store_file = temp_dir / ".session_store.json"
+
+        with patch("bot.session_store.STORE_FILE", store_file):
+            save_session(
+                bot_id=1,
+                user_id=100,
+                antigravity_conversation_id="agy-conversation-1",
+            )
+            data = load_session(1, 100)
+
+        assert data is not None
+        assert data["antigravity_conversation_id"] == "agy-conversation-1"
+
 
 class TestRemoveAllSessionsForBot:
     """测试删除指定bot的所有会话"""
