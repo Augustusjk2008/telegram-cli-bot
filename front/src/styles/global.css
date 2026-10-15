@@ -66,6 +66,172 @@ html {
   color: var(--text);
 }
 
+.desktop-bot-switcher-popover {
+  isolation: isolate;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(
+      132deg,
+      color-mix(in srgb, var(--accent) 54%, transparent),
+      color-mix(in srgb, var(--border-strong) 76%, transparent) 38%,
+      color-mix(in srgb, var(--accent-strong) 38%, transparent) 72%,
+      color-mix(in srgb, var(--border) 88%, transparent)
+    ) border-box;
+  box-shadow:
+    var(--shadow-elevated),
+    0 0 0 1px color-mix(in srgb, var(--accent) 9%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.desktop-bot-switcher-toolbar {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-strong) 68%, var(--surface)),
+    var(--surface)
+  );
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.desktop-bot-switcher-content {
+  min-height: 0;
+}
+
+.desktop-bot-switcher-list {
+  position: relative;
+  border-right: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
+  background:
+    radial-gradient(
+      ellipse 90% 55% at 0% 0%,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      transparent 70%
+    ),
+    var(--surface);
+}
+
+.desktop-bot-switcher-list::after {
+  position: absolute;
+  top: 0;
+  right: -1px;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 38%, transparent),
+    color-mix(in srgb, var(--border-strong) 56%, transparent) 30%,
+    color-mix(in srgb, var(--accent-strong) 24%, transparent) 70%,
+    transparent
+  );
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 18%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.desktop-bot-switcher-detail {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-strong) 90%, var(--accent) 10%),
+    var(--surface-strong)
+  );
+}
+
+.desktop-bot-switcher-item {
+  --bot-status-color: var(--status-info);
+  position: relative;
+  isolation: isolate;
+  border-color: color-mix(in srgb, var(--border-strong) 52%, transparent);
+  background: linear-gradient(
+    112deg,
+    color-mix(in srgb, var(--surface-strong) 88%, var(--surface)),
+    color-mix(in srgb, var(--surface) 95%, transparent)
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent),
+    0 1px 0 color-mix(in srgb, var(--bg) 34%, transparent);
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.desktop-bot-switcher-item::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 999px 999px 0;
+  background: var(--bot-status-color);
+  box-shadow: 0 0 11px color-mix(in srgb, var(--bot-status-color) 62%, transparent);
+  content: "";
+  opacity: 0.74;
+  pointer-events: none;
+}
+
+.desktop-bot-switcher-item::after {
+  position: absolute;
+  inset: 1px;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: inherit;
+  content: "";
+  opacity: 0.54;
+  pointer-events: none;
+}
+
+.desktop-bot-switcher-item[data-bot-status="running"] {
+  --bot-status-color: var(--status-success);
+}
+
+.desktop-bot-switcher-item[data-bot-status="busy"] {
+  --bot-status-color: var(--status-warning);
+}
+
+.desktop-bot-switcher-item[data-bot-status="unread"] {
+  --bot-status-color: var(--status-info);
+}
+
+.desktop-bot-switcher-item[data-bot-status="offline"] {
+  --bot-status-color: var(--status-danger);
+}
+
+.desktop-bot-switcher-item[data-no-access="true"] {
+  --bot-status-color: var(--muted);
+}
+
+.desktop-bot-switcher-item[data-current="true"]:not([data-no-access="true"]) {
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border)) !important;
+  background: linear-gradient(
+    112deg,
+    color-mix(in srgb, var(--accent) 17%, var(--surface-strong)),
+    color-mix(in srgb, var(--accent-strong) 7%, var(--surface))
+  ) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 10px 24px color-mix(in srgb, var(--accent) 9%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.desktop-bot-switcher-item[data-current="true"]::before {
+  width: 3px;
+  opacity: 1;
+}
+
+.desktop-bot-switcher-item[data-focused="true"]:not([data-current="true"]):not([data-no-access="true"]),
+.desktop-bot-switcher-item:not(:disabled):hover:not([data-current="true"]):not([data-no-access="true"]),
+.desktop-bot-switcher-item:not(:disabled):focus-visible:not([data-current="true"]):not([data-no-access="true"]) {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+  background: linear-gradient(
+    112deg,
+    color-mix(in srgb, var(--accent) 9%, var(--surface-strong)),
+    color-mix(in srgb, var(--surface) 97%, transparent)
+  );
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text) 9%, transparent),
+    0 4px 12px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
 .tcb-solid-danger {
   background: var(--danger);
   color: var(--danger-foreground);
