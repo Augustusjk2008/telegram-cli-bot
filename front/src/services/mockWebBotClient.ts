@@ -318,8 +318,21 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
       params,
       defaults: { ...params, extra_args: [] },
       schema: {
-        model: { type: "string", description: "模型 slug", nullable: true },
-        effort: { type: "string", description: "推理努力程度", enum: ["low", "medium", "high"] },
+        model: {
+          type: "string",
+          description: "模型 slug",
+          nullable: true,
+          enum: [
+            "gemini-3.8-flash-high",
+            "gemini-3.8-flash-medium",
+            "gemini-3.8-flash-low",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6-thinking",
+            "gpt-oss-120b-medium",
+            "none",
+          ],
+        },
+        effort: { type: "string", description: "推理努力程度", enum: ["low", "medium", "high", "xhigh", "max"] },
         agent: { type: "string", description: "Agent", nullable: true },
         sandbox: { type: "boolean", description: "启用终端沙箱" },
         yolo: { type: "boolean", description: "跳过权限确认" },

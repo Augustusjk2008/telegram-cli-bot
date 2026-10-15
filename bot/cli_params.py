@@ -7,6 +7,7 @@ import copy
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Tuple
@@ -115,6 +116,8 @@ DEFAULT_ANTIGRAVITY_PARAMS = {
     "extra_args": [],
 }
 
+ANTIGRAVITY_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"]
+
 # CLI 类型到默认参数的映射
 DEFAULT_PARAMS_MAP = {
     "claude": DEFAULT_CLAUDE_PARAMS,
@@ -157,7 +160,7 @@ PARAM_SCHEMA_MAP = {
         "effort": {
             "type": "string",
             "description": "推理努力程度",
-            "enum": ["low", "medium", "high"],
+            "enum": ANTIGRAVITY_EFFORT_OPTIONS,
         },
         "agent": {"type": "string", "description": "Agent", "nullable": True},
         "sandbox": {"type": "boolean", "description": "启用终端沙箱"},
@@ -502,10 +505,14 @@ def _build_antigravity_args(
     cli_invocation = build_executable_invocation(resolved_cli)
     cmd = [*cli_invocation, "-p", user_text, "--output-format", "stream-json"]
 
-    if params.get("model"):
-        cmd.extend(["--model", str(params["model"])])
-    if params.get("effort"):
-        cmd.extend(["--effort", str(params["effort"])])
+    model = str(params.get("model") or "").strip()
+    configured_effort = str(params.get("effort") or "").strip().lower()
+    if model:
+        cmd.extend(["--model", model])
+    model_effort = _infer_antigravity_model_effort(model)
+    effective_effort = model_effort if model else configured_effort
+    if effective_effort:
+        cmd.extend(["--effort", effective_effort])
     if params.get("agent"):
         cmd.extend(["--agent", str(params["agent"])])
     if params.get("sandbox"):
@@ -513,11 +520,36 @@ def _build_antigravity_args(
     if params.get("yolo"):
         cmd.append("--dangerously-skip-permissions")
     if params.get("print_timeout") is not None:
-        cmd.extend(["--print-timeout", str(params["print_timeout"])])
+        cmd.extend(["--print-timeout", _format_antigravity_print_timeout(params["print_timeout"])])
     if session_id:
         cmd.extend(["--conversation", session_id])
     cmd.extend(_filter_antigravity_extra_args(params.get("extra_args") or []))
     return cmd, False
+
+
+def _infer_antigravity_model_effort(model: Any) -> Optional[str]:
+    value = str(model or "").strip().lower()
+    if not value:
+        return None
+    match = re.search(r"-(xhigh|max|high|medium|low)$", value)
+    return match.group(1) if match else None
+
+
+def _format_antigravity_print_timeout(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "0"
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        try:
+            numeric = float(text)
+        except ValueError:
+            return text
+        if numeric == 0:
+            return "0"
+        if numeric.is_integer():
+            return f"{int(numeric)}s"
+        return f"{numeric}s"
+    return text
 
 
 def _filter_antigravity_extra_args(extra_args: Sequence[Any]) -> List[str]:
@@ -767,7 +799,7 @@ def get_params_help(cli_type: str) -> str:
 <code>effort</code> - 推理努力程度 (字符串)
   默认: "low"
   对应参数: --effort
-  可选值: "low", "medium", "high"
+  可选值: "low", "medium", "high", "xhigh", "max"
 
 <code>agent</code> - Agent (字符串)
   对应参数: --agent

@@ -476,6 +476,12 @@ function toModelOptionValue(value: unknown, options: string[]) {
   return options.includes(MODEL_OPTION_NONE) ? MODEL_OPTION_NONE : "";
 }
 
+function inferAntigravityModelEffort(model: string, options: string[]) {
+  const match = String(model || "").trim().toLowerCase().match(/-(xhigh|max|high|medium|low)$/);
+  const effort = match?.[1] || "";
+  return options.includes(effort) ? effort : "";
+}
+
 function modelLimitTitle(contextWindow?: number, outputLimit?: number) {
   return [
     typeof contextWindow === "number" ? `context ${contextWindow.toLocaleString()}` : "",
@@ -4691,7 +4697,14 @@ export function ChatScreen({
           setBotOverview(overview);
         }
       } else if (cliParams) {
-        const next = await client.updateCliParam(botAlias, "model", nextModel, cliParams.cliType);
+        let next = await client.updateCliParam(botAlias, "model", nextModel, cliParams.cliType);
+        if (cliParams.cliType === "antigravity") {
+          const effortOptions = next.schema.effort?.enum || [];
+          const inferredEffort = inferAntigravityModelEffort(nextModel, effortOptions);
+          if (inferredEffort && String(next.params.effort || "") !== inferredEffort) {
+            next = await client.updateCliParam(botAlias, "effort", inferredEffort, next.cliType);
+          }
+        }
         setCliParams(next);
       }
     } catch (err) {
@@ -4969,9 +4982,16 @@ export function ChatScreen({
       ?? cliReasoningEffortOptions[0]
       ?? "",
   );
+  const antigravityExplicitModel = !nativeExecutionMode
+    && cliParams?.cliType === "antigravity"
+    && selectedModel
+    && selectedModel !== MODEL_OPTION_NONE;
+  const visibleCliReasoningEffortOptions = antigravityExplicitModel
+    ? []
+    : cliReasoningEffortOptions;
   const visibleReasoningEffortOptions = nativeExecutionMode
     ? nativeReasoningEffortOptions
-    : cliReasoningEffortOptions;
+    : visibleCliReasoningEffortOptions;
   const selectedReasoningEffort = nativeExecutionMode
     ? nativeSelectedReasoningEffort
     : cliSelectedReasoningEffort;
@@ -5012,7 +5032,10 @@ export function ChatScreen({
       }
       return options;
     }
-    const options = cliModelOptions.map((model) => ({ value: model, label: model }));
+    const options = cliModelOptions.map((model) => ({
+      value: model,
+      label: model === MODEL_OPTION_NONE ? "默认" : model,
+    }));
     if (selectedModel && !cliModelOptions.includes(selectedModel)) {
       return [{ value: selectedModel, label: selectedModel }, ...options];
     }

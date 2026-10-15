@@ -3595,7 +3595,8 @@ class WebApiServer:
         await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
-        return _json({"ok": True, "data": get_cli_params_payload(self.manager, alias, cli_type)})
+        data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type)
+        return _json({"ok": True, "data": data})
 
     async def get_native_agent_models(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_VIEW_BOTS)

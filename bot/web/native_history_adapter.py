@@ -1018,6 +1018,53 @@ def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]
         return []
     step = item.get("step_update") if isinstance(item.get("step_update"), dict) else item
     step_type = str(step.get("step_type") or "").strip().lower()
+    step_state = str(step.get("state") or "").strip().upper()
+    step_index = _stringify_value(step.get("step_index"))
+    if step_type == "agent_response":
+        text_delta = step.get("text_delta")
+        if not isinstance(text_delta, str):
+            text_delta = step.get("text")
+        if isinstance(text_delta, str):
+            if not text_delta.strip():
+                return []
+            return [
+                _trace_event(
+                    "commentary",
+                    raw_type="antigravity_agent_response",
+                    title="assistant",
+                    summary=text_delta.strip(),
+                    payload=_bounded_antigravity_payload({
+                        "step_index": step_index,
+                        "state": step_state,
+                        "text_delta": text_delta,
+                    }),
+                )
+            ]
+        if step_state == "ACTIVE":
+            summary = "Antigravity 正在生成回复"
+        elif step_state == "DONE":
+            summary = "Antigravity 已完成一个回复步骤"
+        else:
+            summary = "Antigravity 回复步骤"
+        return [
+            _trace_event(
+                "process",
+                raw_type="antigravity_agent_response",
+                title="assistant",
+                summary=summary,
+                payload=_bounded_antigravity_payload(item),
+            )
+        ]
+    if step_type == "checkpoint":
+        return [
+            _trace_event(
+                "process",
+                raw_type="antigravity_checkpoint",
+                title="checkpoint",
+                summary="Antigravity 已保存当前检查点",
+                payload=_bounded_antigravity_payload(item),
+            )
+        ]
     if step_type != "tool":
         return []
     tool_info = step.get("tool_info")

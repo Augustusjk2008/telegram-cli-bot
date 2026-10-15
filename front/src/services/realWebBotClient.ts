@@ -1539,6 +1539,7 @@ type StreamEventPayload =
       type: "status";
       elapsed_seconds?: number;
       preview_text?: string;
+      replace_text?: string;
       context_usage?: RawChatMessageContextUsage | null;
       phase?: string;
       message?: string;
@@ -5553,6 +5554,7 @@ export class RealWebBotClient implements WebBotClient {
             ...mapUserTranslationUpdate(event),
             elapsedSeconds: event.elapsed_seconds,
             previewText: event.preview_text,
+            replaceText: event.replace_text,
             ...(turnId ? { turnId } : {}),
             ...(assistantMessageId ? { assistantMessageId } : {}),
           };

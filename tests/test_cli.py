@@ -18,6 +18,7 @@ from bot.cli import (
     CodexJsonStreamParser,
     build_cli_command,
     parse_antigravity_json_output,
+    parse_antigravity_model_options,
     parse_codex_json_line,
 )
 from bot.cli_params import (
@@ -314,11 +315,59 @@ def test_antigravity_command_uses_prompt_stream_json_and_conversation() -> None:
     assert use_stdin is False
     assert command == [
         "agy.exe", "-p", "hello world", "--output-format", "stream-json",
-        "--model", "gemini-3.8-flash-medium", "--effort", "high",
+        "--model", "gemini-3.8-flash-medium", "--effort", "medium",
         "--agent", "reviewer", "--sandbox", "--dangerously-skip-permissions",
-        "--print-timeout", "30", "--conversation", "conversation-1",
+        "--print-timeout", "30s", "--conversation", "conversation-1",
         "--log-file", "agy.log",
     ]
+
+
+def test_antigravity_model_options_parse_cli_table() -> None:
+    raw = """Fetching available models...
+gemini-3.8-flash-high\tGemini 3.8 Flash (High)
+gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)
+gemini-3.8-flash-medium\tDuplicate
+"""
+    assert parse_antigravity_model_options(raw) == [
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+    ]
+
+
+def test_antigravity_model_effort_overrides_stale_default() -> None:
+    params = CliParamsConfig.from_dict({
+        "antigravity": {
+            "model": "gemini-3.8-flash-medium",
+            "effort": "low",
+            "print_timeout": 0,
+        },
+    })
+    command, _ = build_cli_command(
+        cli_type="antigravity",
+        resolved_cli="agy.exe",
+        user_text="hello",
+        env={},
+        params_config=params,
+    )
+    assert command[command.index("--effort") + 1] == "medium"
+    assert command[command.index("--print-timeout") + 1] == "0"
+
+
+def test_antigravity_models_without_effort_support_omit_effort_flag() -> None:
+    params = CliParamsConfig.from_dict({
+        "antigravity": {
+            "model": "claude-sonnet-4-6",
+            "effort": "low",
+        },
+    })
+    command, _ = build_cli_command(
+        cli_type="antigravity",
+        resolved_cli="agy.exe",
+        user_text="hello",
+        env={},
+        params_config=params,
+    )
+    assert "--effort" not in command
 
 
 def test_antigravity_parser_reads_nested_stream_events_and_usage() -> None:
@@ -364,7 +413,23 @@ def test_antigravity_tool_step_maps_to_call_and_result_trace() -> None:
     for line in raw.splitlines(keepends=True):
         events.extend(consume_stream_trace_chunk("antigravity", line, state))
 
-    assert [event["kind"] for event in events] == ["tool_call", "tool_result"]
+    assert [event["kind"] for event in events] == ["tool_call", "tool_result", "commentary"]
     assert events[0]["tool_name"] == "run_command"
     assert events[0]["call_id"] == "agy-conv-tool:4:run_command"
     assert events[1]["call_id"] == events[0]["call_id"]
+    assert events[2]["summary"] == "完成"
+
+
+def test_antigravity_agent_steps_produce_process_trace() -> None:
+    state = create_stream_trace_state("antigravity")
+    raw = (
+        '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response"}}\n'
+        '{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"checkpoint"}}\n'
+    )
+    events = []
+    for line in raw.splitlines(keepends=True):
+        events.extend(consume_stream_trace_chunk("antigravity", line, state))
+
+    assert [event["kind"] for event in events] == ["process", "process"]
+    assert events[0]["summary"] == "Antigravity 已完成一个回复步骤"
+    assert events[1]["summary"] == "Antigravity 已保存当前检查点"

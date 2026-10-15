@@ -345,6 +345,25 @@ def _format_antigravity_denied_actions(value: Any) -> Optional[str]:
     return "\n".join(rendered).strip() or "存在被拒绝的工具操作"
 
 
+def parse_antigravity_model_options(raw_output: str) -> List[str]:
+    """Parse the ``agy models`` table into model slugs for the Web selector."""
+    options: List[str] = []
+    seen: set[str] = set()
+    for raw_line in str(raw_output or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        slug = line.split(None, 1)[0].strip()
+        if not slug or slug.lower() in {"fetching", "available", "models"}:
+            continue
+        if any(char.isspace() for char in slug):
+            continue
+        if slug not in seen:
+            seen.add(slug)
+            options.append(slug)
+    return options
+
+
 def parse_antigravity_json_line(line: str) -> Dict[str, Any]:
     """解析 Antigravity stream-json 的单行事件。"""
     result: Dict[str, Any] = {
@@ -370,8 +389,13 @@ def parse_antigravity_json_line(line: str) -> Dict[str, Any]:
         step_type = str(step.get("step_type") or "").strip().lower()
         if step_type == "agent_response":
             text_delta = step.get("text_delta")
+            if not isinstance(text_delta, str):
+                text_delta = step.get("text")
             if isinstance(text_delta, str) and text_delta:
                 result["delta_text"] = text_delta
+        usage = _normalize_antigravity_usage(step.get("usage"))
+        if usage is not None:
+            result["terminal_usage"] = usage
         return result
 
     if event_type != "result":

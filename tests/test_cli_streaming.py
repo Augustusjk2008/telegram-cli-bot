@@ -22,6 +22,7 @@ from bot.web.api_service import (
     _communicate_claude_process,
     _communicate_codex_process,
     _communicate_process,
+    get_cli_params_payload,
     _start_process_stdout_reader,
 )
 
@@ -134,6 +135,29 @@ def usage_manager(tmp_path: Path) -> MultiBotManager:
         ),
         str(storage),
     )
+
+
+def test_antigravity_cli_params_include_discovered_models(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = usage_manager.main_profile
+    profile.cli_type = "antigravity"
+    profile.cli_path = "agy"
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "agy.exe")
+    monkeypatch.setattr(
+        api_service.subprocess,
+        "run",
+        lambda *args, **kwargs: type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n"},
+        )(),
+    )
+
+    payload = get_cli_params_payload(usage_manager, "main")
+
+    assert payload["schema"]["model"]["enum"] == ["gemini-3.8-flash-medium", "none"]
 
 
 @pytest.mark.asyncio

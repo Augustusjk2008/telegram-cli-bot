@@ -74,6 +74,7 @@ from bot.cli import (
     build_cli_command,
     cli_data_provider,
     normalize_cli_type,
+    parse_antigravity_model_options,
     resolve_cli_executable,
     should_mark_claude_session_initialized,
     should_reset_claude_session,
@@ -117,6 +118,7 @@ from bot.native_agent.pi_rpc_preflight import PiWindowsPreflightRequest, run_pi_
 from bot.native_agent.pi_session_store import PiSessionStore, pi_session_key
 from bot.native_agent.shadow_git_history import ShadowGitHistory
 from bot.platform.output import strip_ansi_escape
+from bot.platform.executables import build_executable_invocation
 from bot.platform.processes import (
     ProcessTreeHandle,
     attach_process_tree,
@@ -1341,13 +1343,70 @@ async def handle_cluster_mcp_tool(
         _raise(409 if exc.code in conflict_codes else 400, exc.code, exc.message, exc.data)
 
 
-def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
+_ANTIGRAVITY_MODEL_DISCOVERY_TIMEOUT_SECONDS = 15.0
+_ANTIGRAVITY_MODEL_CACHE_TTL_SECONDS = 300.0
+_antigravity_model_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
+_antigravity_model_cache_lock = threading.Lock()
+
+
+def _apply_cli_model_options(
+    schema: dict[str, Any],
+    model_options: Optional[list[str]] = None,
+) -> dict[str, Any]:
     next_schema = copy.deepcopy(schema)
     model_field = next_schema.get("model")
-    model_options = normalize_cli_model_options(CLI_MODEL_OPTIONS)
-    if isinstance(model_field, dict) and model_options:
-        model_field["enum"] = model_options
+    resolved_options = normalize_cli_model_options(
+        CLI_MODEL_OPTIONS if model_options is None else model_options
+    )
+    if isinstance(model_field, dict) and resolved_options:
+        model_field["enum"] = resolved_options
     return next_schema
+
+
+def _get_antigravity_model_options(profile: BotProfile) -> list[str]:
+    current_model = ""
+    try:
+        current_model = str(profile.cli_params.get_params("antigravity").get("model") or "").strip()
+    except (AttributeError, ValueError):
+        pass
+
+    resolved_cli = resolve_cli_executable(profile.cli_path, profile.working_dir)
+    if not resolved_cli:
+        return normalize_cli_model_options([current_model])
+
+    cache_key = (
+        os.path.abspath(str(resolved_cli)).lower(),
+        os.path.abspath(str(profile.working_dir or "")).lower(),
+    )
+    now = time.monotonic()
+    with _antigravity_model_cache_lock:
+        cached = _antigravity_model_cache.get(cache_key)
+        if cached is not None and now - cached[0] < _ANTIGRAVITY_MODEL_CACHE_TTL_SECONDS:
+            return normalize_cli_model_options([*cached[1], current_model])
+
+    try:
+        completed = subprocess.run(
+            [*build_executable_invocation(str(resolved_cli)), "models"],
+            cwd=profile.working_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_ANTIGRAVITY_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+            check=False,
+            **build_hidden_process_kwargs(),
+        )
+        discovered = (
+            parse_antigravity_model_options(completed.stdout or "")
+            if completed.returncode == 0
+            else []
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        discovered = []
+
+    with _antigravity_model_cache_lock:
+        _antigravity_model_cache[cache_key] = (time.monotonic(), discovered)
+    return normalize_cli_model_options([*discovered, current_model])
 
 
 def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
@@ -1359,7 +1418,9 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
     try:
         params = profile.cli_params.get_params(resolved_cli_type)
         schema = get_params_schema(resolved_cli_type)
-        if resolved_cli_type != "antigravity":
+        if resolved_cli_type == "antigravity":
+            schema = _apply_cli_model_options(schema, _get_antigravity_model_options(profile))
+        else:
             schema = _apply_cli_model_options(schema)
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
@@ -1518,7 +1579,7 @@ async def update_cli_params(
     except ValueError as exc:
         _raise(400, "invalid_param_value", str(exc))
 
-    return get_cli_params_payload(manager, alias, resolved_cli_type)
+    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
 
 
 async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
@@ -1528,7 +1589,7 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
         await manager.reset_bot_cli_params(alias, resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
-    return get_cli_params_payload(manager, alias, resolved_cli_type)
+    return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
 
 
 def get_history(
@@ -4260,6 +4321,8 @@ class _StreamPreviewState:
         preview_text = self._parser.preview_text
         if preview_text:
             event["preview_text"] = preview_text[-800:]
+            if self.cli_type == "antigravity":
+                event["replace_text"] = preview_text[-800:]
         return event
 
     def result(self):
