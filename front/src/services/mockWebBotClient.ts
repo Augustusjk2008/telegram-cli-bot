@@ -1581,6 +1581,16 @@ export class MockWebBotClient implements WebBotClient {
         busyAgentIds: [],
         busyAgentNames: [],
         busyAgentCount: item.status === "busy" ? 1 : 0,
+        ...(item.remoteWorkspace ? {
+          remoteWorkspaceMcp: item.remoteWorkspaceMcp || {
+            state: "missing" as const,
+            serverName: "tcb-remote",
+            configPath: `${item.workingDir}\\.agents\\mcp_config.json`,
+            scope: "workspace",
+            allowedTools: ["exec", "read", "write", "edit", "list"],
+            askPolicy: "ask",
+          },
+        } : {}),
         promptPresets: clonePromptPresets(item.promptPresets),
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
@@ -7074,6 +7084,16 @@ export class MockWebBotClient implements WebBotClient {
       cliPath: input.cliPath.trim() || defaultCliPathForType(input.cliType),
       status: "running",
       workingDir: input.workingDir?.trim() || "",
+      ...(input.remoteWorkspace ? {
+        remoteWorkspaceMcp: {
+          state: "missing" as const,
+          serverName: "tcb-remote",
+          configPath: `${input.workingDir?.trim() || ""}\\.agents\\mcp_config.json`,
+          scope: "workspace",
+          allowedTools: ["exec", "read", "write", "edit", "list"],
+          askPolicy: "ask",
+        },
+      } : {}),
       lastActiveText: "运行中",
       enabled: true,
       archived: false,

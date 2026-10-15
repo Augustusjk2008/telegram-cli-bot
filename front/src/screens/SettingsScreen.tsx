@@ -13,6 +13,7 @@ import { ThemeDropdown } from "../components/ThemeDropdown";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
+import { copyText } from "../utils/clipboard";
 import type {
   BotOverview,
   BrowserNotificationPermission,
@@ -131,6 +132,14 @@ function notificationPermissionText(permission: BrowserNotificationPermission) {
   return "未询问";
 }
 
+function remoteWorkspaceMcpStateLabel(state: string) {
+  if (state === "installed") return "已配置";
+  if (state === "conflict") return "配置冲突";
+  if (state === "broken") return "配置损坏";
+  if (state === "stale") return "需要更新";
+  return "未配置";
+}
+
 function asWebApiClientError(error: unknown): WebApiClientError | null {
   if (error instanceof WebApiClientError) {
     return error;
@@ -186,6 +195,7 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
+  const [copiedRemoteMcpItem, setCopiedRemoteMcpItem] = useState("");
   const isMainBot = botAlias === "main";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
   const canManageLanguageServices = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
@@ -381,6 +391,17 @@ export function SettingsScreen({
         return;
       }
       setError(getErrorMessage(err, "更新工作目录失败"));
+    }
+  };
+
+  const copyRemoteMcpText = async (value: string, item: string) => {
+    const copied = await copyText(value);
+    if (copied) {
+      setCopiedRemoteMcpItem(item);
+      setNotice("Antigravity 设置说明已复制");
+      window.setTimeout(() => setCopiedRemoteMcpItem((current) => current === item ? "" : current), 1800);
+    } else {
+      setError("复制失败，请检查剪贴板权限");
     }
   };
 
@@ -823,6 +844,83 @@ export function SettingsScreen({
                   </button>
                 </div>
               </div>
+
+              {overview?.cliType === "antigravity" && overview.remoteWorkspace && overview.remoteWorkspaceMcp ? (
+                <div data-testid="remote-workspace-mcp-panel" className="space-y-3 border-t border-[var(--border)] pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-medium text-[var(--text)]">Antigravity 远程 MCP</h3>
+                    <span className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]">
+                      {remoteWorkspaceMcpStateLabel(overview.remoteWorkspaceMcp.state)}
+                    </span>
+                  </div>
+                  <div className="space-y-1 text-sm text-[var(--muted)]">
+                    <p><span className="font-medium text-[var(--text)]">服务：</span>{overview.remoteWorkspaceMcp.serverName}</p>
+                    {overview.remoteWorkspaceMcp.scope ? <p><span className="font-medium text-[var(--text)]">范围：</span>{overview.remoteWorkspaceMcp.scope}</p> : null}
+                    {overview.remoteWorkspaceMcp.configPath ? <p className="break-all"><span className="font-medium text-[var(--text)]">配置路径：</span>{overview.remoteWorkspaceMcp.configPath}</p> : null}
+                    {overview.remoteWorkspaceMcp.message ? <p>{overview.remoteWorkspaceMcp.message}</p> : null}
+                    {overview.remoteWorkspaceMcp.allowedTools.length ? (
+                      <p><span className="font-medium text-[var(--text)]">工具：</span>{overview.remoteWorkspaceMcp.allowedTools.join(", ")}</p>
+                    ) : null}
+                  </div>
+                  {overview.remoteWorkspaceMcp.diagnostics?.length ? (
+                    <div className="space-y-2 rounded border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] p-2 text-sm text-[var(--status-danger)]">
+                      {overview.remoteWorkspaceMcp.diagnostics.map((diagnostic, index) => (
+                        <p key={`${diagnostic.code || "diagnostic"}-${index}`}>
+                          {diagnostic.message}{diagnostic.action ? `：${diagnostic.action}` : ""}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                  {overview.remoteWorkspaceMcp.setupInstructions ? (
+                    <p className="text-sm text-[var(--muted)]">{overview.remoteWorkspaceMcp.setupInstructions}</p>
+                  ) : null}
+                  {overview.remoteWorkspaceMcp.askPolicy ? (
+                    <p className="text-sm text-[var(--muted)]">权限策略：{overview.remoteWorkspaceMcp.askPolicy}</p>
+                  ) : null}
+                  {overview.remoteWorkspaceMcp.mcpSetupSnippet ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-[var(--text)]">MCP 设置说明</span>
+                        <button
+                          type="button"
+                          onClick={() => void copyRemoteMcpText(overview.remoteWorkspaceMcp?.mcpSetupSnippet || "", "mcp")}
+                          className={settingsButtonClass("plain")}
+                        >
+                          {copiedRemoteMcpItem === "mcp" ? "已复制" : "复制"}
+                        </button>
+                      </div>
+                      <textarea
+                        aria-label="Antigravity MCP 设置说明"
+                        readOnly
+                        value={overview.remoteWorkspaceMcp.mcpSetupSnippet}
+                        rows={5}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)]"
+                      />
+                    </div>
+                  ) : null}
+                  {overview.remoteWorkspaceMcp.statusLineSnippet ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-[var(--text)]">statusLine 设置说明</span>
+                        <button
+                          type="button"
+                          onClick={() => void copyRemoteMcpText(overview.remoteWorkspaceMcp?.statusLineSnippet || "", "statusLine")}
+                          className={settingsButtonClass("plain")}
+                        >
+                          {copiedRemoteMcpItem === "statusLine" ? "已复制" : "复制"}
+                        </button>
+                      </div>
+                      <textarea
+                        aria-label="Antigravity statusLine 设置说明"
+                        readOnly
+                        value={overview.remoteWorkspaceMcp.statusLineSnippet}
+                        rows={2}
+                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)]"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
           ) : null
         ) : null}

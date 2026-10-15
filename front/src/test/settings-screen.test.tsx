@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotExecutionConfigInput, BotSummary } from "../services/types";
+import type { BotExecutionConfigInput, BotOverview, BotSummary } from "../services/types";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -15,6 +15,36 @@ class SettingsRuntimeClient extends MockWebBotClient {
   async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
     this.updateCalls.push({ botAlias, input });
     return super.updateBotExecutionConfig(botAlias, input);
+  }
+}
+
+class RemoteSettingsClient extends MockWebBotClient {
+  async getBotOverview(botAlias: string): Promise<BotOverview> {
+    const overview = await super.getBotOverview(botAlias);
+    return {
+      ...overview,
+      cliType: "antigravity",
+      remoteWorkspace: {
+        platform: "posix",
+        connectionId: "ssh-remote",
+        host: "remote.example",
+        port: 22,
+        username: "builder",
+        root: "/work/project",
+        hostKeyFingerprint: "SHA256:private-host-key",
+      },
+      remoteWorkspaceMcp: {
+        state: "installed",
+        serverName: "tcb-remote",
+        configPath: "C:\\workspace\\.agents\\mcp_config.json",
+        scope: "workspace",
+        allowedTools: ["exec", "read", "write", "edit", "list"],
+        setupInstructions: "自动发现工作区 MCP",
+        statusLineSnippet: "{\"statusLine\":{}}",
+        mcpSetupSnippet: "{\"mcpServers\":{\"tcb-remote\":{}}}",
+        askPolicy: "ask",
+      },
+    };
   }
 }
 
@@ -129,4 +159,26 @@ test("settings do not expose manual child agent configuration", async () => {
   expect(await screen.findByLabelText("运行后端")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "子 agent" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "新增 agent" })).not.toBeInTheDocument();
+});
+
+test("remote Antigravity settings expose MCP status, scope and copyable setup guidance", async () => {
+  const user = userEvent.setup();
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  const client = new RemoteSettingsClient();
+
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  const panel = await screen.findByTestId("remote-workspace-mcp-panel");
+  expect(within(panel).getByText("已配置")).toBeInTheDocument();
+  expect(within(panel).getByText("tcb-remote")).toBeInTheDocument();
+  expect(within(panel).getByText("exec, read, write, edit, list")).toBeInTheDocument();
+  expect(within(panel).getByText("权限策略：ask")).toBeInTheDocument();
+
+  const copyButtons = within(panel).getAllByRole("button", { name: "复制" });
+  await user.click(copyButtons[0]);
+  expect(writeText).toHaveBeenCalledWith("{\"mcpServers\":{\"tcb-remote\":{}}}");
 });

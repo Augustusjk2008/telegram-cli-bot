@@ -902,6 +902,62 @@ async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_antigravity_remote_uses_workspace_mcp_and_private_env(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from bot.remote_workspace import chat as remote_chat
+
+    profile = usage_manager.main_profile
+    profile.cli_type = "antigravity"
+    profile.cli_path = "agy"
+    profile.cli_params.set_param("antigravity", "model", "gemini-3.8-flash-medium")
+    profile.remote_workspace = {
+        "connection_id": "ssh-remote",
+        "host": "remote.example",
+        "port": 22,
+        "username": "builder",
+        "root": "/work/project",
+        "host_key_fingerprint": "SHA256:remote-host-key",
+        "key_filename": "/private/key",
+    }
+    usage_manager.remote_bridge_url = "http://127.0.0.1:8765"
+    monkeypatch.setattr(remote_chat, "get_app_data_root", lambda: tmp_path / "app")
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        '{"event":"init","conversation_id":"remote-agy-session","init":{}}\n',
+        '{"event":"result","result":{"conversation_id":"remote-agy-session","status":"SUCCESS","response":"remote OK"}}\n',
+    ])
+    observed: dict[str, object] = {}
+
+    def fake_build_cli_command(**kwargs):
+        observed.update(kwargs)
+        return ["agy"], False
+
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "agy")
+    monkeypatch.setattr(api_service, "build_cli_command", fake_build_cli_command)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *args, **kwargs: (observed.update(popen_kwargs=kwargs) or process))
+
+    events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "remote task")]
+    done = next(event for event in events if event["type"] == "done")
+    workspace_path = Path(profile.working_dir) / ".agents" / "mcp_config.json"
+    workspace = json.loads(workspace_path.read_text(encoding="utf-8"))
+    entry = workspace["mcpServers"]["tcb-remote"]
+    process_kwargs = observed["popen_kwargs"]
+
+    assert done["output"] == "remote OK"
+    assert done["session"]["session_ids"]["antigravity_conversation_id"] == "remote-agy-session"
+    assert process_kwargs["cwd"] == profile.working_dir
+    assert process_kwargs["env"]["TCB_REMOTE_MCP_CONFIG"]
+    assert observed["params_config"].get_params("antigravity")["extra_args"] == []
+    assert entry["cwd"] == str(Path(profile.working_dir).resolve())
+    assert entry["args"][0].endswith("bot\\remote_workspace\\mcp_stdio.py") or entry["args"][0].endswith("bot/remote_workspace/mcp_stdio.py")
+    assert "remote-host-key" not in json.dumps(workspace)
+    assert "private/key" not in json.dumps(workspace)
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_treats_antigravity_soft_denial_as_error(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

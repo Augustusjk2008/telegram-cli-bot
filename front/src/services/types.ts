@@ -533,6 +533,30 @@ export type RemoteWorkspace = {
 
 export type RemoteWorkspaceConnectionStatus = "connected" | "disconnected";
 
+export type RemoteWorkspaceMcpState = "missing" | "installed" | "conflict" | "broken" | "stale";
+
+export type RemoteWorkspaceMcpDiagnostic = {
+  code?: string;
+  kind?: "bridge" | "auth" | "config" | "unknown" | string;
+  message: string;
+  action?: string;
+};
+
+export type RemoteWorkspaceMcpStatus = {
+  state: RemoteWorkspaceMcpState;
+  serverName: string;
+  message?: string;
+  configPath?: string;
+  scope?: string;
+  allowedTools: string[];
+  diagnostics?: RemoteWorkspaceMcpDiagnostic[];
+  statusLineCommand?: string[];
+  statusLineSnippet?: string;
+  mcpSetupSnippet?: string;
+  setupInstructions?: string;
+  askPolicy?: "ask" | "approve" | "yolo" | string;
+};
+
 export type RemoteConnectionInput = {
   platform?: "posix" | "windows";
   host: string;
@@ -548,6 +572,7 @@ export type BotSummary = {
   voice?: CodexVoiceCapability;
   remoteWorkspace?: RemoteWorkspace;
   remoteWorkspaceStatus?: RemoteWorkspaceConnectionStatus;
+  remoteWorkspaceMcp?: RemoteWorkspaceMcpStatus;
   alias: string;
   cliType: CliType;
   status: BotStatus;
@@ -786,6 +811,11 @@ export type ClusterSetupPrepareResult = {
   mcpAllowedTools?: string[];
   mcpSetupState?: string;
   statuslineCommand?: string[];
+  statusLineSnippet?: string;
+  mcpSetupSnippet?: string;
+  setupInstructions?: string;
+  askPolicy?: string;
+  diagnostics?: RemoteWorkspaceMcpDiagnostic[];
   unsupported?: boolean;
   code?: string;
   message?: string;
@@ -1050,6 +1080,7 @@ export type CodexVoiceConnectionOptions = {
 export type BotOverview = {
   voice?: CodexVoiceCapability;
   remoteWorkspace?: RemoteWorkspace;
+  remoteWorkspaceMcp?: RemoteWorkspaceMcpStatus;
   alias: string;
   cliType: CliType;
   status: BotStatus;

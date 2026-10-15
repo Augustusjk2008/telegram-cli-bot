@@ -46,6 +46,22 @@ def _server(tmp_path, monkeypatch):
     return server, auth
 
 
+def test_remote_antigravity_cluster_boundary_is_explicit(tmp_path):
+    profile = BotProfile(
+        alias="remote",
+        cli_type="antigravity",
+        cli_path="agy",
+        working_dir=str(tmp_path),
+        remote_workspace=dict(CONFIG),
+    )
+
+    with pytest.raises(WebApiError) as error:
+        api_service._effective_cli_params(profile, profile.cli_params, "run-remote")
+
+    assert error.value.status == 409
+    assert error.value.code == "remote_workspace_cluster_unsupported"
+
+
 @pytest.mark.asyncio
 async def test_execute_plan_saves_in_remote_workspace_before_creating_conversation(tmp_path, monkeypatch):
     server, _auth = _server(tmp_path, monkeypatch)

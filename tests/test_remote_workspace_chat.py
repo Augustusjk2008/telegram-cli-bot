@@ -89,11 +89,85 @@ def test_instructions_and_cli_config_keep_secrets_out_of_prompt(remote_profile):
     assert prepared.cli_args("codex_server") == prepared.cli_args("codex")
 
 
-def test_remote_chat_rejects_antigravity(remote_profile):
+def test_remote_chat_prepares_antigravity_workspace_mcp_and_is_idempotent(remote_profile):
+    remote_profile.cli_type = "antigravity"
+    prepared = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
+    workspace_path = prepared.workspace_mcp_config_path
+    state_path = prepared.workspace_mcp_state_path
+    workspace = json.loads(workspace_path.read_text(encoding="utf-8"))
+    entry = workspace["mcpServers"][chat.REMOTE_MCP_SERVER_NAME]
+
+    assert prepared.cli_args("antigravity") == []
+    assert entry == {
+        "command": sys.executable,
+        "args": [str(Path(chat.__file__).with_name("mcp_stdio.py").resolve()), "--config", str(prepared.config_path)],
+        "cwd": str(Path(remote_profile.working_dir).resolve()),
+    }
+    assert state_path.exists()
+    serialized = workspace_path.read_text(encoding="utf-8")
+    assert _token(prepared) not in serialized
+    assert remote_profile.remote_workspace["host_key_fingerprint"] not in serialized
+    assert remote_profile.remote_workspace["key_filename"] not in serialized
+
+    before = workspace_path.read_bytes()
+    same = chat.prepare_remote_chat(remote_profile)
+    assert same.workspace_mcp_config_path == workspace_path
+    assert workspace_path.read_bytes() == before
+
+
+def test_remote_chat_workspace_mcp_preserves_user_servers_and_conflicts(remote_profile):
+    remote_profile.cli_type = "antigravity"
+    config_path = Path(remote_profile.working_dir) / ".agents" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True)
+    original = {
+        "ui": {"theme": "dark"},
+        "mcpServers": {"user-server": {"command": "user-tool", "args": ["--keep"]}},
+    }
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    prepared = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
+    configured = json.loads(config_path.read_text(encoding="utf-8"))
+    assert configured["ui"] == original["ui"]
+    assert configured["mcpServers"]["user-server"] == original["mcpServers"]["user-server"]
+
+    user_owned = {"mcpServers": {chat.REMOTE_MCP_SERVER_NAME: {"command": "user-owned"}}}
+    config_path.write_text(json.dumps(user_owned), encoding="utf-8")
+    with pytest.raises(chat.RemoteChatPreparationError, match="tcb-remote") as error:
+        chat.prepare_remote_chat(remote_profile)
+    assert error.value.code == "remote_mcp_config_conflict"
+    assert json.loads(config_path.read_text(encoding="utf-8")) == user_owned
+    assert prepared.config_path.exists()
+
+
+def test_remote_chat_workspace_mcp_revoke_removes_only_owned_entry(remote_profile):
+    remote_profile.cli_type = "antigravity"
+    config_path = Path(remote_profile.working_dir) / ".agents" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"mcpServers": {"user-server": {"command": "keep"}}}), encoding="utf-8")
     prepared = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
 
-    with pytest.raises(ValueError, match="Antigravity"):
-        prepared.cli_args("antigravity")
+    chat.revoke_remote_chat(remote_profile)
+
+    restored = json.loads(config_path.read_text(encoding="utf-8"))
+    assert restored == {"mcpServers": {"user-server": {"command": "keep"}}}
+    assert not prepared.workspace_mcp_state_path.exists()
+
+
+def test_remote_chat_workspace_mcp_reports_broken_and_stale_states(remote_profile, monkeypatch):
+    remote_profile.cli_type = "antigravity"
+    config_path = Path(remote_profile.working_dir) / ".agents" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("{broken", encoding="utf-8")
+    broken = chat.inspect_remote_mcp_config(remote_profile)
+    assert broken["state"] == "broken"
+    assert broken["diagnostics"][0]["kind"] == "config"
+
+    config_path.unlink()
+    prepared = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
+    monkeypatch.setattr(chat.sys, "executable", "other-python")
+    stale = chat.inspect_remote_mcp_config(remote_profile)
+    assert stale["state"] == "stale"
+    assert stale["config_path"] == str(prepared.workspace_mcp_config_path)
+
 
 
 @pytest.mark.parametrize("tool,args", [

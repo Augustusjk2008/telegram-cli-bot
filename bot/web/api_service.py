@@ -614,6 +614,10 @@ def build_bot_summary(
         get_remote_workspace_service().connection_status(profile.remote_workspace)
         if profile.remote_workspace else None
     )
+    remote_workspace_mcp = None
+    if profile.remote_workspace:
+        from bot.remote_workspace.chat import inspect_remote_mcp_config
+        remote_workspace_mcp = inspect_remote_mcp_config(profile)
     bot_id = resolve_session_bot_id(manager, alias)
 
     # 优先使用共享聊天 session 的工作目录（如果已建立）
@@ -659,6 +663,7 @@ def build_bot_summary(
         "working_dir": working_dir,
         "archived": profile.archived,
         **({"remote_workspace": dict(profile.remote_workspace)} if profile.remote_workspace else {}),
+        **({"remote_workspace_mcp": remote_workspace_mcp} if remote_workspace_mcp else {}),
         "prompt_presets": [dict(item) for item in profile.prompt_presets],
         "global_prompt_presets": app_settings.get_global_prompt_presets(manager.app_settings_file),
         "is_main": alias == manager.main_profile.alias,
@@ -3390,6 +3395,21 @@ def _append_missing_cli_arg_pairs(
     return merged
 
 
+def _prepare_remote_chat_for_api(profile: BotProfile, base_url: str = ""):
+    """Prepare a remote capability and map preparation failures to Web API errors."""
+    from bot.remote_workspace.chat import RemoteChatPreparationError, prepare_remote_chat
+
+    try:
+        return prepare_remote_chat(profile, base_url)
+    except RemoteChatPreparationError as exc:
+        _raise(exc.status, exc.code, str(exc), exc.data)
+    except ValueError as exc:
+        _raise(400, "remote_workspace_invalid", str(exc))
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        _raise(502, "remote_bridge_unavailable", "远程工作区 bridge 配置不可用，请确认 Web 服务仍在运行")
+        raise AssertionError from exc
+
+
 def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsConfig) -> CliParamsConfig:
     cli_type = normalize_cli_type(profile.cli_type)
     launcher_name = "tcb-cluster-mcp.cmd" if sys.platform.startswith("win") else "tcb-cluster-mcp.sh"
@@ -3455,15 +3475,16 @@ def _effective_cli_params(
     *,
     allow_unsafe_cli: bool = False,
 ) -> CliParamsConfig:
+    cli_type = normalize_cli_type(profile.cli_type)
+    if cluster_run_id and getattr(profile, "remote_workspace", None) and cli_type == "antigravity":
+        _raise(409, "remote_workspace_cluster_unsupported", "远程 Antigravity 暂不支持 Cluster 编排")
     params = with_global_extra_args(params_config, config.CLI_GLOBAL_EXTRA_ARGS)
     params = clamp_unsafe_cli_params(params, allow_unsafe_cli=allow_unsafe_cli)
     if cluster_run_id:
         params = _cluster_mcp_injected_params(profile, params)
     if getattr(profile, "remote_workspace", None):
-        from bot.remote_workspace.chat import prepare_remote_chat
-        remote = prepare_remote_chat(profile)
+        remote = _prepare_remote_chat_for_api(profile)
         values = params.to_dict()
-        cli_type = normalize_cli_type(profile.cli_type)
         cli_values = values.setdefault(cli_type, {})
         extra_args = list(cli_values.get("extra_args") or [])
         injection = remote.cli_args(cli_type)
@@ -4476,8 +4497,7 @@ async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSess
     epoch, cwd = session.session_epoch, session.working_dir
     env = _build_cli_env("codex_server")
     if getattr(profile, "remote_workspace", None):
-        from bot.remote_workspace.chat import prepare_remote_chat
-        env.update(prepare_remote_chat(profile).env)
+        env.update(_prepare_remote_chat_for_api(profile).env)
     resolved_cli = resolve_cli_executable(profile.cli_path, session.working_dir)
     if resolved_cli is None:
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
@@ -5623,13 +5643,16 @@ async def _stream_cli_chat(
     user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     cli_type = normalize_cli_type(profile.cli_type)
-    if getattr(profile, "remote_workspace", None) and cli_type == "antigravity":
-        _raise(409, "remote_workspace_unsupported_cli", "Antigravity CLI 暂不支持远程工作区")
+    remote_chat = None
+    if getattr(profile, "remote_workspace", None):
+        if cluster_run_id and cli_type == "antigravity":
+            _raise(409, "remote_workspace_cluster_unsupported", "远程 Antigravity 暂不支持 Cluster 编排")
+        remote_chat = _prepare_remote_chat_for_api(
+            profile,
+            getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url(),
+        )
 
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
-    if getattr(profile, "remote_workspace", None):
-        from bot.remote_workspace.chat import prepare_remote_chat
-        prepare_remote_chat(profile, getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url())
     text = (visible_input or "").strip()
     if not text:
         _raise(400, "empty_message", "消息不能为空")
@@ -5659,6 +5682,8 @@ async def _stream_cli_chat(
         return prepared, prepared_done_session
 
     env = _build_cli_env(cli_type)
+    if remote_chat is not None:
+        env.update(remote_chat.env)
     if cli_type == "antigravity":
         env["TCB_ANTIGRAVITY_STATUSLINE_PATH"] = str(
             get_antigravity_statusline_telemetry_path(cwd_hint=session.working_dir)
@@ -5767,9 +5792,6 @@ async def _stream_cli_chat(
                 if cluster_run_id:
                     from bot.cluster.setup import get_cluster_mcp_config_path
                     server_env["TCB_CLUSTER_MCP_CONFIG"] = str(get_cluster_mcp_config_path())
-                if getattr(profile, "remote_workspace", None):
-                    from bot.remote_workspace.chat import prepare_remote_chat
-                    server_env.update(prepare_remote_chat(profile).env)
                 quota_capture = await _start_codex_rate_limit_capture(
                     env=server_env,
                     command=[resolved_cli, "app-server", "--stdio", *params_for_attempt.get_params(cli_type).get("extra_args", [])],
@@ -6831,8 +6853,10 @@ async def _run_native_agent_chat(
 
     effective_task_mode = request.task_mode if request is not None else task_mode
     if getattr(profile, "remote_workspace", None):
-        from bot.remote_workspace.chat import prepare_remote_chat
-        prepare_remote_chat(profile, getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url())
+        _prepare_remote_chat_for_api(
+            profile,
+            getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url(),
+        )
     effective_task_payload = request.task_payload if request is not None else task_payload
     text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
     request_obj = request or _build_chat_run_request(
@@ -6941,8 +6965,10 @@ async def _stream_native_agent_chat(
 
     service = get_native_agent_service()
     if getattr(profile, "remote_workspace", None):
-        from bot.remote_workspace.chat import prepare_remote_chat
-        prepare_remote_chat(profile, getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url())
+        _prepare_remote_chat_for_api(
+            profile,
+            getattr(manager, "remote_bridge_url", "") or _cluster_bridge_url(),
+        )
     normalized_resume_stream_id = str(resume_stream_id or "").strip()
     if normalized_resume_stream_id:
         channel = service.resume_turn_channel(

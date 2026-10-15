@@ -51,6 +51,9 @@ import type {
   GitStashList,
   GitTreeStatus,
   BotOverview,
+  RemoteWorkspaceMcpDiagnostic,
+  RemoteWorkspaceMcpState,
+  RemoteWorkspaceMcpStatus,
   CodexVoiceCapability,
   CodexVoiceConnection,
   CodexVoiceConnectionOptions,
@@ -365,6 +368,8 @@ type RawBotSummary = {
   remote_workspace?: import("./remoteWorkspace").RawRemoteWorkspace;
   remote_workspace_status?: string;
   remoteWorkspaceStatus?: string;
+  remote_workspace_mcp?: unknown;
+  remoteWorkspaceMcp?: unknown;
   alias: string;
   cli_type: CliType;
   cli_path?: string;
@@ -1638,6 +1643,60 @@ function mapRemoteWorkspaceStatus(value: unknown) {
   return value === "disconnected" ? "disconnected" as const : "connected" as const;
 }
 
+function mapRemoteWorkspaceMcpStatus(value: unknown): RemoteWorkspaceMcpStatus | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const stateValue = String(raw.state || "missing");
+  const state: RemoteWorkspaceMcpState = stateValue === "installed"
+    || stateValue === "conflict"
+    || stateValue === "broken"
+    || stateValue === "stale"
+    ? stateValue
+    : "missing";
+  const diagnostics = Array.isArray(raw.diagnostics)
+    ? raw.diagnostics
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item): RemoteWorkspaceMcpDiagnostic => ({
+        code: typeof item.code === "string" ? item.code : undefined,
+        kind: typeof item.kind === "string" ? item.kind : "unknown",
+        message: String(item.message || ""),
+        action: typeof item.action === "string" ? item.action : undefined,
+      }))
+      .filter((item) => item.message.trim())
+    : [];
+  const rawStatusLineCommand = raw.status_line_command ?? raw.statusLineCommand;
+  const statusLineCommand = Array.isArray(rawStatusLineCommand)
+    ? rawStatusLineCommand.map((item) => String(item))
+    : undefined;
+  const rawAllowedTools = raw.allowed_tools ?? raw.allowedTools;
+  return {
+    state,
+    serverName: String(raw.server_name ?? raw.serverName ?? "tcb-remote"),
+    message: typeof raw.message === "string" ? raw.message : undefined,
+    configPath: typeof (raw.config_path ?? raw.configPath) === "string" ? String(raw.config_path ?? raw.configPath) : undefined,
+    scope: typeof raw.scope === "string" ? raw.scope : undefined,
+    allowedTools: Array.isArray(rawAllowedTools)
+      ? rawAllowedTools.map((item) => String(item))
+      : [],
+    diagnostics,
+    statusLineCommand,
+    statusLineSnippet: typeof (raw.status_line_snippet ?? raw.statusLineSnippet) === "string"
+      ? String(raw.status_line_snippet ?? raw.statusLineSnippet)
+      : undefined,
+    mcpSetupSnippet: typeof (raw.mcp_setup_snippet ?? raw.mcpSetupSnippet) === "string"
+      ? String(raw.mcp_setup_snippet ?? raw.mcpSetupSnippet)
+      : undefined,
+    setupInstructions: typeof (raw.setup_instructions ?? raw.setupInstructions) === "string"
+      ? String(raw.setup_instructions ?? raw.setupInstructions)
+      : undefined,
+    askPolicy: typeof (raw.ask_policy ?? raw.askPolicy) === "string"
+      ? String(raw.ask_policy ?? raw.askPolicy)
+      : undefined,
+  };
+}
+
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const busyAgentIds = (raw.busy_agent_ids ?? raw.busyAgentIds ?? []).map((item) => String(item));
   const busyAgentNames = (raw.busy_agent_names ?? raw.busyAgentNames ?? []).map((item) => String(item));
@@ -1656,6 +1715,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     : "idle";
   const status = mapStatus(raw.status, activityStatus === "busy");
   const remoteWorkspace = raw.remote_workspace ? mapRemoteWorkspace(raw.remote_workspace) : undefined;
+  const remoteWorkspaceMcp = mapRemoteWorkspaceMcpStatus(raw.remote_workspace_mcp ?? raw.remoteWorkspaceMcp);
   const summary: BotSummary = {
     alias: raw.alias,
     cliType: mapCliType(raw.cli_type),
@@ -1670,6 +1730,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
       remoteWorkspace,
       remoteWorkspaceStatus: mapRemoteWorkspaceStatus(raw.remote_workspace_status ?? raw.remoteWorkspaceStatus),
     } : {}),
+    ...(remoteWorkspaceMcp ? { remoteWorkspaceMcp } : {}),
     lastActiveText: mapStatusText(status),
     archived: Boolean(raw.archived ?? raw.is_archived ?? raw.isArchived),
   };
