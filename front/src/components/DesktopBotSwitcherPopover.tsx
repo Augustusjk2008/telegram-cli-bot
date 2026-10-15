@@ -211,11 +211,11 @@ export function DesktopBotSwitcherPopover({
         aria-modal="true"
         aria-label="智能体切换"
         data-testid="desktop-bot-switcher-popover"
-        className="desktop-bot-switcher-popover absolute flex min-h-[360px] origin-top-left flex-col overflow-hidden rounded-lg"
+        className="absolute flex min-h-[360px] origin-top-left flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
         style={style}
         {...panelMotion}
       >
-        <div className="desktop-bot-switcher-toolbar flex items-center gap-2 px-3 py-2">
+        <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
             <input
@@ -256,8 +256,8 @@ export function DesktopBotSwitcherPopover({
           </button>
         </div>
 
-        <div className="desktop-bot-switcher-content grid min-h-0 flex-1 grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
-          <div className="desktop-bot-switcher-list min-h-0 overflow-y-auto p-2">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+          <div className="min-h-0 overflow-y-auto border-r border-[var(--border)] p-2">
             {filteredBots.length === 0 ? (
               <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
                 没有匹配的智能体
@@ -281,15 +281,11 @@ export function DesktopBotSwitcherPopover({
                   className={clsx(
                     "desktop-bot-switcher-item mb-1 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 overflow-hidden rounded-md border py-2 pl-3.5 pr-2.5 text-left",
                     "focus:outline-none focus:ring-2 focus:ring-[var(--accent)]",
-                    current ? "tcb-soft-selected" : "hover:bg-[var(--surface-strong)]",
-                    focusedAlias === bot.alias && !current ? "bg-[var(--surface-strong)]" : "",
+                    current ? "tcb-soft-selected" : "hover:bg-[var(--workbench-hover-bg)]",
+                    focusedAlias === bot.alias && !current ? "bg-[var(--workbench-hover-bg)]" : "",
                     offline ? "cursor-not-allowed opacity-70" : "",
                     noAccess ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-zinc-200" : "",
                   )}
-                  data-bot-status={status}
-                  data-current={current ? "true" : undefined}
-                  data-focused={focusedAlias === bot.alias ? "true" : undefined}
-                  data-no-access={noAccess ? "true" : undefined}
                 >
                   <span className="min-w-0">
                     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -325,7 +321,7 @@ export function DesktopBotSwitcherPopover({
             })}
           </div>
 
-          <aside className="desktop-bot-switcher-detail min-h-0 overflow-y-auto p-3">
+          <aside className="min-h-0 overflow-y-auto bg-[var(--surface-strong)] p-3">
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={focusedBot?.alias || "empty"}

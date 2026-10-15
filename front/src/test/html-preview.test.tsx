@@ -78,6 +78,7 @@ test("iframe validates bridge messages, refreshes current page and returns to th
   const data = await loadFilePreview(client, "main", "index.html", { remote: false });
   const { unmount } = render(<FilePreviewSurface title="index.html" {...data} />);
   const frame = await screen.findByTitle<HTMLIFrameElement>("index.html");
+  await act(async () => {});
   expect(frame).toHaveAttribute("src", value.entryUrl);
   expect(frame).not.toHaveAttribute("srcdoc");
   expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-forms allow-downloads");
