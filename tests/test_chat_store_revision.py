@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import uuid
 
 from bot.web.chat_store import ChatStore
 from bot.web import api_service
@@ -30,7 +31,9 @@ def _begin(
 
 
 def test_history_revision_delta_tracks_add_stream_update_and_finalize(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path)
+    # ChatStore keeps workspace databases under the process-level TCB root;
+    # use a fresh workspace key when pytest reuses its temp directory.
+    store = ChatStore(tmp_path / f"workspace-{uuid.uuid4().hex}")
     handle = _begin(store)
 
     initial = store.get_history_delta(handle.conversation_id, revision=0, limit=20)

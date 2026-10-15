@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -107,7 +108,16 @@ async def test_git_capabilities_route_requires_git_ops_and_returns_complete_cont
     auth = _auth_context()
     monkeypatch.setattr(server, "_auth_context", lambda _request: auth)
     monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: True)
-    monkeypatch.setattr(git_service, "_run_git", lambda *_args, **_kwargs: type("Result", (), {"returncode": 0})())
+    def fake_run_git(_cwd, args, **_kwargs):
+        if args == ["rev-parse", "--show-toplevel"]:
+            return SimpleNamespace(returncode=0, stdout=f"{tmp_path}\n", stderr="")
+        if args == ["remote"]:
+            return SimpleNamespace(returncode=0, stdout="origin\n", stderr="")
+        if args == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:
+            return SimpleNamespace(returncode=0, stdout="origin/main\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="git version test\n", stderr="")
+
+    monkeypatch.setattr(git_service, "_run_git", fake_run_git)
 
     async with TestClient(TestServer(server._build_app())) as client:
         response = await client.get("/api/bots/main/git/capabilities")

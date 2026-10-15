@@ -18,9 +18,12 @@ test("mobile files close a pending HTML session without reopening the dialog or 
   const read = vi.spyOn(client, "readFile");
   const close = vi.spyOn(client, "closeHtmlPreview");
   render(<FilesScreen botAlias="main" client={client} />);
-  fireEvent.click(await screen.findByRole("button", { name: "打开 index.html" }));
-  const dialog = await screen.findByRole("dialog", { name: "index.html" });
+  const openButton = await screen.findByRole("button", { name: "打开 index.html" });
+  await act(async () => {
+    fireEvent.click(openButton);
+  });
   await waitFor(() => expect(client.createHtmlPreview).toHaveBeenCalledTimes(1));
+  const dialog = await screen.findByRole("dialog", { name: "index.html" });
   expect(within(dialog).queryByRole("button", { name: "全文读取" })).not.toBeInTheDocument();
   fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
   await act(async () => { resolve(session("late")); });
@@ -61,7 +64,10 @@ test.each(["bot", "hidden"])("chat HTML links close their scoped iframe on %s sw
   const close = vi.spyOn(client, "closeHtmlPreview");
   const read = vi.spyOn(client, "readFile");
   const { rerender } = render(<ChatScreen botAlias="main" client={client} />);
-  fireEvent.click(await screen.findByRole("link", { name: "查看页面" }));
+  const pageLink = await screen.findByRole("link", { name: "查看页面" });
+  await act(async () => {
+    fireEvent.click(pageLink);
+  });
   await waitFor(() => expect(document.querySelector("iframe")).toHaveAttribute("src", session("chat").entryUrl));
   expect(create).toHaveBeenCalledWith("main", expect.stringMatching(/index\.html$/), { agentId: "main" });
   expect(read).not.toHaveBeenCalled();
