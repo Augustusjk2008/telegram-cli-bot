@@ -270,6 +270,15 @@ class RemoteConnection:
             self._disconnect()
             self._password = self._passphrase = None
 
+    def is_connected(self) -> bool:
+        with self._lock:
+            if self._closed:
+                return False
+            if self._client is None:
+                return True
+            transport = self._client.get_transport()
+            return bool(transport and transport.is_active() and transport.is_authenticated())
+
     def _connect(self) -> None:
         self._disconnect()
         client = paramiko.SSHClient()
@@ -833,6 +842,14 @@ class RemoteWorkspaceService:
                 raise RemoteWorkspaceError(409, "remote_connection_mismatch", "Connection identity does not match its saved configuration")
             self._roots.setdefault(public["connection_id"], set()).add(public["root"])
             return connection
+
+    def connection_status(self, config: dict) -> str:
+        public = normalize_remote_workspace(config)
+        if not public:
+            return "disconnected"
+        with self._lock:
+            connection = self._connections.get(public["connection_id"])
+        return "connected" if connection is None or connection.is_connected() else "disconnected"
 
     def close_all(self) -> None:
         with self._lock:

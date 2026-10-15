@@ -29,17 +29,23 @@ def web_manager(tmp_path: Path) -> MultiBotManager:
     )
     return MultiBotManager(main_profile=profile, storage_file=str(storage_file))
 
-def _codex_context_usage(left_percent: int, *, session_id: str = "thread-1") -> dict[str, object]:
+def _codex_context_usage(
+    left_percent: int,
+    *,
+    session_id: str = "thread-1",
+    used_tokens: int = 76_593,
+    context_window: int = 258_400,
+) -> dict[str, object]:
     return {
         "provider": "codex",
         "source": "codex_session_token_count",
         "session_id": session_id,
-        "used_tokens": 76_593,
-        "context_window": 258_400,
+        "used_tokens": used_tokens,
+        "context_window": context_window,
         "context_left_percent": left_percent,
-        "used_display": "76.6K",
-        "window_display": "258K",
-        "status_text": f"{left_percent}% context left | 76.6K / 258K",
+        "used_display": f"{used_tokens / 1000:.1f}K",
+        "window_display": f"{context_window / 1000:.0f}K",
+        "status_text": f"{left_percent}% context left | {used_tokens / 1000:.1f}K / {context_window / 1000:.0f}K",
     }
 
 class _ScheduledFakeStdout:
@@ -156,6 +162,34 @@ def test_chat_store_returns_latest_context_usage_for_exact_native_session(tmp_pa
         native_session_id="missing",
     ) is None
 
+
+def test_compaction_uses_actual_token_drop_when_context_window_changes() -> None:
+    previous = _codex_context_usage(50, used_tokens=120_000, context_window=240_000)
+    same_usage_new_window = _codex_context_usage(70, used_tokens=120_000, context_window=400_000)
+
+    usage, previous_used_tokens, compaction_count = api_service._with_compaction_count(
+        same_usage_new_window,
+        previous_used_tokens=api_service._context_used_tokens(previous),
+        compaction_count=0,
+    )
+
+    assert usage is not None
+    assert "compaction_count" not in usage
+    assert previous_used_tokens == 120_000
+    assert compaction_count == 0
+
+    compacted = _codex_context_usage(82, used_tokens=70_000, context_window=400_000)
+    usage, previous_used_tokens, compaction_count = api_service._with_compaction_count(
+        compacted,
+        previous_used_tokens=previous_used_tokens,
+        compaction_count=compaction_count,
+    )
+
+    assert usage is not None
+    assert usage["compaction_count"] == 1
+    assert previous_used_tokens == 70_000
+    assert compaction_count == 1
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_switches_compaction_baseline_when_session_changes_mid_turn(
     web_manager: MultiBotManager,
@@ -163,11 +197,11 @@ async def test_stream_cli_chat_switches_compaction_baseline_when_session_changes
 ) -> None:
     web_manager.main_profile.cli_params.set_param("codex", "model", "test-model")
     readings = [
-        _codex_context_usage(20),
-        _codex_context_usage(80),
-        _codex_context_usage(80),
-        _codex_context_usage(30, session_id="thread-2"),
-        _codex_context_usage(90, session_id="thread-2"),
+        _codex_context_usage(20, used_tokens=120_000),
+        _codex_context_usage(80, used_tokens=60_000),
+        _codex_context_usage(80, used_tokens=60_000),
+        _codex_context_usage(30, session_id="thread-2", used_tokens=120_000),
+        _codex_context_usage(90, session_id="thread-2", used_tokens=60_000),
     ]
     processes = iter(
         [

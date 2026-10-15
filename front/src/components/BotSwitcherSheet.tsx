@@ -4,9 +4,10 @@ import { clsx } from "clsx";
 import { Settings2, ShieldCheck, X } from "lucide-react";
 import { BotActivitySummary } from "./BotActivitySummary";
 import { BotSwitcherCounts } from "./BotSwitcherCounts";
+import { RemoteWorkspaceStatusPill } from "./RemoteWorkspaceStatusPill";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
-import { getBotAccentStyle } from "../utils/botVisual";
+import { getBotIdentityTextStyle } from "../utils/botVisual";
 
 type Props = {
   bots: BotSummary[];
@@ -126,32 +127,29 @@ export function BotSwitcherSheet({
                     : "",
                 )}
               >
-                <span
-                  aria-hidden="true"
-                  className="absolute left-0 top-0 h-full w-[3px]"
-                  style={getBotAccentStyle(bot.alias)}
-                />
                 <div className="flex min-w-0 items-center justify-between gap-2">
                   <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                    <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
-                    {bot.isMain || bot.alias === "main" ? (
-                      <span className="shrink-0 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">
-                        主
-                      </span>
-                    ) : null}
-                    {bot.remoteWorkspace ? (
-                      <span className="shrink-0 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
-                    ) : null}
-                    {currentAlias === bot.alias ? (
-                      <span className="shrink-0 rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">
-                        当前
-                      </span>
-                    ) : null}
-                    {noAccess ? (
-                      <span className="shrink-0 rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">
-                        无权限 · 只读
-                      </span>
-                    ) : null}
+                    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 overflow-hidden">
+                      <span className="min-w-0 truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
+                      {bot.isMain || bot.alias === "main" ? (
+                        <span className="shrink-0 rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">
+                          主
+                        </span>
+                      ) : null}
+                      {bot.remoteWorkspace ? (
+                        <RemoteWorkspaceStatusPill status={bot.remoteWorkspaceStatus || "connected"} />
+                      ) : null}
+                      {currentAlias === bot.alias ? (
+                        <span className="shrink-0 rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">
+                          当前
+                        </span>
+                      ) : null}
+                      {noAccess ? (
+                        <span className="shrink-0 rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">
+                          无权限 · 只读
+                        </span>
+                      ) : null}
+                    </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1">
                     {bot.status === "unread" ? <StatusPill status="unread" className="px-1.5 text-[10px] leading-4" /> : null}
@@ -165,6 +163,7 @@ export function BotSwitcherSheet({
                       currentAlias === bot.alias ? "text-[var(--text)]" : "text-[var(--muted)]",
                     )}
                     title={getBotRuntimeLabel(bot)}
+                    style={getBotIdentityTextStyle(bot.cliType)}
                   >
                     {getBotRuntimeLabel(bot)}
                   </span>

@@ -126,6 +126,7 @@ from bot.platform.processes import (
     terminate_process_tree_sync,
 )
 from bot.platform.subprocess_streams import close_process_streams
+from bot.remote_workspace import get_remote_workspace_service
 from bot.session_store import (
     rename_bot_sessions as rename_stored_bot_sessions,
 )
@@ -599,6 +600,10 @@ def build_bot_summary(
     profile = profile or get_profile_or_raise(manager, alias)
     run_status = _build_run_status(manager, alias, profile)
     service_status = "offline" if run_status in {"stopped", "offline"} else "online"
+    remote_workspace_status = (
+        get_remote_workspace_service().connection_status(profile.remote_workspace)
+        if profile.remote_workspace else None
+    )
     bot_id = resolve_session_bot_id(manager, alias)
 
     # 优先使用共享聊天 session 的工作目录（如果已建立）
@@ -649,6 +654,7 @@ def build_bot_summary(
         "is_main": alias == manager.main_profile.alias,
         "status": run_status,
         "service_status": service_status,
+        **({"remote_workspace_status": remote_workspace_status} if remote_workspace_status else {}),
         "cluster": profile.cluster.to_dict(),
         "last_answer_completed_at": latest_answer_completed_at,
         "last_answer_terminal_at": latest_answer_terminal_at,
@@ -3895,14 +3901,18 @@ def _context_usage_signature(context_usage: dict[str, Any] | None) -> tuple[tupl
     return tuple(items)
 
 
-def _context_left_percent(context_usage: dict[str, Any] | None) -> int | None:
+CLI_CONTEXT_COMPACTION_TOKEN_THRESHOLD = 50_000
+
+
+def _context_used_tokens(context_usage: dict[str, Any] | None) -> int | None:
     if not isinstance(context_usage, dict):
         return None
-    value = context_usage.get("context_left_percent")
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
+    for key in ("used_tokens", "context_used"):
+        value = context_usage.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return max(0, int(value))
     return None
 
 
@@ -3920,23 +3930,26 @@ def _context_compaction_count(context_usage: dict[str, Any] | None) -> int:
 def _with_compaction_count(
     context_usage: dict[str, Any] | None,
     *,
-    previous_left_percent: int | None,
+    previous_used_tokens: int | None,
     compaction_count: int,
     observed_count: int | None = None,
 ) -> tuple[dict[str, Any] | None, int | None, int]:
     if not isinstance(context_usage, dict) or not context_usage:
-        return context_usage, previous_left_percent, compaction_count
+        return context_usage, previous_used_tokens, compaction_count
 
-    current_left_percent = _context_left_percent(context_usage)
+    current_used_tokens = _context_used_tokens(context_usage)
     if observed_count is not None:
         next_usage = dict(context_usage)
         next_usage["compaction_count"] = max(0, observed_count)
-        return next_usage, current_left_percent, max(0, observed_count)
-    if current_left_percent is None:
-        return dict(context_usage), previous_left_percent, compaction_count
+        return next_usage, current_used_tokens, max(0, observed_count)
+    if current_used_tokens is None:
+        return dict(context_usage), previous_used_tokens, compaction_count
 
     next_count = compaction_count
-    if previous_left_percent is not None and current_left_percent >= previous_left_percent + 20:
+    if (
+        previous_used_tokens is not None
+        and previous_used_tokens - current_used_tokens >= CLI_CONTEXT_COMPACTION_TOKEN_THRESHOLD
+    ):
         next_count += 1
 
     next_usage = dict(context_usage)
@@ -3945,7 +3958,7 @@ def _with_compaction_count(
     else:
         next_usage.pop("compaction_count", None)
 
-    return next_usage, current_left_percent, next_count
+    return next_usage, current_used_tokens, next_count
 
 
 def _with_turn_model(
@@ -5569,12 +5582,12 @@ async def _stream_cli_chat(
             int(round((time.perf_counter() - persist_started_at) * 1000)),
         )
         compaction_session_id: str | None = None
-        session_context_left_percent: int | None = None
+        session_context_used_tokens: int | None = None
         session_compaction_count = 0
         session_compaction_baseline = 0
 
         async def load_compaction_session(session_id: str | None) -> None:
-            nonlocal compaction_session_id, session_context_left_percent, session_compaction_count, session_compaction_baseline
+            nonlocal compaction_session_id, session_context_used_tokens, session_compaction_count, session_compaction_baseline
             normalized_session_id = str(session_id or "").strip()
             if normalized_session_id == compaction_session_id:
                 return
@@ -5583,7 +5596,7 @@ async def _stream_cli_chat(
                 native_session_id=normalized_session_id,
             )
             compaction_session_id = normalized_session_id
-            session_context_left_percent = _context_left_percent(previous_usage)
+            session_context_used_tokens = _context_used_tokens(previous_usage)
             session_compaction_count = _context_compaction_count(previous_usage)
             session_compaction_baseline = session_compaction_count
 
@@ -6014,11 +6027,11 @@ async def _stream_cli_chat(
                         await load_compaction_session(status_session_id)
                         (
                             status_context_usage,
-                            session_context_left_percent,
+                            session_context_used_tokens,
                             session_compaction_count,
                         ) = _with_compaction_count(
                             status_context_usage,
-                            previous_left_percent=session_context_left_percent,
+                            previous_used_tokens=session_context_used_tokens,
                             compaction_count=session_compaction_count,
                             observed_count=(session_compaction_baseline + _context_compaction_count(server_runtime.context_usage))
                             if server_runtime is not None else None,
@@ -6272,11 +6285,11 @@ async def _stream_cli_chat(
             await load_compaction_session(native_session_id)
             (
                 context_usage,
-                session_context_left_percent,
+                session_context_used_tokens,
                 session_compaction_count,
             ) = _with_compaction_count(
                 context_usage,
-                previous_left_percent=session_context_left_percent,
+                previous_used_tokens=session_context_used_tokens,
                 compaction_count=session_compaction_count,
                 observed_count=(session_compaction_baseline + _context_compaction_count(server_runtime.context_usage))
                 if server_runtime is not None else None,

@@ -363,6 +363,8 @@ function mapWorkspaceDocumentCloseResult(raw: RawWorkspaceDocumentSyncResult | n
 type RawBotSummary = {
   voice?: CodexVoiceCapability;
   remote_workspace?: import("./remoteWorkspace").RawRemoteWorkspace;
+  remote_workspace_status?: string;
+  remoteWorkspaceStatus?: string;
   alias: string;
   cli_type: CliType;
   cli_path?: string;
@@ -1631,6 +1633,10 @@ function mapCliType(value: unknown): CliType {
   return value === "claude" || value === "codex_server" || value === "antigravity" ? value : "codex";
 }
 
+function mapRemoteWorkspaceStatus(value: unknown) {
+  return value === "disconnected" ? "disconnected" as const : "connected" as const;
+}
+
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const busyAgentIds = (raw.busy_agent_ids ?? raw.busyAgentIds ?? []).map((item) => String(item));
   const busyAgentNames = (raw.busy_agent_names ?? raw.busyAgentNames ?? []).map((item) => String(item));
@@ -1648,6 +1654,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     ? "busy"
     : "idle";
   const status = mapStatus(raw.status, activityStatus === "busy");
+  const remoteWorkspace = raw.remote_workspace ? mapRemoteWorkspace(raw.remote_workspace) : undefined;
   const summary: BotSummary = {
     alias: raw.alias,
     cliType: mapCliType(raw.cli_type),
@@ -1658,7 +1665,10 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     busyAgentNames: resolvedBusyAgentNames,
     busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,
     workingDir: raw.working_dir,
-    ...(raw.remote_workspace ? { remoteWorkspace: mapRemoteWorkspace(raw.remote_workspace) } : {}),
+    ...(remoteWorkspace ? {
+      remoteWorkspace,
+      remoteWorkspaceStatus: mapRemoteWorkspaceStatus(raw.remote_workspace_status ?? raw.remoteWorkspaceStatus),
+    } : {}),
     lastActiveText: mapStatusText(status),
     archived: Boolean(raw.archived ?? raw.is_archived ?? raw.isArchived),
   };

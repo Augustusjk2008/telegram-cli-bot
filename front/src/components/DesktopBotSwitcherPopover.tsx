@@ -7,9 +7,10 @@ import type { BotStatus, BotSummary } from "../services/types";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { BotActivitySummary, getBotActivityText } from "./BotActivitySummary";
 import { BotSwitcherCounts } from "./BotSwitcherCounts";
+import { RemoteWorkspaceStatusPill } from "./RemoteWorkspaceStatusPill";
 import { StatusPill } from "./StatusPill";
 import { getBotRuntimeLabel } from "./botRuntimeLabel";
-import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
+import { getBotIdentityTextStyle } from "../utils/botVisual";
 
 type StatusFilter = "all" | BotStatus;
 
@@ -271,13 +272,14 @@ export function DesktopBotSwitcherPopover({
                   key={bot.alias}
                   ref={setItemRef(bot.alias)}
                   type="button"
+                  disabled={offline}
                   aria-current={current ? "true" : undefined}
                   aria-disabled={offline}
                   onFocus={() => setFocusedAlias(bot.alias)}
                   onMouseEnter={() => setFocusedAlias(bot.alias)}
                   onClick={() => void selectBot(bot)}
                   className={clsx(
-                    "relative mb-1 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 overflow-hidden rounded-md border py-2 pl-3.5 pr-2.5 text-left",
+                    "mb-1 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 overflow-hidden rounded-md border py-2 pl-3.5 pr-2.5 text-left",
                     "focus:outline-none focus:ring-2 focus:ring-[var(--accent)]",
                     current ? "tcb-soft-selected" : "border-transparent hover:bg-[var(--surface-strong)]",
                     focusedAlias === bot.alias && !current ? "bg-[var(--surface-strong)]" : "",
@@ -285,11 +287,6 @@ export function DesktopBotSwitcherPopover({
                     noAccess ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-zinc-200" : "",
                   )}
                 >
-                  <span
-                    aria-hidden="true"
-                    className="absolute left-0 top-0 h-full w-[3px]"
-                    style={getBotAccentStyle(bot.alias)}
-                  />
                   <span className="min-w-0">
                     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                       <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
@@ -297,7 +294,7 @@ export function DesktopBotSwitcherPopover({
                         <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
                       ) : null}
                       {bot.remoteWorkspace ? (
-                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
+                        <RemoteWorkspaceStatusPill status={bot.remoteWorkspaceStatus || "connected"} />
                       ) : null}
                       {current ? (
                         <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
@@ -310,7 +307,7 @@ export function DesktopBotSwitcherPopover({
                       "mt-1 flex min-w-0 items-center gap-2 text-xs",
                       current ? "text-[var(--text)]" : "text-[var(--muted)]",
                     )}>
-                      <span className="shrink-0 font-medium">{getBotRuntimeLabel(bot)}</span>
+                      <span className="shrink-0 font-medium" style={getBotIdentityTextStyle(bot.cliType)}>{getBotRuntimeLabel(bot)}</span>
                       <span className="min-w-0 truncate" title={workspaceLabel(bot)}>{workspaceLabel(bot)}</span>
                     </span>
                     <BotActivitySummary bot={bot} className="mt-1" showLatestAnswerTime />
@@ -334,15 +331,15 @@ export function DesktopBotSwitcherPopover({
               >
                 {focusedBot ? (
                   <div className="space-y-3">
-                    <div
-                      className="flex items-start border-l-4 pl-3"
-                      style={{ borderLeftColor: getBotAccentColor(focusedBot.alias) }}
-                    >
+                    <div className="flex items-start">
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                           <h2 className="truncate text-lg font-semibold text-[var(--text)]">{focusedBot.alias}</h2>
                           {focusedBot.isMain || focusedBot.alias === "main" ? (
                             <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
+                          ) : null}
+                          {focusedBot.remoteWorkspace ? (
+                            <RemoteWorkspaceStatusPill status={focusedBot.remoteWorkspaceStatus || "connected"} />
                           ) : null}
                           {focusedBot.alias === currentAlias ? (
                             <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
@@ -352,7 +349,7 @@ export function DesktopBotSwitcherPopover({
                           ) : null}
                           <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
                         </div>
-                        <div className="text-xs text-[var(--muted)]">{getBotRuntimeLabel(focusedBot)}</div>
+                        <div className="text-xs" style={getBotIdentityTextStyle(focusedBot.cliType)}>{getBotRuntimeLabel(focusedBot)}</div>
                       </div>
                     </div>
 
@@ -395,6 +392,7 @@ export function DesktopBotSwitcherPopover({
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
+                        disabled={isOffline(focusedBot)}
                         aria-disabled={isOffline(focusedBot)}
                         onClick={() => void selectBot(focusedBot)}
                         className={clsx(

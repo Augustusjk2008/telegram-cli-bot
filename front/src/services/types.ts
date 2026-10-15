@@ -531,6 +531,8 @@ export type RemoteWorkspace = {
   keyFilename?: string;
 };
 
+export type RemoteWorkspaceConnectionStatus = "connected" | "disconnected";
+
 export type RemoteConnectionInput = {
   platform?: "posix" | "windows";
   host: string;
@@ -545,6 +547,7 @@ export type RemoteConnectionInput = {
 export type BotSummary = {
   voice?: CodexVoiceCapability;
   remoteWorkspace?: RemoteWorkspace;
+  remoteWorkspaceStatus?: RemoteWorkspaceConnectionStatus;
   alias: string;
   cliType: CliType;
   status: BotStatus;
