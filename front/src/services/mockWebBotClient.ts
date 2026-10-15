@@ -3790,10 +3790,19 @@ export class MockWebBotClient implements WebBotClient {
       mcp: {
         serverName: "tcb-cluster",
         activeCliType,
+        tools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
         runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: isCodexCli(activeCliType) ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        antigravity: activeCliType === "antigravity" ? { state: "unsupported", message: "Antigravity CLI 暂不支持集群 MCP" } : { state: "not_checked", message: "未使用" },
+        antigravity: activeCliType === "antigravity"
+          ? {
+            state: "installed",
+            message: "Antigravity 工作区 MCP 已配置",
+            configPath: "C:\\workspace\\.agents\\mcp_config.json",
+            scope: "workspace",
+            allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
+          }
+          : { state: "not_checked", message: "未使用" },
         pi: activeCliType === "pi" ? { state: "installed", message: "Pi 集群扩展已配置" } : { state: "not_checked", message: "未使用" },
       },
       agents: this.ensureAgents(botAlias)
@@ -3839,15 +3848,18 @@ export class MockWebBotClient implements WebBotClient {
     if (activeCliType === "antigravity") {
       return {
         serverName: "tcb-cluster",
-        launcherPath: "",
-        configPath: "",
-        tokenPath: "",
+        launcherPath,
+        configPath,
+        tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
         installCommand: [],
-        verifyCommand: [],
+        verifyCommand: [cliPath, "mcp", "list"],
         removeCommand: [],
-        unsupported: true,
-        code: "cluster_unsupported_cli",
-        message: "Antigravity CLI 暂不支持集群 MCP",
+        workspaceMcpConfigPath: "C:\\workspace\\.agents\\mcp_config.json",
+        workspaceMcpScope: "workspace",
+        mcpAllowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
+        mcpSetupState: "installed",
+        statuslineCommand: ["python", "bot\\antigravity_statusline.py"],
+        message: "Antigravity 工作区 MCP 已配置",
       };
     }
     if (activeCliType === "pi") {

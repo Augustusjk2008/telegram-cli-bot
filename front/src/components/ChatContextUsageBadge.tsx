@@ -29,6 +29,20 @@ function formatTokenNumber(value?: number) {
   return Math.max(0, Math.floor(value)).toLocaleString("en-US");
 }
 
+function formatTokenUsage(value?: ChatMessageContextUsage["currentUsage"]) {
+  if (!value) {
+    return "";
+  }
+  const parts = [
+    typeof value.inputTokens === "number" ? `input ${formatTokenNumber(value.inputTokens)}` : "",
+    typeof value.outputTokens === "number" ? `output ${formatTokenNumber(value.outputTokens)}` : "",
+    typeof value.thinkingTokens === "number" ? `thinking ${formatTokenNumber(value.thinkingTokens)}` : "",
+    typeof value.cacheReadTokens === "number" ? `cache ${formatTokenNumber(value.cacheReadTokens)}` : "",
+    typeof value.totalTokens === "number" ? `total ${formatTokenNumber(value.totalTokens)}` : "",
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
 function clampPercent(value: number) {
   if (!Number.isFinite(value)) {
     return 0;
@@ -83,7 +97,12 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
     typeof contextUsage.cacheWriteTokens === "number" ? `cache write: ${formatTokenNumber(contextUsage.cacheWriteTokens)}` : "",
     typeof contextUsage.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
     typeof contextUsage.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
+    typeof contextUsage.totalTokens === "number" ? `total: ${formatTokenNumber(contextUsage.totalTokens)}` : "",
     contextUsage.usedDisplay && contextUsage.windowDisplay ? `display: ${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}` : "",
+    contextUsage.usageScope ? `usage scope: ${contextUsage.usageScope}` : "",
+    contextUsage.source ? `source: ${contextUsage.source}` : "",
+    formatTokenUsage(contextUsage.currentUsage) ? `current usage: ${formatTokenUsage(contextUsage.currentUsage)}` : "",
+    formatTokenUsage(contextUsage.turnUsage) ? `turn usage: ${formatTokenUsage(contextUsage.turnUsage)}` : "",
     model ? `model: ${model}` : "",
     contextUsage.provider ? `provider: ${contextUsage.provider.replace(/原生 (?:agent|智能体)/gi, "native agent")}` : "",
     contextUsage.sessionId ? `session: ${contextUsage.sessionId}` : "",

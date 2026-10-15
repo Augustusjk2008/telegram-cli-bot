@@ -639,6 +639,7 @@ export type ClusterMcpState =
   | "runtime_ready"
   | "installed"
   | "stale"
+  | "conflict"
   | "broken"
   | "app_not_running"
   | "unsupported";
@@ -646,6 +647,9 @@ export type ClusterMcpState =
 export type ClusterMcpTargetStatus = {
   state: ClusterMcpState;
   message: string;
+  configPath?: string;
+  scope?: string;
+  allowedTools?: string[];
 };
 
 export type ClusterAgentStatus = {
@@ -665,6 +669,7 @@ export type ClusterStatus = {
   mcp: {
     serverName: string;
     activeCliType: CliType | string;
+    tools?: string[];
     runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
@@ -776,6 +781,11 @@ export type ClusterSetupPrepareResult = {
   piExtensionPath?: string;
   piExtensionName?: string;
   selfTestCommand?: string[];
+  workspaceMcpConfigPath?: string;
+  workspaceMcpScope?: string;
+  mcpAllowedTools?: string[];
+  mcpSetupState?: string;
+  statuslineCommand?: string[];
   unsupported?: boolean;
   code?: string;
   message?: string;
@@ -1102,6 +1112,15 @@ export type ChatMessageEstimatedCost = {
   isPartial?: boolean;
 };
 
+export type ChatMessageTokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  thinkingTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+};
+
 export type ChatMessageContextUsage = {
   provider?: string;
   source?: string;
@@ -1120,6 +1139,10 @@ export type ChatMessageContextUsage = {
   cacheWriteTokens?: number;
   outputTokens?: number;
   reasoningTokens?: number;
+  totalTokens?: number;
+  usageScope?: string;
+  currentUsage?: ChatMessageTokenUsage;
+  turnUsage?: ChatMessageTokenUsage;
   model?: string;
   estimatedCost?: ChatMessageEstimatedCost;
 };

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -321,6 +322,124 @@ def _normalize_antigravity_usage(value: Any) -> Optional[Dict[str, Any]]:
             return None
         selected[key] = token_value
     return selected or None
+
+
+def _normalize_antigravity_statusline_token(value: Any) -> Optional[int]:
+    if type(value) is not int or value < 0:
+        return None
+    return value
+
+
+def _normalize_antigravity_statusline_percent(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0 or normalized > 100:
+        return None
+    return normalized
+
+
+def parse_antigravity_statusline_json(payload: Any) -> Optional[Dict[str, Any]]:
+    """Validate and normalize one Antigravity statusline state payload.
+
+    Statusline state is an optional side channel, so malformed or partial input
+    is ignored.  Percentages are accepted only from the CLI-provided
+    ``context_window`` object; they are never derived from raw result usage.
+    """
+    if isinstance(payload, (bytes, bytearray)):
+        try:
+            payload = bytes(payload).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, dict):
+        return None
+
+    context_window = payload.get("context_window")
+    if not isinstance(context_window, dict):
+        return None
+    window_size = _normalize_antigravity_statusline_token(context_window.get("context_window_size"))
+    if window_size is None or window_size <= 0:
+        return None
+    used_percent = _normalize_antigravity_statusline_percent(context_window.get("used_percentage"))
+    left_percent = _normalize_antigravity_statusline_percent(context_window.get("remaining_percentage"))
+    if used_percent is None and left_percent is None:
+        return None
+    if used_percent is None:
+        used_percent = max(0.0, min(100.0, 100.0 - left_percent))  # type: ignore[operator]
+    if left_percent is None:
+        left_percent = max(0.0, min(100.0, 100.0 - used_percent))
+    if abs((used_percent + left_percent) - 100.0) > 1.5:
+        return None
+
+    current_usage_raw = context_window.get("current_usage")
+    current_usage: Dict[str, int] = {}
+    if isinstance(current_usage_raw, dict):
+        aliases = (
+            ("input_tokens", "input_tokens"),
+            ("total_input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("total_output_tokens", "output_tokens"),
+            ("thinking_tokens", "thinking_tokens"),
+            ("cache_read_tokens", "cache_read_tokens"),
+            ("cache_read_input_tokens", "cache_read_tokens"),
+            ("cache_write_tokens", "cache_write_tokens"),
+            ("cache_creation_input_tokens", "cache_write_tokens"),
+            ("total_tokens", "total_tokens"),
+        )
+        for source_key, result_key in aliases:
+            token = _normalize_antigravity_statusline_token(current_usage_raw.get(source_key))
+            if token is not None:
+                current_usage[result_key] = token
+
+    for source_key, result_key in (
+        ("total_input_tokens", "input_tokens"),
+        ("total_output_tokens", "output_tokens"),
+    ):
+        if result_key not in current_usage:
+            token = _normalize_antigravity_statusline_token(context_window.get(source_key))
+            if token is not None:
+                current_usage[result_key] = token
+
+    used_tokens = current_usage.get("total_tokens")
+    if used_tokens is None:
+        used_tokens = sum(
+            current_usage.get(key, 0)
+            for key in ("input_tokens", "cache_read_tokens", "output_tokens")
+        )
+        if used_tokens <= 0:
+            used_tokens = None
+
+    result: Dict[str, Any] = {
+        "provider": "antigravity",
+        "source": "antigravity_statusline",
+        "context_window": window_size,
+        "context_used_percent": used_percent,
+        "context_left_percent": left_percent,
+        "usage_scope": "conversation",
+    }
+    conversation_id = str(payload.get("conversation_id") or payload.get("session_id") or "").strip()
+    if conversation_id:
+        result["session_id"] = conversation_id
+    if used_tokens is not None:
+        result["used_tokens"] = used_tokens
+    if current_usage:
+        result["current_usage"] = current_usage
+        for key, value in current_usage.items():
+            if key != "total_tokens":
+                result[key] = value
+    model = payload.get("model")
+    if isinstance(model, dict):
+        model_id = str(model.get("id") or model.get("display_name") or "").strip()
+        if model_id:
+            result["model"] = model_id
+    elif isinstance(model, str) and model.strip():
+        result["model"] = model.strip()
+    return result
 
 
 def _format_antigravity_denied_actions(value: Any) -> Optional[str]:

@@ -1839,6 +1839,11 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
     return {
       state: String(item.state || "not_checked") as ClusterMcpState,
       message: String(item.message || ""),
+      configPath: String(item.config_path || item.configPath || "") || undefined,
+      scope: String(item.scope || "") || undefined,
+      allowedTools: Array.isArray(item.allowed_tools ?? item.allowedTools)
+        ? ((item.allowed_tools ?? item.allowedTools) as unknown[]).map((tool) => String(tool))
+        : undefined,
     };
   };
   return {
@@ -1848,6 +1853,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
     mcp: {
       serverName: String(mcp.server_name || mcp.serverName || "tcb-cluster"),
       activeCliType: String(mcp.active_cli_type || mcp.activeCliType || "codex"),
+      tools: Array.isArray(mcp.tools) ? mcp.tools.map((tool) => String(tool)) : undefined,
       runtime: mapTarget(mcp.runtime),
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
@@ -1982,6 +1988,13 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     piExtensionPath: String(value.pi_extension_path || value.piExtensionPath || ""),
     piExtensionName: String(value.pi_extension_name || value.piExtensionName || ""),
     selfTestCommand: list("self_test_command", "selfTestCommand"),
+    workspaceMcpConfigPath: String(value.workspace_mcp_config_path || value.workspaceMcpConfigPath || ""),
+    workspaceMcpScope: String(value.workspace_mcp_scope || value.workspaceMcpScope || ""),
+    mcpAllowedTools: Array.isArray(value.mcp_allowed_tools ?? value.mcpAllowedTools)
+      ? ((value.mcp_allowed_tools ?? value.mcpAllowedTools) as unknown[]).map((tool) => String(tool))
+      : undefined,
+    mcpSetupState: String(value.mcp_setup_state || value.mcpSetupState || ""),
+    statuslineCommand: list("statusline_command", "statuslineCommand"),
     unsupported: value.unsupported === true,
     code: String(value.code || ""),
     message: String(value.message || ""),

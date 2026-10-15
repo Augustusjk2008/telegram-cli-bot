@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import re
 import threading
+import tempfile
+import time
 from decimal import Decimal, ROUND_HALF_UP
 from io import SEEK_END
 from pathlib import Path
 from typing import Any
 
-from bot.cli import normalize_cli_type
+from bot.cli import normalize_cli_type, parse_antigravity_statusline_json
 from bot.web.native_history_locator import locate_claude_transcript, locate_codex_transcript
+from bot.runtime_paths import get_tcb_home_root
 
 _CODEX_CONTEXT_BASELINE_TOKENS = 12_000
 _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
@@ -34,6 +39,8 @@ _CONTEXT_USAGE_CACHE_ORDER: list[_ContextCacheKey] = []
 _CONTEXT_USAGE_CACHE_LIMIT = 128
 _TRANSCRIPT_STATE: dict[tuple[str, str, str], dict[str, Any]] = {}
 _TAIL_WINDOW_BYTES = 256 * 1024
+ANTIGRAVITY_STATUSLINE_TTL_SECONDS = 30.0
+_ANTIGRAVITY_STATUSLINE_ROOT_NAME = "antigravity-statusline"
 
 
 def clear_context_usage_cache() -> None:
@@ -41,6 +48,186 @@ def clear_context_usage_cache() -> None:
         _CONTEXT_USAGE_CACHE.clear()
         _CONTEXT_USAGE_CACHE_ORDER.clear()
         _TRANSCRIPT_STATE.clear()
+
+
+def _antigravity_statusline_root() -> Path:
+    configured = str(os.environ.get("TCB_ANTIGRAVITY_STATUSLINE_DIR") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    try:
+        return get_tcb_home_root() / _ANTIGRAVITY_STATUSLINE_ROOT_NAME
+    except Exception:
+        return Path(tempfile.gettempdir()) / "orbit-safe-claw" / _ANTIGRAVITY_STATUSLINE_ROOT_NAME
+
+
+def get_antigravity_statusline_telemetry_path(
+    *,
+    cwd_hint: str | None = None,
+    telemetry_path: str | Path | None = None,
+) -> Path:
+    configured = str(telemetry_path or os.environ.get("TCB_ANTIGRAVITY_STATUSLINE_PATH") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    cwd = str(cwd_hint or "").strip()
+    identity = str(Path(cwd).expanduser().absolute()) if cwd else "default"
+    digest = hashlib.sha256(identity.lower().encode("utf-8", errors="replace")).hexdigest()[:24]
+    return _antigravity_statusline_root() / f"{digest}.jsonl"
+
+
+def cleanup_antigravity_statusline_telemetry(
+    *,
+    root: str | Path | None = None,
+    now: float | None = None,
+    max_age_seconds: float = ANTIGRAVITY_STATUSLINE_TTL_SECONDS,
+) -> int:
+    target_root = Path(root).expanduser() if root is not None else _antigravity_statusline_root()
+    try:
+        entries = [*target_root.glob("*.json"), *target_root.glob("*.jsonl")]
+    except OSError:
+        return 0
+    current_time = time.time() if now is None else float(now)
+    removed = 0
+    for path in entries:
+        try:
+            if current_time - path.stat().st_mtime <= max(0.1, float(max_age_seconds)):
+                continue
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def record_antigravity_statusline_payload(
+    payload: Any,
+    *,
+    path: str | Path | None = None,
+    cwd_hint: str | None = None,
+) -> dict[str, Any] | None:
+    """Append a validated statusline payload for a configured statusline hook."""
+    normalized = parse_antigravity_statusline_json(payload)
+    if normalized is None:
+        return None
+    target = get_antigravity_statusline_telemetry_path(cwd_hint=cwd_hint, telemetry_path=path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(payload, (bytes, bytearray)):
+        raw = bytes(payload).decode("utf-8", errors="replace")
+    elif isinstance(payload, str):
+        raw = payload
+    else:
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(raw.strip())
+        handle.write("\n")
+    return normalized
+
+
+def _read_antigravity_statusline_payloads(path: Path) -> list[dict[str, Any]]:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
+    if len(data) > _TAIL_WINDOW_BYTES:
+        data = data[-_TAIL_WINDOW_BYTES:]
+    payloads: list[dict[str, Any]] = []
+    for line in reversed(data.decode("utf-8", errors="replace").splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            payloads.append(value)
+    return payloads
+
+
+def _statusline_payload_matches_workspace(payload: dict[str, Any], cwd_hint: str | None) -> bool:
+    expected = str(cwd_hint or "").strip()
+    if not expected:
+        return True
+    reported = str(payload.get("cwd") or "").strip()
+    if not reported:
+        workspace = payload.get("workspace")
+        if isinstance(workspace, dict):
+            reported = str(workspace.get("current_dir") or workspace.get("project_dir") or "").strip()
+    if not reported:
+        return True
+    try:
+        return Path(reported).expanduser().absolute().resolve() == Path(expected).expanduser().absolute().resolve()
+    except OSError:
+        return reported.lower() == expected.lower()
+
+
+def _format_antigravity_tokens(value: int) -> str:
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}".rstrip("0").rstrip(".") + "M"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}".rstrip("0").rstrip(".") + "K"
+    return str(value)
+
+
+def resolve_antigravity_statusline_usage(
+    session_id: str | None,
+    cwd_hint: str | None = None,
+    *,
+    telemetry_path: str | Path | None = None,
+    now: float | None = None,
+    max_age_seconds: float = ANTIGRAVITY_STATUSLINE_TTL_SECONDS,
+) -> dict[str, Any] | None:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return None
+    path = get_antigravity_statusline_telemetry_path(
+        cwd_hint=cwd_hint,
+        telemetry_path=telemetry_path,
+    )
+    cleanup_antigravity_statusline_telemetry(
+        root=path.parent,
+        now=now,
+        max_age_seconds=max_age_seconds,
+    )
+    try:
+        modified_at = path.stat().st_mtime
+    except OSError:
+        return None
+    current_time = time.time() if now is None else float(now)
+    if current_time - modified_at > max(0.1, float(max_age_seconds)):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+
+    payloads = _read_antigravity_statusline_payloads(path)
+    for require_matching_session in (True, False):
+        for payload in payloads:
+            if not _statusline_payload_matches_workspace(payload, cwd_hint):
+                continue
+            normalized = parse_antigravity_statusline_json(payload)
+            if normalized is None:
+                continue
+            payload_session_id = str(normalized.get("session_id") or "").strip()
+            if require_matching_session:
+                if payload_session_id != normalized_session_id:
+                    continue
+            elif payload_session_id:
+                continue
+            normalized["session_id"] = normalized_session_id
+            used_tokens = normalized.get("used_tokens")
+            context_window = normalized.get("context_window")
+            if isinstance(used_tokens, int):
+                normalized["used_display"] = _format_antigravity_tokens(used_tokens)
+            if isinstance(context_window, int):
+                normalized["window_display"] = _format_antigravity_tokens(context_window)
+            left_percent = normalized.get("context_left_percent")
+            left_text = f"{float(left_percent):.1f}".rstrip("0").rstrip(".") if isinstance(left_percent, (int, float)) else ""
+            usage_text = ""
+            if normalized.get("used_display") and normalized.get("window_display"):
+                usage_text = f"{normalized['used_display']} / {normalized['window_display']}"
+            normalized["status_text"] = " · ".join(
+                part for part in (f"{left_text}% context left" if left_text else "", usage_text) if part
+            ) or "Antigravity context telemetry"
+            return normalized
+    return None
 
 
 def _transcript_cache_key(provider: str, session_id: str, transcript_path: Path) -> _ContextCacheKey | None:
@@ -456,10 +643,13 @@ def resolve_cli_context_usage(
 ) -> dict[str, Any] | None:
     provider = normalize_cli_type(str(cli_type or ""))
     normalized_session_id = str(session_id or "").strip()
-    if not normalized_session_id or provider == "antigravity":
+    if not normalized_session_id:
         return None
 
     try:
+        if provider == "antigravity":
+            return resolve_antigravity_statusline_usage(normalized_session_id, cwd_hint)
+
         if provider == "codex":
             ref = locate_codex_transcript(normalized_session_id)
             if ref is None:

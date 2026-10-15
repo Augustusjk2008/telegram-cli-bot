@@ -875,7 +875,7 @@ async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
     ])
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "agy")
     monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["agy"], False))
-    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: pytest.fail("Antigravity must not query private transcripts"))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
 
     events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
@@ -889,6 +889,8 @@ async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
         "source": "antigravity_stream_json",
         "session_id": "agy-stream-session",
         "model": "gemini-3.8-flash-medium",
+        "usage_scope": "conversation",
+        "status_text": "CLI usage only · conversation total",
         "input_tokens": 11,
         "output_tokens": 2,
         "thinking_tokens": 3,

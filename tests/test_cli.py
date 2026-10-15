@@ -19,6 +19,7 @@ from bot.cli import (
     build_cli_command,
     parse_antigravity_json_output,
     parse_antigravity_model_options,
+    parse_antigravity_statusline_json,
     parse_codex_json_line,
 )
 from bot.cli_params import (
@@ -385,6 +386,26 @@ def test_antigravity_parser_reads_nested_stream_events_and_usage() -> None:
         "total_tokens": 20,
     }
     assert result.error_text is None
+
+
+def test_antigravity_statusline_parser_reads_verified_context_window() -> None:
+    payload = json.loads((ANTIGRAVITY_FIXTURE_DIR / "statusline_context.json").read_text(encoding="utf-8"))
+
+    result = parse_antigravity_statusline_json(payload)
+
+    assert result is not None
+    assert result["source"] == "antigravity_statusline"
+    assert result["session_id"] == "agy-statusline-session"
+    assert result["used_tokens"] == 124245
+    assert result["context_window"] == 1048576
+    assert result["context_left_percent"] == 88.15
+    assert result["usage_scope"] == "conversation"
+
+
+def test_antigravity_statusline_parser_rejects_unavailable_window() -> None:
+    payload = json.loads((ANTIGRAVITY_FIXTURE_DIR / "context_unavailable.json").read_text(encoding="utf-8"))
+
+    assert parse_antigravity_statusline_json(payload) is None
 
 
 def test_antigravity_parser_marks_soft_permission_denial_as_failure() -> None:

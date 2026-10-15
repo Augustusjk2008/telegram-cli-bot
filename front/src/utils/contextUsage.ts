@@ -1,4 +1,4 @@
-import type { ChatMessageContextUsage, ChatMessageEstimatedCost } from "../services/types";
+import type { ChatMessageContextUsage, ChatMessageEstimatedCost, ChatMessageTokenUsage } from "../services/types";
 import { isCodexCli } from "./cliType";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -29,6 +29,25 @@ function firstNumber(raw: Record<string, unknown>, ...keys: string[]) {
     }
   }
   return undefined;
+}
+
+function mapTokenUsage(value: unknown): ChatMessageTokenUsage | undefined {
+  const raw = asRecord(value);
+  const inputTokens = firstNumber(raw, "inputTokens", "input_tokens");
+  const outputTokens = firstNumber(raw, "outputTokens", "output_tokens");
+  const thinkingTokens = firstNumber(raw, "thinkingTokens", "thinking_tokens");
+  const cacheReadTokens = firstNumber(raw, "cacheReadTokens", "cache_read_tokens", "cache_read_input_tokens");
+  const cacheWriteTokens = firstNumber(raw, "cacheWriteTokens", "cache_write_tokens", "cache_creation_input_tokens");
+  const totalTokens = firstNumber(raw, "totalTokens", "total_tokens");
+  const result: ChatMessageTokenUsage = {
+    ...(typeof inputTokens === "number" ? { inputTokens } : {}),
+    ...(typeof outputTokens === "number" ? { outputTokens } : {}),
+    ...(typeof thinkingTokens === "number" ? { thinkingTokens } : {}),
+    ...(typeof cacheReadTokens === "number" ? { cacheReadTokens } : {}),
+    ...(typeof cacheWriteTokens === "number" ? { cacheWriteTokens } : {}),
+    ...(typeof totalTokens === "number" ? { totalTokens } : {}),
+  };
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function displayContextProvider(provider: string) {
@@ -85,6 +104,10 @@ export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUs
   const cacheWriteTokens = firstNumber(raw, "cacheWriteTokens", "cache_write_tokens");
   const outputTokens = firstNumber(raw, "outputTokens", "output_tokens");
   const reasoningTokens = firstNumber(raw, "reasoningTokens", "reasoning_tokens");
+  const totalTokens = firstNumber(raw, "totalTokens", "total_tokens");
+  const usageScope = firstString(raw, "usageScope", "usage_scope");
+  const currentUsage = mapTokenUsage(raw.currentUsage ?? raw.current_usage);
+  const turnUsage = mapTokenUsage(raw.turnUsage ?? raw.turn_usage);
   const model = firstString(raw, "model");
   const usedDisplay = firstString(raw, "usedDisplay", "used_display");
   const windowDisplay = firstString(raw, "windowDisplay", "window_display");
@@ -106,6 +129,10 @@ export function mapChatMessageContextUsage(value: unknown): ChatMessageContextUs
     ...(typeof cacheWriteTokens === "number" ? { cacheWriteTokens } : {}),
     ...(typeof outputTokens === "number" ? { outputTokens } : {}),
     ...(typeof reasoningTokens === "number" ? { reasoningTokens } : {}),
+    ...(typeof totalTokens === "number" ? { totalTokens } : {}),
+    ...(usageScope ? { usageScope } : {}),
+    ...(currentUsage ? { currentUsage } : {}),
+    ...(turnUsage ? { turnUsage } : {}),
     ...(model ? { model } : {}),
     ...(usedDisplay ? { usedDisplay } : {}),
     ...(windowDisplay ? { windowDisplay } : {}),

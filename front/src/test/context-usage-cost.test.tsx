@@ -124,6 +124,32 @@ describe("context usage cost mapping", () => {
 });
 
 describe("context usage cost details", () => {
+  it("shows Antigravity CLI usage without inventing a context percentage", () => {
+    const mapped = mapChatMessageContextUsage({
+      provider: "antigravity",
+      source: "antigravity_stream_json",
+      usage_scope: "conversation",
+      input_tokens: 120,
+      output_tokens: 30,
+      thinking_tokens: 20,
+      cache_read_tokens: 40,
+      total_tokens: 210,
+      status_text: "CLI usage only · conversation total",
+    });
+
+    expect(mapped).toMatchObject({
+      provider: "antigravity",
+      usageScope: "conversation",
+      totalTokens: 210,
+    });
+    render(<ChatContextUsageBadge contextUsage={mapped} />);
+    expect(screen.getByRole("button")).toHaveTextContent("CLI usage only");
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("usage scope: conversation");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("total: 210");
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent(/context left|%/i);
+  });
+
   it("keeps unknown costs hidden even for unvalidated component data", () => {
     const { rerender } = render(<ChatContextUsageBadge contextUsage={{}} />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();

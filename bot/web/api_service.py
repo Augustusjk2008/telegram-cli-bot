@@ -58,9 +58,14 @@ from bot.cluster.setup import (
     build_cli_install_command,
     build_cli_remove_command,
     build_cli_verify_command,
+    CLUSTER_MCP_TOOL_NAMES,
+    ensure_antigravity_mcp_config,
     build_pi_mcp_self_test_command,
+    get_antigravity_mcp_config_path,
     get_pi_cluster_extension_path,
+    inspect_antigravity_mcp_config,
     prepare_cluster_mcp_launcher,
+    remove_antigravity_mcp_config,
     write_pi_cluster_extension,
 )
 from bot.git_runtime import apply_git_fsmonitor_disabled_env
@@ -149,7 +154,10 @@ from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenc
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
 from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore
-from bot.web.cli_context_usage import resolve_cli_context_usage
+from bot.web.cli_context_usage import (
+    get_antigravity_statusline_telemetry_path,
+    resolve_cli_context_usage,
+)
 from bot.web.cli_turn_cost import CliTurnCost
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.git_commit_message import truncate_diff_text
@@ -803,9 +811,19 @@ def _cluster_unsupported_target_status() -> dict[str, str]:
     return {"state": "unsupported", "message": "Antigravity CLI 暂不支持集群 MCP"}
 
 
-def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, str]:
+def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, Any]:
     if cli_data_provider(cli_type) != cli_data_provider(active_cli_type):
         return _cluster_inactive_target_status()
+    if cli_data_provider(cli_type) == "antigravity":
+        launcher_path = _cluster_launcher_path()
+        inspected = inspect_antigravity_mcp_config(profile.working_dir, launcher_path)
+        return {
+            "state": str(inspected.get("state") or "not_checked"),
+            "message": str(inspected.get("message") or ""),
+            "config_path": str(inspected.get("config_path") or get_antigravity_mcp_config_path(profile.working_dir)),
+            "allowed_tools": list(inspected.get("allowed_tools") or CLUSTER_MCP_TOOL_NAMES),
+            "scope": "workspace",
+        }
     cli_path = _cluster_cli_path(profile, cli_type)
     command = build_cli_verify_command(cli_type, cli_path)
     try:
@@ -901,14 +919,11 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
         "mcp": {
             "server_name": CLUSTER_MCP_SERVER_NAME,
             "active_cli_type": active_cli_type,
+            "tools": list(CLUSTER_MCP_TOOL_NAMES),
             "runtime": _cluster_runtime_mcp_status(),
             "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
             "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
-            "antigravity": (
-                _cluster_unsupported_target_status()
-                if active_cli_type == "antigravity"
-                else _cluster_inactive_target_status()
-            ),
+            "antigravity": _cluster_mcp_target_status(profile, "antigravity", active_cli_type=active_cli_type),
             "pi": _cluster_pi_mcp_target_status(active_cli_type=active_cli_type),
         },
         "agents": [
@@ -930,21 +945,26 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
 def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     active_cli_type = _profile_cluster_active_cli_type(profile)
-    if active_cli_type == "antigravity":
-        return {
-            "server_name": CLUSTER_MCP_SERVER_NAME,
-            "unsupported": True,
-            "code": "cluster_unsupported_cli",
-            "message": "Antigravity CLI 暂不支持集群 MCP",
-            "install_command": [],
-            "verify_command": [],
-            "remove_command": [],
-        }
     launcher = prepare_cluster_mcp_launcher(
         home_dir=Path.home(),
         repo_root=_REPO_ROOT,
         bridge_url=_cluster_bridge_url(),
     )
+    if active_cli_type == "antigravity":
+        setup = ensure_antigravity_mcp_config(profile.working_dir, launcher.launcher_path)
+        return {
+            **launcher.to_dict(),
+            "install_command": [],
+            "verify_command": build_cli_verify_command("antigravity", profile.cli_path),
+            "remove_command": [],
+            "workspace_mcp_config_path": setup["config_path"],
+            "workspace_mcp_scope": "workspace",
+            "mcp_allowed_tools": list(setup.get("allowed_tools") or CLUSTER_MCP_TOOL_NAMES),
+            "mcp_setup_state": "conflict" if setup.get("conflict") else "installed",
+            "statusline_command": [sys.executable, str(_REPO_ROOT / "bot" / "antigravity_statusline.py")],
+            "code": "cluster_mcp_config_conflict" if setup.get("conflict") else "",
+            "message": setup.get("message") or "Antigravity 工作区 MCP 已配置",
+        }
     if active_cli_type == "pi":
         extension_path = write_pi_cluster_extension(repo_root=_REPO_ROOT)
         return {
@@ -975,8 +995,11 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
             source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
             profile = get_profile_or_raise(manager, alias)
             next_config = normalize_bot_cluster_config(source)
-            if next_config.enabled and normalize_cli_type(profile.cli_type) == "antigravity":
-                _raise(409, "cluster_unsupported_cli", "Antigravity CLI 暂不支持集群 MCP")
+            remove_antigravity_config = (
+                not next_config.enabled
+                and bool(profile.cluster.enabled)
+                and normalize_cli_type(profile.cli_type) == "antigravity"
+            )
             current_size = max(1, int(profile.cluster.max_parallel_agents or 1))
             target_size = max(1, int(next_config.max_parallel_agents or 1))
             if target_size < current_size:
@@ -1006,6 +1029,11 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
                         },
                     )
             cluster = await manager.update_bot_cluster(alias, next_config.to_dict())
+            if remove_antigravity_config:
+                try:
+                    remove_antigravity_mcp_config(profile.working_dir)
+                except (OSError, ValueError, TimeoutError):
+                    logger.warning("清理 Antigravity MCP 配置失败 working_dir=%s", profile.working_dir, exc_info=True)
     except ValueError as exc:
         _raise(400, "invalid_cluster_config", str(exc))
     return {"cluster": cluster, "status": get_cluster_status(manager, alias)}
@@ -3395,6 +3423,24 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         injection = ["--mcp-config", str(config_path), "--strict-mcp-config"]
+    elif cli_type == "antigravity":
+        launcher = prepare_cluster_mcp_launcher(
+            home_dir=Path.home(),
+            repo_root=_REPO_ROOT,
+            bridge_url=_cluster_bridge_url(),
+        )
+        setup = ensure_antigravity_mcp_config(profile.working_dir, launcher.launcher_path)
+        if setup.get("conflict"):
+            _raise(
+                409,
+                "cluster_mcp_config_conflict",
+                str(setup.get("message") or "工作区已有用户管理的 tcb-cluster 配置"),
+                {
+                    "config_path": setup.get("config_path"),
+                    "allowed_tools": setup.get("allowed_tools") or list(CLUSTER_MCP_TOOL_NAMES),
+                },
+            )
+        injection = []
     else:
         injection = []
     if injection and not all(arg in extra_args for arg in injection):
@@ -3514,8 +3560,6 @@ def _start_cluster_run_if_requested(
     del cluster  # Legacy clients may still send this field; orchestration is Bot-scoped.
     if not profile.cluster.enabled:
         return None
-    if execution_mode == EXECUTION_MODE_CLI and normalize_cli_type(profile.cli_type) == "antigravity":
-        _raise(409, "cluster_unsupported_cli", "Antigravity CLI 暂不支持集群 MCP")
     if str(agent_id or "main").strip().lower() != "main" or solo_mode or internal_continuation:
         return None
     saved_team_state = team_state if isinstance(team_state, dict) else {}
@@ -4046,6 +4090,8 @@ def _build_antigravity_context_usage(
         "provider": "antigravity",
         "source": "antigravity_stream_json",
         "session_id": str(session_id or "").strip(),
+        "usage_scope": "conversation",
+        "status_text": "CLI usage only · conversation total",
     }
     normalized_model = str(model or "").strip()
     if normalized_model:
@@ -4054,7 +4100,41 @@ def _build_antigravity_context_usage(
         value = usage.get(key)
         if type(value) is int and value >= 0:
             result[key] = value
-    return result if len(result) > 3 else None
+    return result if any(key in result for key in ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens", "total_tokens")) else None
+
+
+def _merge_antigravity_context_usage(
+    statusline_usage: dict[str, Any] | None,
+    raw_usage: dict[str, Any] | None,
+    *,
+    model: str,
+    session_id: str,
+) -> dict[str, Any] | None:
+    raw_context = _build_antigravity_context_usage(
+        raw_usage,
+        model=model,
+        session_id=session_id,
+    )
+    if (
+        not isinstance(statusline_usage, dict)
+        or not statusline_usage
+        or str(statusline_usage.get("source") or "") != "antigravity_statusline"
+    ):
+        return raw_context
+    result = dict(statusline_usage)
+    result.setdefault("provider", "antigravity")
+    result.setdefault("source", "antigravity_statusline")
+    result.setdefault("session_id", str(session_id or "").strip())
+    result.setdefault("usage_scope", "conversation")
+    if model and not str(result.get("model") or "").strip():
+        result["model"] = model
+    if raw_context is not None:
+        result["turn_usage"] = {
+            key: value
+            for key, value in raw_context.items()
+            if key in {"input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens", "total_tokens"}
+        }
+    return result
 
 
 async def _resolve_cli_context_usage_bounded(
@@ -4068,8 +4148,6 @@ async def _resolve_cli_context_usage_bounded(
     if not normalized_session_id:
         return None
     normalized_cli_type = cli_data_provider(cli_type)
-    if normalized_cli_type == "antigravity":
-        return None
     loop = asyncio.get_running_loop()
     task = loop.run_in_executor(
         _CLI_CONTEXT_USAGE_EXECUTOR,
@@ -5547,8 +5625,6 @@ async def _stream_cli_chat(
     cli_type = normalize_cli_type(profile.cli_type)
     if getattr(profile, "remote_workspace", None) and cli_type == "antigravity":
         _raise(409, "remote_workspace_unsupported_cli", "Antigravity CLI 暂不支持远程工作区")
-    if cli_type == "antigravity" and (cluster_run_id or profile.cluster.enabled):
-        _raise(409, "cluster_unsupported_cli", "Antigravity CLI 暂不支持集群 MCP")
 
     visible_input = request.visible_text if request is not None and request.visible_text is not None else user_text
     if getattr(profile, "remote_workspace", None):
@@ -5583,6 +5659,10 @@ async def _stream_cli_chat(
         return prepared, prepared_done_session
 
     env = _build_cli_env(cli_type)
+    if cli_type == "antigravity":
+        env["TCB_ANTIGRAVITY_STATUSLINE_PATH"] = str(
+            get_antigravity_statusline_telemetry_path(cwd_hint=session.working_dir)
+        )
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
         env["TCB_CLUSTER_BOT_ALIAS"] = alias
@@ -6080,7 +6160,8 @@ async def _stream_cli_chat(
                     elif status_session_id and status_session_id == last_context_usage_session_id:
                         status_context_usage = last_context_usage
                     if cli_type == "antigravity":
-                        status_context_usage = _build_antigravity_context_usage(
+                        status_context_usage = _merge_antigravity_context_usage(
+                            status_context_usage,
                             preview_state.result().terminal_usage,
                             model=turn_model,
                             session_id=status_session_id,
@@ -6339,11 +6420,12 @@ async def _stream_cli_chat(
             if context_usage is None and native_session_id == last_context_usage_session_id:
                 context_usage = last_context_usage
             if cli_type == "antigravity":
-                context_usage = _build_antigravity_context_usage(
+                context_usage = _merge_antigravity_context_usage(
+                    context_usage,
                     parsed_result.terminal_usage,
                     model=turn_model,
                     session_id=native_session_id,
-                ) or context_usage
+                )
             context_usage = _with_turn_model(context_usage, turn_model)
             await load_compaction_session(native_session_id)
             (

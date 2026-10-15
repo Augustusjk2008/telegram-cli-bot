@@ -1,0 +1,26 @@
+{
+  "conversation_id": "agy-statusline-session",
+  "model": {
+    "id": "Gemini 3.8 Flash (High)",
+    "display_name": "Gemini 3.8 Flash (High)",
+    "effort": "high"
+  },
+  "workspace": {
+    "current_dir": "C:\\workspace\\demo",
+    "project_dir": "C:\\workspace\\demo"
+  },
+  "context_window": {
+    "total_input_tokens": 123456,
+    "total_output_tokens": 789,
+    "context_window_size": 1048576,
+    "used_percentage": 11.85,
+    "remaining_percentage": 88.15,
+    "current_usage": {
+      "input_tokens": 123456,
+      "output_tokens": 789,
+      "total_tokens": 124245
+    }
+  },
+  "product": "antigravity",
+  "agent_state": "idle"
+}

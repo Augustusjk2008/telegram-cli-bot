@@ -115,7 +115,16 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
         <div className="mt-3 grid gap-2 text-sm">
           {(() => {
             const { activeCliType, activeStatus } = targetStatus(status);
-            return <div>{cliLabel(activeCliType)}：{activeStatus?.message || activeStatus?.state || "未检测"}</div>;
+            return (
+              <div className="grid gap-1">
+                <div>{cliLabel(activeCliType)}：{activeStatus?.message || activeStatus?.state || "未检测"}</div>
+                {activeStatus?.configPath ? <div className="break-all text-xs text-[var(--muted)]">配置：{activeStatus.configPath}</div> : null}
+                {activeStatus?.scope ? <div className="text-xs text-[var(--muted)]">范围：{activeStatus.scope}</div> : null}
+                {activeStatus?.allowedTools?.length ? (
+                  <div className="text-xs text-[var(--muted)]">允许工具：{activeStatus.allowedTools.join("、")}</div>
+                ) : null}
+              </div>
+            );
           })()}
           {status.mcp.pi ? <div>Pi：{status.mcp.pi.message || status.mcp.pi.state}</div> : null}
         </div>
@@ -135,6 +144,22 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
             <div className="text-sm font-medium text-[var(--text)]">验证命令</div>
             <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.verifyCommand)}</pre>
           </div> : null}
+          {prepare.workspaceMcpConfigPath ? (
+            <div>
+              <div className="text-sm font-medium text-[var(--text)]">Antigravity 工作区 MCP</div>
+              <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.workspaceMcpConfigPath}</p>
+              {prepare.workspaceMcpScope ? <p className="mt-1 text-xs text-[var(--muted)]">范围：{prepare.workspaceMcpScope}</p> : null}
+              {prepare.mcpAllowedTools?.length ? (
+                <p className="mt-1 text-xs text-[var(--muted)]">允许工具：{prepare.mcpAllowedTools.join("、")}</p>
+              ) : null}
+              {prepare.statuslineCommand?.length ? (
+                <>
+                  <p className="mt-2 text-xs text-[var(--muted)]">状态栏遥测命令（配置到 Antigravity settings.json 的 statusLine.command）</p>
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.statuslineCommand)}</pre>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           {prepare.piExtensionPath ? (
             <div>
               <div className="text-sm font-medium text-[var(--text)]">Pi 扩展</div>
