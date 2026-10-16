@@ -178,10 +178,12 @@ class CodexServerClient:
                 if method and "id" in packet:
                     await self._write({"id": packet["id"], **noninteractive_response(method)})
                 elif method:
-                    try:
-                        self._events.put_nowait(packet)
-                    except asyncio.QueueFull as exc:
-                        raise CodexServerError("codex app-server 通知缓冲区已满") from exc
+                    # Keep the notification queue bounded, but let the single
+                    # events reader drain a burst before declaring the shared
+                    # app-server runtime failed. A burst of realtime transcript
+                    # and tool events is expected while the persistence layer is
+                    # flushing each event.
+                    await self._events.put(packet)
                 elif "id" in packet:
                     future = self._pending.get(packet["id"])
                     if future is not None and not future.done():

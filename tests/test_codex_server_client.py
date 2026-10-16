@@ -45,6 +45,9 @@ for line in sys.stdin:
   print('x'*2048,flush=True)
  elif method == 'flood':
   for i in range(400): emit({'method':'notice','params':{'i':i}})
+ elif method == 'flood_then_reply':
+  for i in range(400): emit({'method':'notice','params':{'i':i}})
+  emit({'id':p['id'],'result':{'value':'ok'}})
  elif method == 'exit':
   sys.stderr.write('isolated child failed\n'); sys.stderr.flush()
   sys.exit(7)
@@ -155,6 +158,22 @@ async def test_failure_timeout_and_bounded_buffers_close_only_owned_child(tmp_pa
     assert len(client._stderr) <= client.limits.raw_tail_max_bytes
     assert client._events.qsize() <= 256
     assert client._packets.qsize() <= client.limits.queue_max_chunks
+
+
+@pytest.mark.asyncio
+async def test_notification_burst_waits_for_the_single_reader(tmp_path):
+    client = await start_fake(tmp_path)
+    events = client.events()
+    try:
+        request = asyncio.create_task(client.request("flood_then_reply", {}, timeout=5))
+        for index in range(400):
+            packet = await asyncio.wait_for(anext(events), 1)
+            assert packet == {"method": "notice", "params": {"i": index}}
+        assert await request == {"value": "ok"}
+        assert client.alive
+    finally:
+        await events.aclose()
+        await client.close()
 
 
 @pytest.mark.asyncio
