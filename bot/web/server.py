@@ -606,10 +606,66 @@ def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, 
     return payload
 
 
-def _auth_cookie_path() -> str:
+def _configured_public_web_base_path(base_path: str) -> str:
+    normalized_base_path = str(base_path or "").strip().rstrip("/")
+    if not normalized_base_path:
+        return ""
+
+    public_urls = []
+    if WEB_FIXED_PUBLIC_FORWARD_ENABLED:
+        public_urls.append(WEB_FIXED_PUBLIC_FORWARD_URL)
+    public_urls.append(WEB_PUBLIC_URL)
+    for public_url in public_urls:
+        parsed = urlparse(str(public_url or "").strip())
+        public_path = str(parsed.path or "").strip().rstrip("/")
+        if parsed.netloc and public_path and (
+            public_path == normalized_base_path or public_path.endswith(normalized_base_path)
+        ):
+            return public_path
+    return normalized_base_path
+
+
+def _request_public_web_base_path(request: web.Request, base_path: str) -> str:
+    normalized_base_path = str(base_path or "").strip().rstrip("/")
+    public_path = _configured_public_web_base_path(normalized_base_path)
+    if not public_path or public_path == normalized_base_path:
+        return normalized_base_path
+
+    request_path = str(request.path or "").rstrip("/")
+    if request_path == public_path or request_path.startswith(f"{public_path}/"):
+        return public_path
+    forwarded_prefix = str(request.headers.get("X-Forwarded-Prefix") or "").split(",", 1)[0].strip().rstrip("/")
+    if forwarded_prefix and (
+        public_path == forwarded_prefix or public_path.startswith(f"{forwarded_prefix}/")
+    ):
+        return public_path
+    request_hosts = {
+        str(request.headers.get(header_name) or "").split(",", 1)[0].strip().lower()
+        for header_name in ("X-Forwarded-Host", "X-Original-Host", "Host")
+    }
+    public_hosts = {
+        parsed.netloc.lower()
+        for parsed in (
+            urlparse(str(public_url or "").strip())
+            for public_url in (
+                WEB_FIXED_PUBLIC_FORWARD_URL if WEB_FIXED_PUBLIC_FORWARD_ENABLED else "",
+                WEB_PUBLIC_URL,
+            )
+            if str(public_url or "").strip()
+        )
+        if parsed.netloc
+    }
+    if public_hosts.intersection(request_hosts):
+        return public_path
+    return normalized_base_path
+
+
+def _auth_cookie_path(request: web.Request | None = None) -> str:
     base_path = str(WEB_BASE_PATH or "").strip()
     if not base_path or base_path == "/":
         return "/"
+    if request is not None:
+        base_path = _request_public_web_base_path(request, base_path)
     return "/" + base_path.strip("/")
 
 
@@ -622,7 +678,7 @@ def _request_is_secure(request: web.Request) -> bool:
 
 def _set_auth_cookie(request: web.Request, response: web.Response, token: str, *, remember: bool = False) -> None:
     kwargs: dict[str, Any] = {
-        "path": _auth_cookie_path(),
+        "path": _auth_cookie_path(request),
         "httponly": True,
         "samesite": "Strict",
         "secure": _request_is_secure(request),
@@ -633,7 +689,7 @@ def _set_auth_cookie(request: web.Request, response: web.Response, token: str, *
 
 
 def _clear_auth_cookie(request: web.Request, response: web.Response) -> None:
-    response.del_cookie(AUTH_SESSION_COOKIE_NAME, path=_auth_cookie_path())
+    response.del_cookie(AUTH_SESSION_COOKIE_NAME, path=_auth_cookie_path(request))
 
 
 def _session_user_id_for_account(account_id: str, session_user_id: int | None = None) -> int:
@@ -5245,14 +5301,20 @@ class WebApiServer:
         self._register_app_routes(app)
         immutable_assets = self._load_vite_immutable_assets()
         base_path = self._web_base_path()
+        mount_paths = []
         if base_path:
+            mount_paths.append(base_path)
+        public_mount_path = self._configured_public_web_base_path()
+        if public_mount_path and public_mount_path not in mount_paths:
+            mount_paths.append(public_mount_path)
+        for mount_path in mount_paths:
             subapp = web.Application(
                 client_max_size=25 * 1024 * 1024,
             )
             self._register_app_routes(subapp)
             self._register_static_routes(subapp, immutable_assets=immutable_assets)
             self._register_spa_fallback(subapp)
-            app.add_subapp(base_path, subapp)
+            app.add_subapp(mount_path, subapp)
         self._register_static_routes(app, immutable_assets=immutable_assets)
         self._register_spa_fallback(app)
         return app
@@ -5356,6 +5418,29 @@ class WebApiServer:
         if not value or value == "/":
             return ""
         return value.rstrip("/")
+
+    def _configured_public_web_base_path(self) -> str:
+        return _configured_public_web_base_path(self._web_base_path())
+
+    def _public_web_base_path(self, request: web.Request | None = None) -> str:
+        base_path = self._web_base_path()
+        if request is None:
+            return base_path
+        return _request_public_web_base_path(request, base_path)
+
+    def _rewrite_public_asset_paths(self, html: str, *, public_base_path: str) -> str:
+        base_path = self._web_base_path()
+        if not base_path or not public_base_path or public_base_path == base_path:
+            return html
+
+        for attribute in ("src", "href"):
+            for quote_mark in ('"', "'"):
+                for source_prefix in (f"{base_path}/assets/", "/assets/"):
+                    html = html.replace(
+                        f"{attribute}={quote_mark}{source_prefix}",
+                        f"{attribute}={quote_mark}{public_base_path}/assets/",
+                    )
+        return html
     
     def _get_static_dir(self, subdir=None):
         """Get static directory path."""
@@ -5365,17 +5450,20 @@ class WebApiServer:
             static_dir = static_dir / subdir
         return str(static_dir)
 
-    def _public_runtime_env_script(self) -> str:
+    def _public_runtime_env_script(self, request: web.Request | None = None) -> str:
         base_path = self._web_base_path()
+        public_base_path = self._public_web_base_path(request)
         payload = {
             "WEB_BASE_PATH": base_path,
-            "VITE_BASE_PATH": base_path,
-            "VITE_API_BASE_URL": base_path,
+            "VITE_BASE_PATH": public_base_path,
+            "VITE_API_BASE_URL": public_base_path,
         }
         return f"<script>window.__TCB_PUBLIC_ENV__={json.dumps(payload, ensure_ascii=False)};</script>"
 
-    def _inject_public_runtime_env(self, html: str) -> str:
-        script = self._public_runtime_env_script()
+    def _inject_public_runtime_env(self, html: str, request: web.Request | None = None) -> str:
+        public_base_path = self._public_web_base_path(request)
+        html = self._rewrite_public_asset_paths(html, public_base_path=public_base_path)
+        script = self._public_runtime_env_script(request)
         html_without_stale_env = _PUBLIC_RUNTIME_ENV_SCRIPT_RE.sub("", html)
         head_match = _HEAD_TAG_RE.search(html_without_stale_env)
         if head_match:
@@ -5412,7 +5500,7 @@ class WebApiServer:
         index_path = Path(self._get_static_dir()) / "index.html"
         if index_path.exists():
             html = index_path.read_text(encoding="utf-8")
-            response = web.Response(text=self._inject_public_runtime_env(html), content_type="text/html")
+            response = web.Response(text=self._inject_public_runtime_env(html, request), content_type="text/html")
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"

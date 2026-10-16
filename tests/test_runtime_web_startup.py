@@ -2,13 +2,14 @@ import json
 import socket
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from bot.main import _get_web_access_lines
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
-from bot.web.server import WebApiServer
+from bot.web.server import WebApiServer, _auth_cookie_path
 
 
 class DummyTunnelService:
@@ -73,6 +74,22 @@ def test_resolve_runtime_web_bind_raises_typed_error_without_fallback() -> None:
     assert exc_info.value.host == "127.0.0.1"
 
 
+def test_auth_cookie_path_uses_public_forward_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", True)
+    monkeypatch.setattr(
+        "bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL",
+        "https://hub.example.test/tcb-hub/node/nanjing-laptop/",
+    )
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
+    request = SimpleNamespace(
+        path="/node/nanjing-laptop/api/auth/login",
+        headers={"Host": "hub.example.test"},
+    )
+
+    assert _auth_cookie_path(request) == "/tcb-hub/node/nanjing-laptop"
+
+
 @pytest.mark.asyncio
 async def test_health_reports_runtime_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "")
@@ -98,6 +115,9 @@ async def test_health_reports_runtime_port(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.asyncio
 async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", False)
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
     dist = tmp_path / "dist"
     assets = dist / "assets"
     assets.mkdir(parents=True)
@@ -213,6 +233,9 @@ async def test_vite_manifest_assets_use_sidecars_and_immutable_cache(
 @pytest.mark.asyncio
 async def test_runtime_public_env_replaces_stale_build_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", False)
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL", "")
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
     dist = tmp_path / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text(
@@ -242,6 +265,56 @@ async def test_runtime_public_env_replaces_stale_build_env(monkeypatch: pytest.M
     assert '"VITE_API_BASE_URL": "/node/nanjing-laptop"' in text
     assert '"VITE_API_BASE_URL":"/node/local"' not in text
     assert text.index("window.__TCB_PUBLIC_ENV__") < text.index('type="module"')
+
+
+@pytest.mark.asyncio
+async def test_public_forward_prefix_rewrites_initial_assets_and_runtime_base(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
+    monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", True)
+    monkeypatch.setattr(
+        "bot.web.server.WEB_FIXED_PUBLIC_FORWARD_URL",
+        "https://hub.example.test/tcb-hub/node/nanjing-laptop/",
+    )
+    monkeypatch.setattr("bot.web.server.WEB_PUBLIC_URL", "")
+    dist = tmp_path / "dist"
+    assets = dist / "assets"
+    dist.mkdir(parents=True)
+    assets.mkdir()
+    (dist / "index.html").write_text(
+        '<html><head><script type="module" src="/node/nanjing-laptop/assets/app.js"></script>'
+        '<link rel="stylesheet" href="/node/nanjing-laptop/assets/app.css"></head></html>',
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("console.log('ok')", encoding="utf-8")
+    (assets / "app.css").write_text("body { color: red; }", encoding="utf-8")
+
+    server = WebApiServer(object(), host="127.0.0.1", port=8768, tunnel_service=DummyTunnelService())
+    monkeypatch.setattr(server, "_get_static_dir", lambda subdir=None: str(dist / subdir) if subdir else str(dist))
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.get(
+                "/tcb-hub/node/nanjing-laptop/",
+                headers={"Host": "hub.example.test"},
+            )
+            text = await response.text()
+            public_asset = await client.get(
+                "/tcb-hub/node/nanjing-laptop/assets/app.js",
+                headers={"Host": "hub.example.test"},
+            )
+            public_asset_body = await public_asset.text()
+
+    assert response.status == 200
+    assert public_asset.status == 200
+    assert public_asset_body == "console.log('ok')"
+    assert 'src="/tcb-hub/node/nanjing-laptop/assets/app.js"' in text
+    assert 'href="/tcb-hub/node/nanjing-laptop/assets/app.css"' in text
+    assert '"WEB_BASE_PATH": "/node/nanjing-laptop"' in text
+    assert '"VITE_API_BASE_URL": "/tcb-hub/node/nanjing-laptop"' in text
 
 
 @pytest.mark.asyncio
