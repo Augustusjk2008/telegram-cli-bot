@@ -892,6 +892,8 @@ def create_stream_trace_state(provider: str) -> dict[str, Any]:
         "provider": str(provider or "").strip(),
         "buffer": "",
         "seen": set(),
+        "antigravity_pending_response": [],
+        "antigravity_terminal_seen": False,
     }
 
 
@@ -1013,8 +1015,24 @@ def _bounded_antigravity_payload(value: Any, *, limit: int = 8_000) -> Any:
     return serialized[:limit] + "…"
 
 
-def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]:
-    if str(item.get("event") or "").strip().lower() != "step_update":
+def _flush_antigravity_pending_response(state: dict[str, Any]) -> list[dict[str, Any]]:
+    pending = state.get("antigravity_pending_response")
+    if not isinstance(pending, list):
+        return []
+    state["antigravity_pending_response"] = []
+    return [event for event in pending if isinstance(event, dict)]
+
+
+def _consume_live_antigravity_line(item: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    event_type = str(item.get("event") or "").strip().lower()
+    if event_type == "result":
+        # The authoritative response is carried by result.response. Any
+        # agent_response text seen immediately before it belongs to the final
+        # answer and must not be persisted as an intermediate trace.
+        state["antigravity_pending_response"] = []
+        state["antigravity_terminal_seen"] = True
+        return []
+    if event_type != "step_update" or state.get("antigravity_terminal_seen"):
         return []
     step = item.get("step_update") if isinstance(item.get("step_update"), dict) else item
     step_type = str(step.get("step_type") or "").strip().lower()
@@ -1027,26 +1045,30 @@ def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]
         if isinstance(text_delta, str):
             if not text_delta.strip():
                 return []
-            return [
-                _trace_event(
-                    "commentary",
-                    raw_type="antigravity_agent_response",
-                    title="assistant",
-                    summary=text_delta.strip(),
-                    payload=_bounded_antigravity_payload({
-                        "step_index": step_index,
-                        "state": step_state,
-                        "text_delta": text_delta,
-                    }),
+            pending = state.setdefault("antigravity_pending_response", [])
+            if isinstance(pending, list):
+                pending.append(
+                    _trace_event(
+                        "commentary",
+                        raw_type="antigravity_agent_response",
+                        title="assistant",
+                        summary=text_delta.strip(),
+                        payload=_bounded_antigravity_payload({
+                            "step_index": step_index,
+                            "state": step_state,
+                            "text_delta": text_delta,
+                        }),
+                    )
                 )
-            ]
+            return []
+        pending = _flush_antigravity_pending_response(state)
         if step_state == "ACTIVE":
             summary = "Antigravity 正在生成回复"
         elif step_state == "DONE":
             summary = "Antigravity 已完成一个回复步骤"
         else:
             summary = "Antigravity 回复步骤"
-        return [
+        return pending + [
             _trace_event(
                 "process",
                 raw_type="antigravity_agent_response",
@@ -1055,8 +1077,9 @@ def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]
                 payload=_bounded_antigravity_payload(item),
             )
         ]
+    pending = _flush_antigravity_pending_response(state)
     if step_type == "checkpoint":
-        return [
+        return pending + [
             _trace_event(
                 "process",
                 raw_type="antigravity_checkpoint",
@@ -1066,10 +1089,10 @@ def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]
             )
         ]
     if step_type != "tool":
-        return []
+        return pending
     tool_info = step.get("tool_info")
     if not isinstance(tool_info, dict):
-        return [
+        return pending + [
             _trace_event(
                 "process",
                 raw_type="step_update.tool",
@@ -1086,7 +1109,7 @@ def _consume_live_antigravity_line(item: dict[str, Any]) -> list[dict[str, Any]]
     step_index = _stringify_value(step.get("step_index"))
     call_id = ":".join(part for part in (conversation_id, step_index, name) if part) or name
 
-    events: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = pending
     if parameters is not None or not any(key in tool_info for key in ("output", "error")):
         events.append(
             _trace_event(
@@ -1147,7 +1170,7 @@ def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any])
         elif provider == "claude":
             candidate_events = _consume_live_claude_line(item)
         elif provider == "antigravity":
-            candidate_events = _consume_live_antigravity_line(item)
+            candidate_events = _consume_live_antigravity_line(item, state)
         else:
             candidate_events = []
 

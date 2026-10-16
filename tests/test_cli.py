@@ -434,11 +434,36 @@ def test_antigravity_tool_step_maps_to_call_and_result_trace() -> None:
     for line in raw.splitlines(keepends=True):
         events.extend(consume_stream_trace_chunk("antigravity", line, state))
 
-    assert [event["kind"] for event in events] == ["tool_call", "tool_result", "commentary"]
+    assert [event["kind"] for event in events] == ["tool_call", "tool_result"]
     assert events[0]["tool_name"] == "run_command"
     assert events[0]["call_id"] == "agy-conv-tool:4:run_command"
     assert events[1]["call_id"] == events[0]["call_id"]
-    assert events[2]["summary"] == "完成"
+
+
+def test_antigravity_final_response_deltas_are_not_saved_as_process_trace() -> None:
+    state = create_stream_trace_state("antigravity")
+    raw = (
+        '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"最终"}}\n'
+        '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"输出"}}\n'
+        '{"event":"result","result":{"status":"SUCCESS","response":"最终输出"}}\n'
+    )
+
+    events = consume_stream_trace_chunk("antigravity", raw, state)
+
+    assert events == []
+
+
+def test_antigravity_response_before_tool_remains_intermediate_trace() -> None:
+    state = create_stream_trace_state("antigravity")
+    raw = (
+        '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"先检查"}}\n'
+        '{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_info":{"name":"run_command","parameters":{"CommandLine":"dir"}}}}\n'
+    )
+
+    events = consume_stream_trace_chunk("antigravity", raw, state)
+
+    assert [event["kind"] for event in events] == ["commentary", "tool_call"]
+    assert events[0]["summary"] == "先检查"
 
 
 def test_antigravity_agent_steps_produce_process_trace() -> None:
