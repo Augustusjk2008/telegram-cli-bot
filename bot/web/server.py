@@ -639,6 +639,14 @@ def _request_public_web_base_path(request: web.Request, base_path: str) -> str:
         public_path == forwarded_prefix or public_path.startswith(f"{forwarded_prefix}/")
     ):
         return public_path
+    forwarded_node_id = str(request.headers.get("X-TCB-Node-ID") or "").strip()
+    if (
+        WEB_FIXED_PUBLIC_FORWARD_ENABLED
+        and forwarded_node_id
+        and forwarded_node_id == TCB_NODE_ID
+        and normalized_base_path == f"/node/{forwarded_node_id}"
+    ):
+        return public_path
     request_hosts = {
         str(request.headers.get(header_name) or "").split(",", 1)[0].strip().lower()
         for header_name in ("X-Forwarded-Host", "X-Original-Host", "Host")
