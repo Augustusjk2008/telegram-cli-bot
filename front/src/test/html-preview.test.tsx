@@ -110,7 +110,7 @@ test("failed creation can retry, and a bridge error rebuilds without closing the
   const data = await loadFilePreview(client, "main", "index.html", { remote: false });
   const { unmount } = render(<FilePreviewSurface title="index.html" {...data} />);
   expect(await screen.findByText("创建失败")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  fireEvent.click(await screen.findByRole("button", { name: "重试" }));
   const frame = await screen.findByTitle<HTMLIFrameElement>("index.html");
   fireEvent(window, new MessageEvent("message", { source: frame.contentWindow, data: { type: "orbit-html-preview", sessionId: "one", event: "error", message: "资源不可用" } }));
   fireEvent.click(screen.getByRole("button", { name: "重试" }));

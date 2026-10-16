@@ -18,12 +18,17 @@ class DummyProcess:
         return self.returncode
 
 
-def _service(tmp_path: Path, *, instance_id: str = "current-instance") -> FixedForwardService:
+def _service(
+    tmp_path: Path,
+    *,
+    instance_id: str = "current-instance",
+    public_url: str = "https://hub.example.test/node/node-a",
+) -> FixedForwardService:
     return FixedForwardService(
         host="127.0.0.1",
         port=8768,
         enabled=True,
-        public_url="https://hub.example.test/node/node-a",
+        public_url=public_url,
         node_id="node-a",
         base_path="/node/node-a",
         frps_port=7000,
@@ -134,3 +139,12 @@ async def test_proxy_exists_reuses_external_frpc_when_public_health_matches_afte
     assert snapshot["last_error"] == ""
     assert snapshot["frpc_note"]
     assert terminated == [process]
+
+
+def test_validate_config_allows_outer_reverse_proxy_prefix(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        public_url="https://hub.example.test/tcb-hub/node/node-a/",
+    )
+
+    assert service._validate_config() == ""

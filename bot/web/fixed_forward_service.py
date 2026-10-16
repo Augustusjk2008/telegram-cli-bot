@@ -75,6 +75,14 @@ def _normalize_base_path(value: str) -> str:
     return text.rstrip("/")
 
 
+def _public_path_contains_base_path(public_path: str, base_path: str) -> bool:
+    normalized_public_path = _normalize_base_path(public_path)
+    normalized_base_path = _normalize_base_path(base_path)
+    if not normalized_base_path:
+        return False
+    return normalized_public_path == normalized_base_path or normalized_public_path.endswith(normalized_base_path)
+
+
 def _is_frpc_auth_error(line: str) -> bool:
     text = line.lower()
     return (
@@ -553,7 +561,7 @@ class FixedForwardService:
         parsed = urlsplit(self._public_url)
         if not parsed.scheme or not parsed.netloc or not parsed.hostname:
             return "WEB_FIXED_PUBLIC_FORWARD_URL 无效"
-        if _normalize_base_path(parsed.path) != self._base_path:
+        if not _public_path_contains_base_path(parsed.path, self._base_path):
             return "WEB_FIXED_PUBLIC_FORWARD_URL 必须包含 WEB_BASE_PATH"
         if self._frps_port <= 0:
             return "TCB_HUB_FRPS_PORT 未配置"
