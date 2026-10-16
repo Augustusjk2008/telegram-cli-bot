@@ -5,6 +5,7 @@ import asyncio
 import copy
 import json
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -18,6 +19,9 @@ MAX_MESSAGE_BYTES = 160_000
 MAX_REQUEST_IDS = 1024
 VOICE_PROTOCOL_VERSION = 1
 VOICE_LEASE_TTL = 90.0
+VOICE_RECOVERY_WINDOW = 15.0
+# Keep the longer name available to callers that describe this as a TTL.
+VOICE_RECOVERY_TTL = VOICE_RECOVERY_WINDOW
 VOICE_BUSY_MESSAGE = "当前有活动任务，语音任务/混合输入将在 M2 支持"
 _ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _PRIVATE_KEY = re.compile(r"credential|secret|token|authorization|cookie|password|apikey|sdp|base64|^audio$|^audiodata$", re.I)
@@ -153,6 +157,9 @@ class VoiceLease:
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.monotonic)
     ttl: float = VOICE_LEASE_TTL
+    recovery_window: float = VOICE_RECOVERY_WINDOW
+    recovery_token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    recovery_deadline: float = 0.0
     runtime: Any = field(default=None, repr=False)
     attached: bool = True
     _stop_attempted: bool = False
@@ -166,6 +173,8 @@ class VoiceLease:
     _cleanup_runtime: Any = field(default=None, repr=False)
     _cleanup_connection_id: str = field(default="", repr=False)
     _cleanup_task: asyncio.Task | None = field(default=None, repr=False)
+    _recoverable: bool = field(default=False, repr=False)
+    _recovery_claimed: bool = field(default=False, repr=False)
 
     @property
     def owner_key(self) -> tuple[int, int, str]:
@@ -174,6 +183,28 @@ class VoiceLease:
     @property
     def expired(self) -> bool:
         return time.monotonic() - self.last_activity >= self.ttl
+
+    @property
+    def recovery_available(self) -> bool:
+        return bool(
+            self._recoverable
+            and not self._recovery_claimed
+            and not self.expired
+            and self.recovery_deadline > time.monotonic()
+        )
+
+    @property
+    def recovery_expired(self) -> bool:
+        return bool(self._recoverable and (self.expired or self.recovery_deadline <= time.monotonic()))
+
+    @property
+    def recoverable(self) -> bool:
+        """Whether a disconnected lease can still accept a replacement socket."""
+        return self.recovery_available
+
+    @property
+    def recovery_claimed(self) -> bool:
+        return self._recovery_claimed
 
     @property
     def task_active(self) -> bool:
@@ -188,12 +219,17 @@ class VoiceLease:
     def cleanup_pending(self) -> bool:
         return self._cleanup_pending
 
-    def renew(self) -> None:
+    def renew(self, *, _expected_connection_id: str = "") -> None:
+        if _expected_connection_id and self.connection_id != _expected_connection_id:
+            raise VoiceError("voice_connection_stale", "语音连接已被新连接替换", 409)
         if not self.attached or self.expired:
             raise VoiceError("voice_lease_expired", "语音连接已过期，请重新连接", 409)
         self.last_activity = time.monotonic()
 
     def bind(self, runtime: Any) -> None:
+        if self._recovery_claimed:
+            self.rebind(runtime)
+            return
         if (runtime.request.owner_key != self.owner_key or runtime.request.conversation_id != self.key[3]
                 or not runtime.request.experimental_api):
             raise VoiceError("voice_session_changed", "语音会话绑定已失效", 409)
@@ -209,18 +245,50 @@ class VoiceLease:
         runtime.voice_lease = self
         runtime.voice_lease_generation = self.connection_id
 
-    def publish(self, message: dict) -> None:
+    def rebind(self, runtime: Any) -> None:
+        if not self._recovery_claimed or not self._recoverable or self.recovery_expired:
+            raise VoiceError("voice_recovery_invalid", "语音恢复凭据无效", 409)
+        if runtime is not self.runtime or runtime.thread_id != self.thread_id or not runtime.alive:
+            raise VoiceError("voice_runtime_changed", "语音运行时已变化，无法恢复", 409)
+        if getattr(runtime, "voice_lease", None) is not self:
+            raise VoiceError("voice_runtime_bound", "语音运行时仍由其他连接绑定", 409)
+        self.connection_id = uuid.uuid4().hex
+        self.attached = True
+        self._recoverable = False
+        self._recovery_claimed = False
+        self.recovery_deadline = 0.0
+        self.last_activity = time.monotonic()
+        self._loop = asyncio.get_running_loop()
+        runtime.voice_lease = self
+        runtime.voice_lease_generation = self.connection_id
+
+    def publish(self, message: dict, *, _expected_connection_id: str = "") -> None:
+        if _expected_connection_id and self.connection_id != _expected_connection_id:
+            return
         self.last_seq = self.runtime.voice_events.publish({**message, "connection_id": self.connection_id})
 
-    def summary(self, request_id: str = "") -> None:
+    def summary(self, request_id: str = "", *, _expected_connection_id: str = "") -> None:
+        if _expected_connection_id and self.connection_id != _expected_connection_id:
+            return
         self.publish({"type": "voice.state", "state": self.state, "id": request_id,
                       "thread_id": self.thread_id, "realtime_session_id": self.realtime_session_id,
                       "client_generation": self.client_generation, "last_seq": self.last_seq,
+                      "clientGeneration": self.client_generation,
+                      "recovery_token": self.recovery_token,
+                      "recoveryToken": self.recovery_token,
+                      "recovery_deadline_ms": max(0, int((self.recovery_deadline - time.monotonic()) * 1000))
+                      if self.recovery_deadline else 0,
+                      "recoveryDeadlineMs": max(0, int((self.recovery_deadline - time.monotonic()) * 1000))
+                      if self.recovery_deadline else 0,
                       "task_state": getattr(self.runtime, "voice_task_state", "idle"),
                       "turn_id": getattr(self.runtime, "voice_turn_id", "")})
 
     def transition(self, state: str, *, code: str = "", message: str = "") -> None:
         self.state = state
+        if state in {"closed", "error", "unknown"}:
+            self._recoverable = False
+            self._recovery_claimed = False
+            self.recovery_deadline = 0.0
         if state == "closed":
             self._closed.set()
         if code:
@@ -252,8 +320,8 @@ class VoiceLease:
             if isinstance(sdp, str) and len(sdp.encode("utf-8")) <= MAX_SDP_BYTES:
                 self.publish({"type": "voice.sdp", "sdp": sdp})
 
-    async def start(self, sdp: str) -> None:
-        self.renew()
+    async def start(self, sdp: str, *, _expected_connection_id: str = "") -> None:
+        self.renew(_expected_connection_id=_expected_connection_id)
         if self._started or self.state != "idle":
             raise VoiceError("voice_already_started", "该连接已启动，不会重发", 409)
         if self.runtime.active or getattr(self.runtime, "voice_task_active", False):
@@ -275,6 +343,8 @@ class VoiceLease:
             ) from exc
 
     async def stop_voice(self, *, timeout: float = 10, _expected_connection_id: str = "") -> None:
+        if _expected_connection_id and self.connection_id != _expected_connection_id:
+            return
         if not self._started or self.state == "closed":
             if self.state != "closed":
                 self.transition("closed")
@@ -305,12 +375,19 @@ class VoiceLease:
         if self._registry is not None:
             self._registry.release(self)
 
-    async def disconnect(self) -> None:
+    async def disconnect(self, *, unexpected: bool = False, _expected_connection_id: str = "") -> None:
         async with self._disconnect_lock:
+            if _expected_connection_id and self.connection_id != _expected_connection_id:
+                return
+            if unexpected and self._enter_recovery_window():
+                return
             # Mark the browser control channel detached, but keep the runtime
             # binding until stop_voice can observe thread/realtime/closed.
             self._disconnecting = True
             self.attached = False
+            self._recoverable = False
+            self._recovery_claimed = False
+            self.recovery_deadline = 0.0
             try:
                 if (self.runtime is not None and self.runtime.alive
                         and self._owns_runtime_binding()):
@@ -318,6 +395,32 @@ class VoiceLease:
             finally:
                 self._disconnecting = False
                 self.detach()
+
+    def _enter_recovery_window(self) -> bool:
+        if (self.runtime is None or not self.runtime.alive
+                or self._stop_attempted or self.state in {"closed", "error", "unknown", "stopping"}
+                or not self._owns_runtime_binding()):
+            return False
+        now = time.monotonic()
+        self.recovery_deadline = min(now + max(0.0, self.recovery_window), self.last_activity + self.ttl)
+        if self.recovery_deadline <= now:
+            return False
+        self.attached = False
+        self._recoverable = True
+        self._recovery_claimed = False
+        return True
+
+    def cancel_recovery_claim(self, *, _expected_connection_id: str = "") -> None:
+        if _expected_connection_id and self.connection_id != _expected_connection_id:
+            return
+        self._recovery_claimed = False
+
+    def invalidate(self) -> None:
+        self._recoverable = False
+        self._recovery_claimed = False
+        self.recovery_deadline = 0.0
+        self.attached = False
+        self.detach()
 
     def _owns_runtime_binding(self, expected_connection_id: str = "") -> bool:
         runtime = self.runtime
@@ -327,16 +430,20 @@ class VoiceLease:
 
 
 class VoiceLeaseRegistry:
-    def __init__(self, *, ttl: float = VOICE_LEASE_TTL):
+    def __init__(self, *, ttl: float = VOICE_LEASE_TTL, recovery_window: float = VOICE_RECOVERY_WINDOW):
         self._leases: dict[tuple[int, int, str, str], VoiceLease] = {}
         self._tasks: dict[tuple[int, int, str], Any] = {}
         self._pending_cleanups: dict[int, VoiceLease] = {}
         self.ttl = ttl
+        self.recovery_window = recovery_window
         self._lock = threading.RLock()
 
     def _prune(self) -> None:
         for lease in list(self._leases.values()):
-            if not lease.attached or lease.expired or (lease.runtime is not None and not lease.runtime.alive):
+            if (lease.recovery_expired
+                    or (not lease._recoverable and not lease.attached)
+                    or lease.expired
+                    or (lease.runtime is not None and not lease.runtime.alive)):
                 self._begin_cleanup(lease)
         for owner, runtime in list(self._tasks.items()):
             if not runtime.alive or not getattr(runtime, "voice_task_active", False):
@@ -371,6 +478,9 @@ class VoiceLeaseRegistry:
         if lease._cleanup_pending:
             return
         runtime = lease.runtime
+        lease._recoverable = False
+        lease._recovery_claimed = False
+        lease.recovery_deadline = 0.0
         lease._cleanup_pending = True
         lease._cleanup_runtime = runtime
         lease._cleanup_connection_id = lease.connection_id
@@ -450,19 +560,33 @@ class VoiceLeaseRegistry:
         lease._cleanup_runtime = None
         lease._cleanup_connection_id = ""
 
-    def acquire(self, key: tuple[int, int, str, str], actor_id: tuple[str, int]) -> VoiceLease:
+    def acquire(self, key: tuple[int, int, str, str], actor_id: tuple[str, int], *,
+                client_generation: str = "", recovery_token: str = "") -> VoiceLease:
         with self._lock:
             self._prune()
             existing = self._leases.get(key)
             if existing is not None and existing._cleanup_pending:
                 raise VoiceError("voice_cleanup_pending", "语音运行时正在清理，请稍后重试", 409)
             if existing is not None:
+                if existing._recoverable:
+                    if not existing.recovery_available:
+                        raise VoiceError("voice_recovery_expired", "语音恢复窗口已结束，请重新连接", 409)
+                    if existing._recovery_claimed:
+                        raise VoiceError("voice_connection_occupied", "当前会话已有语音连接", 409)
+                    if not client_generation or not recovery_token:
+                        raise VoiceError("voice_recovery_required", "语音恢复缺少 clientGeneration 或恢复令牌", 409)
+                    if (existing.actor_id != actor_id
+                            or existing.client_generation != client_generation
+                            or not secrets.compare_digest(existing.recovery_token, recovery_token)):
+                        raise VoiceError("voice_recovery_invalid", "语音恢复凭据无效", 409)
+                    existing._recovery_claimed = True
+                    return existing
                 raise VoiceError("voice_connection_occupied", "当前会话已有语音连接", 409)
             if key[:3] in self._tasks:
                 raise VoiceError("voice_task_active", VOICE_BUSY_MESSAGE, 409)
             if len(self._leases) >= 128:
                 raise VoiceError("voice_connection_limit", "语音连接数量超过限制", 429)
-            lease = VoiceLease(key, actor_id, ttl=self.ttl, _registry=self)
+            lease = VoiceLease(key, actor_id, ttl=self.ttl, recovery_window=self.recovery_window, _registry=self)
             self._leases[key] = lease
             return lease
 
@@ -470,13 +594,30 @@ class VoiceLeaseRegistry:
         with self._lock:
             self._prune()
             return (owner_key in self._tasks
-                    or any(lease.owner_key == owner_key and (lease.busy or lease.task_active)
+                    or any(lease.owner_key == owner_key and (lease.busy or lease.task_active or lease._recoverable)
                            for lease in self._leases.values())
                     or any(lease.owner_key == owner_key for lease in self._pending_cleanups.values()))
 
-    def release(self, lease: VoiceLease) -> None:
+    def can_recover(self, key: tuple[int, int, str, str], actor_id: tuple[str, int],
+                    client_generation: str, recovery_token: str) -> bool:
         with self._lock:
+            self._prune()
+            lease = self._leases.get(key)
+            return bool(
+                lease is not None
+                and lease.recovery_available
+                and lease.actor_id == actor_id
+                and lease.client_generation == client_generation
+                and secrets.compare_digest(lease.recovery_token, recovery_token)
+            )
+
+    def release(self, lease: VoiceLease, *, _expected_connection_id: str = "") -> None:
+        with self._lock:
+            if _expected_connection_id and lease.connection_id != _expected_connection_id:
+                return
             lease.attached = False
+            if lease._recoverable:
+                return
             if not lease._cleanup_pending and self._leases.get(lease.key) is lease:
                 self._leases.pop(lease.key)
             if lease.task_active:
@@ -484,6 +625,13 @@ class VoiceLeaseRegistry:
             if (lease.runtime is not None and not lease._cleanup_pending
                     and (not lease._disconnecting or lease.state in {"closed", "error"})):
                 self._clear_runtime_binding(lease, lease.runtime, lease.connection_id)
+
+    def invalidate(self, key: tuple[int, int, str, str]) -> VoiceLease | None:
+        with self._lock:
+            lease = self._leases.get(key)
+            if lease is not None:
+                lease.invalidate()
+            return lease
 
 
 voice_leases = VoiceLeaseRegistry()

@@ -1896,6 +1896,7 @@ def _create_agent_conversation(
     cluster_assignment_revision: int | None = None,
 ) -> tuple[ChatStore, str]:
     store = _get_chat_store(session)
+    previous_conversation_id = str(session.active_conversation_id or "").strip()
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     native_provider = NATIVE_AGENT_PROVIDER if resolved_execution_mode == NATIVE_AGENT_PROVIDER else cli_data_provider(profile.cli_type)
     conversation_id = store.create_conversation(
@@ -1911,6 +1912,8 @@ def _create_agent_conversation(
         cluster_parent_conversation_id=cluster_parent_conversation_id,
         cluster_assignment_revision=cluster_assignment_revision,
     )
+    if previous_conversation_id and previous_conversation_id != conversation_id:
+        _invalidate_codex_server_voice(session, previous_conversation_id)
     with session._lock:
         session.active_conversation_id = conversation_id
         _clear_all_native_sessions_locked(session)
@@ -2186,6 +2189,8 @@ def _select_conversation_locked(
             record,
             store.latest_active_workspace_history(str(conversation["id"])),
         )
+    if previous_conversation_id and previous_conversation_id != str(conversation["id"]):
+        _invalidate_codex_server_voice(session, previous_conversation_id)
     with session._lock:
         session.active_conversation_id = str(conversation["id"])
         _clear_all_native_sessions_locked(session)
@@ -3121,6 +3126,7 @@ def _reset_user_session_locked(manager: MultiBotManager, alias: str, user_id: in
 
     store = _get_chat_store(session)
     team_revision = _conversation_cluster_team_revision(store, active_conversation_id)
+    _invalidate_codex_server_voice(session, active_conversation_id)
     _get_chat_history_service(session).reset_active_conversation(session)
     if normalized_agent_id == "main" and active_conversation_id:
         _retire_cluster_child_conversations(manager, alias, user_id, active_conversation_id)
@@ -4432,6 +4438,15 @@ def _codex_server_owner(session: UserSession) -> tuple[int, int, str]:
     return (session.bot_id, chat_session_user_id(session.user_id), session.agent_id)
 
 
+def _invalidate_codex_server_voice(session: UserSession, conversation_id: str) -> None:
+    normalized_conversation_id = str(conversation_id or "").strip()
+    if not normalized_conversation_id:
+        return
+    from bot.codex_server.voice import voice_leases
+
+    voice_leases.invalidate((*_codex_server_owner(session), normalized_conversation_id))
+
+
 def get_codex_server_voice_session(
     manager: MultiBotManager,
     alias: str,
@@ -4441,6 +4456,10 @@ def get_codex_server_voice_session(
     execution_mode: str = "",
     conversation_id: str = "",
     session_epoch: int | str | None = None,
+    allow_voice_recovery: bool = False,
+    recovery_actor: tuple[str, int] | None = None,
+    client_generation: str = "",
+    recovery_token: str = "",
 ):
     if not config.TCB_CODEX_SERVER_VOICE_ENABLED:
         _raise(403, "voice_disabled", "语音连接未启用")
@@ -4456,11 +4475,27 @@ def get_codex_server_voice_session(
     except (TypeError, ValueError):
         _raise(400, "voice_session_binding_required", "语音连接缺少有效的 session_epoch")
     with session._lock:
-        if session.is_processing:
-            _raise(409, "voice_task_active", "当前有活动任务，语音任务/混合输入将在 M2 支持")
         active_conversation_id = str(session.active_conversation_id or "").strip()
         current_epoch = max(0, int(getattr(session, "session_epoch", 0) or 0))
         current_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+        session_is_processing = bool(session.is_processing)
+    if session_is_processing:
+        from bot.codex_server.voice import voice_leases
+
+        can_recover = bool(
+            allow_voice_recovery
+            and recovery_actor is not None
+            and client_generation
+            and recovery_token
+            and voice_leases.can_recover(
+                (session.bot_id, chat_session_user_id(session.user_id), session.agent_id, active_conversation_id),
+                recovery_actor,
+                client_generation,
+                recovery_token,
+            )
+        )
+        if not can_recover:
+            _raise(409, "voice_task_active", "当前有活动任务，语音任务/混合输入将在 M2 支持")
     if str(agent_id or "main").strip().lower() != current_agent_id:
         _raise(409, "voice_session_changed", "当前 agent 会话已切换")
     if requested_epoch != current_epoch or requested_conversation_id != active_conversation_id:
@@ -4484,7 +4519,8 @@ def get_codex_server_voice_session(
 
 async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSession,
                                         conversation_id: str, *, allow_unsafe_cli: bool = False,
-                                        actor: dict[str, Any] | None = None):
+                                        actor: dict[str, Any] | None = None,
+                                        voice_lease: Any | None = None):
     """Open only a server-resolved binding. Voice does not create chat turns."""
     from bot.codex_server.runtime import CodexServerRuntimeRequest, get_codex_server_registry
 
@@ -4508,6 +4544,7 @@ async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSess
         allow_unsafe_cli=allow_unsafe_cli,
     )
     registry = get_codex_server_registry()
+    allow_voice_rebind = bool(getattr(voice_lease, "recovery_claimed", False))
     runtime = await registry.open_or_create(CodexServerRuntimeRequest(
         owner_key=_codex_server_owner(session),
         conversation_id=conversation_id,
@@ -4517,13 +4554,13 @@ async def open_codex_server_voice_runtime(profile: BotProfile, session: UserSess
         params_config=params,
         thread_id=thread_id,
         experimental_api=True,
-    ))
+    ), allow_voice_rebind=allow_voice_rebind)
     with session._lock:
         changed = (
             session.active_conversation_id != conversation_id
             or session.session_epoch != epoch
             or session.working_dir != cwd
-            or session.is_processing
+            or (session.is_processing and not allow_voice_rebind)
         )
     if changed:
         await registry.close_owner(_codex_server_owner(session))

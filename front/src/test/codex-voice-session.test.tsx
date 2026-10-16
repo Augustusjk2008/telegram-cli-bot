@@ -317,6 +317,73 @@ describe("useCodexVoiceSession", () => {
     }));
   });
 
+  test("recovers an unexpected control disconnect without repeating start", async () => {
+    const connections: CodexVoiceConnection[] = [];
+    const optionsList: Array<{
+      onMessage: (message: CodexVoiceMessage) => void;
+      onClose: () => void;
+      recoveryToken?: string;
+      clientGeneration?: string;
+      threadId?: string;
+      codexTurnId?: string;
+      tcbTurnId?: string;
+      conversationId?: string;
+      sessionEpoch?: number;
+    }> = [];
+    const connect = vi.fn((_alias: string, options: typeof optionsList[number]) => {
+      optionsList.push(options);
+      const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+      connections.push(connection);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<Harness client={{ connectCodexVoice: connect } as unknown as WebBotClient} scopeKey={JSON.stringify(["account", "cli", "conversation-1", 7])} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connections[0]?.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+
+    await act(async () => optionsList[0].onMessage({
+      type: "voice.state",
+      seq: 1,
+      state: "active",
+      recovery_token: "server-recovery-1",
+      client_generation: "generation-1",
+      thread_id: "thread-1",
+      codex_turn_id: "codex-turn-1",
+      tcb_turn_id: "tcb-turn-1",
+    }));
+
+    vi.useFakeTimers();
+    try {
+      act(() => optionsList[0].onClose());
+      expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("连接中断");
+
+      await act(async () => {
+        vi.advanceTimersByTime(250);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(optionsList[1]).toMatchObject({
+        agentId: "main",
+        conversationId: "conversation-1",
+        sessionEpoch: 7,
+        recoveryToken: "server-recovery-1",
+        clientGeneration: "generation-1",
+        threadId: "thread-1",
+        codexTurnId: "codex-turn-1",
+        tcbTurnId: "tcb-turn-1",
+      });
+      expect(connections[1].send).toHaveBeenCalledWith({ op: "summary" });
+      expect(connections[1].send).not.toHaveBeenCalledWith(expect.objectContaining({ op: "start" }));
+      expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("已继续当前会话");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("shows occupied errors without retrying or taking over", async () => {
     const messages: Array<(message: CodexVoiceMessage) => void> = [];
     const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };

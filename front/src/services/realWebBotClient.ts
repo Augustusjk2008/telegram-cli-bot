@@ -576,6 +576,12 @@ type RawVoiceTaskBinding = {
   assistantMessageId?: string;
   codex_turn_id?: string;
   codexTurnId?: string;
+  thread_id?: string;
+  threadId?: string;
+  recovery_token?: string;
+  recoveryToken?: string;
+  client_generation?: string;
+  clientGeneration?: string;
   realtime_session_id?: string;
   realtimeSessionId?: string;
   conversation_id?: string;
@@ -2281,6 +2287,9 @@ function mapVoiceTaskBinding(raw?: RawVoiceTaskBinding | null): VoiceTaskBinding
     ...((raw.tcb_turn_id ?? raw.tcbTurnId) ? { tcbTurnId: String(raw.tcb_turn_id ?? raw.tcbTurnId) } : {}),
     ...((raw.assistant_message_id ?? raw.assistantMessageId) ? { assistantMessageId: String(raw.assistant_message_id ?? raw.assistantMessageId) } : {}),
     ...((raw.codex_turn_id ?? raw.codexTurnId) ? { codexTurnId: String(raw.codex_turn_id ?? raw.codexTurnId) } : {}),
+    ...((raw.thread_id ?? raw.threadId) ? { threadId: String(raw.thread_id ?? raw.threadId) } : {}),
+    ...((raw.recovery_token ?? raw.recoveryToken) ? { recoveryToken: String(raw.recovery_token ?? raw.recoveryToken) } : {}),
+    ...((raw.client_generation ?? raw.clientGeneration) ? { clientGeneration: String(raw.client_generation ?? raw.clientGeneration) } : {}),
     ...((raw.realtime_session_id ?? raw.realtimeSessionId) ? { realtimeSessionId: String(raw.realtime_session_id ?? raw.realtimeSessionId) } : {}),
     ...((raw.conversation_id ?? raw.conversationId) ? { conversationId: String(raw.conversation_id ?? raw.conversationId) } : {}),
     state: ["active", "completed", "failed", "interrupted", "unknown"].includes(state)
@@ -5003,6 +5012,11 @@ export class RealWebBotClient implements WebBotClient {
       protocol_version: options.protocolVersion ?? 1,
       conversation_id: options.conversationId?.trim() || undefined,
       session_epoch: options.sessionEpoch,
+      recovery_token: options.recoveryToken?.trim() || undefined,
+      client_generation: options.clientGeneration?.trim() || undefined,
+      thread_id: options.threadId?.trim() || undefined,
+      codex_turn_id: options.codexTurnId?.trim() || undefined,
+      tcb_turn_id: options.tcbTurnId?.trim() || undefined,
     }));
     let closed = false;
     let opened = false;

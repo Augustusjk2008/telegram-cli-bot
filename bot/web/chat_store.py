@@ -1913,6 +1913,7 @@ class ChatStore:
                   AND c.working_dir = ? AND c.session_epoch = ?
                   AND c.native_provider = 'codex'
                   AND c.archived_at IS NULL
+                  AND (? = '' OR vt.conversation_id = ?)
                 ORDER BY vt.created_at ASC, vt.turn_id ASC
                 LIMIT 1
                 """,
@@ -1923,6 +1924,8 @@ class ChatStore:
                     normalized_agent_id,
                     working_dir,
                     session_epoch,
+                    normalized_conversation_id,
+                    normalized_conversation_id,
                 ),
             ).fetchone()
             if existing is not None:

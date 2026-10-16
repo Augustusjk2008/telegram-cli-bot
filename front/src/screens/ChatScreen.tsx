@@ -3646,7 +3646,7 @@ export function ChatScreen({
   }
 
   async function handleSelectConversation(conversationId: string) {
-    if (isStreaming) {
+    if (isStreaming || voiceInputLocked) {
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
@@ -4903,7 +4903,6 @@ export function ChatScreen({
     ? "等待权限处理"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || !isStreaming || actionLoading === "kill";
-  const showActionBar = !isImmersive;
   const voiceEnabled = botOverview?.alias === botAlias
     && botOverview?.cliType === "codex_server"
     && effectiveExecutionMode === "cli"
@@ -4952,7 +4951,16 @@ export function ChatScreen({
     }
     void pollAssistantStateRef.current?.({ allowDuringSse: true, forceHistory: true });
   }, [voiceTaskRevision]);
+  const voiceForegroundActive = voiceEnabled && isVisible && (
+    voiceSession.connected
+    || voiceSession.task === "running"
+    || voiceSession.taskBinding?.state === "active"
+    || voiceSession.continuity === "interrupted"
+    || voiceSession.continuity === "recovering"
+  );
+  const voiceInputLocked = voiceForegroundActive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
+  const showActionBar = !isImmersive && !voiceForegroundActive;
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
@@ -5270,7 +5278,37 @@ export function ChatScreen({
           onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
         />
       ) : null}
-      {voiceEnabled && isVisible ? <CodexVoiceBar session={voiceSession} disabled={loading || conversationLoading} busy={isStreaming} /> : null}
+      {voiceEnabled && isVisible ? (
+        <section
+          data-testid="codex-voice-foreground"
+          className={voiceForegroundActive
+            ? "border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]"
+            : ""}
+        >
+          <CodexVoiceBar session={voiceSession} disabled={loading || conversationLoading} busy={isStreaming} />
+          {voiceForegroundActive ? (
+            <div className="flex items-center gap-2 border-t border-[var(--workbench-hairline)] px-3 py-1.5 text-xs text-[var(--muted)]">
+              <span>文字输入已暂停，当前语音会话仍与此对话保持连续</span>
+              <button
+                type="button"
+                aria-label="展开文字"
+                onClick={() => void handleOpenHistoryPanel("history")}
+                className="ml-auto rounded-md border border-[var(--workbench-hairline)] px-2 py-1 font-medium text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)]"
+              >
+                展开文字
+              </button>
+              <button
+                type="button"
+                aria-label="切换到文字"
+                onClick={voiceSession.end}
+                className="rounded-md border border-[var(--workbench-hairline)] px-2 py-1 font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+              >
+                切换到文字
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       {chatDisabledReason && !childAgentReadOnly ? (
         <section className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm font-medium text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
           {chatDisabledReason}
@@ -5375,7 +5413,7 @@ export function ChatScreen({
         conversations={conversations}
         favorites={favoriteItems}
         query={conversationQuery}
-        disabled={isStreaming}
+        disabled={isStreaming || voiceInputLocked}
         deletingConversationId={deletingConversationId}
         deletingFavoriteId={deletingFavoriteId}
         favoriteError={favoriteError}
@@ -5455,12 +5493,12 @@ export function ChatScreen({
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}
             pulse={composerPulseKey > 0}
-            disabled={chatMutationsDisabled || nativePermissionPending || loading || voiceSession.connected}
+            disabled={chatMutationsDisabled || nativePermissionPending || loading || voiceInputLocked}
             compact={isImmersive || embedded}
             mobileLayout={mobileLayout}
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
-            placeholder={voiceSession.connected ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
+            placeholder={voiceInputLocked ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}

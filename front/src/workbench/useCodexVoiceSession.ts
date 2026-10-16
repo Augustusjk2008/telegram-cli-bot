@@ -3,6 +3,7 @@ import type {
   CodexVoiceConnection,
   CodexVoiceMessage,
   CodexVoiceState,
+  CodexVoiceSessionDetails,
   VoiceTaskBinding,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -20,6 +21,7 @@ type CaptionTracker = {
 };
 type VoiceView = {
   state: CodexVoiceState;
+  continuity: "stable" | "interrupted" | "recovering" | "resumed" | "ended";
   mic: "off" | "requesting" | "on" | "muted";
   peer: RTCPeerConnectionState;
   playback: "idle" | "playing" | "blocked" | "suppressed";
@@ -30,10 +32,11 @@ type VoiceView = {
   receivedPackets: number;
   captions: Caption[];
   error: string;
+  details: CodexVoiceSessionDetails;
 };
 const initialView: VoiceView = {
-  state: "idle", mic: "off", peer: "new", playback: "idle", activity: "等待连接", task: "idle",
-  taskBinding: null, receivedBytes: 0, receivedPackets: 0, captions: [], error: "",
+  state: "idle", continuity: "stable", mic: "off", peer: "new", playback: "idle", activity: "等待连接", task: "idle",
+  taskBinding: null, receivedBytes: 0, receivedPackets: 0, captions: [], error: "", details: {},
 };
 
 function taskLabelState(binding: VoiceTaskBinding | null): VoiceView["task"] {
@@ -48,6 +51,15 @@ function initialViewForTask(binding?: VoiceTaskBinding | null): VoiceView {
     task: taskLabelState(binding),
     taskBinding: binding,
     activity: binding.state === "active" ? "任务运行中" : "语音任务已同步",
+    details: {
+      ...(binding.conversationId ? { conversationId: binding.conversationId } : {}),
+      ...(binding.sessionEpoch !== undefined ? { sessionEpoch: binding.sessionEpoch } : {}),
+      ...(binding.recoveryToken ? { recoveryToken: binding.recoveryToken } : {}),
+      ...(binding.clientGeneration ? { clientGeneration: binding.clientGeneration } : {}),
+      ...(binding.threadId ? { threadId: binding.threadId } : {}),
+      ...(binding.codexTurnId ? { codexTurnId: binding.codexTurnId } : {}),
+      ...(binding.tcbTurnId ? { tcbTurnId: binding.tcbTurnId } : {}),
+    },
   };
 }
 
@@ -91,10 +103,25 @@ type Session = {
   playbackGeneration: number;
   responseId?: string;
   suppressedResponseId?: string;
+  conversationId?: string;
+  sessionEpoch?: number;
+  recoveryToken: string;
+  clientGeneration?: string;
+  threadId?: string;
+  codexTurnId?: string;
+  tcbTurnId?: string;
+  controlGeneration: number;
+  recoveryAttempt: number;
+  recoveryStartedAt?: number;
+  recoveryTimer?: number;
+  recoveryInFlight: boolean;
   statsTimer?: number;
   deadline?: number;
   disconnectTimer?: number;
 };
+
+const VOICE_RECOVERY_WINDOW_MS = 30000;
+const VOICE_RECOVERY_DELAYS_MS = [250, 1000, 2500, 5000] as const;
 
 function releaseMedia(session: Session) {
   if (!session.released) {
@@ -126,6 +153,8 @@ function releaseMedia(session: Session) {
   session.deadline = undefined;
   window.clearTimeout(session.disconnectTimer);
   session.disconnectTimer = undefined;
+  window.clearTimeout(session.recoveryTimer);
+  session.recoveryTimer = undefined;
 }
 
 function gatherIce(peer: RTCPeerConnection, signal: AbortSignal): Promise<void> {
@@ -155,6 +184,18 @@ function optionalNumber(value: unknown): number | undefined {
   if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return undefined;
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function optionalText(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+  return text || undefined;
+}
+
+function createRecoveryToken(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `voice-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function parseVoiceScope(scopeKey: string): { conversationId?: string; sessionEpoch?: number } {
@@ -353,6 +394,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     if (state === "unknown") {
       dispose(false);
       setView((value) => ({ ...value, state: "unknown", error: error || value.error,
+        continuity: "interrupted",
         mic: "off", peer: "closed", playback: "idle",
         activity: "结果待确认",
         task: value.taskBinding?.state === "unknown" || value.task === "running" ? "unknown" : value.task,
@@ -360,8 +402,8 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       return;
     }
     dispose();
-    setView((value) => ({ ...value, state, mic: "off", peer: "closed", playback: "idle", error,
-      activity: state === "closed" ? "语音已结束" : "设备已释放",
+    setView((value) => ({ ...value, state, continuity: state === "closed" ? "ended" : "stable", mic: "off", peer: "closed", playback: "idle", error,
+      activity: state === "closed" ? "语音已结束，已保存的内容仍在对话中" : "设备已释放",
       task: value.task,
     }));
   }, [dispose]);
@@ -389,6 +431,14 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       seq: -1,
       started: false, stopping: false, applyingSdp: false, suppressed: false, released: false,
       playbackGeneration: 0,
+      recoveryToken: restoredTaskBindingRef.current?.recoveryToken || createRecoveryToken(),
+      clientGeneration: restoredTaskBindingRef.current?.clientGeneration,
+      threadId: restoredTaskBindingRef.current?.threadId,
+      codexTurnId: restoredTaskBindingRef.current?.codexTurnId,
+      tcbTurnId: restoredTaskBindingRef.current?.tcbTurnId,
+      controlGeneration: 0,
+      recoveryAttempt: 0,
+      recoveryInFlight: false,
     };
     current.current = session;
     const live = () => current.current === session && !session.stopping;
@@ -396,9 +446,53 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       finish(session, session.started ? "unknown" : "error", message);
     };
     setView({ ...initialView, state: "negotiating", mic: "requesting", activity: "等待麦克风授权" });
+    const publishDetails = () => {
+      setView((value) => ({
+        ...value,
+        details: {
+          agentId,
+          ...(session.conversationId ? { conversationId: session.conversationId } : {}),
+          ...(session.sessionEpoch !== undefined ? { sessionEpoch: session.sessionEpoch } : {}),
+          recoveryToken: session.recoveryToken,
+          ...(session.clientGeneration ? { clientGeneration: session.clientGeneration } : {}),
+          ...(session.threadId ? { threadId: session.threadId } : {}),
+          ...(session.codexTurnId ? { codexTurnId: session.codexTurnId } : {}),
+          ...(session.tcbTurnId ? { tcbTurnId: session.tcbTurnId } : {}),
+          reconnectAttempt: session.recoveryAttempt,
+          lastSeq: session.seq >= 0 ? session.seq : undefined,
+        },
+      }));
+    };
+    const rememberIdentity = (raw: Record<string, unknown>, forcePublish = false) => {
+      const nested = record(raw.data);
+      const payload = { ...nested, ...raw };
+      const previousIdentity = [
+        session.conversationId, session.sessionEpoch, session.recoveryToken, session.clientGeneration,
+        session.threadId, session.codexTurnId, session.tcbTurnId,
+      ].join("\u0000");
+      const incomingConversationId = optionalText(payload.conversation_id ?? payload.conversationId);
+      const incomingSessionEpoch = optionalNumber(payload.session_epoch ?? payload.sessionEpoch);
+      if (!session.conversationId && incomingConversationId) session.conversationId = incomingConversationId;
+      if (session.sessionEpoch === undefined && incomingSessionEpoch !== undefined) session.sessionEpoch = incomingSessionEpoch;
+      session.recoveryToken = optionalText(
+        payload.recovery_token ?? payload.recoveryToken ?? payload.resume_token ?? payload.resumeToken,
+      ) || session.recoveryToken;
+      session.clientGeneration = optionalText(payload.client_generation ?? payload.clientGeneration) || session.clientGeneration;
+      session.threadId = optionalText(payload.thread_id ?? payload.threadId) || session.threadId;
+      session.codexTurnId = optionalText(
+        payload.codex_turn_id ?? payload.codexTurnId ?? payload.turn_id ?? payload.turnId,
+      ) || session.codexTurnId;
+      session.tcbTurnId = optionalText(payload.tcb_turn_id ?? payload.tcbTurnId) || session.tcbTurnId;
+      const nextIdentity = [
+        session.conversationId, session.sessionEpoch, session.recoveryToken, session.clientGeneration,
+        session.threadId, session.codexTurnId, session.tcbTurnId,
+      ].join("\u0000");
+      if (forcePublish || previousIdentity !== nextIdentity) publishDetails();
+    };
     const applyTaskBinding = (raw: Record<string, unknown>) => {
       const nested = record(raw.data);
       const payload = Object.keys(nested).length > 0 ? { ...nested, ...raw } : raw;
+      rememberIdentity(payload);
       const rawState = String(payload.state || "unknown").trim().toLowerCase();
       const transcript = normalizeTranscriptState(payload.transcript_state ?? payload.transcriptState);
       const sessionEpoch = optionalNumber(payload.session_epoch ?? payload.sessionEpoch);
@@ -408,6 +502,9 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         ...(payload.tcb_turn_id || payload.tcbTurnId ? { tcbTurnId: String(payload.tcb_turn_id || payload.tcbTurnId) } : {}),
         ...(payload.assistant_message_id || payload.assistantMessageId ? { assistantMessageId: String(payload.assistant_message_id || payload.assistantMessageId) } : {}),
         ...(payload.codex_turn_id || payload.codexTurnId ? { codexTurnId: String(payload.codex_turn_id || payload.codexTurnId) } : {}),
+        ...(payload.thread_id || payload.threadId ? { threadId: String(payload.thread_id || payload.threadId) } : {}),
+        ...(payload.recovery_token || payload.recoveryToken ? { recoveryToken: String(payload.recovery_token || payload.recoveryToken) } : {}),
+        ...(payload.client_generation || payload.clientGeneration ? { clientGeneration: String(payload.client_generation || payload.clientGeneration) } : {}),
         ...(payload.realtime_session_id || payload.realtimeSessionId ? { realtimeSessionId: String(payload.realtime_session_id || payload.realtimeSessionId) } : {}),
         ...(payload.conversation_id || payload.conversationId ? { conversationId: String(payload.conversation_id || payload.conversationId) } : {}),
         state: ["active", "completed", "failed", "interrupted", "unknown"].includes(rawState)
@@ -429,6 +526,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     };
     const runtimeEvent = (name: string, raw: Record<string, unknown>, eventId?: string, itemId?: string) => {
       if (!live()) return;
+      rememberIdentity(raw);
       const outer = record(raw.params || raw);
       const nested = record(outer.event);
       const data = typeof nested.type === "string" ? nested : outer;
@@ -482,6 +580,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         if (message.seq <= session.seq) return;
         session.seq = message.seq;
       }
+      rememberIdentity(record(message), typeof message.seq === "number");
       if (message.type === "voice.state") {
         if (message.state === "unknown") {
           finish(session, "unknown", voiceErrorMessage(message, "语音状态待确认"));
@@ -510,11 +609,84 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         }
       }
     };
+    const scheduleRecovery = (reason = "连接中断") => {
+      if (!live() || !session.started || session.stopping || session.recoveryTimer !== undefined || session.recoveryInFlight) return;
+      const now = Date.now();
+      session.recoveryStartedAt ??= now;
+      const elapsed = now - session.recoveryStartedAt;
+      const nextAttempt = session.recoveryAttempt + 1;
+      if (elapsed >= VOICE_RECOVERY_WINDOW_MS || nextAttempt > VOICE_RECOVERY_DELAYS_MS.length) {
+        fail("连接中断，语音结果待确认");
+        return;
+      }
+      session.recoveryAttempt = nextAttempt;
+      publishDetails();
+      setView((value) => ({ ...value, continuity: "interrupted", activity: "连接中断", error: reason }));
+      session.recoveryTimer = window.setTimeout(() => {
+        session.recoveryTimer = undefined;
+        if (!live()) return;
+        session.recoveryInFlight = true;
+        publishDetails();
+        setView((value) => ({ ...value, continuity: "recovering", activity: "正在尝试继续当前会话", error: "" }));
+        void connectControl(true);
+      }, VOICE_RECOVERY_DELAYS_MS[nextAttempt - 1]);
+    };
+    const connectControl = async (resume: boolean, sdp?: string) => {
+      if (!live()) return;
+      const generation = session.controlGeneration + 1;
+      session.controlGeneration = generation;
+      let connection: CodexVoiceConnection | undefined;
+      try {
+        connection = client.connectCodexVoice(botAlias, {
+          agentId,
+          conversationId: session.conversationId,
+          sessionEpoch: session.sessionEpoch,
+          recoveryToken: session.recoveryToken,
+          clientGeneration: session.clientGeneration,
+          threadId: session.threadId,
+          codexTurnId: session.codexTurnId,
+          tcbTurnId: session.tcbTurnId,
+          protocolVersion: 1,
+          onMessage: (message) => {
+            if (session.controlGeneration === generation) onMessage(message);
+          },
+          onClose: () => {
+            if (session.controlGeneration !== generation || !live()) return;
+            if (session.started) scheduleRecovery("连接中断");
+            else fail("语音控制连接中断");
+          },
+        });
+        session.connection = connection;
+        await connection.ready;
+        if (!live() || session.controlGeneration !== generation) {
+          connection.close();
+          return;
+        }
+        if (resume) {
+          connection.send({ op: "summary" });
+          session.recoveryInFlight = false;
+          session.recoveryStartedAt = undefined;
+          session.recoveryAttempt = 0;
+          publishDetails();
+          setView((value) => ({ ...value, continuity: "resumed", activity: "已继续当前会话", error: "" }));
+        } else {
+          if (!sdp) throw new Error("未生成本地 SDP");
+          connection.send({ op: "start", sdp });
+          session.started = true;
+        }
+      } catch (error) {
+        if (!live() || session.controlGeneration !== generation) return;
+        session.recoveryInFlight = false;
+        try { connection?.close(); } catch { /* The connection may already be closed. */ }
+        if (resume) scheduleRecovery(error instanceof Error ? error.message : "连接中断");
+        else fail(error instanceof Error ? error.message : "语音控制连接失败");
+      }
+    };
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === "undefined") throw new Error("当前浏览器不支持语音，请使用安全连接并允许麦克风访问");
       const scoped = parseVoiceScope(scopeKey);
-      let voiceConversationId = requestedConversationId?.trim() || scoped.conversationId;
-      let voiceSessionEpoch = requestedSessionEpoch ?? scoped.sessionEpoch;
+      let voiceConversationId = requestedConversationId?.trim() || scoped.conversationId || restoredTaskBindingRef.current?.conversationId;
+      let voiceSessionEpoch = requestedSessionEpoch ?? scoped.sessionEpoch ?? restoredTaskBindingRef.current?.sessionEpoch;
       if (typeof client.getBotOverview === "function") {
         const overview = await client.getBotOverview(botAlias, { agentId, executionMode: "cli" });
         if (!live()) return;
@@ -530,6 +702,9 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
           throw new Error("当前聊天会话已切换，请重试语音连接");
         }
       }
+      session.conversationId = voiceConversationId;
+      session.sessionEpoch = voiceSessionEpoch;
+      publishDetails();
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (!live()) { mic.getTracks().forEach((track) => track.stop()); return; }
       session.mic = mic;
@@ -589,18 +764,8 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       await gatherIce(peer, session.abort.signal);
       if (!live()) return;
       if (!peer.localDescription?.sdp) throw new Error("未生成本地 SDP");
-      session.connection = client.connectCodexVoice(botAlias, {
-        agentId,
-        conversationId: voiceConversationId,
-        sessionEpoch: voiceSessionEpoch,
-        protocolVersion: 1,
-        onMessage,
-        onClose: () => fail("语音控制连接中断，未自动重连"),
-      });
-      await session.connection.ready;
+      await connectControl(false, peer.localDescription.sdp);
       if (!live()) return;
-      session.connection.send({ op: "start", sdp: peer.localDescription.sdp });
-      session.started = true;
       session.deadline = window.setTimeout(() => fail("等待远端 SDP 超时，语音结果待确认"), 70000);
       session.statsTimer = window.setInterval(() => {
         void peer.getStats().then((reports) => {

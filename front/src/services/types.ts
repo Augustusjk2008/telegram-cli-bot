@@ -1023,6 +1023,9 @@ export type VoiceTaskBinding = {
   tcbTurnId?: string;
   assistantMessageId?: string;
   codexTurnId?: string;
+  threadId?: string;
+  recoveryToken?: string;
+  clientGeneration?: string;
   realtimeSessionId?: string;
   conversationId?: string;
   state: VoiceTaskState;
@@ -1037,6 +1040,16 @@ export type CodexVoiceMessage =
     seq: number;
     state: CodexVoiceState;
     connection_id?: string;
+    thread_id?: string;
+    conversation_id?: string;
+    session_epoch?: number;
+    recovery_token?: string;
+    resume_token?: string;
+    client_generation?: string;
+    tcb_turn_id?: string;
+    codex_turn_id?: string;
+    turn_id?: string;
+    last_seq?: number;
     code?: string;
     message?: string;
     outcome?: string;
@@ -1047,20 +1060,36 @@ export type CodexVoiceMessage =
     tcb_turn_id?: string;
     assistant_message_id?: string;
     codex_turn_id?: string;
+    thread_id?: string;
+    recovery_token?: string;
+    client_generation?: string;
     realtime_session_id?: string;
     conversation_id?: string;
     state: VoiceTaskState;
     transcript_state: VoiceTranscriptStatePayload;
     session_epoch?: number;
-  } & Partial<Pick<VoiceTaskBinding, "tcbTurnId" | "assistantMessageId" | "codexTurnId" | "realtimeSessionId" | "conversationId" | "transcriptState" | "sessionEpoch">>)
+  } & Partial<Pick<VoiceTaskBinding, "tcbTurnId" | "assistantMessageId" | "codexTurnId" | "threadId" | "recoveryToken" | "clientGeneration" | "realtimeSessionId" | "conversationId" | "transcriptState" | "sessionEpoch">>)
   | { type: "voice.sdp"; seq: number; connection_id?: string; sdp: string }
-  | { type: "voice.event"; seq: number; event_id?: string; name: string; thread_id?: string; turn_id?: string; realtime_session_id?: string; item_id?: string; data: Record<string, unknown> }
+  | { type: "voice.event"; seq: number; event_id?: string; name: string; thread_id?: string; turn_id?: string; tcb_turn_id?: string; codex_turn_id?: string; recovery_token?: string; client_generation?: string; realtime_session_id?: string; item_id?: string; data: Record<string, unknown> }
   | { type: "voice.error" | "error"; seq?: number; code?: string; message?: string; state?: CodexVoiceState; error?: { code?: string; message?: string }; outcome?: string };
 
 export type CodexVoiceCommand =
   | { op: "start"; sdp: string }
   | { op: "stop_voice" | "summary" }
   | { op: "browser_event"; name: string; data: Record<string, unknown> };
+
+export type CodexVoiceSessionDetails = {
+  agentId?: string;
+  conversationId?: string;
+  sessionEpoch?: number;
+  recoveryToken?: string;
+  clientGeneration?: string;
+  threadId?: string;
+  codexTurnId?: string;
+  tcbTurnId?: string;
+  reconnectAttempt?: number;
+  lastSeq?: number;
+};
 
 export type CodexVoiceConnection = {
   ready: Promise<void>;
@@ -1072,6 +1101,11 @@ export type CodexVoiceConnectionOptions = {
   agentId?: string;
   conversationId?: string;
   sessionEpoch?: number;
+  recoveryToken?: string;
+  clientGeneration?: string;
+  threadId?: string;
+  codexTurnId?: string;
+  tcbTurnId?: string;
   protocolVersion?: number;
   onMessage: (message: CodexVoiceMessage) => void;
   onClose: () => void;

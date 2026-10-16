@@ -18,6 +18,36 @@ def _voice_handle(store: ChatStore, *, user_id: int = 2):
     )
 
 
+def test_voice_submission_key_is_scoped_to_explicit_conversation(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    first = _voice_handle(store)
+    second_conversation = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2,
+        agent_id="main",
+        cli_type="codex",
+        working_dir=str(tmp_path),
+        session_epoch=0,
+        native_provider="codex",
+    )
+
+    second = store.ensure_voice_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2,
+        working_dir=str(tmp_path),
+        session_epoch=0,
+        task_submission_key="submission-1",
+        codex_turn_id="codex-turn-2",
+        realtime_session_id="realtime-2",
+        conversation_id=second_conversation,
+    )
+
+    assert second.conversation_id == second_conversation
+    assert second.turn_id != first.turn_id
+
+
 def test_voice_schema_submission_and_event_are_idempotent(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     handle = _voice_handle(store)

@@ -143,6 +143,58 @@ async def test_disconnect_keeps_runtime_binding_until_realtime_closed():
     assert not registry.owner_busy((1, 2, "main"))
 
 
+@pytest.mark.asyncio
+async def test_unexpected_disconnect_can_rebind_with_scoped_recovery_credentials():
+    runtime = FakeRuntime()
+    registry = VoiceLeaseRegistry(ttl=90, recovery_window=10)
+    key = (1, 2, "main", "conversation")
+    lease = registry.acquire(key, ("account", 2))
+    lease.bind(runtime)
+    await lease.start("v=0\r\n")
+    runtime.voice_task_active = True
+    old_connection_id = lease.connection_id
+
+    await lease.disconnect(unexpected=True)
+
+    assert runtime.stop_realtime.await_count == 0
+    assert lease.recoverable
+    assert registry.owner_busy((1, 2, "main"))
+    with pytest.raises(VoiceError, match="恢复凭据无效"):
+        registry.acquire(key, ("other-account", 2),
+                         client_generation=lease.client_generation,
+                         recovery_token=lease.recovery_token)
+    with pytest.raises(VoiceError, match="clientGeneration"):
+        registry.acquire(key, ("account", 2))
+
+    recovered = registry.acquire(
+        key,
+        ("account", 2),
+        client_generation=lease.client_generation,
+        recovery_token=lease.recovery_token,
+    )
+    assert recovered is lease
+    lease.bind(runtime)
+    new_connection_id = lease.connection_id
+    assert new_connection_id != old_connection_id
+    assert runtime.voice_lease is lease
+    assert runtime.voice_lease_generation == new_connection_id
+
+    await lease.disconnect(unexpected=True, _expected_connection_id=old_connection_id)
+    registry.release(lease, _expected_connection_id=old_connection_id)
+    assert lease.attached and runtime.voice_lease is lease
+
+    lease.invalidate()
+    runtime.voice_task_active = False
+    replacement = registry.acquire(
+        key,
+        ("account", 2),
+        client_generation=lease.client_generation,
+        recovery_token=lease.recovery_token,
+    )
+    assert replacement is not lease
+    replacement.invalidate()
+
+
 def test_detached_lease_expires_and_does_not_block_reacquire():
     registry = VoiceLeaseRegistry(ttl=.01)
     lease = registry.acquire((1, 2, "main", "conversation"), ("account", 2))

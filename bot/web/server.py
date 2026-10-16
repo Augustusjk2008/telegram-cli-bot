@@ -1920,10 +1920,20 @@ class WebApiServer:
             requested_epoch = int(requested_epoch)
         except (TypeError, ValueError) as exc:
             raise WebApiError(400, "voice_session_binding_required", "语音连接缺少有效的 session_epoch") from exc
+        requested_client_generation = str(
+            request.query.get("client_generation") or request.query.get("clientGeneration") or ""
+        ).strip()
+        requested_recovery_token = str(
+            request.query.get("recovery_token") or request.query.get("recoveryToken")
+            or request.query.get("resume_token") or request.query.get("resumeToken") or ""
+        ).strip()
+        if bool(requested_client_generation) != bool(requested_recovery_token):
+            raise WebApiError(400, "voice_recovery_binding_required", "语音恢复需要 clientGeneration 和恢复令牌")
 
         runtime = None
         lease = None
         voice_queue = None
+        bound_connection_id = ""
         ws = web.WebSocketResponse(heartbeat=30.0)
         try:
             profile, session, conversation_id = get_codex_server_voice_session(
@@ -1934,11 +1944,20 @@ class WebApiServer:
                 execution_mode=execution_mode,
                 conversation_id=requested_conversation_id,
                 session_epoch=requested_epoch,
+                allow_voice_recovery=bool(requested_client_generation and requested_recovery_token),
+                recovery_actor=(auth.account_id, auth.user_id),
+                client_generation=requested_client_generation,
+                recovery_token=requested_recovery_token,
             )
             lease_key = (session.bot_id, chat_session_user_id(session.user_id), session.agent_id, conversation_id)
             await ws.prepare(request)
             try:
-                lease = voice_leases.acquire(lease_key, (auth.account_id, auth.user_id))
+                lease = voice_leases.acquire(
+                    lease_key,
+                    (auth.account_id, auth.user_id),
+                    client_generation=requested_client_generation,
+                    recovery_token=requested_recovery_token,
+                )
             except VoiceError as exc:
                 await ws.send_json({"type": "voice.error", "code": exc.code, "message": exc.message,
                                     "state": "idle"})
@@ -1951,6 +1970,7 @@ class WebApiServer:
                     conversation_id,
                     allow_unsafe_cli=CAP_RUN_UNSAFE_CLI in auth.capabilities,
                     actor=self._chat_actor(auth),
+                    voice_lease=lease,
                 )
             except CodexServerError as exc:
                 await ws.send_json({"type": "voice.error", "code": "voice_runtime_unavailable",
@@ -1960,12 +1980,13 @@ class WebApiServer:
             try:
                 voice_queue = runtime.subscribe_voice()
                 lease.bind(runtime)
+                bound_connection_id = lease.connection_id
             except VoiceError as exc:
                 await ws.send_json({"type": "voice.error", "code": exc.code, "message": exc.message,
                                     "state": lease.state if lease is not None else "idle"})
                 await ws.close(code=WSCloseCode.INTERNAL_ERROR, message=exc.code.encode("utf-8"))
                 return ws
-            lease.summary()
+            lease.summary(_expected_connection_id=bound_connection_id)
 
             async def forward_events() -> None:
                 while True:
@@ -1979,7 +2000,7 @@ class WebApiServer:
                 seen_ids: set[str] = set()
                 async for message in ws:
                     try:
-                        lease.renew()
+                        lease.renew(_expected_connection_id=bound_connection_id)
                     except VoiceError as exc:
                         await ws.send_json({"type": "voice.error", "code": exc.code,
                                             "message": exc.message, "state": lease.state})
@@ -1996,15 +2017,16 @@ class WebApiServer:
                         payload = validate_message(json.loads(message.data or "{}"), seen_ids)
                         op = payload["op"]
                         if op == "start":
-                            await lease.start(payload["sdp"])
+                            await lease.start(payload["sdp"], _expected_connection_id=bound_connection_id)
                         elif op == "stop_voice":
-                            await lease.stop_voice()
+                            await lease.stop_voice(_expected_connection_id=bound_connection_id)
                         elif op == "summary":
-                            lease.summary(payload["id"])
+                            lease.summary(payload["id"], _expected_connection_id=bound_connection_id)
                         else:
                             lease.publish({"type": "voice.event", "event_id": payload["id"],
                                            "name": f"browser/{payload['name']}",
-                                           "thread_id": lease.thread_id, "data": payload["data"]})
+                                           "thread_id": lease.thread_id, "data": payload["data"]},
+                                          _expected_connection_id=bound_connection_id)
                     except (json.JSONDecodeError, VoiceError) as exc:
                         if isinstance(exc, VoiceError):
                             error = {"type": "voice.error", "code": exc.code, "message": exc.message,
@@ -2018,7 +2040,7 @@ class WebApiServer:
                 try:
                     while not ws.closed:
                         await asyncio.sleep(15)
-                        lease.renew()
+                        lease.renew(_expected_connection_id=bound_connection_id)
                 except (asyncio.CancelledError, VoiceError):
                     return
 
@@ -2033,8 +2055,10 @@ class WebApiServer:
             if voice_queue is not None and runtime is not None:
                 runtime.unsubscribe_voice(voice_queue)
             if lease is not None:
-                await lease.disconnect()
-                voice_leases.release(lease)
+                if not bound_connection_id:
+                    lease.cancel_recovery_claim()
+                await lease.disconnect(unexpected=True, _expected_connection_id=bound_connection_id)
+                voice_leases.release(lease, _expected_connection_id=bound_connection_id)
 
     def _request_agent_id(self, request: web.Request, body: dict[str, Any] | None = None) -> str:
         value = request.query.get("agent_id") or request.query.get("agentId")

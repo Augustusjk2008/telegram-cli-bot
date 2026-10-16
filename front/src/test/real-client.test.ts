@@ -74,6 +74,11 @@ describe("RealWebBotClient", () => {
       agentId: "reviewer",
       conversationId: "conversation-1",
       sessionEpoch: 4,
+      recoveryToken: "recovery-1",
+      clientGeneration: "generation-1",
+      threadId: "thread-1",
+      codexTurnId: "codex-turn-1",
+      tcbTurnId: "tcb-turn-1",
       onMessage,
       onClose,
     });
@@ -85,6 +90,11 @@ describe("RealWebBotClient", () => {
     expect(url.searchParams.get("protocol_version")).toBe("1");
     expect(url.searchParams.get("conversation_id")).toBe("conversation-1");
     expect(url.searchParams.get("session_epoch")).toBe("4");
+    expect(url.searchParams.get("recovery_token")).toBe("recovery-1");
+    expect(url.searchParams.get("client_generation")).toBe("generation-1");
+    expect(url.searchParams.get("thread_id")).toBe("thread-1");
+    expect(url.searchParams.get("codex_turn_id")).toBe("codex-turn-1");
+    expect(url.searchParams.get("tcb_turn_id")).toBe("tcb-turn-1");
     socket.readyState = 1;
     socket.emit("open");
     await connection.ready;

@@ -59,6 +59,10 @@ async def test_voice_task_persistence_is_runtime_owned_and_terminal_is_idempoten
         "threadId": "thread-1", "turnId": "codex-turn", "itemId": "assistant-item", "delta": "hi",
         "item": {"id": "assistant-item", "type": "agentMessage"},
     }})
+    await coordinator.observe({"method": "item/agentMessage/delta", "params": {
+        "threadId": "thread-1", "turnId": "codex-turn", "itemId": "assistant-item", "delta": "hi",
+        "item": {"id": "assistant-item", "type": "agentMessage"},
+    }})
     terminal = {"method": "turn/completed", "params": {
         "threadId": "thread-1", "turnId": "codex-turn", "turn": {"id": "codex-turn", "status": "completed"},
     }}

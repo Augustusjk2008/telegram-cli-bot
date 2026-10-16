@@ -510,7 +510,8 @@ class CodexServerRegistry:
         self._epochs: dict[tuple[int, int, str], int] = {}
         self._lock = threading.RLock()
 
-    async def open_or_create(self, request: CodexServerRuntimeRequest) -> CodexServerRuntime:
+    async def open_or_create(self, request: CodexServerRuntimeRequest, *,
+                             allow_voice_rebind: bool = False) -> CodexServerRuntime:
         owner = request.owner_key
         with self._lock:
             if owner in self._opening:
@@ -540,17 +541,27 @@ class CodexServerRegistry:
                                              for key, r in self._runtimes.items() if key != owner):
                     raise CodexServerError("Codex thread 已由另一个 owner 绑定")
             if existing:
-                if existing.active:
-                    raise CodexServerError("codex server owner 当前 turn 尚未完成")
-                if existing.voice_task_active:
-                    raise CodexServerError("codex server owner 当前语音任务尚未完成")
-                if existing.voice_lease is not None and existing.voice_lease.state not in {"closed", "unknown", "error"}:
-                    raise CodexServerError("codex server owner 当前语音连接尚未结束")
-                if existing.loop is not asyncio.get_running_loop():
-                    raise CodexServerError("codex server owner 绑定到其他 event loop；请先 release_owner")
                 same_conversation = existing.request.conversation_id == request.conversation_id
                 same_thread = not request.thread_id or request.thread_id == existing.thread_id
                 same_api = existing.request.experimental_api == request.experimental_api
+                if existing.active:
+                    raise CodexServerError("codex server owner 当前 turn 尚未完成")
+                if existing.voice_task_active and not allow_voice_rebind:
+                    raise CodexServerError("codex server owner 当前语音任务尚未完成")
+                if (existing.voice_lease is not None
+                        and existing.voice_lease.state not in {"closed", "unknown", "error"}
+                        and not allow_voice_rebind):
+                    raise CodexServerError("codex server owner 当前语音连接尚未结束")
+                if existing.loop is not asyncio.get_running_loop():
+                    raise CodexServerError("codex server owner 绑定到其他 event loop；请先 release_owner")
+                if (allow_voice_rebind and (
+                        not existing.alive
+                        or not same_conversation
+                        or not same_thread
+                        or not same_api
+                        or existing.fingerprint != fingerprint
+                )):
+                    raise CodexServerError("codex server voice runtime 已变化，无法恢复")
                 if existing.alive and same_conversation and same_thread and same_api and existing.fingerprint == fingerprint:
                     existing.params = params
                     existing.request = request

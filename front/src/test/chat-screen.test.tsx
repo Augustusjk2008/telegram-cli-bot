@@ -455,7 +455,7 @@ test("retains steering input when the Codex server rejects it", async () => {
   });
 });
 
-test("steers an active persisted voice task into the same turn", async () => {
+test("keeps text input locked while an active persisted voice task is foreground", async () => {
   const user = userEvent.setup();
   const steerMessage = vi.fn<WebBotClient["steerMessage"]>(async (_botAlias, text, turnId) => ({
     id: "user-voice-steer",
@@ -505,23 +505,10 @@ test("steers an active persisted voice task into the same turn", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
   const voiceBar = await screen.findByTestId("codex-voice-bar");
   await waitFor(() => expect(voiceBar).toHaveTextContent("运行中"));
-  await user.type(screen.getByPlaceholderText("输入消息"), "补充要求");
-  await user.click(screen.getByRole("button", { name: "发送" }));
-
-  await waitFor(() => expect(steerMessage).toHaveBeenCalledWith(
-    "main",
-    "补充要求",
-    "tcb-turn-voice",
-    expect.objectContaining({
-      agentId: "main",
-      executionMode: "cli",
-      conversationId: "conversation-voice",
-      sessionEpoch: 8,
-      codexTurnId: "codex-turn-voice",
-      requestId: expect.any(String),
-    }),
-  ));
-  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("");
+  expect(screen.getByPlaceholderText("请先结束语音再发送文字，混合输入将在 M2 支持")).toBeDisabled();
+  expect(steerMessage).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "展开文字" }));
+  expect((await screen.findAllByRole("button", { name: "关闭历史会话" })).length).toBeGreaterThan(0);
 });
 
 test("keeps regular codex messages in the existing queue while streaming", async () => {

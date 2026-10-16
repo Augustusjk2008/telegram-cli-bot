@@ -333,6 +333,8 @@ class VoiceTaskPersistence:
                 "transcript_text": "",
                 "transcript_final": False,
             }
+            if event_id in self._seen_event_ids:
+                return
             if transcript:
                 role, text, is_final = transcript
                 key = (role, item_id)
@@ -381,14 +383,13 @@ class VoiceTaskPersistence:
                     self._terminal_seen = True
                     self.state = state
                     event.update({"task_state": state, "terminal_code": code, "terminal_message": message})
-            if event_id not in self._seen_event_ids:
-                self._seen_event_ids.add(event_id)
-                if len(self._seen_event_ids) > 4096:
-                    self._seen_event_ids.pop()
-                # Terminal state, transcript and identifiers are committed by
-                # record_voice_event in one transaction. The explicit complete
-                # call below remains an idempotent compatibility fallback.
-                await self._call(self.service.record_voice_event, self.handle, event)
+            self._seen_event_ids.add(event_id)
+            if len(self._seen_event_ids) > 4096:
+                self._seen_event_ids.pop()
+            # Terminal state, transcript and identifiers are committed by
+            # record_voice_event in one transaction. The explicit complete
+            # call below remains an idempotent compatibility fallback.
+            await self._call(self.service.record_voice_event, self.handle, event)
             if terminal and self._terminal_seen and not self._completed and self.state in {"completed", "failed", "interrupted", "unknown"}:
                 self._completed = True
                 content = ""

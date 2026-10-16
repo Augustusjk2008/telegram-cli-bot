@@ -17,10 +17,31 @@ const stateLabels: Record<string, string> = {
   unknown: "结果待确认",
 };
 
+const taskLabels: Record<string, string> = {
+  idle: "空闲",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+  interrupted: "已中断",
+  unknown: "结果待确认",
+};
+
 export function CodexVoiceBar({ session, disabled = false, busy = false }: Props) {
   const active = session.connected;
   const blockedByBusy = !active && busy && session.taskBinding?.state !== "active";
   const hasCaption = session.captions.length > 0;
+  const primaryState = session.state === "unknown"
+    ? stateLabels[session.state]
+    : session.continuity === "interrupted"
+    ? "连接中断"
+    : session.continuity === "recovering"
+      ? "正在尝试继续当前会话"
+      : session.continuity === "resumed"
+        ? "已继续当前会话"
+        : session.continuity === "ended"
+          ? "语音已结束"
+          : stateLabels[session.state] || session.state;
+  const details = session.details;
   return (
     <section
       data-testid="codex-voice-bar"
@@ -29,10 +50,10 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-[var(--text)]">语音</span>
-        <span data-testid="codex-voice-state" className="text-[var(--muted)]">{stateLabels[session.state] || session.state}</span>
+        <span data-testid="codex-voice-state" className="font-medium text-[var(--text)]">{primaryState}</span>
         {session.mic !== "off" ? <span className="text-[var(--muted)]">麦克风：{session.mic === "muted" ? "已静音" : session.mic === "requesting" ? "授权中" : "开启"}</span> : null}
         <span className="text-[var(--muted)]">{session.activity}</span>
-        <span className="text-[var(--muted)]">任务：{{ idle: "空闲", running: "运行中", completed: "已完成", failed: "失败", interrupted: "已中断", unknown: "结果待确认" }[session.task]}</span>
+        <span className="text-[var(--muted)]">任务：{taskLabels[session.task] || session.task}</span>
         {!active ? (
           <button
             type="button"
@@ -80,8 +101,18 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
       </div>
       {blockedByBusy ? <p className="mt-1 text-[var(--status-warning)]">{VOICE_BUSY_REASON}</p> : null}
       {session.playback === "blocked" ? <button type="button" onClick={session.resumePlayback} className="mt-1 text-[var(--accent)]">允许播放音频</button> : null}
-      {active ? <p className="mt-1 text-[var(--muted)]">媒体：{session.peer} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
+      {session.continuity === "ended" ? <p data-testid="codex-voice-ended" className="mt-1 text-[var(--muted)]">语音已结束，已保存的内容仍在对话中</p> : null}
       {session.error ? <p role="alert" className="mt-1 text-[var(--status-danger)]">{session.error}</p> : null}
+      <details className="mt-1 text-[var(--muted)]">
+        <summary className="cursor-pointer select-none">连接详情</summary>
+        <div data-testid="codex-voice-details" className="mt-1 space-y-0.5 pl-3">
+          <p>会话：{details.conversationId || "未绑定"} · epoch：{details.sessionEpoch ?? "未绑定"} · agent：{details.agentId || "main"}</p>
+          <p>线程：{details.threadId || "未同步"} · Codex turn：{details.codexTurnId || "未同步"} · TCB turn：{details.tcbTurnId || "未同步"}</p>
+          <p>clientGeneration：{details.clientGeneration || "未同步"} · 恢复令牌：{details.recoveryToken ? "已保存" : "未生成"}</p>
+          <p>控制连接：{stateLabels[session.state] || session.state} · 恢复尝试：{details.reconnectAttempt || 0} · 最新序号：{details.lastSeq ?? "未同步"}</p>
+          {active ? <p>媒体：{session.peer} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
+        </div>
+      </details>
       {hasCaption ? (
         <div data-testid="codex-voice-captions" className="mt-2 max-h-24 space-y-1 overflow-y-auto rounded-md bg-[var(--workbench-panel-bg)] px-2 py-1.5">
           {session.captions.map((caption) => (

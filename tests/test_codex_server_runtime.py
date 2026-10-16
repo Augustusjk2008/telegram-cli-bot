@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -438,6 +439,26 @@ async def test_regular_runtime_switch_does_not_destroy_active_voice_turn(runtime
             await registry.open_or_create(request)
         assert runtime.alive
     finally:
+        await registry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_voice_rebind_reuses_runtime_without_restarting_turn(runtime_setup):
+    registry, request = runtime_setup
+    request = replace(request, experimental_api=True)
+    runtime = await registry.open_or_create(request)
+    runtime._voice_task_state = "active"
+    initial_call_count = len(runtime.client.calls)
+    try:
+        with pytest.raises(CodexServerError, match="语音任务尚未完成"):
+            await registry.open_or_create(request)
+
+        recovered = await registry.open_or_create(request, allow_voice_rebind=True)
+
+        assert recovered is runtime
+        assert len(runtime.client.calls) == initial_call_count
+    finally:
+        runtime.voice_lease = SimpleNamespace(state="closed", observe=lambda _packet: None)
         await registry.aclose()
 
 

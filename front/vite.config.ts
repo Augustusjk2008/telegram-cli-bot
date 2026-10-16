@@ -300,6 +300,13 @@ export default defineConfig(({mode}) => {
         },
         output: {
           manualChunks(id) {
+            const normalized = id.replace(/\\/g, '/');
+            if (
+              normalized.endsWith('/src/workbench/useCodexVoiceSession.ts')
+              || normalized.endsWith('/src/components/CodexVoiceBar.tsx')
+            ) {
+              return 'voice-runtime';
+            }
             return resolveVendorChunk(id);
           },
         },
