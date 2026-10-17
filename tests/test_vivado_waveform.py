@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -125,7 +125,10 @@ def test_log_parser_keeps_explicit_times_and_missing_signal_warnings() -> None:
 
 
 def test_materialize_source_uses_host_stat_and_one_megabyte_ranges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    waveform_main = importlib.import_module("main")
+    spec = importlib.util.spec_from_file_location("vivado_waveform_test_main", BACKEND / "main.py")
+    assert spec is not None and spec.loader is not None
+    waveform_main = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(waveform_main)
     content = b"header\n#0\n0!\n"
     calls: list[tuple[str, dict[str, object]]] = []
 
