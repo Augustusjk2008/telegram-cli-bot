@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -51,12 +52,18 @@ def run_worker(
         "config": limits,
         "maxArtifactBytes": max_artifact_bytes,
     }
+    worker_dir = Path(__file__).resolve().parent
+    worker_env = os.environ.copy()
+    existing_python_path = worker_env.get("PYTHONPATH")
+    worker_env["PYTHONPATH"] = os.pathsep.join(
+        [str(worker_dir), existing_python_path] if existing_python_path else [str(worker_dir)]
+    )
     try:
         # subprocess.run kills and reaps only this child on timeout.
         completed = subprocess.run(
             [sys.executable, str(Path(__file__).resolve().with_name("worker.py"))],
             input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            capture_output=True,
+            capture_output=True, env=worker_env,
             timeout=timeout,
             check=False,
         )

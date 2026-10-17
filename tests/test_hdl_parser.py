@@ -551,7 +551,13 @@ def test_initialization_reports_missing_dependencies_over_stdio(tmp_path):
     completed = subprocess.run(
         [sys.executable, "-S", str(PLUGIN / "backend/main.py")],
         input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "plugin.initialize"}) + "\n",
-        cwd=tmp_path, env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(PLUGIN / "backend"),
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
+        },
         capture_output=True, encoding="utf-8", timeout=15, check=True,
     )
     response = json.loads(completed.stdout)
