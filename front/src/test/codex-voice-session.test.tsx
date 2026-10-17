@@ -35,7 +35,7 @@ class FakePeer {
   setLocalDescription = vi.fn(async (description: RTCSessionDescriptionInit) => { this.localDescription = description; });
   setRemoteDescription = vi.fn(async () => undefined);
   addTrack = vi.fn();
-  readonly channel = { close: vi.fn(), onclose: null, onerror: null, onmessage: null } as unknown as RTCDataChannel;
+  readonly channel = { readyState: "connecting", close: vi.fn(), onopen: null, onclose: null, onerror: null, onmessage: null } as unknown as RTCDataChannel;
   constructor() { FakePeer.last = this; }
   createDataChannel = vi.fn(() => this.channel);
   getStats = vi.fn(async () => new Map());
@@ -53,8 +53,29 @@ function fakeMic() {
   };
 }
 
+async function startVoiceHarness() {
+  let onMessage!: (message: CodexVoiceMessage) => void;
+  const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+  const client = clientWithVoice(connection);
+  (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: typeof onMessage }) => {
+    onMessage = options.onMessage;
+    return connection;
+  });
+  const { stream } = fakeMic();
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+  vi.stubGlobal("RTCPeerConnection", FakePeer);
+  render(<StrictMode><Harness client={client} /></StrictMode>);
+  fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+  await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+  const peer = FakePeer.last!;
+  return { peer, connection, control: onMessage, media: (data: Record<string, unknown>) => {
+    peer.channel.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
+  } };
+}
+
 beforeEach(() => {
   FakePeer.last = undefined;
+  window.localStorage.clear();
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
 });
@@ -67,6 +88,112 @@ afterEach(() => {
 });
 
 describe("useCodexVoiceSession", () => {
+  test("renders V3 transcription immediately and keeps RTC turn IDs out of task bindings", async () => {
+    const { media, control } = await startVoiceHarness();
+    await act(async () => {
+      control({ type: "voice.state", seq: 1, state: "active", codex_turn_id: "native-turn-1" });
+      media({ type: "session.started", session: { status: "active" } });
+      media({ type: "input_transcript.added", item: { id: "input-1", type: "input_transcript", text: "你" } });
+    });
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:你");
+    await act(async () => {
+      media({ type: "turn.created", turn: { id: "rtc-user-1", role: "user", transcript: "你" } });
+      media({ type: "turn.delta", turn_id: "rtc-user-1", delta: "好" });
+      media({ type: "input_transcript.added", item: { id: "input-2", type: "input_transcript", text: "好" } });
+      media({ type: "input_transcript.added", item: { id: "input-2", type: "input_transcript", text: "好" } });
+    });
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:你好");
+    await act(async () => {
+      media({ type: "turn.done", turn: { id: "rtc-user-1", role: "user", transcript: "你好呀" } });
+      media({ type: "output_transcript.added", item: { id: "output-1", type: "output_transcript", text: "你好" } });
+      media({ type: "turn.created", turn: { id: "rtc-assistant-1", role: "assistant", transcript: "你好" } });
+      media({ type: "turn.delta", turn_id: "rtc-assistant-1", delta: "！" });
+      media({ type: "turn.done", turn: { id: "rtc-assistant-1", role: "assistant", transcript: "你好！" } });
+    });
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:你好呀|assistant:你好！");
+    expect(screen.getByTestId("codex-voice-details")).toHaveTextContent("Codex turn：native-turn-1");
+    expect(screen.getByText("任务：空闲")).toBeInTheDocument();
+  });
+
+  test.each(["media", "control"])("uses the first transcript stream without duplicating repeated utterances (%s first)", async (first) => {
+    const { media, control } = await startVoiceHarness();
+    let seq = 0;
+    for (let turn = 0; turn < 2; turn += 1) {
+      const native = () => {
+        control({ type: "voice.event", seq: ++seq, name: "thread/realtime/item/completed", data: {
+          item: { id: `native-${turn}`, type: "transcriptSegment", role: "user", text: "你好" },
+        } });
+        control({ type: "voice.event", seq: ++seq, name: "thread/realtime/transcript/done", data: { role: "user", text: "你好" } });
+      };
+      const direct = () => {
+        media({ type: "input_transcript.added", item: { id: `chunk-${turn}`, type: "input_transcript", text: "你好" } });
+        media({ type: "turn.created", turn: { id: `rtc-${turn}`, role: "user", transcript: "你好" } });
+        media({ type: "turn.done", turn: { id: `rtc-${turn}`, role: "user", transcript: "你好" } });
+      };
+      await act(async () => { if (first === "media") { direct(); native(); } else { native(); direct(); } });
+      expect(screen.getByTestId("voice-caption").textContent).toBe(Array(turn + 1).fill("user:你好").join("|"));
+    }
+  });
+
+  test("keeps a new pending caption bound when an earlier RTC turn completes again", async () => {
+    const { media } = await startVoiceHarness();
+    await act(async () => {
+      media({ type: "turn.created", turn: { id: "first", role: "user", transcript: "first" } });
+      media({ type: "turn.done", turn: { id: "first", role: "user", transcript: "first" } });
+      media({ type: "input_transcript.added", item: { id: "second-chunk", text: "second" } });
+      media({ type: "turn.done", turn: { id: "first", role: "user", transcript: "first" } });
+      media({ type: "turn.created", turn: { id: "second", role: "user", transcript: "second" } });
+      media({ type: "turn.done", turn: { id: "second", role: "user", transcript: "second" } });
+    });
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:first|user:second");
+  });
+
+  test("removes a V3 partial caption when the explicit final transcript is empty", async () => {
+    const { media } = await startVoiceHarness();
+    await act(async () => media({ type: "turn.created", turn: { id: "withdrawn", role: "user", transcript: "partial" } }));
+    expect(screen.getByTestId("voice-caption")).toHaveTextContent("partial");
+    await act(async () => media({ type: "turn.done", turn: { id: "withdrawn", role: "user", transcript: "" } }));
+    expect(screen.getByTestId("voice-caption")).toBeEmptyDOMElement();
+  });
+
+  test("waits for V3 media, data channel and session readiness before displaying connected", async () => {
+    const { media, control, peer } = await startVoiceHarness();
+    await act(async () => {
+      control({ type: "voice.event", seq: 1, name: "thread/realtime/started", data: { version: "v3" } });
+      control({ type: "voice.state", seq: 2, state: "active" });
+    });
+    expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("准备语音中");
+    act(() => { peer.connectionState = "connected"; peer.onconnectionstatechange?.(); });
+    expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("准备语音中");
+    act(() => {
+      Object.defineProperty(peer.channel, "readyState", { value: "open", configurable: true });
+      peer.channel.onopen?.(new Event("open"));
+    });
+    expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("准备语音中");
+    await act(async () => media({ type: "session.started", session: { status: "active" } }));
+    expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("已连接");
+  });
+
+  test("resumes suppressed V3 audio only for a new assistant turn and keeps the audio tail playing", async () => {
+    const { media, control, peer } = await startVoiceHarness();
+    await act(async () => {
+      control({ type: "voice.state", seq: 1, state: "active" });
+      peer.ontrack?.({ track: { stop: vi.fn() }, streams: [{ getTracks: () => [] }] } as unknown as RTCTrackEvent);
+      media({ type: "turn.created", turn: { id: "assistant-1", role: "assistant", transcript: "你好" } });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "停止当前播报" }));
+    const pauses = vi.mocked(HTMLMediaElement.prototype.pause).mock.calls.length;
+    await act(async () => {
+      media({ type: "turn.created", turn: { id: "assistant-1", role: "assistant", transcript: "你好" } });
+      media({ type: "turn.created", turn: { id: "user-1", role: "user", transcript: "再说一次" } });
+      media({ type: "turn.done", turn: { id: "assistant-1", role: "assistant", transcript: "你好" } });
+    });
+    expect(screen.getByText(/播放：本地暂停/)).toBeInTheDocument();
+    expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(pauses);
+    await act(async () => media({ type: "turn.created", turn: { id: "assistant-2", role: "assistant", transcript: "你好" } }));
+    expect(screen.getByText(/播放：播放中/)).toBeInTheDocument();
+  });
+
   test("reports microphone authorization failures and releases the session", async () => {
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
@@ -79,6 +206,66 @@ describe("useCodexVoiceSession", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
     await waitFor(() => expect(screen.getByTestId("voice-error")).toHaveTextContent("Permission denied"));
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  test("remembers the selected physical microphone and uses it instead of the default input", async () => {
+    const { stream, track } = fakeMic();
+    Object.defineProperty(track, "label", { value: "麦克风 (Realtek(R) Audio)" });
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: vi.fn().mockResolvedValue([
+          { kind: "audioinput", deviceId: "steam", label: "Steam Streaming Microphone" },
+          { kind: "audioinput", deviceId: "realtek", label: "麦克风 (Realtek(R) Audio)" },
+          { kind: "audiooutput", deviceId: "speaker", label: "Realtek Speaker" },
+        ]),
+      },
+    });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    const view = render(<Harness client={client} />);
+    await screen.findByRole("option", { name: "麦克风 (Realtek(R) Audio)" });
+    expect(screen.queryByRole("option", { name: "Realtek Speaker" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "麦克风设备" }), { target: { value: "realtek" } });
+    view.unmount();
+    render(<Harness client={client} />);
+    await screen.findByRole("option", { name: "麦克风 (Realtek(R) Audio)" });
+    expect(screen.getByRole("combobox", { name: "麦克风设备" })).toHaveValue("realtek");
+    expect(getUserMedia).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: { deviceId: { exact: "realtek" } } });
+    expect(FakePeer.last?.addTrack).toHaveBeenCalledWith(track, stream);
+    expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("麦克风 (Realtek(R) Audio)");
+    expect(screen.getByRole("combobox", { name: "麦克风设备" })).toBeDisabled();
+  });
+
+  test.each(["NotFoundError", "OverconstrainedError"])("requires a new selection when the chosen microphone is unavailable (%s)", async (errorName) => {
+    const { stream } = fakeMic();
+    const getUserMedia = vi.fn().mockRejectedValueOnce(new DOMException("Device unavailable", errorName)).mockResolvedValue(stream);
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([
+        { kind: "audioinput", deviceId: "realtek", label: "Realtek Microphone" },
+      ]) },
+    });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    render(<Harness client={client} />);
+    await screen.findByRole("option", { name: "Realtek Microphone" });
+    fireEvent.change(screen.getByRole("combobox", { name: "麦克风设备" }), { target: { value: "realtek" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("所选麦克风不可用"));
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(client.connectCodexVoice).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("combobox", { name: "麦克风设备" }), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalledWith(expect.objectContaining({ op: "start" })));
+    expect(getUserMedia).toHaveBeenLastCalledWith({ audio: true });
   });
 
   test("blocks voice start while a normal text task is active", () => {

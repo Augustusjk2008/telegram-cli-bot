@@ -13,6 +13,7 @@ export const VOICE_BUSY_REASON = "当前有活动任务，语音任务/混合输
 type Caption = { id: string; role: string; text: string; done: boolean };
 type CaptionItem = { captionId: string; role: string; done: boolean; itemText: string; flatText: string; finalText?: string };
 type CaptionTracker = {
+  source?: "native" | "webrtc";
   items: Map<string, CaptionItem>;
   activeByRole: Map<string, string>;
   pendingFlatByRole: Map<string, string>;
@@ -24,6 +25,8 @@ type VoiceView = {
   continuity: "stable" | "interrupted" | "recovering" | "resumed" | "ended";
   mic: "off" | "requesting" | "on" | "muted";
   peer: RTCPeerConnectionState;
+  dataChannel: RTCDataChannelState;
+  realtimeReady?: boolean;
   playback: "idle" | "playing" | "blocked" | "suppressed";
   activity: string;
   task: "idle" | "running" | "completed" | "failed" | "interrupted" | "unknown";
@@ -41,7 +44,7 @@ type VoiceView = {
   details: CodexVoiceSessionDetails;
 };
 const initialView: VoiceView = {
-  state: "idle", continuity: "stable", mic: "off", peer: "new", playback: "idle", activity: "等待连接", task: "idle",
+  state: "idle", continuity: "stable", mic: "off", peer: "new", dataChannel: "connecting", playback: "idle", activity: "等待连接", task: "idle",
   taskBinding: null, receivedBytes: 0, receivedPackets: 0, sentBytes: 0, sentPackets: 0, inputDevice: "", captions: [], error: "", details: {},
 };
 
@@ -129,6 +132,12 @@ type Session = {
 
 const VOICE_RECOVERY_WINDOW_MS = 30000;
 const VOICE_RECOVERY_DELAYS_MS = [250, 1000, 2500, 5000] as const;
+const VOICE_MICROPHONE_STORAGE_KEY = "tcb.voice.microphone-device-id";
+
+function readMicrophonePreference(): string {
+  try { return window.localStorage.getItem(VOICE_MICROPHONE_STORAGE_KEY) || ""; }
+  catch { return ""; }
+}
 
 function releaseMedia(session: Session) {
   if (!session.released) {
@@ -137,6 +146,7 @@ function releaseMedia(session: Session) {
     session.mic?.getTracks().forEach((track) => { track.onended = null; track.stop(); });
     session.tracks.forEach((track) => track.stop());
     if (session.channel) {
+      session.channel.onopen = null;
       session.channel.onmessage = null;
       session.channel.onclose = null;
       session.channel.onerror = null;
@@ -266,7 +276,9 @@ function updateCaptions(
   const item = record(data.item);
   const native = /^thread\/realtime\/(?:transcript\/(?:delta|done)|item\/(?:started|completed|transcript\/delta)|itemStarted|itemCompleted|itemTranscriptDelta)$/.test(name);
   const standard = /^(?:conversation\.item\.input_audio_transcription\.(?:delta|completed)|response\.(?:audio_transcript|output_audio_transcript|output_text)\.(?:delta|done))$/.test(name);
-  if ((!native && !standard) || (item.type && item.type !== "transcriptSegment")) return captions;
+  const v3 = /^(?:(?:input|output)_transcript\.added|turn\.(?:created|delta|done))$/.test(name);
+  if ((!native && !standard && !v3) || (!v3 && item.type && item.type !== "transcriptSegment")) return captions;
+  if (tracker.source && tracker.source !== (v3 ? "webrtc" : "native")) return captions;
   const itemKey = String(item.id || data.itemId || data.item_id || itemId || "").trim();
   const itemEvent = Boolean(itemKey) && (name.includes("/item/") || name === "thread/realtime/itemStarted"
     || name === "thread/realtime/itemCompleted" || name === "thread/realtime/itemTranscriptDelta"
@@ -279,7 +291,8 @@ function updateCaptions(
   const fallbackRole = name.startsWith("conversation.") ? "user" : standard ? "assistant" : "unknown";
 
   const upsert = (captionId: string, role: string, text: string, done: boolean) => {
-    if (!text) return captions;
+    if (!text) return done ? captions.filter((caption) => caption.id !== captionId) : captions;
+    tracker.source ??= v3 ? "webrtc" : "native";
     const previous = captions.find((caption) => caption.id === captionId);
     const caption: Caption = {
       id: captionId,
@@ -295,6 +308,48 @@ function updateCaptions(
     }
     return rows;
   };
+
+  if (v3) {
+    const added = name.endsWith("_transcript.added");
+    const turn = record(data.turn);
+    const turnId = optionalText(turn.id ?? data.turn_id);
+    if (added ? !optionalText(item.id) || typeof item.text !== "string" || !item.text : !turnId) return captions;
+    let key = turnId ? `v3:turn:${turnId}` : "";
+    let current = key ? tracker.items.get(key) : undefined;
+    const role = added ? name === "input_transcript.added" ? "user" : "assistant" : optionalText(turn.role) || current?.role;
+    if (role !== "user" && role !== "assistant") return captions;
+    if (name === "turn.delta" && !current) return captions;
+    if (!tracker.source) {
+      tracker.source = "webrtc";
+      tracker.items.clear();
+      tracker.activeByRole.clear();
+      tracker.pendingFlatByRole.clear();
+      tracker.flatByRole.clear();
+    }
+    const activeKey = tracker.activeByRole.get(role);
+    let boundPending = false;
+    if (added) {
+      key = activeKey || `v3:pending:${tracker.nextId++}`;
+      current = tracker.items.get(key);
+    } else if (!current && activeKey?.startsWith("v3:pending:")) {
+      current = tracker.items.get(activeKey);
+      boundPending = Boolean(current);
+      tracker.items.delete(activeKey);
+    }
+    const state: CaptionItem = current || { captionId: key, role, done: false, itemText: "", flatText: "" };
+    if (state.done && name !== "turn.done") return captions;
+    if (added) state.flatText = (state.flatText + item.text).slice(-4000);
+    else if (name === "turn.delta") state.itemText = (state.itemText + (typeof data.delta === "string" ? data.delta : "")).slice(-4000);
+    else if (typeof turn.transcript === "string") state.itemText = turn.transcript.slice(-4000);
+    if (name === "turn.done") {
+      state.done = true;
+      if (typeof turn.transcript === "string") state.finalText = turn.transcript.slice(-4000);
+      if (activeKey === key || boundPending) tracker.activeByRole.delete(role);
+    } else tracker.activeByRole.set(role, key);
+    tracker.items.set(key, state);
+    const text = state.finalText ?? (state.itemText.length >= state.flatText.length ? state.itemText : state.flatText);
+    return upsert(state.captionId, role, text, state.done);
+  }
 
   if (itemEvent) {
     const current = tracker.items.get(itemKey);
@@ -360,10 +415,38 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
   busy?: boolean;
 }) {
   const [view, setView] = useState<VoiceView>(() => initialViewForTask(restoredTaskBinding));
+  const [microphoneId, setMicrophoneId] = useState(readMicrophonePreference);
+  const [microphones, setMicrophones] = useState<Array<{ id: string; label: string }>>([]);
   const current = useRef<Session | null>(null);
   const scopeInitialized = useRef(false);
   const restoredTaskBindingRef = useRef<VoiceTaskBinding | null | undefined>(restoredTaskBinding);
   restoredTaskBindingRef.current = restoredTaskBinding;
+
+  useEffect(() => {
+    const devices = navigator.mediaDevices;
+    if (!enabled || !devices?.enumerateDevices) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const available = await devices.enumerateDevices();
+        if (active) setMicrophones(available
+          .filter((device) => device.kind === "audioinput" && device.deviceId && !["default", "communications"].includes(device.deviceId))
+          .map((device, index) => ({ id: device.deviceId, label: device.label || `麦克风 ${index + 1}` })));
+      } catch { /* Device discovery is optional; capture reports access failures. */ }
+    };
+    void refresh();
+    devices.addEventListener?.("devicechange", refresh);
+    return () => { active = false; devices.removeEventListener?.("devicechange", refresh); };
+  }, [enabled, view.mic]);
+
+  const selectMicrophone = useCallback((deviceId: string) => {
+    if (current.current) return;
+    setMicrophoneId(deviceId);
+    try {
+      if (deviceId) window.localStorage.setItem(VOICE_MICROPHONE_STORAGE_KEY, deviceId);
+      else window.localStorage.removeItem(VOICE_MICROPHONE_STORAGE_KEY);
+    } catch { /* Keep the selection for this page when storage is unavailable. */ }
+  }, []);
 
   const dispose = useCallback((sendStop = true) => {
     const session = current.current;
@@ -537,14 +620,17 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         };
       });
     };
-    const runtimeEvent = (name: string, raw: Record<string, unknown>, eventId?: string, itemId?: string) => {
+    const runtimeEvent = (name: string, raw: Record<string, unknown>, eventId?: string, itemId?: string, source: "control" | "media" = "control") => {
       if (!live()) return;
-      rememberIdentity(raw);
+      if (source === "control") rememberIdentity(raw);
       const outer = record(raw.params || raw);
       const nested = record(outer.event);
       const data = typeof nested.type === "string" ? nested : outer;
       if (typeof nested.type === "string") name = nested.type;
-      const id = typeof data.event_id === "string" ? data.event_id : eventId;
+      const turn = record(data.turn);
+      const v3ItemId = /^(?:input|output)_transcript\.added$/.test(name) ? optionalText(record(data.item).id)
+        : name === "turn.created" ? optionalText(turn.id) : undefined;
+      const id = typeof data.event_id === "string" ? data.event_id : v3ItemId ? `${name}:${v3ItemId}` : eventId;
       if (id && session.seen.has(id)) return;
       if (id) {
         session.seen.add(id);
@@ -553,9 +639,9 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       if (name === "thread/realtime/error") { fail(String(data.message || "语音运行时错误")); return; }
       if (name === "runtime/error" || name === "runtime/closed") { fail("语音运行时连接中断，结果待确认"); return; }
       if (name === "thread/realtime/closed") { session.stopping = true; finish(session, "closed"); return; }
-      if (name === "response.created") {
+      if (name === "response.created" || (name === "turn.created" && turn.role === "assistant" && optionalText(turn.id))) {
         const previousResponseId = session.responseId;
-        const responseId = responseIdOf(data);
+        const responseId = name === "turn.created" ? String(turn.id) : responseIdOf(data);
         if (responseId) session.responseId = responseId;
         const newResponse = !previousResponseId || !responseId || previousResponseId !== responseId;
         if (newResponse && (!session.suppressed || session.suppressedResponseId !== responseId)) {
@@ -581,10 +667,17 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
           const status = record(data.turn).status || data.status;
           task = status === "completed" || status === "failed" || status === "interrupted" ? status : "unknown";
         }
-        const activity = name === "input_audio_buffer.speech_started" ? "正在聆听"
+        const activity = name === "input_transcript.added" ? "已收到语音"
+          : name === "output_transcript.added" || (name === "turn.created" && turn.role === "assistant") ? "正在回复"
+          : name === "turn.done" && turn.role === "assistant" ? "等待语音"
+          : name === "session.started" ? "等待语音"
+          : name === "thread/realtime/started" && data.version === "v3" && !value.realtimeReady ? "正在准备语音"
+          : name === "input_audio_buffer.speech_started" ? "正在聆听"
           : name === "output_audio_buffer.started" ? "正在播报"
           : name === "output_audio_buffer.stopped" || name === "thread/realtime/started" ? "等待语音" : value.activity;
         return { ...value, task, activity,
+          realtimeReady: name === "session.started" ? true
+            : name === "thread/realtime/started" && data.version === "v3" ? value.realtimeReady ?? false : value.realtimeReady,
           playback: name === "output_audio_buffer.stopped" ? "idle" : value.playback,
           captions,
         };
@@ -721,7 +814,15 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       session.conversationId = voiceConversationId;
       session.sessionEpoch = voiceSessionEpoch;
       publishDetails();
-      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let mic: MediaStream;
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({ audio: microphoneId ? { deviceId: { exact: microphoneId } } : true });
+      } catch (error) {
+        if (microphoneId && ["NotFoundError", "OverconstrainedError"].includes(String(record(error).name))) {
+          throw new Error("所选麦克风不可用，请选择其他设备后重新开始语音");
+        }
+        throw error;
+      }
       if (!live()) { mic.getTracks().forEach((track) => track.stop()); return; }
       session.mic = mic;
       session.audio = new Audio();
@@ -764,6 +865,8 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         }
       };
       const channel = session.channel = peer.createDataChannel("oai-events");
+      channel.onopen = () => { if (live()) setView((value) => ({ ...value, dataChannel: "open" })); };
+      setView((value) => ({ ...value, dataChannel: channel.readyState || "connecting" }));
       channel.onclose = () => fail("语音事件通道已关闭");
       channel.onerror = () => fail("语音事件通道错误");
       channel.onmessage = ({ data: raw }) => {
@@ -771,7 +874,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         let data: Record<string, unknown>;
         try { data = record(JSON.parse(raw)); } catch { return; }
         const name = typeof data.type === "string" ? data.type : "";
-        runtimeEvent(name, data);
+        runtimeEvent(name, data, undefined, undefined, "media");
       };
       const offer = await peer.createOffer();
       if (!live()) return;
@@ -813,7 +916,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     } catch (error) {
       if (live()) fail(error instanceof Error ? error.message : "语音启动失败");
     }
-  }, [enabled, busy, client, botAlias, agentId, scopeKey, requestedConversationId, requestedSessionEpoch, dispose, finish, play]);
+  }, [enabled, busy, client, botAlias, agentId, scopeKey, requestedConversationId, requestedSessionEpoch, microphoneId, dispose, finish, play]);
 
   const end = useCallback(() => {
     const session = current.current;
@@ -856,7 +959,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     void play(session);
   }, [play]);
 
-  return { ...view, start, end, toggleMute, stopPlayback, resumePlayback,
+  return { ...view, start, end, toggleMute, stopPlayback, resumePlayback, microphones, microphoneId, selectMicrophone,
     connected: ["negotiating", "active", "stopping"].includes(view.state),
   };
 }

@@ -30,12 +30,16 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
   const active = session.connected;
   const blockedByBusy = !active && busy && session.taskBinding?.state !== "active";
   const hasCaption = session.captions.length > 0;
+  const preparing = session.state === "active" && session.realtimeReady !== undefined
+    && (!session.realtimeReady || session.peer !== "connected" || session.dataChannel !== "open");
   const primaryState = session.state === "unknown"
     ? stateLabels[session.state]
     : session.continuity === "interrupted"
     ? "连接中断"
     : session.continuity === "recovering"
       ? "正在尝试继续当前会话"
+      : preparing
+        ? "准备语音中"
       : session.continuity === "resumed"
         ? "已继续当前会话"
         : session.continuity === "ended"
@@ -99,6 +103,24 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
           </>
         )}
       </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="flex min-w-0 max-w-full items-center gap-2 text-[var(--muted)]">
+          <span className="shrink-0">输入设备</span>
+          <select
+            aria-label="麦克风设备"
+            value={session.microphoneId}
+            onChange={(event) => session.selectMicrophone(event.target.value)}
+            disabled={disabled || active}
+            className="h-7 min-w-0 max-w-64 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 text-[var(--text)] disabled:opacity-60"
+          >
+            <option value="">系统默认麦克风</option>
+            {session.microphoneId && !session.microphones.some((device) => device.id === session.microphoneId)
+              ? <option value={session.microphoneId}>已保存的麦克风</option> : null}
+            {session.microphones.map((device) => <option key={device.id} value={device.id}>{device.label}</option>)}
+          </select>
+        </label>
+        {active ? <span className="text-[var(--muted)]">更换设备请先结束语音</span> : null}
+      </div>
       {blockedByBusy ? <p className="mt-1 text-[var(--status-warning)]">{VOICE_BUSY_REASON}</p> : null}
       {session.playback === "blocked" ? <button type="button" onClick={session.resumePlayback} className="mt-1 text-[var(--accent)]">允许播放音频</button> : null}
       {session.continuity === "ended" ? <p data-testid="codex-voice-ended" className="mt-1 text-[var(--muted)]">语音已结束，已保存的内容仍在对话中</p> : null}
@@ -110,7 +132,7 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
           <p>线程：{details.threadId || "未同步"} · Codex turn：{details.codexTurnId || "未同步"} · TCB turn：{details.tcbTurnId || "未同步"}</p>
           <p>clientGeneration：{details.clientGeneration || "未同步"} · 恢复令牌：{details.recoveryToken ? "已保存" : "未生成"}</p>
           <p>控制连接：{stateLabels[session.state] || session.state} · 恢复尝试：{details.reconnectAttempt || 0} · 最新序号：{details.lastSeq ?? "未同步"}</p>
-          {active ? <p>媒体：{session.peer} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
+          {active ? <p>媒体：{session.peer} · 数据通道：{session.dataChannel} · 语音服务：{session.realtimeReady === undefined ? "未同步" : session.realtimeReady ? "已就绪" : "准备中"} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
           {active ? <p data-testid="codex-voice-input" className="break-words">输入设备：{session.inputDevice || "等待授权"} · {session.inputMuted ? "采集已暂停" : session.inputDetected === undefined ? "等待输入数据" : session.inputDetected ? "已检测到声音" : "未检测到声音"} · 输入音量：{session.inputLevel === undefined ? "未提供" : `${Math.round(Math.max(0, Math.min(1, session.inputLevel)) * 100)}%`} · 发送 {session.sentPackets} 包 / {session.sentBytes} 字节</p> : null}
         </div>
       </details>
