@@ -56,7 +56,7 @@ if (!thirdPartyLicenses.startsWith('ORBIT SAFE CLAW - FRONTEND THIRD-PARTY LICEN
 }
 
 const indexHtml = fs.readFileSync(indexPath, 'utf8');
-const pollutedAssetPattern = /\/node\/[^"'<> \t\r\n]*\/assets\//g;
+const pollutedAssetPattern = /(?:src|href)="\/node\/[^"'<> \t\r\n]*\/assets\//g;
 const matches = [...new Set(indexHtml.match(pollutedAssetPattern) || [])];
 
 if (matches.length > 0) {

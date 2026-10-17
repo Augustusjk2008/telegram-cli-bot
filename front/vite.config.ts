@@ -211,6 +211,39 @@ function normalizeBasePath(value?: string) {
   return `/${raw.replace(/^\/+/, '').replace(/\/+$/, '')}/`;
 }
 
+function normalizedPath(value?: string) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') {
+    return '';
+  }
+  return `/${raw.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+}
+
+function outerPublicWebPath(env: Record<string, string>) {
+  const webBasePath = normalizedPath(env.WEB_BASE_PATH);
+  if (!webBasePath) {
+    return '';
+  }
+  const fixedForwardEnabled = ['1', 'true', 'yes', 'on'].includes(
+    String(env.WEB_FIXED_PUBLIC_FORWARD_ENABLED || '').trim().toLowerCase(),
+  );
+  const publicUrls = [
+    env.WEB_PUBLIC_URL,
+    ...(fixedForwardEnabled ? [env.WEB_FIXED_PUBLIC_FORWARD_URL] : []),
+  ];
+  for (const value of publicUrls) {
+    try {
+      const publicPath = normalizedPath(new URL(String(value || '').trim()).pathname);
+      if (publicPath && publicPath !== webBasePath && publicPath.endsWith(webBasePath)) {
+        return publicPath;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return '';
+}
+
 function requestPathname(req: IncomingMessage) {
   try {
     return new URL(req.url || '/', 'http://localhost').pathname;
@@ -248,10 +281,16 @@ export default defineConfig(({mode}) => {
   const publicEnv = Object.fromEntries(
     Object.entries(env).filter(([key]) => key.startsWith('VITE_')),
   );
+  const publicBuildPath = outerPublicWebPath(env);
+  // Build directly against the configured public path so Vite's lazy imports
+  // use the same prefix as the initial HTML entry URLs.
   const useRootBuildBase = env.TCB_FRONT_BUILD_ROOT_BASE === '1';
   if (useRootBuildBase) {
     delete publicEnv.VITE_BASE_PATH;
     delete publicEnv.VITE_API_BASE_URL;
+  } else if (publicBuildPath) {
+    publicEnv.VITE_BASE_PATH = publicBuildPath;
+    publicEnv.VITE_API_BASE_URL = publicBuildPath;
   } else if (!publicEnv.VITE_BASE_PATH && env.WEB_BASE_PATH) {
     publicEnv.VITE_BASE_PATH = env.WEB_BASE_PATH;
   }
@@ -260,7 +299,7 @@ export default defineConfig(({mode}) => {
   }
   const viteBasePath = useRootBuildBase
     ? '/'
-    : normalizeBasePath(env.VITE_BASE_PATH || env.WEB_BASE_PATH);
+    : normalizeBasePath(publicBuildPath || env.VITE_BASE_PATH || env.WEB_BASE_PATH);
   return {
     base: viteBasePath,
     plugins: [react(), tailwindcss(), thirdPartyLicensePlugin(frontRoot), pdfjsAssetsPlugin(frontRoot)],
