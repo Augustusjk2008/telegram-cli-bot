@@ -540,6 +540,10 @@ class RemoteConnection:
     def create_file(self, path: str, content: str = "", *, root: str) -> dict:
         return self._write_file(path, content, root, None, create_only=True)
 
+    def upload_file(self, path: str, data: bytes, *, root: str) -> dict:
+        """Atomically save uploaded bytes with the same path and platform checks as text edits."""
+        return self._write_bytes(path, data, root, None)
+
     def _write_file(self, path, content, root, expected_mtime_ns, *, encoding="utf-8", create_only=False):
         if not isinstance(content, str) or "\x00" in content or encoding not in {"utf-8", "utf-8-sig"}:
             raise RemoteWorkspaceError(400, "unsupported_encoding", "Only UTF-8 text files are supported")
@@ -549,13 +553,19 @@ class RemoteConnection:
             raise RemoteWorkspaceError(400, "unsupported_encoding", "Content is not valid UTF-8 text") from exc
         if len(raw) > MAX_TEXT_BYTES:
             raise RemoteWorkspaceError(413, "file_too_large", "Remote text file is too large")
+        return self._write_bytes(path, raw, root, expected_mtime_ns, encoding=encoding, create_only=create_only)
+
+    def _write_bytes(self, path, raw, root, expected_mtime_ns, *, encoding=None, create_only=False):
         with self._operation() as sftp:
             resolved = self._resolve(path, root, missing=True)
             previous = self._stat_optional(resolved)
             if create_only and previous is not None:
                 raise RemoteWorkspaceError(409, "path_exists", "Path already exists")
             if previous is not None:
-                self._check_text_file(previous)
+                if not stat.S_ISREG(previous.st_mode):
+                    raise RemoteWorkspaceError(400, "not_a_file", "Path is not a regular file")
+                if encoding is not None:
+                    self._check_text_file(previous)
             if expected_mtime_ns is not None and (
                 previous is None or not isinstance(expected_mtime_ns, str)
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_mtime_ns)
@@ -593,7 +603,7 @@ class RemoteConnection:
                         raise
                 created = False
                 return {"path": path, "size": len(raw), "file_size_bytes": len(raw),
-                        "last_modified_ns": _version(raw), "encoding": encoding}
+                        "last_modified_ns": _version(raw), **({"encoding": encoding} if encoding is not None else {})}
             except RemoteWorkspaceError as exc:
                 if windows_commit_started:
                     exc.data.update({"temporary_path": temporary, "backup_path": temporary + ".bak"})

@@ -98,6 +98,71 @@ test("shows the voice bar only for an enabled codex_server CLI scope", async () 
   expect(await screen.findByTestId("codex-voice-bar")).toBeInTheDocument();
 });
 
+test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, previews and deletes local attachments", async (platform) => {
+  const user = userEvent.setup();
+  const attachmentRoot = "C:\\control\\remote\\attachments\\tester";
+  const savedPath = `${attachmentRoot}\\report.html`;
+  const previewPath = savedPath.replace(/\\/g, "/");
+  const upload = vi.fn<WebBotClient["uploadChatAttachment"]>(async (_alias, file) => ({
+    filename: file.name, savedPath: `${attachmentRoot}\\${file.name}`, size: file.size,
+  }));
+  const remove = vi.fn<WebBotClient["deleteChatAttachment"]>(async (_alias, path) => ({
+    filename: path.split("\\").pop()!, savedPath: path, existed: true, deleted: true,
+  }));
+  const send = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "attachment-reply", role: "assistant", text: `[查看附件](<${previewPath}>)`,
+    createdAt: "2026-10-17T00:00:00Z", state: "done",
+  }));
+  const read = vi.fn<WebBotClient["readFile"]>(async () => ({ content: "<html>", mode: "head", isFullContent: false }));
+  const full = vi.fn<WebBotClient["readFileFull"]>(async () => ({ content: "<html>Local attachment</html>", mode: "cat", isFullContent: true }));
+  const download = vi.fn<WebBotClient["downloadFile"]>(async () => undefined);
+  const desktopPreview = vi.fn();
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main", cliType: "codex", status: "running", workingDir: "C:\\control\\remote", isProcessing: false,
+      supportedExecutionModes: ["native_agent"], executionMode: "native_agent", defaultExecutionMode: "native_agent",
+      remoteWorkspace: { connectionId: "ssh-1", host: "remote.test", port: 22, username: "dev", root: platform === "windows" ? "/C:/project" : "/srv/project", hostKeyFingerprint: "SHA256:test", platform },
+    }),
+    uploadChatAttachment: upload, deleteChatAttachment: remove, sendMessage: send,
+    readFile: read, readFileFull: full, downloadFile: download,
+  });
+  const htmlSession = vi.spyOn(client, "createHtmlPreview");
+  render(<ChatScreen botAlias="main" client={client} embedded={platform === "windows"} onRequestDesktopPreview={desktopPreview} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  const input = screen.getByLabelText("上传附件");
+  expect(input).toBeEnabled();
+  const draft = new File(["draft"], "draft.txt", { type: "text/plain" });
+  await user.upload(input, draft);
+  expect(upload).toHaveBeenCalledWith("main", draft);
+  await user.click(await screen.findByRole("button", { name: "移除附件 draft.txt" }));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith("main", `${attachmentRoot}\\draft.txt`));
+  expect(screen.queryByText("draft.txt")).not.toBeInTheDocument();
+
+  const file = new File(["<html>Local attachment</html>"], "report.html", { type: "text/html" });
+  await user.upload(input, file);
+  expect(upload).toHaveBeenLastCalledWith("main", file);
+  await screen.findByRole("button", { name: "移除附件 report.html" });
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "检查附件" } });
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(send).toHaveBeenCalledOnce());
+  expect(send.mock.calls[0][1]).toBe(`检查附件\n\nAttachment path: ${savedPath}`);
+  expect(send.mock.calls[0][5]).toMatchObject({ executionMode: "native_agent" });
+  expect(screen.queryByRole("button", { name: "移除附件 report.html" })).not.toBeInTheDocument();
+
+  await user.click(await screen.findByRole("link", { name: "查看附件" }));
+  const dialog = await screen.findByRole("dialog", { name: previewPath });
+  await waitFor(() => expect(full).toHaveBeenCalledWith("main", previewPath));
+  expect(read).toHaveBeenCalledWith("main", previewPath);
+  expect(htmlSession).not.toHaveBeenCalled();
+  expect(desktopPreview).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole("button", { name: "下载" }));
+  await waitFor(() => expect(download).toHaveBeenCalledWith("main", previewPath, expect.any(Function), expect.any(AbortSignal)));
+  await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+  await user.click(screen.getByRole("button", { name: "删除附件文件 report.html" }));
+  await waitFor(() => expect(remove).toHaveBeenLastCalledWith("main", savedPath));
+  expect(await screen.findByText("已删除")).toBeInTheDocument();
+});
+
 test.each([true, false])("executes the edited plan and leaves plan mode (structured title: %s)", async (hasTitle) => {
   const user = userEvent.setup();
   const executionGate = deferred<void>();

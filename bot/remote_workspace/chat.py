@@ -516,6 +516,9 @@ def remote_chat_prompt(profile: Any) -> str:
     return (
         f"Remote SSH workspace: host={host}, root={root}.\n{shell}"
         "This local working directory is only an agent control directory; it contains no project source or tests. "
+        "Uploaded chat attachments are stored locally under attachments/ in this control directory. "
+        "An 'Attachment path:' in the user message is a local absolute path: read or process it with local tools "
+        "(Pi: local_read/local_bash). Keep attachment processing outputs alongside the input attachment. "
         "Perform ALL project reads, edits, searches, commands and tests on the remote workspace using "
         "tcb-remote MCP exec/read/write/edit/list (Pi: remote_exec/remote_read/remote_write/remote_edit/remote_list; "
         "read/write/edit/bash/ls are also routed remotely). Paths are remote, relative to the remote root. "

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type ToolSchema = { name: string; description: string; inputSchema: any };
 type BridgeConfig = { bridge_url: string; token: string; tools: ToolSchema[] };
@@ -9,6 +9,22 @@ export default function (pi: ExtensionAPI) {
 	if (!configPath) return;
 	const load = (): BridgeConfig => JSON.parse(readFileSync(configPath, "utf8"));
 	const config = load();
+	pi.registerTool({
+		...createReadToolDefinition(process.cwd()), name: "local_read", label: "local_read",
+		description: "Read an uploaded attachment on the local host, including images. All project files use remote read.",
+		promptGuidelines: ["Use for local Attachment path entries and outputs under the local attachments/ directory."],
+		async execute(id, params, signal, onUpdate, ctx) {
+			return createReadToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
+		},
+	});
+	pi.registerTool({
+		...createBashToolDefinition(process.cwd()), name: "local_bash", label: "local_bash",
+		description: "Run a local shell command to process uploaded attachments. All project commands and tests use remote exec/bash.",
+		promptGuidelines: ["Keep attachment processing outputs alongside the input attachment."],
+		async execute(id, params, signal, onUpdate, ctx) {
+			return createBashToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
+		},
+	});
 	async function call(tool: string, args: Record<string, unknown>, signal?: AbortSignal) {
 		const current = load();
 		const url = new URL(current.bridge_url);

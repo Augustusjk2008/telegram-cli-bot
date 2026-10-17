@@ -120,7 +120,7 @@ export function ChatComposer({
   const compactSelectClassName = "h-8 w-full appearance-none rounded-md border-0 bg-transparent py-0 pl-1.5 pr-4 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
   const presetMenuClassName = "absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
   const attachmentControl = (
-    <label className={attachmentButtonClassName} title={onAttachFiles ? "上传附件" : "远程工作区暂不支持上传附件"}>
+    <label className={attachmentButtonClassName} title={onAttachFiles ? "上传附件" : "上传附件不可用"}>
       <Plus className="h-4 w-4" />
       <span className="sr-only">上传附件</span>
       <input

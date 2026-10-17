@@ -474,7 +474,14 @@ def sanitize_uploaded_filename(filename: str) -> str:
     return candidate
 
 
-def build_chat_attachment_dir(alias: str, user_id: int) -> str:
+def build_chat_attachment_dir(alias: str, user_id: int, *, profile: BotProfile | None = None) -> str:
+    if profile is not None and profile.remote_workspace:
+        control_dir = Path(profile.working_dir).expanduser().resolve()
+        attachment_dir = control_dir / "attachments" / str(user_id)
+        ensure_path_within_base_dir(str(control_dir), str(attachment_dir))
+        if attachment_dir.resolve() != attachment_dir:
+            _raise(403, "forbidden_path", "附件目录不能使用符号链接")
+        return str(attachment_dir)
     return str(get_chat_attachments_dir(alias, user_id))
 
 
@@ -491,20 +498,38 @@ def resolve_unique_upload_path(base_dir: str, filename: str) -> tuple[str, str]:
     return resolved_path, resolved_name
 
 
-def resolve_chat_attachment_path(alias: str, user_id: int, saved_path: str) -> Path:
+def resolve_chat_attachment_path(
+    alias: str, user_id: int, saved_path: str, *, profile: BotProfile | None = None,
+) -> Path:
     candidate = Path(str(saved_path or "").strip())
     if not str(candidate):
         _raise(400, "missing_saved_path", "附件路径不能为空")
     if not candidate.is_absolute():
         _raise(400, "invalid_saved_path", "附件路径必须是绝对路径")
 
-    attachment_dir = get_chat_attachments_dir(alias, user_id).resolve()
+    attachment_dir = Path(build_chat_attachment_dir(alias, user_id, profile=profile)).resolve()
     resolved_candidate = candidate.expanduser().resolve(strict=False)
     try:
         resolved_candidate.relative_to(attachment_dir)
     except ValueError:
         _raise(403, "attachment_delete_forbidden", "只能删除当前 Bot 当前用户上传的附件")
     return resolved_candidate
+
+
+def is_remote_chat_attachment_path(profile: BotProfile, filename: str) -> bool:
+    """Recognize local attachment URLs before remote file routing and scope checks."""
+    candidate = Path(filename)
+    if not candidate.is_absolute():
+        return False
+    attachment_root = Path(profile.working_dir).expanduser().resolve() / "attachments"
+    return candidate.is_relative_to(attachment_root)
+
+
+def resolve_readable_file_path(manager, alias, user_id, browser_dir, filename, *, allow_external_paths=False) -> str:
+    profile = get_profile_or_raise(manager, alias)
+    if profile.remote_workspace and is_remote_chat_attachment_path(profile, filename):
+        return str(resolve_chat_attachment_path(alias, user_id, filename, profile=profile))
+    return resolve_safe_path(browser_dir, filename, allow_external_paths=allow_external_paths)
 
 
 def invalidate_workspace_indexes(
@@ -843,13 +868,13 @@ def delete_path(
 
 
 def save_chat_attachment(manager: MultiBotManager, alias: str, user_id: int, filename: str, data: bytes) -> dict[str, Any]:
-    ensure_file_browser_supported(manager, alias)
+    profile = ensure_file_browser_supported(manager, alias)
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
     if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
         _raise(400, "file_too_large", msg("upload", "file_too_large"))
 
-    attachment_dir = build_chat_attachment_dir(alias, user_id)
+    attachment_dir = build_chat_attachment_dir(alias, user_id, profile=profile)
     os.makedirs(attachment_dir, exist_ok=True)
     file_path, stored_filename = resolve_unique_upload_path(attachment_dir, filename)
     with open(file_path, "wb") as handle:
@@ -868,8 +893,8 @@ async def save_chat_attachment_from_chunks(
     filename: str,
     chunks: AsyncIterator[bytes],
 ) -> dict[str, Any]:
-    ensure_file_browser_supported(manager, alias)
-    attachment_dir = build_chat_attachment_dir(alias, user_id)
+    profile = ensure_file_browser_supported(manager, alias)
+    attachment_dir = build_chat_attachment_dir(alias, user_id, profile=profile)
     os.makedirs(attachment_dir, exist_ok=True)
     file_path, stored_filename = resolve_unique_upload_path(attachment_dir, filename)
     size = await _write_limited_chunks(file_path, chunks, replace_existing=False)
@@ -886,8 +911,8 @@ def delete_chat_attachment(
     user_id: int,
     saved_path: str,
 ) -> dict[str, Any]:
-    ensure_file_browser_supported(manager, alias)
-    target_path = resolve_chat_attachment_path(alias, user_id, saved_path)
+    profile = ensure_file_browser_supported(manager, alias)
+    target_path = resolve_chat_attachment_path(alias, user_id, saved_path, profile=profile)
 
     if target_path.exists() and not target_path.is_file():
         _raise(400, "invalid_saved_path", "附件路径必须指向文件")
@@ -1010,7 +1035,9 @@ def get_file_metadata(
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_path(browser_dir, filename, allow_external_paths=allow_external_paths)
+    file_path = resolve_readable_file_path(
+        manager, alias, user_id, browser_dir, filename, allow_external_paths=allow_external_paths,
+    )
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
     return {
@@ -1033,7 +1060,9 @@ def read_file_content(
 ) -> dict[str, Any]:
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_path(browser_dir, filename, allow_external_paths=allow_external_paths)
+    file_path = resolve_readable_file_path(
+        manager, alias, user_id, browser_dir, filename, allow_external_paths=allow_external_paths,
+    )
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
 

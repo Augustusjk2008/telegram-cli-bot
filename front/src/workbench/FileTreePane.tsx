@@ -1372,12 +1372,16 @@ export function FileTreePane({
     if (files.length === 0) {
       return;
     }
-    if (!canManageFiles) {
+    if (!canMutateFiles) {
       setActionError("无文件写入权限");
       return;
     }
     setActionError("");
-    await onRequestUpload(files);
+    try {
+      await onRequestUpload(files);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "上传失败");
+    }
   }
 
   async function handleRefresh() {
@@ -1589,7 +1593,7 @@ export function FileTreePane({
         if (hasInternalTreeEntryDrag(event)) {
           return;
         }
-        if (!canManageFiles) {
+        if (!canMutateFiles) {
           return;
         }
         event.preventDefault();
@@ -1602,7 +1606,7 @@ export function FileTreePane({
         if (hasInternalTreeEntryDrag(event)) {
           return;
         }
-        if (!canManageFiles) {
+        if (!canMutateFiles) {
           return;
         }
         event.preventDefault();
@@ -1624,7 +1628,7 @@ export function FileTreePane({
           return;
         }
         event.preventDefault();
-        if (!canManageFiles) {
+        if (!canMutateFiles) {
           return;
         }
         setDragDepth(0);
@@ -1646,7 +1650,7 @@ export function FileTreePane({
         <div className="flex shrink-0 items-center gap-0.5">
           {canMutateFiles ? (
             <>
-              {canManageFiles ? <input
+              <input
                 ref={uploadInputRef}
                 aria-label="上传文件"
                 type="file"
@@ -1658,7 +1662,7 @@ export function FileTreePane({
                   }
                   event.currentTarget.value = "";
                 }}
-              /> : null}
+              />
               <button
                 type="button"
                 aria-label="新建文件"
@@ -1721,7 +1725,7 @@ export function FileTreePane({
             aria-label="更多文件操作"
             className="absolute right-1 top-full z-40 min-w-48 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
           >
-            {canManageFiles ? (
+            {canMutateFiles ? (
               <button
                 type="button"
                 role="menuitem"
@@ -1998,7 +2002,7 @@ export function FileTreePane({
         )
         : null}
 
-      {canManageFiles && dragDepth > 0 ? (
+      {canMutateFiles && dragDepth > 0 ? (
         <div
           data-testid="desktop-file-drop-overlay"
           className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-2xl border border-dashed border-[var(--accent)] bg-[var(--accent-soft)] text-sm font-medium text-[var(--text)]"

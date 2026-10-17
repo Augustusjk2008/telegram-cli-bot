@@ -19,6 +19,10 @@ from bot.web.auth_store import (
     CAP_MANAGE_BOTS, CAP_MUTATE_BROWSE_STATE, CAP_READ_FILE_CONTENT,
     CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES,
 )
+from bot.web.files_service import (
+    UPLOAD_MAX_FILE_SIZE_BYTES, is_remote_chat_attachment_path,
+    resolve_chat_attachment_path, sanitize_uploaded_filename,
+)
 
 
 def _response(data: dict[str, Any]) -> web.Response:
@@ -94,6 +98,9 @@ def middleware(server):
 
 
 async def _workspace_request(server, request, profile, suffix, browse_dirs):
+    if request.method == "POST" and suffix in {"chat/attachments", "chat/attachments/delete"}:
+        # Chat attachments belong to this agent's local control directory.
+        return None
     if suffix == "files/html-preview" and request.method == "POST":
         from bot.web.routes.html_preview_routes import reject_remote
         reject_remote(profile)
@@ -110,6 +117,7 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         ("POST", "files/write"): CAP_WRITE_FILES,
         ("POST", "files/create"): CAP_WRITE_FILES,
         ("POST", "files/mkdir"): CAP_WRITE_FILES,
+        ("POST", "files/upload"): CAP_WRITE_FILES,
         ("POST", "exec"): CAP_TERMINAL_EXEC,
     }
     capability = operations.get((request.method, suffix))
@@ -125,6 +133,11 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
             raise WebApiError(409, "remote_feature_unavailable", "远程工作区暂不支持此操作")
         return None
     auth = await server._with_capability(request, capability)
+    if suffix in {"files/read", "files/download"}:
+        filename = request.query.get("filename", "")
+        if is_remote_chat_attachment_path(profile, filename):
+            resolve_chat_attachment_path(profile.alias, server._chat_user_id(auth), filename, profile=profile)
+            return None
     config = profile.remote_workspace
     root = config["root"]
     platform = config.get("platform", "posix")
@@ -134,6 +147,22 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         return _response({"working_dir": root})
     service = get_remote_workspace_service()
     connection = await asyncio.to_thread(service.get, config)
+    if suffix == "files/upload":
+        reader = await request.multipart()
+        field = await reader.next()
+        if field is None or field.name != "file":
+            raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
+        filename = sanitize_uploaded_filename(field.filename or "")
+        data = bytearray()
+        while chunk := await field.read_chunk(size=64 * 1024):
+            if len(data) + len(chunk) > UPLOAD_MAX_FILE_SIZE_BYTES:
+                raise WebApiError(413, "file_too_large", "上传文件不能超过 20MB")
+            data.extend(chunk)
+        if not data:
+            raise WebApiError(400, "empty_file", "文件内容不能为空")
+        target = _relative_target(filename, current, platform)
+        result = await asyncio.to_thread(connection.upload_file, target, bytes(data), root=root)
+        return _response({"filename": filename, "saved_path": target, "size": result["size"]})
     if suffix == "ls":
         return _response(await asyncio.to_thread(
             connection.list_directory, _relative_target(request.query.get("path"), current, platform), root=root,

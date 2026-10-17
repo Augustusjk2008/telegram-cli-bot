@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from bot.manager import MultiBotManager
@@ -12,7 +13,7 @@ from bot.models import BotProfile
 from bot.remote_workspace import RemoteWorkspaceError
 from bot.web.api_common import AuthContext, WebApiError
 from bot.web.api_common import get_session_for_alias
-from bot.web.auth_store import CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
+from bot.web.auth_store import CAP_CHAT_SEND, CAP_GIT_OPS, CAP_MANAGE_BOTS, CAP_MUTATE_BROWSE_STATE, CAP_READ_FILE_CONTENT, CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES
 from bot.web import api_service
 from bot.web import git_backend
 from bot.web.routes import remote_routes
@@ -158,6 +159,113 @@ async def test_remote_file_download_streams_sftp_bytes(tmp_path, monkeypatch):
 
 def _forbid_local_git(monkeypatch):
     monkeypatch.setattr("bot.web.git_service._run_git", Mock(side_effect=AssertionError("local Git executed")))
+
+
+def _upload_form(filename, data):
+    form = FormData()
+    form.add_field("file", data, filename=filename, content_type="application/octet-stream")
+    return form
+
+
+@pytest.mark.asyncio
+async def test_remote_chat_attachment_upload_preview_download_and_delete_stay_local(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    auth.capabilities.add(CAP_CHAT_SEND)
+    auth.capabilities.remove(CAP_WRITE_FILES)
+    service = Mock()
+    service.get.side_effect = AssertionError("Chat attachments must not require SSH")
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    control = Path(server.manager.main_profile.working_dir)
+    (control / "AGENTS.md").write_text("remote instructions", encoding="utf-8")
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post("/api/bots/main/chat/attachments", data=_upload_form("AGENTS.md", b"attachment"))
+        assert response.status == 200, await response.text()
+        uploaded = (await response.json())["data"]
+        target = Path(uploaded["saved_path"])
+        assert target.parent == control / "attachments" / str(server._chat_user_id(auth))
+        assert target.read_bytes() == b"attachment"
+        assert (control / "AGENTS.md").read_text(encoding="utf-8") == "remote instructions"
+        response = await client.post("/api/bots/main/chat/attachments", data=_upload_form("AGENTS.md", b"second"))
+        assert response.status == 200
+        duplicate = (await response.json())["data"]
+        assert duplicate["saved_path"] != uploaded["saved_path"]
+        assert target.read_bytes() == b"attachment"
+
+        response = await client.get("/api/bots/main/files/read", params={"filename": str(target), "mode": "cat"})
+        assert response.status == 200, await response.text()
+        assert (await response.json())["data"]["content"] == "attachment"
+        response = await client.get("/api/bots/main/files/download", params={"filename": str(target)})
+        assert response.status == 200
+        assert await response.read() == b"attachment"
+        response = await client.post("/api/bots/main/chat/attachments/delete", json={"saved_path": str(target)})
+        assert response.status == 200
+        assert not target.exists()
+        assert Path(duplicate["saved_path"]).read_bytes() == b"second"
+    service.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_remote_chat_attachment_scope_and_chat_permissions(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    service = Mock()
+    service.get.side_effect = AssertionError("Attachment scope errors must not reach SSH")
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    control = Path(server.manager.main_profile.working_dir)
+    other = control / "attachments" / "another-user" / "secret.txt"
+    other.parent.mkdir(parents=True)
+    other.write_text("private", encoding="utf-8")
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post("/api/bots/main/chat/attachments", data=_upload_form("a.txt", b"no permission"))
+        assert response.status == 403
+        auth.capabilities.add(CAP_CHAT_SEND)
+        for endpoint in ("files/read", "files/download"):
+            response = await client.get(f"/api/bots/main/{endpoint}", params={"filename": str(other)})
+            assert response.status == 403
+        for target in (other, control / "private.txt"):
+            response = await client.post("/api/bots/main/chat/attachments/delete", json={"saved_path": str(target)})
+            assert response.status == 403
+            assert target.exists()
+    service.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("root,platform", [("/srv/project", "posix"), ("/D:/project", "windows")])
+async def test_remote_upload_uses_current_remote_directory_and_preserves_bytes(tmp_path, monkeypatch, root, platform):
+    server, auth = _server(tmp_path, monkeypatch)
+    config = {**CONFIG, "root": root, "platform": platform}
+    server.manager.main_profile.remote_workspace = config
+    auth.capabilities.add(CAP_MUTATE_BROWSE_STATE)
+    connection = Mock()
+    connection.canonical_root.return_value = root + "/assets"
+    payload = b"\x00\xffimage\r\n"
+    connection.upload_file.return_value = {"size": len(payload)}
+    service = Mock(get=Mock(return_value=connection))
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post("/api/bots/main/cd", json={"path": "assets"})
+        assert response.status == 200
+        response = await client.post("/api/bots/main/files/upload", data=_upload_form("image.bin", payload))
+        assert response.status == 200, await response.text()
+        assert (await response.json())["data"]["saved_path"] == root + "/assets/image.bin"
+        connection.upload_file.assert_called_once_with(root + "/assets/image.bin", payload, root=root)
+        auth.capabilities.remove(CAP_WRITE_FILES)
+        response = await client.post("/api/bots/main/files/upload", data=_upload_form("image.bin", payload))
+        assert response.status == 403
+        assert connection.upload_file.call_count == 1
+    assert not (Path(server.manager.main_profile.working_dir) / "image.bin").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload,status", [(b"", 400), (b"123456789", 413)])
+async def test_remote_upload_rejects_empty_and_oversized_files_before_writing(tmp_path, monkeypatch, payload, status):
+    server, _auth = _server(tmp_path, monkeypatch)
+    connection = Mock()
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: Mock(get=Mock(return_value=connection)))
+    monkeypatch.setattr(remote_routes, "UPLOAD_MAX_FILE_SIZE_BYTES", 8)
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post("/api/bots/main/files/upload", data=_upload_form("a.bin", payload))
+        assert response.status == status
+    connection.upload_file.assert_not_called()
 
 
 @pytest.mark.asyncio

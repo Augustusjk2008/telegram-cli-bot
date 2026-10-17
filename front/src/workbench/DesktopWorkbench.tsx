@@ -1203,7 +1203,7 @@ export function DesktopWorkbench({
   }
 
   async function handleUpload(files: File[]) {
-    if (!canMutateFiles || remoteWorkspace) {
+    if (!canMutateFiles) {
       return;
     }
     for (const file of files) {

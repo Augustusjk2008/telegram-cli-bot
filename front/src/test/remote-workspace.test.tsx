@@ -226,7 +226,7 @@ test("shared mobile files screen edits and downloads remote text while hiding un
   expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("menuitem", { name: "下载 Case\\Name.txt" }));
   await waitFor(() => expect(download).toHaveBeenCalledWith("remote", "Case\\Name.txt", expect.any(Function), expect.any(AbortSignal)));
-  expect(screen.queryByLabelText("上传文件")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("上传文件")).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "更多操作 Case\\Name.txt" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "编辑 Case\\Name.txt" }));
   await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "Case\\Name.txt"));
@@ -235,6 +235,42 @@ test("shared mobile files screen edits and downloads remote text while hiding un
   // The editor save path retains the remote file's concurrency token.
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(write).toHaveBeenCalledWith("remote", "Case\\Name.txt", "after", "123", "utf-8"));
+});
+
+test.each([remote, windowsRemote])("remote files upload into the browsed directory and refresh ($host)", async (workspace) => {
+  const client = new MockWebBotClient();
+  let currentPath = workspace.root;
+  let uploaded = false;
+  vi.spyOn(client, "listFiles").mockImplementation(async () => ({
+    workingDir: currentPath,
+    entries: currentPath === workspace.root
+      ? [{ name: "uploads", isDir: true }]
+      : uploaded ? [{ name: "report.txt", isDir: false }] : [],
+  }));
+  const changeDirectory = vi.spyOn(client, "changeDirectory").mockImplementation(async (_alias, name) => {
+    currentPath = joinRemotePath(currentPath, name, workspace.platform);
+    return currentPath;
+  });
+  const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
+  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={workspace} />);
+  fireEvent.click(await screen.findByRole("button", { name: "进入 uploads" }));
+  await waitFor(() => expect(changeDirectory).toHaveBeenCalledWith("remote", "uploads"));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "进入 uploads" })).not.toBeInTheDocument());
+  const file = new File(["remote upload"], "report.txt", { type: "text/plain" });
+  fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
+  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file));
+  expect(await screen.findByRole("button", { name: "打开 report.txt" })).toBeInTheDocument();
+  expect(currentPath).toBe(`${workspace.root}/uploads`);
+  fireEvent.click(screen.getByRole("button", { name: "更多操作 report.txt" }));
+  expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
+});
+
+test.each([{ structureOnly: true }, { canWriteFiles: false }])("remote file upload respects browse permissions (%j)", async (props) => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries: [{ name: "README.md", isDir: false }] });
+  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} {...props} />);
+  await screen.findByText("README.md");
+  expect(screen.queryByLabelText("上传文件")).not.toBeInTheDocument();
 });
 
 test("read-only remote browsing keeps backslashes inside POSIX directory names", async () => {
@@ -309,6 +345,32 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   fireEvent.click(screen.getByRole("button", { name: "文件" }));
   expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
   expect(decorations).toHaveBeenCalledWith("remote");
+});
+
+test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the file tree", async (entrypoint) => {
+  const client = new MockWebBotClient();
+  let uploaded = false;
+  const list = vi.spyOn(client, "listFiles").mockImplementation(async () => ({
+    workingDir: remote.root,
+    entries: uploaded ? [{ name: "report.txt", isDir: false }] : [{ name: "README.md", isDir: false }],
+  }));
+  const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
+  render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} /></PersistentTerminalProvider>);
+  await screen.findByRole("button", { name: "打开 README.md" });
+  list.mockClear();
+  const file = new File(["remote upload"], "report.txt", { type: "text/plain" });
+  if (entrypoint === "picker") {
+    fireEvent.click(screen.getByRole("button", { name: "更多文件操作" }));
+    expect(screen.getByRole("menuitem", { name: "上传文件" })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
+  } else {
+    fireEvent.drop(screen.getByTestId("desktop-file-tree-dropzone"), { dataTransfer: { files: [file], types: ["Files"] } });
+  }
+  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file));
+  expect(await screen.findByRole("button", { name: "打开 report.txt" })).toBeInTheDocument();
+  expect(list).toHaveBeenCalled();
+  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 report.txt" }));
+  expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
 });
 
 test("desktop tree preserves a trailing backslash in the remote root", async () => {

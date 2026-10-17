@@ -3217,10 +3217,21 @@ export function ChatScreen({
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !htmlPreview && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
-  const shouldUseInlinePreview = !(embedded && onRequestDesktopPreview);
+  const shouldUseInlinePreview = Boolean(previewName) || !(embedded && onRequestDesktopPreview);
 
   const handleFileLinkClick = useCallback((href: string) => {
-    const remote = botOverviewRef.current?.remoteWorkspace;
+    const overview = botOverviewRef.current;
+    const remote = overview?.remoteWorkspace;
+    if (remote && overview.workingDir) {
+      const localPath = resolvePreviewFilePath(href, "");
+      const attachmentRoot = resolvePreviewFilePath(`${overview.workingDir}/attachments`, "");
+      const normalizeCase = (path: string) => /^[A-Za-z]:\//.test(path) ? path.toLowerCase() : path;
+      if (localPath && attachmentRoot && normalizeCase(localPath).startsWith(`${normalizeCase(attachmentRoot)}/`)) {
+        // Keep control-directory attachments out of remote path normalization.
+        void loadPreview(localPath, "preview");
+        return;
+      }
+    }
     const nextPath = resolvePreviewFilePath(href, workingDirRef.current, remote ? remote.platform || "posix" : undefined);
     if (!nextPath) {
       setError("暂不支持预览该文件链接");
@@ -3936,7 +3947,7 @@ export function ChatScreen({
   }, [activeAgentId, botOverview?.cluster?.enabled, clearClusterTaskState, handleSelectAgent]);
 
   const handleAttachFiles = useCallback(async (files: File[]) => {
-    if (botOverviewRef.current?.remoteWorkspace || files.length === 0) {
+    if (files.length === 0) {
       return;
     }
 
@@ -5489,7 +5500,7 @@ export function ChatScreen({
           <ChatComposer
             key={`composer-${composerPulseKey}`}
             onSend={handleSend}
-            onAttachFiles={botOverview?.remoteWorkspace ? undefined : handleAttachFiles}
+            onAttachFiles={handleAttachFiles}
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}
             pulse={composerPulseKey > 0}

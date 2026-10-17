@@ -801,6 +801,29 @@ def test_windows_config_paths_and_native_file_commit(ssh, monkeypatch):
         ssh.service.get({**config, "platform": "posix"})
 
 
+@pytest.mark.parametrize("platform", ["posix", "windows"])
+def test_binary_upload_creates_and_replaces_with_platform_path_checks(ssh, monkeypatch, platform):
+    if platform == "windows":
+        config, connection, operations = windows_connection(ssh, monkeypatch)
+    else:
+        config, connection = connected(ssh)
+        operations = []
+    root = config["root"]
+    raw = b"\x00\xff\x80archive\r\n" * 10
+    monkeypatch.setattr(remote, "MAX_TEXT_BYTES", 8)
+    for payload in (raw, raw[::-1]):
+        result = connection.upload_file("image.bin", payload, root=root)
+        assert result["size"] == len(payload)
+        assert ssh.nodes[root + "/image.bin"]["data"] == payload
+    with error_code("forbidden_path"):
+        connection.upload_file("../outside.bin", raw, root=root)
+    with error_code("not_a_file"):
+        connection.upload_file(".", raw, root=root)
+    assert not any(".orbit-" in path for path in ssh.nodes)
+    if platform == "windows":
+        assert operations.count("prepare") == 2 and operations.count("commit") == 2
+
+
 def test_windows_uncertain_commit_retains_recovery_files_without_retry(ssh, monkeypatch):
     config, connection, _ = windows_connection(ssh, monkeypatch)
     attempts = []

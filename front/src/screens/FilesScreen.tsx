@@ -1134,14 +1134,16 @@ export function FilesScreen({
                 <FolderPlus className="w-5 h-5" />
               </ToolbarButton>
             ) : null}
-            {canManageFiles && !isVirtualRoot ? (
-              <label className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]">
+            {canMutateFiles && !isVirtualRoot ? (
+              <label title="上传文件" className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]">
                 <Upload className="w-5 h-5" />
                 <input
+                  aria-label="上传文件"
                   type="file"
                   className="hidden"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
+                    event.currentTarget.value = "";
                     if (!file) return;
                     if (!canMutateFiles) return;
                     void client.uploadFile(botAlias, file)

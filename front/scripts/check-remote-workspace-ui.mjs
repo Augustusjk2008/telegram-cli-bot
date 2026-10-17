@@ -29,7 +29,9 @@ const result = await build({
     import { WebApiClientError } from "./src/services/types";
     const windows = window.remotePlatform === "windows";
     const remote = { connectionId: "ssh-1", host: windows ? "windows.test" : "linux.test", port: 22, username: "dev", root: windows ? "/C:/Users/dev" : "/home/dev", hostKeyFingerprint: "SHA256:browser-check", ...(windows ? { platform: "windows" } : {}) };
-    window.remoteSmoke = { connections: 0, confirmed: false, writes: 0, localCalls: [], directories: [], platform: "" };
+    let currentPath = remote.root;
+    const uploads = [];
+    window.remoteSmoke = { connections: 0, confirmed: false, writes: 0, localCalls: [], directories: [], platform: "", uploads, listings: 0 };
     const client = {
       async connectRemote(input) {
         window.remoteSmoke.connections++;
@@ -39,15 +41,21 @@ const result = await build({
         return remote;
       },
       async listRemoteDirectories(_id, dir) { window.remoteSmoke.directories.push(dir); return { workingDir: dir, entries: dir === remote.root || dir === "/D:/" ? [{ name: "project", isDir: true }] : [] }; },
-      async getCurrentPath() { return remote.root; },
-      async listFiles(_alias, dir) { return { workingDir: dir || remote.root, entries: [{ name: "README.md", isDir: false }] }; },
-      async revealFileTreePath() { return { rootPath: remote.root, highlightPath: "README.md", expandedPaths: [], branches: { "": [{ name: "README.md", isDir: false }] } }; },
+      async getCurrentPath() { return currentPath; },
+      async listFiles(_alias, dir) {
+        window.remoteSmoke.listings++;
+        const workingDir = dir || currentPath;
+        return { workingDir, entries: [{ name: "README.md", isDir: false }, ...uploads.filter((upload) => upload.path === workingDir).map((upload) => ({ name: upload.name, isDir: false }))] };
+      },
+      async uploadFile(alias, file) { uploads.push({ alias, name: file.name, path: currentPath }); },
+      async revealFileTreePath() { return { rootPath: currentPath, highlightPath: "README.md", expandedPaths: [], branches: { "": [{ name: "README.md", isDir: false }, ...uploads.filter((upload) => upload.path === currentPath).map((upload) => ({ name: upload.name, isDir: false }))] } }; },
       async readFile() { return { content: "Remote workspace text", mode: "head", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" }; },
       async readFileFull() { return { content: "Remote workspace text", mode: "cat", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" }; },
       async writeFile() { window.remoteSmoke.writes++; return { lastModifiedNs: "124" }; },
       async getTerminalSession() { return { started: false, closed: false, cwd: remote.root, ptyMode: null, connectionText: "未启动", lastSeq: 0 }; },
       async resolveFileOpenTarget() { window.remoteSmoke.localCalls.push("resolveFileOpenTarget"); throw Error("local-only API"); },
-      async getGitOverview() { window.remoteSmoke.localCalls.push("getGitOverview"); throw Error("local-only API"); },
+      async getGitOverview() { return { repoFound: false, canInit: false, workingDir: currentPath, changedFiles: [], recentCommits: [] }; },
+      async getGitTreeStatus() { return { repoFound: false, workingDir: currentPath, items: {} }; },
       async syncWorkspaceDocuments() { window.remoteSmoke.localCalls.push("syncWorkspaceDocuments"); throw Error("local-only API"); },
     };
     function Harness() {
@@ -56,7 +64,7 @@ const result = await build({
         botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div className="p-4">Remote agent chat</div>}
       /></PersistentTerminalProvider>;
       return selected ? <div style={{ height: "100dvh" }}><FilesScreen client={client} botAlias="remote" remoteWorkspace={selected} /></div>
-        : <main className="mx-auto max-w-lg space-y-4 p-4"><h1 className="text-lg font-semibold">远程 SSH 工作区</h1><RemoteWorkspacePicker client={client} onPick={setSelected} /></main>;
+        : <main className="mx-auto max-w-lg space-y-4 p-4"><h1 className="text-lg font-semibold">远程 SSH 工作区</h1><RemoteWorkspacePicker client={client} onPick={(workspace) => { currentPath = workspace.root; setSelected(workspace); }} /></main>;
     }
     createRoot(document.getElementById("root")).render(<Harness />);
   ` },
@@ -99,6 +107,14 @@ try {
       await page.waitForFunction((expected) => document.querySelector('[aria-label="远程目录路径"]').value === expected, platform === "windows" ? "/D:/project" : "/home/dev/project");
       await page.getByRole("button", { name: "选择此远程工作目录" }).click();
       await page.getByRole("button", { name: "打开 README.md" }).waitFor();
+      const listingsBeforeUpload = await page.evaluate(() => window.remoteSmoke.listings);
+      await page.getByLabel("上传文件", { exact: true }).setInputFiles({ name: "report.txt", mimeType: "text/plain", buffer: Buffer.from("remote upload") });
+      await page.getByRole("button", { name: "打开 report.txt" }).waitFor();
+      assert.deepEqual(await page.evaluate(() => window.remoteSmoke.uploads), [{ alias: "remote", name: "report.txt", path: platform === "windows" ? "/D:/project" : "/home/dev/project" }]);
+      assert.equal(await page.evaluate((count) => window.remoteSmoke.listings > count, listingsBeforeUpload), true);
+      await page.getByRole("button", { name: "更多操作 report.txt" }).click();
+      assert.equal(await page.getByRole("menuitem", { name: /重命名|删除/ }).count(), 0);
+      await page.keyboard.press("Escape");
       assert.equal(await page.evaluate(() => window.remoteSmoke.confirmed), true);
       assert.equal(await page.evaluate(() => window.remoteSmoke.platform), platform);
       assert.equal(await page.evaluate(() => window.remoteSmoke.directories.includes("/")), false);
@@ -117,6 +133,14 @@ try {
     await page.evaluate((platform) => { window.workbenchSmoke = true; window.remotePlatform = platform; }, platform);
     await page.addScriptTag({ content: result.outputFiles[0].text });
     await page.getByText("Remote agent chat", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "更多文件操作", exact: true }).click();
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.getByRole("menuitem", { name: "上传文件", exact: true }).click(),
+    ]);
+    await chooser.setFiles({ name: "desktop-upload.txt", mimeType: "text/plain", buffer: Buffer.from("desktop remote upload") });
+    await page.getByRole("button", { name: "打开 desktop-upload.txt" }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.remoteSmoke.uploads), [{ alias: "remote", name: "desktop-upload.txt", path: platform === "windows" ? "/C:/Users/dev" : "/home/dev" }]);
     await page.getByRole("button", { name: "打开 README.md" }).click();
     await page.getByRole("tab", { name: "README.md" }).waitFor();
     await page.getByRole("button", { name: "隐藏底部终端", exact: true }).waitFor();
@@ -126,5 +150,5 @@ try {
     await page.screenshot({ path: path.join(output, `workbench-${platform}-1280.png`), fullPage: true });
     await page.close();
   }
-  console.log("Remote POSIX/Windows SSH shared UI browser smoke passed at 390px and 1280px; no server started.");
+  console.log("Remote POSIX/Windows SSH shared UI and uploads passed at 390px and 1280px; no server started.");
 } finally { await browser.close(); }
