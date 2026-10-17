@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import subprocess
 import sys
 import time
@@ -56,12 +55,6 @@ def run_worker(operation: str, source: bytes, config: dict, *, deadline: float,
         "maxArtifactBytes": max_artifact_bytes,
     }
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    worker_dir = Path(__file__).resolve().parent
-    worker_env = os.environ.copy()
-    existing_python_path = worker_env.get("PYTHONPATH")
-    worker_env["PYTHONPATH"] = os.pathsep.join(
-        [str(worker_dir), existing_python_path] if existing_python_path else [str(worker_dir)]
-    )
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("转换预算已耗尽")
@@ -69,7 +62,7 @@ def run_worker(operation: str, source: bytes, config: dict, *, deadline: float,
         # subprocess.run kills and reaps only this conversion worker on timeout.
         completed = subprocess.run(
             [sys.executable, str(Path(__file__).with_name("worker.py"))],
-            input=encoded, capture_output=True, env=worker_env, timeout=remaining, check=False,
+            input=encoded, capture_output=True, timeout=remaining, check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError("转换 worker 超时") from exc

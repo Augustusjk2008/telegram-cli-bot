@@ -549,12 +549,17 @@ def test_copied_backend_parses_host_content_through_stdio(parser, tmp_path):
 
 def test_initialization_reports_missing_dependencies_over_stdio(tmp_path):
     completed = subprocess.run(
-        [sys.executable, "-S", str(PLUGIN / "backend/main.py")],
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            "import pathlib, runpy, sys; entry=sys.argv[1]; sys.path.insert(0, str(pathlib.Path(entry).resolve().parent)); sys.argv=[entry]; runpy.run_path(entry, run_name='__main__')",
+            str(PLUGIN / "backend/main.py"),
+        ],
         input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "plugin.initialize"}) + "\n",
         cwd=tmp_path,
         env={
             **os.environ,
-            "PYTHONPATH": str(PLUGIN / "backend"),
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
         },
