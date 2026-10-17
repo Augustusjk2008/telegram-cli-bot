@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
 import { useCodexVoiceSession } from "../workbench/useCodexVoiceSession";
+import { RealWebBotClient } from "../services/realWebBotClient";
 import type { CodexVoiceConnection, CodexVoiceMessage } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -61,6 +63,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "mediaDevices");
+  window.history.replaceState(null, "", "/");
 });
 
 describe("useCodexVoiceSession", () => {
@@ -149,6 +152,104 @@ describe("useCodexVoiceSession", () => {
 
     expect(screen.getByTestId("voice-caption")).toHaveTextContent("user:你好|user:你好");
     expect(screen.getByTestId("voice-caption").textContent).toBe("user:你好|user:你好");
+  });
+
+  test.each([false, true])("keeps flat transcript text when item text is delayed or absent (delayed: %s)", async (delayedItemText) => {
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<StrictMode><Harness client={client} /></StrictMode>);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalled());
+    let seq = 0;
+    const emit = (name: string, data: Record<string, unknown>) => messages[0]({ type: "voice.event", seq: ++seq, name, data });
+    for (const role of ["user", "assistant"]) {
+      await act(async () => {
+        emit("thread/realtime/item/started", { item: { id: role, type: "transcriptSegment", role, text: "" } });
+        emit("thread/realtime/transcript/delta", { role, delta: "你好" });
+      });
+      expect(screen.getByTestId("voice-caption")).toHaveTextContent(`${role}:你好`);
+      await act(async () => {
+        if (delayedItemText) emit("thread/realtime/item/transcript/delta", { itemId: role, delta: "你好" });
+        emit("thread/realtime/transcript/delta", { role, delta: "世界" });
+      });
+      expect(screen.getByTestId("voice-caption")).toHaveTextContent(`${role}:你好世界`);
+      await act(async () => {
+        if (delayedItemText) emit("thread/realtime/item/transcript/delta", { itemId: role, delta: "世界" });
+        emit("thread/realtime/item/completed", { item: { id: role, type: "transcriptSegment", role } });
+        emit("thread/realtime/transcript/done", { role });
+      });
+    }
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:你好世界|assistant:你好世界");
+  });
+
+  test("preserves a corrected final transcript when later flat events omit the full text", async () => {
+    const messages: Array<(message: CodexVoiceMessage) => void> = [];
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const client = clientWithVoice(connection);
+    (client.connectCodexVoice as ReturnType<typeof vi.fn>).mockImplementation((_alias: string, options: { onMessage: (message: CodexVoiceMessage) => void }) => {
+      messages.push(options.onMessage);
+      return connection;
+    });
+    const { stream } = fakeMic();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    render(<Harness client={client} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
+    await waitFor(() => expect(connection.send).toHaveBeenCalled());
+    const item = { id: "item-1", type: "transcriptSegment", role: "user" };
+    await act(async () => {
+      messages[0]({ type: "voice.event", seq: 1, name: "thread/realtime/item/started", data: { item: { ...item, text: "" } } });
+      messages[0]({ type: "voice.event", seq: 2, name: "thread/realtime/transcript/delta", data: { role: "user", delta: "hello world" } });
+      messages[0]({ type: "voice.event", seq: 3, name: "thread/realtime/item/completed", data: { item: { ...item, text: "hello" } } });
+    });
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:hello");
+    await act(async () => {
+      messages[0]({ type: "voice.event", seq: 4, name: "thread/realtime/transcript/delta", data: { role: "user", delta: "!" } });
+      messages[0]({ type: "voice.event", seq: 5, name: "thread/realtime/transcript/done", data: { role: "user" } });
+    });
+    expect(screen.getByTestId("voice-caption").textContent).toBe("user:hello");
+  });
+
+  test("reports microphone input and outgoing audio separately from received packets", async () => {
+    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
+    const { stream, track } = fakeMic();
+    Object.defineProperty(track, "label", { value: "Test microphone" });
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
+    vi.stubGlobal("RTCPeerConnection", FakePeer);
+    vi.useFakeTimers();
+    try {
+      render(<Harness client={clientWithVoice(connection)} />);
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "开始语音" })));
+      expect(connection.send).toHaveBeenCalled();
+      const peer = FakePeer.last!;
+      peer.getStats.mockResolvedValue(new Map([
+        ["incoming", { type: "inbound-rtp", kind: "audio", packetsReceived: 487, bytesReceived: 1461 }],
+        ["outgoing", { type: "outbound-rtp", kind: "audio", packetsSent: 400, bytesSent: 1200 }],
+        ["microphone", { type: "media-source", kind: "audio", audioLevel: 0, totalAudioEnergy: 0 }],
+      ]));
+      await act(async () => { vi.advanceTimersByTime(5000); });
+      expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("Test microphone");
+      expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("未检测到声音");
+      expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("发送 400 包 / 1200 字节");
+      peer.getStats.mockResolvedValue(new Map([
+        ["outgoing", { type: "outbound-rtp", kind: "audio", packetsSent: 450, bytesSent: 9500 }],
+        ["microphone", { type: "media-source", kind: "audio", audioLevel: 0.2, totalAudioEnergy: 0.1 }],
+      ]));
+      await act(async () => { vi.advanceTimersByTime(5000); });
+      expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("已检测到声音");
+      expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("20%");
+      expect(screen.getByTestId("codex-voice-input")).toHaveTextContent("发送 450 包 / 9500 字节");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("does not show an unbound turn as a voice task", async () => {
@@ -300,21 +401,59 @@ describe("useCodexVoiceSession", () => {
     expect(screen.queryByText("当前有活动任务，语音任务/混合输入将在 M2 支持")).not.toBeInTheDocument();
   });
 
-  test("passes the current voice scope to the connection", async () => {
-    const connection: CodexVoiceConnection = { ready: Promise.resolve(), send: vi.fn(), close: vi.fn() };
-    const connect = vi.fn(() => connection);
+  test.each(["", "/tcb-hub/node/lenovo-y7000p-laptop"])("starts a fresh voice connection at %s and receives server recovery credentials", async (basePath) => {
+    class FakeWebSocket extends EventTarget {
+      static OPEN = 1;
+      static last: FakeWebSocket | undefined;
+      readyState = 0;
+      send = vi.fn();
+      close = vi.fn(() => { this.readyState = 3; });
+      constructor(readonly url: string) {
+        super();
+        FakeWebSocket.last = this;
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    window.history.replaceState(null, "", `${basePath}/`);
+    vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: basePath });
+    const client = new RealWebBotClient();
+    vi.spyOn(client, "getBotOverview").mockResolvedValue({
+      activeConversationId: "conversation-1", sessionEpoch: 0,
+    } as Awaited<ReturnType<WebBotClient["getBotOverview"]>>);
     const { stream } = fakeMic();
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue(stream) } });
     vi.stubGlobal("RTCPeerConnection", FakePeer);
-    render(<Harness client={{ connectCodexVoice: connect } as unknown as WebBotClient} scopeKey={JSON.stringify(["account", "cli", "conversation-1", 7])} />);
+    render(<Harness client={client} scopeKey={JSON.stringify(["account", "cli", "conversation-1", 0])} />);
     fireEvent.click(screen.getByRole("button", { name: "开始语音" }));
-    await waitFor(() => expect(connect).toHaveBeenCalled());
-    expect(connect).toHaveBeenCalledWith("main", expect.objectContaining({
-      agentId: "main",
-      conversationId: "conversation-1",
-      sessionEpoch: 7,
-      protocolVersion: 1,
-    }));
+    await waitFor(() => expect(FakeWebSocket.last).toBeDefined());
+    const socket = FakeWebSocket.last!;
+    const url = new URL(socket.url);
+    expect(url.pathname).toBe(`${basePath}/api/bots/main/chat/voice`);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      agent_id: "main", execution_mode: "cli", protocol_version: "1",
+      conversation_id: "conversation-1", session_epoch: "0",
+    });
+    expect(screen.getByText(/恢复令牌：未生成/)).toBeInTheDocument();
+
+    await act(async () => {
+      socket.readyState = FakeWebSocket.OPEN;
+      socket.dispatchEvent(new Event("open"));
+      socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+        type: "voice.state", seq: 1, state: "negotiating",
+        recovery_token: "server-recovery-1", client_generation: "generation-1",
+      }) }));
+    });
+    expect(JSON.parse(socket.send.mock.calls[0][0])).toMatchObject({ op: "start", sdp: "v=0\r\n" });
+    await act(async () => socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+      type: "voice.sdp", seq: 2, sdp: "v=0 answer",
+    }) })));
+    expect(FakePeer.last?.setRemoteDescription).toHaveBeenCalledWith({ type: "answer", sdp: "v=0 answer" });
+    await act(async () => socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+      type: "voice.state", seq: 3, state: "active",
+    }) })));
+    expect(screen.getByTestId("codex-voice-state")).toHaveTextContent("已连接");
+    expect(screen.getByText(/clientGeneration：generation-1/)).toBeInTheDocument();
+    expect(screen.getByText(/恢复令牌：已保存/)).toBeInTheDocument();
   });
 
   test("recovers an unexpected control disconnect without repeating start", async () => {

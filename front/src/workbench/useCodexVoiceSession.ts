@@ -11,7 +11,7 @@ import type { WebBotClient } from "../services/webBotClient";
 export const VOICE_BUSY_REASON = "当前有活动任务，语音任务/混合输入将在 M2 支持";
 
 type Caption = { id: string; role: string; text: string; done: boolean };
-type CaptionItem = { captionId: string; role: string; done: boolean };
+type CaptionItem = { captionId: string; role: string; done: boolean; itemText: string; flatText: string; finalText?: string };
 type CaptionTracker = {
   items: Map<string, CaptionItem>;
   activeByRole: Map<string, string>;
@@ -30,13 +30,19 @@ type VoiceView = {
   taskBinding: VoiceTaskBinding | null;
   receivedBytes: number;
   receivedPackets: number;
+  sentBytes: number;
+  sentPackets: number;
+  inputDevice: string;
+  inputLevel?: number;
+  inputDetected?: boolean;
+  inputMuted?: boolean;
   captions: Caption[];
   error: string;
   details: CodexVoiceSessionDetails;
 };
 const initialView: VoiceView = {
   state: "idle", continuity: "stable", mic: "off", peer: "new", playback: "idle", activity: "等待连接", task: "idle",
-  taskBinding: null, receivedBytes: 0, receivedPackets: 0, captions: [], error: "", details: {},
+  taskBinding: null, receivedBytes: 0, receivedPackets: 0, sentBytes: 0, sentPackets: 0, inputDevice: "", captions: [], error: "", details: {},
 };
 
 function taskLabelState(binding: VoiceTaskBinding | null): VoiceView["task"] {
@@ -94,6 +100,7 @@ type Session = {
   abort: AbortController;
   seen: Set<string>;
   captions: CaptionTracker;
+  captionRows: Caption[];
   seq: number;
   started: boolean;
   stopping: boolean;
@@ -105,7 +112,7 @@ type Session = {
   suppressedResponseId?: string;
   conversationId?: string;
   sessionEpoch?: number;
-  recoveryToken: string;
+  recoveryToken?: string;
   clientGeneration?: string;
   threadId?: string;
   codexTurnId?: string;
@@ -189,13 +196,6 @@ function optionalNumber(value: unknown): number | undefined {
 function optionalText(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
   return text || undefined;
-}
-
-function createRecoveryToken(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `voice-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function parseVoiceScope(scopeKey: string): { conversationId?: string; sessionEpoch?: number } {
@@ -287,22 +287,29 @@ function updateCaptions(
       text: text.slice(-4000),
       done: Boolean(previous?.done || done),
     };
-    return (previous ? captions.map((row) => row.id === caption.id ? caption : row) : [...captions, caption]).slice(-30);
+    const rows = (previous ? captions.map((row) => row.id === caption.id ? caption : row) : [...captions, caption]).slice(-30);
+    const retainedIds = new Set(rows.map((row) => row.id));
+    const linkedKeys = new Set([...tracker.activeByRole.values(), ...tracker.pendingFlatByRole.values()]);
+    for (const [key, state] of tracker.items) {
+      if (state.done && !retainedIds.has(state.captionId) && !linkedKeys.has(key)) tracker.items.delete(key);
+    }
+    return rows;
   };
 
   if (itemEvent) {
     const current = tracker.items.get(itemKey);
     const role = explicitRole || current?.role || fallbackRole;
-    const state = current || { captionId: itemKey, role, done: false };
+    const state: CaptionItem = current || { captionId: itemKey, role, done: false, itemText: "", flatText: "" };
     state.role = role;
     tracker.items.set(itemKey, state);
     if (itemStarted) tracker.activeByRole.set(role, itemKey);
     if (itemDelta) tracker.activeByRole.set(role, itemKey);
-    const previous = captions.find((caption) => caption.id === state.captionId);
     const fullText = item.text ?? data.text ?? data.transcript;
-    const text = typeof fullText === "string"
+    state.itemText = (typeof fullText === "string"
       ? fullText
-      : (previous?.text || "") + (typeof data.delta === "string" ? data.delta : "");
+      : state.itemText + (typeof data.delta === "string" ? data.delta : "")).slice(-4000);
+    if (itemCompleted && typeof fullText === "string" && fullText) state.finalText = fullText.slice(-4000);
+    const text = state.finalText ?? (state.itemText.length >= state.flatText.length ? state.itemText : state.flatText);
     if (itemCompleted) {
       state.done = true;
       if (tracker.activeByRole.get(role) === itemKey) tracker.activeByRole.delete(role);
@@ -315,14 +322,19 @@ function updateCaptions(
   const linkedItemKey = tracker.activeByRole.get(role) || tracker.pendingFlatByRole.get(role);
   const linkedItem = linkedItemKey ? tracker.items.get(linkedItemKey) : undefined;
   if (linkedItem) {
+    const fullText = data.text ?? data.transcript;
+    linkedItem.flatText = (typeof fullText === "string"
+      ? fullText
+      : linkedItem.flatText + (typeof data.delta === "string" ? data.delta : "")).slice(-4000);
     if (captionDone) {
-      const fullText = data.text ?? data.transcript;
       tracker.pendingFlatByRole.delete(role);
+      if (tracker.activeByRole.get(role) === linkedItemKey) tracker.activeByRole.delete(role);
       linkedItem.done = true;
-      const previous = captions.find((caption) => caption.id === linkedItem.captionId);
-      return upsert(linkedItem.captionId, linkedItem.role, typeof fullText === "string" ? fullText : previous?.text || "", true);
+      if (typeof fullText === "string" && fullText) linkedItem.finalText = fullText.slice(-4000);
     }
-    return captions;
+    // Both event forms describe the same text and may arrive in either order.
+    const text = linkedItem.finalText ?? (linkedItem.itemText.length >= linkedItem.flatText.length ? linkedItem.itemText : linkedItem.flatText);
+    return upsert(linkedItem.captionId, linkedItem.role, text, captionDone);
   }
 
   const flatId = tracker.flatByRole.get(role) || `flat:${role}:${tracker.nextId++}`;
@@ -428,10 +440,11 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
     const session: Session = {
       abort: new AbortController(), tracks: new Set(), seen: new Set(),
       captions: { items: new Map(), activeByRole: new Map(), pendingFlatByRole: new Map(), flatByRole: new Map(), nextId: 0 },
+      captionRows: [],
       seq: -1,
       started: false, stopping: false, applyingSdp: false, suppressed: false, released: false,
       playbackGeneration: 0,
-      recoveryToken: restoredTaskBindingRef.current?.recoveryToken || createRecoveryToken(),
+      recoveryToken: restoredTaskBindingRef.current?.recoveryToken,
       clientGeneration: restoredTaskBindingRef.current?.clientGeneration,
       threadId: restoredTaskBindingRef.current?.threadId,
       codexTurnId: restoredTaskBindingRef.current?.codexTurnId,
@@ -558,6 +571,9 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         session.playbackGeneration += 1;
         session.audio?.pause();
       }
+      // Consume each event once; React can replay state updater callbacks.
+      const captions = updateCaptions(session.captionRows, name, data, itemId, session.captions);
+      session.captionRows = captions;
       setView((value) => {
         let task = value.task;
         if (name === "turn/started" && value.taskBinding?.state === "active") task = "running";
@@ -570,7 +586,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
           : name === "output_audio_buffer.stopped" || name === "thread/realtime/started" ? "等待语音" : value.activity;
         return { ...value, task, activity,
           playback: name === "output_audio_buffer.stopped" ? "idle" : value.playback,
-          captions: updateCaptions(value.captions, name, data, itemId, session.captions),
+          captions,
         };
       });
     };
@@ -720,7 +736,7 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
         peer.addTrack(track, mic);
         track.onended = () => fail("麦克风已停止，设备已释放");
       });
-      setView((value) => ({ ...value, mic: "on", activity: "正在协商" }));
+      setView((value) => ({ ...value, mic: "on", activity: "正在协商", inputDevice: mic.getAudioTracks()[0]?.label || "默认麦克风" }));
       peer.ontrack = ({ track, streams }) => {
         if (!live()) { track.stop(); return; }
         session.tracks.add(track);
@@ -770,16 +786,30 @@ export function useCodexVoiceSession({ client, botAlias, agentId, scopeKey, conv
       session.statsTimer = window.setInterval(() => {
         void peer.getStats().then((reports) => {
           if (!live()) return;
-          let receivedBytes = 0, receivedPackets = 0;
+          let receivedBytes = 0, receivedPackets = 0, sentBytes = 0, sentPackets = 0;
+          let inputLevel: number | undefined, inputEnergy: number | undefined;
           reports.forEach((report) => {
-            if (report.type === "inbound-rtp" && (report.kind === "audio" || report.mediaType === "audio")) {
+            if (report.kind !== "audio" && report.mediaType !== "audio") return;
+            if (report.type === "inbound-rtp") {
               receivedBytes += Number(report.bytesReceived) || 0;
               receivedPackets += Number(report.packetsReceived) || 0;
+            } else if (report.type === "outbound-rtp") {
+              sentBytes += Number(report.bytesSent) || 0;
+              sentPackets += Number(report.packetsSent) || 0;
+            } else if (report.type === "media-source") {
+              inputLevel = optionalNumber(report.audioLevel);
+              inputEnergy = optionalNumber(report.totalAudioEnergy);
             }
           });
-          setView((value) => ({ ...value, receivedBytes, receivedPackets }));
+          setView((value) => ({
+            ...value, receivedBytes, receivedPackets, sentBytes, sentPackets, inputLevel,
+            inputDetected: inputEnergy !== undefined || inputLevel !== undefined
+              ? Boolean(value.inputDetected || (inputEnergy ?? 0) > 0 || (inputLevel ?? 0) > 0)
+              : value.inputDetected,
+            inputMuted: Boolean(mic.getAudioTracks()[0]?.muted),
+          }));
         }).catch(() => { /* Statistics are diagnostic; media may still be live. */ });
-      }, 5000);
+      }, 1000);
     } catch (error) {
       if (live()) fail(error instanceof Error ? error.message : "语音启动失败");
     }

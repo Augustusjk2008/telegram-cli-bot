@@ -111,6 +111,7 @@ export function CodexVoiceBar({ session, disabled = false, busy = false }: Props
           <p>clientGeneration：{details.clientGeneration || "未同步"} · 恢复令牌：{details.recoveryToken ? "已保存" : "未生成"}</p>
           <p>控制连接：{stateLabels[session.state] || session.state} · 恢复尝试：{details.reconnectAttempt || 0} · 最新序号：{details.lastSeq ?? "未同步"}</p>
           {active ? <p>媒体：{session.peer} · 播放：{{ idle: "等待音频", playing: "播放中", blocked: "等待播放授权", suppressed: "本地暂停，下一次响应恢复" }[session.playback]} · 接收 {session.receivedPackets} 包 / {session.receivedBytes} 字节</p> : null}
+          {active ? <p data-testid="codex-voice-input" className="break-words">输入设备：{session.inputDevice || "等待授权"} · {session.inputMuted ? "采集已暂停" : session.inputDetected === undefined ? "等待输入数据" : session.inputDetected ? "已检测到声音" : "未检测到声音"} · 输入音量：{session.inputLevel === undefined ? "未提供" : `${Math.round(Math.max(0, Math.min(1, session.inputLevel)) * 100)}%`} · 发送 {session.sentPackets} 包 / {session.sentBytes} 字节</p> : null}
         </div>
       </details>
       {hasCaption ? (
