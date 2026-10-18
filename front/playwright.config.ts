@@ -23,6 +23,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
+        channel: !chromiumExecutablePath && process.platform === 'win32' ? 'chrome' : undefined,
         launchOptions: chromiumExecutablePath
           ? {
               executablePath: chromiumExecutablePath,

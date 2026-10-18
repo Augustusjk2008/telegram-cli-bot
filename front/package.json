@@ -14,7 +14,8 @@
     "lint": "tsc --noEmit",
     "test:gate": "vitest run --maxWorkers=1 --fileParallelism=false",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:smoke": "playwright test src/test/browser-smoke.spec.ts"
   },
   "dependencies": {
     "@ag-ui/core": "^0.0.55",
