@@ -572,7 +572,7 @@ test("keeps text input locked while an active persisted voice task is foreground
   await waitFor(() => expect(voiceBar).toHaveTextContent("运行中"));
   expect(screen.getByPlaceholderText("请先结束语音再发送文字，混合输入将在 M2 支持")).toBeDisabled();
   expect(steerMessage).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "展开文字" }));
+  await user.click(screen.getByRole("button", { name: "查看会话历史" }));
   expect((await screen.findAllByRole("button", { name: "关闭历史会话" })).length).toBeGreaterThan(0);
 });
 

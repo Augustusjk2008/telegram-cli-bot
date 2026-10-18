@@ -4945,7 +4945,7 @@ export function ChatScreen({
     sessionEpoch: botOverview?.sessionEpoch,
     taskBinding: restoredVoiceTask,
     scopeKey: JSON.stringify([accountId, effectiveExecutionMode, voiceConversationId, botOverview?.sessionEpoch]),
-    enabled: voiceEnabled && isVisible && !conversationLoading,
+    enabled: voiceEnabled && isVisible,
     busy: isStreaming,
   });
   voiceTaskBindingRef.current = voiceSession.connected
@@ -5308,22 +5308,22 @@ export function ChatScreen({
           <CodexVoiceBar session={voiceSession} disabled={loading || conversationLoading} busy={isStreaming} />
           {voiceForegroundActive ? (
             <div className="flex items-center gap-2 border-t border-[var(--workbench-hairline)] px-3 py-1.5 text-xs text-[var(--muted)]">
-              <span>文字输入已暂停，当前语音会话仍与此对话保持连续</span>
+              <span>文字输入已暂停，查看会话历史不会结束当前语音</span>
               <button
                 type="button"
-                aria-label="展开文字"
+                aria-label="查看会话历史"
                 onClick={() => void handleOpenHistoryPanel("history")}
                 className="ml-auto rounded-md border border-[var(--workbench-hairline)] px-2 py-1 font-medium text-[var(--accent)] hover:bg-[var(--workbench-hover-bg)]"
               >
-                展开文字
+                查看会话历史
               </button>
               <button
                 type="button"
-                aria-label="切换到文字"
+                aria-label="结束语音并切换到文字"
                 onClick={voiceSession.end}
                 className="rounded-md border border-[var(--workbench-hairline)] px-2 py-1 font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
               >
-                切换到文字
+                结束语音并切换到文字
               </button>
             </div>
           ) : null}
