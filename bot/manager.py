@@ -219,6 +219,7 @@ class MultiBotManager:
         default_cli_path = (
             "codex" if normalized_cli_type == "codex_server"
             else "agy" if normalized_cli_type == "antigravity"
+            else "dsh" if normalized_cli_type == "deepseek"
             else normalized_cli_type
         )
         for profile in profiles:
@@ -727,6 +728,8 @@ class MultiBotManager:
             resolved_cli_type = validate_cli_type(cli_type or current.cli_type or profile.cli_type)
             if resolved_cli_type == "antigravity":
                 raise ValueError("Git commit CLI 不支持 Antigravity CLI")
+            if resolved_cli_type == "deepseek":
+                raise ValueError("Git commit CLI 不支持 DeepSeek Harness")
             next_config = GitCommitMessageCliConfig(
                 cli_type=resolved_cli_type,
                 cli_path=str(cli_path if cli_path is not None else current.cli_path or profile.cli_path).strip(),

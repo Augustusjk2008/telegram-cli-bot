@@ -366,11 +366,12 @@ function agentOptions(agentId?: string, executionMode?: ChatExecutionMode): { ag
   return Object.keys(options).length > 0 ? options : undefined;
 }
 
-function getSupportedExecutionModes(overview?: Pick<BotOverview, "supportedExecutionModes"> | null): ChatExecutionMode[] {
+function getSupportedExecutionModes(overview?: Pick<BotOverview, "cliType" | "supportedExecutionModes"> | null): ChatExecutionMode[] {
+  if (overview?.cliType === "deepseek") return ["cli"];
   return overview?.supportedExecutionModes?.length ? overview.supportedExecutionModes : ["cli"];
 }
 
-function getDefaultExecutionMode(overview?: Pick<BotOverview, "defaultExecutionMode" | "supportedExecutionModes"> | null): ChatExecutionMode {
+function getDefaultExecutionMode(overview?: Pick<BotOverview, "cliType" | "defaultExecutionMode" | "supportedExecutionModes"> | null): ChatExecutionMode {
   const supportedExecutionModes = getSupportedExecutionModes(overview);
   return overview?.defaultExecutionMode && supportedExecutionModes.includes(overview.defaultExecutionMode)
     ? overview.defaultExecutionMode
@@ -3951,6 +3952,12 @@ export function ChatScreen({
       return;
     }
 
+    if (botOverviewRef.current?.cliType === "deepseek" && files.some((file) => (
+      /^(image|audio)\//i.test(file.type) || /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif|ico|tiff?|mp3|wav|ogg|m4a|aac|flac|opus|weba)$/i.test(file.name)
+    ))) {
+      setError("DeepSeek Harness 暂不支持图片或语音附件");
+      return;
+    }
     setError("");
     setUploadingAttachments(true);
     try {
@@ -4638,7 +4645,7 @@ export function ChatScreen({
   async function handleToggleClusterMode() {
     const overview = botOverviewRef.current;
     const config = overview?.cluster;
-    if (!config || clusterSaving || overview.canOperate === false) {
+    if (!config || overview.cliType === "deepseek" || clusterSaving || overview.canOperate === false) {
       return;
     }
 
@@ -4890,7 +4897,8 @@ export function ChatScreen({
     ? "native_agent"
     : supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
-  const clusterMode = Boolean(botOverview?.cluster?.enabled);
+  const deepseekCli = botOverview?.cliType === "deepseek";
+  const clusterMode = !deepseekCli && Boolean(botOverview?.cluster?.enabled);
   const activeConversation = conversations.find((conversation) => conversation.active);
   const liveClusterTeam = botOverview?.activeClusterRun?.team || activeConversation?.clusterTeam;
   const liveClusterTeamView: ClusterTeamViewSnapshot | null = liveClusterTeam?.assignments.length ? {
@@ -4976,7 +4984,7 @@ export function ChatScreen({
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
     : true);
-  const cliModelOptions = cliParams?.schema.model?.enum ?? [];
+  const cliModelOptions = deepseekCli ? [] : cliParams?.schema.model?.enum ?? [];
   const nativeModelOptions = nativeAgentModels?.items ?? [];
   const nativeSelectedModel = nativeAgentModels?.selectedModel
     || botOverview?.nativeAgent?.model
@@ -4990,11 +4998,11 @@ export function ChatScreen({
   );
   const selectedModel = nativeExecutionMode
     ? nativeSelectedModel
-    : toModelOptionValue(cliParams?.params.model, cliModelOptions);
+    : deepseekCli ? "" : toModelOptionValue(cliParams?.params.model, cliModelOptions);
   const cliReasoningParamKey = cliParams?.cliType === "claude" || cliParams?.cliType === "antigravity"
     ? "effort"
     : "reasoning_effort";
-  const cliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
+  const cliReasoningEffortOptions = deepseekCli ? [] : cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
   const cliSelectedReasoningEffort = String(
     cliParams?.params[cliReasoningParamKey]
       ?? cliParams?.defaults[cliReasoningParamKey]
@@ -5013,7 +5021,7 @@ export function ChatScreen({
     : visibleCliReasoningEffortOptions;
   const selectedReasoningEffort = nativeExecutionMode
     ? nativeSelectedReasoningEffort
-    : cliSelectedReasoningEffort;
+    : deepseekCli ? "" : cliSelectedReasoningEffort;
   const clusterTasks = clusterTaskStatus?.tasks.length
     ? clusterTaskStatus.tasks
     : clusterTeamView?.tasks || [];
@@ -5268,7 +5276,8 @@ export function ChatScreen({
           planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
           clusterEnabled={clusterMode}
-          clusterDisabled={loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
+          clusterDisabled={deepseekCli || loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
+          clusterDisabledReason={deepseekCli ? "DeepSeek Harness 暂不支持集群" : undefined}
           clusterSaving={clusterSaving}
           onToggleClusterMode={() => void handleToggleClusterMode()}
           embedded={embedded}
@@ -5279,6 +5288,7 @@ export function ChatScreen({
           killTaskDisabled={killTaskDisabled}
           killTaskBusy={actionLoading === "kill"}
           mobileLayout={mobileLayout}
+          modelDescription={deepseekCli ? "使用 Harness 配置的模型" : undefined}
           modelOptions={visibleModelOptions}
           selectedModel={selectedModel}
           modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
@@ -5510,6 +5520,7 @@ export function ChatScreen({
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
             placeholder={voiceInputLocked ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
+            modelDescription={deepseekCli && !mobileLayout ? "使用 Harness 配置的模型" : undefined}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}

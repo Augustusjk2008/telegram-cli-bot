@@ -901,6 +901,229 @@ async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
     assert done["session"]["session_ids"]["antigravity_conversation_id"] == "agy-stream-session"
 
 
+class _DeepSeekStdin:
+    def __init__(self):
+        self.text = ""
+
+    def write(self, text):
+        self.text += text
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _DeepSeekProcess(_UsageProcess):
+    def __init__(self, events, *, returncode=0, stderr=""):
+        super().__init__()
+        self.stdout = _StreamingStdout([
+            (event if isinstance(event, str) else json.dumps(event, ensure_ascii=False)) + "\n"
+            for event in events
+        ])
+        self.stderr = _StreamingStdout([stderr] if stderr else [])
+        self.stdin = _DeepSeekStdin()
+        self.exit_code = returncode
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.returncode = self.exit_code
+        return self.returncode
+
+
+def _deepseek_events(session_id="session-dsh", text="最终回复"):
+    return [
+        {"type": "session", "sessionId": session_id},
+        {"type": "status", "phase": "turn_start", "turn": 1},
+        {"type": "thinking", "text": "思考过程"},
+        {"type": "tool_call", "callId": "read-1", "tool": "read", "input": {"file_path": "probe.txt"}},
+        {"type": "tool_result", "callId": "read-1", "status": "completed", "result": "文件内容"},
+        {"type": "text", "text": text},
+        {"type": "status", "phase": "step_end", "turn": 1, "step": 1,
+         "usage": {"inputTokens": 134, "outputTokens": 10, "cacheReadTokens": 6016, "totalTokens": 6160}},
+        {"type": "status", "phase": "turn_end", "turn": 1, "reason": {"kind": "completed"}},
+        {"type": "final", "text": text},
+    ]
+
+
+def _patch_deepseek_runtime(manager, monkeypatch, processes):
+    profile = manager.main_profile
+    profile.cli_type, profile.cli_path = "deepseek", "dsh"
+    pending = iter(processes)
+    observed = {"commands": [], "kwargs": [], "completions": []}
+
+    def spawn(command, **kwargs):
+        observed["commands"].append(command)
+        observed["kwargs"].append(kwargs)
+        return next(pending)
+
+    original_complete = api_service.ChatHistoryService.complete_turn
+
+    def complete(service, handle, **kwargs):
+        observed["completions"].append(handle.turn_id)
+        return original_complete(service, handle, **kwargs)
+
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_: "dsh")
+    monkeypatch.setattr(api_service.subprocess, "Popen", spawn)
+    monkeypatch.setattr(api_service.ChatHistoryService, "complete_turn", complete)
+    monkeypatch.setattr(api_service, "estimate_usage_cost", Mock(side_effect=AssertionError("unknown model price")))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", Mock(side_effect=AssertionError("no native log import")))
+    return observed
+
+
+@pytest.mark.asyncio
+async def test_deepseek_stream_persists_trace_and_restores_conversation_binding(usage_manager, monkeypatch):
+    processes = [_DeepSeekProcess(_deepseek_events()), _DeepSeekProcess(_deepseek_events()),
+                 _DeepSeekProcess(_deepseek_events("session-new"))]
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, processes)
+    usage_manager.main_profile.cli_params.set_param("deepseek", "model", "ignored-host-model")
+    all_events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "中文\n第二行")]
+    done = all_events[-1]
+    session = api_service.get_session_for_alias(usage_manager, "main", 1001)
+    first_conversation = session.active_conversation_id
+    assert done["output"] == "最终回复"
+    assert processes[0].stdin.text == "中文\n第二行\n"
+    assert all(event["turn_id"] == done["turn_id"] and event["assistant_message_id"] == done["assistant_message_id"]
+               for event in all_events if event["type"] in {"meta", "status", "trace", "done"})
+    assert any(event.get("preview_text") == "最终回复" for event in all_events)
+    trace = api_service.get_history_trace(usage_manager, "main", 1001, done["assistant_message_id"])["trace"]
+    assert {(e["kind"], e["call_id"]) for e in trace if e["kind"].startswith("tool_")} == {
+        ("tool_call", "read-1"), ("tool_result", "read-1"),
+    }
+    usage = done["message"]["meta"]["context_usage"]
+    assert usage == {"provider": "deepseek", "source": "deepseek_headless", "session_id": "session-dsh",
+                     "usage_scope": "turn", "status_text": "本轮用量", "input_tokens": 134,
+                     "output_tokens": 10, "cache_read_tokens": 6016, "total_tokens": 6160}
+    assert done["session"]["session_ids"]["deepseek_session_id"] == "session-dsh"
+    await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "继续"))
+    await api_service.create_conversation(usage_manager, "main", 1001)
+    assert session.deepseek_session_id is None
+    await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "新会话"))
+    await api_service.select_conversation(usage_manager, "main", 1001, first_conversation)
+    assert session.deepseek_session_id == "session-dsh"
+    assert "--session-id" not in observed["commands"][0]
+    assert observed["commands"][1][-3:] == ["--session-id", "session-dsh", "-"]
+    assert "--session-id" not in observed["commands"][2]
+    assert all(kwargs["stderr"] == subprocess.PIPE for kwargs in observed["kwargs"])
+    assert len(observed["completions"]) == len(set(observed["completions"])) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["stderr", "missing_final", "exit_after_final", "invalid_json"])
+async def test_deepseek_failure_never_succeeds_or_replays(usage_manager, monkeypatch, failure):
+    events, returncode, stderr = _deepseek_events(), 0, ""
+    if failure == "stderr":
+        events, returncode, stderr = [], 1, "dsh: startup failed\n"
+    elif failure == "missing_final":
+        events = events[:-1]
+    elif failure == "exit_after_final":
+        returncode, stderr = 1, "dsh: provider failed\n"
+    else:
+        events.insert(1, "invalid diagnostic on stdout")
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [_DeepSeekProcess(events, returncode=returncode, stderr=stderr)])
+    result = await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"))
+    done = result[-1]
+    assert done["type"] == "done" and done["message"]["state"] == "error"
+    assert done["message"]["meta"]["completion_state"] == "error"
+    if stderr:
+        assert stderr.strip() in done["output"]
+    assert len(observed["commands"]) == len(observed["completions"]) == 1
+    assert done["session"]["is_processing"] is False
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_switch_uses_selected_conversations_binding(usage_manager, monkeypatch):
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [
+        _DeepSeekProcess(_deepseek_events("session-a")),
+        _DeepSeekProcess(_deepseek_events("session-b")),
+        _DeepSeekProcess(_deepseek_events("session-b")),
+    ])
+    profile = usage_manager.main_profile
+    session = api_service.get_session_for_alias(usage_manager, "main", 1001)
+    await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "A"))
+    conversation_a = session.active_conversation_id
+    await api_service.create_conversation(usage_manager, "main", 1001)
+    await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "B"))
+    conversation_b = session.active_conversation_id
+    await api_service.select_conversation(usage_manager, "main", 1001, conversation_a)
+    assert session.deepseek_session_id == "session-a"
+    profile.cli_type = "codex"
+    history = api_service._get_chat_history_service(session)
+    codex_turn = history.start_turn(profile=profile, session=session, user_text="codex", native_provider="codex")
+    history.complete_turn(codex_turn, content="codex", completion_state="completed", native_session_id="codex-thread")
+    profile.cli_type = "deepseek"
+    await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "back"))
+    assert session.active_conversation_id == conversation_b
+    assert observed["commands"][-1][-3:] == ["--session-id", "session-b", "-"]
+    assert history.store.get_conversation(conversation_a)["native_session_id"] == "session-a"
+    assert history.store.get_conversation(conversation_b)["native_session_id"] == "session-b"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_unsupported_entry_points_fail_before_launch(usage_manager, monkeypatch):
+    from bot.web import git_service
+
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [])
+    profile = usage_manager.main_profile
+    with pytest.raises(api_service.WebApiError, match="集群"):
+        await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello", cluster_run_id="cluster"))
+    profile.remote_workspace = {"root": "/remote"}
+    with pytest.raises(api_service.WebApiError, match="本地工作区"):
+        await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"))
+    profile.remote_workspace = None
+    profile.supported_execution_modes = ["cli", "native_agent"]
+    with pytest.raises(api_service.WebApiError, match="CLI 执行模式"):
+        api_service._resolve_chat_execution_mode(profile, "native_agent")
+    with pytest.raises(api_service.WebApiError, match="DeepSeek Harness"):
+        await git_service._generate_git_commit_message_from_context(
+            usage_manager, "main", 1001, repo_root=profile.working_dir, context={},
+        )
+    assert observed["commands"] == []
+
+
+@pytest.mark.asyncio
+async def test_deepseek_output_limit_preserves_partial_reply_and_finishes_once(usage_manager, monkeypatch):
+    process = _DeepSeekProcess([
+        {"type": "session", "sessionId": "session-limit"},
+        {"type": "text", "text": "已收到的正文"},
+        {"type": "text", "text": "x" * 500},
+    ])
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [process])
+    start_reader = api_service._start_process_stdout_reader
+    monkeypatch.setattr(api_service, "_start_process_stdout_reader",
+                        lambda proc, output_queue: start_reader(proc, output_queue, max_line_bytes=200))
+    done = (await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")))[-1]
+    assert done["message"]["state"] == "error"
+    assert "单行输出超过" in done["output"] and "已收到的正文" in done["output"]
+    assert len(observed["completions"]) == 1
+    assert done["session"]["is_processing"] is False
+
+
+@pytest.mark.asyncio
+async def test_deepseek_stop_preserves_partial_reply_and_allows_next_turn(usage_manager, monkeypatch):
+    first = _DeepSeekProcess([
+        {"type": "session", "sessionId": "session-stopped"},
+        {"type": "text", "text": "停止前的正文"},
+    ])
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [first, _DeepSeekProcess(_deepseek_events("session-stopped"))])
+    session = api_service.get_session_for_alias(usage_manager, "main", 1001)
+    result = []
+    async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"):
+        result.append(event)
+        if event["type"] == "meta":
+            with session._lock:
+                session.stop_requested = True
+    done = result[-1]
+    assert done["message"]["meta"]["completion_state"] == "cancelled"
+    assert done["output"] == "停止前的正文"
+    assert session.is_processing is False and session.stop_requested is False
+    next_done = (await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "continue")))[-1]
+    assert next_done["message"]["meta"]["completion_state"] == "completed"
+    assert observed["commands"][1][-3:] == ["--session-id", "session-stopped", "-"]
+    assert len(observed["completions"]) == len(set(observed["completions"])) == 2
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_antigravity_remote_uses_workspace_mcp_and_private_env(
     usage_manager: MultiBotManager,

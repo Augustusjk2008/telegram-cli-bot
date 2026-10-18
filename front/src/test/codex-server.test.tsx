@@ -132,3 +132,15 @@ test("Git config selector saves codex server with the codex executable", async (
   await screen.findByText("Commit Message CLI 配置已保存");
   expect(await client.getGitCommitMessageConfig("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex" });
 });
+
+
+test("Git config keeps an unsupported DeepSeek selection explicit until a supported CLI is saved", async () => {
+  const client = new MockWebBotClient();
+  await client.updateBotCli("main", "deepseek", "dsh");
+  render(<GitCommitCliConfigPanel botAlias="main" client={client} />);
+  await waitFor(() => expect(screen.getByLabelText("Commit Message CLI 类型")).toHaveValue("deepseek"));
+  expect(screen.getByRole("option", { name: "DeepSeek Harness（暂不支持）" })).toBeDisabled();
+  await expect(client.generateGitCommitMessage("main")).rejects.toThrow("DeepSeek Harness 暂不支持生成提交信息");
+  await userEvent.selectOptions(screen.getByLabelText("Commit Message CLI 类型"), "codex");
+  expect(screen.getByLabelText("Commit Message CLI 路径")).toHaveValue("codex");
+});

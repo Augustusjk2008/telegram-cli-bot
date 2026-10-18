@@ -299,10 +299,19 @@ const DEFAULT_AGENT_CLUSTER = {
 function defaultCliPathForType(cliType: string) {
   if (cliType === "claude") return "claude";
   if (cliType === "antigravity") return "agy";
+  if (cliType === "deepseek") return "dsh";
   return "codex";
 }
 
 function buildMockCliParams(cliType: string): CliParamsPayload {
+  if (cliType === "deepseek") {
+    return {
+      cliType,
+      params: { extra_args: [] },
+      defaults: { extra_args: [] },
+      schema: { extra_args: { type: "string_list", description: "额外参数（仅支持 --patch）" } },
+    };
+  }
   if (cliType === "antigravity") {
     const params = {
       model: "none",
@@ -458,6 +467,7 @@ function createMockEnvItems(): EnvConfigItem[] {
         { value: "codex_server", label: "codex server" },
         { value: "claude", label: "claude" },
         { value: "antigravity", label: "Antigravity CLI" },
+        { value: "deepseek", label: "DeepSeek Harness" },
       ],
     },
     {
@@ -2813,6 +2823,12 @@ export class MockWebBotClient implements WebBotClient {
     const ownerAccountId = this.botOwners.get(base.alias) || base.ownerAccountId || "";
     return {
       ...base,
+      ...(base.cliType === "deepseek" ? {
+        supportedExecutionModes: ["cli" as const],
+        defaultExecutionMode: "cli" as const,
+        executionMode: "cli" as const,
+        voice: { enabled: false, reason: "unsupported_cli" },
+      } : {}),
       serviceStatus,
       activityStatus,
       busyAgentIds,
@@ -3794,14 +3810,16 @@ export class MockWebBotClient implements WebBotClient {
       && bot.supportedExecutionModes[0] === "native_agent"
     ) ? "pi" : bot.cliType;
     return {
-      enabled: Boolean(cluster.enabled),
+      enabled: bot.cliType !== "deepseek" && Boolean(cluster.enabled),
       modelTiers: { ...cluster.modelTiers },
       reasoningEfforts: { ...cluster.reasoningEfforts },
       mcp: {
         serverName: "tcb-cluster",
         activeCliType,
         tools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
-        runtime: { state: "runtime_ready", message: "运行态可用" },
+        runtime: bot.cliType === "deepseek"
+          ? { state: "unsupported", message: "DeepSeek Harness 暂不支持集群" }
+          : { state: "runtime_ready", message: "运行态可用" },
         codex: isCodexCli(activeCliType) ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         antigravity: activeCliType === "antigravity"
@@ -3846,6 +3864,9 @@ export class MockWebBotClient implements WebBotClient {
 
   async prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult> {
     const bot = this.getBotSummary(botAlias);
+    if (bot.cliType === "deepseek") {
+      throw new WebApiClientError("DeepSeek Harness 暂不支持集群", { status: 400 });
+    }
     const cliPath = bot.cliPath || defaultCliPathForType(bot.cliType);
     const cliType = bot.cliType;
     const launcherPath = "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd";
@@ -3899,6 +3920,9 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult> {
     const current = this.getBotSummary(botAlias);
+    if (current.cliType === "deepseek") {
+      throw new WebApiClientError("DeepSeek Harness 暂不支持集群", { status: 400 });
+    }
     const cluster = {
       ...(current.cluster || DEFAULT_CLUSTER),
       ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
@@ -6738,6 +6762,9 @@ export class MockWebBotClient implements WebBotClient {
     botAlias: string,
     input: GitCommitMessageCliConfigUpdateInput,
   ): Promise<GitCommitMessageCliConfig> {
+    if (input.cliType === "deepseek") {
+      throw new WebApiClientError("DeepSeek Harness 暂不支持生成提交信息", { status: 400 });
+    }
     const current = await this.getGitCommitMessageConfig(botAlias);
     const nextCliType = input.cliType || current.cliType;
     this.gitCommitParamsByCli[current.cliType] = { ...current.params };
@@ -6776,6 +6803,9 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async generateGitCommitMessage(botAlias: string): Promise<GitCommitMessageGenerateResult> {
+    if ((await this.getGitCommitMessageConfig(botAlias)).cliType === "deepseek") {
+      throw new WebApiClientError("DeepSeek Harness 暂不支持生成提交信息", { status: 400 });
+    }
     const overview = await this.getGitOverview(botAlias);
     const firstChanged = overview.changedFiles[0]?.path || "repo";
     const scope = firstChanged.includes("/")
@@ -6787,6 +6817,9 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async startGitSmartCommit(botAlias: string): Promise<GitSmartCommitJob> {
+    if ((await this.getGitCommitMessageConfig(botAlias)).cliType === "deepseek") {
+      throw new WebApiClientError("DeepSeek Harness 暂不支持生成提交信息", { status: 400 });
+    }
     const current = this.gitSmartCommitActiveJobs.get(botAlias);
     if (current) {
       const existing = this.gitSmartCommitJobs.get(current);
@@ -6992,10 +7025,13 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary> {
     const current = this.getBotSummary(botAlias);
+    if (cliType === "deepseek" && current.remoteWorkspace) {
+      throw new WebApiClientError("DeepSeek Harness 目前仅支持本地 CLI", { status: 400 });
+    }
     const next = {
       ...current,
       cliType: cliType as BotSummary["cliType"],
-      cliPath: cliPath.trim(),
+      cliPath: cliType === "deepseek" ? cliPath.trim() || "dsh" : cliPath.trim(),
     };
     this.bots.set(botAlias, next);
     return this.getBotSummary(botAlias);
@@ -7063,6 +7099,9 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async addBot(input: CreateBotInput): Promise<BotSummary> {
+    if (input.cliType === "deepseek" && input.remoteWorkspace) {
+      throw new WebApiClientError("DeepSeek Harness 目前仅支持本地 CLI", { status: 400 });
+    }
     const alias = input.alias.trim().toLowerCase();
     if (!alias) {
       throw new WebApiClientError("Bot 别名不能为空", { status: 400, code: "bot_alias_required" });
@@ -7114,10 +7153,12 @@ export class MockWebBotClient implements WebBotClient {
     };
     this.bots.set(alias, bot);
     const cliParams = buildMockCliParams(bot.cliType);
-    cliParams.params = {
-      ...cliParams.params,
-      yolo: Boolean(input.bypassApprovalAndSandbox),
-    };
+    if (bot.cliType !== "deepseek") {
+      cliParams.params = {
+        ...cliParams.params,
+        yolo: Boolean(input.bypassApprovalAndSandbox),
+      };
+    }
     this.cliParamsByBot.set(alias, { [bot.cliType]: cloneCliParamsPayload(cliParams) });
     if (!this.isLocalAdminSession()) {
       this.botOwners.set(alias, accountId);

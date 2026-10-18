@@ -116,6 +116,8 @@ DEFAULT_ANTIGRAVITY_PARAMS = {
     "extra_args": [],
 }
 
+DEFAULT_DEEPSEEK_PARAMS = {"extra_args": []}
+
 ANTIGRAVITY_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"]
 
 # CLI 类型到默认参数的映射
@@ -124,12 +126,19 @@ DEFAULT_PARAMS_MAP = {
     "codex": DEFAULT_CODEX_PARAMS,
     "codex_server": DEFAULT_CODEX_PARAMS,
     "antigravity": DEFAULT_ANTIGRAVITY_PARAMS,
+    "deepseek": DEFAULT_DEEPSEEK_PARAMS,
 }
 
 # 支持的 CLI 类型
 SUPPORTED_CLI_TYPES = set(DEFAULT_PARAMS_MAP.keys())
 
 PARAM_SCHEMA_MAP = {
+    "deepseek": {
+        "extra_args": {
+            "type": "string_list",
+            "description": "Harness 配置覆盖，仅支持 --patch <文件路径>；模型使用 Harness 配置",
+        },
+    },
     "claude": {
         "yolo": {"type": "boolean", "description": "跳过权限确认"},
         "effort": {
@@ -183,6 +192,7 @@ class CliParamsConfig:
     codex: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex"))
     codex_server: Dict[str, Any] = field(default_factory=lambda: get_default_params("codex_server"))
     antigravity: Dict[str, Any] = field(default_factory=lambda: get_default_params("antigravity"))
+    deepseek: Dict[str, Any] = field(default_factory=lambda: get_default_params("deepseek"))
     
     def to_dict(self) -> Dict[str, Dict[str, Any]]:
         """转换为字典格式用于序列化"""
@@ -191,6 +201,7 @@ class CliParamsConfig:
             "codex": copy.deepcopy(self.codex),
             "codex_server": copy.deepcopy(self.codex_server),
             "antigravity": copy.deepcopy(self.antigravity),
+            "deepseek": copy.deepcopy(self.deepseek),
         }
     
     @classmethod
@@ -235,6 +246,7 @@ class CliParamsConfig:
             self.codex = get_default_params("codex")
             self.codex_server = get_default_params("codex_server")
             self.antigravity = get_default_params("antigravity")
+            self.deepseek = get_default_params("deepseek")
         else:
             cli_type = cli_type.lower().strip()
             if cli_type not in SUPPORTED_CLI_TYPES:
@@ -251,7 +263,7 @@ def get_default_params(cli_type: str) -> Dict[str, Any]:
     if cli_type not in SUPPORTED_CLI_TYPES:
         raise ValueError(f"不支持的 CLI 类型: {cli_type}")
     params = copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type])
-    if cli_type == "antigravity":
+    if cli_type in {"antigravity", "deepseek"}:
         return params
     model = normalize_cli_model_options(CLI_MODEL_OPTIONS)[0]
     params["model"] = None if model.lower() == MODEL_OPTION_NONE else model
@@ -492,7 +504,40 @@ def build_cli_args_from_config(
     if cli_type == "antigravity":
         return _build_antigravity_args(resolved_cli, params, user_text, session_id)
 
+    if cli_type == "deepseek":
+        return _build_deepseek_args(resolved_cli, params, session_id)
+
     raise ValueError(f"不支持的 CLI 类型: {cli_type}")
+
+
+def _build_deepseek_args(
+    resolved_cli: str,
+    params: Dict[str, Any],
+    session_id: Optional[str],
+) -> Tuple[List[str], bool]:
+    """Keep the one-shot protocol and task input under the host's control."""
+    extra_args = params.get("extra_args") or []
+    if not isinstance(extra_args, (list, tuple)):
+        raise ValueError("DeepSeek Harness 额外参数必须为列表，仅支持 --patch <文件路径>")
+    patches: List[str] = []
+    index = 0
+    while index < len(extra_args):
+        arg = str(extra_args[index])
+        if arg == "--patch":
+            index += 1
+            path = str(extra_args[index]) if index < len(extra_args) else ""
+        elif arg.startswith("--patch="):
+            path = arg.partition("=")[2]
+        else:
+            raise ValueError("DeepSeek Harness 额外参数仅支持 --patch <文件路径>")
+        if not path.strip() or path.startswith("-"):
+            raise ValueError("DeepSeek Harness --patch 缺少有效的文件路径")
+        patches.extend(["--patch", path])
+        index += 1
+    cmd = [*build_executable_invocation(resolved_cli), "--profile", "headless", *patches, "--json"]
+    if session_id:
+        cmd.extend(["--session-id", session_id])
+    return [*cmd, "-"], True
 
 
 def _build_antigravity_args(
@@ -733,6 +778,7 @@ def get_params_help(cli_type: str) -> str:
     """获取指定 CLI 类型的参数说明"""
 
     help_texts = {
+        "deepseek": "DeepSeek Harness 使用 headless JSON 模式，模型由 Harness 配置。extra_args 仅支持 --patch <文件路径>。",
         "claude": """
 <b>Claude CLI 可配置参数:</b>
 

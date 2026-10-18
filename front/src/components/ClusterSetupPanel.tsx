@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, RefreshCw, Wrench } from "lucide-react";
-import type { ClusterSetupPrepareResult, ClusterStatus } from "../services/types";
+import type { ClusterMcpTargetStatus, ClusterSetupPrepareResult, ClusterStatus } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -18,6 +18,7 @@ const CLI_LABELS: Record<string, string> = {
   codex: "Codex",
   codex_server: "codex server",
   antigravity: "Antigravity CLI",
+  deepseek: "DeepSeek Harness",
   pi: "Pi",
 };
 
@@ -25,7 +26,10 @@ function cliLabel(cliType: string) {
   return CLI_LABELS[cliType] || cliType;
 }
 
-function targetStatus(status: ClusterStatus) {
+function targetStatus(status: ClusterStatus): { activeCliType: string; activeStatus: ClusterMcpTargetStatus | undefined } {
+  if (status.mcp.activeCliType === "deepseek") {
+    return { activeCliType: "deepseek", activeStatus: { state: "unsupported", message: "DeepSeek Harness 暂不支持集群" } as const };
+  }
   const activeCliType = status.mcp.activeCliType === "pi"
     ? "pi"
     : status.mcp.activeCliType === "claude"
@@ -96,7 +100,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
           <button
             type="button"
             onClick={() => void prepareInstall()}
-            disabled={!canManage}
+            disabled={!canManage || status?.mcp.activeCliType === "deepseek"}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm tcb-solid-accent disabled:opacity-60"
           >
             <Wrench className="h-4 w-4" />

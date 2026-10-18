@@ -15,6 +15,51 @@ from bot.manager import MultiBotManager
 from bot.models import BotProfile
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ["main", "deepseekbot"])
+async def test_deepseek_bot_cli_roundtrip_and_switch(temp_dir, monkeypatch, alias):
+    monkeypatch.setenv("CLI_TYPE", "codex")
+    monkeypatch.delenv("CLI_PATH", raising=False)
+    monkeypatch.setattr("bot.manager._DOTENV_VALUES", {})
+    storage = temp_dir / "bots.json"
+    manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
+    with patch("bot.manager.resolve_cli_executable", return_value="dsh"):
+        if alias != "main":
+            profile = await manager.add_bot(alias, "deepseek", None, str(temp_dir))
+            assert profile.cli_path == "dsh"
+        for cli_type, cli_path in (("deepseek", "dsh"), ("codex", "codex"), ("deepseek", "dsh")):
+            await manager.set_bot_cli(alias, cli_type, cli_path)
+            manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
+            profile = manager.get_profile(alias)
+            assert (profile.cli_type, profile.cli_path) == (cli_type, cli_path)
+        await manager.set_bot_cli_param(alias, "deepseek", "extra_args", ["--patch", "model.json"])
+    restored = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
+    assert restored.get_profile(alias).cli_params.get_param("deepseek", "extra_args") == ["--patch", "model.json"]
+
+
+def test_deepseek_profile_without_path_loads_dsh(temp_dir):
+    storage = temp_dir / "bots.json"
+    storage.write_text(json.dumps({"bots": [{"alias": "deepseekbot", "cli_type": "deepseek"}]}), encoding="utf-8")
+    app_settings.update_main_bot_profile({"cli_type": "deepseek"})
+    manager = MultiBotManager(BotProfile(alias="main"), str(storage))
+    for alias in ("main", "deepseekbot"):
+        profile = manager.get_profile(alias)
+        assert (profile.cli_type, profile.cli_path) == ("deepseek", "dsh")
+
+
+@pytest.mark.asyncio
+async def test_deepseek_bot_does_not_enable_git_commit_harness(temp_dir):
+    from bot.models import GitCommitMessageCliConfig
+
+    manager = MultiBotManager(BotProfile(alias="main", cli_type="deepseek", cli_path="dsh"), str(temp_dir / "bots.json"))
+    config = manager.get_git_commit_cli_config("main")
+    assert (config.cli_type, config.cli_path) == ("deepseek", "dsh")
+    with pytest.raises(ValueError, match="DeepSeek Harness"):
+        await manager.set_git_commit_cli_config("main", cli_type="deepseek", cli_path="dsh")
+    restored = GitCommitMessageCliConfig.from_dict({"cli_type": "deepseek", "cli_path": "dsh"})
+    assert (restored.cli_type, restored.cli_path) == ("deepseek", "dsh")
+
+
 class TestManagerLoadSave:
     """测试配置加载和保存"""
 

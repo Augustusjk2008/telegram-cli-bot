@@ -76,11 +76,12 @@ export const DEFAULT_NATIVE_AGENT_DRAFT: NativeAgentDraft = {
   clearApiKey: false,
 };
 
-type ExecutionModeSource =
+type ExecutionModeSource = { cliType?: CliType } & (
   | Pick<BotSummary, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">
-  | Pick<BotOverview, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">;
+  | Pick<BotOverview, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">);
 
 export function getSupportedExecutionModes(source?: ExecutionModeSource | null): ChatExecutionMode[] {
+  if (source?.cliType === "deepseek") return ["cli"];
   return source?.supportedExecutionModes?.length ? source.supportedExecutionModes : ["cli"];
 }
 

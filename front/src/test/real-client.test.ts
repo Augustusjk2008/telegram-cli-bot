@@ -39,6 +39,32 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("preserves DeepSeek through creation, editing and overview mapping", async () => {
+    const bot = { alias: "deepseek", cli_type: "deepseek", status: "running", working_dir: "C:/workspace" };
+    const client = new RealWebBotClient();
+    fetchMock.mockResolvedValueOnce(jsonOk({ bot }));
+    const created = await client.addBot({ alias: "deepseek", cliType: "deepseek", cliPath: "", workingDir: "C:/workspace" });
+    expect(created).toMatchObject({ cliType: "deepseek", cliPath: "dsh", supportedExecutionModes: ["cli"], executionMode: "cli" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      cli_type: "deepseek", cli_path: "dsh", supported_execution_modes: ["cli"], default_execution_mode: "cli",
+      bypass_approval_and_sandbox: false,
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonOk({ bot: { ...bot, cli_path: "C:/tools/dsh.cmd" } }));
+    const edited = await client.updateBotCli("deepseek", "deepseek", "C:/tools/dsh.cmd");
+    expect(edited).toMatchObject({ cliType: "deepseek", cliPath: "C:/tools/dsh.cmd" });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ cli_type: "deepseek", cli_path: "C:/tools/dsh.cmd" });
+
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      bot: { ...bot, supported_execution_modes: ["cli", "native_agent"], default_execution_mode: "native_agent" },
+      session: { working_dir: "C:/workspace", message_count: 0, history_count: 0, is_processing: false },
+      voice: { enabled: true },
+    }));
+    expect(await client.getBotOverview("deepseek")).toMatchObject({
+      cliType: "deepseek", executionMode: "cli", supportedExecutionModes: ["cli"], voice: { enabled: false },
+    });
+  });
+
   test("creates a scoped voice WebSocket and cleans up after remote close", async () => {
     class FakeWebSocket {
       static OPEN = 1;

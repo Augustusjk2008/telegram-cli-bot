@@ -264,3 +264,26 @@ test("cluster resize blockers can open or archive the blocking conversation", as
   }));
   expect(screen.queryByRole("alert", { name: "缩容受阻" })).not.toBeInTheDocument();
 });
+
+
+test.each(["list", "desktop"])("%s creates DeepSeek with local CLI capabilities", async (surface) => {
+  const client = new MockWebBotClient();
+  const addBot = vi.spyOn(client, "addBot");
+  if (surface === "desktop") {
+    render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "新增智能体" }));
+  } else {
+    render(<BotListScreen client={client} onSelect={vi.fn()} />);
+  }
+  await userEvent.selectOptions(await screen.findByLabelText("新智能体 CLI 类型"), "deepseek");
+  expect(screen.getByLabelText("新智能体 CLI 路径")).toHaveValue("dsh");
+  expect(screen.queryByLabelText("新智能体默认绕过审批和沙箱")).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText("运行后端")).queryByRole("option", { name: "原生 agent" })).not.toBeInTheDocument();
+  expect(within(screen.getByLabelText("工作区位置")).getByRole("option", { name: "远程 SSH（Linux / Windows）" })).toBeDisabled();
+  await userEvent.type(screen.getByLabelText("新智能体别名"), "deepseek-test");
+  await userEvent.click(screen.getByRole("button", { name: "创建智能体" }));
+  await waitFor(() => expect(addBot).toHaveBeenCalledWith(expect.objectContaining({
+    cliType: "deepseek", cliPath: "dsh", supportedExecutionModes: ["cli"], defaultExecutionMode: "cli", bypassApprovalAndSandbox: false,
+  })));
+  expect((await client.getCliParams("deepseek-test")).params).toEqual({ extra_args: [] });
+});

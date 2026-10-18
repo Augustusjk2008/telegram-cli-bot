@@ -135,6 +135,10 @@ export function GitCommitCliConfigPanel({
     if (!config || !canManage) {
       return;
     }
+    if (cliTypeDraft === "deepseek") {
+      setError("DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI");
+      return;
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -222,6 +226,7 @@ export function GitCommitCliConfigPanel({
       {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
       {notice ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</div> : null}
       {loading ? <div className="text-xs text-[var(--muted)]">加载中...</div> : null}
+      {cliTypeDraft === "deepseek" ? <p className="text-xs text-[var(--muted)]">DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI</p> : null}
 
       {!loading ? (
         <>
@@ -242,6 +247,7 @@ export function GitCommitCliConfigPanel({
                 <option value="codex">codex</option>
                 <option value="codex_server">codex server</option>
                 <option value="claude">claude</option>
+                {cliTypeDraft === "deepseek" ? <option value="deepseek" disabled>DeepSeek Harness（暂不支持）</option> : null}
               </select>
             </label>
             <label className="space-y-1">

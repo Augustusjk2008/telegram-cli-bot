@@ -71,6 +71,138 @@ class CliStreamParseResult:
     denied_actions: Optional[List[Any]] = None
 
 
+class DeepSeekJsonStreamParser:
+    """Parse the headless JSON projection without promoting diagnostics to a reply."""
+
+    def __init__(self, *, raw_tail_max_bytes: int, final_text_max_bytes: int) -> None:
+        self._raw_tail = _BoundedText(raw_tail_max_bytes)
+        self._text = _BoundedText(final_text_max_bytes)
+        self._final = _BoundedText(final_text_max_bytes)
+        self._errors = _BoundedText(raw_tail_max_bytes)
+        self._has_final = False
+        self._projection_truncated = False
+        self._step_usage: dict[tuple[int, int], dict[str, int]] = {}
+        self.session_id: Optional[str] = None
+        self.terminal_status: Optional[str] = None
+        self.total_bytes = 0
+
+    def consume_line(self, line: str) -> Dict[str, Optional[str]]:
+        value = str(line or "")
+        self.total_bytes += len(value.encode("utf-8", errors="replace"))
+        self._raw_tail.append(value)
+        parsed: Dict[str, Optional[str]] = {
+            "session_id": None, "completed_text": None, "delta_text": None, "error_text": None,
+        }
+        if not value.strip():
+            return parsed
+        try:
+            event = json.loads(value)
+        except (json.JSONDecodeError, RecursionError):
+            self._errors.append("DeepSeek Harness 输出了无效 JSON", separator="\n")
+            return parsed
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            self._errors.append("DeepSeek Harness 事件缺少有效 type", separator="\n")
+            return parsed
+        kind = event["type"]
+        self._projection_truncated |= event.get("truncated") is True
+        if self._has_final and kind in {"session", "status", "text", "thinking", "tool_call", "tool_result", "final", "error"}:
+            self._errors.append("DeepSeek Harness 在 final 后继续输出运行事件", separator="\n")
+        if kind == "session":
+            session_id = event.get("sessionId")
+            if not isinstance(session_id, str) or not session_id.strip():
+                self._errors.append("DeepSeek Harness 未提供有效 sessionId", separator="\n")
+            elif self.session_id is not None and self.session_id != session_id:
+                self._errors.append("DeepSeek Harness 在同一进程中更换了 sessionId", separator="\n")
+            else:
+                self.session_id = parsed["session_id"] = session_id
+        elif kind in {"text", "final"}:
+            text = event.get("text")
+            if not isinstance(text, str):
+                self._errors.append(f"DeepSeek Harness {kind} 事件缺少有效正文", separator="\n")
+            elif kind == "final":
+                self._has_final = True
+                self._final.replace(text)
+                parsed["completed_text"] = text
+                if self._final.truncated or event.get("truncated") is True:
+                    self._errors.append("DeepSeek Harness 最终回复超过输出限制", separator="\n")
+            else:
+                self._text.append(text, separator="\n")
+                parsed["delta_text"] = text
+        elif kind == "status":
+            phase = event.get("phase")
+            if phase == "turn_end":
+                reason = event.get("reason")
+                status = reason.get("kind") if isinstance(reason, dict) else None
+                if not isinstance(status, str) or status not in {"completed", "error", "aborted"}:
+                    self._errors.append("DeepSeek Harness 缺少合法的结束原因", separator="\n")
+                else:
+                    self.terminal_status = status
+                    if status != "completed":
+                        error = _extract_codex_error_text(reason) or f"DeepSeek Harness 执行结束：{status}"
+                        self._errors.append(error, separator="\n")
+                        parsed["error_text"] = error
+            elif phase == "step_end":
+                self._record_usage(event)
+        elif kind == "error":
+            error = _extract_codex_error_text(event) or "DeepSeek Harness 执行失败"
+            self._errors.append(error, separator="\n")
+            parsed["error_text"] = error
+        return parsed
+
+    def _record_usage(self, event: dict[str, Any]) -> None:
+        turn, step, usage = event.get("turn"), event.get("step"), event.get("usage")
+        if type(turn) is not int or type(step) is not int or not isinstance(usage, dict):
+            return
+        names = {
+            "inputTokens": "input_tokens", "outputTokens": "output_tokens",
+            "cacheReadTokens": "cache_read_input_tokens",
+            "cacheWriteTokens": "cache_creation_input_tokens", "totalTokens": "total_tokens",
+        }
+        self._step_usage[(turn, step)] = {
+            target: usage[source] for source, target in names.items()
+            if type(usage.get(source)) is int and usage[source] >= 0
+        }
+
+    @property
+    def terminal_usage(self) -> Optional[Dict[str, Any]]:
+        rows = list(self._step_usage.values())
+        if not rows:
+            return None
+        common = set(rows[0]).intersection(*(set(row) for row in rows[1:]))
+        return {key: sum(row[key] for row in rows) for key in common} or None
+
+    @property
+    def preview_text(self) -> Optional[str]:
+        text = self._final.text if self._has_final else self._text.text
+        return text.strip() or None
+
+    def result(self) -> CliStreamParseResult:
+        error = self._errors.text.strip()
+        if not error:
+            if not self.session_id:
+                error = "DeepSeek Harness 未返回会话 ID"
+            elif not self._has_final:
+                error = "DeepSeek Harness 未返回 final 事件"
+            elif self.terminal_status != "completed":
+                error = "DeepSeek Harness 未返回成功结束状态"
+        text = self.preview_text or "(无输出)"
+        if self._has_final and self._final.truncated:
+            text = f"[回复前部已截断]\n{text}"
+        return CliStreamParseResult(
+            final_text=text,
+            session_id=self.session_id,
+            error_text=error or None,
+            raw_tail=self._raw_tail.text,
+            total_bytes=self.total_bytes,
+            truncated=self._projection_truncated or any(
+                value.truncated for value in (self._raw_tail, self._text, self._final, self._errors)
+            ),
+            terminal_usage=self.terminal_usage,
+            terminal_status="failed" if error else self.terminal_status,
+            terminal_error=error or None,
+        )
+
+
 def _parse_terminal_usage(line: str, *, cli_type: str) -> Optional[Dict[str, Any]]:
     try:
         event = json.loads(line)

@@ -1836,6 +1836,8 @@ async def _generate_git_commit_message_from_context(
     cli_type = str(cli_config.cli_type or "").strip().lower()
     if cli_type == "antigravity":
         _raise(400, "git_commit_unsupported_cli", "Antigravity CLI 暂不支持生成 Git commit message")
+    if cli_type == "deepseek":
+        _raise(400, "git_commit_unsupported_cli", "DeepSeek Harness 暂不支持生成 Git commit message，请单独配置已支持的 CLI")
     cli_path = str(cli_config.cli_path or "").strip()
     resolved_cli = resolve_cli_executable(cli_path, repo_root)
     if not resolved_cli:

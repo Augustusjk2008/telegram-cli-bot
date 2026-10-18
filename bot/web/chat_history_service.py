@@ -755,8 +755,13 @@ class ChatHistoryService:
                 context = {}
             conversation_id = str(context.get("conversation_id") or "")
             if conversation_id:
+                deepseek_conversation = None
+                if cli_data_provider(profile.cli_type) == "deepseek" and context.get("native_provider") == "deepseek":
+                    deepseek_conversation = self.store.get_conversation(conversation_id)
                 with session._lock:
                     session.active_conversation_id = conversation_id
+                    if deepseek_conversation is not None:
+                        session.deepseek_session_id = str(deepseek_conversation.get("native_session_id") or "").strip() or None
                 session.persist()
         recovered = False
         for item in items:
@@ -927,6 +932,7 @@ class ChatHistoryService:
                 "codex_session_id": session.codex_session_id,
                 "claude_session_id": session.claude_session_id,
                 "antigravity_conversation_id": session.antigravity_conversation_id,
+                "deepseek_session_id": getattr(session, "deepseek_session_id", None),
                 "native_agent_session_id": session.native_agent_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },

@@ -27,6 +27,7 @@ type Props = {
   pulse?: boolean;
   uploadingAttachments?: boolean;
   placeholder?: string;
+  modelDescription?: string;
   modelOptions?: ChatComposerModelOption[];
   selectedModel?: string;
   modelDisabled?: boolean;
@@ -62,6 +63,7 @@ export function ChatComposer({
   pulse = false,
   uploadingAttachments = false,
   placeholder = "输入消息",
+  modelDescription,
   modelOptions = [],
   selectedModel = "",
   modelDisabled = false,
@@ -503,6 +505,7 @@ export function ChatComposer({
           </div>
           <div data-testid="chat-composer-toolbar" className={mobileLayout ? "order-3 flex shrink-0 items-center gap-0.5" : "flex min-w-0 items-center gap-0.5"}>
             {!mobileLayout ? attachmentControl : null}
+            {modelDescription ? <span className="truncate text-xs text-[var(--muted)]" title={modelDescription}>{modelDescription}</span> : null}
             {modelOptions.length > 0 ? (
               <div className={mobileLayout ? "hidden" : "relative min-w-[4.25rem] max-w-[8.5rem] flex-[0_1_8.5rem]"}>
                 <select

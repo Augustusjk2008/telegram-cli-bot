@@ -1008,6 +1008,83 @@ def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(event) for event in turn["trace"]]
 
 
+def _consume_live_deepseek_line(item: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    event_type = str(item.get("type") or "").strip()
+    if event_type == "status":
+        phase = str(item.get("phase") or "")
+        if phase == "turn_start":
+            state["deepseek_step"] = None
+        for field in ("turn", "step"):
+            if type(item.get(field)) is int:
+                state[f"deepseek_{field}"] = item[field]
+    payload = {
+        key: state[f"deepseek_{key}"]
+        for key in ("turn", "step")
+        if state.get(f"deepseek_{key}") is not None
+    }
+    payload.update(item)
+    if event_type == "thinking":
+        text = _stringify_value(item.get("text"))
+        return [
+            _trace_event("reasoning", raw_type="deepseek_thinking", summary=text, payload=payload)
+        ] if text else []
+    if event_type == "tool_call":
+        name = _stringify_value(item.get("tool")) or "tool"
+        return [
+            _trace_event(
+                "tool_call",
+                raw_type="deepseek_tool_call",
+                title=name,
+                tool_name=name,
+                call_id=_stringify_value(item.get("callId")),
+                summary=_summarize_tool_payload(name, item.get("input")),
+                payload=payload,
+            )
+        ]
+    if event_type == "tool_result":
+        return [
+            _trace_event(
+                "tool_result",
+                raw_type="deepseek_tool_result",
+                call_id=_stringify_value(item.get("callId")),
+                summary=_stringify_value(item.get("result")) or "工具调用已返回",
+                payload=payload,
+            )
+        ]
+    if event_type == "error":
+        return [
+            _trace_event(
+                "error",
+                raw_type="deepseek_error",
+                summary=_stringify_value(item.get("message")) or "DeepSeek Harness 执行失败",
+                payload=payload,
+            )
+        ]
+    if event_type == "status":
+        summaries = {
+            "turn_start": "DeepSeek Harness 开始执行",
+            "step_start": f"开始步骤 {item.get('step', '')}".strip(),
+            "step_end": f"步骤 {item.get('step', '')} 已结束".strip(),
+            "turn_end": "DeepSeek Harness 执行结束",
+        }
+        if phase not in summaries:
+            return []
+        kind = "status"
+        summary = summaries[phase]
+        reason = item.get("reason")
+        if phase == "turn_end" and isinstance(reason, dict):
+            if reason.get("kind") == "error":
+                kind, summary = "error", "DeepSeek Harness 执行失败"
+            elif reason.get("kind") == "aborted":
+                kind, summary = "cancelled", "DeepSeek Harness 已停止"
+        return [
+            _trace_event(kind, raw_type=f"deepseek_{phase}", summary=summary, payload=payload)
+        ]
+    # text/final belong to the CLI body parser; keeping them out of trace also
+    # avoids repeating the final answer when Harness emits both projections.
+    return []
+
+
 def _bounded_antigravity_payload(value: Any, *, limit: int = 8_000) -> Any:
     serialized = _safe_json_dumps(value)
     if len(serialized) <= limit:
@@ -1171,11 +1248,16 @@ def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any])
             candidate_events = _consume_live_claude_line(item)
         elif provider == "antigravity":
             candidate_events = _consume_live_antigravity_line(item, state)
+        elif provider == "deepseek":
+            candidate_events = _consume_live_deepseek_line(item, state)
         else:
             candidate_events = []
 
         for event in candidate_events:
             event_key = _stream_event_key(event)
+            if provider == "deepseek":
+                payload = event.get("payload") or {}
+                event_key += (str(payload.get("turn", "")), str(payload.get("step", "")))
             if event_key in state["seen"]:
                 continue
             state["seen"].add(event_key)

@@ -311,7 +311,7 @@ export function BotListScreen({
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
               >
                 <option value="cli">CLI</option>
-                {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+                {nativeAgentOptionVisible && createDraft.cliType !== "deepseek" ? <option value="native_agent">原生 agent</option> : null}
               </select>
               {nativeAgentFeatureEnabled === false ? (
                 <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
@@ -327,7 +327,8 @@ export function BotListScreen({
                   value={createDraft.cliType}
                   onChange={(event) => {
                     const cliType = event.target.value as CliType;
-                    setCreateDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, bots).cliPath }));
+                    if (cliType === "deepseek") setRemoteCreate(false);
+                    setCreateDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, bots).cliPath, ...(cliType === "deepseek" ? { remoteWorkspace: undefined, bypassApprovalAndSandbox: false } : {}) }));
                   }}
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
                 >
@@ -335,6 +336,7 @@ export function BotListScreen({
                   <option value="codex_server">codex server</option>
                   <option value="claude">claude</option>
                   <option value="antigravity">Antigravity CLI</option>
+                  <option value="deepseek">DeepSeek Harness</option>
                 </select>
               </label>
             </div>
@@ -349,7 +351,7 @@ export function BotListScreen({
               placeholder={defaultCliPathForType(createDraft.cliType)}
             />
           ) : null}
-          {createDraft.runtimeBackend === "cli" ? (
+          {createDraft.runtimeBackend === "cli" && createDraft.cliType !== "deepseek" ? (
             <label className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
               <input
                 type="checkbox"
@@ -383,7 +385,7 @@ export function BotListScreen({
               }))}
             />
           ) : null}
-          <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setCreateDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote">远程 SSH（Linux / Windows）</option></select></label>
+          <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setCreateDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote" disabled={createDraft.cliType === "deepseek"}>远程 SSH（Linux / Windows）</option></select></label>
           {remoteCreate ? <RemoteWorkspacePicker client={client} onPick={(remote) => setCreateDraft((prev) => ({ ...prev, remoteWorkspace: { connectionId: remote.connectionId, root: remote.root } }))} /> : (
           <div className="flex flex-col gap-2 sm:flex-row">
             <input

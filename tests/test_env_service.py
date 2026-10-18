@@ -12,6 +12,16 @@ def _write_env(root: Path, text: str) -> None:
     (root / ".env.example").write_text("", encoding="utf-8")
 
 
+def test_env_service_saves_deepseek_cli_type(tmp_path):
+    _write_env(tmp_path, "CLI_TYPE=codex\nCLI_PATH=codex\n")
+    service = EnvConfigService(tmp_path)
+    service.patch({"values": {"CLI_TYPE": "deepseek", "CLI_PATH": "dsh"}})
+    snapshot = service.snapshot()
+    cli_type = next(item for item in snapshot["schema"] if item["key"] == "CLI_TYPE")
+    assert "deepseek" in cli_type["options"]
+    assert "CLI_TYPE=deepseek" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
 def test_windows_registry_environment_merges_path_and_expands_values() -> None:
     class FakeKey:
         def __init__(self, values):

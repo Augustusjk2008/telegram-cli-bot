@@ -208,7 +208,7 @@ export function SettingsScreen({
   const runtimeBackend = getRuntimeBackend(overview);
   const nativeRuntime = runtimeBackend === "native_agent";
   const draftNativeRuntime = runtimeBackendDraft === "native_agent";
-  const nativeAgentOptionVisible = true;
+  const nativeAgentOptionVisible = cliTypeDraft !== "deepseek";
   const nativeSelectedModel = nativeAgentDraft.model || nativeAgentModels?.selectedModel || "";
   const nativeSelectedModelItem = nativeAgentModels?.items.find((item) => item.id === nativeSelectedModel);
   const nativeReasoningEffortOptions = nativeSelectedModelItem?.reasoningEfforts || [];
@@ -288,6 +288,10 @@ export function SettingsScreen({
   }, [prefilledWorkdir]);
 
   const saveRuntimeConfig = async () => {
+    if (cliTypeDraft === "deepseek" && (overview?.remoteWorkspace || runtimeBackendDraft !== "cli")) {
+      setError("DeepSeek Harness 目前仅支持本地 CLI");
+      return;
+    }
     const nextCliPath = cliPathDraft.trim();
     if (runtimeBackendDraft === "cli" && !nextCliPath) {
       setError("CLI 路径不能为空");
@@ -299,7 +303,7 @@ export function SettingsScreen({
     setNotice("");
     try {
       let nextBot = overview;
-      if (runtimeBackendDraft === "cli") {
+      if (runtimeBackendDraft === "cli" && cliTypeDraft !== "deepseek") {
         nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
       }
       const normalizedNativeAgent = normalizeNativeAgentDraft(nativeAgentDraft);
@@ -316,6 +320,12 @@ export function SettingsScreen({
           defaultExecutionMode: executionConfig.defaultExecutionMode,
           nativeAgent: normalizedNativeAgent,
         });
+      }
+      if (runtimeBackendDraft === "cli" && cliTypeDraft === "deepseek") {
+        if (overview?.cluster?.enabled) {
+          await client.updateClusterConfig(botAlias, { enabled: false });
+        }
+        nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
       }
       if (!nextBot) {
         throw new Error("更新运行配置失败");
@@ -703,13 +713,18 @@ export function SettingsScreen({
                       aria-label="CLI 类型"
                       value={cliTypeDraft}
                       disabled={!canManageBotRuntime}
-                      onChange={(event) => setCliTypeDraft(event.target.value as CliType)}
+                      onChange={(event) => {
+                        const cliType = event.target.value as CliType;
+                        if (cliType === "deepseek" || cliTypeDraft === "deepseek") setCliPathDraft(defaultCliPathForType(cliType));
+                        setCliTypeDraft(cliType);
+                      }}
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
                     >
                       <option value="codex">codex</option>
                       <option value="codex_server">codex server</option>
                       <option value="claude">claude</option>
                       <option value="antigravity">Antigravity CLI</option>
+                      <option value="deepseek" disabled={Boolean(overview?.remoteWorkspace)}>DeepSeek Harness</option>
                     </select>
                   </label>
                   <label className="space-y-1">

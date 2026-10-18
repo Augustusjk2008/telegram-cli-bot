@@ -35,6 +35,20 @@ def test_session_store_defaults_to_sqlite(monkeypatch: pytest.MonkeyPatch) -> No
     close_session_store()
 
 
+@pytest.mark.parametrize("backend", ["json", "sqlite"])
+def test_deepseek_store_isolates_bot_user_agent_keys(monkeypatch, backend):
+    monkeypatch.setenv("SESSION_STORE_BACKEND", backend)
+    keys = [(1, 100, "main"), (1, 200, "main"), (1, 100, "reviewer"), (2, 100, "main")]
+    for index, (bot_id, user_id, agent_id) in enumerate(keys):
+        save_session(bot_id, user_id, agent_id=agent_id, deepseek_session_id=f"dsh-{index}")
+    close_session_store()
+    for index, key in enumerate(keys):
+        assert load_session(*key)["deepseek_session_id"] == f"dsh-{index}"
+    save_session(1, 100, deepseek_session_id=None)
+    assert load_session(1, 100) is None
+    assert load_session(1, 100, "reviewer")["deepseek_session_id"] == "dsh-2"
+
+
 class TestSaveAndLoadSession:
     """测试保存和加载会话"""
 

@@ -182,3 +182,26 @@ test("remote Antigravity settings expose MCP status, scope and copyable setup gu
   await user.click(copyButtons[0]);
   expect(writeText).toHaveBeenCalledWith("{\"mcpServers\":{\"tcb-remote\":{}}}");
 });
+
+
+test("switches a local bot to DeepSeek with its own command and parameter schema", async () => {
+  const client = new MockWebBotClient();
+  await addNativeBot(client, "deepseek-migration");
+  client.setClusterStatus("deepseek-migration", { enabled: true });
+  const updateCli = vi.spyOn(client, "updateBotCli");
+  const updateExecution = vi.spyOn(client, "updateBotExecutionConfig");
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
+  render(<SettingsScreen botAlias="deepseek-migration" client={client} onLogout={() => undefined} />);
+  await userEvent.selectOptions(await screen.findByLabelText("运行后端"), "cli");
+  await userEvent.selectOptions(await screen.findByLabelText("CLI 类型"), "deepseek");
+  expect(screen.getByLabelText("CLI 路径")).toHaveValue("dsh");
+  expect(within(screen.getByLabelText("运行后端")).queryByRole("option", { name: "原生 agent" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+  await waitFor(() => expect(updateCli).toHaveBeenCalledWith("deepseek-migration", "deepseek", "dsh"));
+  expect(updateExecution.mock.invocationCallOrder[0]).toBeLessThan(updateCli.mock.invocationCallOrder[0]);
+  expect(updateCluster).toHaveBeenCalledWith("deepseek-migration", { enabled: false });
+  expect(updateCluster.mock.invocationCallOrder[0]).toBeLessThan(updateCli.mock.invocationCallOrder[0]);
+  const params = await client.getCliParams("deepseek-migration");
+  expect(params).toMatchObject({ cliType: "deepseek", params: { extra_args: [] }, defaults: { extra_args: [] } });
+  expect(Object.keys(params.schema)).toEqual(["extra_args"]);
+});

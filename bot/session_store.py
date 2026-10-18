@@ -202,6 +202,7 @@ def _snapshot_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
         int(bool(snapshot.get("codex_session_id")))
         + int(bool(snapshot.get("claude_session_id")))
         + int(bool(snapshot.get("antigravity_conversation_id")))
+        + int(bool(snapshot.get("deepseek_session_id")))
         + int(bool(snapshot.get("native_agent_session_id")))
     )
     session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
@@ -239,6 +240,20 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
         int(source_data.get("session_epoch", 0) or 0),
         int(target_data.get("session_epoch", 0) or 0),
     )
+    # A Harness binding belongs to one workspace, conversation and reset epoch.
+    merged.pop("deepseek_session_id", None)
+    for candidate in (preferred, fallback):
+        if (
+            candidate.get("deepseek_session_id")
+            and candidate.get("working_dir")
+            and _same_workspace_path(candidate["working_dir"], merged["working_dir"])
+            and (candidate.get("active_conversation_id") or None) == (merged.get("active_conversation_id") or None)
+            and (candidate.get("active_conversation_id") or None) == (preferred.get("active_conversation_id") or None)
+            and int(candidate.get("session_epoch", 0) or 0) == merged["session_epoch"]
+            and int(candidate.get("session_epoch", 0) or 0) == int(preferred.get("session_epoch", 0) or 0)
+        ):
+            merged["deepseek_session_id"] = candidate["deepseek_session_id"]
+            break
     last_activity = max(str(source_data.get("last_activity") or ""), str(target_data.get("last_activity") or ""))
     if last_activity:
         merged["last_activity"] = last_activity
@@ -371,6 +386,7 @@ def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_worki
     next_data["codex_session_id"] = None
     next_data["claude_session_id"] = None
     next_data["antigravity_conversation_id"] = None
+    next_data["deepseek_session_id"] = None
     next_data["native_agent_session_id"] = None
     next_data.pop("kimi_session_id", None)
     next_data.pop("native_agent_server_key", None)
@@ -405,6 +421,7 @@ def save_session(
     running_updated_at: Optional[str] = None,
     agent_id: str = "main",
     antigravity_conversation_id: Optional[str] = None,
+    deepseek_session_id: Optional[str] = None,
 ):
     """保存会话信息到持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id, agent_id)
@@ -416,6 +433,8 @@ def save_session(
         session_data["claude_session_id"] = claude_session_id
     if antigravity_conversation_id:
         session_data["antigravity_conversation_id"] = antigravity_conversation_id
+    if deepseek_session_id:
+        session_data["deepseek_session_id"] = deepseek_session_id
     if native_agent_session_id:
         session_data["native_agent_session_id"] = native_agent_session_id
     if isinstance(working_dir, str) and working_dir:

@@ -59,7 +59,7 @@ def _parse_cli_global_extra_args(raw_value: str) -> dict[str, list[str]]:
     parsed: dict[str, list[str]] = {}
     for key, args in payload.items():
         cli_type = str(key or "").strip().lower()
-        if cli_type not in {"codex", "codex_server", "claude", "antigravity"}:
+        if cli_type not in SUPPORTED_CLI_TYPES:
             logging.warning("忽略无效的 CLI_GLOBAL_EXTRA_ARGS.%s：不支持的 CLI 类型", key)
             continue
         if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
@@ -157,7 +157,7 @@ def _effective_frontend_base_path(name: str, web_base_path: str) -> str:
 DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
 
 # ============ 常量定义 ============
-SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity"}
+SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity", "deepseek"}
 
 
 def _refresh_environment_config() -> None:
@@ -199,6 +199,7 @@ def _refresh_environment_config() -> None:
     CLI_PATH = configured_cli_path or {
         "claude": "claude",
         "antigravity": "agy",
+        "deepseek": "dsh",
     }.get(CLI_TYPE, "codex")
     TCB_CODEX_SERVER_VOICE_ENABLED = _get_project_bool("TCB_CODEX_SERVER_VOICE_ENABLED", False)
     NATIVE_AGENT_BACKEND = "pi"
@@ -472,6 +473,8 @@ def default_cli_path(cli_type: str) -> str:
         return "claude"
     if cli_type == "antigravity":
         return "agy"
+    if cli_type == "deepseek":
+        return "dsh"
     return "codex"
 
 

@@ -150,6 +150,10 @@ export function useBotManager({
   }, [client, includeArchived]);
 
   async function createBot(draft: CreateDraft) {
+    if (draft.cliType === "deepseek" && (draft.remoteWorkspace || draft.runtimeBackend !== "cli")) {
+      setError("DeepSeek Harness 目前仅支持本地 CLI");
+      return null;
+    }
     if (!draft.alias.trim()) {
       setError("别名不能为空");
       return null;
@@ -167,7 +171,7 @@ export function useBotManager({
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: draft.remoteWorkspace ? undefined : normalizePathInput(draft.workingDir),
-        bypassApprovalAndSandbox: runtimeBackend === "cli" ? Boolean(draft.bypassApprovalAndSandbox) : false,
+        bypassApprovalAndSandbox: runtimeBackend === "cli" && draft.cliType !== "deepseek" ? Boolean(draft.bypassApprovalAndSandbox) : false,
         nativeAgent: normalizeNativeAgentInput(draft.nativeAgent),
       });
       setNotice("智能体已创建");
@@ -318,6 +322,15 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
+      if (cliType === "deepseek" && bot.cluster?.enabled) {
+        await client.updateClusterConfig(bot.alias, { enabled: false });
+      }
+      if (cliType === "deepseek" && getRuntimeBackend(bot) !== "cli") {
+        await client.updateBotExecutionConfig(bot.alias, {
+          ...buildExecutionConfig("cli"),
+          nativeAgent: normalizeNativeAgentInput(bot.nativeAgent),
+        });
+      }
       const updated = await client.updateBotCli(bot.alias, cliType, nextCliPath);
       setNotice("CLI 配置已更新");
       await loadBots();
@@ -383,6 +396,10 @@ export function useBotManager({
     draft: EditDraft,
     options: UpdateBotWorkdirOptions = {},
   ): Promise<SaveBotEditsResult> {
+    if (draft.cliType === "deepseek" && (draft.remoteWorkspace || draft.runtimeBackend !== "cli")) {
+      setError("DeepSeek Harness 目前仅支持本地 CLI");
+      return { ok: false };
+    }
     let nextBot = bot;
 
     if (!isMainBot(bot) && draft.alias.trim() !== bot.alias) {

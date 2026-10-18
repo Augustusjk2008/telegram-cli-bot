@@ -1690,3 +1690,24 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
   expect(listMessages.mock.calls.filter(([, options]) => options?.executionMode === "native_agent").length).toBeGreaterThan(1);
   expect(listConversations).toHaveBeenCalled();
 });
+
+
+test("DeepSeek uses Harness configuration and blocks unsupported chat capabilities", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
+      supportedExecutionModes: ["cli", "native_agent"], defaultExecutionMode: "cli", voice: { enabled: true, reason: "enabled" },
+    }),
+  });
+  const upload = vi.spyOn(client, "uploadChatAttachment");
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("使用 Harness 配置的模型")).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "模型" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "思考深度" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "原生 agent" })).not.toBeInTheDocument();
+  expect(screen.queryByTestId("codex-voice-foreground")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开启集群模式" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("上传附件"), { target: { files: [new File(["image"], "photo.png", { type: "image/png" })] } });
+  expect(await screen.findByText("DeepSeek Harness 暂不支持图片或语音附件")).toBeInTheDocument();
+  expect(upload).not.toHaveBeenCalled();
+});

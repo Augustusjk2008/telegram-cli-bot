@@ -14,6 +14,7 @@ type Props = {
   onTogglePlanMode: () => void;
   clusterEnabled: boolean;
   clusterDisabled?: boolean;
+  clusterDisabledReason?: string;
   clusterSaving?: boolean;
   onToggleClusterMode: () => void;
   embedded?: boolean;
@@ -24,6 +25,7 @@ type Props = {
   killTaskDisabled?: boolean;
   killTaskBusy?: boolean;
   mobileLayout?: boolean;
+  modelDescription?: string;
   modelOptions?: ChatComposerModelOption[];
   selectedModel?: string;
   modelDisabled?: boolean;
@@ -51,6 +53,7 @@ export function ChatActionBar({
   onTogglePlanMode,
   clusterEnabled,
   clusterDisabled = false,
+  clusterDisabledReason,
   clusterSaving = false,
   onToggleClusterMode,
   embedded = false,
@@ -61,6 +64,7 @@ export function ChatActionBar({
   killTaskDisabled = false,
   killTaskBusy = false,
   mobileLayout = false,
+  modelDescription,
   modelOptions = [],
   selectedModel = "",
   modelDisabled = false,
@@ -98,7 +102,7 @@ export function ChatActionBar({
     };
   }, [mobileLayout, mobileOptionsOpen]);
   if (mobileLayout) {
-    const selectedModelLabel = modelOptions.find((option) => option.value === selectedModel)?.label || "模型";
+    const selectedModelLabel = modelDescription || modelOptions.find((option) => option.value === selectedModel)?.label || "模型";
     const optionsSummary = [
       executionMode === "native_agent" ? "原生" : "CLI",
       selectedModelLabel,
@@ -174,6 +178,7 @@ export function ChatActionBar({
                 ))}
               </div>
             ) : <p className="mb-2 text-xs">执行模式：{executionMode === "native_agent" ? "原生 agent" : "CLI"}</p>}
+            {modelDescription ? <p className="mb-2 text-xs text-[var(--muted)]">{modelDescription}</p> : null}
             {modelOptions.length > 0 ? (
               <label className="mb-2 block text-xs text-[var(--muted)]">
                 模型
@@ -204,6 +209,7 @@ export function ChatActionBar({
               type="button"
               aria-pressed={clusterEnabled}
               aria-label={clusterEnabled ? "关闭集群模式" : "开启集群模式"}
+              title={clusterDisabledReason}
               onClick={onToggleClusterMode}
               disabled={clusterDisabled}
               className={clusterEnabled ? activePlanButtonClassName : neutralButtonClassName}
@@ -262,6 +268,7 @@ export function ChatActionBar({
             type="button"
             aria-pressed={clusterEnabled}
             aria-label={clusterEnabled ? "关闭集群模式" : "开启集群模式"}
+            title={clusterDisabledReason}
             onClick={onToggleClusterMode}
             disabled={clusterDisabled}
             className={clusterEnabled

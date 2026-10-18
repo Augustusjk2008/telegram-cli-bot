@@ -32,6 +32,93 @@ from bot.models import (
 )
 
 
+@pytest.mark.parametrize("backend", ["json", "sqlite"])
+def test_deepseek_session_survives_reload_and_reset_actions(temp_dir, monkeypatch, backend):
+    from bot.session_store import close_session_store, load_session
+    from bot.sessions import unload_bot_sessions
+
+    monkeypatch.setenv("SESSION_STORE_BACKEND", backend)
+    workdir = str(temp_dir / "workspace")
+    main = get_or_create_session(81, "deepseek", 100, workdir)
+    reviewer = get_or_create_session(81, "deepseek", 100, workdir, agent_id="reviewer")
+    other_bot = get_or_create_session(82, "other", 100, workdir)
+    for session, session_id in ((main, "dsh-main"), (reviewer, "dsh-reviewer"), (other_bot, "dsh-other")):
+        session.deepseek_session_id = session_id
+        session.active_conversation_id = f"conversation-{session_id}"
+        session.persist()
+
+    unload_bot_sessions("deepseek")
+    close_session_store()
+    main = get_or_create_session(81, "deepseek", 100, workdir)
+    reviewer = get_or_create_session(81, "deepseek", 100, workdir, agent_id="reviewer")
+    assert main.deepseek_session_id == "dsh-main"
+    assert main.active_conversation_id == "conversation-dsh-main"
+    assert reviewer.deepseek_session_id == "dsh-reviewer"
+
+    assert reset_session(81, 100)
+    main.persist()  # A retired object cannot bring its binding back.
+    main = get_or_create_session(81, "deepseek", 100, workdir)
+    assert main.deepseek_session_id is None
+    assert reviewer.deepseek_session_id == "dsh-reviewer"
+
+    reviewer.clear_session_ids()
+    assert load_session(81, reviewer.user_id, "reviewer").get("deepseek_session_id") is None
+    reviewer.deepseek_session_id = "dsh-reviewer-new"
+    reviewer.persist()
+    new_workdir = str(temp_dir / "next-workspace")
+    update_bot_working_dir("deepseek", new_workdir)
+    unload_bot_sessions("deepseek")
+    close_session_store()
+    restored = get_or_create_session(81, "deepseek", 100, new_workdir, agent_id="reviewer")
+    assert restored.working_dir == new_workdir
+    assert restored.deepseek_session_id is None
+    assert restored.active_conversation_id is None
+    assert other_bot.deepseek_session_id == "dsh-other"
+
+
+def test_old_session_without_deepseek_field_loads(temp_dir):
+    from bot.session_store import save_session
+
+    save_session(83, chat_session_user_id(100), codex_session_id="codex-existing", working_dir=str(temp_dir))
+    session = get_or_create_session(83, "legacy", 100, str(temp_dir))
+    assert session.deepseek_session_id is None
+    assert session.codex_session_id == "codex-existing"
+
+
+@pytest.mark.parametrize("merge_kind", ["memory", "stored"])
+@pytest.mark.parametrize("changed_field", [None, "working_dir", "active_conversation_id", "session_epoch", "cleared_conversation", "newer_epoch"])
+def test_deepseek_merge_only_restores_binding_in_same_context(temp_dir, merge_kind, changed_field):
+    from bot.session_store import _merge_session_snapshots
+    from bot.sessions import _merge_session_state
+
+    context = {"working_dir": str(temp_dir), "active_conversation_id": "current", "session_epoch": 2}
+    preferred = {**context, "message_count": 10}
+    fallback = {**context, "message_count": 1, "deepseek_session_id": "dsh-fallback"}
+    if changed_field == "cleared_conversation":
+        preferred["active_conversation_id"] = None
+    elif changed_field == "newer_epoch":
+        preferred["deepseek_session_id"] = "dsh-old-epoch"
+        fallback["session_epoch"] = 3
+        fallback["deepseek_session_id"] = None
+    elif changed_field:
+        fallback[changed_field] = {
+            "working_dir": str(temp_dir / "other"),
+            "active_conversation_id": "other-conversation",
+            "session_epoch": 1,
+        }[changed_field]
+    if merge_kind == "memory":
+        merged = _merge_session_state(
+            UserSession(bot_id=84, bot_alias="renamed", user_id=0, **preferred),
+            UserSession(bot_id=85, bot_alias="old", user_id=0, **fallback),
+            bot_id=84,
+            bot_alias="renamed",
+        )
+        actual = merged.deepseek_session_id
+    else:
+        actual = _merge_session_snapshots(preferred, fallback).get("deepseek_session_id")
+    assert actual == (None if changed_field else "dsh-fallback")
+
+
 class TestGetSession:
     """测试 get_session"""
 

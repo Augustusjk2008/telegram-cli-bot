@@ -9,6 +9,7 @@ from bot.chat_identity import chat_session_user_id
 from bot.models import UserSession
 from bot.session_store import (
     LOCAL_HISTORY_BACKEND,
+    _same_workspace_path,
     load_session,
     migrate_local_history_snapshot,
     migrate_sessions_to_shared,
@@ -86,7 +87,8 @@ def _session_rank(session: UserSession) -> tuple[int, int, int, str]:
             max(0, int(getattr(session, "message_count", 0) or 0)),
             int(bool(getattr(session, "codex_session_id", None)))
             + int(bool(getattr(session, "claude_session_id", None)))
-        + int(bool(getattr(session, "antigravity_conversation_id", None)))
+            + int(bool(getattr(session, "antigravity_conversation_id", None)))
+            + int(bool(getattr(session, "deepseek_session_id", None)))
             + int(bool(getattr(session, "native_agent_session_id", None))),
             max(0, int(getattr(session, "session_epoch", 0) or 0)),
             getattr(session, "last_activity", datetime.min).isoformat() if getattr(session, "last_activity", None) else "",
@@ -95,6 +97,22 @@ def _session_rank(session: UserSession) -> tuple[int, int, int, str]:
 
 def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_id: int, bot_alias: str) -> UserSession:
     with preferred._lock, fallback._lock:
+        working_dir = preferred.working_dir or fallback.working_dir
+        conversation_id = preferred.active_conversation_id or fallback.active_conversation_id
+        session_epoch = max(preferred.session_epoch, fallback.session_epoch)
+        deepseek_session_id = None
+        for candidate in (preferred, fallback):
+            if (
+                candidate.deepseek_session_id
+                and candidate.working_dir
+                and _same_workspace_path(candidate.working_dir, working_dir)
+                and candidate.active_conversation_id == conversation_id
+                and candidate.active_conversation_id == preferred.active_conversation_id
+                and candidate.session_epoch == session_epoch
+                and candidate.session_epoch == preferred.session_epoch
+            ):
+                deepseek_session_id = candidate.deepseek_session_id
+                break
         preferred.bot_id = bot_id
         preferred.bot_alias = bot_alias
         preferred.agent_id = preferred.agent_id or fallback.agent_id or "main"
@@ -105,6 +123,7 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
         preferred.antigravity_conversation_id = (
             preferred.antigravity_conversation_id or fallback.antigravity_conversation_id
         )
+        preferred.deepseek_session_id = deepseek_session_id
         preferred.native_agent_session_id = preferred.native_agent_session_id or fallback.native_agent_session_id
         preferred.claude_session_initialized = (
             preferred.claude_session_initialized or fallback.claude_session_initialized
@@ -224,6 +243,7 @@ def _save_session_to_store(session: UserSession):
             codex_session_id=session.codex_session_id,
             claude_session_id=session.claude_session_id,
             antigravity_conversation_id=session.antigravity_conversation_id,
+            deepseek_session_id=session.deepseek_session_id,
             native_agent_session_id=session.native_agent_session_id,
             working_dir=session.working_dir,
             browse_dir=session.browse_dir,
@@ -249,6 +269,7 @@ def _build_session_from_store(
     codex_session_id = None
     claude_session_id = None
     antigravity_conversation_id = None
+    deepseek_session_id = None
     native_agent_session_id = None
     claude_session_initialized = False
     working_dir = default_working_dir
@@ -275,6 +296,7 @@ def _build_session_from_store(
         codex_session_id = stored_data.get("codex_session_id")
         claude_session_id = stored_data.get("claude_session_id")
         antigravity_conversation_id = stored_data.get("antigravity_conversation_id")
+        deepseek_session_id = stored_data.get("deepseek_session_id")
         native_agent_session_id = stored_data.get("native_agent_session_id")
         if stored_data.get("native_agent_server_key"):
             should_persist_migration = True
@@ -297,6 +319,7 @@ def _build_session_from_store(
             codex_session_id
             or claude_session_id
             or antigravity_conversation_id
+            or deepseek_session_id
             or native_agent_session_id
             or working_dir != default_working_dir
         ):
@@ -305,6 +328,7 @@ def _build_session_from_store(
                 f"codex={codex_session_id is not None}, "
                 f"claude={claude_session_id is not None}, "
                 f"antigravity={antigravity_conversation_id is not None}, "
+                f"deepseek={deepseek_session_id is not None}, "
                 f"native_agent={native_agent_session_id is not None}, "
                 f"epoch={session_epoch}"
             )
@@ -321,6 +345,7 @@ def _build_session_from_store(
             codex_session_id=codex_session_id,
             claude_session_id=claude_session_id,
             antigravity_conversation_id=antigravity_conversation_id,
+            deepseek_session_id=deepseek_session_id,
             native_agent_session_id=native_agent_session_id,
             claude_session_initialized=claude_session_initialized,
             web_turn_overlays=web_turn_overlays,
@@ -447,6 +472,7 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
             session.codex_session_id = None
             session.claude_session_id = None
             session.antigravity_conversation_id = None
+            session.deepseek_session_id = None
             session.native_agent_session_id = None
             session.native_agent_run_id = None
             session.native_agent_server_key = None

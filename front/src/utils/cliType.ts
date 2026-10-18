@@ -1,12 +1,14 @@
 export function defaultCliPathForType(cliType: string) {
   if (cliType === "claude") return "claude";
   if (cliType === "antigravity") return "agy";
+  if (cliType === "deepseek") return "dsh";
   return "codex";
 }
 
 export function cliTypeLabel(cliType: string) {
   if (cliType === "codex_server") return "codex server";
   if (cliType === "antigravity") return "Antigravity CLI";
+  if (cliType === "deepseek") return "DeepSeek Harness";
   return cliType;
 }
 

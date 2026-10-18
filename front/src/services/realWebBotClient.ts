@@ -1642,7 +1642,7 @@ function serializePromptPresets(presets: PromptPreset[]) {
 }
 
 function mapCliType(value: unknown): CliType {
-  return value === "claude" || value === "codex_server" || value === "antigravity" ? value : "codex";
+  return value === "claude" || value === "codex_server" || value === "antigravity" || value === "deepseek" ? value : "codex";
 }
 
 function mapRemoteWorkspaceStatus(value: unknown) {
@@ -1804,6 +1804,13 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   }
   if (typeof raw.is_owned_by_current_user === "boolean" || typeof raw.isOwnedByCurrentUser === "boolean") {
     summary.isOwnedByCurrentUser = raw.is_owned_by_current_user ?? raw.isOwnedByCurrentUser;
+  }
+  if (summary.cliType === "deepseek") {
+    summary.cliPath ||= "dsh";
+    summary.supportedExecutionModes = ["cli"];
+    summary.defaultExecutionMode = "cli";
+    summary.executionMode = "cli";
+    summary.voice = { enabled: false, reason: "unsupported_cli" };
   }
   return summary;
 }
@@ -3374,6 +3381,7 @@ function mapGitIdentityConfig(raw: RawGitIdentityConfig): GitIdentityConfig {
 function defaultCliPathForType(cliType: CliType) {
   if (cliType === "claude") return "claude";
   if (cliType === "antigravity") return "agy";
+  if (cliType === "deepseek") return "dsh";
   return "codex";
 }
 
@@ -4983,8 +4991,8 @@ export class RealWebBotClient implements WebBotClient {
     const overview: BotOverview = {
       ...summary,
       voice: {
-        enabled: (data.voice ?? data.bot.voice)?.enabled === true,
-        reason: (data.voice ?? data.bot.voice)?.reason || "disabled",
+        enabled: summary.cliType !== "deepseek" && (data.voice ?? data.bot.voice)?.enabled === true,
+        reason: summary.cliType === "deepseek" ? "unsupported_cli" : (data.voice ?? data.bot.voice)?.reason || "disabled",
       },
       workingDir: data.session.working_dir || summary.workingDir,
       messageCount: data.session.message_count,
@@ -7207,13 +7215,14 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({
         alias: input.alias,
         cli_type: input.cliType,
-        cli_path: input.cliPath,
+        cli_path: input.cliType === "deepseek" ? input.cliPath.trim() || "dsh" : input.cliPath,
         ...(input.remoteWorkspace ? {
           remote_workspace: { connection_id: input.remoteWorkspace.connectionId, root: input.remoteWorkspace.root },
         } : { working_dir: input.workingDir }),
-        bypass_approval_and_sandbox: Boolean(input.bypassApprovalAndSandbox),
+        bypass_approval_and_sandbox: input.cliType !== "deepseek" && Boolean(input.bypassApprovalAndSandbox),
         ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
+        ...(input.cliType === "deepseek" ? { supported_execution_modes: ["cli"], default_execution_mode: "cli" } : {}),
         ...(input.nativeAgent ? {
           native_agent: serializeNativeAgentConfig(input.nativeAgent),
         } : {}),

@@ -631,6 +631,7 @@ class UserSession:
     codex_session_id: Optional[str] = None
     claude_session_id: Optional[str] = None
     antigravity_conversation_id: Optional[str] = None
+    deepseek_session_id: Optional[str] = None
     native_agent_session_id: Optional[str] = None
     native_agent_run_id: Optional[str] = None
     native_agent_server_key: Optional[str] = None
@@ -796,6 +797,7 @@ class UserSession:
             self.codex_session_id = None
             self.claude_session_id = None
             self.antigravity_conversation_id = None
+            self.deepseek_session_id = None
             self.native_agent_session_id = None
             self.native_agent_run_id = None
             self.native_agent_server_key = None

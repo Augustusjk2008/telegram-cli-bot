@@ -373,7 +373,7 @@ function CreatePanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
           >
             <option value="cli">CLI</option>
-            {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+            {nativeAgentOptionVisible && draft.cliType !== "deepseek" ? <option value="native_agent">原生 agent</option> : null}
           </select>
           {nativeAgentFeatureEnabled === false ? (
             <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
@@ -387,7 +387,8 @@ function CreatePanel({
             value={draft.cliType}
             onChange={(event) => {
               const cliType = event.target.value as CliType;
-              setDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, manager.bots).cliPath }));
+              if (cliType === "deepseek") setRemoteCreate(false);
+              setDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, manager.bots).cliPath, ...(cliType === "deepseek" ? { remoteWorkspace: undefined, bypassApprovalAndSandbox: false } : {}) }));
             }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
           >
@@ -395,6 +396,7 @@ function CreatePanel({
             <option value="codex_server">codex server</option>
             <option value="claude">claude</option>
             <option value="antigravity">Antigravity CLI</option>
+            <option value="deepseek">DeepSeek Harness</option>
           </select>
           </label>
         ) : null}
@@ -410,7 +412,7 @@ function CreatePanel({
           />
           </label>
         ) : null}
-        {draft.runtimeBackend === "cli" ? (
+        {draft.runtimeBackend === "cli" && draft.cliType !== "deepseek" ? (
           <label className="col-span-2 flex items-start gap-2 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm">
             <input
               type="checkbox"
@@ -445,7 +447,7 @@ function CreatePanel({
           }))}
         />
       ) : null}
-      <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote">远程 SSH（Linux / Windows）</option></select></label>
+      <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote" disabled={draft.cliType === "deepseek"}>远程 SSH（Linux / Windows）</option></select></label>
       {remoteCreate ? <RemoteWorkspacePicker client={manager.client} onPick={(remote) => setDraft((prev) => ({ ...prev, remoteWorkspace: { connectionId: remote.connectionId, root: remote.root } }))} /> : (
       <label className="block space-y-1 text-sm">
         <span className="text-[var(--muted)]">工作目录</span>
@@ -567,7 +569,7 @@ function EditPanel({
     let cancelled = false;
     setClusterError("");
     void Promise.all([
-      manager.client.getClusterStatus(bot.alias),
+      bot.cliType === "deepseek" ? Promise.resolve(null) : manager.client.getClusterStatus(bot.alias),
       manager.client.getCliParams(bot.alias),
     ])
       .then(([nextCluster, nextCliParams]) => {
@@ -584,7 +586,7 @@ function EditPanel({
     return () => {
       cancelled = true;
     };
-  }, [bot.alias, manager.client]);
+  }, [bot.alias, bot.cliType, manager.client]);
 
   async function submit(options: UpdateBotWorkdirOptions = {}) {
     const result = await manager.saveBotEdits(bot, draft, options);
@@ -726,7 +728,7 @@ function EditPanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           >
             <option value="cli">CLI</option>
-            {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+            {nativeAgentOptionVisible && draft.cliType !== "deepseek" ? <option value="native_agent">原生 agent</option> : null}
           </select>
           {nativeAgentFeatureEnabled === false ? (
             <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
@@ -739,13 +741,17 @@ function EditPanel({
             aria-label="智能体 CLI 类型"
             value={draft.cliType}
             disabled={!canManage}
-            onChange={(event) => setDraft((prev) => ({ ...prev, cliType: event.target.value as CliType }))}
+            onChange={(event) => {
+              const cliType = event.target.value as CliType;
+              setDraft((prev) => ({ ...prev, cliType, cliPath: cliType === "deepseek" || prev.cliType === "deepseek" ? defaultCliPathForType(cliType) : prev.cliPath }));
+            }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           >
             <option value="codex">codex</option>
             <option value="codex_server">codex server</option>
             <option value="claude">claude</option>
             <option value="antigravity">Antigravity CLI</option>
+            <option value="deepseek" disabled={Boolean(bot.remoteWorkspace)}>DeepSeek Harness</option>
           </select>
           </label>
         ) : null}
@@ -837,7 +843,7 @@ function EditPanel({
         />
       ) : null}
 
-      <div className="space-y-4 border-t border-[var(--border)] pt-4">
+      {bot.cliType !== "deepseek" && draft.cliType !== "deepseek" ? <div className="space-y-4 border-t border-[var(--border)] pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="inline-flex items-center gap-2 text-sm font-medium">
               <input
@@ -964,7 +970,7 @@ function EditPanel({
             />
           ) : null}
           <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
-      </div>
+      </div> : <p className="text-sm text-[var(--muted)]">DeepSeek Harness 目前仅支持本地 CLI，暂不支持集群。</p>}
 
       {draft.runtimeBackend === "cli" ? (
         <BotCliParamsPanel
