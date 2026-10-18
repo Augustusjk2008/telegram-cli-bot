@@ -202,6 +202,10 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   expect(updateCluster).toHaveBeenCalledWith("deepseek-migration", { enabled: false });
   expect(updateCluster.mock.invocationCallOrder[0]).toBeLessThan(updateCli.mock.invocationCallOrder[0]);
   const params = await client.getCliParams("deepseek-migration");
-  expect(params).toMatchObject({ cliType: "deepseek", params: { extra_args: [] }, defaults: { extra_args: [] } });
-  expect(Object.keys(params.schema)).toEqual(["extra_args"]);
+  expect(params).toMatchObject({
+    cliType: "deepseek",
+    params: { model: null, reasoning_effort: null, extra_args: [] },
+    defaults: { model: null, reasoning_effort: null, extra_args: [] },
+  });
+  expect(Object.keys(params.schema)).toEqual(["model", "reasoning_effort", "extra_args"]);
 });

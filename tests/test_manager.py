@@ -33,8 +33,12 @@ async def test_deepseek_bot_cli_roundtrip_and_switch(temp_dir, monkeypatch, alia
             profile = manager.get_profile(alias)
             assert (profile.cli_type, profile.cli_path) == (cli_type, cli_path)
         await manager.set_bot_cli_param(alias, "deepseek", "extra_args", ["--patch", "model.json"])
+        await manager.set_bot_cli_param(alias, "deepseek", "model", "deepseek-v4-pro")
+        await manager.set_bot_cli_param(alias, "deepseek", "reasoning_effort", "high")
     restored = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
     assert restored.get_profile(alias).cli_params.get_param("deepseek", "extra_args") == ["--patch", "model.json"]
+    assert restored.get_profile(alias).cli_params.get_param("deepseek", "model") == "deepseek-v4-pro"
+    assert restored.get_profile(alias).cli_params.get_param("deepseek", "reasoning_effort") == "high"
 
 
 def test_deepseek_profile_without_path_loads_dsh(temp_dir):

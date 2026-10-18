@@ -307,9 +307,19 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
   if (cliType === "deepseek") {
     return {
       cliType,
-      params: { extra_args: [] },
-      defaults: { extra_args: [] },
-      schema: { extra_args: { type: "string_list", description: "额外参数（仅支持 --patch）" } },
+      params: { model: null, reasoning_effort: null, extra_args: [] },
+      defaults: { model: null, reasoning_effort: null, extra_args: [] },
+      schema: {
+        model: {
+          type: "string", description: "模型选择", nullable: true,
+          enum: ["none", "deepseek-flash", "deepseek-v4-pro"],
+        },
+        reasoning_effort: {
+          type: "string", description: "思考深度", nullable: true,
+          enum: ["none", "off", "low", "high", "max"],
+        },
+        extra_args: { type: "string_list", description: "额外参数（仅支持 --patch）" },
+      },
     };
   }
   if (cliType === "antigravity") {

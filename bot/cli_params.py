@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.platform.executables import build_executable_invocation
+from bot.deepseek_cli import build_deepseek_invocation
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,8 @@ DEFAULT_ANTIGRAVITY_PARAMS = {
     "extra_args": [],
 }
 
-DEFAULT_DEEPSEEK_PARAMS = {"extra_args": []}
+DEFAULT_DEEPSEEK_PARAMS = {"model": None, "reasoning_effort": None, "extra_args": []}
+DEEPSEEK_MODEL_OPTIONS = ["none", "deepseek-flash", "deepseek-v4-pro"]
 
 ANTIGRAVITY_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"]
 
@@ -134,9 +136,16 @@ SUPPORTED_CLI_TYPES = set(DEFAULT_PARAMS_MAP.keys())
 
 PARAM_SCHEMA_MAP = {
     "deepseek": {
+        "model": {"type": "string", "description": "模型选择，none 使用 Harness 配置", "nullable": True},
+        "reasoning_effort": {
+            "type": "string",
+            "description": "思考深度，none 使用 Harness 配置，off 关闭思考",
+            "nullable": True,
+            "enum": ["none", "off", "low", "high", "max"],
+        },
         "extra_args": {
             "type": "string_list",
-            "description": "Harness 配置覆盖，仅支持 --patch <文件路径>；模型使用 Harness 配置",
+            "description": "Harness 配置覆盖，仅支持 --patch <文件路径>",
         },
     },
     "claude": {
@@ -534,7 +543,7 @@ def _build_deepseek_args(
             raise ValueError("DeepSeek Harness --patch 缺少有效的文件路径")
         patches.extend(["--patch", path])
         index += 1
-    cmd = [*build_executable_invocation(resolved_cli), "--profile", "headless", *patches, "--json"]
+    cmd = [*build_deepseek_invocation(resolved_cli, params), "--profile", "headless", *patches, "--json"]
     if session_id:
         cmd.extend(["--session-id", session_id])
     return [*cmd, "-"], True
@@ -778,7 +787,7 @@ def get_params_help(cli_type: str) -> str:
     """获取指定 CLI 类型的参数说明"""
 
     help_texts = {
-        "deepseek": "DeepSeek Harness 使用 headless JSON 模式，模型由 Harness 配置。extra_args 仅支持 --patch <文件路径>。",
+        "deepseek": "DeepSeek Harness 支持模型和思考深度选择；none 沿用 Harness 配置。extra_args 仅支持 --patch <文件路径>。",
         "claude": """
 <b>Claude CLI 可配置参数:</b>
 

@@ -30,6 +30,7 @@ from bot.agents import build_agent_prompt_input
 from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
     CliParamsConfig,
+    DEEPSEEK_MODEL_OPTIONS,
     clamp_unsafe_cli_params,
     get_cli_output_limits,
     get_default_params,
@@ -1461,6 +1462,8 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
         schema = get_params_schema(resolved_cli_type)
         if resolved_cli_type == "antigravity":
             schema = _apply_cli_model_options(schema, _get_antigravity_model_options(profile))
+        elif resolved_cli_type == "deepseek":
+            schema = _apply_cli_model_options(schema, [*DEEPSEEK_MODEL_OPTIONS, str(params.get("model") or "")])
         else:
             schema = _apply_cli_model_options(schema)
         defaults = get_default_params(resolved_cli_type)

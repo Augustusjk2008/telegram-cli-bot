@@ -4984,7 +4984,7 @@ export function ChatScreen({
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
     : true);
-  const cliModelOptions = deepseekCli ? [] : cliParams?.schema.model?.enum ?? [];
+  const cliModelOptions = cliParams?.schema.model?.enum ?? [];
   const nativeModelOptions = nativeAgentModels?.items ?? [];
   const nativeSelectedModel = nativeAgentModels?.selectedModel
     || botOverview?.nativeAgent?.model
@@ -4998,11 +4998,11 @@ export function ChatScreen({
   );
   const selectedModel = nativeExecutionMode
     ? nativeSelectedModel
-    : deepseekCli ? "" : toModelOptionValue(cliParams?.params.model, cliModelOptions);
+    : toModelOptionValue(cliParams?.params.model, cliModelOptions);
   const cliReasoningParamKey = cliParams?.cliType === "claude" || cliParams?.cliType === "antigravity"
     ? "effort"
     : "reasoning_effort";
-  const cliReasoningEffortOptions = deepseekCli ? [] : cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
+  const cliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
   const cliSelectedReasoningEffort = String(
     cliParams?.params[cliReasoningParamKey]
       ?? cliParams?.defaults[cliReasoningParamKey]
@@ -5021,7 +5021,7 @@ export function ChatScreen({
     : visibleCliReasoningEffortOptions;
   const selectedReasoningEffort = nativeExecutionMode
     ? nativeSelectedReasoningEffort
-    : deepseekCli ? "" : cliSelectedReasoningEffort;
+    : cliSelectedReasoningEffort;
   const clusterTasks = clusterTaskStatus?.tasks.length
     ? clusterTaskStatus.tasks
     : clusterTeamView?.tasks || [];
@@ -5288,7 +5288,6 @@ export function ChatScreen({
           killTaskDisabled={killTaskDisabled}
           killTaskBusy={actionLoading === "kill"}
           mobileLayout={mobileLayout}
-          modelDescription={deepseekCli ? "使用 Harness 配置的模型" : undefined}
           modelOptions={visibleModelOptions}
           selectedModel={selectedModel}
           modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
@@ -5520,7 +5519,6 @@ export function ChatScreen({
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
             placeholder={voiceInputLocked ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
-            modelDescription={deepseekCli && !mobileLayout ? "使用 Harness 配置的模型" : undefined}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}

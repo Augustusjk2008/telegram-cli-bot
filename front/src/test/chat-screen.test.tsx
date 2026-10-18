@@ -1692,22 +1692,62 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
 });
 
 
-test("DeepSeek uses Harness configuration and blocks unsupported chat capabilities", async () => {
+test("DeepSeek selects and saves chat models and thinking while retaining CLI boundaries", async () => {
   const client = createClient({
     getBotOverview: async () => ({
       alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
       supportedExecutionModes: ["cli", "native_agent"], defaultExecutionMode: "cli", voice: { enabled: true, reason: "enabled" },
     }),
   });
+  await client.updateBotCli("main", "deepseek", "dsh");
+  const updateParam = vi.spyOn(client, "updateCliParam");
   const upload = vi.spyOn(client, "uploadChatAttachment");
   render(<ChatScreen botAlias="main" client={client} />);
-  expect(await screen.findByText("使用 Harness 配置的模型")).toBeInTheDocument();
-  expect(screen.queryByRole("combobox", { name: "模型" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("combobox", { name: "思考深度" })).not.toBeInTheDocument();
+  const model = await screen.findByRole("combobox", { name: "模型" });
+  const thinking = screen.getByRole("combobox", { name: "思考深度" });
+  expect(model).toHaveValue("none");
+  expect(thinking).toHaveValue("none");
+  expect(within(model).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+    .toEqual(["none", "deepseek-flash", "deepseek-v4-pro"]);
+  expect(within(thinking).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+    .toEqual(["none", "off", "low", "high", "max"]);
+  await userEvent.selectOptions(model, "deepseek-v4-pro");
+  await waitFor(() => expect(model).toHaveValue("deepseek-v4-pro"));
+  expect(updateParam).toHaveBeenLastCalledWith("main", "model", "deepseek-v4-pro", "deepseek");
+  for (const effort of ["high", "off", "none"]) {
+    await userEvent.selectOptions(thinking, effort);
+    await waitFor(() => expect(thinking).toHaveValue(effort));
+    expect(updateParam).toHaveBeenLastCalledWith("main", "reasoning_effort", effort, "deepseek");
+    expect((await client.getCliParams("main")).params.reasoning_effort).toBe(effort);
+  }
+  await userEvent.selectOptions(model, "none");
+  await waitFor(() => expect(model).toHaveValue("none"));
+  expect((await client.getCliParams("main")).params.model).toBeNull();
   expect(screen.queryByRole("button", { name: "原生 agent" })).not.toBeInTheDocument();
   expect(screen.queryByTestId("codex-voice-foreground")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "开启集群模式" })).toBeDisabled();
   fireEvent.change(screen.getByLabelText("上传附件"), { target: { files: [new File(["image"], "photo.png", { type: "image/png" })] } });
   expect(await screen.findByText("DeepSeek Harness 暂不支持图片或语音附件")).toBeInTheDocument();
   expect(upload).not.toHaveBeenCalled();
+});
+
+test("DeepSeek preserves a selected custom model in mobile chat options", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
+      supportedExecutionModes: ["cli"], defaultExecutionMode: "cli",
+    }),
+  });
+  await client.updateBotCli("main", "deepseek", "dsh");
+  await client.updateCliParam("main", "model", "deepseek-custom", "deepseek");
+  render(<ChatScreen botAlias="main" client={client} mobileLayout />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  await userEvent.click(screen.getByRole("button", { name: "聊天选项" }));
+  const model = await screen.findByRole("combobox", { name: "模型" });
+  expect(model).toHaveValue("deepseek-custom");
+  expect(within(model).getByRole("option", { name: "deepseek-custom" })).toBeInTheDocument();
+  const thinking = screen.getByRole("combobox", { name: "思考深度" });
+  await userEvent.selectOptions(thinking, "max");
+  await waitFor(() => expect(thinking).toHaveValue("max"));
+  expect((await client.getCliParams("main")).params).toMatchObject({ model: "deepseek-custom", reasoning_effort: "max" });
 });

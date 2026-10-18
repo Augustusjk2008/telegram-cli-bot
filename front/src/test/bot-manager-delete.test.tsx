@@ -285,5 +285,5 @@ test.each(["list", "desktop"])("%s creates DeepSeek with local CLI capabilities"
   await waitFor(() => expect(addBot).toHaveBeenCalledWith(expect.objectContaining({
     cliType: "deepseek", cliPath: "dsh", supportedExecutionModes: ["cli"], defaultExecutionMode: "cli", bypassApprovalAndSandbox: false,
   })));
-  expect((await client.getCliParams("deepseek-test")).params).toEqual({ extra_args: [] });
+  expect((await client.getCliParams("deepseek-test")).params).toEqual({ model: null, reasoning_effort: null, extra_args: [] });
 });

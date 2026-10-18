@@ -977,7 +977,6 @@ async def test_deepseek_stream_persists_trace_and_restores_conversation_binding(
     processes = [_DeepSeekProcess(_deepseek_events()), _DeepSeekProcess(_deepseek_events()),
                  _DeepSeekProcess(_deepseek_events("session-new"))]
     observed = _patch_deepseek_runtime(usage_manager, monkeypatch, processes)
-    usage_manager.main_profile.cli_params.set_param("deepseek", "model", "ignored-host-model")
     all_events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "中文\n第二行")]
     done = all_events[-1]
     session = api_service.get_session_for_alias(usage_manager, "main", 1001)
@@ -1007,6 +1006,17 @@ async def test_deepseek_stream_persists_trace_and_restores_conversation_binding(
     assert "--session-id" not in observed["commands"][2]
     assert all(kwargs["stderr"] == subprocess.PIPE for kwargs in observed["kwargs"])
     assert len(observed["completions"]) == len(set(observed["completions"])) == 3
+
+
+def test_deepseek_model_schema_keeps_own_options_and_saved_custom_model(usage_manager, monkeypatch):
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", ["gpt-host-model"])
+    usage_manager.main_profile.cli_type = "deepseek"
+    usage_manager.main_profile.cli_params.set_param("deepseek", "model", "my-deepseek-model")
+    payload = get_cli_params_payload(usage_manager, "main")
+    assert payload["schema"]["model"]["enum"] == ["none", "deepseek-flash", "deepseek-v4-pro", "my-deepseek-model"]
+    assert payload["schema"]["reasoning_effort"]["enum"] == ["none", "off", "low", "high", "max"]
+    assert payload["defaults"]["model"] is None
+    assert payload["defaults"]["reasoning_effort"] is None
 
 
 @pytest.mark.asyncio
