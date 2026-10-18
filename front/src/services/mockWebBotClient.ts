@@ -3820,18 +3820,17 @@ export class MockWebBotClient implements WebBotClient {
       && bot.supportedExecutionModes[0] === "native_agent"
     ) ? "pi" : bot.cliType;
     return {
-      enabled: bot.cliType !== "deepseek" && Boolean(cluster.enabled),
+      enabled: Boolean(cluster.enabled),
       modelTiers: { ...cluster.modelTiers },
       reasoningEfforts: { ...cluster.reasoningEfforts },
       mcp: {
         serverName: "tcb-cluster",
         activeCliType,
         tools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
-        runtime: bot.cliType === "deepseek"
-          ? { state: "unsupported", message: "DeepSeek Harness 暂不支持集群" }
-          : { state: "runtime_ready", message: "运行态可用" },
+        runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: isCodexCli(activeCliType) ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
         claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
+        deepseek: activeCliType === "deepseek" ? { state: "runtime_ready", message: "集群轮次自动注入 MCP" } : { state: "not_checked", message: "未使用" },
         antigravity: activeCliType === "antigravity"
           ? {
             state: "installed",
@@ -3874,9 +3873,6 @@ export class MockWebBotClient implements WebBotClient {
 
   async prepareClusterSetup(botAlias: string): Promise<ClusterSetupPrepareResult> {
     const bot = this.getBotSummary(botAlias);
-    if (bot.cliType === "deepseek") {
-      throw new WebApiClientError("DeepSeek Harness 暂不支持集群", { status: 400 });
-    }
     const cliPath = bot.cliPath || defaultCliPathForType(bot.cliType);
     const cliType = bot.cliType;
     const launcherPath = "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd";
@@ -3886,6 +3882,20 @@ export class MockWebBotClient implements WebBotClient {
       && bot.supportedExecutionModes.length === 1
       && bot.supportedExecutionModes[0] === "native_agent"
     ) ? "pi" : bot.cliType;
+    if (activeCliType === "deepseek") {
+      return {
+        serverName: "tcb-cluster",
+        launcherPath,
+        configPath,
+        tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
+        installCommand: [],
+        verifyCommand: [],
+        removeCommand: [],
+        mcpSetupState: "runtime",
+        mcpSetupSnippet: "DeepSeek Harness 集群轮次会自动注入 tcb-cluster MCP，无需修改 Harness 全局配置。",
+        message: "DeepSeek Harness 集群 MCP 已准备。",
+      };
+    }
     if (activeCliType === "antigravity") {
       return {
         serverName: "tcb-cluster",
@@ -3930,9 +3940,6 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult> {
     const current = this.getBotSummary(botAlias);
-    if (current.cliType === "deepseek") {
-      throw new WebApiClientError("DeepSeek Harness 暂不支持集群", { status: 400 });
-    }
     const cluster = {
       ...(current.cluster || DEFAULT_CLUSTER),
       ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),

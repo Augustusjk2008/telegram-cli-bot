@@ -27,22 +27,21 @@ function cliLabel(cliType: string) {
 }
 
 function targetStatus(status: ClusterStatus): { activeCliType: string; activeStatus: ClusterMcpTargetStatus | undefined } {
-  if (status.mcp.activeCliType === "deepseek") {
-    return { activeCliType: "deepseek", activeStatus: { state: "unsupported", message: "DeepSeek Harness 暂不支持集群" } as const };
-  }
   const activeCliType = status.mcp.activeCliType === "pi"
     ? "pi"
     : status.mcp.activeCliType === "claude"
       ? "claude"
       : status.mcp.activeCliType === "antigravity"
         ? "antigravity"
-        : status.mcp.activeCliType === "codex_server" ? "codex_server" : "codex";
+        : status.mcp.activeCliType === "deepseek" ? "deepseek" : status.mcp.activeCliType === "codex_server" ? "codex_server" : "codex";
   const activeStatus = activeCliType === "pi"
     ? status.mcp.pi
     : activeCliType === "claude"
       ? status.mcp.claude
       : activeCliType === "antigravity"
         ? status.mcp.antigravity
+        : activeCliType === "deepseek"
+          ? status.mcp.deepseek
         : status.mcp.codex;
   return { activeCliType, activeStatus };
 }
@@ -100,7 +99,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
           <button
             type="button"
             onClick={() => void prepareInstall()}
-            disabled={!canManage || status?.mcp.activeCliType === "deepseek"}
+            disabled={!canManage}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm tcb-solid-accent disabled:opacity-60"
           >
             <Wrench className="h-4 w-4" />
@@ -138,6 +137,11 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
           {prepare.unsupported ? (
             <div className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--status-warning)]">
               {prepare.message || "当前 CLI 暂不支持集群 MCP"}
+            </div>
+          ) : null}
+          {prepare.mcpSetupSnippet ? (
+            <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-sm text-[var(--muted)]">
+              {prepare.mcpSetupSnippet}
             </div>
           ) : null}
           {prepare.installCommand.length > 0 ? <div>

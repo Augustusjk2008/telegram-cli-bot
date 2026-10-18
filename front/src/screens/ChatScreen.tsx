@@ -4645,7 +4645,7 @@ export function ChatScreen({
   async function handleToggleClusterMode() {
     const overview = botOverviewRef.current;
     const config = overview?.cluster;
-    if (!config || overview.cliType === "deepseek" || clusterSaving || overview.canOperate === false) {
+    if (!config || clusterSaving || overview.canOperate === false) {
       return;
     }
 
@@ -4898,7 +4898,7 @@ export function ChatScreen({
     : supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
   const nativeExecutionMode = effectiveExecutionMode === "native_agent";
   const deepseekCli = botOverview?.cliType === "deepseek";
-  const clusterMode = !deepseekCli && Boolean(botOverview?.cluster?.enabled);
+  const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeConversation = conversations.find((conversation) => conversation.active);
   const liveClusterTeam = botOverview?.activeClusterRun?.team || activeConversation?.clusterTeam;
   const liveClusterTeamView: ClusterTeamViewSnapshot | null = liveClusterTeam?.assignments.length ? {
@@ -5276,8 +5276,7 @@ export function ChatScreen({
           planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
           clusterEnabled={clusterMode}
-          clusterDisabled={deepseekCli || loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
-          clusterDisabledReason={deepseekCli ? "DeepSeek Harness 暂不支持集群" : undefined}
+          clusterDisabled={loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
           clusterSaving={clusterSaving}
           onToggleClusterMode={() => void handleToggleClusterMode()}
           embedded={embedded}

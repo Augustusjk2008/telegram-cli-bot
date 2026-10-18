@@ -6,10 +6,52 @@ from bot.web.cli_context_usage import (
     cleanup_antigravity_statusline_telemetry,
     record_antigravity_statusline_payload,
     resolve_antigravity_statusline_usage,
+    resolve_cli_context_usage,
+    resolve_deepseek_context_usage,
 )
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
+
+
+def test_deepseek_context_usage_reads_context_pressure_projection(tmp_path, monkeypatch):
+    path = tmp_path / "storages" / "session_projcache" / "sessions" / "session-dsh.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({
+            "record": {
+                "rows": {
+                    "contextPressure": {
+                        "ver": 5,
+                        "seq": 12,
+                        "val": {
+                            "contextWindow": 1_000_000,
+                            "pressureTokens": 6_000,
+                            "projectedTokens": 123_456,
+                        },
+                    },
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    result = resolve_deepseek_context_usage("session-dsh", dsh_home=tmp_path)
+
+    assert result == {
+        "provider": "deepseek",
+        "source": "deepseek_context_pressure",
+        "session_id": "session-dsh",
+        "usage_scope": "conversation",
+        "used_tokens": 123_456,
+        "context_window": 1_000_000,
+        "context_left_percent": 88,
+        "used_display": "123K",
+        "window_display": "1000K",
+        "status_text": "88% context left · 123K / 1000K",
+    }
+    monkeypatch.setenv("DSH_HOME", str(tmp_path))
+    assert resolve_cli_context_usage("deepseek", "session-dsh") == result
 
 
 def test_antigravity_statusline_usage_reads_latest_valid_payload(tmp_path):

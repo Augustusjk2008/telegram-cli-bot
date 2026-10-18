@@ -41,6 +41,7 @@ _TRANSCRIPT_STATE: dict[tuple[str, str, str], dict[str, Any]] = {}
 _TAIL_WINDOW_BYTES = 256 * 1024
 ANTIGRAVITY_STATUSLINE_TTL_SECONDS = 30.0
 _ANTIGRAVITY_STATUSLINE_ROOT_NAME = "antigravity-statusline"
+_DEEPSEEK_PROJECTION_ROOT = ("storages", "session_projcache", "sessions")
 
 
 def clear_context_usage_cache() -> None:
@@ -303,6 +304,65 @@ def _format_tokens(value: int) -> str:
         text = f"{value / 1000:.1f}".rstrip("0").rstrip(".")
         return f"{text}K"
     return str(value)
+
+
+def _resolve_deepseek_home(dsh_home: str | Path | None = None) -> Path:
+    configured = str(dsh_home or os.environ.get("DSH_HOME") or "").strip()
+    return (Path(configured).expanduser() if configured else Path.home() / ".dsh").resolve()
+
+
+def _deepseek_projection_path(session_id: str, dsh_home: str | Path | None = None) -> Path | None:
+    normalized = str(session_id or "").strip()
+    if not normalized or normalized in {".", ".."} or any(separator in normalized for separator in ("/", "\\")):
+        return None
+    return _resolve_deepseek_home(dsh_home).joinpath(*_DEEPSEEK_PROJECTION_ROOT, f"{normalized}.json")
+
+
+def resolve_deepseek_context_usage(
+    session_id: str | None,
+    *,
+    dsh_home: str | Path | None = None,
+) -> dict[str, Any] | None:
+    path = _deepseek_projection_path(str(session_id or ""), dsh_home)
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    record = payload.get("record")
+    rows = record.get("rows") if isinstance(record, dict) else None
+    projection = rows.get("contextPressure") if isinstance(rows, dict) else None
+    value = projection.get("val") if isinstance(projection, dict) else None
+    if not isinstance(value, dict):
+        return None
+
+    context_window = _as_nonnegative_int(value.get("contextWindow"))
+    used_tokens = _as_nonnegative_int(value.get("projectedTokens"))
+    if used_tokens is None:
+        used_tokens = _as_nonnegative_int(value.get("pressureTokens"))
+    if context_window is None or context_window <= 0 or used_tokens is None:
+        return None
+
+    left_percent = _clamp_percent(
+        _round_half_up((context_window - used_tokens) / context_window * 100)
+    )
+    used_display = _format_tokens(used_tokens)
+    window_display = _format_tokens(context_window)
+    return {
+        "provider": "deepseek",
+        "source": "deepseek_context_pressure",
+        "session_id": str(session_id or "").strip(),
+        "usage_scope": "conversation",
+        "used_tokens": used_tokens,
+        "context_window": context_window,
+        "context_left_percent": left_percent,
+        "used_display": used_display,
+        "window_display": window_display,
+        "status_text": f"{left_percent}% context left · {used_display} / {window_display}",
+    }
 
 
 def _parse_token_display(value: str) -> int | None:
@@ -647,6 +707,9 @@ def resolve_cli_context_usage(
         return None
 
     try:
+        if provider == "deepseek":
+            return resolve_deepseek_context_usage(normalized_session_id)
+
         if provider == "antigravity":
             return resolve_antigravity_statusline_usage(normalized_session_id, cwd_hint)
 

@@ -18,6 +18,7 @@ from typing import Any, Literal
 from bot.runtime_paths import get_tcb_home_root
 
 CLUSTER_MCP_SERVER_NAME = "tcb-cluster"
+DEEPSEEK_MCP_PATCH_FILENAME = "dsh-cluster-mcp.patch.json"
 CLUSTER_MCP_TOOL_NAMES = (
     "configure_team",
     "cluster_status",
@@ -133,7 +134,7 @@ def _antigravity_mcp_lock(config_path: Path, *, timeout_seconds: float = 10.0):
                 _release_workspace_lock(handle)
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+def _write_json_atomic(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -336,6 +337,37 @@ def get_cluster_mcp_config_path(*, home_dir: Path | None = None) -> Path:
     return root / "cluster-mcp" / "config.json"
 
 
+def get_deepseek_mcp_patch_path(*, home_dir: Path | None = None) -> Path:
+    return get_cluster_mcp_config_path(home_dir=home_dir).with_name(DEEPSEEK_MCP_PATCH_FILENAME)
+
+
+def write_deepseek_mcp_patch(
+    *,
+    working_dir: Path | str | None = None,
+    home_dir: Path | None = None,
+    repo_root: Path | None = None,
+    python_executable: Path | None = None,
+) -> Path:
+    config_path = get_cluster_mcp_config_path(home_dir=home_dir)
+    patch_path = get_deepseek_mcp_patch_path(home_dir=home_dir)
+    root = repo_root or Path(__file__).resolve().parents[2]
+    executable = python_executable or Path(sys.executable)
+    mcp_config: dict[str, Any] = {
+        "serverName": CLUSTER_MCP_SERVER_NAME,
+        "transport": "stdio",
+        "command": str(executable),
+        "args": [str(root / "bot" / "cluster" / "mcp_stdio.py"), "--config", str(config_path)],
+        "failOnStartupError": True,
+    }
+    if working_dir is not None:
+        mcp_config["cwd"] = str(Path(working_dir).expanduser().resolve())
+    _write_json_atomic(
+        patch_path,
+        [{"id": "orbit-tcb-cluster-mcp", "name": "@deepseek-ai/dsh-mcp-client", "config": mcp_config}],
+    )
+    return patch_path
+
+
 def get_pi_cluster_extension_source_path(repo_root: Path | None = None) -> Path:
     root = repo_root or Path(__file__).resolve().parents[2]
     return root / "bot" / "cluster" / "pi_extension" / "tcb-cluster.ts"
@@ -441,17 +473,17 @@ def prepare_cluster_mcp_launcher(
     return ClusterMcpLauncher(CLUSTER_MCP_SERVER_NAME, launcher_path, config_path, token_path)
 
 
-def normalize_cli_kind(cli_type: str) -> Literal["codex", "codex_server", "claude", "antigravity", "pi"]:
+def normalize_cli_kind(cli_type: str) -> Literal["codex", "codex_server", "claude", "antigravity", "deepseek", "pi"]:
     kind = str(cli_type or "").strip().lower()
-    if kind not in {"codex", "codex_server", "claude", "antigravity", "pi"}:
-        raise ValueError("cluster MCP 仅支持 codex / codex server / claude / antigravity / pi")
+    if kind not in {"codex", "codex_server", "claude", "antigravity", "deepseek", "pi"}:
+        raise ValueError("cluster MCP 仅支持 codex / codex server / claude / antigravity / deepseek / pi")
     return kind  # type: ignore[return-value]
 
 
 def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Path) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     executable = str(cli_path or ("codex" if kind == "codex_server" else kind))
-    if kind in {"antigravity", "pi"}:
+    if kind in {"antigravity", "deepseek", "pi"}:
         return []
     if kind in {"codex", "codex_server"}:
         return [executable, "mcp", "add", CLUSTER_MCP_SERVER_NAME, "--", str(launcher_path)]
@@ -460,6 +492,8 @@ def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Pa
 
 def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
+    if kind == "deepseek":
+        return []
     if kind == "pi":
         return [str(cli_path or kind), "-p", "--tools", f"{CLUSTER_MCP_SERVER_NAME}.cluster_status", "List MCP tools"]
     if kind == "antigravity":
@@ -469,6 +503,6 @@ def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
 
 def build_cli_remove_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
-    if kind in {"antigravity", "pi"}:
+    if kind in {"antigravity", "deepseek", "pi"}:
         return []
     return [str(cli_path or ("codex" if kind == "codex_server" else kind)), "mcp", "remove", CLUSTER_MCP_SERVER_NAME]

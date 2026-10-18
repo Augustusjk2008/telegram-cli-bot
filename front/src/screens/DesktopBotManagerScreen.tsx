@@ -843,7 +843,7 @@ function EditPanel({
         />
       ) : null}
 
-      {bot.cliType !== "deepseek" && draft.cliType !== "deepseek" ? <div className="space-y-4 border-t border-[var(--border)] pt-4">
+      <div className="space-y-4 border-t border-[var(--border)] pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="inline-flex items-center gap-2 text-sm font-medium">
               <input
@@ -970,7 +970,7 @@ function EditPanel({
             />
           ) : null}
           <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
-      </div> : <p className="text-sm text-[var(--muted)]">DeepSeek Harness 目前仅支持本地 CLI，暂不支持集群。</p>}
+      </div>
 
       {draft.runtimeBackend === "cli" ? (
         <BotCliParamsPanel

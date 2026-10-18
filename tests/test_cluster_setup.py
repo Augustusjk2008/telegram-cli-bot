@@ -9,9 +9,11 @@ from bot.cluster.setup import (
     build_cli_remove_command,
     build_cli_verify_command,
     ensure_antigravity_mcp_config,
+    get_deepseek_mcp_patch_path,
     inspect_antigravity_mcp_config,
     normalize_cli_kind,
     remove_antigravity_mcp_config,
+    write_deepseek_mcp_patch,
 )
 
 
@@ -49,6 +51,53 @@ def test_codex_server_mcp_injection_keeps_codex_params_isolated(tmp_path, monkey
     assert args[:2] == ["-c", "server_only=true"]
     assert any(arg.startswith("mcp_servers.tcb-cluster.command=") for arg in args)
     assert 'mcp_servers.tcb-cluster.default_tools_approval_mode="approve"' in args
+
+
+def test_deepseek_mcp_patch_uses_project_bridge_without_global_harness_changes(tmp_path):
+    patch_path = write_deepseek_mcp_patch(
+        home_dir=tmp_path,
+        repo_root=tmp_path / "repo",
+        working_dir=tmp_path / "workspace",
+        python_executable=tmp_path / "python.exe",
+    )
+
+    assert patch_path == get_deepseek_mcp_patch_path(home_dir=tmp_path)
+    payload = json.loads(patch_path.read_text(encoding="utf-8"))
+    assert payload == [{
+        "id": "orbit-tcb-cluster-mcp",
+        "name": "@deepseek-ai/dsh-mcp-client",
+        "config": {
+            "serverName": "tcb-cluster",
+            "transport": "stdio",
+            "command": str(tmp_path / "python.exe"),
+            "args": [str(tmp_path / "repo" / "bot" / "cluster" / "mcp_stdio.py"), "--config", str(tmp_path / ".tcb" / "cluster-mcp" / "config.json")],
+            "cwd": str((tmp_path / "workspace").resolve()),
+            "failOnStartupError": True,
+        },
+    }]
+
+
+def test_deepseek_cluster_setup_uses_runtime_injection_commands():
+    launcher = Path("bridge/tcb-cluster-mcp.cmd")
+
+    assert normalize_cli_kind("deepseek") == "deepseek"
+    assert build_cli_install_command(cli_type="deepseek", cli_path="dsh", launcher_path=launcher) == []
+    assert build_cli_verify_command("deepseek", "dsh") == []
+    assert build_cli_remove_command("deepseek", "dsh") == []
+
+
+def test_deepseek_cluster_tier_uses_harness_reasoning_parameter():
+    from bot.models import BotProfile
+    from bot.web.api_service import build_cluster_cli_params_override
+
+    profile = BotProfile(alias="cluster", cli_type="deepseek")
+    profile.cluster.model_tiers["high"] = "deepseek-v4-pro"
+    profile.cluster.reasoning_efforts["high"] = "max"
+
+    params = build_cluster_cli_params_override(profile, "high")
+
+    assert params.get_param("deepseek", "model") == "deepseek-v4-pro"
+    assert params.get_param("deepseek", "reasoning_effort") == "max"
 
 
 def test_antigravity_workspace_mcp_setup_preserves_other_servers_and_restores_on_stop(tmp_path):

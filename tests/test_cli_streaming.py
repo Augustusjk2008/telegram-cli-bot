@@ -947,6 +947,68 @@ def _deepseek_events(session_id="session-dsh", text="最终回复"):
     ]
 
 
+def test_deepseek_context_usage_merges_projection_and_turn_usage():
+    result = api_service._build_deepseek_context_usage(
+        {
+            "input_tokens": 134,
+            "output_tokens": 10,
+            "cache_read_input_tokens": 6016,
+            "total_tokens": 6160,
+        },
+        session_id="session-dsh",
+        context_usage={
+            "provider": "deepseek",
+            "source": "deepseek_context_pressure",
+            "session_id": "session-dsh",
+            "usage_scope": "conversation",
+            "used_tokens": 6150,
+            "context_window": 1_000_000,
+            "context_left_percent": 99,
+            "status_text": "99% context left · 6.2K / 1000K",
+        },
+    )
+
+    assert result is not None
+    assert result["source"] == "deepseek_context_pressure"
+    assert result["usage_scope"] == "conversation"
+    assert result["context_left_percent"] == 99
+    assert result["input_tokens"] == 134
+    assert result["total_tokens"] == 6160
+
+
+@pytest.mark.asyncio
+async def test_deepseek_stream_publishes_context_pressure_with_turn_usage(usage_manager, monkeypatch):
+    observed = _patch_deepseek_runtime(
+        usage_manager,
+        monkeypatch,
+        [_DeepSeekProcess(_deepseek_events())],
+    )
+    context_usage = {
+        "provider": "deepseek",
+        "source": "deepseek_context_pressure",
+        "session_id": "session-dsh",
+        "usage_scope": "conversation",
+        "used_tokens": 6150,
+        "context_window": 1_000_000,
+        "context_left_percent": 99,
+        "used_display": "6.2K",
+        "window_display": "1000K",
+        "status_text": "99% context left · 6.2K / 1000K",
+    }
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: context_usage)
+    monkeypatch.setattr(api_service, "estimate_usage_cost", Mock(return_value=None))
+
+    events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
+    done = events[-1]
+    published = done["message"]["meta"]["context_usage"]
+
+    assert observed["commands"]
+    assert published["context_left_percent"] == 99
+    assert published["usage_scope"] == "conversation"
+    assert published["input_tokens"] == 134
+    assert published["total_tokens"] == 6160
+
+
 def _patch_deepseek_runtime(manager, monkeypatch, processes):
     profile = manager.main_profile
     profile.cli_type, profile.cli_path = "deepseek", "dsh"
@@ -1071,13 +1133,21 @@ async def test_deepseek_provider_switch_uses_selected_conversations_binding(usag
 
 
 @pytest.mark.asyncio
-async def test_deepseek_unsupported_entry_points_fail_before_launch(usage_manager, monkeypatch):
+async def test_deepseek_cluster_launches_with_mcp_patch_but_other_entry_points_fail(usage_manager, monkeypatch, tmp_path):
     from bot.web import git_service
 
-    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [])
+    patch_path = tmp_path / "dsh-cluster-mcp.patch.json"
+    patch_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(api_service, "prepare_cluster_mcp_launcher", lambda **_kwargs: None)
+    monkeypatch.setattr(api_service, "write_deepseek_mcp_patch", lambda **_kwargs: patch_path)
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [_DeepSeekProcess(_deepseek_events())])
     profile = usage_manager.main_profile
-    with pytest.raises(api_service.WebApiError, match="集群"):
-        await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello", cluster_run_id="cluster"))
+    cluster_events = await _collect_stream_events(
+        api_service._stream_cli_chat(usage_manager, "main", 1001, "hello", cluster_run_id="cluster")
+    )
+    assert cluster_events[-1]["output"] == "最终回复"
+    assert "--patch" in observed["commands"][0]
+    assert str(patch_path) in observed["commands"][0]
     profile.remote_workspace = {"root": "/remote"}
     with pytest.raises(api_service.WebApiError, match="本地工作区"):
         await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"))
@@ -1089,7 +1159,7 @@ async def test_deepseek_unsupported_entry_points_fail_before_launch(usage_manage
         await git_service._generate_git_commit_message_from_context(
             usage_manager, "main", 1001, repo_root=profile.working_dir, context={},
         )
-    assert observed["commands"] == []
+    assert len(observed["commands"]) == 1
 
 
 @pytest.mark.asyncio

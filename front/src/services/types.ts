@@ -698,6 +698,7 @@ export type ClusterStatus = {
     runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
+    deepseek?: ClusterMcpTargetStatus;
     antigravity?: ClusterMcpTargetStatus;
     pi?: ClusterMcpTargetStatus;
   };
@@ -798,6 +799,7 @@ export type ClusterSetupPrepareResult = {
   launcherPath: string;
   configPath: string;
   tokenPath: string;
+  deepseekPatchPath?: string;
   installCommand: string[];
   verifyCommand: string[];
   removeCommand: string[];
@@ -810,9 +812,9 @@ export type ClusterSetupPrepareResult = {
   workspaceMcpScope?: string;
   mcpAllowedTools?: string[];
   mcpSetupState?: string;
+  mcpSetupSnippet?: string;
   statuslineCommand?: string[];
   statusLineSnippet?: string;
-  mcpSetupSnippet?: string;
   setupInstructions?: string;
   askPolicy?: string;
   diagnostics?: RemoteWorkspaceMcpDiagnostic[];

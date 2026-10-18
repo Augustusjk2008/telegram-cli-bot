@@ -199,8 +199,7 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   await userEvent.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
   await waitFor(() => expect(updateCli).toHaveBeenCalledWith("deepseek-migration", "deepseek", "dsh"));
   expect(updateExecution.mock.invocationCallOrder[0]).toBeLessThan(updateCli.mock.invocationCallOrder[0]);
-  expect(updateCluster).toHaveBeenCalledWith("deepseek-migration", { enabled: false });
-  expect(updateCluster.mock.invocationCallOrder[0]).toBeLessThan(updateCli.mock.invocationCallOrder[0]);
+  expect(updateCluster).not.toHaveBeenCalled();
   const params = await client.getCliParams("deepseek-migration");
   expect(params).toMatchObject({
     cliType: "deepseek",

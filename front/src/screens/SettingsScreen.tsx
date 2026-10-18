@@ -322,9 +322,6 @@ export function SettingsScreen({
         });
       }
       if (runtimeBackendDraft === "cli" && cliTypeDraft === "deepseek") {
-        if (overview?.cluster?.enabled) {
-          await client.updateClusterConfig(botAlias, { enabled: false });
-        }
         nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
       }
       if (!nextBot) {

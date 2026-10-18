@@ -1931,6 +1931,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       runtime: mapTarget(mcp.runtime),
       codex: mapTarget(mcp.codex),
       claude: mapTarget(mcp.claude),
+      deepseek: mcp.deepseek ? mapTarget(mcp.deepseek) : undefined,
       antigravity: mcp.antigravity ? mapTarget(mcp.antigravity) : undefined,
       pi: mcp.pi ? mapTarget(mcp.pi) : undefined,
     },
@@ -2054,6 +2055,7 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     launcherPath: String(value.launcher_path || value.launcherPath || ""),
     configPath: String(value.config_path || value.configPath || ""),
     tokenPath: String(value.token_path || value.tokenPath || ""),
+    deepseekPatchPath: String(value.deepseek_patch_path || value.deepseekPatchPath || "") || undefined,
     installCommand: list("install_command", "installCommand"),
     verifyCommand: list("verify_command", "verifyCommand"),
     removeCommand: list("remove_command", "removeCommand"),
@@ -2068,6 +2070,7 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
       ? ((value.mcp_allowed_tools ?? value.mcpAllowedTools) as unknown[]).map((tool) => String(tool))
       : undefined,
     mcpSetupState: String(value.mcp_setup_state || value.mcpSetupState || ""),
+    mcpSetupSnippet: String(value.mcp_setup_snippet || value.mcpSetupSnippet || "") || undefined,
     statuslineCommand: list("statusline_command", "statuslineCommand"),
     unsupported: value.unsupported === true,
     code: String(value.code || ""),

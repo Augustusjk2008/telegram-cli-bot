@@ -63,10 +63,12 @@ from bot.cluster.setup import (
     ensure_antigravity_mcp_config,
     build_pi_mcp_self_test_command,
     get_antigravity_mcp_config_path,
+    get_deepseek_mcp_patch_path,
     get_pi_cluster_extension_path,
     inspect_antigravity_mcp_config,
     prepare_cluster_mcp_launcher,
     remove_antigravity_mcp_config,
+    write_deepseek_mcp_patch,
     write_pi_cluster_extension,
 )
 from bot.git_runtime import apply_git_fsmonitor_disabled_env
@@ -828,6 +830,13 @@ def _cluster_unsupported_target_status() -> dict[str, str]:
 def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, Any]:
     if cli_data_provider(cli_type) != cli_data_provider(active_cli_type):
         return _cluster_inactive_target_status()
+    if cli_type == "deepseek":
+        return {
+            **_cluster_runtime_mcp_status(),
+            "config_path": str(get_deepseek_mcp_patch_path()),
+            "scope": "cluster turn",
+            "allowed_tools": list(CLUSTER_MCP_TOOL_NAMES),
+        }
     if cli_data_provider(cli_type) == "antigravity":
         launcher_path = _cluster_launcher_path()
         inspected = inspect_antigravity_mcp_config(profile.working_dir, launcher_path)
@@ -937,6 +946,7 @@ def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
             "runtime": _cluster_runtime_mcp_status(),
             "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
             "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
+            "deepseek": _cluster_mcp_target_status(profile, "deepseek", active_cli_type=active_cli_type),
             "antigravity": _cluster_mcp_target_status(profile, "antigravity", active_cli_type=active_cli_type),
             "pi": _cluster_pi_mcp_target_status(active_cli_type=active_cli_type),
         },
@@ -989,6 +999,21 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
             "pi_extension_path": str(extension_path),
             "pi_extension_name": "tcb-cluster.ts",
             "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
+        }
+    if active_cli_type == "deepseek":
+        patch_path = write_deepseek_mcp_patch(
+            working_dir=profile.working_dir,
+            repo_root=_REPO_ROOT,
+        )
+        return {
+            **launcher.to_dict(),
+            "install_command": [],
+            "verify_command": [],
+            "remove_command": [],
+            "deepseek_patch_path": str(patch_path),
+            "mcp_setup_state": "runtime",
+            "mcp_setup_snippet": "DeepSeek Harness 集群轮次会自动注入 tcb-cluster MCP，无需修改 Harness 全局配置。",
+            "message": "DeepSeek Harness 集群 MCP 已准备，下一次集群轮次会自动加载。",
         }
     cli_type = active_cli_type if active_cli_type in {"codex", "codex_server", "claude"} else profile.cli_type
     return {
@@ -3377,7 +3402,7 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     if model:
         params[cli_type]["model"] = model
     if reasoning_effort:
-        parameter_name = "reasoning_effort" if cli_data_provider(cli_type) == "codex" else "effort"
+        parameter_name = "reasoning_effort" if cli_data_provider(cli_type) == "codex" or cli_type == "deepseek" else "effort"
         params[cli_type][parameter_name] = reasoning_effort
     return CliParamsConfig.from_dict(params)
 
@@ -3494,6 +3519,21 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
                 },
             )
         injection = []
+    elif cli_type == "deepseek":
+        prepare_cluster_mcp_launcher(
+            home_dir=Path.home(),
+            repo_root=_REPO_ROOT,
+            bridge_url=_cluster_bridge_url(),
+        )
+        patch_path = write_deepseek_mcp_patch(
+            working_dir=profile.working_dir,
+            repo_root=_REPO_ROOT,
+        )
+        cli_params["extra_args"] = _append_missing_cli_arg_pairs(
+            extra_args,
+            [("--patch", str(patch_path))],
+        )
+        injection = []
     else:
         injection = []
     if injection and not all(arg in extra_args for arg in injection):
@@ -3509,8 +3549,6 @@ def _effective_cli_params(
     allow_unsafe_cli: bool = False,
 ) -> CliParamsConfig:
     cli_type = normalize_cli_type(profile.cli_type)
-    if cluster_run_id and cli_type == "deepseek":
-        _raise(409, "deepseek_cluster_unsupported", "DeepSeek Harness 暂不支持集群编排，请关闭该 Bot 的集群模式")
     if cluster_run_id and getattr(profile, "remote_workspace", None) and cli_type == "antigravity":
         _raise(409, "remote_workspace_cluster_unsupported", "远程 Antigravity 暂不支持 Cluster 编排")
     params = with_global_extra_args(params_config, config.CLI_GLOBAL_EXTRA_ARGS)
@@ -3618,8 +3656,6 @@ def _start_cluster_run_if_requested(
         return None
     if str(agent_id or "main").strip().lower() != "main" or solo_mode or internal_continuation:
         return None
-    if normalize_cli_type(profile.cli_type) == "deepseek" and execution_mode == EXECUTION_MODE_CLI:
-        _raise(409, "deepseek_cluster_unsupported", "DeepSeek Harness 暂不支持集群编排，请关闭该 Bot 的集群模式")
     saved_team_state = team_state if isinstance(team_state, dict) else {}
     request = ClusterRunRequest(
         bot_alias=alias,
@@ -3696,8 +3732,6 @@ async def _ensure_cluster_main_conversation(
     user_id: int,
     execution_mode: str,
 ) -> tuple[str, dict[str, Any]]:
-    if normalize_cli_type(profile.cli_type) == "deepseek" and execution_mode == EXECUTION_MODE_CLI:
-        _raise(409, "deepseek_cluster_unsupported", "DeepSeek Harness 暂不支持集群编排，请关闭该 Bot 的集群模式")
     _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, "main")
     while True:
         parent_conversation_id = str(session.active_conversation_id or "").strip()
@@ -4072,8 +4106,10 @@ def _context_usage_signature(context_usage: dict[str, Any] | None) -> tuple[tupl
 
 def _build_deepseek_context_usage(
     usage: dict[str, Any] | None, *, session_id: str,
+    context_usage: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if not usage:
+    base = dict(context_usage) if isinstance(context_usage, dict) else {}
+    if not usage and not base:
         return None
     names = {
         "input_tokens": "input_tokens", "output_tokens": "output_tokens",
@@ -4084,11 +4120,19 @@ def _build_deepseek_context_usage(
         target: usage[source] for source, target in names.items()
         if type(usage.get(source)) is int and usage[source] >= 0
     }
-    if not values:
+    if not values and not base:
         return None
+    has_context = any(
+        key in base for key in ("used_tokens", "context_used", "context_window", "context_left_percent")
+    )
     return {
-        "provider": "deepseek", "source": "deepseek_headless", "session_id": session_id,
-        "usage_scope": "turn", "status_text": "本轮用量", **values,
+        **base,
+        "provider": "deepseek",
+        "source": base.get("source") or "deepseek_headless",
+        "session_id": session_id,
+        "usage_scope": base.get("usage_scope") or ("conversation" if has_context else "turn"),
+        "status_text": base.get("status_text") or ("上下文占用" if has_context else "本轮用量"),
+        **values,
     }
 
 
@@ -4234,8 +4278,6 @@ async def _resolve_cli_context_usage_bounded(
     if not normalized_session_id:
         return None
     normalized_cli_type = cli_data_provider(cli_type)
-    if normalized_cli_type == "deepseek":
-        return None
     loop = asyncio.get_running_loop()
     task = loop.run_in_executor(
         _CLI_CONTEXT_USAGE_EXECUTOR,
@@ -5754,8 +5796,6 @@ async def _stream_cli_chat(
     user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     cli_type = normalize_cli_type(profile.cli_type)
-    if cli_type == "deepseek" and cluster_run_id:
-        _raise(409, "deepseek_cluster_unsupported", "DeepSeek Harness 暂不支持集群编排")
     remote_chat = None
     if getattr(profile, "remote_workspace", None):
         if cluster_run_id and cli_type == "antigravity":
@@ -6325,7 +6365,9 @@ async def _stream_cli_chat(
                         )
                     elif cli_type == "deepseek":
                         status_context_usage = _build_deepseek_context_usage(
-                            preview_state.result().terminal_usage, session_id=status_session_id,
+                            preview_state.result().terminal_usage,
+                            session_id=status_session_id,
+                            context_usage=status_context_usage,
                         )
                     if status_context_usage:
                         status_context_usage = _with_turn_model(status_context_usage, turn_model)
@@ -6614,7 +6656,9 @@ async def _stream_cli_chat(
                 )
             elif cli_type == "deepseek":
                 context_usage = _build_deepseek_context_usage(
-                    parsed_result.terminal_usage, session_id=native_session_id,
+                    parsed_result.terminal_usage,
+                    session_id=native_session_id,
+                    context_usage=context_usage,
                 )
             context_usage = _with_turn_model(context_usage, turn_model)
             if cli_type != "deepseek":

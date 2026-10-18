@@ -322,9 +322,6 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      if (cliType === "deepseek" && bot.cluster?.enabled) {
-        await client.updateClusterConfig(bot.alias, { enabled: false });
-      }
       if (cliType === "deepseek" && getRuntimeBackend(bot) !== "cli") {
         await client.updateBotExecutionConfig(bot.alias, {
           ...buildExecutionConfig("cli"),
