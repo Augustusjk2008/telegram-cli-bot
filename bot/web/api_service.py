@@ -4137,14 +4137,15 @@ def _build_deepseek_context_usage(
     base = dict(context_usage) if isinstance(context_usage, dict) else {}
     if not usage and not base:
         return None
+    turn_usage = usage if isinstance(usage, dict) else {}
     names = {
         "input_tokens": "input_tokens", "output_tokens": "output_tokens",
         "cache_read_input_tokens": "cache_read_tokens",
         "cache_creation_input_tokens": "cache_write_tokens", "total_tokens": "total_tokens",
     }
     values = {
-        target: usage[source] for source, target in names.items()
-        if type(usage.get(source)) is int and usage[source] >= 0
+        target: turn_usage[source] for source, target in names.items()
+        if type(turn_usage.get(source)) is int and turn_usage[source] >= 0
     }
     if not values and not base:
         return None

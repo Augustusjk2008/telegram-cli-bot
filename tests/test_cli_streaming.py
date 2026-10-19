@@ -1000,6 +1000,31 @@ def test_deepseek_context_usage_merges_projection_and_turn_usage():
     assert result["total_tokens"] == 6160
 
 
+def test_deepseek_context_usage_keeps_projection_without_turn_usage():
+    result = api_service._build_deepseek_context_usage(
+        None,
+        session_id="session-dsh",
+        context_usage={
+            "provider": "deepseek",
+            "source": "deepseek_context_pressure",
+            "used_tokens": 6150,
+            "context_window": 1_000_000,
+            "context_left_percent": 99,
+        },
+    )
+
+    assert result == {
+        "provider": "deepseek",
+        "source": "deepseek_context_pressure",
+        "session_id": "session-dsh",
+        "usage_scope": "conversation",
+        "used_tokens": 6150,
+        "context_window": 1_000_000,
+        "context_left_percent": 99,
+        "status_text": "上下文占用",
+    }
+
+
 @pytest.mark.asyncio
 async def test_deepseek_stream_publishes_context_pressure_with_turn_usage(usage_manager, monkeypatch):
     observed = _patch_deepseek_runtime(
