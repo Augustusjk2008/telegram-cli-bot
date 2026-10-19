@@ -208,7 +208,7 @@ type TranscriptRenderItem =
 
 function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
   return (
-    entry.trace?.kind === "commentary"
+    entry.kind === "process"
     || ["permission", "error", "cancelled"].includes(entry.kind)
   );
 }

@@ -838,6 +838,12 @@ def build_cli_command(
         params = params_config.get_params("claude")
         if params.get("disable_prompts"):
             env["CLAUDE_CODE_DISABLE_PROMPTS"] = "1"
+    elif kind == "deepseek":
+        permission_mode = str(
+            params_config.get_param("deepseek", "permission_mode", "workspace-write")
+            or "workspace-write"
+        ).strip()
+        env["DSH_PERMISSION_MODE"] = permission_mode or "workspace-write"
     return cmd, use_stdin
 
 

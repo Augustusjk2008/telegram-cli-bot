@@ -186,13 +186,16 @@ class TestBuildCliCommand:
             "--permission-mode",
             "bypassPermissions",
         ]
+        params_config.deepseek["permission_mode"] = "danger-full-access"
 
         clamped = clamp_unsafe_cli_params(params_config, allow_unsafe_cli=False)
         allowed = clamp_unsafe_cli_params(params_config, allow_unsafe_cli=True)
 
         assert clamped.codex["extra_args"] == ["--safe"]
         assert clamped.claude["extra_args"] == ["--keep"]
+        assert clamped.deepseek["permission_mode"] == "workspace-write"
         assert allowed.codex["extra_args"] == params_config.codex["extra_args"]
+        assert allowed.deepseek["permission_mode"] == "danger-full-access"
 
 
 class TestParseCodexJsonLine:

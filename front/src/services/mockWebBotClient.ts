@@ -307,8 +307,8 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
   if (cliType === "deepseek") {
     return {
       cliType,
-      params: { model: null, reasoning_effort: null, extra_args: [] },
-      defaults: { model: null, reasoning_effort: null, extra_args: [] },
+      params: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
+      defaults: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
       schema: {
         model: {
           type: "string", description: "模型选择", nullable: true,
@@ -317,6 +317,10 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
         reasoning_effort: {
           type: "string", description: "思考深度", nullable: true,
           enum: ["none", "off", "low", "high", "max"],
+        },
+        permission_mode: {
+          type: "string", description: "权限模式",
+          enum: ["read-only", "workspace-write", "danger-full-access"],
         },
         extra_args: { type: "string_list", description: "额外参数（仅支持 --patch）" },
       },

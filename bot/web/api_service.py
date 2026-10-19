@@ -5294,12 +5294,17 @@ class _CliProcessLifecycle:
     finalizer_started: bool = False
 
 
-def _create_cli_process_lifecycle(process: Any) -> _CliProcessLifecycle:
+def _create_cli_process_lifecycle(
+    process: Any,
+    *,
+    contain_process_tree: bool = True,
+) -> _CliProcessLifecycle:
     lifecycle = _CliProcessLifecycle(
         process=process,
         process_tree=attach_process_tree(
             process,
             terminate_fallback=_terminate_process_sync,
+            use_job=contain_process_tree,
         ),
     )
     try:
@@ -6026,6 +6031,9 @@ async def _stream_cli_chat(
                 try:
                     check_chat_stopped(session)
                     spawn_started_at = time.perf_counter()
+                    # DeepSeek Harness owns a Windows Job runner for pwsh. Nesting
+                    # the CLI inside Orbit's Job makes that runner fail before spawn.
+                    deepseek_windows_process = cli_type == "deepseek" and os.name == "nt"
                     process = subprocess.Popen(
                         cmd,
                         stdin=subprocess.PIPE if use_stdin else None,
@@ -6037,25 +6045,32 @@ async def _stream_cli_chat(
                         env=env,
                         encoding="utf-8",
                         errors="replace",
-                        **build_chat_cli_process_kwargs(suspended=True),
+                        **build_chat_cli_process_kwargs(
+                            suspended=not deepseek_windows_process,
+                            breakaway_from_job=deepseek_windows_process,
+                        ),
                     )
-                    process_lifecycle = _create_cli_process_lifecycle(process)
+                    process_lifecycle = _create_cli_process_lifecycle(
+                        process,
+                        contain_process_tree=not deepseek_windows_process,
+                    )
                     if cli_type in {"antigravity", "deepseek"}:
                         process_lifecycle.stderr_reader = _start_process_stderr_reader(process)
                     active_lifecycle = process_lifecycle
                     with session._lock:
                         session.process = process
-                    try:
-                        await asyncio.to_thread(
-                            resume_suspended_process,
-                            process,
-                            process_lifecycle.process_tree,
-                        )
-                    except Exception as exc:
-                        await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
-                        active_lifecycle = None
-                        check_chat_stopped(session)
-                        _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
+                    if not deepseek_windows_process:
+                        try:
+                            await asyncio.to_thread(
+                                resume_suspended_process,
+                                process,
+                                process_lifecycle.process_tree,
+                            )
+                        except Exception as exc:
+                            await _cleanup_cli_process_lifecycle(process_lifecycle, abort=True)
+                            active_lifecycle = None
+                            check_chat_stopped(session)
+                            _raise(500, "cli_process_isolation_failed", f"CLI 进程隔离初始化失败: {exc}")
                     process_pid = int(getattr(process, "pid", 0) or 0)
                     diag_log_event(
                         logger,

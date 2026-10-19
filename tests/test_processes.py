@@ -98,6 +98,21 @@ def test_process_tree_handle_terminates_posix_group_after_leader_exits(monkeypat
     assert fallback_calls == []
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job containment fallback")
+def test_process_tree_can_use_fallback_without_creating_a_windows_job() -> None:
+    fallback_calls: list[object] = []
+    process = object()
+    handle = processes.attach_process_tree(
+        process,
+        terminate_fallback=lambda current: fallback_calls.append(current),
+        use_job=False,
+    )
+
+    assert handle.is_contained is False
+    handle.terminate()
+    assert fallback_calls == [process]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows suspended process contract")
 def test_windows_chat_process_is_contained_before_it_is_resumed(tmp_path) -> None:
     assert "suspended" in inspect.signature(
@@ -122,3 +137,10 @@ def test_windows_chat_process_is_contained_before_it_is_resumed(tmp_path) -> Non
     finally:
         process_tree.terminate()
         process_tree.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process creation flags")
+def test_windows_chat_process_can_request_breakaway_from_parent_job() -> None:
+    kwargs = processes.build_chat_cli_process_kwargs(breakaway_from_job=True)
+
+    assert int(kwargs["creationflags"]) & processes._CREATE_BREAKAWAY_FROM_JOB

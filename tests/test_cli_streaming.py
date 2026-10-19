@@ -1033,6 +1033,47 @@ async def test_deepseek_stream_publishes_context_pressure_with_turn_usage(usage_
     assert published["total_tokens"] == 6160
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allow_unsafe_cli", "expected_mode"),
+    [(False, "workspace-write"), (True, "danger-full-access")],
+)
+async def test_deepseek_stream_applies_permission_mode(usage_manager, monkeypatch, allow_unsafe_cli, expected_mode):
+    usage_manager.main_profile.cli_params.set_param("deepseek", "permission_mode", "danger-full-access")
+    observed = _patch_deepseek_runtime(
+        usage_manager,
+        monkeypatch,
+        [_DeepSeekProcess(_deepseek_events())],
+    )
+
+    await _collect_stream_events(
+        api_service._stream_cli_chat(
+            usage_manager,
+            "main",
+            1001,
+            "hello",
+            allow_unsafe_cli=allow_unsafe_cli,
+        )
+    )
+
+    assert observed["kwargs"][0]["env"]["DSH_PERMISSION_MODE"] == expected_mode
+
+
+@pytest.mark.asyncio
+async def test_deepseek_windows_process_is_not_nested_in_orbit_job(usage_manager, monkeypatch):
+    observed = _patch_deepseek_runtime(
+        usage_manager,
+        monkeypatch,
+        [_DeepSeekProcess(_deepseek_events())],
+    )
+
+    await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"))
+
+    creationflags = int(observed["kwargs"][0].get("creationflags", 0) or 0)
+    assert creationflags & 0x00000004 == 0
+    assert creationflags & 0x01000000 != 0
+
+
 def _patch_deepseek_runtime(manager, monkeypatch, processes):
     profile = manager.main_profile
     profile.cli_type, profile.cli_path = "deepseek", "dsh"

@@ -203,8 +203,9 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   const params = await client.getCliParams("deepseek-migration");
   expect(params).toMatchObject({
     cliType: "deepseek",
-    params: { model: null, reasoning_effort: null, extra_args: [] },
-    defaults: { model: null, reasoning_effort: null, extra_args: [] },
+    params: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
+    defaults: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
   });
-  expect(Object.keys(params.schema)).toEqual(["model", "reasoning_effort", "extra_args"]);
+  expect(Object.keys(params.schema)).toEqual(["model", "reasoning_effort", "permission_mode", "extra_args"]);
+  expect(await screen.findByLabelText("权限模式")).toHaveValue("workspace-write");
 });

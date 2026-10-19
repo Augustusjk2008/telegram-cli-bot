@@ -124,7 +124,13 @@ DEFAULT_ANTIGRAVITY_PARAMS = {
     "extra_args": [],
 }
 
-DEFAULT_DEEPSEEK_PARAMS = {"model": None, "reasoning_effort": None, "extra_args": []}
+DEEPSEEK_PERMISSION_MODES = ["read-only", "workspace-write", "danger-full-access"]
+DEFAULT_DEEPSEEK_PARAMS = {
+    "model": None,
+    "reasoning_effort": None,
+    "permission_mode": "workspace-write",
+    "extra_args": [],
+}
 DEEPSEEK_MODEL_OPTIONS = ["none", "deepseek-flash", "deepseek-v4-pro"]
 
 ANTIGRAVITY_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"]
@@ -149,6 +155,11 @@ PARAM_SCHEMA_MAP = {
             "description": "思考深度，none 使用 Harness 配置，off 关闭思考",
             "nullable": True,
             "enum": ["none", "off", "low", "high", "max"],
+        },
+        "permission_mode": {
+            "type": "string",
+            "description": "权限模式",
+            "enum": DEEPSEEK_PERMISSION_MODES,
         },
         "extra_args": {
             "type": "string_list",
@@ -358,6 +369,8 @@ def clamp_unsafe_cli_params(params_config: CliParamsConfig, *, allow_unsafe_cli:
             if isinstance(params, dict):
                 params["yolo"] = False
                 params["extra_args"] = _filter_unsafe_extra_args(cli_type, params.get("extra_args", []))
+                if cli_type == "deepseek" and params.get("permission_mode") == "danger-full-access":
+                    params["permission_mode"] = "workspace-write"
     return CliParamsConfig.from_dict(data)
 
 
@@ -810,7 +823,7 @@ def get_params_help(cli_type: str) -> str:
     """获取指定 CLI 类型的参数说明"""
 
     help_texts = {
-        "deepseek": "DeepSeek Harness 支持模型和思考深度选择；none 沿用 Harness 配置。extra_args 仅支持 --patch <文件路径>。",
+        "deepseek": "DeepSeek Harness 支持模型、思考深度和权限模式选择；headless 模式需要 danger-full-access 才能免审批运行 pwsh。extra_args 仅支持 --patch <文件路径>。",
         "claude": """
 <b>Claude CLI 可配置参数:</b>
 

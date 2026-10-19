@@ -3,10 +3,54 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 
 from bot.platform.executables import build_executable_invocation
+
+
+_DSH_ENTRY_RE = re.compile(
+    r"(?i)(?P<path>(?:%~dp0|%[A-Z_][A-Z0-9_]*%|[A-Za-z]:|\\\\|/)?"
+    r"[^\"\r\n]*node_modules[\\/]+@deepseek-ai[\\/]+dsh[\\/]+lib[\\/]+bin\.js)"
+)
+
+
+def _resolve_dsh_entry_from_shim(executable: Path, shim: str) -> Path | None:
+    candidates: list[Path] = []
+    for match in _DSH_ENTRY_RE.finditer(shim):
+        raw_path = match.group("path")
+        expanded = raw_path.replace("%~dp0", str(executable.parent) + os.sep)
+        expanded = os.path.expandvars(expanded)
+        for key, value in os.environ.items():
+            expanded = expanded.replace(f"%{key}%", value)
+        candidate = Path(expanded)
+        if not candidate.is_absolute():
+            candidate = executable.parent / candidate
+        candidates.append(candidate)
+
+    candidates.extend(
+        [
+            executable.parent / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js",
+            executable.parent.parent / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js",
+        ]
+    )
+    appdata = str(os.environ.get("APPDATA") or "").strip()
+    if appdata:
+        candidates.append(
+            Path(appdata) / "npm" / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        key = str(resolved).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.is_file():
+            return resolved
+    return None
 
 
 def build_deepseek_invocation(resolved_cli: str, params: dict[str, Any]) -> list[str]:
@@ -25,11 +69,16 @@ def build_deepseek_invocation(resolved_cli: str, params: dict[str, Any]) -> list
             shim = executable.read_text(encoding="utf-8").replace("\\", "/")
         except (OSError, UnicodeError):
             shim = ""
-        if "node_modules/@deepseek-ai/dsh/lib/bin.js" in shim:
-            entry = executable.parent / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
+        resolved_entry = _resolve_dsh_entry_from_shim(executable, shim)
+        if resolved_entry is not None:
+            entry = resolved_entry
     try:
         manifest = json.loads((entry.parent.parent / "package.json").read_text(encoding="utf-8"))
-        is_npm_cli = entry.name == "bin.js" and manifest.get("name") == "@deepseek-ai/dsh"
+        is_npm_cli = (
+            entry.name == "bin.js"
+            and isinstance(manifest, dict)
+            and manifest.get("name") == "@deepseek-ai/dsh"
+        )
     except (OSError, ValueError):
         is_npm_cli = False
 

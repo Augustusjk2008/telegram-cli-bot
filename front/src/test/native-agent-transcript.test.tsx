@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
 
-function processEntry(id: string, summary: string, seq: number): NativeAgentTranscriptEntry {
+function processEntry(
+  id: string,
+  summary: string,
+  seq: number,
+  traceKind: "commentary" | "reasoning" | "status" = "commentary",
+): NativeAgentTranscriptEntry {
   return {
     id,
     seq,
@@ -14,9 +19,37 @@ function processEntry(id: string, summary: string, seq: number): NativeAgentTran
     trace: {
       id: "trace-" + id,
       sequence: seq,
-      kind: "commentary",
+      kind: traceKind,
       summary,
       source: "native_agent",
+    },
+  };
+}
+
+function toolEntry(
+  id: string,
+  kind: "tool_call" | "tool_result",
+  summary: string,
+  seq: number,
+): NativeAgentTranscriptEntry {
+  const isCall = kind === "tool_call";
+  return {
+    id,
+    seq,
+    kind: isCall ? "tool" : "event",
+    label: isCall ? "read" : "工具结果",
+    summary,
+    body: summary,
+    collapsedByDefault: true,
+    trace: {
+      id: `trace-${id}`,
+      sequence: seq,
+      kind,
+      summary,
+      source: "native",
+      rawType: `deepseek_${kind}`,
+      callId: "call-" + id,
+      payload: { output: summary },
     },
   };
 }
@@ -134,5 +167,32 @@ describe("NativeAgentTranscript", () => {
     expect(transcript.querySelector('[data-transcript-entry-id="cli-process"]')).not.toBeInTheDocument();
     fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
     expect(transcript.querySelector('[data-transcript-entry-id="cli-process"]')).toBeInTheDocument();
+  });
+
+  it("splits DeepSeek tool events at each process boundary", () => {
+    render(
+      <NativeAgentTranscript
+        entries={[
+          processEntry("step-1", "开始步骤 1", 1, "status"),
+          toolEntry("call-1", "tool_call", "读取文件 A", 2),
+          toolEntry("result-1", "tool_result", "文件 A 已读取", 3),
+          processEntry("step-2", "先分析文件 B", 4, "reasoning"),
+          toolEntry("call-2", "tool_call", "读取文件 B", 5),
+          toolEntry("result-2", "tool_result", "文件 B 已读取", 6),
+        ]}
+        resultText=""
+        state="streaming"
+        mode="cli"
+        traceCount={6}
+        processCount={2}
+        toolCallCount={2}
+        traceLoaded
+      />,
+    );
+
+    const transcript = screen.getByTestId("native-agent-transcript");
+    expect(within(transcript).getAllByTestId("native-agent-event-group")).toHaveLength(2);
+    expect(within(transcript).getAllByText("过程 1")).toHaveLength(1);
+    expect(within(transcript).getAllByText("过程 2")).toHaveLength(1);
   });
 });

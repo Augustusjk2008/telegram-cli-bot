@@ -211,7 +211,7 @@ export function BotCliParamsPanel({
       {notice ? <div className="mt-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">{notice}</div> : null}
       {loading ? <div className="mt-4 text-sm text-[var(--muted)]">加载中...</div> : null}
       {cliParams?.cliType === "deepseek" ? (
-        <p className="mt-3 text-sm text-[var(--muted)]">模型和思考深度可在聊天中选择；默认模型和 none 思考深度继承 Harness 配置，off 关闭思考。</p>
+        <p className="mt-3 text-sm text-[var(--muted)]">模型和思考深度可在聊天中选择；headless 模式下运行 pwsh 等工具需要选择 danger-full-access。</p>
       ) : null}
 
       <div className="mt-3 space-y-3">

@@ -26,7 +26,12 @@ def test_deepseek_uses_stdin_and_only_returned_session_ids(monkeypatch, prompt):
     monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", ["gpt-test"])
     monkeypatch.setattr("bot.deepseek_cli.build_executable_invocation", lambda path: [path])
     config = CliParamsConfig()
-    assert get_default_params("deepseek") == {"model": None, "reasoning_effort": None, "extra_args": []}
+    assert get_default_params("deepseek") == {
+        "model": None,
+        "reasoning_effort": None,
+        "permission_mode": "workspace-write",
+        "extra_args": [],
+    }
     config.deepseek["extra_args"] = ["--patch", "C:\\配置 文件\\model.yml"]
     for session_id in (None, "session-returned"):
         command, stdin = build_cli_command(
@@ -40,6 +45,18 @@ def test_deepseek_uses_stdin_and_only_returned_session_ids(monkeypatch, prompt):
         assert prompt not in command
     restored = CliParamsConfig.from_dict(config.to_dict())
     assert restored.deepseek == config.deepseek
+
+
+@pytest.mark.parametrize("permission_mode", ["workspace-write", "danger-full-access"])
+def test_deepseek_permission_mode_is_exported_to_harness_env(permission_mode):
+    config = CliParamsConfig.from_dict({"deepseek": {"permission_mode": permission_mode}})
+    env = {}
+
+    command, stdin = build_cli_command("deepseek", "dsh", "hello", env, config)
+
+    assert command[-2:] == ["--json", "-"]
+    assert stdin is True
+    assert env["DSH_PERMISSION_MODE"] == permission_mode
 
 
 @pytest.fixture
@@ -77,6 +94,43 @@ def test_deepseek_npm_entry_runs_once_and_preserves_stdin_and_session(npm_dsh):
     assert result["args"] == ["--profile", "headless", "--json", "--session-id", "session-existing", "-"]
     assert result["input"] == "中文\n继续"
     assert result["patch"] is None
+
+
+def test_deepseek_wrapper_can_reference_npm_package_outside_shim_directory(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the Harness launcher regression")
+
+    package = tmp_path / "global" / "node_modules" / "@deepseek-ai" / "dsh"
+    (package / "lib").mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({"name": "@deepseek-ai/dsh"}),
+        encoding="utf-8",
+    )
+    entry = package / "lib" / "bin.js"
+    entry.write_text("", encoding="utf-8")
+    shim = tmp_path / "shim" / "dsh.cmd"
+    shim.parent.mkdir()
+    shim.write_text(f'@node "{entry}" %*', encoding="utf-8")
+
+    command = build_deepseek_invocation(str(shim), {"model": "deepseek-flash"})
+
+    assert command[0] == node
+    assert Path(command[2]) == entry.resolve()
+
+
+def test_deepseek_invalid_package_manifest_does_not_raise_none_get(tmp_path):
+    package = tmp_path / "global" / "node_modules" / "@deepseek-ai" / "dsh"
+    (package / "lib").mkdir(parents=True)
+    (package / "package.json").write_text("null", encoding="utf-8")
+    entry = package / "lib" / "bin.js"
+    entry.write_text("", encoding="utf-8")
+    shim = tmp_path / "shim" / "dsh.cmd"
+    shim.parent.mkdir()
+    shim.write_text(f'@node "{entry}" %*', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="模型选择需要 npm 安装"):
+        build_deepseek_invocation(str(shim), {"model": "deepseek-flash"})
 
 
 @pytest.mark.parametrize("selection,expected", [

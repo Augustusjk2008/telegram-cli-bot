@@ -21,6 +21,7 @@ if os.name == "nt":
     _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
     _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
     _CREATE_SUSPENDED = 0x00000004
+    _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
     class _JobObjectBasicLimitInformation(ctypes.Structure):
         _fields_ = [
@@ -69,6 +70,7 @@ if os.name == "nt":
 else:
     _kernel32 = None
     _CREATE_SUSPENDED = 0
+    _CREATE_BREAKAWAY_FROM_JOB = 0
 
 
 class ProcessTreeJob:
@@ -189,6 +191,7 @@ def attach_process_tree(
     process: Any,
     *,
     terminate_fallback: Callable[[Any], None] | None = None,
+    use_job: bool = True,
 ) -> ProcessTreeHandle:
     process_group_id = None
     if os.name != "nt" and isinstance(process, _POPEN_TYPE):
@@ -199,7 +202,7 @@ def attach_process_tree(
             process_group_id = None
     return ProcessTreeHandle(
         process,
-        attach_process_tree_job(process),
+        attach_process_tree_job(process) if use_job else None,
         terminate_fallback=terminate_fallback,
         process_group_id=process_group_id,
     )
@@ -211,7 +214,11 @@ def build_subprocess_group_kwargs() -> dict:
     return {"start_new_session": True}
 
 
-def build_chat_cli_process_kwargs(*, suspended: bool = False) -> dict:
+def build_chat_cli_process_kwargs(
+    *,
+    suspended: bool = False,
+    breakaway_from_job: bool = False,
+) -> dict:
     if os.name != "nt":
         return {"start_new_session": True}
 
@@ -222,6 +229,8 @@ def build_chat_cli_process_kwargs(*, suspended: bool = False) -> dict:
     )
     if suspended:
         creationflags |= _CREATE_SUSPENDED
+    if breakaway_from_job:
+        creationflags |= _CREATE_BREAKAWAY_FROM_JOB
     if not creationflags:
         return {}
     return {"creationflags": creationflags}
