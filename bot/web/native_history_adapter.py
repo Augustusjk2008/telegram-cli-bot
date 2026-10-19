@@ -1061,22 +1061,18 @@ def _consume_live_deepseek_line(item: dict[str, Any], state: dict[str, Any]) -> 
             )
         ]
     if event_type == "status":
-        summaries = {
-            "turn_start": "DeepSeek Harness 开始执行",
-            "step_start": f"开始步骤 {item.get('step', '')}".strip(),
-            "step_end": f"步骤 {item.get('step', '')} 已结束".strip(),
-            "turn_end": "DeepSeek Harness 执行结束",
-        }
-        if phase not in summaries:
+        if phase != "turn_end":
             return []
-        kind = "status"
-        summary = summaries[phase]
         reason = item.get("reason")
-        if phase == "turn_end" and isinstance(reason, dict):
+        kind = "status"
+        summary = ""
+        if isinstance(reason, dict):
             if reason.get("kind") == "error":
                 kind, summary = "error", "DeepSeek Harness 执行失败"
             elif reason.get("kind") == "aborted":
                 kind, summary = "cancelled", "DeepSeek Harness 已停止"
+        if not summary:
+            return []
         return [
             _trace_event(kind, raw_type=f"deepseek_{phase}", summary=summary, payload=payload)
         ]

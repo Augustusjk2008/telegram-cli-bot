@@ -133,6 +133,29 @@ def test_deepseek_invalid_package_manifest_does_not_raise_none_get(tmp_path):
         build_deepseek_invocation(str(shim), {"model": "deepseek-flash"})
 
 
+def test_deepseek_wrapper_uses_bundled_node_from_shim(tmp_path):
+    package = tmp_path / "global" / "node_modules" / "@deepseek-ai" / "dsh"
+    (package / "lib").mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({"name": "@deepseek-ai/dsh"}), encoding="utf-8")
+    entry = package / "lib" / "bin.js"
+    entry.write_text("", encoding="utf-8")
+    shim = tmp_path / "shim" / "dsh.cmd"
+    bundled_node = tmp_path / "runtimes" / "node-v22.23.3-win-x64" / "node.exe"
+    bundled_node.parent.mkdir(parents=True)
+    bundled_node.write_text("", encoding="utf-8")
+    shim.parent.mkdir()
+    shim.write_text(
+        "@echo off\n"
+        "set \"PATH=%~dp0..\\runtimes\\node-v22.23.3-win-x64;%PATH%\"\n"
+        f'"%~dp0..\\runtimes\\node-v22.23.3-win-x64\\node.exe" "{entry}" %*',
+        encoding="utf-8",
+    )
+
+    command = build_deepseek_invocation(str(shim), {"model": "deepseek-flash"})
+
+    assert Path(command[0]) == bundled_node.resolve()
+
+
 @pytest.mark.parametrize("selection,expected", [
     ({"model": "deepseek-v4-pro"}, {"model": "deepseek-v4-pro", "reasoningEffort": "low"}),
     ({"reasoning_effort": "off"}, {"model": "custom-model", "reasoningEffort": "off"}),

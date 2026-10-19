@@ -30,6 +30,7 @@ def test_deepseek_trace_pairs_interleaved_tools_and_separates_thinking_from_body
         {"type": "tool_result", "callId": "shell-1", "status": "completed", "result": "workspace"},
         {"type": "tool_result", "callId": "read-1", "status": "completed", "result": {"text": "中文内容"}},
         {"type": "text", "text": "读取完成", "truncated": True},
+        {"type": "status", "phase": "turn_end", "turn": 1, "reason": {"kind": "completed"}},
         {"type": "final", "text": "读取完成，工作目录为 workspace"},
         {"type": "extension", "data": "ignored"},
     )
@@ -47,6 +48,12 @@ def test_deepseek_trace_pairs_interleaved_tools_and_separates_thinking_from_body
     thinking = next(event for event in trace if event["kind"] == "reasoning")
     assert thinking["summary"] == "先读取文件"
     assert thinking["payload"]["truncated"] is True
+    assert [event["kind"] for event in trace] == [
+        "reasoning", "tool_call", "tool_call", "tool_result", "tool_result",
+    ]
+    assert all(not event["raw_type"].startswith("deepseek_") or event["raw_type"] in {
+        "deepseek_thinking", "deepseek_tool_call", "deepseek_tool_result",
+    } for event in trace)
     assert all(event["kind"] != "permission" for event in trace)
     assert all(event["payload"]["type"] not in {"session", "text", "final", "extension"} for event in trace)
 
@@ -62,10 +69,10 @@ def test_deepseek_trace_deduplicates_step_replay_without_losing_later_steps():
              "usage": {"inputTokens": 120, "cacheReadTokens": 384}},
         ), state))
 
-    assert len(trace) == 6
+    assert len(trace) == 2
+    assert [event["kind"] for event in trace] == ["reasoning", "reasoning"]
     assert [event["payload"]["step"] for event in trace if event["kind"] == "reasoning"] == [1, 2]
-    assert all(event["payload"]["usage"] == {"inputTokens": 120, "cacheReadTokens": 384}
-               for event in trace if event["raw_type"] == "deepseek_step_end")
+    assert all(event["raw_type"] == "deepseek_thinking" for event in trace)
 
 
 @pytest.mark.parametrize(("reason", "kind"), [("error", "error"), ("aborted", "cancelled")])
