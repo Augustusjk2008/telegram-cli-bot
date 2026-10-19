@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,32 @@ def test_env_service_saves_deepseek_cli_type(tmp_path):
     cli_type = next(item for item in snapshot["schema"] if item["key"] == "CLI_TYPE")
     assert "deepseek" in cli_type["options"]
     assert "CLI_TYPE=deepseek" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
+def test_cli_model_options_accepts_independent_json_rows(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+    table = {
+        "codex": ["codex-model"],
+        "codex_server": ["server-model"],
+        "claude": ["claude-model"],
+        "antigravity": ["agy-model"],
+        "deepseek": ["dsh-model"],
+    }
+
+    preview = service.reload_preview({"values": {"CLI_MODEL_OPTIONS": json.dumps(table)}})
+
+    assert preview["changedKeys"] == ["CLI_MODEL_OPTIONS"]
+    assert preview["restartRequiredKeys"] == ["CLI_MODEL_OPTIONS"]
+    assert next(item for item in service.snapshot()["items"] if item["key"] == "CLI_MODEL_OPTIONS")["type"] == "json"
+
+    with pytest.raises(EnvValidationError):
+        service.reload_preview({"values": {"CLI_MODEL_OPTIONS": "[\"codex-model\"]"}})
+
+    parsed = config._parse_cli_model_options(json.dumps(table))
+    assert parsed["codex"] == ["codex-model", "none"]
+    assert parsed["deepseek"] == ["dsh-model", "none"]
+    assert config._parse_cli_model_options("legacy-a,legacy-b") == ["legacy-a", "legacy-b", "none"]
 
 
 def test_windows_registry_environment_merges_path_and_expands_values() -> None:

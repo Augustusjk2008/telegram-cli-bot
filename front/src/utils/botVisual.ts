@@ -13,8 +13,10 @@ const BOT_ACCENT_COLORS = [
 
 const BOT_IDENTITY_COLORS = {
   codex: "#5aa7ff",
+  codexServer: "#c084fc",
   claude: "#c79270",
   antigravity: "#6fd99a",
+  deepseek: "#f0a15c",
 } as const;
 
 function hashAlias(alias: string) {
@@ -39,6 +41,8 @@ export function getBotAccentStyle(alias: string): CSSProperties {
 function identityKey(cliType: string | undefined) {
   if (cliType === "claude") return "claude" as const;
   if (cliType === "antigravity") return "antigravity" as const;
+  if (cliType === "deepseek") return "deepseek" as const;
+  if (cliType === "codex_server") return "codexServer" as const;
   return "codex" as const;
 }
 

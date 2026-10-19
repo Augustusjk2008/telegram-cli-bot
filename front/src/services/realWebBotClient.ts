@@ -2947,6 +2947,7 @@ function normalizeEnvFieldType(type: unknown): EnvConfigFieldType {
     || type === "boolean"
     || type === "select"
     || type === "csv"
+    || type === "json"
     || type === "path"
     || type === "password"
     ? type

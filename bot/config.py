@@ -9,7 +9,7 @@ import re
 import sys
 from typing import Any, List, Optional, Set
 
-from bot.cli_params import normalize_cli_model_options
+from bot.cli_params import CLI_MODEL_OPTION_TYPES, normalize_cli_model_options
 from bot.native_agent.legacy_migration import resolve_pi_agent_env
 
 try:
@@ -41,6 +41,36 @@ except ImportError:
 # ============ 环境变量读取 ============
 def _split_csv_env(raw_value: str) -> List[str]:
     return [item.strip() for item in (raw_value or "").split(",") if item.strip()]
+
+
+def _parse_cli_model_options(raw_value: str) -> list[str] | dict[str, list[str]]:
+    """Parse the legacy CSV or the per-CLI JSON model table."""
+    value = str(raw_value or "").strip()
+    if not value:
+        return normalize_cli_model_options([])
+
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return normalize_cli_model_options(_split_csv_env(value))
+
+    if isinstance(payload, list):
+        return normalize_cli_model_options(payload)
+    if not isinstance(payload, dict):
+        logging.warning("忽略无效的 CLI_MODEL_OPTIONS：必须是 CSV 或 JSON object")
+        return normalize_cli_model_options([])
+
+    parsed: dict[str, list[str]] = {}
+    for key, options in payload.items():
+        cli_type = str(key or "").strip().lower()
+        if cli_type not in CLI_MODEL_OPTION_TYPES:
+            logging.warning("忽略无效的 CLI_MODEL_OPTIONS.%s：不支持的 CLI 类型", key)
+            continue
+        if not isinstance(options, list):
+            logging.warning("忽略无效的 CLI_MODEL_OPTIONS.%s：必须是字符串数组", key)
+            continue
+        parsed[cli_type] = normalize_cli_model_options(options)
+    return parsed
 
 
 def _parse_cli_global_extra_args(raw_value: str) -> dict[str, list[str]]:
@@ -228,7 +258,7 @@ def _refresh_environment_config() -> None:
     NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = _get_project_float("NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS", 0.0)
     NATIVE_AGENT_REASONING_EFFORT = _get_project_config("NATIVE_AGENT_REASONING_EFFORT", "").strip()
     NATIVE_AGENT_THINKING_DEPTH = _get_project_config("NATIVE_AGENT_THINKING_DEPTH", "").strip()
-    CLI_MODEL_OPTIONS = normalize_cli_model_options(_split_csv_env(_get_project_config("CLI_MODEL_OPTIONS", "")))
+    CLI_MODEL_OPTIONS = _parse_cli_model_options(_get_project_config("CLI_MODEL_OPTIONS", ""))
     CLI_GLOBAL_EXTRA_ARGS = _parse_cli_global_extra_args(_get_project_config("CLI_GLOBAL_EXTRA_ARGS", "{}"))
     MODEL_PRICES_FILE = _get_project_config("MODEL_PRICES_FILE", "").strip()
     WORKING_DIR = os.path.abspath(os.path.expanduser(os.environ.get("WORKING_DIR", os.getcwd())))

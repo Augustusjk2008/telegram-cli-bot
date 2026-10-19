@@ -8,7 +8,13 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from bot.cli_params import CliParamsConfig, get_default_params, get_params_schema, normalize_cli_model_options
+from bot.cli_params import (
+    CliParamsConfig,
+    get_cli_model_options,
+    get_default_params,
+    get_params_schema,
+    normalize_cli_model_options,
+)
 from bot.config import CLI_MODEL_OPTIONS
 from bot.models import BotProfile, GitCommitMessageCliConfig
 from bot.prompts import render_prompt
@@ -51,7 +57,7 @@ async def run_codex_server_commit_message(
 
 def build_git_commit_cli_config(profile: BotProfile, config: GitCommitMessageCliConfig) -> dict[str, Any]:
     resolved_cli_type = str(config.cli_type or profile.cli_type or "").strip().lower()
-    schema = _apply_cli_model_options(get_params_schema(resolved_cli_type))
+    schema = _apply_cli_model_options(get_params_schema(resolved_cli_type), resolved_cli_type)
     return {
         "cli_type": resolved_cli_type,
         "cli_path": str(config.cli_path or "").strip(),
@@ -148,10 +154,10 @@ def extract_commit_message(text: str) -> str:
     return value.strip()
 
 
-def _apply_cli_model_options(schema: dict[str, Any]) -> dict[str, Any]:
+def _apply_cli_model_options(schema: dict[str, Any], cli_type: str) -> dict[str, Any]:
     next_schema = copy.deepcopy(schema)
     model_field = next_schema.get("model")
-    model_options = normalize_cli_model_options(CLI_MODEL_OPTIONS)
+    model_options = get_cli_model_options(CLI_MODEL_OPTIONS, cli_type) or normalize_cli_model_options([])
     if isinstance(model_field, dict) and model_options:
         model_field["enum"] = model_options
     return next_schema

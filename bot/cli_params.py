@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 MODEL_OPTION_NONE = "none"
 REMOVED_CLI_MODEL_OPTIONS = {"gpt-5.2", "gpt-5.3"}
 REQUIRED_CLI_MODEL_OPTIONS = [MODEL_OPTION_NONE]
+CLI_MODEL_OPTION_TYPES = (
+    "claude",
+    "codex",
+    "codex_server",
+    "antigravity",
+    "deepseek",
+)
 
 
 @dataclass(frozen=True)
@@ -263,6 +270,21 @@ class CliParamsConfig:
             setattr(self, cli_type, get_default_params(cli_type))
 
 
+def get_cli_model_options(options: Any, cli_type: str) -> Optional[List[str]]:
+    """Return a type-specific model list, or ``None`` when no table row exists."""
+    normalized_cli_type = _normalize_cli_type(cli_type)
+    if isinstance(options, Mapping):
+        if normalized_cli_type not in options:
+            return None
+        raw_options = options.get(normalized_cli_type)
+        if not isinstance(raw_options, (list, tuple)):
+            return normalize_cli_model_options([])
+        return normalize_cli_model_options(list(raw_options))
+    if isinstance(options, (list, tuple)):
+        return normalize_cli_model_options(list(options))
+    return normalize_cli_model_options([])
+
+
 def get_default_params(cli_type: str) -> Dict[str, Any]:
     """获取指定 CLI 类型的默认参数。"""
     # 延迟导入，避免 config 加载模型选项时的循环依赖。
@@ -274,7 +296,8 @@ def get_default_params(cli_type: str) -> Dict[str, Any]:
     params = copy.deepcopy(DEFAULT_PARAMS_MAP[cli_type])
     if cli_type in {"antigravity", "deepseek"}:
         return params
-    model = normalize_cli_model_options(CLI_MODEL_OPTIONS)[0]
+    model_options = get_cli_model_options(CLI_MODEL_OPTIONS, cli_type) or normalize_cli_model_options([])
+    model = model_options[0]
     params["model"] = None if model.lower() == MODEL_OPTION_NONE else model
     return params
 

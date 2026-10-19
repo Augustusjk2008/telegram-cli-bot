@@ -19,6 +19,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +34,7 @@ from bot.cli_params import (
     DEEPSEEK_MODEL_OPTIONS,
     clamp_unsafe_cli_params,
     get_cli_output_limits,
+    get_cli_model_options,
     get_default_params,
     get_params_schema,
     normalize_cli_model_options,
@@ -1423,7 +1425,9 @@ def _apply_cli_model_options(
     next_schema = copy.deepcopy(schema)
     model_field = next_schema.get("model")
     resolved_options = normalize_cli_model_options(
-        CLI_MODEL_OPTIONS if model_options is None else model_options
+        (get_cli_model_options(CLI_MODEL_OPTIONS, "codex") or [])
+        if model_options is None
+        else model_options
     )
     if isinstance(model_field, dict) and resolved_options:
         model_field["enum"] = resolved_options
@@ -1486,11 +1490,33 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
         params = profile.cli_params.get_params(resolved_cli_type)
         schema = get_params_schema(resolved_cli_type)
         if resolved_cli_type == "antigravity":
-            schema = _apply_cli_model_options(schema, _get_antigravity_model_options(profile))
+            configured_options = (
+                get_cli_model_options(CLI_MODEL_OPTIONS, resolved_cli_type)
+                if isinstance(CLI_MODEL_OPTIONS, Mapping)
+                else None
+            )
+            if configured_options is None:
+                configured_options = _get_antigravity_model_options(profile)
+            else:
+                configured_options = [
+                    *configured_options,
+                    str(params.get("model") or ""),
+                ]
+            schema = _apply_cli_model_options(schema, configured_options)
         elif resolved_cli_type == "deepseek":
-            schema = _apply_cli_model_options(schema, [*DEEPSEEK_MODEL_OPTIONS, str(params.get("model") or "")])
+            table_options = (
+                get_cli_model_options(CLI_MODEL_OPTIONS, resolved_cli_type)
+                if isinstance(CLI_MODEL_OPTIONS, Mapping)
+                else None
+            )
+            configured_options = DEEPSEEK_MODEL_OPTIONS if table_options is None else table_options
+            schema = _apply_cli_model_options(
+                schema,
+                [*configured_options, str(params.get("model") or "")],
+            )
         else:
-            schema = _apply_cli_model_options(schema)
+            configured_options = get_cli_model_options(CLI_MODEL_OPTIONS, resolved_cli_type) or []
+            schema = _apply_cli_model_options(schema, configured_options)
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))

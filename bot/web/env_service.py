@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -67,7 +68,15 @@ _NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("CLI_TYPE", "CLI 类型", "主 Bot 使用的本地 CLI。", "select", "codex", "basic", options=("codex", "codex_server", "claude", "antigravity", "deepseek")),
     EnvField("CLI_PATH", "CLI 路径", "CLI 可执行文件路径或 PATH 中的命令名。", "path", "codex", "basic"),
-    EnvField("CLI_MODEL_OPTIONS", "模型选项", "聊天页模型选择器候选值。", "csv", "", "basic"),
+    EnvField(
+        "CLI_MODEL_OPTIONS",
+        "模型选项表",
+        "JSON 对象，按 claude/codex/codex_server/antigravity/deepseek 分别填写聊天页模型候选值；旧 CSV 仍兼容。",
+        "json",
+        "{}",
+        "basic",
+        max_length=32768,
+    ),
     EnvField(
         "CLI_GLOBAL_EXTRA_ARGS",
         "全局 CLI 额外参数",
@@ -321,6 +330,23 @@ def _normalize_csv(value: Any) -> str:
     return ",".join(item.strip() for item in str(value).split(",") if item.strip())
 
 
+def _normalize_json_object(field: EnvField, value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise EnvValidationError(
+            "invalid_env_value",
+            f"{field.key} 必须是 JSON object",
+            {"key": field.key},
+        ) from exc
+    if not isinstance(payload, dict):
+        raise EnvValidationError("invalid_env_value", f"{field.key} 必须是 JSON object", {"key": field.key})
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def _normalize_base_path_value(value: Any) -> str:
     text = str(value or "").strip()
     if not text or text == "/":
@@ -349,6 +375,8 @@ def _normalize_value(field: EnvField, value: Any) -> str:
         normalized = _normalize_number(field, value)
     elif field.type == "csv":
         normalized = _normalize_csv(value)
+    elif field.type == "json":
+        normalized = _normalize_json_object(field, value)
     elif field.key in {"WEB_BASE_PATH", "VITE_BASE_PATH", "VITE_API_BASE_URL"}:
         normalized = _normalize_base_path_value(value)
     else:

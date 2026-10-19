@@ -160,6 +160,30 @@ def test_antigravity_cli_params_include_discovered_models(
     assert payload["schema"]["model"]["enum"] == ["gemini-3.8-flash-medium", "none"]
 
 
+def test_cli_model_options_table_is_applied_per_cli_type(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    table = {
+        "codex": ["codex-model"],
+        "codex_server": ["server-model"],
+        "claude": ["claude-model"],
+        "antigravity": ["agy-model"],
+        "deepseek": ["dsh-model"],
+    }
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", table)
+    monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", table)
+
+    for cli_type, expected in table.items():
+        usage_manager.main_profile.cli_type = cli_type
+        usage_manager.main_profile.cli_path = {
+            "antigravity": "agy",
+            "deepseek": "dsh",
+        }.get(cli_type, cli_type)
+        payload = get_cli_params_payload(usage_manager, "main")
+        assert payload["schema"]["model"]["enum"] == [*expected, "none"]
+
+
 @pytest.mark.asyncio
 async def test_run_cli_chat_consumes_stream_until_done(
     usage_manager: MultiBotManager,

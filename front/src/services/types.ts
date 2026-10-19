@@ -194,7 +194,7 @@ export type LanguageServerInstallOptions = {
   update?: boolean;
 };
 
-export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "path" | "password";
+export type EnvConfigFieldType = "string" | "number" | "boolean" | "select" | "csv" | "json" | "path" | "password";
 
 export type EnvConfigValue = string | number | boolean | string[];
 
