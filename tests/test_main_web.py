@@ -27,6 +27,9 @@ async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, re
     monkeypatch.setattr(main_module, "_allow_runtime_port_fallback", lambda: True)
     fake_native_service = MagicMock()
     fake_native_service.shutdown = AsyncMock()
+    fake_telegram_gateway = SimpleNamespace(stop=AsyncMock())
+    start_telegram_gateway = AsyncMock(return_value=fake_telegram_gateway)
+    monkeypatch.setattr(main_module, "start_telegram_gateway", start_telegram_gateway)
     migration_service = MagicMock()
     migration_service.status.return_value = {"state": migration_state}
     save_sessions = MagicMock()
@@ -43,6 +46,8 @@ async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, re
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
     fake_web_server.start.assert_awaited_once()
+    start_telegram_gateway.assert_awaited_once_with(fake_manager)
+    fake_telegram_gateway.stop.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=restart_requested)
     fake_native_service.shutdown.assert_awaited_once()
     assert save_sessions.call_count == (0 if migration_state == "awaiting_restart" else 1)

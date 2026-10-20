@@ -46,6 +46,7 @@ from bot.native_agent.service import get_native_agent_service
 from bot.storage_lifecycle import stop_all_agent_processes
 from bot.storage_migration import StorageMigrationService
 from bot.storage_runtime import AsyncStorageMigrationService
+from bot.telegram.gateway import start_telegram_gateway
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
@@ -450,13 +451,17 @@ async def run_all_bots():
         storage_migration_service=async_storage_migration_service,
         storage_migration_stop_all_agents=stop_all_agents_for_storage_migration,
     )
+    telegram_gateway = None
     try:
         await web_server.start()
         logger.debug("Web API 已附加到主进程")
         _print_web_access_lines(runtime_bind)
         await _open_local_browser(runtime_bind)
+        telegram_gateway = await start_telegram_gateway(manager)
         await config.RESTART_EVENT.wait()
     finally:
+        if telegram_gateway is not None:
+            await telegram_gateway.stop()
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
         await get_native_agent_service().shutdown()
         # Migration already flushed these sessions before copying. The current

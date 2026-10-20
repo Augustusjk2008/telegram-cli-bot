@@ -193,6 +193,7 @@ SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity", "deepse
 def _refresh_environment_config() -> None:
     """Refresh values derived from the current process environment."""
     global ALLOWED_USER_IDS, CLI_TYPE, CLI_PATH, TCB_CODEX_SERVER_VOICE_ENABLED
+    global TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS
     global NATIVE_AGENT_BACKEND, NATIVE_AGENT_PATH, NATIVE_AGENT_ENABLED, NATIVE_AGENT_PI_HOME
     global NATIVE_AGENT_PI_COMMAND, NATIVE_AGENT_COMMAND, NATIVE_AGENT_PROVIDER, NATIVE_AGENT_MODEL
     global NATIVE_AGENT_BASE_URL, NATIVE_AGENT_API_KEY, NATIVE_AGENT_PI_AGENT
@@ -223,6 +224,15 @@ def _refresh_environment_config() -> None:
             except ValueError:
                 logging.warning("忽略无效的用户ID: %s", uid)
     ALLOWED_USER_IDS = allowed_user_ids
+
+    TELEGRAM_ENABLED = _get_project_bool("TELEGRAM_ENABLED", False)
+    TELEGRAM_BOT_TOKEN = _get_project_config("TELEGRAM_BOT_TOKEN", "").strip()
+    TELEGRAM_ALLOWED_USER_IDS = set()
+    for uid in _split_csv_env(_get_project_config("TELEGRAM_ALLOWED_USER_IDS", "")):
+        if uid.isascii() and uid.isdigit() and int(uid) > 0:
+            TELEGRAM_ALLOWED_USER_IDS.add(int(uid))
+        else:
+            logging.warning("忽略无效的 TELEGRAM_ALLOWED_USER_IDS 项：需要正整数用户 ID")
 
     CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
     configured_cli_path = _get_project_config("CLI_PATH", "").strip()
