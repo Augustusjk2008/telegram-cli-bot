@@ -9,9 +9,10 @@ from typing import Any
 MESSAGE_LIMIT = 4096
 SHORTCUTS = {
     "🤖 智能体": "targets", "✉️ 发消息": "prompt", "🆕 新会话": "new",
-    "📊 状态": "status", "⏹ 停止任务": "stop", "❓ 帮助": "help",
+    "📊 状态": "status", "⏹ 停止任务": "stop", "⚙️ 配置": "config", "❓ 帮助": "help",
 }
 _ROUTE = re.compile(r"\Ato[ \t]+(\S+)(?:[ \t]*\r?\n|[ \t]+)([\s\S]*)\Z", re.IGNORECASE)
+_CONFIG_SETTINGS = {"model", "reasoning", "cluster"}
 
 
 def parse_target_text(text: str) -> tuple[str, str] | None:
@@ -19,6 +20,30 @@ def parse_target_text(text: str) -> tuple[str, str] | None:
     if match is None or not match[2].strip():
         return None
     return match[1].lower(), match[2]
+
+
+def parse_config_text(text: str) -> tuple[str | None, str | None, str | None] | None:
+    """Parse ``/config [alias] [model|reasoning|cluster value]``."""
+    parts = str(text or "").strip().split(None, 3)
+    if not parts or parts[0].lower() != "/config":
+        return None
+    if len(parts) == 1:
+        return None, None, None
+
+    alias: str | None = None
+    setting: str | None = None
+    value: str | None = None
+    index = 1
+    if parts[index].lower() not in _CONFIG_SETTINGS:
+        alias = parts[index].lower()
+        index += 1
+    if index < len(parts):
+        setting = parts[index].lower()
+        if setting not in _CONFIG_SETTINGS:
+            return None
+        index += 1
+        value = parts[index].strip() if index < len(parts) else ""
+    return alias, setting, value
 
 
 def help_text(aliases: list[str]) -> str:
@@ -29,7 +54,9 @@ def help_text(aliases: list[str]) -> str:
         "例如：to dev 帮我分析这个问题\n"
         "也可以在 to dev 后换行输入多行正文或代码。\n"
         "新会话：to <智能体别名> /new（保留旧历史）\n"
-        "底部“智能体”选择目标，“发消息”弹出定向回复提示；答复下可点击“继续聊”。\n"
+        "底部“智能体”选择目标，“配置”查询并修改模型、思考强度和集群开关。\n"
+        "也可以使用 /config [智能体]，或 /config [智能体] model|reasoning|cluster <值>。\n"
+        "“发消息”弹出定向回复提示；答复下可点击“继续聊”。\n"
         "回复提示中的全部文字会作为正文发送到提示标注的目标和会话。\n"
         "消息使用对应智能体的当前 Web 会话；完成后回复最终结果和 context left。\n"
         "人工审批请在 Web 中处理。"
@@ -38,7 +65,7 @@ def help_text(aliases: list[str]) -> str:
 
 def reply_keyboard() -> dict[str, Any]:
     labels = list(SHORTCUTS)
-    return {"keyboard": [[{"text": label} for label in labels[i:i + 2]] for i in range(0, 6, 2)],
+    return {"keyboard": [[{"text": label} for label in labels[i:i + 2]] for i in range(0, len(labels), 2)],
             "resize_keyboard": True, "is_persistent": True}
 
 
@@ -66,6 +93,21 @@ def status_text(alias: str, snapshot: dict[str, Any]) -> str:
         lines.append(f"运行中或排队的子任务：{len(task_ids)} 个")
     lines.append(f"context left: {context_left(snapshot.get('context_usage'))}")
     return "\n".join(lines)
+
+
+def configuration_text(alias: str, configuration: dict[str, Any]) -> str:
+    model_value = str(configuration.get("model") or "").strip()
+    model = "默认" if model_value.lower() in {"", "none"} else model_value
+    reasoning = str(configuration.get("reasoning_effort") or "默认")
+    mode = str(configuration.get("execution_mode") or "cli")
+    cluster = "开启" if configuration.get("cluster_enabled") else "关闭"
+    return "\n".join([
+        f"[{alias}] 智能体配置",
+        f"执行模式：{mode}",
+        f"模型：{model}",
+        f"思考强度：{reasoning}",
+        f"集群：{cluster}",
+    ])
 
 
 def context_left(usage: dict[str, Any] | None) -> str:

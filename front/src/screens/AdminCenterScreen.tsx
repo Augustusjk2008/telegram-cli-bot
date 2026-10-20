@@ -69,6 +69,7 @@ type AdminCenterTab =
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
+  telegram: "Telegram",
   web: "Web",
   native_agent: "原生 Agent",
   tunnel: "Tunnel",
@@ -83,6 +84,7 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
 
 const ENV_CATEGORY_ORDER = [
   "basic",
+  "telegram",
   "web",
   "native_agent",
   "tunnel",

@@ -17,7 +17,7 @@ from bot.models import BotProfile
 from bot.telegram.client import TelegramClient, TelegramError
 from bot.telegram.gateway import TelegramGateway, start_telegram_gateway
 from bot.telegram.state import TelegramState
-from bot.telegram.ui import context_left, format_result, parse_target_text
+from bot.telegram.ui import context_left, format_result, parse_config_text, parse_target_text
 from bot.web import api_service
 from bot.web.api_common import WebApiError
 
@@ -125,6 +125,21 @@ async def test_routes_to_main_agent_with_shared_identity_and_preserves_multiline
 @pytest.mark.parametrize("text,body", [("to dev a\nb", "a\nb"), ("to dev\r\n  a\r\nb", "  a\r\nb"), ("to dev \n  x", "  x")])
 def test_multiline_route_separator(text, body):
     assert parse_target_text(text) == ("dev", body)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("/config", (None, None, None)),
+    ("/config dev", ("dev", None, None)),
+    ("/config model gpt-5", (None, "model", "gpt-5")),
+    ("/config dev reasoning high", ("dev", "reasoning", "high")),
+    ("/config dev cluster on", ("dev", "cluster", "on")),
+])
+def test_config_command_parser(text, expected):
+    assert parse_config_text(text) == expected
+
+
+def test_config_command_parser_rejects_unknown_setting():
+    assert parse_config_text("/config dev prompt hello") is None
 
 
 @pytest.mark.asyncio

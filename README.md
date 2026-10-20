@@ -179,6 +179,36 @@ HTML 文件上限为 1 MiB，其他单个资源上限为 16 MiB；只提供允�
 - 集群工具覆盖动态编组、状态查询、子 Agent 新会话、异步任务创建、轮询和消息等待。
 - 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务；Codex、Claude 使用 stdio MCP，Pi 使用扩展适配同一 bridge。
 
+### Telegram 单 Bot 接入
+
+Telegram 接入由一个 Bot 路由到已启用的 Web Bot 别名。打开 Admin Center 的环境配置，或编辑项目 `.env`：
+
+```env
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=<从 BotFather 获取的 Token>
+TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
+```
+
+`TELEGRAM_BOT_TOKEN` 在设置页中按敏感字段处理；`TELEGRAM_ALLOWED_USER_IDS` 使用 Telegram 数字用户 ID，独立于 Web 的 `ALLOWED_USER_IDS`。保存环境配置后重启应用，空白白名单会关闭接入。网关只处理白名单用户的私聊文本，不会把 Token 写入日志或 Telegram 状态库。
+
+常用命令如下：
+
+| 命令 | 作用 |
+|---|---|
+| `/start`、`/help` | 展示智能体列表和快捷操作 |
+| `to dev 帮我分析这个问题` | 向 `dev` 当前共享会话发送消息 |
+| `to dev /new` | 新建并切换会话，旧历史保留 |
+| `/config dev` | 查询 `dev` 当前执行模式、模型、思考强度和集群开关 |
+| `/config dev model <值>` | 设置当前执行模式使用的模型 |
+| `/config dev reasoning <值>` | 设置当前执行模式的思考强度 |
+| `/config dev cluster on\|off` | 开启或关闭 Bot 级集群 |
+
+底部键盘提供智能体、发消息、新会话、状态、停止任务、配置和帮助入口。配置页会根据当前会话执行模式列出可用模型和思考强度；没有当前会话时使用 Bot 默认执行模式。模型列表来自 CLI 参数配置或 Pi 模型配置，非法值会被拒绝。模型、思考强度和集群开关保存到 Bot 配置，正在运行的任务继续使用启动时的配置，下一轮生效。
+
+Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Telegram 新会话会同步切换 Web 当前会话；停止任务沿用 Web 的主任务和集群子任务取消语义。最终答复带有 `context left`、继续聊、新会话和打开 Web 操作；打开 Web 需要配置 `WEB_PUBLIC_URL` 或固定公网转发地址，并保留 `/node/<节点 ID>/` 前缀。
+
+常见连接问题包括：Token 格式错误、用户 ID 未加入白名单、应用未重启、Bot 被其他轮询实例占用，以及公网地址或 WebSocket 反向代理未配置。遇到轮询冲突时先停止同一 Bot 的其他 `getUpdates` 客户端；遇到公网按钮不可用时先检查 `WEB_PUBLIC_URL`、固定转发配置和 `/node/<节点 ID>/` 路径。
+
 ### 管理与扩展
 
 - Admin Center 管理用户权限、邀请码、公告、更新和运行状态。

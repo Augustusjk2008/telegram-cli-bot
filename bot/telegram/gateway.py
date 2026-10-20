@@ -17,7 +17,19 @@ from bot.web.api_common import WebApiError
 
 from .client import TelegramClient, TelegramError
 from .state import CONFIRM_TTL, NAVIGATION_TTL, REPLY_TTL, TelegramState
-from .ui import SHORTCUTS, conversation_label, force_reply, format_result, help_text, parse_target_text, reply_keyboard, split_text, status_text
+from .ui import (
+    SHORTCUTS,
+    configuration_text,
+    conversation_label,
+    force_reply,
+    format_result,
+    help_text,
+    parse_config_text,
+    parse_target_text,
+    reply_keyboard,
+    split_text,
+    status_text,
+)
 
 logger = logging.getLogger(__name__)
 _UNBOUND = object()
@@ -325,11 +337,237 @@ class TelegramGateway:
         rows = [[self._button(label, action, user_id, chat_id, alias, conversation_id)
                  for label, action in pair] for pair in (
                      (("发消息", "prompt"), ("新会话", "new")),
-                     (("状态", "status"), ("停止任务", "stop")),
+                     (("状态", "status"), ("配置", "config")),
+                     (("停止任务", "stop"),),
                  )]
         rows.append([self._web_button(user_id, chat_id, alias, conversation_id)])
         await self._deliver(update_id, chat_id, [f"[{alias}] 当前操作目标\n会话：{conversation_label(conversation_id)}"],
                             {"inline_keyboard": rows})
+
+    def _configuration_mode(self, alias: str, user_id: int) -> str:
+        profile, _agent, session = api_service.get_chat_session_for_alias(
+            self.manager, alias, chat_session_user_id(user_id), "main",
+        )
+        conversation_id = session.active_conversation_id
+        if conversation_id:
+            try:
+                conversation = api_service._get_chat_store(session).get_conversation(conversation_id)
+            except KeyError:
+                pass
+            else:
+                if str(conversation.get("native_provider") or "").strip().lower() == "native_agent":
+                    return "native_agent"
+                return "cli"
+        return str(profile.default_execution_mode or "cli").strip().lower() or "cli"
+
+    async def _configuration(self, alias: str, user_id: int) -> dict[str, Any]:
+        self._require_target(alias)
+        profile = self.manager.get_profile(alias)
+        execution_mode = self._configuration_mode(alias, user_id)
+        if execution_mode == "native_agent":
+            payload = await asyncio.to_thread(api_service.get_native_agent_models_payload, self.manager, alias)
+            selected_model = str(payload.get("selected_model") or "").strip()
+            selected_reasoning = str(payload.get("selected_reasoning_effort") or "").strip()
+            model_options = [
+                {
+                    "value": str(item.get("id") or "").strip(),
+                    "label": str(item.get("label") or item.get("name") or item.get("id") or "").strip(),
+                }
+                for item in payload.get("items", [])
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            ]
+            selected_item = next((item for item in payload.get("items", [])
+                                  if isinstance(item, dict) and str(item.get("id") or "") == selected_model), None)
+            reasoning_options = [
+                str(item or "").strip()
+                for item in (selected_item or {}).get("reasoning_efforts", [])
+                if str(item or "").strip()
+            ]
+            cli_type = "pi"
+            reasoning_key = "reasoning_effort"
+        else:
+            payload = await asyncio.to_thread(api_service.get_cli_params_payload, self.manager, alias, profile.cli_type)
+            params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+            defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
+            schema = payload.get("schema") if isinstance(payload.get("schema"), dict) else {}
+            cli_type = str(payload.get("cli_type") or profile.cli_type or "cli")
+            reasoning_key = "effort" if cli_type in {"claude", "antigravity"} else "reasoning_effort"
+            selected_model = str(params.get("model") or "none").strip()
+            selected_reasoning = str(params.get(reasoning_key) or defaults.get(reasoning_key) or "").strip()
+            model_schema = schema.get("model") if isinstance(schema.get("model"), dict) else {}
+            model_options = [
+                {"value": str(item or "").strip(), "label": str(item or "").strip()}
+                for item in model_schema.get("enum", [])
+                if str(item or "").strip()
+            ]
+            reasoning_schema = schema.get(reasoning_key) if isinstance(schema.get(reasoning_key), dict) else {}
+            reasoning_options = [
+                str(item or "").strip()
+                for item in reasoning_schema.get("enum", [])
+                if str(item or "").strip()
+            ]
+
+        cluster = await asyncio.to_thread(api_service.get_cluster_status, self.manager, alias)
+        return {
+            "execution_mode": execution_mode,
+            "cli_type": cli_type,
+            "reasoning_key": reasoning_key,
+            "model": selected_model,
+            "reasoning_effort": selected_reasoning,
+            "model_options": model_options,
+            "reasoning_options": reasoning_options,
+            "cluster_enabled": bool(cluster.get("enabled")),
+        }
+
+    async def _config_panel(self, update_id: int, user_id: int, chat_id: int, alias: str) -> None:
+        configuration = await self._configuration(alias, user_id)
+        conversation_id = self._conversation(alias, user_id)
+        cluster_label = "关闭集群" if configuration["cluster_enabled"] else "开启集群"
+        rows = [
+            [
+                self._button("选择模型", "config_model", user_id, chat_id, alias, conversation_id),
+                self._button("选择思考强度", "config_reasoning", user_id, chat_id, alias, conversation_id),
+            ],
+            [self._button(cluster_label, "config_cluster", user_id, chat_id, alias, conversation_id)],
+            [self._button("刷新配置", "config", user_id, chat_id, alias, conversation_id)],
+        ]
+        await self._deliver(
+            update_id,
+            chat_id,
+            [configuration_text(alias, configuration)],
+            {"inline_keyboard": rows},
+        )
+
+    async def _config_choices(
+        self, update_id: int, user_id: int, chat_id: int, alias: str, setting: str,
+    ) -> None:
+        configuration = await self._configuration(alias, user_id)
+        conversation_id = self._conversation(alias, user_id)
+        options = configuration["model_options"] if setting == "model" else configuration["reasoning_options"]
+        buttons: list[list[dict[str, str]]] = []
+        for item in options:
+            if isinstance(item, dict):
+                value = str(item.get("value") or "").strip()
+                label = str(item.get("label") or value).strip()
+            else:
+                value = str(item or "").strip()
+                label = value
+            if not value:
+                continue
+            current = value == configuration["model"] if setting == "model" else value == configuration["reasoning_effort"]
+            buttons.append([self._button(
+                ("✅ " if current else "") + label[:50],
+                f"config_set_{setting}",
+                user_id,
+                chat_id,
+                alias,
+                conversation_id,
+                control={"value": value},
+            )])
+        if not buttons:
+            command = f"/config {alias} {setting} <值>"
+            await self._deliver(update_id, chat_id, [f"当前没有可列出的{('模型' if setting == 'model' else '思考强度')}选项。\n请发送：{command}"],
+                                {"inline_keyboard": [[self._button("返回配置", "config", user_id, chat_id, alias, conversation_id)]]})
+            return
+        buttons.append([self._button("返回配置", "config", user_id, chat_id, alias, conversation_id)])
+        title = "模型" if setting == "model" else "思考强度"
+        await self._deliver(update_id, chat_id, [f"[{alias}] 请选择{title}："], {"inline_keyboard": buttons})
+
+    async def _apply_configuration(
+        self,
+        update_id: int,
+        user_id: int,
+        chat_id: int,
+        alias: str,
+        setting: str,
+        value: str,
+    ) -> None:
+        configuration = await self._configuration(alias, user_id)
+        normalized_value = str(value or "").strip()
+        if setting == "cluster":
+            cluster_value = normalized_value.lower()
+            if cluster_value in {"on", "true", "1", "开启", "打开"}:
+                enabled = True
+            elif cluster_value in {"off", "false", "0", "关闭"}:
+                enabled = False
+            else:
+                raise WebApiError(400, "invalid_telegram_cluster_value", "集群开关只能填写 on 或 off。")
+            cluster = self.manager.get_profile(alias).cluster.to_dict()
+            cluster["enabled"] = enabled
+            await api_service.update_cluster_config(self.manager, alias, cluster)
+            message = f"集群已{'开启' if enabled else '关闭'}。"
+        elif setting == "model":
+            if not normalized_value:
+                raise WebApiError(400, "missing_telegram_model", "模型不能为空。")
+            if configuration["execution_mode"] == "native_agent":
+                await api_service.update_bot_native_agent_model(
+                    self.manager,
+                    alias,
+                    normalized_value,
+                    configuration["reasoning_effort"],
+                )
+            else:
+                await api_service.update_cli_params(
+                    self.manager,
+                    alias,
+                    configuration["cli_type"],
+                    "model",
+                    normalized_value,
+                )
+            message = f"模型已设置为：{normalized_value}。"
+        elif setting == "reasoning":
+            if not normalized_value:
+                raise WebApiError(400, "missing_telegram_reasoning", "思考强度不能为空。")
+            if configuration["execution_mode"] == "native_agent":
+                await api_service.update_bot_native_agent_model(
+                    self.manager,
+                    alias,
+                    configuration["model"],
+                    normalized_value,
+                )
+            else:
+                await api_service.update_cli_params(
+                    self.manager,
+                    alias,
+                    configuration["cli_type"],
+                    configuration["reasoning_key"],
+                    normalized_value,
+                )
+            message = f"思考强度已设置为：{normalized_value}。"
+        else:
+            raise WebApiError(400, "invalid_telegram_config_setting", "配置项只能是 model、reasoning 或 cluster。")
+
+        await self._deliver(update_id, chat_id, [f"[{alias}] {message}"])
+        await self._config_panel(update_id, user_id, chat_id, alias)
+
+    async def _handle_config_command(
+        self,
+        update_id: int,
+        user_id: int,
+        chat_id: int,
+        command: tuple[str | None, str | None, str | None],
+        *,
+        forced_alias: str | None = None,
+    ) -> None:
+        command_alias, setting, value = command
+        alias = (forced_alias or command_alias or self.state.selected_target(user_id, chat_id) or "").strip().lower()
+        if command_alias and forced_alias and command_alias != forced_alias:
+            raise WebApiError(409, "telegram_config_target_mismatch", "配置命令的智能体和当前 to 目标不一致。")
+        if not alias:
+            await self._targets(update_id, user_id, chat_id)
+            return
+        if alias not in self._aliases():
+            raise WebApiError(404, "telegram_target_unavailable", f"智能体 {alias} 不可用，请刷新智能体列表。")
+        self.state.select_target(user_id, chat_id, alias)
+        if setting is None:
+            await self._config_panel(update_id, user_id, chat_id, alias)
+            return
+        if not value:
+            if setting in {"model", "reasoning"}:
+                await self._config_choices(update_id, user_id, chat_id, alias, setting)
+                return
+            raise WebApiError(400, "missing_telegram_config_value", f"请填写 {setting} 的值。")
+        await self._apply_configuration(update_id, user_id, chat_id, alias, setting, value)
 
     async def _help(self, update_id: int, user_id: int, chat_id: int) -> None:
         await self._deliver(update_id, chat_id, split_text(help_text(self._aliases())), reply_keyboard())
@@ -365,7 +603,7 @@ class TelegramGateway:
 
     async def _control(
         self, update_id: int, sender: dict[str, Any], chat_id: int, action: str,
-        alias: str, conversation_id: str | None,
+        alias: str, conversation_id: str | None, control: dict[str, Any] | None = None,
     ) -> None:
         if action == "prompt":
             await self._prompt(update_id, sender["id"], chat_id, alias, conversation_id)
@@ -400,6 +638,38 @@ class TelegramGateway:
                 await self._deliver(update_id, chat_id, split_text(
                     f"{summary}\n\n{scope}\n任务或子任务范围变化后需重新确认。本确认 5 分钟内有效。"
                 ), {"inline_keyboard": [[confirm]]})
+        elif action == "config":
+            await self._config_panel(update_id, sender["id"], chat_id, alias)
+        elif action in {"config_model", "config_reasoning"}:
+            await self._config_choices(
+                update_id,
+                sender["id"],
+                chat_id,
+                alias,
+                "model" if action == "config_model" else "reasoning",
+            )
+        elif action in {"config_set_model", "config_set_reasoning"}:
+            selected = control.get("value") if isinstance(control, dict) else ""
+            if not isinstance(selected, str) or not selected.strip():
+                raise WebApiError(409, "telegram_config_unavailable", _REFRESH)
+            await self._apply_configuration(
+                update_id,
+                sender["id"],
+                chat_id,
+                alias,
+                "model" if action == "config_set_model" else "reasoning",
+                selected,
+            )
+        elif action == "config_cluster":
+            configuration = await self._configuration(alias, sender["id"])
+            await self._apply_configuration(
+                update_id,
+                sender["id"],
+                chat_id,
+                alias,
+                "cluster",
+                "off" if configuration["cluster_enabled"] else "on",
+            )
         elif action == "web":
             await self._deliver(update_id, chat_id, [f"[{alias}] 请在 Web 配置公网访问地址，然后刷新面板打开会话。"])
         else:
@@ -456,7 +726,15 @@ class TelegramGateway:
                     await self._panel(update_id, user_id, chat_id, alias)
                 else:
                     self._check_conversation(record, user_id)
-                    await self._control(update_id, sender, chat_id, action, alias, record["conversation_id"])
+                    await self._control(
+                        update_id,
+                        sender,
+                        chat_id,
+                        action,
+                        alias,
+                        record["conversation_id"],
+                        record.get("control"),
+                    )
                 self.state.update(update_id, status="handled", alias=alias)
                 return
             text = message.get("text")
@@ -474,6 +752,11 @@ class TelegramGateway:
                 claimed_token = record["token"]
                 await self._send_text(update_id, chat_id, alias, text, sender, expected_conversation_id=record["conversation_id"])
                 self.state.finish_interaction(claimed_token, "回复已处理，请使用最终答复下的“继续聊”。")
+                return
+            config_command = parse_config_text(text) if isinstance(text, str) else None
+            if config_command is not None:
+                await self._handle_config_command(update_id, user_id, chat_id, config_command)
+                self.state.update(update_id, status="handled", alias=config_command[0] or "")
                 return
             action = SHORTCUTS.get(text) if isinstance(text, str) else None
             if text in ("/start", "/help") or action == "help":
@@ -497,6 +780,17 @@ class TelegramGateway:
             if alias not in self._aliases():
                 self.state.update(update_id, alias=alias, status="rejected")
                 await self._deliver(update_id, chat_id, split_text(f"智能体 {alias} 不可用。\n\n{help_text(self._aliases())}"))
+                return
+            config_command = parse_config_text(body)
+            if config_command is not None:
+                await self._handle_config_command(
+                    update_id,
+                    user_id,
+                    chat_id,
+                    config_command,
+                    forced_alias=alias,
+                )
+                self.state.update(update_id, status="handled", alias=alias)
                 return
             if body.strip() == "/new":
                 self.state.update(update_id, alias=alias, status="running")

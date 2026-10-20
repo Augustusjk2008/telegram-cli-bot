@@ -112,6 +112,9 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
         options=("", "minimal", "low", "medium", "high"),
     ),
     EnvField("NATIVE_AGENT_THINKING_DEPTH", "Thinking depth", "全局 thinking token budget；0 表示不启用。", "number", "0", "advanced", min_value=0, integer=True),
+    EnvField("TELEGRAM_ENABLED", "启用 Telegram", "启用单 Bot Telegram 接入；修改后需重启应用。", "boolean", "false", "telegram"),
+    EnvField("TELEGRAM_BOT_TOKEN", "Telegram Bot Token", "由 BotFather 创建的 Telegram Bot Token。", "password", "", "telegram", sensitive=True, max_length=8192),
+    EnvField("TELEGRAM_ALLOWED_USER_IDS", "Telegram 用户白名单", "允许操作 Telegram Bot 的数字用户 ID，逗号分隔；留空时关闭接入。", "csv", "", "telegram"),
     EnvField("WEB_ENABLED", "启用 Web", "Web 运行入口开关。", "boolean", "true", "web"),
     EnvField(
         "TCB_CODEX_SERVER_VOICE_ENABLED",

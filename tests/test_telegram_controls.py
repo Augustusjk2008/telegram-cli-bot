@@ -32,6 +32,52 @@ def reply(update_id, message_id, text):
 
 
 @pytest.mark.asyncio
+async def test_config_command_queries_and_updates_model_reasoning_and_cluster(gateway, monkeypatch):
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", {"codex": ["gpt-5", "gpt-4"]})
+
+    await gateway.receive_update(update(1, "/config dev"))
+    assert "[dev] 智能体配置" in gateway.client.messages[-1][1]
+    assert "模型：" in gateway.client.messages[-1][1]
+    assert "集群：关闭" in gateway.client.messages[-1][1]
+
+    await gateway.receive_update(update(2, "/config dev model gpt-5"))
+    await gateway.receive_update(update(3, "/config dev reasoning high"))
+    await gateway.receive_update(update(4, "/config dev cluster on"))
+
+    profile = gateway.manager.get_profile("dev")
+    assert profile.cli_params.get_param("codex", "model") == "gpt-5"
+    assert profile.cli_params.get_param("codex", "reasoning_effort") == "high"
+    assert profile.cluster.enabled is True
+    assert "集群：开启" in gateway.client.messages[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_native_config_command_uses_model_and_reasoning_api(gateway, monkeypatch):
+    profile = gateway.manager.get_profile("dev")
+    profile.supported_execution_modes = ["native_agent"]
+    profile.default_execution_mode = "native_agent"
+    models = {
+        "items": [{
+            "id": "openai/gpt-5",
+            "label": "GPT-5",
+            "reasoning_efforts": ["low", "high"],
+            "default_reasoning_effort": "low",
+        }],
+        "selected_model": "openai/gpt-5",
+        "selected_reasoning_effort": "low",
+    }
+    update_model = AsyncMock(return_value=models)
+    monkeypatch.setattr(api_service, "get_native_agent_models_payload", lambda *_args: models)
+    monkeypatch.setattr(api_service, "update_bot_native_agent_model", update_model)
+
+    await gateway.receive_update(update(1, "/config dev model openai/gpt-5"))
+    await gateway.receive_update(update(2, "/config dev reasoning high"))
+
+    assert update_model.await_args_list[0].args[1:] == ("dev", "openai/gpt-5", "low")
+    assert update_model.await_args_list[1].args[1:] == ("dev", "openai/gpt-5", "high")
+
+
+@pytest.mark.asyncio
 async def test_select_reply_and_final_buttons_keep_original_target(gateway, monkeypatch):
     calls = install_stream(monkeypatch, [done()])
     await gateway.receive_update(update(1, "/start"))

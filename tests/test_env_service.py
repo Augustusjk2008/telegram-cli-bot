@@ -49,6 +49,37 @@ def test_cli_model_options_accepts_independent_json_rows(tmp_path: Path) -> None
     assert config._parse_cli_model_options("legacy-a,legacy-b") == ["legacy-a", "legacy-b", "none"]
 
 
+def test_env_service_exposes_telegram_fields_and_masks_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in ("TELEGRAM_ENABLED", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_IDS"):
+        monkeypatch.delenv(key, raising=False)
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+
+    items = {item["key"]: item for item in service.snapshot()["items"]}
+    assert items["TELEGRAM_ENABLED"]["category"] == "telegram"
+    assert items["TELEGRAM_ENABLED"]["type"] == "boolean"
+    assert items["TELEGRAM_ALLOWED_USER_IDS"]["type"] == "csv"
+    assert items["TELEGRAM_BOT_TOKEN"]["sensitive"] is True
+    assert items["TELEGRAM_BOT_TOKEN"]["type"] == "password"
+
+    service.patch({
+        "values": {
+            "TELEGRAM_ENABLED": True,
+            "TELEGRAM_BOT_TOKEN": "123456:secret",
+            "TELEGRAM_ALLOWED_USER_IDS": "42, 43",
+        }
+    })
+    snapshot = {item["key"]: item for item in service.snapshot()["items"]}
+    assert snapshot["TELEGRAM_ENABLED"]["value"] == "true"
+    assert snapshot["TELEGRAM_ALLOWED_USER_IDS"]["value"] == "42,43"
+    assert snapshot["TELEGRAM_BOT_TOKEN"]["value"] == ""
+    assert snapshot["TELEGRAM_BOT_TOKEN"]["masked"] is True
+    assert "TELEGRAM_BOT_TOKEN=123456:secret" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
 def test_windows_registry_environment_merges_path_and_expands_values() -> None:
     class FakeKey:
         def __init__(self, values):

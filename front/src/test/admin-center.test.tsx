@@ -38,6 +38,23 @@ test("环境配置显示 Codex server 语音开关", async () => {
   expect(voiceItem).toHaveTextContent("重启生效");
 });
 
+test("环境配置显示 Telegram 接入字段并标记 Token 为敏感项", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  await user.click(screen.getByRole("button", { name: "Telegram" }));
+
+  expect(screen.getByText("启用 Telegram")).toBeInTheDocument();
+  const tokenItem = screen.getByText("Telegram Bot Token").closest("article");
+  expect(tokenItem).toBeInTheDocument();
+  expect(tokenItem?.querySelector('input[type="password"]')).not.toBeNull();
+  expect(screen.getByText("Telegram 用户白名单")).toBeInTheDocument();
+});
+
 test("数据迁移先预览并明确确认停止全部智能体", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
