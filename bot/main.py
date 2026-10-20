@@ -457,7 +457,7 @@ async def run_all_bots():
         logger.debug("Web API 已附加到主进程")
         _print_web_access_lines(runtime_bind)
         await _open_local_browser(runtime_bind)
-        telegram_gateway = await start_telegram_gateway(manager)
+        telegram_gateway = await start_telegram_gateway(manager, chat_url=web_server.chat_public_url)
         await config.RESTART_EVENT.wait()
     finally:
         if telegram_gateway is not None:

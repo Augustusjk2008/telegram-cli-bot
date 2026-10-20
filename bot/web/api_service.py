@@ -12,18 +12,19 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager, contextmanager, nullcontext
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Callable, Coroutine, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from bot import app_settings
 from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
@@ -269,6 +270,7 @@ class _ClusterRunControl:
     agent_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
     cancel_requested: bool = False
+    stop_holds: int = 0
 
 
 _CLUSTER_RUN_CONTROLS: dict[str, _ClusterRunControl] = {}
@@ -479,6 +481,71 @@ def _resolve_chat_execution_mode(profile: BotProfile, execution_mode: str) -> st
     if resolved_execution_mode == NATIVE_AGENT_PROVIDER and not _supports_native_agent_runtime(profile):
         _raise(409, "native_agent_unavailable", "当前 Bot 未启用原生 agent")
     return resolved_execution_mode
+
+
+def _current_conversation_execution_mode(profile: BotProfile, session: UserSession) -> str:
+    conversation_id = str(session.active_conversation_id or "").strip()
+    if conversation_id:
+        mode = _conversation_execution_mode(_get_chat_store(session).get_conversation(conversation_id))
+        if _resolve_requested_execution_mode(mode, profile) != mode:
+            _raise(409, "conversation_execution_mode_mismatch", "当前会话的执行模式已停用，请在 Web 中检查智能体配置")
+        return mode
+    return profile.default_execution_mode
+
+
+_UNSPECIFIED_CONVERSATION = object()
+
+
+def _check_expected_conversation(session: UserSession, expected: Any) -> None:
+    if expected is _UNSPECIFIED_CONVERSATION:
+        return
+    if (str(session.active_conversation_id or "").strip() or None) != expected:
+        _raise(409, "conversation_changed", "当前会话已变化，请刷新面板后重试")
+
+
+def _finish_control_execution(session: UserSession, execution_id: str | None) -> None:
+    with session._lock:
+        if session._execution_id != execution_id:
+            return
+        session._execution_id = None
+        session._execution_turn_id = None
+        session._execution_mode = ""
+        if session._execution_detached:
+            session._lifecycle_operation = ""
+            session._lifecycle_token = ""
+            session._execution_detached = False
+
+
+@contextmanager
+def _session_lifecycle_scope(
+    session: UserSession, *, conversation_change: bool = False,
+    expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
+):
+    """Reserve a shared session across async preparation and conversation-store IO."""
+    with session._lock:
+        _check_expected_conversation(session, expected_conversation_id)
+        if (session.is_processing or getattr(session, "_lifecycle_operation", "")
+                or getattr(session, "_control_stop_task", None) is not None
+                or getattr(session, "_native_abort_task", None) is not None):
+            if conversation_change:
+                _raise(409, "conversation_switch_blocked", "当前会话忙碌，请等待任务或会话操作完成")
+            _raise(409, "session_busy", msg("chat", "busy"))
+        session._lifecycle_operation = "conversation" if conversation_change else "chat"
+        token = session._lifecycle_token = uuid.uuid4().hex
+        if not conversation_change:
+            session._execution_id = f"exec_{token}"
+            session._execution_turn_id = None
+            session._execution_detached = False
+            session.stop_requested = False
+    try:
+        yield
+    finally:
+        with session._lock:
+            if session._lifecycle_token == token and not getattr(session, "_execution_detached", False):
+                session._lifecycle_operation = ""
+                session._lifecycle_token = ""
+                if not conversation_change:
+                    _finish_control_execution(session, f"exec_{token}")
 
 
 def _pi_store() -> PiSessionStore:
@@ -2090,9 +2157,9 @@ async def _cluster_parent_lock_scope(
 
 
 async def _await_cancel_safe_lifecycle_io(
-    awaitable: Coroutine[Any, Any, Any],
+    awaitable: Awaitable[Any],
 ) -> Any:
-    inner_task = asyncio.create_task(awaitable)
+    inner_task = asyncio.ensure_future(awaitable)
     try:
         return await asyncio.shield(inner_task)
     except asyncio.CancelledError as cancelled:
@@ -2164,35 +2231,39 @@ async def create_conversation(
     title: str = "",
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    follow_current_conversation: bool = False,
+    expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
 ) -> dict[str, Any]:
-    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
-    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
-    while True:
-        previous_conversation_id = (
-            str(session.active_conversation_id or "").strip()
-            if normalized_agent_id == "main"
-            else ""
-        )
-        async with _cluster_parent_lock_scope(alias, user_id, previous_conversation_id):
-            if (
-                normalized_agent_id == "main"
-                and str(session.active_conversation_id or "").strip() != previous_conversation_id
-            ):
-                continue
-            io = run_chat_store_io(
-                _create_conversation_locked,
-                manager,
-                alias,
-                user_id,
-                title,
-                agent_id=normalized_agent_id,
-                execution_mode=execution_mode,
-                write_key=write_key,
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    with _session_lifecycle_scope(session, conversation_change=True, expected_conversation_id=expected_conversation_id):
+        if follow_current_conversation:
+            execution_mode = _current_conversation_execution_mode(profile, session)
+        normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+        write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+        while True:
+            previous_conversation_id = (
+                str(session.active_conversation_id or "").strip()
+                if normalized_agent_id == "main"
+                else ""
             )
-            if normalized_agent_id == "main" and previous_conversation_id:
+            async with _cluster_parent_lock_scope(alias, user_id, previous_conversation_id):
+                if (
+                    normalized_agent_id == "main"
+                    and str(session.active_conversation_id or "").strip() != previous_conversation_id
+                ):
+                    continue
+                io = run_chat_store_io(
+                    _create_conversation_locked,
+                    manager,
+                    alias,
+                    user_id,
+                    title,
+                    agent_id=normalized_agent_id,
+                    execution_mode=execution_mode,
+                    write_key=write_key,
+                )
                 return await _await_cancel_safe_lifecycle_io(io)
-            return await io
 
 
 def _select_conversation_locked(
@@ -2301,40 +2372,39 @@ async def select_conversation(
     execution_mode: str = "",
 ) -> dict[str, Any]:
     _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
-    target_conversation_id = str(conversation_id or "").strip()
-    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
-    while True:
-        previous_conversation_id = (
-            str(session.active_conversation_id or "").strip()
-            if normalized_agent_id == "main"
-            else ""
-        )
-        target_parent_id = target_conversation_id if normalized_agent_id == "main" else ""
-        async with _cluster_parent_lock_scope(
-            alias,
-            user_id,
-            previous_conversation_id,
-            target_parent_id,
-        ):
-            if (
-                normalized_agent_id == "main"
-                and str(session.active_conversation_id or "").strip() != previous_conversation_id
-            ):
-                continue
-            io = run_chat_store_io(
-                _select_conversation_locked,
-                manager,
+    with _session_lifecycle_scope(session, conversation_change=True):
+        normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
+        target_conversation_id = str(conversation_id or "").strip()
+        write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+        while True:
+            previous_conversation_id = (
+                str(session.active_conversation_id or "").strip()
+                if normalized_agent_id == "main"
+                else ""
+            )
+            target_parent_id = target_conversation_id if normalized_agent_id == "main" else ""
+            async with _cluster_parent_lock_scope(
                 alias,
                 user_id,
-                target_conversation_id,
-                agent_id=normalized_agent_id,
-                execution_mode=execution_mode,
-                write_key=write_key,
-            )
-            if normalized_agent_id == "main":
+                previous_conversation_id,
+                target_parent_id,
+            ):
+                if (
+                    normalized_agent_id == "main"
+                    and str(session.active_conversation_id or "").strip() != previous_conversation_id
+                ):
+                    continue
+                io = run_chat_store_io(
+                    _select_conversation_locked,
+                    manager,
+                    alias,
+                    user_id,
+                    target_conversation_id,
+                    agent_id=normalized_agent_id,
+                    execution_mode=execution_mode,
+                    write_key=write_key,
+                )
                 return await _await_cancel_safe_lifecycle_io(io)
-            return await io
 
 
 def _delete_conversation_locked(
@@ -3256,125 +3326,230 @@ def _find_active_cluster_run_for_session(alias: str, user_id: int, session: User
     return run
 
 
+def _control_history(session: UserSession) -> tuple[dict[str, Any], str | None, dict[str, Any] | None]:
+    """Read only the explicit conversation; never migrate or reconcile history."""
+    conversation_id = str(session.active_conversation_id or "").strip()
+    if not conversation_id:
+        return {}, None, None
+    store = ChatStore(Path(session.working_dir))
+    if not store.db_path.is_file():
+        return {}, None, None
+    # ChatStore's regular read connection can initialize/migrate its schema.
+    conn = sqlite3.connect(f"{store.db_path.resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ?",
+            (conversation_id, session.bot_id, chat_session_user_id(session.user_id), session.agent_id),
+        ).fetchone()
+        if row is None:
+            return {}, None, None
+        conversation = dict(row)
+        running = conn.execute(
+            "SELECT id FROM turns WHERE conversation_id = ? AND completion_state = 'streaming' "
+            "AND workspace_history_discarded_at IS NULL ORDER BY seq DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        usage = conn.execute(
+            "SELECT context_usage_json FROM turns WHERE conversation_id = ? AND context_usage_json IS NOT NULL "
+            "AND workspace_history_discarded_at IS NULL ORDER BY seq DESC LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        context = json.loads(usage[0]) if usage and usage[0] else None
+        return conversation, str(running[0]) if running else None, context if isinstance(context, dict) else None
+    finally:
+        conn.close()
+
+
+def _control_runtime(profile: BotProfile, session: UserSession) -> Any:
+    if session.native_agent_server_key:
+        return get_native_agent_service().get_control_runtime(session)
+    if session._execution_mode == NATIVE_AGENT_PROVIDER or session.native_agent_run_id:
+        return None
+    if profile.cli_type == "codex_server":
+        from bot.codex_server.runtime import get_codex_server_registry
+        return getattr(get_codex_server_registry(), "_runtimes", {}).get(_codex_server_owner(session))
+    return None
+
+
+def _control_snapshot_locked(profile: BotProfile, session: UserSession) -> dict[str, Any]:
+    conversation, stored_turn_id, context_usage = _control_history(session)
+    conversation_id = str(session.active_conversation_id or "").strip() or None
+    run = None
+    if conversation_id and session.agent_id == "main":
+        candidate = _CLUSTER_RUNTIME.get_run(derive_cluster_run_id(
+            conversation_id, max(0, int(conversation.get("cluster_team_revision") or 0)),
+        ))
+        if candidate is not None and candidate.bot_alias == session.bot_alias and candidate.user_id == chat_session_user_id(session.user_id):
+            run = candidate
+    task_ids = sorted(task.task_id for task in run.tasks.values() if task.status in {"queued", "running"}) if run else []
+    runtime = _control_runtime(profile, session)
+    active = bool(session.is_processing or session._lifecycle_operation == "chat")
+    runtime_turn = getattr(runtime, "active_turn_id", None) if runtime is not None else None
+    turn_id = None
+    if active:
+        turn_id = session._execution_turn_id if session._execution_id else (stored_turn_id or runtime_turn)
+    execution_id = session._execution_id if active else None
+    if active and not execution_id:
+        execution_id = session.native_agent_run_id or runtime_turn or turn_id
+        if not execution_id and session.process is not None:
+            execution_id = f"process_{id(session.process)}"
+    waiting = bool(active and runtime is not None and getattr(getattr(runtime, "state", None), "pending_permission_ids", None))
+    if session._control_stop_task is not None or session._native_abort_task is not None or (active and session.stop_requested):
+        phase = "stopping"
+    elif waiting:
+        phase = "waiting_approval"
+    elif active and (input_is_preparing(session) or not turn_id):
+        phase = "preparing"
+    elif active or task_ids:
+        phase = "running"
+    else:
+        phase = "idle"
+    return {
+        "conversation_id": conversation_id,
+        "execution_mode": session._execution_mode or (_conversation_execution_mode(conversation) if conversation else profile.default_execution_mode),
+        "phase": phase,
+        "execution_id": execution_id,
+        "turn_id": turn_id,
+        "cluster_run_id": run.run_id if run else None,
+        "cluster_task_ids": task_ids,
+        "context_usage": context_usage,
+    }
+
+
+async def get_conversation_control_snapshot(
+    manager: MultiBotManager, alias: str, user_id: int, *, agent_id: str = "main",
+) -> dict[str, Any]:
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    with session._lock:
+        return _control_snapshot_locked(profile, session)
+
+
+def _check_expected_control(expected: dict[str, Any] | None, actual: dict[str, Any]) -> None:
+    if expected is None:
+        return
+    keys = ("conversation_id", "execution_mode", "execution_id", "turn_id", "cluster_run_id", "cluster_task_ids")
+    if any(key not in expected or expected[key] != actual.get(key) for key in keys):
+        _raise(409, "execution_changed", "当前任务已变化，请刷新面板后重新确认停止")
+
+
 async def kill_user_process(
     manager: MultiBotManager,
     alias: str,
     user_id: int,
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
+    expected_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
     profile = get_profile_or_raise(manager, alias)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
-    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+    if resolved_execution_mode == NATIVE_AGENT_PROVIDER and expected_control is None:
         normalized_agent_id = "main"
     if normalized_agent_id == "main":
         session = get_session_for_alias(manager, alias, user_id)
     else:
         _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
     with session._lock:
-        is_processing = bool(session.is_processing)
-        process = session.process
-        native_agent_session_id = str(session.native_agent_session_id or "").strip()
-        native_agent_server_key = str(session.native_agent_server_key or "").strip()
-        if not is_processing:
-            stale_cleared = False
-        elif process is None and (input_is_preparing(session) or session.running_user_text is not None or session.native_agent_run_id or native_agent_session_id or native_agent_server_key):
-            session.stop_requested = True
-            stale_cleared = False
-        elif process is None:
-            session.stop_requested = False
-            session.is_processing = False
-            session.process = None
-            session.running_user_text = None
-            session.running_preview_text = ""
-            session.running_started_at = None
-            session.running_updated_at = None
-            stale_cleared = True
+        _check_expected_conversation(session, expected_conversation_id)
+        if session._control_stop_task is not None:
+            _check_expected_control(expected_control, session._control_stop_snapshot or {})
+            stop_task = session._control_stop_task
         else:
-            stale_cleared = False
-            session.stop_requested = True
-
-    if not is_processing:
-        if normalized_agent_id == "main":
-            cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
-            if cluster_run is not None:
-                status = _CLUSTER_RUNTIME.build_task_status(cluster_run.run_id, include_output=False)
-                if int(status.get("pending_count") or 0) > 0:
-                    await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
-                    return {
-                        "killed": False,
-                        "message": "已取消子 agent 任务",
-                        "cluster_run_cancelled": cluster_run.run_id,
-                    }
-        return {"killed": False, "message": msg("kill", "no_task")}
-
-    if stale_cleared:
-        _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
-        session.persist()
-        result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
-        return result
-
-    try:
-        if resolved_execution_mode == EXECUTION_MODE_CLI and profile.cli_type == "codex_server":
-            # A voice task has no CLI stream owner; interrupt its Codex turn directly.
-            from bot.codex_server.runtime import get_codex_server_registry
-            registry = get_codex_server_registry()
-            runtime = getattr(registry, "_runtimes", {}).get(_codex_server_owner(session))
-            if runtime is not None and getattr(runtime, "voice_task_active", False):
-                try:
-                    await runtime.interrupt()
-                except Exception as exc:
-                    logger.warning("语音任务终止请求失败: %s", exc)
-                return {"killed": True, "message": "已请求停止语音任务", "stop_requested": True}
-            # The stream owns the interrupt and waits for turn/completed before clearing busy state.
-            with session._lock:
-                session.stop_requested = True
-            if input_is_preparing(session):
-                cancel_input_preparation(session)
-            result = {"killed": True, "message": "已请求停止", "stop_requested": True}
-            if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
-                await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
-                result["cluster_run_cancelled"] = cluster_run.run_id
-            return result
-        if process is None and (input_is_preparing(session) or (not native_agent_server_key and (session.running_user_text is not None or session.native_agent_run_id))):
-            cancel_input_preparation(session)
-            return {"killed": True, "message": "已请求停止", "stop_requested": True}
-        if process is None and (native_agent_session_id or native_agent_server_key):
-            aborted = await get_native_agent_service().abort(session)
-            session.persist()
-            result = {
-                "killed": bool(aborted),
-                "message": "已请求原生 agent 停止" if aborted else msg("kill", "already_done"),
-                "stop_requested": True,
-                "native_agent_aborted": bool(aborted),
-            }
-            if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
-                await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
-                result["cluster_run_cancelled"] = cluster_run.run_id
-            return result
-        process_lifecycle = _get_cli_process_lifecycle(process)
-        if process is not None and (process_lifecycle is not None or process.poll() is None):
-            if process_lifecycle is not None:
-                await _terminate_cli_process_lifecycle(process_lifecycle)
+            if session._lifecycle_operation == "conversation":
+                _raise(409, "conversation_switch_blocked", "当前会话正在切换，请稍后重试")
+            snapshot = _control_snapshot_locked(profile, session) if expected_control is not None else {}
+            _check_expected_control(expected_control, snapshot)
+            execution_id = session._execution_id
+            native_run_id = session.native_agent_run_id
+            native_server_key = session.native_agent_server_key
+            process = session.process
+            process_lifecycle = _get_cli_process_lifecycle(process)
+            runtime = _control_runtime(profile, session)
+            native_service = get_native_agent_service() if session.native_agent_server_key else None
+            native = bool(session.native_agent_run_id or session.native_agent_server_key or session._execution_mode == NATIVE_AGENT_PROVIDER)
+            processing = bool(session.is_processing or session._lifecycle_operation == "chat")
+            preparing = input_is_preparing(session)
+            conversation_id = session.active_conversation_id
+            if expected_control is not None:
+                cluster_run = _CLUSTER_RUNTIME.get_run(snapshot["cluster_run_id"]) if snapshot["cluster_run_id"] else None
             else:
-                await asyncio.to_thread(_terminate_process_sync, process)
-            session.persist()
-            result = {"killed": True, "message": msg("kill", "killed"), "stop_requested": True}
-            if cluster_run := _find_active_cluster_run_for_session(alias, user_id, session):
-                await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止")
-                result["cluster_run_cancelled"] = cluster_run.run_id
-            return result
-        await asyncio.to_thread(close_process_streams, process)
-        with session._lock:
-            _reset_session_runtime_flags(session)
-        _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
-        session.persist()
-        result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
-        return result
-    except Exception as exc:
-        _raise(500, "kill_failed", msg("kill", "error", error=str(exc)))
+                cluster_run = _find_active_cluster_run_for_session(alias, user_id, session) if normalized_agent_id == "main" else None
+            if cluster_run is not None and not processing and not any(task.status in {"queued", "running"} for task in cluster_run.tasks.values()):
+                cluster_run = None
+            cluster_control = None
+            if cluster_run is not None:
+                cluster_control = _cluster_run_control(cluster_run.run_id, profile.cluster.max_parallel_agents)
+                cluster_control.stop_holds += 1
+                cluster_control.cancel_requested = True
+            stale = processing and process is None and runtime is None and not (
+                preparing or session.running_user_text is not None or session.native_agent_run_id
+                or session.native_agent_session_id or session._lifecycle_operation == "chat"
+            )
+            if processing:
+                session.stop_requested = True
+                cancel_input_preparation(session)
+
+            async def stop_captured() -> dict[str, Any]:
+                try:
+                    result: dict[str, Any] = {"killed": False, "message": msg("kill", "no_task")}
+                    if processing:
+                        result = {"killed": True, "message": "已请求停止", "stop_requested": True}
+                        if runtime is not None and native:
+                            aborted = await native_service.abort(
+                                session, expected_execution_id=execution_id,
+                                captured_runtime=runtime, captured_process=process,
+                            )
+                            result.update(killed=bool(aborted), native_agent_aborted=bool(aborted))
+                        elif runtime is not None and getattr(runtime, "voice_task_active", False):
+                            await runtime.interrupt()
+                        elif process is not None:
+                            if process_lifecycle is not None:
+                                await _terminate_cli_process_lifecycle(process_lifecycle)
+                            elif process.poll() is None:
+                                await asyncio.to_thread(_terminate_process_sync, process)
+                            else:
+                                await asyncio.to_thread(close_process_streams, process)
+                                result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
+                        elif stale:
+                            result = {"killed": False, "message": msg("kill", "already_done"), "stale_cleared": True}
+                    if cluster_run is not None:
+                        await _cancel_cluster_run(cluster_run.run_id, "主 agent 已停止", captured_run=cluster_run, captured_control=cluster_control)
+                        result["cluster_run_cancelled"] = cluster_run.run_id
+                        if not processing:
+                            result["message"] = "已取消子 agent 任务"
+                    with session._lock:
+                        same_execution = (
+                            session._execution_id == execution_id
+                            and session.active_conversation_id == conversation_id
+                            and session.process is process
+                            and session.native_agent_run_id == native_run_id
+                            and session.native_agent_server_key == native_server_key
+                        )
+                        if same_execution and result.get("stale_cleared"):
+                            _reset_session_runtime_flags(session)
+                            _get_chat_history_service(session).reconcile_idle_streaming_turns(session)
+                        if same_execution:
+                            session.persist()
+                    return result
+                except Exception as exc:
+                    _raise(500, "kill_failed", msg("kill", "error", error=str(exc)))
+                finally:
+                    if cluster_control is not None:
+                        cluster_control.stop_holds -= 1
+                        _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+                    with session._lock:
+                        if session._control_stop_task is asyncio.current_task():
+                            session._control_stop_task = None
+                            session._control_stop_snapshot = None
+
+            stop_task = asyncio.create_task(stop_captured())
+            session._control_stop_task = stop_task
+            session._control_stop_snapshot = snapshot
+    return await _await_cancel_safe_lifecycle_io(stop_task)
 
 
 async def reply_native_agent_permission(
@@ -3610,7 +3785,7 @@ def _require_cluster_run_control_ready(run_id: str) -> None:
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     if control is None or not control.cancel_requested:
         return
-    if any(not task.done() for task in control.tasks):
+    if control.stop_holds or any(not task.done() for task in control.tasks):
         raise ClusterToolError("cluster_agent_busy", "子 agent 正在停止，请等待完成后重试")
     _cleanup_cluster_run_control_if_idle(run_id)
 
@@ -3619,6 +3794,8 @@ def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     run = _CLUSTER_RUNTIME.get_run(run_id)
     if control is None:
+        return
+    if control.stop_holds:
         return
     if any(not task.done() for task in control.tasks):
         return
@@ -3637,19 +3814,23 @@ def _cluster_task_is_cancelled(run_id: str, task_id: str, control: _ClusterRunCo
     return task is None or task.status == "cancelled"
 
 
-async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
+async def _cancel_cluster_run(
+    run_id: str, message: str = "已取消", *, captured_run: Any = None,
+    captured_control: _ClusterRunControl | None = None,
+) -> None:
     normalized_run_id = str(run_id or "").strip()
     if not normalized_run_id:
         return
     run = _CLUSTER_RUNTIME.get_run(normalized_run_id)
+    if captured_run is not None and run is not captured_run:
+        return
     if run is None:
         _CLUSTER_RUN_CONTROLS.pop(normalized_run_id, None)
         return
-    control = _CLUSTER_RUN_CONTROLS.get(normalized_run_id)
+    control = captured_control or _CLUSTER_RUN_CONTROLS.get(normalized_run_id)
     if control is not None:
         control.cancel_requested = True
     _CLUSTER_RUNTIME.cancel_run_tasks(normalized_run_id, message)
-    await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
     running_tasks = [
         task
         for task in list(control.tasks if control is not None else [])
@@ -3657,8 +3838,12 @@ async def _cancel_cluster_run(run_id: str, message: str = "已取消") -> None:
     ]
     for task in running_tasks:
         task.cancel()
+    await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
     if running_tasks:
-        await asyncio.wait(running_tasks, timeout=0.2)
+        if captured_run is not None:
+            await asyncio.gather(*running_tasks, return_exceptions=True)
+        else:
+            await asyncio.wait(running_tasks, timeout=0.2)
     _cleanup_cluster_run_control_if_idle(normalized_run_id)
 
 
@@ -5882,13 +6067,19 @@ async def _stream_cli_chat(
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     with session._lock:
-        if session.is_processing:
+        if (session.is_processing or session._lifecycle_operation == "conversation"
+                or session._control_stop_task is not None or session._native_abort_task is not None):
             _raise(409, "session_busy", msg("chat", "busy"))
         if cli_type == "codex_server":
             from bot.codex_server.voice import voice_leases, VOICE_BUSY_MESSAGE
             if voice_leases.owner_busy(_codex_server_owner(session)):
                 _raise(409, "voice_connection_active", VOICE_BUSY_MESSAGE)
-        session.stop_requested = False
+        owns_execution = not session._execution_id
+        if owns_execution:
+            session._execution_id = f"exec_{uuid.uuid4().hex}"
+            session.stop_requested = False
+        execution_id = session._execution_id
+        session._execution_mode = EXECUTION_MODE_CLI
         session.is_processing = True
         session.running_user_text = text
 
@@ -5924,6 +6115,8 @@ async def _stream_cli_chat(
             native_provider=cli_data_provider(cli_type),
             actor=_actor_from_request(request),
         )
+        with session._lock:
+            session._execution_turn_id = turn_handle.turn_id
         if cli_type == "deepseek":
             conversation = service.store.get_conversation(turn_handle.conversation_id)
             binding = str(conversation.get("native_session_id") or "").strip() or None
@@ -6858,7 +7051,8 @@ async def _stream_cli_chat(
             )
         lingering_process: subprocess.Popen | None = None
         with session._lock:
-            lingering_process = session.process
+            if session._execution_id == execution_id:
+                lingering_process = session.process
         lingering_lifecycle = _get_cli_process_lifecycle(lingering_process) or active_lifecycle
         try:
             if active_server_reader is not None:
@@ -6870,7 +7064,10 @@ async def _stream_cli_chat(
                 await asyncio.to_thread(close_process_streams, lingering_process)
         finally:
             with session._lock:
-                _reset_session_runtime_flags(session)
+                if session._execution_id == execution_id:
+                    _reset_session_runtime_flags(session)
+                    if owns_execution:
+                        _finish_control_execution(session, execution_id)
         if not normal_return_for_diag:
             await _reconcile_idle_cli_turns(session)
 
@@ -7270,67 +7467,95 @@ async def _stream_native_agent_chat(
             await events.aclose()
         return
 
-    effective_task_mode = request.task_mode if request is not None else task_mode
-    effective_task_payload = request.task_payload if request is not None else task_payload
-    text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
-    request_obj = request or _build_chat_run_request(
-        alias,
-        shared_user_id,
-        user_text,
-        task_mode=effective_task_mode,
-        task_payload=effective_task_payload,
-        visible_text=visible_text,
-        actor=actor,
-    )
-    is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
-    main_conversation_id = ""
-    cluster_team_state: dict[str, Any] | None = None
-    if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
-        main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
-            manager,
-            profile,
+    with nullcontext() if session._execution_id else _session_lifecycle_scope(session):
+        session._execution_mode = NATIVE_AGENT_PROVIDER
+        effective_task_mode = request.task_mode if request is not None else task_mode
+        effective_task_payload = request.task_payload if request is not None else task_payload
+        text = _normalized_chat_text(user_text, request=request, visible_text=visible_text)
+        request_obj = request or _build_chat_run_request(
             alias,
             shared_user_id,
-            NATIVE_AGENT_PROVIDER,
+            user_text,
+            task_mode=effective_task_mode,
+            task_payload=effective_task_payload,
+            visible_text=visible_text,
+            actor=actor,
         )
-    cluster_run = _start_cluster_run_if_requested(
-        profile=profile,
-        alias=alias,
-        shared_user_id=shared_user_id,
-        cluster=cluster,
-        execution_mode=NATIVE_AGENT_PROVIDER,
-        mentions=mentions,
-        allow_unsafe_cli=allow_unsafe_cli,
-        agent_id=agent_id,
-        solo_mode=solo_mode,
-        internal_continuation=bool(normalized_resume_stream_id),
-        main_conversation_id=main_conversation_id,
-        team_state=cluster_team_state,
-    )
-    async def produce() -> AsyncIterator[dict[str, Any]]:
-        try:
-            async for event in service.stream_chat(
-                profile=profile,
-                session=session,
-                user_text=text,
-                prompt_text=text,
-                prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
-                translate_chat=translate_chat,
-                history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
-                actor=_actor_from_request(request_obj),
-                protocol=protocol,
-                cluster_run_id=cluster_run.run_id if cluster_run else "",
-                solo_mode=solo_mode,
-                suppress_agent_prompt=suppress_agent_prompt,
-            ):
-                yield event
-        finally:
-            if cluster_run:
-                _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+        is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
+        main_conversation_id = ""
+        cluster_team_state: dict[str, Any] | None = None
+        if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+            main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
+                manager,
+                profile,
+                alias,
+                shared_user_id,
+                NATIVE_AGENT_PROVIDER,
+            )
+        cluster_run = _start_cluster_run_if_requested(
+            profile=profile,
+            alias=alias,
+            shared_user_id=shared_user_id,
+            cluster=cluster,
+            execution_mode=NATIVE_AGENT_PROVIDER,
+            mentions=mentions,
+            allow_unsafe_cli=allow_unsafe_cli,
+            agent_id=agent_id,
+            solo_mode=solo_mode,
+            internal_continuation=bool(normalized_resume_stream_id),
+            main_conversation_id=main_conversation_id,
+            team_state=cluster_team_state,
+        )
+        execution_id = session._execution_id
 
-    if enable_reconnect or pi_turn_reconnect_enabled():
-        channel = service.open_turn_channel(produce(), session=session)
-        events = channel.events(after_sequence=0)
+        async def produce() -> AsyncIterator[dict[str, Any]]:
+            try:
+                native_events = service.stream_chat(
+                    profile=profile,
+                    session=session,
+                    user_text=text,
+                    prompt_text=text,
+                    prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
+                    translate_chat=translate_chat,
+                    history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+                    actor=_actor_from_request(request_obj),
+                    protocol=protocol,
+                    cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    solo_mode=solo_mode,
+                    suppress_agent_prompt=suppress_agent_prompt,
+                )
+                async with aclosing(native_events):
+                    async for event in native_events:
+                        yield event
+            finally:
+                if cluster_run:
+                    _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+                if execution_id is not None:
+                    _finish_control_execution(session, execution_id)
+
+        if enable_reconnect or pi_turn_reconnect_enabled():
+            with session._lock:
+                session._execution_detached = execution_id is not None
+            try:
+                channel = service.open_turn_channel(produce(), session=session)
+            except BaseException:
+                session._execution_detached = False
+                raise
+            events = channel.events(after_sequence=0)
+            try:
+                async for event in events:
+                    prepared = _chat_stream_event_for_consumer(
+                        event,
+                        include_trace=include_trace,
+                        stream_protocol_version=stream_protocol_version,
+                    )
+                    if prepared is not None:
+                        yield prepared
+            finally:
+                await events.aclose()
+            return
+
+        events = produce()
         try:
             async for event in events:
                 prepared = _chat_stream_event_for_consumer(
@@ -7342,20 +7567,6 @@ async def _stream_native_agent_chat(
                     yield prepared
         finally:
             await events.aclose()
-        return
-
-    events = produce()
-    try:
-        async for event in events:
-            prepared = _chat_stream_event_for_consumer(
-                event,
-                include_trace=include_trace,
-                stream_protocol_version=stream_protocol_version,
-            )
-            if prepared is not None:
-                yield prepared
-    finally:
-        await events.aclose()
 
 
 async def run_chat(
@@ -7377,107 +7588,16 @@ async def run_chat(
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
-    resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
-    if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-        return await _run_native_agent_chat(
-            manager,
-            alias,
-            shared_user_id,
-            user_text,
-            task_mode=task_mode,
-            task_payload=task_payload,
-            visible_text=visible_text,
-            agent_id=agent_id,
-            cluster=cluster,
-            mentions=mentions,
-            solo_mode=solo_mode,
-            actor=actor,
-            allow_unsafe_cli=allow_unsafe_cli,
-        )
-    main_conversation_id = ""
-    cluster_team_state: dict[str, Any] | None = None
-    if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
-        main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
-            manager,
-            profile,
-            alias,
-            shared_user_id,
-            EXECUTION_MODE_CLI,
-        )
-    cluster_run = _start_cluster_run_if_requested(
-        profile=profile,
-        alias=alias,
-        shared_user_id=shared_user_id,
-        cluster=cluster,
-        execution_mode=EXECUTION_MODE_CLI,
-        mentions=mentions,
-        allow_unsafe_cli=allow_unsafe_cli,
-        agent_id=agent_id,
-        solo_mode=solo_mode,
-        main_conversation_id=main_conversation_id,
-        team_state=cluster_team_state,
-    )
-    request = _build_chat_run_request(
-        alias,
-        shared_user_id,
-        user_text,
-        task_mode=task_mode,
-        task_payload=task_payload,
-        visible_text=visible_text,
-        actor=actor,
-    )
-    try:
-        return await run_cli_chat(
-            manager,
-            alias,
-            shared_user_id,
-            user_text,
-            request=request,
-            agent_id=agent_id,
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
-            cluster_mentions=list(mentions or []),
-            allow_unsafe_cli=allow_unsafe_cli,
-        )
-    finally:
-        if cluster_run:
-            _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
-
-
-async def stream_chat(
-    manager: MultiBotManager,
-    alias: str,
-    user_id: int,
-    user_text: str,
-    *,
-    task_mode: str = "standard",
-    task_payload: dict[str, Any] | None = None,
-    visible_text: str | None = None,
-    agent_id: str = "main",
-    cluster: bool = False,
-    mentions: list[dict[str, Any]] | None = None,
-    execution_mode: str = "",
-    solo_mode: bool = False,
-    actor: dict[str, Any] | None = None,
-    protocol: str = "",
-    allow_unsafe_cli: bool = False,
-    resume_stream_id: str = "",
-    resume_turn_id: str = "",
-    after_sequence: int = 0,
-    enable_reconnect: bool = False,
-    include_trace: bool = True,
-    stream_protocol_version: int = 1,
-) -> AsyncIterator[dict[str, Any]]:
-    try:
-        profile = get_profile_or_raise(manager, alias)
-        shared_user_id = chat_session_user_id(user_id)
-        normalized_stream_protocol_version = normalize_stream_protocol_version(stream_protocol_version)
+    _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
+    with _session_lifecycle_scope(session):
         resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
+        session._execution_mode = resolved_execution_mode
         if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-            async for event in _stream_native_agent_chat(
+            return await _run_native_agent_chat(
                 manager,
-                alias=alias,
-                user_id=shared_user_id,
-                user_text=user_text,
+                alias,
+                shared_user_id,
+                user_text,
                 task_mode=task_mode,
                 task_payload=task_payload,
                 visible_text=visible_text,
@@ -7486,20 +7606,11 @@ async def stream_chat(
                 mentions=mentions,
                 solo_mode=solo_mode,
                 actor=actor,
-                protocol=protocol,
                 allow_unsafe_cli=allow_unsafe_cli,
-                resume_stream_id=resume_stream_id,
-                resume_turn_id=resume_turn_id,
-                after_sequence=after_sequence,
-                enable_reconnect=enable_reconnect,
-                include_trace=include_trace,
-                stream_protocol_version=normalized_stream_protocol_version,
-            ):
-                yield event
-            return
+            )
         main_conversation_id = ""
         cluster_team_state: dict[str, Any] | None = None
-        if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode and not resume_stream_id:
+        if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
             main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
                 manager,
                 profile,
@@ -7517,7 +7628,6 @@ async def stream_chat(
             allow_unsafe_cli=allow_unsafe_cli,
             agent_id=agent_id,
             solo_mode=solo_mode,
-            internal_continuation=bool(resume_stream_id),
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
         )
@@ -7531,7 +7641,7 @@ async def stream_chat(
             actor=actor,
         )
         try:
-            async for event in _stream_cli_chat(
+            return await run_cli_chat(
                 manager,
                 alias,
                 shared_user_id,
@@ -7541,13 +7651,136 @@ async def stream_chat(
                 cluster_run_id=cluster_run.run_id if cluster_run else "",
                 cluster_mentions=list(mentions or []),
                 allow_unsafe_cli=allow_unsafe_cli,
-                include_trace=include_trace,
-                stream_protocol_version=normalized_stream_protocol_version,
-            ):
-                yield event
+            )
         finally:
             if cluster_run:
                 _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+
+
+async def stream_chat(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    user_text: str,
+    *,
+    task_mode: str = "standard",
+    task_payload: dict[str, Any] | None = None,
+    visible_text: str | None = None,
+    agent_id: str = "main",
+    cluster: bool = False,
+    mentions: list[dict[str, Any]] | None = None,
+    execution_mode: str = "",
+    follow_current_conversation: bool = False,
+    expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
+    solo_mode: bool = False,
+    actor: dict[str, Any] | None = None,
+    protocol: str = "",
+    allow_unsafe_cli: bool = False,
+    resume_stream_id: str = "",
+    resume_turn_id: str = "",
+    after_sequence: int = 0,
+    enable_reconnect: bool = False,
+    include_trace: bool = True,
+    stream_protocol_version: int = 1,
+) -> AsyncIterator[dict[str, Any]]:
+    try:
+        profile = get_profile_or_raise(manager, alias)
+        shared_user_id = chat_session_user_id(user_id)
+        _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
+        resuming = False
+        if str(resume_stream_id or "").strip():
+            with session._lock:
+                _check_expected_conversation(session, expected_conversation_id)
+                requested_mode = _current_conversation_execution_mode(profile, session) if follow_current_conversation else execution_mode
+                resuming = _resolve_chat_execution_mode(profile, requested_mode) == NATIVE_AGENT_PROVIDER
+        with nullcontext() if resuming else _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id):
+            normalized_stream_protocol_version = normalize_stream_protocol_version(stream_protocol_version)
+            with session._lock:
+                _check_expected_conversation(session, expected_conversation_id)
+                requested_mode = _current_conversation_execution_mode(profile, session) if follow_current_conversation else execution_mode
+                resolved_execution_mode = _resolve_chat_execution_mode(profile, requested_mode)
+                if not resuming:
+                    session._execution_mode = resolved_execution_mode
+            if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
+                events = _stream_native_agent_chat(
+                    manager,
+                    alias=alias,
+                    user_id=shared_user_id,
+                    user_text=user_text,
+                    task_mode=task_mode,
+                    task_payload=task_payload,
+                    visible_text=visible_text,
+                    agent_id=agent_id,
+                    cluster=cluster,
+                    mentions=mentions,
+                    solo_mode=solo_mode,
+                    actor=actor,
+                    protocol=protocol,
+                    allow_unsafe_cli=allow_unsafe_cli,
+                    resume_stream_id=resume_stream_id,
+                    resume_turn_id=resume_turn_id,
+                    after_sequence=after_sequence,
+                    enable_reconnect=enable_reconnect,
+                    include_trace=include_trace,
+                    stream_protocol_version=normalized_stream_protocol_version,
+                )
+                async with aclosing(events):
+                    async for event in events:
+                        yield event
+                return
+            main_conversation_id = ""
+            cluster_team_state: dict[str, Any] | None = None
+            if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode and not resume_stream_id:
+                main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
+                    manager,
+                    profile,
+                    alias,
+                    shared_user_id,
+                    EXECUTION_MODE_CLI,
+                )
+            cluster_run = _start_cluster_run_if_requested(
+                profile=profile,
+                alias=alias,
+                shared_user_id=shared_user_id,
+                cluster=cluster,
+                execution_mode=EXECUTION_MODE_CLI,
+                mentions=mentions,
+                allow_unsafe_cli=allow_unsafe_cli,
+                agent_id=agent_id,
+                solo_mode=solo_mode,
+                internal_continuation=bool(resume_stream_id),
+                main_conversation_id=main_conversation_id,
+                team_state=cluster_team_state,
+            )
+            request = _build_chat_run_request(
+                alias,
+                shared_user_id,
+                user_text,
+                task_mode=task_mode,
+                task_payload=task_payload,
+                visible_text=visible_text,
+                actor=actor,
+            )
+            try:
+                events = _stream_cli_chat(
+                    manager,
+                    alias,
+                    shared_user_id,
+                    user_text,
+                    request=request,
+                    agent_id=agent_id,
+                    cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    cluster_mentions=list(mentions or []),
+                    allow_unsafe_cli=allow_unsafe_cli,
+                    include_trace=include_trace,
+                    stream_protocol_version=normalized_stream_protocol_version,
+                )
+                async with aclosing(events):
+                    async for event in events:
+                        yield event
+            finally:
+                if cluster_run:
+                    _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
     except WebApiError as exc:
         yield {"type": "error", "code": exc.code, "message": exc.message}
     except Exception as exc:  # pragma: no cover - defensive

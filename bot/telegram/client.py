@@ -52,19 +52,27 @@ class TelegramClient:
     async def get_updates(self, offset: int, *, timeout: int = 30) -> list[dict[str, Any]]:
         result = await self._request(
             "getUpdates",
-            {"offset": offset, "timeout": timeout, "allowed_updates": ["message"]},
+            {"offset": offset, "timeout": timeout, "allowed_updates": ["message", "callback_query"]},
             timeout=timeout + 10,
         )
         if not isinstance(result, list):
             raise TelegramError("getUpdates")
         return result
 
-    async def send_message(self, chat_id: int, text: str) -> dict[str, Any]:
-        return await self._request("sendMessage", {
+    async def send_message(
+        self, chat_id: int, text: str, *, reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
             "chat_id": chat_id,
             "text": text,
             "link_preview_options": {"is_disabled": True},
-        })
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        return await self._request("sendMessage", payload)
+
+    async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
+        await self._request("answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text})
 
     async def close(self) -> None:
         if self._session is not None:

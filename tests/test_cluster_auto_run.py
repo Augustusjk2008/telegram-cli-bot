@@ -904,6 +904,11 @@ async def test_main_chat_run_loads_persisted_conversation_team_before_start(monk
 
     monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
     monkeypatch.setattr(api_service, "get_profile_or_raise", lambda *_args: profile)
+    session = UserSession(bot_id=-1, bot_alias="main", user_id=1, working_dir=".", _persist_enabled=False)
+    monkeypatch.setattr(
+        api_service, "get_chat_session_for_alias",
+        lambda *_args: (profile, profile.get_agent("main"), session),
+    )
     monkeypatch.setattr(api_service, "run_cli_chat", fake_run_cli_chat)
     async def fake_ensure_cluster_main_conversation(*_args, **_kwargs):
         return "conv_main", team_state

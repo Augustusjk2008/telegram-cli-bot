@@ -269,6 +269,9 @@ def _escape_markdown_fence(text: str) -> str:
     return str(text or "").replace("```", "``\\`")
 
 
+_UNSPECIFIED_ABORT_TARGET = object()
+
+
 class NativeAgentService:
     def __init__(self) -> None:
         self._pi_session_store = PiSessionStore()
@@ -322,8 +325,10 @@ class NativeAgentService:
         if len(self._turn_channels) >= 64:
             raise RuntimeError("Pi turn 恢复通道数量已达上限")
 
+        execution_id = session._execution_id
+
         async def abort_turn() -> None:
-            await self.abort(session)
+            await self.abort(session, expected_execution_id=execution_id)
 
         channel = PiTurnChannel(producer, abort_turn=abort_turn, bot_id=session.bot_id)
         self._turn_channels[channel.stream_id] = channel
@@ -642,26 +647,64 @@ class NativeAgentService:
             conversation_id=conversation_id,
         )
 
-    async def abort(self, session: UserSession) -> bool:
+    def get_control_runtime(self, session: UserSession) -> PiSessionRuntime | None:
+        runtime_id = str(session.native_agent_server_key or "").strip()
+        return self._runtime_registry.get_by_runtime_id(runtime_id) if runtime_id else None
+
+    async def abort(
+        self, session: UserSession, *, expected_execution_id: Any = _UNSPECIFIED_ABORT_TARGET,
+        captured_runtime: Any = _UNSPECIFIED_ABORT_TARGET,
+        captured_process: Any = _UNSPECIFIED_ABORT_TARGET,
+    ) -> bool:
         with session._lock:
-            if not session.is_processing:
+            if expected_execution_id is not _UNSPECIFIED_ABORT_TARGET and session._execution_id != expected_execution_id:
                 return False
-            session.stop_requested = True
-            runtime_id = str(session.native_agent_server_key or "").strip()
-            process = session.process
-        if input_is_preparing(session):
-            cancel_input_preparation(session)
-            return True
-        runtime = self._runtime_registry.get_by_runtime_id(runtime_id) if runtime_id else None
-        if runtime is not None:
-            return await runtime.abort()
-        if process is None or process.poll() is not None:
-            return False
+            task = session._native_abort_task
+            if task is None:
+                if not session.is_processing:
+                    return False
+                session.stop_requested = True
+                runtime = self.get_control_runtime(session) if captured_runtime is _UNSPECIFIED_ABORT_TARGET else captured_runtime
+                process = session.process if captured_process is _UNSPECIFIED_ABORT_TARGET else captured_process
+                preparing = input_is_preparing(session)
+                if preparing:
+                    cancel_input_preparation(session)
+
+                async def abort_captured() -> bool:
+                    try:
+                        if preparing:
+                            return True
+                        if runtime is not None:
+                            return await runtime.abort()
+                        if process is None or process.poll() is not None:
+                            return False
+                        try:
+                            process.terminate()
+                            return True
+                        except Exception:
+                            return False
+                    finally:
+                        with session._lock:
+                            if session._native_abort_task is asyncio.current_task():
+                                session._native_abort_task = None
+
+                task = asyncio.create_task(abort_captured())
+                session._native_abort_task = task
         try:
-            process.terminate()
-            return True
-        except Exception:
-            return False
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as cancelled:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            try:
+                task.result()
+            except BaseException:
+                pass
+            raise cancelled
 
     async def reply_permission(
         self,
@@ -703,10 +746,16 @@ class NativeAgentService:
         with session._lock:
             if profile.archived:
                 raise RuntimeError("智能体已归档，请先取消归档")
-            if session.is_processing:
+            if (session.is_processing or session._lifecycle_operation == "conversation"
+                    or session._control_stop_task is not None or session._native_abort_task is not None):
                 raise RuntimeError("当前会话正在处理上一条消息")
+            owns_execution = not session._execution_id
+            if owns_execution:
+                session._execution_id = f"exec_{uuid.uuid4().hex}"
+                session.stop_requested = False
+            execution_id = session._execution_id
+            session._execution_mode = NATIVE_AGENT_PROVIDER
             session.native_agent_run_id = f"nar_{uuid.uuid4().hex[:12]}"
-            session.stop_requested = False
             session.is_processing = True
             run_id = str(session.native_agent_run_id or "")
         session.touch()
@@ -766,6 +815,8 @@ class NativeAgentService:
                 native_provider=NATIVE_AGENT_PROVIDER,
                 actor=actor,
             )
+            with session._lock:
+                session._execution_turn_id = turn_handle.turn_id
             pending_translation = input_translation_pending(user_text, translation_config)
             if pending_translation is not None:
                 fields = {"turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
@@ -1385,11 +1436,16 @@ class NativeAgentService:
             }
         finally:
             with session._lock:
-                session.native_agent_run_id = None
-                session.native_agent_server_key = None
-                session.is_processing = False
-                session.stop_requested = False
-                session.process = None
+                if session._execution_id == execution_id and session.native_agent_run_id == run_id:
+                    session.native_agent_run_id = None
+                    session.native_agent_server_key = None
+                    session.is_processing = False
+                    session.stop_requested = False
+                    session.process = None
+                    if owns_execution:
+                        session._execution_id = None
+                        session._execution_turn_id = None
+                        session._execution_mode = ""
             session.persist()
             _ = user_id, run_id, total_started
 

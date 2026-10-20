@@ -652,6 +652,15 @@ class UserSession:
     session_epoch: int = 0
     active_conversation_id: Optional[str] = None
     _lock: threading.RLock = field(default_factory=threading.RLock)
+    _lifecycle_operation: str = field(default="", repr=False, compare=False)
+    _lifecycle_token: str = field(default="", repr=False, compare=False)
+    _execution_id: Optional[str] = field(default=None, repr=False, compare=False)
+    _execution_turn_id: Optional[str] = field(default=None, repr=False, compare=False)
+    _execution_mode: str = field(default="", repr=False, compare=False)
+    _execution_detached: bool = field(default=False, repr=False, compare=False)
+    _control_stop_task: Any = field(default=None, repr=False, compare=False)
+    _native_abort_task: Any = field(default=None, repr=False, compare=False)
+    _control_stop_snapshot: Optional[dict] = field(default=None, repr=False, compare=False)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
 

@@ -2195,6 +2195,9 @@ class WebApiServer:
             path = f"{path}?{urlencode({'conversation_id': conversation_id})}"
         return f"{base_url}{path}"
 
+    def chat_public_url(self, alias: str, conversation_id: str = "") -> str:
+        return self._chat_notification_url(alias, conversation_id)
+
     def _extract_chat_notification_payload(
         self,
         *,

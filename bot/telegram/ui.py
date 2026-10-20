@@ -7,6 +7,10 @@ import re
 from typing import Any
 
 MESSAGE_LIMIT = 4096
+SHORTCUTS = {
+    "🤖 智能体": "targets", "✉️ 发消息": "prompt", "🆕 新会话": "new",
+    "📊 状态": "status", "⏹ 停止任务": "stop", "❓ 帮助": "help",
+}
 _ROUTE = re.compile(r"\Ato[ \t]+(\S+)(?:[ \t]*\r?\n|[ \t]+)([\s\S]*)\Z", re.IGNORECASE)
 
 
@@ -24,9 +28,44 @@ def help_text(aliases: list[str]) -> str:
         "发送：to <智能体别名> <正文>\n"
         "例如：to dev 帮我分析这个问题\n"
         "也可以在 to dev 后换行输入多行正文或代码。\n"
+        "新会话：to <智能体别名> /new（保留旧历史）\n"
+        "底部“智能体”选择目标，“发消息”弹出定向回复提示；答复下可点击“继续聊”。\n"
+        "回复提示中的全部文字会作为正文发送到提示标注的目标和会话。\n"
         "消息使用对应智能体的当前 Web 会话；完成后回复最终结果和 context left。\n"
         "人工审批请在 Web 中处理。"
     )
+
+
+def reply_keyboard() -> dict[str, Any]:
+    labels = list(SHORTCUTS)
+    return {"keyboard": [[{"text": label} for label in labels[i:i + 2]] for i in range(0, 6, 2)],
+            "resize_keyboard": True, "is_persistent": True}
+
+
+def force_reply() -> dict[str, Any]:
+    return {"force_reply": True, "input_field_placeholder": "回复此消息，发送正文"}
+
+
+def conversation_label(conversation_id: str | None) -> str:
+    return conversation_id or "尚无会话（首次发送时创建）"
+
+
+def status_text(alias: str, snapshot: dict[str, Any]) -> str:
+    phases = {"idle": "空闲", "preparing": "准备中", "running": "执行中",
+              "waiting_approval": "等待审批（请在 Web 完成审批）", "stopping": "正在停止"}
+    lines = [f"[{alias}] 状态：{phases.get(snapshot['phase'], snapshot['phase'])}",
+             f"会话：{conversation_label(snapshot.get('conversation_id'))}",
+             f"执行模式：{snapshot['execution_mode']}"]
+    identity = snapshot.get("turn_id") or snapshot.get("execution_id")
+    if identity:
+        lines.append(f"任务：{identity}")
+    task_ids = snapshot.get("cluster_task_ids") or []
+    if task_ids:
+        if not identity:
+            lines.append("主任务已结束，子任务仍在执行。")
+        lines.append(f"运行中或排队的子任务：{len(task_ids)} 个")
+    lines.append(f"context left: {context_left(snapshot.get('context_usage'))}")
+    return "\n".join(lines)
 
 
 def context_left(usage: dict[str, Any] | None) -> str:
