@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 CONFIRM_TTL = 5 * 60
 REPLY_TTL = 30 * 60
@@ -67,13 +67,67 @@ class TelegramState:
                     expires_at REAL NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
                     result TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (bot_id, token)
                 )
             """)
+            interaction_columns = {
+                str(row[1]) for row in self._db.execute("PRAGMA table_info(interactions)").fetchall()
+            }
+            if "updated_at" not in interaction_columns:
+                self._db.execute("ALTER TABLE interactions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+                self._db.execute(
+                    "UPDATE interactions SET updated_at = CURRENT_TIMESTAMP WHERE updated_at = ''"
+                )
             self._db.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS interaction_reply
                 ON interactions (bot_id, chat_id, message_id) WHERE message_id IS NOT NULL
             """)
+            self._db.execute("""
+                CREATE TABLE IF NOT EXISTS deliveries (
+                    bot_id TEXT NOT NULL,
+                    delivery_id TEXT NOT NULL,
+                    update_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    alias TEXT NOT NULL DEFAULT '',
+                    conversation_id TEXT NOT NULL DEFAULT '',
+                    turn_id TEXT NOT NULL DEFAULT '',
+                    assistant_message_id TEXT NOT NULL DEFAULT '',
+                    parts_json TEXT NOT NULL,
+                    reply_markup_json TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    retry_at REAL NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (bot_id, delivery_id),
+                    UNIQUE (bot_id, update_id)
+                )
+            """)
+            self._db.execute("""
+                CREATE TABLE IF NOT EXISTS delivery_parts (
+                    bot_id TEXT NOT NULL,
+                    delivery_id TEXT NOT NULL,
+                    part_index INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    message_id INTEGER,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    retry_at REAL NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (bot_id, delivery_id, part_index),
+                    FOREIGN KEY (bot_id, delivery_id)
+                        REFERENCES deliveries (bot_id, delivery_id)
+                        ON DELETE CASCADE
+                )
+            """)
+            self._db.execute(
+                "CREATE INDEX IF NOT EXISTS deliveries_recovery "
+                "ON deliveries (bot_id, status, retry_at, created_at)"
+            )
 
     def next_offset(self) -> int:
         row = self._db.execute(
@@ -88,13 +142,15 @@ class TelegramState:
                 "INSERT OR IGNORE INTO updates (bot_id, update_id, user_id, chat_id) VALUES (?, ?, ?, ?)",
                 (self.bot_id, update_id, user_id, chat_id),
             )
-            # Telegram may choose a smaller ID after a week without updates.
-            # Persist the last received position, independently of claim history.
-            self._db.execute(
-                "INSERT INTO polling_cursors (bot_id, next_offset) VALUES (?, ?) "
-                "ON CONFLICT(bot_id) DO UPDATE SET next_offset = excluded.next_offset",
-                (self.bot_id, update_id + 1),
-            )
+            # A duplicate update must not move a high-water mark backwards. A
+            # newly claimed lower ID is kept as a Telegram reset epoch, which
+            # preserves recovery after Telegram recreates its update sequence.
+            if cursor.rowcount == 1:
+                self._db.execute(
+                    "INSERT INTO polling_cursors (bot_id, next_offset) VALUES (?, ?) "
+                    "ON CONFLICT(bot_id) DO UPDATE SET next_offset = excluded.next_offset",
+                    (self.bot_id, update_id + 1),
+                )
         return cursor.rowcount == 1
 
     def update(self, update_id: int, **fields: str) -> None:
@@ -113,6 +169,278 @@ class TelegramState:
             "SELECT * FROM updates WHERE bot_id = ? AND update_id = ?", (self.bot_id, update_id),
         ).fetchone()
         return dict(row) if row is not None else None
+
+    @staticmethod
+    def _decode_delivery(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        record = dict(row)
+        record["parts"] = json.loads(record.pop("parts_json"))
+        markup = record.pop("reply_markup_json")
+        record["reply_markup"] = json.loads(markup) if markup else None
+        return record
+
+    @staticmethod
+    def _validate_parts(parts: Sequence[str]) -> list[str]:
+        values = list(parts)
+        if not values or any(not isinstance(part, str) or not part for part in values):
+            raise ValueError("A delivery must contain at least one non-empty text part")
+        return values
+
+    def create_delivery(
+        self,
+        update_id: int,
+        chat_id: int,
+        alias: str,
+        parts: Sequence[str],
+        *,
+        conversation_id: str | None = None,
+        turn_id: str | None = None,
+        assistant_message_id: str | None = None,
+        reply_markup: dict[str, Any] | None = None,
+        retry_at: float | None = None,
+        delivery_id: str | None = None,
+    ) -> str:
+        """Persist a result before its first Telegram send attempt.
+
+        The update ID is the idempotency key for a result. Recreating an existing
+        result returns the original delivery ID and leaves its sent parts intact.
+        """
+        values = self._validate_parts(parts)
+        existing = self._db.execute(
+            "SELECT delivery_id FROM deliveries WHERE bot_id = ? AND update_id = ?",
+            (self.bot_id, update_id),
+        ).fetchone()
+        if existing is not None:
+            return str(existing[0])
+
+        identifier = delivery_id or secrets.token_urlsafe(18)
+        due = time.time() if retry_at is None else float(retry_at)
+        markup = json.dumps(reply_markup, ensure_ascii=False) if reply_markup is not None else None
+        with self._db:
+            try:
+                self._db.execute(
+                    "INSERT INTO deliveries "
+                    "(bot_id, delivery_id, update_id, chat_id, alias, conversation_id, "
+                    "turn_id, assistant_message_id, parts_json, reply_markup_json, retry_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        self.bot_id, identifier, update_id, chat_id, alias,
+                        conversation_id or "", turn_id or "", assistant_message_id or "",
+                        json.dumps(values, ensure_ascii=False), markup, due,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = self._db.execute(
+                    "SELECT delivery_id FROM deliveries WHERE bot_id = ? AND update_id = ?",
+                    (self.bot_id, update_id),
+                ).fetchone()
+                if existing is None:
+                    raise
+                return str(existing[0])
+            self._db.executemany(
+                "INSERT INTO delivery_parts (bot_id, delivery_id, part_index, text, retry_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [(self.bot_id, identifier, index, part, due) for index, part in enumerate(values)],
+            )
+            self._sync_update_delivery_status(identifier)
+        return identifier
+
+    def create_pending_delivery(self, *args: Any, **kwargs: Any) -> str:
+        return self.create_delivery(*args, **kwargs)
+
+    def get_delivery(self, delivery_id: str) -> dict[str, Any] | None:
+        record = self._decode_delivery(self._db.execute(
+            "SELECT * FROM deliveries WHERE bot_id = ? AND delivery_id = ?",
+            (self.bot_id, delivery_id),
+        ).fetchone())
+        if record is not None:
+            record["part_records"] = self.get_delivery_parts(delivery_id)
+        return record
+
+    def get_delivery_for_update(self, update_id: int) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT * FROM deliveries WHERE bot_id = ? AND update_id = ?",
+            (self.bot_id, update_id),
+        ).fetchone()
+        return self.get_delivery(row["delivery_id"]) if row is not None else None
+
+    def get_delivery_parts(self, delivery_id: str) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM delivery_parts WHERE bot_id = ? AND delivery_id = ? "
+            "ORDER BY part_index",
+            (self.bot_id, delivery_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_pending_deliveries(self, *, now: float | None = None) -> list[dict[str, Any]]:
+        """Return due, incomplete results for a post-restart delivery worker."""
+        current = time.time() if now is None else float(now)
+        rows = self._db.execute(
+            "SELECT * FROM deliveries WHERE bot_id = ? AND status != 'sent' "
+            "AND retry_at <= ? ORDER BY created_at, delivery_id",
+            (self.bot_id, current),
+        ).fetchall()
+        return [self.get_delivery(row["delivery_id"]) for row in rows]
+
+    def pending_deliveries(self, *, now: float | None = None) -> list[dict[str, Any]]:
+        """Compatibility-friendly alias for restart recovery callers."""
+        return self.list_pending_deliveries(now=now)
+
+    def recover_pending_deliveries(self, *, now: float | None = None) -> list[dict[str, Any]]:
+        return self.list_pending_deliveries(now=now)
+
+    def delivery_parts(self, delivery_id: str) -> list[dict[str, Any]]:
+        return self.get_delivery_parts(delivery_id)
+
+    def recover_after_restart(self) -> list[dict[str, Any]]:
+        """Close in-flight local records without replaying agent side effects.
+
+        A completed delivery remains eligible for Telegram retry. An update
+        without such a delivery has an execution outcome that cannot be known
+        after a process crash, so it is marked interrupted for Web inspection.
+        Callback operations left in ``processing`` are similarly made explicit
+        instead of being retried blindly.
+        """
+        recovered: list[dict[str, Any]] = []
+        with self._db:
+            rows = self._db.execute(
+                "SELECT * FROM updates WHERE bot_id = ? AND status IN ('received', 'running') "
+                "ORDER BY update_id",
+                (self.bot_id,),
+            ).fetchall()
+            for row in rows:
+                delivery = self._db.execute(
+                    "SELECT status FROM deliveries WHERE bot_id = ? AND update_id = ?",
+                    (self.bot_id, row["update_id"]),
+                ).fetchone()
+                status = "completed" if delivery is not None else "interrupted"
+                self._db.execute(
+                    "UPDATE updates SET status = ?, delivery_status = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE bot_id = ? AND update_id = ?",
+                    (status, delivery["status"] if delivery is not None else "", self.bot_id, row["update_id"]),
+                )
+                recovered.append({**dict(row), "status": status, "delivery_status": delivery["status"] if delivery is not None else ""})
+            self._db.execute(
+                "UPDATE interactions SET status = 'failed', result = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE bot_id = ? AND status = 'processing'",
+                ("应用重启前操作未完成，请刷新面板后重试。", self.bot_id),
+            )
+        return recovered
+
+    def mark_delivery_part_sent(self, delivery_id: str, part_index: int, message_id: int) -> None:
+        """Record one Telegram message ID without changing an already sent part."""
+        with self._db:
+            part = self._db.execute(
+                "SELECT status, message_id FROM delivery_parts "
+                "WHERE bot_id = ? AND delivery_id = ? AND part_index = ?",
+                (self.bot_id, delivery_id, part_index),
+            ).fetchone()
+            if part is None:
+                raise KeyError(f"Unknown delivery part: {delivery_id}/{part_index}")
+            if part["status"] != "sent":
+                self._db.execute(
+                    "UPDATE delivery_parts SET status = 'sent', message_id = ?, "
+                    "attempts = attempts + 1, last_error = '', updated_at = CURRENT_TIMESTAMP "
+                    "WHERE bot_id = ? AND delivery_id = ? AND part_index = ?",
+                    (message_id, self.bot_id, delivery_id, part_index),
+                )
+            self._refresh_delivery_status(delivery_id)
+
+    def mark_part_sent(self, delivery_id: str, part_index: int, message_id: int) -> None:
+        self.mark_delivery_part_sent(delivery_id, part_index, message_id)
+
+    def mark_delivery_part_failed(
+        self,
+        delivery_id: str,
+        part_index: int,
+        error: str = "",
+        *,
+        retry_at: float | None = None,
+    ) -> None:
+        """Record a failed attempt while keeping successfully sent parts durable."""
+        due = time.time() if retry_at is None else float(retry_at)
+        with self._db:
+            part = self._db.execute(
+                "SELECT status FROM delivery_parts WHERE bot_id = ? AND delivery_id = ? "
+                "AND part_index = ?",
+                (self.bot_id, delivery_id, part_index),
+            ).fetchone()
+            if part is None:
+                raise KeyError(f"Unknown delivery part: {delivery_id}/{part_index}")
+            if part["status"] != "sent":
+                self._db.execute(
+                    "UPDATE delivery_parts SET status = 'failed', retry_at = ?, "
+                    "attempts = attempts + 1, last_error = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE bot_id = ? AND delivery_id = ? AND part_index = ?",
+                    (due, str(error), self.bot_id, delivery_id, part_index),
+                )
+            self._refresh_delivery_status(delivery_id)
+
+    def mark_part_failed(
+        self, delivery_id: str, part_index: int, error: str = "", *, retry_at: float | None = None,
+    ) -> None:
+        self.mark_delivery_part_failed(delivery_id, part_index, error, retry_at=retry_at)
+
+    def mark_delivery_failed(self, delivery_id: str, error: str = "", *, retry_at: float | None = None) -> None:
+        """Record a delivery-level failure for results with no part-level attempt."""
+        due = time.time() if retry_at is None else float(retry_at)
+        with self._db:
+            if self._db.execute(
+                "SELECT 1 FROM deliveries WHERE bot_id = ? AND delivery_id = ?",
+                (self.bot_id, delivery_id),
+            ).fetchone() is None:
+                raise KeyError(f"Unknown delivery: {delivery_id}")
+            self._db.execute(
+                "UPDATE deliveries SET status = 'failed', retry_at = ?, last_error = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE bot_id = ? AND delivery_id = ? "
+                "AND status != 'sent'",
+                (due, str(error), self.bot_id, delivery_id),
+            )
+            self._sync_update_delivery_status(delivery_id)
+
+    def _refresh_delivery_status(self, delivery_id: str) -> None:
+        parts = self._db.execute(
+            "SELECT status FROM delivery_parts WHERE bot_id = ? AND delivery_id = ?",
+            (self.bot_id, delivery_id),
+        ).fetchall()
+        statuses = [row[0] for row in parts]
+        if not statuses:
+            return
+        if all(status == "sent" for status in statuses):
+            status = "sent"
+        elif any(status == "sent" for status in statuses):
+            status = "partial"
+        elif any(status == "failed" for status in statuses):
+            status = "failed"
+        else:
+            status = "pending"
+        retry_row = self._db.execute(
+            "SELECT retry_at, last_error FROM delivery_parts WHERE bot_id = ? AND delivery_id = ? "
+            "AND status != 'sent' ORDER BY part_index LIMIT 1",
+            (self.bot_id, delivery_id),
+        ).fetchone()
+        retry_at = retry_row[0] if retry_row and retry_row[0] is not None else time.time()
+        last_error = retry_row[1] if retry_row else ""
+        self._db.execute(
+            "UPDATE deliveries SET status = ?, retry_at = ?, last_error = ?, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE bot_id = ? AND delivery_id = ? AND status != 'sent'",
+            (status, retry_at, last_error, self.bot_id, delivery_id),
+        )
+        self._sync_update_delivery_status(delivery_id)
+
+    def _sync_update_delivery_status(self, delivery_id: str) -> None:
+        row = self._db.execute(
+            "SELECT update_id, status FROM deliveries WHERE bot_id = ? AND delivery_id = ?",
+            (self.bot_id, delivery_id),
+        ).fetchone()
+        if row is not None:
+            self._db.execute(
+                "UPDATE updates SET delivery_status = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE bot_id = ? AND update_id = ?",
+                (row["status"], self.bot_id, row["update_id"]),
+            )
 
     def select_target(self, user_id: int, chat_id: int, alias: str) -> None:
         with self._db:
@@ -175,6 +503,7 @@ class TelegramState:
         with self._db:
             cursor = self._db.execute(
                 "UPDATE interactions SET status = 'processing' "
+                ", updated_at = CURRENT_TIMESTAMP "
                 "WHERE bot_id = ? AND token = ? AND user_id = ? AND chat_id = ? "
                 "AND status = 'pending' AND expires_at > ?",
                 (self.bot_id, token, user_id, chat_id, time.time()),
@@ -184,7 +513,8 @@ class TelegramState:
     def finish_interaction(self, token: str, result: str, *, status: str = "completed") -> None:
         with self._db:
             self._db.execute(
-                "UPDATE interactions SET status = ?, result = ? WHERE bot_id = ? AND token = ?",
+                "UPDATE interactions SET status = ?, result = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE bot_id = ? AND token = ?",
                 (status, result, self.bot_id, token),
             )
 

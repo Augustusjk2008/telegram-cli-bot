@@ -15,13 +15,15 @@ from bot.runtime_paths import get_app_data_root
 from bot.web import api_service
 from bot.web.api_common import WebApiError
 
-from .client import TelegramClient
+from .client import TelegramClient, TelegramError
 from .state import CONFIRM_TTL, NAVIGATION_TTL, REPLY_TTL, TelegramState
 from .ui import SHORTCUTS, conversation_label, force_reply, format_result, help_text, parse_target_text, reply_keyboard, split_text, status_text
 
 logger = logging.getLogger(__name__)
 _UNBOUND = object()
 _REFRESH = "此操作已失效，请通过底部“智能体”刷新面板后重试。"
+_POLL_MAX_BACKOFF = 30.0
+_DELIVERY_MAX_BACKOFF = 60.0
 
 
 class TelegramGateway:
@@ -37,6 +39,7 @@ class TelegramGateway:
         self.chat_url = chat_url
         self._poll_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
+        self._delivery_retry_tasks: dict[str, asyncio.Task] = {}
 
     def start(self) -> None:
         if self._poll_task is None and self.allowed_user_ids:
@@ -51,26 +54,67 @@ class TelegramGateway:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self._delivery_retry_tasks.clear()
         try:
             await self.client.close()
         finally:
             self.state.close()
 
     async def _poll(self) -> None:
+        await self._recover_state()
         offset = self.state.next_offset()
+        failures = 0
         while True:
             try:
                 updates = await self.client.get_updates(offset)
+                failures = 0
                 for update in updates:
                     self.receive_update(update)
                     # Claims are committed before acknowledging updates to Telegram.
                     if type(update.get("update_id")) is int:
-                        offset = update["update_id"] + 1
+                        offset = self.state.next_offset()
             except asyncio.CancelledError:
                 raise
+            except TelegramError as exc:
+                failures += 1
+                if exc.retry_after > 0:
+                    delay = float(exc.retry_after)
+                elif exc.retryable:
+                    delay = min(_POLL_MAX_BACKOFF, 2 ** min(failures - 1, 5))
+                else:
+                    delay = 5.0
+                logger.warning("Telegram 轮询失败，%s 秒后重试 (%s)", delay, type(exc).__name__)
+                await asyncio.sleep(delay)
             except Exception as exc:
-                logger.warning("Telegram 轮询失败，稍后重试 (%s)", type(exc).__name__)
-                await asyncio.sleep(5)
+                failures += 1
+                delay = min(_POLL_MAX_BACKOFF, 2 ** min(failures - 1, 5))
+                logger.warning("Telegram 轮询失败，%s 秒后重试 (%s)", delay, type(exc).__name__)
+                await asyncio.sleep(delay)
+
+    async def _recover_state(self) -> None:
+        try:
+            recovered = self.state.recover_after_restart()
+            for record in recovered:
+                if record.get("status") != "interrupted":
+                    continue
+                alias = str(record.get("alias") or "main")
+                detail = f"[{alias}] 应用重启前任务未能确认结果，请在 Web 查看历史。"
+                url = self.chat_url(alias, str(record.get("conversation_id") or "")) if self.chat_url else ""
+                if url:
+                    detail += f"\n{url}"
+                delivery_id = self._prepare_delivery(
+                    int(record["update_id"]), int(record["chat_id"]), [detail], None,
+                )
+                await self._deliver_persisted(delivery_id)
+            for delivery in self.state.list_pending_deliveries():
+                self._schedule_delivery_retry(
+                    str(delivery["delivery_id"]),
+                    max(0.0, float(delivery.get("retry_at") or 0) - time.time()),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Telegram 状态恢复失败 (%s)", type(exc).__name__)
 
     def receive_update(self, update: dict[str, Any]) -> asyncio.Task | None:
         update_id = update.get("update_id")
@@ -96,8 +140,8 @@ class TelegramGateway:
             message = {"chat": chat, "from": sender}
         return self._schedule(self._handle(update_id, message, callback))
 
-    def _schedule(self, coroutine) -> asyncio.Task:
-        task = asyncio.create_task(coroutine)
+    def _schedule(self, coroutine, *, name: str | None = None) -> asyncio.Task:
+        task = asyncio.create_task(coroutine, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
         return task
@@ -122,7 +166,11 @@ class TelegramGateway:
     async def _deliver(
         self, update_id: int, chat_id: int, parts: list[str],
         reply_markup: dict[str, Any] | None = None,
+        *, durable: bool = False, delivery_id: str | None = None,
     ) -> dict[str, Any] | None:
+        if durable:
+            identifier = delivery_id or self._prepare_delivery(update_id, chat_id, parts, reply_markup)
+            return await self._deliver_persisted(identifier)
         sent = None
         try:
             for index, part in enumerate(parts):
@@ -137,6 +185,107 @@ class TelegramGateway:
             self.state.update(update_id, delivery_status="sent")
             return sent
         return None
+
+    def _prepare_delivery(
+        self, update_id: int, chat_id: int, parts: list[str], reply_markup: dict[str, Any] | None,
+    ) -> str:
+        record = self.state.get(update_id) or {}
+        return self.state.create_delivery(
+            update_id,
+            chat_id,
+            str(record.get("alias") or ""),
+            parts,
+            conversation_id=str(record.get("conversation_id") or "") or None,
+            turn_id=str(record.get("turn_id") or "") or None,
+            assistant_message_id=str(record.get("assistant_message_id") or "") or None,
+            reply_markup=reply_markup,
+        )
+
+    def _schedule_delivery_retry(self, delivery_id: str, delay: float) -> None:
+        existing = self._delivery_retry_tasks.get(delivery_id)
+        current = asyncio.current_task()
+        if existing is not None and existing is not current and not existing.done():
+            return
+        if existing is current:
+            self._delivery_retry_tasks.pop(delivery_id, None)
+
+        async def retry() -> None:
+            await asyncio.sleep(max(0.0, delay))
+            await self._deliver_persisted(delivery_id)
+
+        task = self._schedule(retry(), name=f"telegram-delivery-{delivery_id}")
+        self._delivery_retry_tasks[delivery_id] = task
+
+    def _delivery_retry_delay(self, attempts: int, error: TelegramError) -> float:
+        if error.retry_after > 0:
+            return float(error.retry_after)
+        return min(_DELIVERY_MAX_BACKOFF, 2 ** min(max(attempts - 1, 0), 6))
+
+    async def _deliver_persisted(self, delivery_id: str) -> dict[str, Any] | None:
+        try:
+            delivery = self.state.get_delivery(delivery_id)
+            if delivery is None or delivery.get("status") == "sent":
+                return None
+            parts = delivery.get("part_records") or self.state.get_delivery_parts(delivery_id)
+            last_message: dict[str, Any] | None = None
+            for part in parts:
+                if part.get("status") == "sent":
+                    continue
+                due = float(part.get("retry_at") or 0)
+                if due > time.time():
+                    self._schedule_delivery_retry(delivery_id, due - time.time())
+                    return last_message
+                index = int(part["part_index"])
+                markup = delivery.get("reply_markup") if index == len(parts) - 1 else None
+                try:
+                    last_message = await self.client.send_message(
+                        int(delivery["chat_id"]), str(part["text"]), reply_markup=markup,
+                    )
+                    message_id = last_message.get("message_id") if isinstance(last_message, dict) else None
+                    if type(message_id) is not int:
+                        raise TelegramError("sendMessage")
+                    self.state.mark_delivery_part_sent(delivery_id, index, message_id)
+                except asyncio.CancelledError:
+                    raise
+                except TelegramError as exc:
+                    retryable = bool(exc.retryable)
+                    if retryable:
+                        delay = self._delivery_retry_delay(int(part.get("attempts") or 0) + 1, exc)
+                        self.state.mark_delivery_part_failed(
+                            delivery_id, index, str(exc), retry_at=time.time() + delay,
+                        )
+                        self._schedule_delivery_retry(delivery_id, delay)
+                    else:
+                        self.state.mark_delivery_part_failed(
+                            delivery_id, index, str(exc), retry_at=float("inf"),
+                        )
+                    logger.warning(
+                        "Telegram 结果投递失败 delivery_id=%s part=%s (%s)",
+                        delivery_id, index, type(exc).__name__,
+                    )
+                    return last_message
+                except Exception as exc:
+                    retryable = isinstance(exc, (ConnectionError, TimeoutError)) or bool(getattr(exc, "retryable", False))
+                    if retryable:
+                        delay = min(_DELIVERY_MAX_BACKOFF, 2 ** min(int(part.get("attempts") or 0), 6))
+                        self.state.mark_delivery_part_failed(
+                            delivery_id, index, str(exc), retry_at=time.time() + delay,
+                        )
+                        self._schedule_delivery_retry(delivery_id, delay)
+                    else:
+                        self.state.mark_delivery_part_failed(
+                            delivery_id, index, str(exc), retry_at=float("inf"),
+                        )
+                    logger.warning(
+                        "Telegram 结果投递失败 delivery_id=%s part=%s (%s)",
+                        delivery_id, index, type(exc).__name__,
+                    )
+                    return last_message
+            return last_message
+        finally:
+            task = self._delivery_retry_tasks.get(delivery_id)
+            if task is asyncio.current_task():
+                self._delivery_retry_tasks.pop(delivery_id, None)
 
     def _require_target(self, alias: str) -> None:
         if alias not in self._aliases():
@@ -273,10 +422,11 @@ class TelegramGateway:
             )
             result = f"[{alias}] {stopped['message']}"
             markup = reply_keyboard()
+        delivery_id = self._prepare_delivery(update_id, chat_id, split_text(result), markup)
         # Record the side effect before attempting Telegram delivery.
         self.state.finish_interaction(record["token"], result)
         self.state.update(update_id, status="completed", alias=alias)
-        await self._deliver(update_id, chat_id, split_text(result), markup)
+        await self._deliver(update_id, chat_id, split_text(result), markup, durable=True, delivery_id=delivery_id)
 
     async def _handle(self, update_id: int, message: dict[str, Any], callback: dict[str, Any] | None = None) -> None:
         chat_id = message["chat"]["id"]
@@ -354,8 +504,11 @@ class TelegramGateway:
                     self.manager, alias, chat_session_user_id(user_id),
                     agent_id="main", follow_current_conversation=True,
                 )
-                self.state.update(update_id, status="completed", conversation_id=result["conversation"]["id"])
-                await self._deliver(update_id, chat_id, [f"[{alias}] 已新建并切换会话，旧历史已保留。\n发送 to {alias} <正文> 开始对话。"])
+                parts = [f"[{alias}] 已新建并切换会话，旧历史已保留。\n发送 to {alias} <正文> 开始对话。"]
+                self.state.update(update_id, conversation_id=result["conversation"]["id"])
+                delivery_id = self._prepare_delivery(update_id, chat_id, parts, None)
+                self.state.update(update_id, status="completed")
+                await self._deliver(update_id, chat_id, parts, durable=True, delivery_id=delivery_id)
                 return
             await self._send_text(update_id, chat_id, alias, body, sender)
         except asyncio.CancelledError:
@@ -381,10 +534,11 @@ class TelegramGateway:
         self._require_target(alias)
         self.state.update(update_id, alias=alias, status="running")
         parts, status = await self._execute(update_id, alias, body, sender, expected_conversation_id=expected_conversation_id)
-        self.state.update(update_id, status=status)
         conversation_id = (self.state.get(update_id) or {}).get("conversation_id")
         markup = self._result_markup(sender["id"], chat_id, alias, conversation_id) if conversation_id else None
-        await self._deliver(update_id, chat_id, parts, markup)
+        delivery_id = self._prepare_delivery(update_id, chat_id, parts, markup)
+        self.state.update(update_id, status=status)
+        await self._deliver(update_id, chat_id, parts, markup, durable=True, delivery_id=delivery_id)
 
     async def _execute(
         self, update_id: int, alias: str, body: str, sender: dict[str, Any],

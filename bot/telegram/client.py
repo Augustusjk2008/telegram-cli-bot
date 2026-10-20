@@ -2,16 +2,38 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import aiohttp
 
 
 class TelegramError(Exception):
-    def __init__(self, method: str, code: int = 0, retry_after: int = 0):
+    def __init__(
+        self,
+        method: str,
+        code: int = 0,
+        retry_after: int = 0,
+        *,
+        is_network_error: bool = False,
+        is_timeout: bool = False,
+    ):
+        self.method = method
         self.code = code
         self.retry_after = retry_after
+        self.is_network_error = is_network_error
+        self.is_timeout = is_timeout
+        self.network_error = is_network_error
+        self.timeout = is_timeout
+        self.retryable = bool(is_network_error or is_timeout or retry_after or code == 429 or code >= 500)
+        self.is_retryable = self.retryable
         super().__init__(f"Telegram {method} failed (code={code})")
+
+
+class TelegramTransportError(TelegramError):
+    """A network or timeout failure safe to classify without exposing the token."""
+
+    pass
 
 
 class TelegramClient:
@@ -45,8 +67,12 @@ class TelegramClient:
                 return data.get("result")
         except TelegramError:
             raise
-        except (aiohttp.ClientError, TimeoutError, ValueError, TypeError):
+        except (aiohttp.ServerTimeoutError, asyncio.TimeoutError, TimeoutError):
+            raise TelegramTransportError(method, is_timeout=True) from None
+        except aiohttp.ClientError:
             # aiohttp exceptions can include the URL, which contains the token.
+            raise TelegramTransportError(method, is_network_error=True) from None
+        except (ValueError, TypeError):
             raise TelegramError(method) from None
 
     async def get_updates(self, offset: int, *, timeout: int = 30) -> list[dict[str, Any]]:
