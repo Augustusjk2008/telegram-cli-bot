@@ -49,6 +49,10 @@ test("环境配置显示 Telegram 接入字段并标记 Token 为敏感项", asy
   await user.click(screen.getByRole("button", { name: "Telegram" }));
 
   expect(screen.getByText("启用 Telegram")).toBeInTheDocument();
+  const broadcastItem = screen.getByText("Telegram 最终回复广播").closest("article");
+  expect(broadcastItem).toBeInTheDocument();
+  expect(broadcastItem).toHaveTextContent("TELEGRAM_BROADCAST_COMPLETIONS");
+  expect(broadcastItem?.querySelector('input[type="checkbox"]')).not.toBeNull();
   const tokenItem = screen.getByText("Telegram Bot Token").closest("article");
   expect(tokenItem).toBeInTheDocument();
   expect(tokenItem?.querySelector('input[type="password"]')).not.toBeNull();

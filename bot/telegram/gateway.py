@@ -16,6 +16,12 @@ from bot.web import api_service
 from bot.web.api_common import WebApiError
 
 from .client import TelegramClient, TelegramError
+from .notifications import (
+    TelegramDeliveryService,
+    TelegramCompletionNotifier,
+    register_completion_notifier,
+    unregister_completion_notifier,
+)
 from .state import CONFIRM_TTL, NAVIGATION_TTL, REPLY_TTL, TelegramState
 from .ui import (
     SHORTCUTS,
@@ -52,6 +58,16 @@ class TelegramGateway:
         self._poll_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
         self._delivery_retry_tasks: dict[str, asyncio.Task] = {}
+        self.completion_notifier = TelegramCompletionNotifier(
+            state,
+            client,
+            self.allowed_user_ids,
+            chat_url=chat_url,
+            broadcast_enabled=getattr(config, "TELEGRAM_BROADCAST_COMPLETIONS", False),
+            schedule_task=self._schedule,
+            markup_factory=self._result_markup,
+        )
+        register_completion_notifier(self.completion_notifier)
 
     def start(self) -> None:
         if self._poll_task is None and self.allowed_user_ids:
@@ -67,6 +83,8 @@ class TelegramGateway:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._delivery_retry_tasks.clear()
+        await self.completion_notifier.close()
+        unregister_completion_notifier(self.completion_notifier)
         try:
             await self.client.close()
         finally:
@@ -105,6 +123,7 @@ class TelegramGateway:
 
     async def _recover_state(self) -> None:
         try:
+            await self.completion_notifier.recover()
             recovered = self.state.recover_after_restart()
             for record in recovered:
                 if record.get("status") != "interrupted":
@@ -239,61 +258,25 @@ class TelegramGateway:
             if delivery is None or delivery.get("status") == "sent":
                 return None
             parts = delivery.get("part_records") or self.state.get_delivery_parts(delivery_id)
-            last_message: dict[str, Any] | None = None
-            for part in parts:
-                if part.get("status") == "sent":
-                    continue
-                due = float(part.get("retry_at") or 0)
-                if due > time.time():
-                    self._schedule_delivery_retry(delivery_id, due - time.time())
-                    return last_message
-                index = int(part["part_index"])
-                markup = delivery.get("reply_markup") if index == len(parts) - 1 else None
-                try:
-                    last_message = await self.client.send_message(
-                        int(delivery["chat_id"]), str(part["text"]), reply_markup=markup,
-                    )
-                    message_id = last_message.get("message_id") if isinstance(last_message, dict) else None
-                    if type(message_id) is not int:
-                        raise TelegramError("sendMessage")
-                    self.state.mark_delivery_part_sent(delivery_id, index, message_id)
-                except asyncio.CancelledError:
-                    raise
-                except TelegramError as exc:
-                    retryable = bool(exc.retryable)
-                    if retryable:
-                        delay = self._delivery_retry_delay(int(part.get("attempts") or 0) + 1, exc)
-                        self.state.mark_delivery_part_failed(
-                            delivery_id, index, str(exc), retry_at=time.time() + delay,
-                        )
-                        self._schedule_delivery_retry(delivery_id, delay)
-                    else:
-                        self.state.mark_delivery_part_failed(
-                            delivery_id, index, str(exc), retry_at=float("inf"),
-                        )
-                    logger.warning(
-                        "Telegram 结果投递失败 delivery_id=%s part=%s (%s)",
-                        delivery_id, index, type(exc).__name__,
-                    )
-                    return last_message
-                except Exception as exc:
-                    retryable = isinstance(exc, (ConnectionError, TimeoutError)) or bool(getattr(exc, "retryable", False))
-                    if retryable:
-                        delay = min(_DELIVERY_MAX_BACKOFF, 2 ** min(int(part.get("attempts") or 0), 6))
-                        self.state.mark_delivery_part_failed(
-                            delivery_id, index, str(exc), retry_at=time.time() + delay,
-                        )
-                        self._schedule_delivery_retry(delivery_id, delay)
-                    else:
-                        self.state.mark_delivery_part_failed(
-                            delivery_id, index, str(exc), retry_at=float("inf"),
-                        )
-                    logger.warning(
-                        "Telegram 结果投递失败 delivery_id=%s part=%s (%s)",
-                        delivery_id, index, type(exc).__name__,
-                    )
-                    return last_message
-            return last_message
+            return await TelegramDeliveryService.deliver_parts(
+                self.client,
+                delivery,
+                parts,
+                mark_sent=lambda index, message_id: self.state.mark_delivery_part_sent(
+                    delivery_id,
+                    index,
+                    message_id,
+                ),
+                mark_failed=lambda index, error, retry_at: self.state.mark_delivery_part_failed(
+                    delivery_id,
+                    index,
+                    error,
+                    retry_at=retry_at,
+                ),
+                schedule_retry=lambda delay: self._schedule_delivery_retry(delivery_id, delay),
+                retry_delay=self._delivery_retry_delay,
+                log_label="结果",
+            )
         finally:
             task = self._delivery_retry_tasks.get(delivery_id)
             if task is asyncio.current_task():
@@ -334,6 +317,15 @@ class TelegramGateway:
 
     async def _panel(self, update_id: int, user_id: int, chat_id: int, alias: str) -> None:
         conversation_id = self._conversation(alias, user_id)
+        if conversation_id:
+            self.state.bind_conversation(
+                chat_id=chat_id,
+                telegram_user_id=user_id,
+                shared_user_id=chat_session_user_id(user_id),
+                alias=alias,
+                agent_id="main",
+                conversation_id=conversation_id,
+            )
         rows = [[self._button(label, action, user_id, chat_id, alias, conversation_id)
                  for label, action in pair] for pair in (
                      (("发消息", "prompt"), ("新会话", "new")),
@@ -683,6 +675,14 @@ class TelegramGateway:
                 self.manager, alias, chat_session_user_id(user_id), follow_current_conversation=True, **options,
             )
             conversation_id = created["conversation"]["id"]
+            self.state.bind_conversation(
+                chat_id=chat_id,
+                telegram_user_id=user_id,
+                shared_user_id=chat_session_user_id(user_id),
+                alias=alias,
+                agent_id="main",
+                conversation_id=conversation_id,
+            )
             self.state.update(update_id, conversation_id=conversation_id)
             result = f"[{alias}] 已新建并切换会话，旧历史已保留。\n会话：{conversation_id}\n点击“继续聊”发送正文开始对话。"
             markup = self._result_markup(user_id, chat_id, alias, conversation_id)
@@ -799,7 +799,16 @@ class TelegramGateway:
                     agent_id="main", follow_current_conversation=True,
                 )
                 parts = [f"[{alias}] 已新建并切换会话，旧历史已保留。\n发送 to {alias} <正文> 开始对话。"]
-                self.state.update(update_id, conversation_id=result["conversation"]["id"])
+                conversation_id = result["conversation"]["id"]
+                self.state.update(update_id, conversation_id=conversation_id)
+                self.state.bind_conversation(
+                    chat_id=chat_id,
+                    telegram_user_id=user_id,
+                    shared_user_id=chat_session_user_id(user_id),
+                    alias=alias,
+                    agent_id="main",
+                    conversation_id=conversation_id,
+                )
                 delivery_id = self._prepare_delivery(update_id, chat_id, parts, None)
                 self.state.update(update_id, status="completed")
                 await self._deliver(update_id, chat_id, parts, durable=True, delivery_id=delivery_id)
@@ -827,7 +836,14 @@ class TelegramGateway:
     ) -> None:
         self._require_target(alias)
         self.state.update(update_id, alias=alias, status="running")
-        parts, status = await self._execute(update_id, alias, body, sender, expected_conversation_id=expected_conversation_id)
+        parts, status = await self._execute(
+            update_id,
+            chat_id,
+            alias,
+            body,
+            sender,
+            expected_conversation_id=expected_conversation_id,
+        )
         conversation_id = (self.state.get(update_id) or {}).get("conversation_id")
         markup = self._result_markup(sender["id"], chat_id, alias, conversation_id) if conversation_id else None
         delivery_id = self._prepare_delivery(update_id, chat_id, parts, markup)
@@ -835,7 +851,7 @@ class TelegramGateway:
         await self._deliver(update_id, chat_id, parts, markup, durable=True, delivery_id=delivery_id)
 
     async def _execute(
-        self, update_id: int, alias: str, body: str, sender: dict[str, Any],
+        self, update_id: int, chat_id: int, alias: str, body: str, sender: dict[str, Any],
         *, expected_conversation_id: Any = _UNBOUND,
     ) -> tuple[list[str], str]:
         shared_user_id = chat_session_user_id(sender["id"])
@@ -848,6 +864,7 @@ class TelegramGateway:
             self.manager, alias, shared_user_id, body,
             agent_id="main", follow_current_conversation=True, include_trace=False,
             protocol="ag-ui",
+            telegram_origin_chat_id=chat_id,
             actor={"user_id": sender["id"], "username": sender.get("username") or sender.get("first_name") or "Telegram"},
             **expected,
         )
@@ -870,6 +887,15 @@ class TelegramGateway:
                 if changed:
                     bindings.update(changed)
                     self.state.update(update_id, **changed)
+                    if ids["conversation_id"]:
+                        self.state.bind_conversation(
+                            chat_id=chat_id,
+                            telegram_user_id=sender["id"],
+                            shared_user_id=shared_user_id,
+                            alias=alias,
+                            agent_id="main",
+                            conversation_id=ids["conversation_id"],
+                        )
                 if event["type"] in {"done", "error"}:
                     terminal = event
         finally:

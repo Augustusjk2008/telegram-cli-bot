@@ -187,9 +187,14 @@ Telegram 接入由一个 Bot 路由到已启用的 Web Bot 别名。打开 Admin
 TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=<从 BotFather 获取的 Token>
 TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
+TELEGRAM_BROADCAST_COMPLETIONS=false
 ```
 
 `TELEGRAM_BOT_TOKEN` 在设置页中按敏感字段处理；`TELEGRAM_ALLOWED_USER_IDS` 使用 Telegram 数字用户 ID，独立于 Web 的 `ALLOWED_USER_IDS`。保存环境配置后重启应用，空白白名单会关闭接入。网关只处理白名单用户的私聊文本，不会把 Token 写入日志或 Telegram 状态库。
+
+默认使用会话绑定模式：Telegram 用户选择 Bot 和 Agent、发送消息或打开面板后，会将当前会话绑定到该 Telegram 私聊。Web 在相同 `alias + agent_id + conversation_id` 会话中发送消息时，Telegram 会收到一次最终答复；中间状态、trace 和集群子任务过程不会推送。Web 切换会话不会自动迁移 Telegram 绑定，Telegram 通过“新会话”或再次打开面板后才会绑定新会话。
+
+将 `TELEGRAM_BROADCAST_COMPLETIONS` 设为 `true` 并重启后，Web 或 Telegram 的最终答复会发送给 `TELEGRAM_ALLOWED_USER_IDS` 中的所有 Telegram 私聊用户。原始 Telegram 聊天只收到现有直接答复，避免重复；已绑定当前会话的用户会获得“继续聊 / 新会话 / 打开 Web”按钮，广播-only 用户只收到正文和 `context left`。广播发送失败按用户单独重试，不会重新执行智能体任务。
 
 常用命令如下：
 

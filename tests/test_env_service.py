@@ -53,7 +53,7 @@ def test_env_service_exposes_telegram_fields_and_masks_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for key in ("TELEGRAM_ENABLED", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_IDS"):
+    for key in ("TELEGRAM_ENABLED", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_BROADCAST_COMPLETIONS"):
         monkeypatch.delenv(key, raising=False)
     _write_env(tmp_path, "")
     service = EnvConfigService(tmp_path)
@@ -62,6 +62,10 @@ def test_env_service_exposes_telegram_fields_and_masks_token(
     assert items["TELEGRAM_ENABLED"]["category"] == "telegram"
     assert items["TELEGRAM_ENABLED"]["type"] == "boolean"
     assert items["TELEGRAM_ALLOWED_USER_IDS"]["type"] == "csv"
+    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["category"] == "telegram"
+    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["type"] == "boolean"
+    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["default"] == "false"
+    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["restartRequired"] is True
     assert items["TELEGRAM_BOT_TOKEN"]["sensitive"] is True
     assert items["TELEGRAM_BOT_TOKEN"]["type"] == "password"
 
@@ -70,11 +74,13 @@ def test_env_service_exposes_telegram_fields_and_masks_token(
             "TELEGRAM_ENABLED": True,
             "TELEGRAM_BOT_TOKEN": "123456:secret",
             "TELEGRAM_ALLOWED_USER_IDS": "42, 43",
+            "TELEGRAM_BROADCAST_COMPLETIONS": True,
         }
     })
     snapshot = {item["key"]: item for item in service.snapshot()["items"]}
     assert snapshot["TELEGRAM_ENABLED"]["value"] == "true"
     assert snapshot["TELEGRAM_ALLOWED_USER_IDS"]["value"] == "42,43"
+    assert snapshot["TELEGRAM_BROADCAST_COMPLETIONS"]["value"] == "true"
     assert snapshot["TELEGRAM_BOT_TOKEN"]["value"] == ""
     assert snapshot["TELEGRAM_BOT_TOKEN"]["masked"] is True
     assert "TELEGRAM_BOT_TOKEN=123456:secret" in (tmp_path / ".env").read_text(encoding="utf-8")

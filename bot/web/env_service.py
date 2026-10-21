@@ -115,6 +115,7 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("TELEGRAM_ENABLED", "启用 Telegram", "启用单 Bot Telegram 接入；修改后需重启应用。", "boolean", "false", "telegram"),
     EnvField("TELEGRAM_BOT_TOKEN", "Telegram Bot Token", "由 BotFather 创建的 Telegram Bot Token。", "password", "", "telegram", sensitive=True, max_length=8192),
     EnvField("TELEGRAM_ALLOWED_USER_IDS", "Telegram 用户白名单", "允许操作 Telegram Bot 的数字用户 ID，逗号分隔；留空时关闭接入。", "csv", "", "telegram"),
+    EnvField("TELEGRAM_BROADCAST_COMPLETIONS", "Telegram 最终回复广播", "开启后将 Web 或 Telegram 的最终回复发送给 TELEGRAM_ALLOWED_USER_IDS 中的所有私聊用户；保存后需重启应用。", "boolean", "false", "telegram"),
     EnvField("WEB_ENABLED", "启用 Web", "Web 运行入口开关。", "boolean", "true", "web"),
     EnvField(
         "TCB_CODEX_SERVER_VOICE_ENABLED",

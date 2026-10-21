@@ -7412,6 +7412,107 @@ def _chat_stream_event_for_consumer(
     return event if compacted is event.get("event") else {**event, "event": compacted}
 
 
+async def _notify_telegram_completion(
+    event: dict[str, Any],
+    *,
+    alias: str,
+    agent_id: str,
+    source_chat_id: int | None,
+) -> None:
+    """Forward a persisted terminal reply without coupling Web to Telegram."""
+    if str(event.get("type") or "") != "done":
+        return
+    if str(agent_id or "main").strip().lower() != "main":
+        # Cluster child conversations are implementation details of the main
+        # turn and must not create user-facing Telegram notifications.
+        return
+    if event.get("cluster_child") or event.get("is_cluster_child") or event.get("internal"):
+        return
+    try:
+        from bot.telegram.notifications import (
+            TelegramCompletionNotification,
+            get_active_completion_notifier,
+        )
+
+        notifier = get_active_completion_notifier()
+        if notifier is None:
+            return
+        message = event.get("message") if isinstance(event.get("message"), dict) else {}
+        message_meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+        session = event.get("session") if isinstance(event.get("session"), dict) else {}
+        conversation_id = str(
+            event.get("conversation_id")
+            or message.get("conversation_id")
+            or session.get("active_conversation_id")
+            or ""
+        )
+        turn_id = str(event.get("turn_id") or message.get("turn_id") or "")
+        assistant_message_id = str(
+            event.get("assistant_message_id")
+            or message.get("assistant_message_id")
+            or message.get("id")
+            or ""
+        )
+        context_usage = message_meta.get("context_usage") or event.get("context_usage")
+        if not isinstance(context_usage, dict):
+            context_usage = None
+        completion_state = str(
+            message_meta.get("completion_state")
+            or event.get("completion_state")
+            or message.get("completion_state")
+            or "completed"
+        )
+        content = str(message.get("content") or event.get("output") or "")
+        if not content and completion_state == "cancelled":
+            content = "任务已停止。"
+        elif not content and completion_state in {"error", "failed"}:
+            content = str(
+                message_meta.get("error_message")
+                or message.get("error_message")
+                or event.get("error_message")
+                or "执行失败，请在 Web 查看任务详情。"
+            )
+        await notifier.notify_completion(
+            TelegramCompletionNotification(
+                alias=alias,
+                agent_id=str(agent_id or "main"),
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                assistant_message_id=assistant_message_id,
+                content=content,
+                completion_state=completion_state,
+                context_usage=context_usage,
+                source_chat_id=source_chat_id,
+            )
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # Telegram is an optional side effect.
+        logger.warning(
+            "Telegram 最终回复通知失败 alias=%s turn_id=%s (%s)",
+            alias,
+            str(event.get("turn_id") or ""),
+            type(exc).__name__,
+        )
+
+
+async def _stream_with_telegram_completion_notifications(
+    events: AsyncIterator[dict[str, Any]],
+    *,
+    alias: str,
+    agent_id: str,
+    source_chat_id: int | None,
+) -> AsyncIterator[dict[str, Any]]:
+    async for event in events:
+        await _notify_telegram_completion(
+            event,
+            alias=alias,
+            agent_id=agent_id,
+            source_chat_id=source_chat_id,
+        )
+        yield event
+
+
 async def _stream_native_agent_chat(
     manager: MultiBotManager,
     alias: str,
@@ -7682,6 +7783,7 @@ async def stream_chat(
     enable_reconnect: bool = False,
     include_trace: bool = True,
     stream_protocol_version: int = 1,
+    telegram_origin_chat_id: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     try:
         profile = get_profile_or_raise(manager, alias)
@@ -7725,7 +7827,12 @@ async def stream_chat(
                     stream_protocol_version=normalized_stream_protocol_version,
                 )
                 async with aclosing(events):
-                    async for event in events:
+                    async for event in _stream_with_telegram_completion_notifications(
+                        events,
+                        alias=alias,
+                        agent_id=agent_id,
+                        source_chat_id=telegram_origin_chat_id,
+                    ):
                         yield event
                 return
             main_conversation_id = ""
@@ -7776,7 +7883,12 @@ async def stream_chat(
                     stream_protocol_version=normalized_stream_protocol_version,
                 )
                 async with aclosing(events):
-                    async for event in events:
+                    async for event in _stream_with_telegram_completion_notifications(
+                        events,
+                        alias=alias,
+                        agent_id=agent_id,
+                        source_chat_id=telegram_origin_chat_id,
+                    ):
                         yield event
             finally:
                 if cluster_run:
