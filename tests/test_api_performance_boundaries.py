@@ -1,18 +1,117 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
-from bot.web import api_service
+from bot.models import BotProfile
+from bot.web import api_service, server as server_module
+from bot.web.api_common import AuthContext
 from bot.web.async_chat_store import AsyncChatStore, ChatStoreOverloadedError
 from bot.web.chat_store import ChatStore
+
+
+@pytest.fixture
+def bot_list_server(monkeypatch: pytest.MonkeyPatch) -> server_module.WebApiServer:
+    server = object.__new__(server_module.WebApiServer)
+    server.manager = SimpleNamespace(main_profile=BotProfile(alias="main"), managed_profiles={})
+    auth = AuthContext(user_id=123, token_used=False, is_local_admin=True)
+    monkeypatch.setattr(server, "_with_capability", AsyncMock(return_value=auth))
+    monkeypatch.setattr(server, "_with_any_capability", AsyncMock(return_value=auth))
+    monkeypatch.setattr(
+        server_module,
+        "_BOT_PERMISSION_STORE",
+        SimpleNamespace(bot_owner=lambda _alias: "owner"),
+    )
+    return server
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_name", "blocked_operation"),
+    [
+        ("get_bots", "list_bots"),
+        ("admin_bots", "list_bots"),
+        ("admin_bots", "list_archived_bots"),
+        ("get_bots", "main_owner"),
+        ("admin_bots", "main_owner"),
+        ("admin_bots", "archived_owner"),
+    ],
+)
+async def test_bot_list_requests_keep_event_loop_responsive(
+    monkeypatch: pytest.MonkeyPatch,
+    bot_list_server: server_module.WebApiServer,
+    handler_name: str,
+    blocked_operation: str,
+) -> None:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def block() -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=5), "event loop could not release the blocked list read"
+
+    def active_bots(*_args, **_kwargs):
+        if blocked_operation == "list_bots":
+            block()
+        return [{"alias": "main"}]
+
+    def archived_bots(*_args, **_kwargs):
+        if blocked_operation == "list_archived_bots":
+            block()
+        return [{"alias": "archived", "archived": True}]
+
+    def bot_owner(alias: str) -> str:
+        if blocked_operation == f"{alias}_owner":
+            block()
+        return "owner"
+
+    monkeypatch.setattr(server_module, "list_bots", active_bots)
+    monkeypatch.setattr(server_module, "list_archived_bots", archived_bots)
+    monkeypatch.setattr(server_module._BOT_PERMISSION_STORE, "bot_owner", bot_owner)
+    request = asyncio.create_task(getattr(bot_list_server, handler_name)(SimpleNamespace()))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=10)
+        assert not request.done(), "list read completed before the event loop could respond"
+        release.set()
+        response = await request
+        assert response.status == 200
+        assert json.loads(response.text)["ok"] is True
+    finally:
+        release.set()
+        await asyncio.gather(request, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_bot_list_preserves_profile_snapshot_during_management_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    bot_list_server: server_module.WebApiServer,
+) -> None:
+    worker = BotProfile(alias="worker", enabled=True)
+    bot_list_server.manager.managed_profiles["worker"] = worker
+
+    def summary(_manager, alias, _user_id, *, profile=None):
+        profile = profile or api_service.get_profile_or_raise(_manager, alias)
+        if alias == "main":
+            worker.alias = "renamed"
+            worker.enabled = False
+            _manager.managed_profiles.clear()
+        return {"alias": profile.alias, "enabled": profile.enabled}
+
+    monkeypatch.setattr(api_service, "build_bot_summary", summary)
+    response = await bot_list_server.get_bots(SimpleNamespace())
+    items = json.loads(response.text)["data"]
+    assert [(item["alias"], item["enabled"]) for item in items] == [("main", True), ("worker", True)]
+    assert items[1]["can_operate"] is False
 
 
 @pytest.mark.asyncio

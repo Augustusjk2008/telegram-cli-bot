@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import functools
 import getpass
 import ipaddress
@@ -1904,10 +1905,28 @@ class WebApiServer:
         data = _BOT_PERMISSION_STORE.set_allowed_bots(request.match_info["account_id"], normalized)
         return _json({"ok": True, "data": data})
 
+    async def _list_bots_for_auth(self, auth: AuthContext, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        # Management can rename or remove profiles while the worker reads storage.
+        profiles = copy.deepcopy({self.manager.main_profile.alias: self.manager.main_profile, **self.manager.managed_profiles})
+
+        def build_items() -> list[dict[str, Any]]:
+            items = self._filter_bots_for_auth(auth, list_bots(self.manager, auth.user_id, profiles=profiles))
+            archived = []
+            if include_archived:
+                archived = [
+                    {**item, "can_operate": False, "effective_capabilities": [],
+                     "owner_account_id": _BOT_PERMISSION_STORE.bot_owner(item["alias"])}
+                    for item in list_archived_bots(self.manager)
+                    if self._is_local_admin(auth) or _BOT_PERMISSION_STORE.bot_owner(item["alias"]) == auth.account_id
+                ]
+            return [*self._decorate_bots_for_auth(auth, items), *archived]
+
+        return await asyncio.to_thread(build_items)
+
     async def get_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOTS)
-        items = self._filter_bots_for_auth(auth, list_bots(self.manager, auth.user_id))
-        return _json({"ok": True, "data": self._decorate_bots_for_auth(auth, items)})
+        items = await self._list_bots_for_auth(auth)
+        return _json({"ok": True, "data": items})
 
     async def get_plugins(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_PLUGINS)
@@ -4705,14 +4724,8 @@ class WebApiServer:
 
     async def admin_bots(self, request: web.Request) -> web.Response:
         auth = await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
-        items = self._filter_bots_for_auth(auth, list_bots(self.manager, auth.user_id))
-        archived = [
-            {**item, "can_operate": False, "effective_capabilities": [],
-             "owner_account_id": _BOT_PERMISSION_STORE.bot_owner(item["alias"])}
-            for item in list_archived_bots(self.manager)
-            if self._is_local_admin(auth) or _BOT_PERMISSION_STORE.bot_owner(item["alias"]) == auth.account_id
-        ]
-        return _json({"ok": True, "data": [*self._decorate_bots_for_auth(auth, items), *archived]})
+        items = await self._list_bots_for_auth(auth, include_archived=True)
+        return _json({"ok": True, "data": items})
 
     async def admin_cli_error_stats(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

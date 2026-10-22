@@ -758,9 +758,17 @@ def build_bot_summary(
     }
 
 
-def list_bots(manager: MultiBotManager, user_id: Optional[int] = None) -> list[dict[str, Any]]:
-    aliases = [manager.main_profile.alias, *sorted(manager.managed_profiles.keys())]
-    return [build_bot_summary(manager, alias, user_id) for alias in aliases]
+def list_bots(
+    manager: MultiBotManager,
+    user_id: Optional[int] = None,
+    *,
+    profiles: Mapping[str, BotProfile] | None = None,
+) -> list[dict[str, Any]]:
+    if profiles is None:
+        profiles = {manager.main_profile.alias: manager.main_profile, **manager.managed_profiles}
+    main_alias = manager.main_profile.alias
+    aliases = [main_alias, *sorted(alias for alias in profiles if alias != main_alias)]
+    return [build_bot_summary(manager, alias, user_id, profile=profiles[alias]) for alias in aliases]
 
 
 def list_archived_bots(manager: MultiBotManager) -> list[dict[str, Any]]:
