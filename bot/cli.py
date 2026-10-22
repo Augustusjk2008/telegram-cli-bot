@@ -18,6 +18,7 @@ from bot.cli_params import (
     build_codex_project_trust_config_arg,
     get_cli_output_limits,
 )
+from bot.platform.executables import build_executable_invocation
 from bot.platform.executables import resolve_cli_executable as _resolve_cli_executable
 
 logger = logging.getLogger(__name__)
@@ -1327,7 +1328,7 @@ def _build_codex_status_terminal_argv(resolved_cli: str, working_dir: Optional[s
             *codex_args,
         ]
     if ext in {".cmd", ".bat"}:
-        return ["cmd.exe", "/d", "/c", resolved_cli, *codex_args]
+        return [*build_executable_invocation(resolved_cli), *codex_args]
     return [resolved_cli, *codex_args]
 
 

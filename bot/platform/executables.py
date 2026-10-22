@@ -135,7 +135,8 @@ def build_executable_invocation(resolved_path: str) -> list[str]:
     if os.name == "nt" and ext == ".ps1":
         return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved_path]
     if os.name == "nt" and ext in {".cmd", ".bat"}:
-        return ["cmd.exe", "/d", "/c", resolved_path]
+        # The @ prefix keeps cmd /c from stripping quotes around the batch path.
+        return ["cmd.exe", "/d", "/c", "@", resolved_path]
     if os.name != "nt" and not _has_posix_execute_bit(resolved_path):
         return ["bash", resolved_path]
     return [resolved_path]
