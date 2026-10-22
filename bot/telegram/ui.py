@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import math
 import re
+from html import escape
 from typing import Any
 
+from .formatting import markdown_to_telegram_html, split_telegram_html, telegram_html_to_text
+
 MESSAGE_LIMIT = 4096
+BROADCAST_PREVIEW_CHARS = 300
 SHORTCUTS = {
     "🤖 智能体": "targets", "✉️ 发消息": "prompt", "🆕 新会话": "new",
     "📊 状态": "status", "⏹ 停止任务": "stop", "⚙️ 配置": "config", "❓ 帮助": "help",
@@ -59,6 +63,7 @@ def help_text(aliases: list[str]) -> str:
         "“发消息”弹出定向回复提示；答复下可点击“继续聊”。\n"
         "回复提示中的全部文字会作为正文发送到提示标注的目标和会话。\n"
         "消息使用对应智能体的当前 Web 会话；完成后回复最终结果和 context left。\n"
+        "广播摘要可点击“展开全文”，或回复该通知发送 /expand；单独发送 /expand 展开最近一条摘要。\n"
         "人工审批请在 Web 中处理。"
     )
 
@@ -153,10 +158,35 @@ def split_text(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
     return chunks
 
 
+def agent_header(alias: str) -> str:
+    return f"🤖 <b>[{escape(alias)}]</b>"
+
+
+def format_plain_text(text: str) -> list[str]:
+    """Escape control messages and emphasize their existing agent label."""
+    match = re.match(r"\A\[([^\]\n]+)\]", text)
+    rendered = (agent_header(match[1]) + escape(text[match.end():])) if match else escape(text)
+    return split_telegram_html(rendered)
+
+
 def format_result(alias: str, content: str, usage: dict[str, Any] | None) -> list[str]:
-    header = f"[{alias}]\n\n"
+    header = agent_header(alias) + "\n\n"
     footer = f"\n\ncontext left: {context_left(usage)}"
     # Reserve room for a target on every segment and the complete final footer.
-    capacity = MESSAGE_LIMIT - len(header.encode("utf-16-le")) // 2 - len(footer)
-    chunks = split_text(content or "任务已完成，没有文本答复。", capacity)
+    capacity = MESSAGE_LIMIT - len(telegram_html_to_text(header).encode("utf-16-le")) // 2 - len(footer)
+    rendered = markdown_to_telegram_html(content)
+    if not telegram_html_to_text(rendered).strip():
+        rendered = "任务已完成，没有文本答复。"
+    chunks = split_telegram_html(rendered, capacity)
     return [header + chunk + (footer if index == len(chunks) - 1 else "") for index, chunk in enumerate(chunks)]
+
+
+def format_broadcast_preview(alias: str, content: str) -> str | None:
+    text = telegram_html_to_text(markdown_to_telegram_html(content)).strip()
+    if len(text) <= BROADCAST_PREVIEW_CHARS:
+        return None
+    preview = text[:BROADCAST_PREVIEW_CHARS].rstrip() + "…"
+    return (
+        f"{agent_header(alias)}\n\n{escape(preview)}\n\n"
+        "点击“展开全文”，或回复此消息发送 /expand。"
+    )

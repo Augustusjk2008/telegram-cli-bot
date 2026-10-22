@@ -28,6 +28,7 @@ from .ui import (
     configuration_text,
     conversation_label,
     force_reply,
+    format_plain_text,
     format_result,
     help_text,
     parse_config_text,
@@ -202,11 +203,12 @@ class TelegramGateway:
         if durable:
             identifier = delivery_id or self._prepare_delivery(update_id, chat_id, parts, reply_markup)
             return await self._deliver_persisted(identifier)
+        parts = [chunk for part in parts for chunk in format_plain_text(part)]
         sent = None
         try:
             for index, part in enumerate(parts):
                 options = {"reply_markup": reply_markup} if reply_markup is not None and index == len(parts) - 1 else {}
-                sent = await self.client.send_message(chat_id, part, **options)
+                sent = await self.client.send_message(chat_id, part, parse_mode="HTML", **options)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -219,8 +221,11 @@ class TelegramGateway:
 
     def _prepare_delivery(
         self, update_id: int, chat_id: int, parts: list[str], reply_markup: dict[str, Any] | None,
+        *, parse_mode: str | None = None,
     ) -> str:
         record = self.state.get(update_id) or {}
+        if not parse_mode:
+            parts = [chunk for part in parts for chunk in format_plain_text(part)]
         return self.state.create_delivery(
             update_id,
             chat_id,
@@ -230,6 +235,7 @@ class TelegramGateway:
             turn_id=str(record.get("turn_id") or "") or None,
             assistant_message_id=str(record.get("assistant_message_id") or "") or None,
             reply_markup=reply_markup,
+            parse_mode=parse_mode or "HTML",
         )
 
     def _schedule_delivery_retry(self, delivery_id: str, delay: float) -> None:
@@ -586,8 +592,36 @@ class TelegramGateway:
         if (record is None or record["user_id"] != user_id or record["chat_id"] != chat_id
                 or record["expires_at"] <= time.time()):
             raise WebApiError(409, "telegram_interaction_expired", _REFRESH)
-        self._require_target(record["alias"])
+        if record["action"] != "expand":
+            self._require_target(record["alias"])
         return record
+
+    async def _expand_notification(
+        self, update_id: int, user_id: int, chat_id: int, *,
+        token: str = "", message_id: int | None = None,
+    ) -> None:
+        if token:
+            interaction = self._check_interaction(self.state.get_interaction(token), user_id, chat_id)
+            if interaction["action"] != "expand":
+                raise WebApiError(409, "telegram_preview_unavailable", "请回复摘要消息发送 /expand。")
+            notification = self.state.get_completion_notification(
+                str(interaction["control"].get("notification_key") or ""),
+            )
+        else:
+            notification = self.state.find_completion_preview(user_id, chat_id, message_id=message_id)
+        if (notification is None or notification["telegram_user_id"] != user_id
+                or notification["chat_id"] != chat_id or not notification.get("full_parts")):
+            raise WebApiError(404, "telegram_preview_unavailable", "未找到可展开的摘要，请回复摘要消息发送 /expand。")
+        self.state.update(
+            update_id, alias=notification["alias"], conversation_id=notification["conversation_id"],
+            turn_id=notification["turn_id"], assistant_message_id=notification["assistant_message_id"],
+            status="completed",
+        )
+        delivery_id = self._prepare_delivery(
+            update_id, chat_id, notification["full_parts"], None,
+            parse_mode=notification["parse_mode"] or None,
+        )
+        await self._deliver_persisted(delivery_id)
 
     def _check_conversation(self, record: dict[str, Any], user_id: int) -> None:
         if self._conversation(record["alias"], user_id) != record["conversation_id"]:
@@ -711,6 +745,9 @@ class TelegramGateway:
                 record = self._check_interaction(self.state.get_interaction(token) if isinstance(token, str) else None, user_id, chat_id)
                 alias = record["alias"]
                 action = record["action"]
+                if action == "expand":
+                    await self._expand_notification(update_id, user_id, chat_id, token=record["token"])
+                    return
                 if action in {"create_confirm", "stop_confirm"}:
                     if not self.state.claim_interaction(record["token"], user_id, chat_id):
                         previous = self.state.get_interaction(record["token"])
@@ -739,8 +776,20 @@ class TelegramGateway:
                 return
             text = message.get("text")
             reply = message.get("reply_to_message") or {}
+            reply_id = reply.get("message_id")
+            reply_record = self.state.get_reply(chat_id, reply_id) if type(reply_id) is int else None
+            command = text.strip().split() if isinstance(text, str) else []
+            if command and command[0].lower().split("@", 1)[0] == "/expand" and reply_record is None:
+                if len(command) > 2:
+                    raise WebApiError(400, "telegram_expand_usage", "请回复摘要消息发送 /expand，或单独发送 /expand 展开最近一条摘要。")
+                await self._expand_notification(
+                    update_id, user_id, chat_id,
+                    token=command[1] if len(command) == 2 else "",
+                    message_id=reply_id if type(reply_id) is int else None,
+                )
+                return
             if type(reply.get("message_id")) is int:
-                record = self._check_interaction(self.state.get_reply(chat_id, reply["message_id"]), user_id, chat_id)
+                record = self._check_interaction(reply_record, user_id, chat_id)
                 alias = record["alias"]
                 self._check_conversation(record, user_id)
                 if not isinstance(text, str) or not text.strip():
@@ -846,7 +895,7 @@ class TelegramGateway:
         )
         conversation_id = (self.state.get(update_id) or {}).get("conversation_id")
         markup = self._result_markup(sender["id"], chat_id, alias, conversation_id) if conversation_id else None
-        delivery_id = self._prepare_delivery(update_id, chat_id, parts, markup)
+        delivery_id = self._prepare_delivery(update_id, chat_id, parts, markup, parse_mode="HTML")
         self.state.update(update_id, status=status)
         await self._deliver(update_id, chat_id, parts, markup, durable=True, delivery_id=delivery_id)
 
@@ -903,7 +952,7 @@ class TelegramGateway:
         if terminal is None:
             return format_result(alias, "执行结束，但未收到最终结果。请在 Web 查看历史。", None), "failed"
         if terminal.get("code") == "session_busy":
-            return split_text(f"[{alias}] {terminal['message']}"), "rejected"
+            return format_plain_text(f"[{alias}] {terminal['message']}"), "rejected"
 
         final_message = terminal.get("message") if isinstance(terminal.get("message"), dict) else {}
         meta = final_message.get("meta") or {}

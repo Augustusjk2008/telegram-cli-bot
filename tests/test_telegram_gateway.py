@@ -15,6 +15,7 @@ from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.telegram.client import TelegramClient, TelegramError
+from bot.telegram.formatting import telegram_html_to_text
 from bot.telegram.gateway import TelegramGateway, start_telegram_gateway
 from bot.telegram.state import TelegramState
 from bot.telegram.ui import context_left, format_result, parse_config_text, parse_target_text
@@ -26,12 +27,14 @@ class FakeTelegramClient:
     def __init__(self):
         self.messages = []
         self.markups = []
+        self.parse_modes = []
         self.callbacks = []
         self.closed = False
 
-    async def send_message(self, chat_id, text, *, reply_markup=None):
+    async def send_message(self, chat_id, text, *, reply_markup=None, parse_mode=None):
         self.messages.append((chat_id, text))
         self.markups.append(reply_markup)
+        self.parse_modes.append(parse_mode)
         return {"message_id": len(self.messages)}
 
     async def answer_callback_query(self, callback_query_id, text=""):
@@ -73,6 +76,7 @@ def install_stream(monkeypatch, events):
 @pytest_asyncio.fixture
 async def gateway(tmp_path, monkeypatch):
     monkeypatch.setattr("bot.app_settings.APP_SETTINGS_FILE", tmp_path / "app_settings.json")
+    monkeypatch.setattr(config, "TELEGRAM_BROADCAST_COMPLETIONS", False)
     manager = MultiBotManager(
         BotProfile(alias="main", cli_type="codex", cli_path="codex", working_dir=str(tmp_path)),
         str(tmp_path / "managed_bots.json"),
@@ -117,7 +121,7 @@ async def test_routes_to_main_agent_with_shared_identity_and_preserves_multiline
     assert args == (gateway.manager, "dev", chat_session_user_id(42), body)
     assert kwargs["agent_id"] == "main" and kwargs["include_trace"] is False
     assert kwargs["actor"]["user_id"] == 42
-    assert gateway.client.messages == [(42, "[dev]\n\n最终答复\n\ncontext left: 72%")]
+    assert gateway.client.messages == [(42, "🤖 <b>[dev]</b>\n\n最终答复\n\ncontext left: 72%")]
     row = gateway.state.get(1)
     assert (row["conversation_id"], row["turn_id"], row["assistant_message_id"]) == ("conv-1", "turn-1", "message-1")
 
@@ -163,7 +167,7 @@ async def test_progress_and_native_final_events_produce_one_terminal_reply(gatew
     assert gateway.state.get(1)["turn_id"] == "turn-1"
     release.set()
     await task
-    assert gateway.client.messages == [(42, "[dev]\n\n最终答复\n\ncontext left: unknown")]
+    assert gateway.client.messages == [(42, "🤖 <b>[dev]</b>\n\n最终答复\n\ncontext left: unknown")]
 
 
 @pytest.mark.asyncio
@@ -212,7 +216,7 @@ async def test_polling_and_different_targets_continue_while_a_turn_runs(gateway,
     assert gateway.state.next_offset() == 7
     release.set()
     await asyncio.gather(*list(gateway._tasks))
-    assert {text.splitlines()[0] for _, text in gateway.client.messages} == {"[dev]", "[ops]"}
+    assert {text.splitlines()[0] for _, text in gateway.client.messages} == {"🤖 <b>[dev]</b>", "🤖 <b>[ops]</b>"}
 
 
 @pytest.mark.asyncio
@@ -330,13 +334,13 @@ def test_context_left_precedence_and_valid_boundaries(usage, expected):
 
 @pytest.mark.parametrize("content", ["x" * 4069, "x" * 4096, "x" * 8192, "代码\n🧪" * 2200], ids=["near-limit", "at-limit", "two-pages", "unicode"])
 def test_long_answers_preserve_all_text_and_keep_footer_in_last_segment(content):
-    parts = format_result("dev", content, None)
+    parts = [telegram_html_to_text(part) for part in format_result("dev", content, None)]
     footer = "\n\ncontext left: unknown"
     assert all(0 < len(part.encode("utf-16-le")) // 2 <= 4096 for part in parts)
-    assert all(part.startswith("[dev]\n\n") for part in parts)
+    assert all(part.startswith("🤖 [dev]\n\n") for part in parts)
     assert all("context left:" not in part for part in parts[:-1])
     assert parts[-1].endswith(footer)
-    reconstructed = "".join(part[len("[dev]\n\n"):] for part in parts)
+    reconstructed = "".join(part[len("🤖 [dev]\n\n"):] for part in parts)
     assert reconstructed[:-len(footer)] == content
 
 
@@ -414,7 +418,7 @@ async def test_web_and_telegram_share_history_and_new_conversation_resets_bindin
     await asyncio.wait_for(gateway.receive_update(update(text="to dev //status")), 10)
     assert build_command.call_args.kwargs["user_text"] == "/status"
     assert build_command.call_args.kwargs["session_id"] == "telegram-thread"
-    assert gateway.client.messages == [(42, "[dev]\n\nshared answer\n\ncontext left: 72%")]
+    assert gateway.client.messages == [(42, "🤖 <b>[dev]</b>\n\nshared answer\n\ncontext left: 72%")]
     row = gateway.state.get(1)
     _, _, web_session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 1001)
     stored = api_service._get_chat_store(web_session).get_message(row["assistant_message_id"])

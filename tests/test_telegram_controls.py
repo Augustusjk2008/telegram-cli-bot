@@ -36,7 +36,7 @@ async def test_config_command_queries_and_updates_model_reasoning_and_cluster(ga
     monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", {"codex": ["gpt-5", "gpt-4"]})
 
     await gateway.receive_update(update(1, "/config dev"))
-    assert "[dev] 智能体配置" in gateway.client.messages[-1][1]
+    assert "<b>[dev]</b> 智能体配置" in gateway.client.messages[-1][1]
     assert "模型：" in gateway.client.messages[-1][1]
     assert "集群：关闭" in gateway.client.messages[-1][1]
 
@@ -94,7 +94,7 @@ async def test_select_reply_and_final_buttons_keep_original_target(gateway, monk
     await gateway.receive_update(reply(6, prompt_id, "to ops /new"))
     assert calls[0][0][1:] == ("dev", chat_session_user_id(42), "to ops /new")
     assert calls[0][1]["expected_conversation_id"] is None
-    assert gateway.client.messages[-1][1].startswith("[dev]")
+    assert gateway.client.messages[-1][1].startswith("🤖 <b>[dev]</b>")
     result_button = button(gateway, "继续聊")
     record = gateway.state.get_interaction(result_button["callback_data"])
     assert (record["alias"], record["conversation_id"]) == ("dev", "conv-1")
@@ -113,7 +113,7 @@ async def test_select_reply_and_final_buttons_keep_original_target(gateway, monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", ["/new", "✉️ 发消息", "📊 状态", "  多行\n正文\n"])
+@pytest.mark.parametrize("body", ["/new", "/expand", "✉️ 发消息", "📊 状态", "  多行\n正文\n"])
 async def test_bound_reply_body_is_literal(gateway, monkeypatch, body):
     calls = install_stream(monkeypatch, [done()])
     gateway.state.select_target(42, 42, "dev")
@@ -316,9 +316,10 @@ async def test_client_sends_markup_and_acknowledges_callbacks():
     client._request = AsyncMock(side_effect=[[], {"message_id": 1}, True])
     assert await client.get_updates(2) == []
     markup = {"force_reply": True}
-    await client.send_message(42, "prompt", reply_markup=markup)
+    await client.send_message(42, "<b>prompt</b>", reply_markup=markup, parse_mode="HTML")
     await client.answer_callback_query("callback-1")
     requests = client._request.call_args_list
     assert requests[0].args[1]["allowed_updates"] == ["message", "callback_query"]
     assert requests[1].args[1]["reply_markup"] == markup
+    assert requests[1].args[1]["parse_mode"] == "HTML"
     assert requests[2].args == ("answerCallbackQuery", {"callback_query_id": "callback-1", "text": ""})

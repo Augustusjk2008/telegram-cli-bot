@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from unittest.mock import Mock
 
 import aiohttp
@@ -82,6 +83,27 @@ def test_repeated_part_completion_keeps_original_message_id_and_sent_state(tmp_p
         assert state.get_delivery_parts(delivery_id)[0]["message_id"] == 501
     finally:
         state.close()
+
+
+def test_existing_plain_deliveries_survive_html_schema_migration(tmp_path):
+    path = tmp_path / "state.sqlite3"
+    state = TelegramState(path, "123")
+    delivery_id = state.create_delivery(1, 42, "dev", ["literal <tag> & text"])
+    state.create_completion_notification("turn:42", 42, "dev", ["old plain notification"])
+    state.close()
+    with sqlite3.connect(path) as db:
+        db.execute("ALTER TABLE deliveries DROP COLUMN parse_mode")
+        db.execute("ALTER TABLE completion_notifications DROP COLUMN parse_mode")
+        db.execute("ALTER TABLE completion_notifications DROP COLUMN full_parts_json")
+    reopened = TelegramState(path, "123")
+    try:
+        delivery = reopened.get_delivery(delivery_id)
+        assert delivery["parts"] == ["literal <tag> & text"]
+        assert delivery["parse_mode"] == ""
+        notification = reopened.get_completion_notification("turn:42")
+        assert notification["parse_mode"] == "" and notification["full_parts"] is None
+    finally:
+        reopened.close()
 
 
 class _Response:

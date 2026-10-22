@@ -95,6 +95,7 @@ class TelegramState:
                     assistant_message_id TEXT NOT NULL DEFAULT '',
                     parts_json TEXT NOT NULL,
                     reply_markup_json TEXT,
+                    parse_mode TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'pending',
                     retry_at REAL NOT NULL DEFAULT 0,
                     attempts INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +161,8 @@ class TelegramState:
                     assistant_message_id TEXT NOT NULL DEFAULT '',
                     parts_json TEXT NOT NULL,
                     reply_markup_json TEXT,
+                    parse_mode TEXT NOT NULL DEFAULT '',
+                    full_parts_json TEXT,
                     status TEXT NOT NULL DEFAULT 'pending',
                     retry_at REAL NOT NULL DEFAULT 0,
                     attempts INTEGER NOT NULL DEFAULT 0,
@@ -193,6 +196,12 @@ class TelegramState:
                 "CREATE INDEX IF NOT EXISTS completion_notifications_recovery "
                 "ON completion_notifications (bot_id, status, retry_at, created_at)"
             )
+            for table in ("deliveries", "completion_notifications"):
+                columns = {str(row[1]) for row in self._db.execute(f"PRAGMA table_info({table})")}
+                if "parse_mode" not in columns:
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN parse_mode TEXT NOT NULL DEFAULT ''")
+                if table == "completion_notifications" and "full_parts_json" not in columns:
+                    self._db.execute("ALTER TABLE completion_notifications ADD COLUMN full_parts_json TEXT")
 
     def next_offset(self) -> int:
         row = self._db.execute(
@@ -263,6 +272,7 @@ class TelegramState:
         turn_id: str | None = None,
         assistant_message_id: str | None = None,
         reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
         retry_at: float | None = None,
         delivery_id: str | None = None,
     ) -> str:
@@ -287,12 +297,12 @@ class TelegramState:
                 self._db.execute(
                     "INSERT INTO deliveries "
                     "(bot_id, delivery_id, update_id, chat_id, alias, conversation_id, "
-                    "turn_id, assistant_message_id, parts_json, reply_markup_json, retry_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "turn_id, assistant_message_id, parts_json, reply_markup_json, retry_at, parse_mode) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         self.bot_id, identifier, update_id, chat_id, alias,
                         conversation_id or "", turn_id or "", assistant_message_id or "",
-                        json.dumps(values, ensure_ascii=False), markup, due,
+                        json.dumps(values, ensure_ascii=False), markup, due, parse_mode or "",
                     ),
                 )
             except sqlite3.IntegrityError:
@@ -601,6 +611,8 @@ class TelegramState:
         record["parts"] = json.loads(record.pop("parts_json"))
         markup = record.pop("reply_markup_json")
         record["reply_markup"] = json.loads(markup) if markup else None
+        full_parts = record.pop("full_parts_json")
+        record["full_parts"] = json.loads(full_parts) if full_parts else None
         return record
 
     def create_completion_notification(
@@ -617,6 +629,8 @@ class TelegramState:
         turn_id: str | None = None,
         assistant_message_id: str | None = None,
         reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
+        full_parts: Sequence[str] | None = None,
         retry_at: float | None = None,
     ) -> str:
         """Persist one final-reply notification using a stable recipient key."""
@@ -643,8 +657,9 @@ class TelegramState:
                 self._db.execute(
                     "INSERT INTO completion_notifications "
                     "(bot_id, notification_key, chat_id, telegram_user_id, shared_user_id, alias, agent_id, "
-                    "conversation_id, turn_id, assistant_message_id, parts_json, reply_markup_json, retry_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ",
+                    "conversation_id, turn_id, assistant_message_id, parts_json, reply_markup_json, retry_at, "
+                    "parse_mode, full_parts_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ",
                     (
                         self.bot_id,
                         key,
@@ -659,6 +674,8 @@ class TelegramState:
                         json.dumps(values, ensure_ascii=False),
                         markup,
                         due,
+                        parse_mode or "",
+                        json.dumps(self._validate_parts(full_parts), ensure_ascii=False) if full_parts is not None else None,
                     ),
                 )
                 self._db.executemany(
@@ -700,6 +717,23 @@ class TelegramState:
 
     def get_notification(self, notification_key: str) -> dict[str, Any] | None:
         return self.get_completion_notification(notification_key)
+
+    def find_completion_preview(
+        self, user_id: int, chat_id: int, *, message_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        query = (
+            "SELECT n.notification_key FROM completion_notifications n "
+            "JOIN completion_notification_parts p "
+            "ON p.bot_id = n.bot_id AND p.notification_key = n.notification_key "
+            "WHERE n.bot_id = ? AND n.telegram_user_id = ? AND n.chat_id = ? "
+            "AND n.full_parts_json IS NOT NULL AND p.message_id IS NOT NULL "
+        )
+        params: list[Any] = [self.bot_id, user_id, chat_id]
+        if message_id is not None:
+            query += "AND p.message_id = ? "
+            params.append(message_id)
+        row = self._db.execute(query + "ORDER BY p.message_id DESC LIMIT 1", params).fetchone()
+        return self.get_completion_notification(row[0]) if row is not None else None
 
     def get_completion_notification_parts(self, notification_key: str) -> list[dict[str, Any]]:
         rows = self._db.execute(

@@ -14,7 +14,7 @@ from bot import config
 
 from .client import TelegramClient, TelegramError
 from .state import NAVIGATION_TTL, TelegramState
-from .ui import format_result
+from .ui import format_broadcast_preview, format_result
 
 logger = logging.getLogger(__name__)
 _DELIVERY_MAX_BACKOFF = 60.0
@@ -91,10 +91,12 @@ class TelegramDeliveryService:
             index = int(part["part_index"])
             markup = record.get("reply_markup") if index == len(parts) - 1 else None
             try:
+                options = {"parse_mode": record["parse_mode"]} if record.get("parse_mode") else {}
                 last_message = await client.send_message(
                     int(record["chat_id"]),
                     str(part["text"]),
                     reply_markup=markup,
+                    **options,
                 )
                 message_id = last_message.get("message_id") if isinstance(last_message, dict) else None
                 if type(message_id) is not int:
@@ -337,6 +339,19 @@ class TelegramCompletionNotifier:
                 else None
             )
             parts = format_result(completion.alias, completion.content, completion.context_usage)
+            full_parts = None
+            preview = (
+                format_broadcast_preview(completion.alias, completion.content)
+                if self.is_broadcast_enabled and completion.source_chat_id is None else None
+            )
+            if preview is not None:
+                full_parts, parts = parts, [preview]
+                token = self.state.new_interaction(
+                    "expand", telegram_user_id, chat_id, completion.alias, completion.conversation_id,
+                    control={"notification_key": key},
+                )
+                rows = (markup or {}).get("inline_keyboard", [])
+                markup = {"inline_keyboard": [[{"text": "展开全文", "callback_data": token}], *rows]}
             notification_id = self.state.create_completion_notification(
                 key,
                 chat_id,
@@ -349,6 +364,8 @@ class TelegramCompletionNotifier:
                 turn_id=completion.turn_id,
                 assistant_message_id=completion.assistant_message_id,
                 reply_markup=markup,
+                parse_mode="HTML",
+                full_parts=full_parts,
             )
             notification_ids.append(notification_id)
             try:

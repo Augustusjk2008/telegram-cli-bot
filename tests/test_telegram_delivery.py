@@ -33,6 +33,7 @@ async def test_final_result_is_durable_and_retry_does_not_execute_agent_again(ga
     assert gateway.state.get(1)["delivery_status"] == "sent"
     assert len(calls) == 1
     assert gateway.client.send_message.await_count == 2
+    assert all(call.kwargs["parse_mode"] == "HTML" for call in gateway.client.send_message.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -79,6 +80,7 @@ async def test_restart_recovers_pending_delivery_without_reexecuting(gateway, tm
     assert restored["status"] == "sent"
     assert [part["message_id"] for part in restored["part_records"]] == [100, 101]
     gateway.client.send_message.assert_awaited_once()
+    assert "parse_mode" not in gateway.client.send_message.await_args.kwargs
 
 
 @pytest.mark.asyncio

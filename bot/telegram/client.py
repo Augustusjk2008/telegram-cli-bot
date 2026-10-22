@@ -87,6 +87,7 @@ class TelegramClient:
 
     async def send_message(
         self, chat_id: int, text: str, *, reply_markup: dict[str, Any] | None = None,
+        parse_mode: str | None = None,
     ) -> dict[str, Any]:
         payload = {
             "chat_id": chat_id,
@@ -95,6 +96,8 @@ class TelegramClient:
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         return await self._request("sendMessage", payload)
 
     async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
