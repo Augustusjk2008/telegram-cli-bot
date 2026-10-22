@@ -214,7 +214,7 @@ The keyboard also provides status, stop, configuration, and help actions. Model 
 ### Administration and Extensions
 
 - Admin Center manages user permissions, invite codes, announcements, updates, and runtime status.
-- Theme management shares one library and selected theme across accounts. Signed-in member accounts can copy, edit, apply, and delete custom themes; guests have read-only access. Copy the built-in Paper Day theme to customize and preview its colors.
+- Theme management shares one library and selected theme across accounts. Signed-in member accounts can copy, edit, apply, and delete custom themes; guests have read-only access. The login page lets you choose an existing theme and remembers that choice in the current browser; signed-in sessions use the shared selection. Copy the built-in Paper Day theme to customize and preview its colors.
 - Codex CLI usage can be aggregated by local calendar day, provider, and model.
 - Cloudflare quick tunnels and fixed public forwarding support controlled mobile access.
 

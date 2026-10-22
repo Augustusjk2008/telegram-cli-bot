@@ -1,4 +1,4 @@
-"""Global theme routes using the host authentication context."""
+"""Global theme routes with public login previews and authenticated mutations."""
 
 from __future__ import annotations
 
@@ -14,13 +14,12 @@ from bot.web.theme_store import ThemeStoreError
 
 async def _dispatch(request: web.Request, operation: str) -> web.Response:
     server = request.app[SERVER_APP_KEY]
-    auth = await server._with_auth(request)
-    guest = auth.role == ROLE_GUEST or auth.account_id == "guest"
+    auth = None if operation == "public_list" else await server._with_auth(request)
     try:
-        if operation == "list":
+        if operation in {"list", "public_list"}:
             data = await asyncio.to_thread(server.theme_store.list_library)
         else:
-            if guest:
+            if auth.role == ROLE_GUEST or auth.account_id == "guest":
                 raise WebApiError(403, "theme_readonly", "请登录正式账户后管理主题")
             payload = await server._parse_json(request)
             method = getattr(server.theme_store, operation)
@@ -35,6 +34,10 @@ async def _dispatch(request: web.Request, operation: str) -> web.Response:
 
 async def get_themes(request: web.Request) -> web.Response:
     return await _dispatch(request, "list")
+
+
+async def get_public_themes(request: web.Request) -> web.Response:
+    return await _dispatch(request, "public_list")
 
 
 async def post_theme(request: web.Request) -> web.Response:
@@ -55,6 +58,7 @@ async def patch_selection(request: web.Request) -> web.Response:
 
 def register(app: web.Application, server) -> None:
     app[SERVER_APP_KEY] = server
+    app.router.add_get("/api/public/ui/themes", get_public_themes)
     app.router.add_get("/api/ui/themes", get_themes)
     app.router.add_post("/api/ui/themes", post_theme)
     app.router.add_patch("/api/ui/themes/{theme_id}", patch_theme)

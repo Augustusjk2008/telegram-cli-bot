@@ -3329,8 +3329,8 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private uiThemeLibrary(): ThemeLibrary {
-    if (!this.session.isLoggedIn) {
+  private uiThemeLibrary(requireAuth = true): ThemeLibrary {
+    if (requireAuth && !this.session.isLoggedIn) {
       throw new WebApiClientError("请先登录", { status: 401, code: "unauthorized" });
     }
     let library: ThemeLibrary;
@@ -3410,6 +3410,10 @@ export class MockWebBotClient implements WebBotClient {
       overrides[key] = `#${hex}`;
     }
     return { colors: { scheme: colors.scheme, overrides } };
+  }
+
+  async listPublicUiThemes(): Promise<ThemeLibrary> {
+    return this.uiThemeLibrary(false);
   }
 
   async listUiThemes(): Promise<ThemeLibrary> {

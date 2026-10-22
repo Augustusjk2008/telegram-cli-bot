@@ -8,7 +8,8 @@ test("登录页支持桌面和移动端输入、切换及截图", async ({ page 
     const path = new URL(route.request().url()).pathname.split("/api/")[1];
     const json = path === "health"
       ? { ok: true, host_info: { username: "browser-smoke", operating_system: "Windows", hardware_platform: "x64", hardware_spec: "Test host" } }
-      : { ok: true, data: path === "auth/me" ? { is_logged_in: false } : {} };
+      : { ok: true, data: path === "auth/me" ? { is_logged_in: false } : path === "public/ui/themes"
+        ? { schemaVersion: 1, scope: "global", revision: 0, selectedThemeId: "paper-daylight", themes: [] } : {} };
     await route.fulfill({ json });
   });
   await page.goto("/");

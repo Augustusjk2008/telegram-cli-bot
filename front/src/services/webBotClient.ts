@@ -172,6 +172,7 @@ export interface WebBotClient {
   loginGuest(): Promise<SessionState>;
   restoreSession(token?: string): Promise<SessionState>;
   logout(): Promise<void>;
+  listPublicUiThemes(): Promise<ThemeLibrary>;
   listUiThemes(): Promise<ThemeLibrary>;
   createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary>;
   updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary>;

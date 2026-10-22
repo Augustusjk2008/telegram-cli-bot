@@ -4478,6 +4478,10 @@ export class RealWebBotClient implements WebBotClient {
     }
   }
 
+  async listPublicUiThemes(): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>("/api/public/ui/themes");
+  }
+
   async listUiThemes(): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>("/api/ui/themes");
   }

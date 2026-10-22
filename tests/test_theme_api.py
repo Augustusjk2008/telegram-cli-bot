@@ -122,6 +122,25 @@ async def test_guests_read_global_library_and_unauthenticated_requests_use_host_
 
 
 @pytest.mark.asyncio
+async def test_login_page_can_read_themes_without_auth_but_cannot_mutate_them(api):
+    _, created = await request(api, "POST", body=create_input(activate=True))
+    theme_id = created["data"]["selectedThemeId"]
+    before = api.server.theme_store.library_path.read_bytes()
+    for path in ("/api/public/ui/themes", "/node/theme-test/api/public/ui/themes"):
+        status, payload = await request(api, "GET", path, token="")
+        assert status == 200 and payload == created
+    for method, path, body in (
+        ("POST", "/api/ui/themes", create_input(expectedRevision=1)),
+        ("PATCH", f"/api/ui/themes/{theme_id}", {"schemaVersion": 1, "expectedRevision": 1, "name": "修改"}),
+        ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 1}),
+        ("PATCH", "/api/ui/theme-selection", {"themeId": "paper-daylight", "expectedRevision": 1}),
+    ):
+        status, payload = await request(api, method, path, token="", body=body)
+        assert status == 401 and payload["error"]["code"] == "unauthorized"
+    assert api.server.theme_store.library_path.read_bytes() == before
+
+
+@pytest.mark.asyncio
 async def test_revision_conflicts_are_409_and_do_not_apply_stale_mutations(api):
     _, payload = await request(api, "POST", body=create_input())
     theme_id = payload["data"]["themes"][1]["id"]

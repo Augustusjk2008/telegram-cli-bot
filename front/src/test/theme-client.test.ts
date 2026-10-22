@@ -10,12 +10,14 @@ test("theme requests use the global API without account-specific headers", async
     ok: true, data: builtinLibrary(),
   }), { headers: { "Content-Type": "application/json" } }));
   const client = new RealWebBotClient();
+  await client.listPublicUiThemes();
   await client.listUiThemes();
   await client.createUiTheme({ schemaVersion: 1, expectedRevision: 0, sourceId: "paper-daylight", name: "配色" });
   await client.updateUiTheme("theme_test", { schemaVersion: 1, expectedRevision: 1, name: "重命名" });
   await client.deleteUiTheme("theme_test", 2);
   await client.selectUiTheme("paper-daylight", 3);
-  expect(fetch).toHaveBeenCalledTimes(5);
+  expect(fetch).toHaveBeenCalledTimes(6);
+  expect(fetch.mock.calls[0][0]).toMatch(/\/api\/public\/ui\/themes$/);
   for (const [, options] of fetch.mock.calls) {
     expect(new Headers(options?.headers).get("X-UI-Account-ID")).toBeNull();
   }
@@ -27,6 +29,11 @@ test("mock accounts and guests share the theme library and selected theme", asyn
   await alice.login({ username: "alice", password: "password" });
   const created = await alice.createUiTheme({ schemaVersion: 1, expectedRevision: 0, sourceId: "paper-daylight", name: "共享主题", activate: true });
   const id = created.selectedThemeId;
+  const anonymous = new MockWebBotClient();
+  await anonymous.logout();
+  expect(await anonymous.listPublicUiThemes()).toEqual(created);
+  await expect(anonymous.listUiThemes()).rejects.toMatchObject({ status: 401 });
+  await expect(anonymous.selectUiTheme("paper-daylight", created.revision)).rejects.toMatchObject({ status: 401 });
   const bob = new MockWebBotClient();
   await bob.login({ username: "bob", password: "password" });
   expect(await bob.listUiThemes()).toEqual(created);

@@ -93,6 +93,52 @@ test("guest sessions display the global selection and cannot write", async () =>
   expect(select).not.toHaveBeenCalled();
 });
 
+test("login theme selection survives a reload without changing the shared choice", async () => {
+  const shared = { ...library("theme_preview", 4), selectedThemeId: BUILTIN_THEME.id };
+  const select = vi.fn();
+  const create = vi.fn();
+  const client = {
+    listPublicUiThemes: vi.fn(async () => shared), listUiThemes: vi.fn(async () => shared),
+    selectUiTheme: select, createUiTheme: create,
+  } as unknown as WebBotClient;
+  const login = { key: "login", client, canManage: false, previewOnly: true };
+  const first = render(<AppearanceProvider><Probe /></AppearanceProvider>);
+  act(() => state.bindSession(login));
+  await waitFor(() => expect(state.library.revision).toBe(4));
+  expect(state.canSelect).toBe(true);
+  expect(state.canManage).toBe(false);
+  await act(async () => { await state.selectTheme("theme_preview"); await state.reload(); });
+  expect(state.appearance.themeId).toBe("theme_preview");
+  expect(state.library.selectedThemeId).toBe(BUILTIN_THEME.id);
+  const cache = Object.keys(localStorage).find((key) => key.startsWith("web-ui-themes:global:"))!;
+  expect(JSON.parse(localStorage.getItem(cache)!).selectedThemeId).toBe(BUILTIN_THEME.id);
+  await expect(state.createTheme({ schemaVersion: 1, sourceId: BUILTIN_THEME.id, name: "配色" })).rejects.toThrow("正式账户");
+  expect(create).not.toHaveBeenCalled();
+  expect(select).not.toHaveBeenCalled();
+  expect(client.listUiThemes).not.toHaveBeenCalled();
+  first.unmount();
+  render(<AppearanceProvider><Probe /></AppearanceProvider>);
+  act(() => state.bindSession(login));
+  await waitFor(() => expect(state.loading).toBe(false));
+  expect(state.appearance.themeId).toBe("theme_preview");
+  act(() => state.bindSession({ key: "member", client }));
+  await waitFor(() => expect(client.listUiThemes).toHaveBeenCalledOnce());
+  expect(state.appearance.themeId).toBe(BUILTIN_THEME.id);
+});
+
+test("a removed login theme falls back to the current shared theme", async () => {
+  const list = vi.fn(async () => library("theme_preview"));
+  const client = { listPublicUiThemes: list } as unknown as WebBotClient;
+  render(<AppearanceProvider><Probe /></AppearanceProvider>);
+  act(() => state.bindSession({ key: "login", client, canManage: false, previewOnly: true }));
+  await waitFor(() => expect(state.appearance.themeId).toBe("theme_preview"));
+  await act(async () => { await state.selectTheme("theme_preview"); });
+  list.mockResolvedValue(library("theme_replacement", 2));
+  await act(async () => { await state.reload(); });
+  expect(state.appearance.themeId).toBe("theme_replacement");
+  expect(state.error).toBe("");
+});
+
 test("an obsolete account-scoped service cannot receive writes from the global UI", async () => {
   const { scope: _scope, ...oldLibrary } = library("theme_private");
   const create = vi.fn();

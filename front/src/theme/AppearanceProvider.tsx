@@ -6,7 +6,7 @@ import type { ThemeCreateInput, ThemeLibrary, ThemeUpdateInput } from "./types";
 import "./appearance.css";
 
 const ThemeManagerScreen = lazy(() => import("../screens/ThemeManagerScreen").then((module) => ({ default: module.ThemeManagerScreen })));
-type ThemeSession = { key: string; client: WebBotClient; canManage?: boolean };
+type ThemeSession = { key: string; client: WebBotClient; canManage?: boolean; previewOnly?: boolean };
 type CreateInput = Omit<ThemeCreateInput, "expectedRevision"> & { expectedRevision?: number };
 type UpdateInput = Omit<ThemeUpdateInput, "expectedRevision"> & { expectedRevision?: number };
 
@@ -39,6 +39,10 @@ function cacheKey() {
   return `web-ui-themes:global:v1:${window.location.pathname}`;
 }
 
+function loginThemeKey() {
+  return `web-ui-theme:login:v1:${window.location.pathname}`;
+}
+
 function useAppearanceState() {
   const sessionRef = useRef<ThemeSession | null>(null);
   const readyRef = useRef(false);
@@ -50,6 +54,7 @@ function useAppearanceState() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [managerOpen, setManagerOpen] = useState(false);
+  const [loginThemeId, setLoginThemeId] = useState<string | null>(null);
   const accept = useCallback((next: ThemeLibrary, cache = true) => {
     const valid = validateLibrary(next);
     libraryRef.current = valid;
@@ -69,7 +74,9 @@ function useAppearanceState() {
     const startedRevision = libraryRef.current.revision;
     setLoading(true);
     try {
-      const next = await activeSession.client.listUiThemes();
+      const next = await (activeSession.previewOnly
+        ? activeSession.client.listPublicUiThemes()
+        : activeSession.client.listUiThemes());
       if (generation !== generationRef.current || requestSequence !== reloadSequenceRef.current) return;
       validateLibrary(next);
       if (libraryRef.current.revision === startedRevision || next.revision >= libraryRef.current.revision) {
@@ -91,16 +98,20 @@ function useAppearanceState() {
 
   const bindSession = useCallback((next: ThemeSession | null) => {
     const previous = sessionRef.current;
-    if (previous?.key === next?.key && previous?.client === next?.client && previous?.canManage === next?.canManage) return;
+    if (previous?.key === next?.key && previous?.client === next?.client && previous?.canManage === next?.canManage && previous?.previewOnly === next?.previewOnly) return;
     generationRef.current += 1;
     sessionRef.current = next;
     readyRef.current = false;
     setSession(next);
     setManagerOpen(false);
+    setLoginThemeId(null);
     const fallback = builtinLibrary();
     accept(fallback, false);
     applyResolvedAppearance(resolveAppearance(BUILTIN_THEME));
     if (!next) { setLoading(false); return; }
+    if (next.previewOnly) {
+      try { setLoginThemeId(localStorage.getItem(loginThemeKey())); } catch { /* Login themes also work without browser storage. */ }
+    }
     try {
       const raw = localStorage.getItem(cacheKey());
       if (raw) accept(validateLibrary(JSON.parse(raw)), false);
@@ -108,10 +119,14 @@ function useAppearanceState() {
     void reload().catch(() => {});
   }, [accept, reload]);
 
+  const appearance = useMemo(() => {
+    const preview = session?.previewOnly && library.themes.find((theme) => theme.id === loginThemeId);
+    return resolveAppearance(preview || library.themes.find((theme) => theme.id === library.selectedThemeId) || BUILTIN_THEME);
+  }, [library, loginThemeId, session?.previewOnly]);
+
   useLayoutEffect(() => {
-    const theme = library.themes.find((item) => item.id === library.selectedThemeId) || BUILTIN_THEME;
-    applyResolvedAppearance(resolveAppearance(theme));
-  }, [library]);
+    applyResolvedAppearance(appearance);
+  }, [appearance]);
 
   useLayoutEffect(() => {
     if (!session) return;
@@ -129,7 +144,7 @@ function useAppearanceState() {
 
   const mutate = useCallback(async (operation: (client: WebBotClient, revision: number) => Promise<ThemeLibrary>) => {
     const activeSession = sessionRef.current;
-    if (!activeSession || activeSession.canManage === false) throw new Error("请登录正式账户后管理全局主题");
+    if (!activeSession || activeSession.previewOnly || activeSession.canManage === false) throw new Error("请登录正式账户后管理全局主题");
     if (!readyRef.current) throw new Error("全局主题库尚未加载成功，请重新加载后再保存");
     const generation = generationRef.current;
     try {
@@ -149,11 +164,19 @@ function useAppearanceState() {
   const createTheme = useCallback((input: CreateInput) => mutate((client, revision) => client.createUiTheme({ ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
   const updateTheme = useCallback((id: string, input: UpdateInput) => mutate((client, revision) => client.updateUiTheme(id, { ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
   const deleteTheme = useCallback((id: string) => mutate((client, revision) => client.deleteUiTheme(id, revision)), [mutate]);
-  const selectTheme = useCallback((id: string) => mutate((client, revision) => client.selectUiTheme(id, revision)), [mutate]);
-  const openManager = useCallback(() => { if (sessionRef.current && sessionRef.current.canManage !== false) setManagerOpen(true); }, []);
+  const selectTheme = useCallback(async (id: string) => {
+    if (sessionRef.current?.previewOnly) {
+      if (!libraryRef.current.themes.some((theme) => theme.id === id)) throw new Error("主题不存在");
+      setLoginThemeId(id);
+      try { localStorage.setItem(loginThemeKey(), id); } catch { /* Keep the selection for this page when storage is unavailable. */ }
+      return libraryRef.current;
+    }
+    return mutate((client, revision) => client.selectUiTheme(id, revision));
+  }, [mutate]);
+  const openManager = useCallback(() => { if (sessionRef.current && !sessionRef.current.previewOnly && sessionRef.current.canManage !== false) setManagerOpen(true); }, []);
   const closeManager = useCallback(() => setManagerOpen(false), []);
-  const appearance = useMemo(() => resolveAppearance(library.themes.find((theme) => theme.id === library.selectedThemeId) || BUILTIN_THEME), [library]);
-  return { library, appearance, loading, error, canManage: Boolean(session && session.canManage !== false), bindSession, reload, createTheme, updateTheme, deleteTheme, selectTheme, managerOpen, openManager, closeManager };
+  const canManage = Boolean(session && !session.previewOnly && session.canManage !== false);
+  return { library, appearance, loading, error, canManage, canSelect: Boolean(session?.previewOnly || canManage), bindSession, reload, createTheme, updateTheme, deleteTheme, selectTheme, managerOpen, openManager, closeManager };
 }
 
 type AppearanceContextValue = ReturnType<typeof useAppearanceState>;

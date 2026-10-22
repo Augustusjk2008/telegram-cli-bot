@@ -109,10 +109,10 @@
       "group": "基础界面",
       "description": "面板和控件边界",
       "cssVariable": "--border",
-      "default": "#3F46501F",
+      "default": "#3F465096",
       "derive": {
         "from": "text.primary",
-        "alpha": 0.12
+        "alpha": 0.59
       },
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
@@ -124,10 +124,10 @@
       "group": "基础界面",
       "description": "强调控件边界",
       "cssVariable": "--border-strong",
-      "default": "#3F46503D",
+      "default": "#3F4650A6",
       "derive": {
         "from": "text.primary",
-        "alpha": 0.24
+        "alpha": 0.65
       },
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
@@ -161,11 +161,11 @@
       "group": "基础界面",
       "description": "强调轮廓，用于基础界面中的对应界面元素",
       "cssVariable": "--accent-outline",
-      "default": "#A94A2E5C",
+      "default": "#A94A2EB8",
       "allowAlpha": true,
       "derive": {
         "from": "accent",
-        "alpha": 0.36
+        "alpha": 0.72
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -251,7 +251,7 @@
       "group": "聊天与输入",
       "description": "代码块边框，用于聊天与输入中的对应界面元素",
       "cssVariable": "--code-border",
-      "default": "#3F46501F",
+      "default": "#3F465096",
       "allowAlpha": true,
       "derive": {
         "from": "border"
@@ -289,7 +289,7 @@
       "group": "聊天与输入",
       "description": "代码复制按钮边框，用于聊天与输入中的对应界面元素",
       "cssVariable": "--code-copy-border",
-      "default": "#3F46503D",
+      "default": "#3F4650A6",
       "allowAlpha": true,
       "derive": {
         "from": "border.strong"
@@ -359,9 +359,7 @@
           "with": "editor.background",
           "ratio": 0.07
         }
-      },
-      "contrastAgainst": "editor.background",
-      "minContrast": 3
+      }
     },
     {
       "key": "editor.activeLineGutter",
@@ -377,9 +375,7 @@
           "with": "editor.gutterBackground",
           "ratio": 0.11
         }
-      },
-      "contrastAgainst": "editor.background",
-      "minContrast": 3
+      }
     },
     {
       "key": "editor.background",
@@ -411,12 +407,19 @@
       "group": "编辑器",
       "description": "行号文字，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-gutter-text",
-      "default": "#69727DFF",
+      "default": "#5F6772FF",
       "allowAlpha": true,
       "derive": {
-        "from": "text.muted"
+        "from": "text.muted",
+        "mix": {
+          "with": "text.primary",
+          "ratio": 0.75
+        }
       },
-      "contrastAgainst": "editor.background",
+      "contrastAgainst": [
+        "editor.gutterBackground",
+        "editor.activeLineGutter"
+      ],
       "minContrast": 4.5
     },
     {
@@ -518,7 +521,10 @@
       "derive": {
         "from": "text.primary"
       },
-      "contrastAgainst": "editor.background",
+      "contrastAgainst": [
+        "editor.background",
+        "editor.activeLine"
+      ],
       "minContrast": 4.5
     },
     {
@@ -690,11 +696,11 @@
       "group": "状态与身份",
       "description": "错误状态边框，用于状态与身份中的对应界面元素",
       "cssVariable": "--status-danger-border",
-      "default": "#B4233D61",
+      "default": "#B4233DB3",
       "allowAlpha": true,
       "derive": {
         "from": "status.danger.text",
-        "alpha": 0.38
+        "alpha": 0.7
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -729,11 +735,11 @@
       "group": "状态与身份",
       "description": "信息状态边框，用于状态与身份中的对应界面元素",
       "cssVariable": "--status-info-border",
-      "default": "#315F8861",
+      "default": "#315F88B3",
       "allowAlpha": true,
       "derive": {
         "from": "status.info.text",
-        "alpha": 0.38
+        "alpha": 0.7
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -768,11 +774,11 @@
       "group": "状态与身份",
       "description": "成功状态边框，用于状态与身份中的对应界面元素",
       "cssVariable": "--status-success-border",
-      "default": "#27674961",
+      "default": "#276749B3",
       "allowAlpha": true,
       "derive": {
         "from": "status.success.text",
-        "alpha": 0.38
+        "alpha": 0.7
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -807,11 +813,11 @@
       "group": "状态与身份",
       "description": "警告状态边框，用于状态与身份中的对应界面元素",
       "cssVariable": "--status-warning-border",
-      "default": "#8A530A61",
+      "default": "#8A530AB3",
       "allowAlpha": true,
       "derive": {
         "from": "status.warning.text",
-        "alpha": 0.38
+        "alpha": 0.7
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -921,7 +927,7 @@
       "group": "工作台",
       "description": "通用工作区分隔线，用于工作台中的对应界面元素",
       "cssVariable": "--workbench-hairline",
-      "default": "#3F46501F",
+      "default": "#3F465096",
       "allowAlpha": true,
       "derive": {
         "from": "border"
@@ -948,11 +954,11 @@
       "group": "工作台",
       "description": "工作区悬停边框，用于工作台中的对应界面元素",
       "cssVariable": "--workbench-hover-border",
-      "default": "#3F465038",
+      "default": "#3F465099",
       "allowAlpha": true,
       "derive": {
         "from": "text.primary",
-        "alpha": 0.22
+        "alpha": 0.6
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -1242,7 +1248,7 @@
       "group": "聊天与输入",
       "description": "用户消息边框，用于聊天与输入中的对应界面元素",
       "cssVariable": "--chat-user-border",
-      "default": "#A94A2E5C",
+      "default": "#A94A2EB8",
       "allowAlpha": true,
       "derive": {
         "from": "accent.outline"
@@ -1269,11 +1275,11 @@
       "group": "聊天与输入",
       "description": "用户消息强调轮廓，用于聊天与输入中的对应界面元素",
       "cssVariable": "--chat-user-markdown-outline",
-      "default": "#3F465073",
+      "default": "#3F465099",
       "allowAlpha": true,
       "derive": {
         "from": "chat.userText",
-        "alpha": 0.45
+        "alpha": 0.6
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -1284,11 +1290,11 @@
       "group": "聊天与输入",
       "description": "用户消息内容边框，用于聊天与输入中的对应界面元素",
       "cssVariable": "--chat-user-markdown-border",
-      "default": "#3F465040",
+      "default": "#3F465096",
       "allowAlpha": true,
       "derive": {
         "from": "chat.userText",
-        "alpha": 0.25
+        "alpha": 0.59
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -1499,7 +1505,7 @@
       "group": "图表与插件展示",
       "description": "文档未知形状边框，用于图表与插件展示中的对应界面元素",
       "cssVariable": "--document-placeholder-border",
-      "default": "#00000033",
+      "default": "#0000006D",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -1782,7 +1788,7 @@
       "group": "图表与插件展示",
       "description": "主要节点边框，用于图表与插件展示中的对应界面元素",
       "cssVariable": "--diagram-primary-border",
-      "default": "#3F46503D",
+      "default": "#3F4650A6",
       "allowAlpha": true,
       "derive": {
         "from": "border.strong"
@@ -1860,7 +1866,7 @@
       "group": "编辑器",
       "description": "搜索匹配边框，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-search-border",
-      "default": "#A94A2E5C",
+      "default": "#A94A2EB8",
       "allowAlpha": true,
       "derive": {
         "from": "accent.outline"
@@ -1962,7 +1968,7 @@
       "group": "编辑器",
       "description": "断点轮廓，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-breakpoint-border",
-      "default": "#B4233D61",
+      "default": "#B4233DB3",
       "allowAlpha": true,
       "derive": {
         "from": "status.danger.border"
@@ -1976,11 +1982,10 @@
       "group": "工作台",
       "description": "状态标签边框，用于工作台中的对应界面元素",
       "cssVariable": "--workbench-status-chip-border",
-      "default": "#3F465017",
+      "default": "#3F465096",
       "allowAlpha": true,
       "derive": {
-        "from": "border",
-        "alpha": 0.0912
+        "from": "border"
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -1991,11 +1996,11 @@
       "group": "工作台",
       "description": "活动栏选中边框，用于工作台中的对应界面元素",
       "cssVariable": "--workbench-activity-border",
-      "default": "#A94A2E3D",
+      "default": "#A94A2EB8",
       "allowAlpha": true,
       "derive": {
         "from": "accent",
-        "alpha": 0.24
+        "alpha": 0.72
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2006,14 +2011,10 @@
       "group": "基础界面",
       "description": "流式消息边框，用于基础界面中的对应界面元素",
       "cssVariable": "--chat-streaming-border",
-      "default": "#9F4A3182",
+      "default": "#A94A2EB8",
       "allowAlpha": true,
       "derive": {
-        "from": "accent",
-        "mix": {
-          "with": "workbench.divider",
-          "ratio": 0.46
-        }
+        "from": "accent.outline"
       },
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2050,7 +2051,7 @@
       "group": "状态与身份",
       "description": "用量面板错误边框，用于状态与身份中的对应界面元素",
       "cssVariable": "--usage-error-border",
-      "default": "#FECACAFF",
+      "default": "#AD8989FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2081,7 +2082,7 @@
       "group": "状态与身份",
       "description": "用量面板成功边框，用于状态与身份中的对应界面元素",
       "cssVariable": "--usage-success-border",
-      "default": "#A7F3D0FF",
+      "default": "#6B9C86FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2112,7 +2113,7 @@
       "group": "状态与身份",
       "description": "错误边框（浅层）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-error-border-light",
-      "default": "#FFC9C9FF",
+      "default": "#AD8989FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2134,7 +2135,12 @@
       "cssVariable": "--feedback-error-text-deep",
       "default": "#C10007FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.error.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.error.backgroundSubtle",
+        "feedback.error.backgroundSoft",
+        "feedback.error.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2143,7 +2149,7 @@
       "group": "状态与身份",
       "description": "警告边框（浅层）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-warning-border-light",
-      "default": "#FEE685FF",
+      "default": "#A19154FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2165,7 +2171,12 @@
       "cssVariable": "--feedback-warning-text-stronger",
       "default": "#973C00FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.warning.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.warning.backgroundSubtle",
+        "feedback.warning.backgroundSoft",
+        "feedback.warning.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2174,7 +2185,7 @@
       "group": "状态与身份",
       "description": "成功边框（浅层）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-success-border-light",
-      "default": "#A4F4CFFF",
+      "default": "#699C85FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2196,7 +2207,11 @@
       "cssVariable": "--feedback-success-text-deep",
       "default": "#007A55FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.success.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.success.backgroundSubtle",
+        "feedback.success.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2207,7 +2222,12 @@
       "cssVariable": "--feedback-error-text-stronger",
       "default": "#9F0712FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.error.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.error.backgroundSubtle",
+        "feedback.error.backgroundSoft",
+        "feedback.error.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2216,9 +2236,14 @@
       "group": "状态与身份",
       "description": "警告文字（深色）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-warning-text-deep",
-      "default": "#BB4D00FF",
+      "default": "#B54B00FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.warning.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.warning.backgroundSubtle",
+        "feedback.warning.backgroundSoft",
+        "feedback.warning.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2229,7 +2254,12 @@
       "cssVariable": "--feedback-warning-text-emphasis",
       "default": "#7B3306FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.warning.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.warning.backgroundSubtle",
+        "feedback.warning.backgroundSoft",
+        "feedback.warning.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2267,7 +2297,7 @@
       "group": "状态与身份",
       "description": "信息边框（浅层）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-information-border-light",
-      "default": "#BEDBFFFF",
+      "default": "#8093ACFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2289,7 +2319,10 @@
       "cssVariable": "--feedback-information-text-emphasis",
       "default": "#1C398EFF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.information.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.information.backgroundSubtle"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2307,7 +2340,7 @@
       "group": "状态与身份",
       "description": "错误边框（清晰）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-error-border-visible",
-      "default": "#FFA2A2FF",
+      "default": "#C77E7EFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2320,7 +2353,12 @@
       "cssVariable": "--feedback-error-text-emphasis",
       "default": "#82181AFF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.error.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.error.backgroundSubtle",
+        "feedback.error.backgroundSoft",
+        "feedback.error.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2365,7 +2403,7 @@
       "group": "状态与身份",
       "description": "工作区提示边框（浅层）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-workspace-info-border-light",
-      "default": "#B8E6FEFF",
+      "default": "#7896A6FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2387,7 +2425,11 @@
       "cssVariable": "--feedback-workspace-info-text-deep",
       "default": "#0069A8FF",
       "allowAlpha": true,
-      "contrastAgainst": "surface.base",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.workspaceInfo.backgroundSubtle",
+        "feedback.workspaceInfo.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2416,9 +2458,14 @@
       "group": "状态与身份",
       "description": "警告文字（标准）；用于AdminCenterScreen等界面对应状态",
       "cssVariable": "--feedback-warning-text",
-      "default": "#FE9A00FF",
+      "default": "#9A5E00FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.warning.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.warning.backgroundSubtle",
+        "feedback.warning.backgroundSoft",
+        "feedback.warning.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2427,7 +2474,7 @@
       "group": "状态与身份",
       "description": "警告边框（清晰）；用于DesktopBotManagerScreen等界面对应状态",
       "cssVariable": "--feedback-warning-border-visible",
-      "default": "#FFD230FF",
+      "default": "#AD8E21FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2489,9 +2536,14 @@
       "group": "状态与身份",
       "description": "错误文字（突出）；用于BotListScreen等界面对应状态",
       "cssVariable": "--feedback-error-text-strong",
-      "default": "#E7000BFF",
+      "default": "#D1000AFF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.error.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.error.backgroundSubtle",
+        "feedback.error.backgroundSoft",
+        "feedback.error.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2500,7 +2552,7 @@
       "group": "状态与身份",
       "description": "注意边框（浅层）；用于GitScreen等界面对应状态",
       "cssVariable": "--feedback-caution-border-light",
-      "default": "#FFF085FF",
+      "default": "#9C9352FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2522,7 +2574,10 @@
       "cssVariable": "--feedback-caution-text-deep",
       "default": "#A65F00FF",
       "allowAlpha": true,
-      "contrastAgainst": "surface.base",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.caution.backgroundSubtle"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2531,18 +2586,22 @@
       "group": "状态与身份",
       "description": "成功文字（突出）；用于GitScreen等界面对应状态",
       "cssVariable": "--feedback-success-text-strong",
-      "default": "#009966FF",
+      "default": "#007A52FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.success.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.success.backgroundSubtle",
+        "feedback.success.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
       "key": "feedback.error.borderAlpha25",
-      "label": "错误边框（标准，25%）",
+      "label": "错误边框（操作）",
       "group": "状态与身份",
-      "description": "错误边框（标准，25%）；用于ChatScreen等界面对应状态",
+      "description": "错误边框（操作）；用于ChatScreen等界面对应状态",
       "cssVariable": "--feedback-error-border-alpha25",
-      "default": "#FB2C3640",
+      "default": "#FB2C36C9",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2571,7 +2630,7 @@
       "group": "状态与身份",
       "description": "登录错误边框；用于LoginScreen等界面对应状态",
       "cssVariable": "--login-error-border",
-      "default": "#FB2C364D",
+      "default": "#FB2C36C9",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2591,18 +2650,21 @@
       "group": "状态与身份",
       "description": "登录错误文字；用于LoginScreen等界面对应状态",
       "cssVariable": "--login-error-text",
-      "default": "#FFC9C9FF",
+      "default": "#B4233DFF",
       "allowAlpha": true,
       "contrastAgainst": "login.error.background",
-      "minContrast": 4.5
+      "minContrast": 4.5,
+      "derive": {
+        "from": "status.danger.text"
+      }
     },
     {
       "key": "feedback.error.borderMutedAlpha60",
-      "label": "错误边框（次级，60%）",
+      "label": "错误边框（调试操作）",
       "group": "状态与身份",
-      "description": "错误边框（次级，60%）；用于MobileDebugScreen等界面对应状态",
+      "description": "错误边框（调试操作）；用于MobileDebugScreen等界面对应状态",
       "cssVariable": "--feedback-error-border-muted-alpha60",
-      "default": "#FF646799",
+      "default": "#F46063FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2613,9 +2675,14 @@
       "group": "状态与身份",
       "description": "错误文字（标准）；用于MobileDebugScreen等界面对应状态",
       "cssVariable": "--feedback-error-text",
-      "default": "#FB2C36FF",
+      "default": "#C7232BFF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.error.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.error.backgroundSubtle",
+        "feedback.error.backgroundSoft",
+        "feedback.error.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2673,7 +2740,7 @@
       "group": "状态与身份",
       "description": "成功边框（标准）；用于AnnouncementDialog等界面对应状态",
       "cssVariable": "--feedback-success-border",
-      "default": "#00BC7DFF",
+      "default": "#00A66FFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2693,7 +2760,7 @@
       "group": "状态与身份",
       "description": "警告边框（标准）；用于AnnouncementDialog等界面对应状态",
       "cssVariable": "--feedback-warning-border",
-      "default": "#FE9A00FF",
+      "default": "#D17E00FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2731,7 +2798,7 @@
       "group": "状态与身份",
       "description": "错误边框（浅色）；用于ChatComposer等界面对应状态",
       "cssVariable": "--feedback-error-border-soft",
-      "default": "#FFE2E2FF",
+      "default": "#A08D8DFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2742,9 +2809,14 @@
       "group": "状态与身份",
       "description": "警告文字（突出）；用于ConversationHistoryPanel等界面对应状态",
       "cssVariable": "--feedback-warning-text-strong",
-      "default": "#E17100FF",
+      "default": "#A95500FF",
       "allowAlpha": true,
-      "contrastAgainst": "feedback.warning.background",
+      "contrastAgainst": [
+        "surface.base",
+        "feedback.warning.backgroundSubtle",
+        "feedback.warning.backgroundSoft",
+        "feedback.warning.backgroundAlpha10"
+      ],
       "minContrast": 4.5
     },
     {
@@ -2813,7 +2885,7 @@
       "group": "文件树与 Git",
       "description": "差异行号；用于GitDiffViewer等界面对应状态",
       "cssVariable": "--diff-line-number",
-      "default": "#90A1B9FF",
+      "default": "#8393A9FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2866,7 +2938,7 @@
       "group": "图表与插件展示",
       "description": "结构树文件夹边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-folder-border",
-      "default": "#FFD230FF",
+      "default": "#AD8E21FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2878,9 +2950,7 @@
       "description": "结构树文件夹底色；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-folder-background",
       "default": "#FFFBEBFF",
-      "allowAlpha": true,
-      "contrastAgainst": "surface.base",
-      "minContrast": 3
+      "allowAlpha": true
     },
     {
       "key": "pluginTree.folder.text",
@@ -2899,7 +2969,7 @@
       "group": "图表与插件展示",
       "description": "结构树文件边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-file-border",
-      "default": "#CAD5E2FF",
+      "default": "#8B929BFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2930,7 +3000,7 @@
       "group": "图表与插件展示",
       "description": "结构树类边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-class-border",
-      "default": "#74D4FFFF",
+      "default": "#549ABAFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2961,7 +3031,7 @@
       "group": "图表与插件展示",
       "description": "结构树函数边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-function-border",
-      "default": "#5EE9B5FF",
+      "default": "#42A27EFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -2992,7 +3062,7 @@
       "group": "图表与插件展示",
       "description": "结构树方法边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-method-border",
-      "default": "#46EDD5FF",
+      "default": "#30A292FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -3023,7 +3093,7 @@
       "group": "图表与插件展示",
       "description": "结构树标题边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-heading-border",
-      "default": "#C4B4FFFF",
+      "default": "#968AC3FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -3054,7 +3124,7 @@
       "group": "图表与插件展示",
       "description": "结构树符号边框；用于TreeView等界面对应状态",
       "cssVariable": "--plugin-tree-symbol-border",
-      "default": "#D4D4D8FF",
+      "default": "#919194FF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -3135,11 +3205,11 @@
     },
     {
       "key": "feedback.error.borderAlpha30",
-      "label": "错误边框（标准，30%）",
+      "label": "错误边框（工作区操作）",
       "group": "状态与身份",
-      "description": "错误边框（标准，30%）；用于SoloSessionChangesTab等界面对应状态",
+      "description": "错误边框（工作区操作）；用于SoloSessionChangesTab等界面对应状态",
       "cssVariable": "--feedback-error-border-alpha30",
-      "default": "#FB2C364D",
+      "default": "#FB2C36C9",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -3159,7 +3229,7 @@
       "group": "状态与身份",
       "description": "局域网在线状态；用于LanChatDock等界面对应状态",
       "cssVariable": "--lan-online",
-      "default": "#00BC7DFF",
+      "default": "#00A66FFF",
       "allowAlpha": true,
       "contrastAgainst": "surface.base",
       "minContrast": 3
@@ -3258,7 +3328,7 @@
       "group": "状态与身份",
       "description": "Codex 身份色，用于状态与身份中的对应界面元素",
       "cssVariable": "--identity-codex",
-      "default": "#5AA7FFFF",
+      "default": "#4077B5FF",
       "allowAlpha": false,
       "contrastAgainst": "surface.base",
       "minContrast": 4.5
@@ -3269,7 +3339,7 @@
       "group": "状态与身份",
       "description": "Codex 服务 身份色，用于状态与身份中的对应界面元素",
       "cssVariable": "--identity-codex-server",
-      "default": "#C084FCFF",
+      "default": "#8C60B8FF",
       "allowAlpha": false,
       "contrastAgainst": "surface.base",
       "minContrast": 4.5
@@ -3280,7 +3350,7 @@
       "group": "状态与身份",
       "description": "Claude 身份色，用于状态与身份中的对应界面元素",
       "cssVariable": "--identity-claude",
-      "default": "#C79270FF",
+      "default": "#946C53FF",
       "allowAlpha": false,
       "contrastAgainst": "surface.base",
       "minContrast": 4.5
@@ -3291,7 +3361,7 @@
       "group": "状态与身份",
       "description": "Antigravity 身份色，用于状态与身份中的对应界面元素",
       "cssVariable": "--identity-antigravity",
-      "default": "#6FD99AFF",
+      "default": "#42815CFF",
       "allowAlpha": false,
       "contrastAgainst": "surface.base",
       "minContrast": 4.5
@@ -3302,7 +3372,7 @@
       "group": "状态与身份",
       "description": "DeepSeek 身份色，用于状态与身份中的对应界面元素",
       "cssVariable": "--identity-deepseek",
-      "default": "#F0A15CFF",
+      "default": "#9D693CFF",
       "allowAlpha": false,
       "contrastAgainst": "surface.base",
       "minContrast": 4.5

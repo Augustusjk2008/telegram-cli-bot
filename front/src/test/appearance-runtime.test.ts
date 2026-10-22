@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { applyResolvedAppearance, getCurrentAppearance } from "../theme/appearanceRuntime";
-import { BUILTIN_THEME, contrastRatio, normalizeColor, resolveAppearance } from "../theme/resolveAppearance";
+import { BUILTIN_THEME, THEME_TOKENS, contrastRatio, normalizeColor, resolveAppearance } from "../theme/resolveAppearance";
 import type { UiTheme } from "../theme/types";
 
 const custom = (overrides: Record<string, string> = {}): UiTheme => ({
@@ -11,6 +11,19 @@ const custom = (overrides: Record<string, string> = {}): UiTheme => ({
 afterEach(() => applyResolvedAppearance(resolveAppearance(BUILTIN_THEME)));
 
 describe("resolved theme colors", () => {
+  it("meets every configured contrast target in the built-in theme", () => {
+    const { colors } = resolveAppearance(BUILTIN_THEME);
+    const failures = THEME_TOKENS.flatMap((token) => {
+      if (!token.contrastAgainst) return [];
+      const backgrounds = Array.isArray(token.contrastAgainst) ? token.contrastAgainst : [token.contrastAgainst];
+      return backgrounds.flatMap((background) => {
+        const ratio = contrastRatio(colors[token.key], colors[background], colors.canvas);
+        return ratio < (token.minContrast ?? 4.5) ? [`${token.key} / ${background}: ${ratio.toFixed(2)}`] : [];
+      });
+    });
+    expect(failures).toEqual([]);
+  });
+
   it("normalizes hex while enforcing opaque canvas values", () => {
     expect(normalizeColor("#aBc")).toBe("#AABBCCFF");
     expect(normalizeColor("#abcd")).toBe("#AABBCCDD");

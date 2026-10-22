@@ -573,7 +573,9 @@ function AppContent() {
   }, [client]);
 
   useLayoutEffect(() => {
-    bindSession(isLoggedIn && accountKey ? { key: accountKey, client, canManage: !isGuest(session) } : null);
+    bindSession(isLoggedIn && accountKey
+      ? { key: accountKey, client, canManage: !isGuest(session) }
+      : { key: "login", client, canManage: false, previewOnly: true });
   }, [accountKey, bindSession, client, isLoggedIn, session?.role]);
 
   useLayoutEffect(() => {
@@ -784,7 +786,7 @@ function AppContent() {
   }
 
   async function handleThemeChange(nextTheme: UiThemeName) {
-    if (!isLoggedIn || isGuest(session)) return;
+    if (isLoggedIn && isGuest(session)) return;
     await selectTheme(nextTheme);
   }
 

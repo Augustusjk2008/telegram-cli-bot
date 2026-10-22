@@ -53,7 +53,7 @@ export type ColorToken = {
   default: string;
   derive?: { from: string; alpha?: number; mix?: { with: string; ratio: number } };
   allowAlpha: boolean;
-  contrastAgainst?: string;
+  contrastAgainst?: string | string[];
   minContrast?: number;
   terminal?: string;
 };
