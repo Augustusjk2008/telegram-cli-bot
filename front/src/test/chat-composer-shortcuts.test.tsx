@@ -25,6 +25,24 @@ function renderComposer({
 }
 
 describe("ChatComposer send shortcuts", () => {
+  it("closes presets with Escape and returns focus without changing the draft", async () => {
+    const user = userEvent.setup();
+    render(<ChatComposer onSend={vi.fn()} onRemoveAttachment={vi.fn()} attachments={[]} promptPresets={[{ id: "review", title: "检查改动", content: "检查当前改动" }]} />);
+    const input = screen.getByPlaceholderText("输入消息");
+    await user.type(input, "保留草稿");
+    const trigger = screen.getByRole("button", { name: "打开提示词预设" });
+    await user.click(trigger);
+    await user.tab();
+    expect(screen.getByRole("listbox", { name: "提示词预设" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox", { name: "提示词预设" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(input).toHaveValue("保留草稿");
+    await user.click(trigger);
+    await user.click(input);
+    expect(screen.queryByRole("listbox", { name: "提示词预设" })).not.toBeInTheDocument();
+  });
+
   it("sends with Enter when Enter-to-send is enabled", async () => {
     const user = userEvent.setup();
     const { input, onSend } = renderComposer();

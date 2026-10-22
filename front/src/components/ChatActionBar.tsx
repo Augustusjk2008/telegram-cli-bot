@@ -223,7 +223,7 @@ export function ChatActionBar({
     );
   }
   return (
-    <section className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5">
+    <section className="chat-action-header border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5">
       <div
         data-testid="chat-action-bar"
         className="flex max-w-full gap-1.5 overflow-x-auto"

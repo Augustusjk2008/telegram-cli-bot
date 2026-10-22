@@ -1,13 +1,18 @@
-import { render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownContent } from "../components/MarkdownPreview";
 import {
   mermaidRendererDiagnostics,
+  mermaidAppearance,
   renderMermaidSingleFlight,
   resetMermaidRendererForTests,
 } from "../markdown/mermaidRenderer";
+import { applyResolvedAppearance } from "../theme/appearanceRuntime";
+import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
 
 afterEach(() => {
+  cleanup();
+  applyResolvedAppearance(resolveAppearance(BUILTIN_THEME));
   resetMermaidRendererForTests();
 });
 
@@ -26,6 +31,51 @@ function mermaidLoader() {
 }
 
 describe("Mermaid renderer cache", () => {
+  it("separates palette caches and serializes shared configuration across colors", async () => {
+    const base = resolveAppearance(BUILTIN_THEME);
+    const firstPalette = mermaidAppearance({ ...base, colors: { ...base.colors, "diagram.primary": "#123456FF" } });
+    const secondPalette = mermaidAppearance({ ...base, colors: { ...base.colors, "diagram.primary": "#654321FF" } });
+    let variables: { primaryColor: string };
+    const releases: Array<() => void> = [];
+    const initialize = vi.fn((options: { themeVariables: typeof variables }) => { variables = options.themeVariables; });
+    const renderDiagram = vi.fn(async (id: string) => {
+      const before = variables.primaryColor;
+      await new Promise<void>((done) => releases.push(done));
+      expect(variables.primaryColor).toBe(before);
+      return { svg: `<svg id="${id}" data-color="${before}" />` };
+    });
+    resetMermaidRendererForTests({ load: async () => ({ default: { initialize, render: renderDiagram } }) });
+    const first = renderMermaidSingleFlight("graph TD;A-->B", "first", firstPalette);
+    const second = renderMermaidSingleFlight("graph TD;A-->B", "second", secondPalette);
+    await waitFor(() => expect(renderDiagram).toHaveBeenCalledTimes(1));
+    expect(initialize).toHaveBeenCalledTimes(1);
+    releases[0]();
+    await waitFor(() => expect(renderDiagram).toHaveBeenCalledTimes(2));
+    releases[1]();
+    expect((await first).svg).toContain("#123456");
+    expect((await second).svg).toContain("#654321");
+    await renderMermaidSingleFlight("graph TD;A-->B", "cached-first", firstPalette);
+    expect(renderDiagram).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects stale asynchronous results when the same theme changes color", async () => {
+    const base = resolveAppearance(BUILTIN_THEME);
+    const releases: Array<() => void> = [];
+    const renderDiagram = vi.fn(async (id: string) => {
+      const index = releases.length;
+      await new Promise<void>((done) => releases.push(done));
+      return { svg: `<svg id="${id}" data-generation="${index}" />` };
+    });
+    resetMermaidRendererForTests({ load: async () => ({ default: { initialize: vi.fn(), render: renderDiagram } }) });
+    render(<MarkdownContent content={"```mermaid\ngraph TD;A-->B\n```"} variant="chat" />);
+    await waitFor(() => expect(renderDiagram).toHaveBeenCalledTimes(1));
+    act(() => applyResolvedAppearance({ ...base, colors: { ...base.colors, "diagram.primary": "#112233FF" }, revision: "same-id-new-colors" }));
+    await act(async () => { releases[0](); });
+    expect(document.querySelector('[data-generation="0"]')).toBeNull();
+    await waitFor(() => expect(renderDiagram).toHaveBeenCalledTimes(2));
+    await act(async () => { releases[1](); });
+    expect((await screen.findByLabelText("Mermaid 图表")).querySelector("svg")).toHaveAttribute("data-generation", "1");
+  });
   it("shares one pending render for concurrent identical diagrams", async () => {
     const loader = mermaidLoader();
     resetMermaidRendererForTests({ load: loader.load });

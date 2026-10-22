@@ -191,7 +191,7 @@ export function ConversationHistoryPanel({
             </div>
           ) : null}
           {activeTab === "favorites" && favoriteError ? (
-            <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{favoriteError}</div>
+            <div className="mb-2 rounded-md border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-3 py-2 text-xs text-[var(--feedback-warning-text-stronger)]">{favoriteError}</div>
           ) : null}
           {!panelLoading && (activeTab === "favorites" ? favorites.length === 0 : conversations.length === 0) ? (
             <div className="mt-10 text-center text-sm text-[var(--muted)]">{emptyText}</div>
@@ -237,7 +237,7 @@ export function ConversationHistoryPanel({
                       setDeleteNativeSession(true);
                       setPendingDelete(item);
                     }}
-                    className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-red-600 disabled:opacity-60"
+                    className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--feedback-error-text-strong)] disabled:opacity-60"
                   >
                     {itemDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   </button>
@@ -263,7 +263,7 @@ export function ConversationHistoryPanel({
                       className="min-w-0 flex-1 p-3 text-left disabled:opacity-60"
                     >
                       <div className="flex min-w-0 items-center gap-2">
-                        <Star className="h-3.5 w-3.5 shrink-0 fill-current text-amber-500" />
+                        <Star className="h-3.5 w-3.5 shrink-0 fill-current text-[var(--feedback-warning-text)]" />
                         <span className="truncate text-sm font-medium text-[var(--text)]">{title}</span>
                         <span className="ml-auto shrink-0 text-[11px] text-[var(--muted)]">{formatConversationTime(item.favoritedAt)}</span>
                       </div>
@@ -280,7 +280,7 @@ export function ConversationHistoryPanel({
                       aria-label={`取消收藏 ${title}`}
                       disabled={disabled || favoriteDeleting}
                       onClick={() => onDeleteFavorite?.(item)}
-                      className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-amber-600 hover:bg-amber-50 disabled:opacity-60"
+                      className="m-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--feedback-warning-text-strong)] hover:bg-[var(--feedback-warning-background-subtle)] disabled:opacity-60"
                     >
                       {itemDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Star className="h-4 w-4 fill-current" />}
                     </button>

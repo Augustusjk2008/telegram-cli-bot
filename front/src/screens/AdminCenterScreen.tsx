@@ -37,6 +37,9 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
+import { requestThemeManagerLeave, useOptionalAppearance } from "../theme/AppearanceProvider";
+
+const ThemeManagerScreen = lazy(() => import("./ThemeManagerScreen").then((module) => ({ default: module.ThemeManagerScreen })));
 
 const CodexUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
   default: module.CodexUsagePanel,
@@ -52,6 +55,7 @@ type Props = {
 };
 
 type AdminCenterTab =
+  | "themes"
   | "users"
   | "invites"
   | "cli-errors"
@@ -250,15 +254,15 @@ function nativePreflightStatus(preflight?: NativeAgentPreflightResult) {
 
 function nativePreflightStatusClass(preflight?: NativeAgentPreflightResult) {
   const status = nativePreflightStatus(preflight);
-  if (status === "失败") return "border-red-200 bg-red-50 text-red-700";
-  if (status === "警告") return "border-amber-200 bg-amber-50 text-amber-800";
-  if (status === "通过") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "失败") return "border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-deep)]";
+  if (status === "警告") return "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-stronger)]";
+  if (status === "通过") return "border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] text-[var(--feedback-success-text-deep)]";
   return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
 }
 
 function nativePreflightCheckClass(check: NativeAgentPreflightCheck) {
-  if (check.severity === "error" && !check.ok) return "border-red-200 bg-red-50 text-red-800";
-  if (check.severity === "warning" && !check.ok) return "border-amber-200 bg-amber-50 text-amber-800";
+  if (check.severity === "error" && !check.ok) return "border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-stronger)]";
+  if (check.severity === "warning" && !check.ok) return "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-stronger)]";
   return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
 }
 
@@ -411,6 +415,7 @@ export function AdminCenterScreen({
   canManageEnvConfig = true,
 }: Props) {
   const [activeTab, setActiveTab] = useState<AdminCenterTab>("users");
+  const appearance = useOptionalAppearance();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [bots, setBots] = useState<BotSummary[]>(initialBots);
   const [registerCodes, setRegisterCodes] = useState<RegisterCodeItem[]>([]);
@@ -458,6 +463,7 @@ export function AdminCenterScreen({
   const [envRestarting, setEnvRestarting] = useState(false);
   const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
+    themes: false,
     users: false,
     invites: false,
     "cli-errors": false,
@@ -489,6 +495,7 @@ export function AdminCenterScreen({
   const visibleTabs = useMemo<AdminCenterTab[]>(
     () => [
       "users",
+      "themes",
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
       "codex-usage",
@@ -882,7 +889,11 @@ export function AdminCenterScreen({
   }
 
   async function refreshActiveTab(nextNotice = "", refresh = false) {
-    if (activeTab === "users") {
+    if (activeTab === "themes") {
+      setLoadedTabs((prev) => ({ ...prev, themes: true }));
+      setLoading(false);
+      if (refresh) await appearance?.reload().catch(() => {});
+    } else if (activeTab === "users") {
       await loadUsers(nextNotice, refresh);
     } else if (activeTab === "invites" && canManageRegisterCodes) {
       await loadInvites(nextNotice, refresh);
@@ -1543,7 +1554,7 @@ export function AdminCenterScreen({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => activeTab === "themes" ? requestThemeManagerLeave(onClose) : onClose()}
             className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1558,12 +1569,12 @@ export function AdminCenterScreen({
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => activeTab === "themes" && tab !== "themes" ? requestThemeManagerLeave(() => setActiveTab(tab)) : setActiveTab(tab)}
               className={activeTab === tab
                 ? "rounded-md px-2.5 py-1.5 text-sm tcb-selected-accent"
                 : "rounded-md border border-[var(--border)] px-2.5 py-1.5 text-sm"}
             >
-              {tab === "users"
+              {tab === "themes" ? "主题管理" : tab === "users"
                 ? "用户"
                 : tab === "invites"
                   ? "邀请"
@@ -1620,6 +1631,10 @@ export function AdminCenterScreen({
           </section>
         ) : null}
 
+        {activeTab === "themes" && appearance ? <section className="h-[min(850px,calc(100dvh-190px))] min-h-[520px]">
+          <Suspense fallback={<p>正在加载主题管理…</p>}><ThemeManagerScreen /></Suspense>
+        </section> : null}
+
         {!loading && activeTab === "users" ? (
           <section aria-labelledby="user-permissions-title" className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1639,7 +1654,7 @@ export function AdminCenterScreen({
                           {user.role}
                         </span>
                         {user.disabled ? (
-                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                          <span className="rounded-full border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">
                             已停用
                           </span>
                         ) : null}
@@ -1718,7 +1733,7 @@ export function AdminCenterScreen({
               </div>
 
               {createdRegisterCode ? (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-700">
+                <div className="rounded-lg border border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-success-text-deep)]">
                   最新邀请码: <span className="font-semibold">{createdRegisterCode.code}</span>
                 </div>
               ) : null}
@@ -1737,7 +1752,7 @@ export function AdminCenterScreen({
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium text-[var(--text)]">{item.codePreview}</p>
                         {item.disabled ? (
-                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                          <span className="rounded-full border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">
                             已停用
                           </span>
                         ) : null}
@@ -1775,7 +1790,7 @@ export function AdminCenterScreen({
                         type="button"
                         onClick={() => void removeRegisterCode(item.codeId)}
                         disabled={registerCodeActionId === item.codeId}
-                        className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
                       >
                         删除
                       </button>
@@ -1890,7 +1905,7 @@ export function AdminCenterScreen({
                           <p className="break-all"><span className="font-medium text-[var(--text)]">frpc:</span> 已复用外部 frpc</p>
                         ) : null}
                         {showTunnelLastError ? (
-                          <p className="break-all text-red-700"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
+                          <p className="break-all text-[var(--feedback-error-text-deep)]"><span className="font-medium">错误:</span> {tunnel.lastError}</p>
                         ) : null}
                       </div>
 
@@ -1904,13 +1919,13 @@ export function AdminCenterScreen({
                             <div className="mt-2 space-y-1">
                               <p>PID: {tunnel.frpcExternal ? "外部进程" : tunnel.frpcPid ?? tunnel.pid ?? "未启动"}</p>
                               {showFrpcLastError ? (
-                                <p className="break-all text-red-700">错误: {tunnel.frpcLastError}</p>
+                                <p className="break-all text-[var(--feedback-error-text-deep)]">错误: {tunnel.frpcLastError}</p>
                               ) : null}
                               {externalSameNameProxy && tunnel.frpcLastError ? (
                                 <p className="break-all">外部 frpc 已占用同名 proxy，当前配置按复用处理。</p>
                               ) : null}
                               {frpcErrorHint ? (
-                                <p className="text-red-700">提示: {frpcErrorHint}</p>
+                                <p className="text-[var(--feedback-error-text-deep)]">提示: {frpcErrorHint}</p>
                               ) : null}
                             </div>
                           </div>
@@ -1923,10 +1938,10 @@ export function AdminCenterScreen({
                             <div className="mt-2 space-y-1">
                               <p className="break-all">最近上报: {tunnel.heartbeatLastAt || "暂无"}</p>
                               {tunnel.heartbeatLastError ? (
-                                <p className="break-all text-red-700">错误: {tunnel.heartbeatLastError}</p>
+                                <p className="break-all text-[var(--feedback-error-text-deep)]">错误: {tunnel.heartbeatLastError}</p>
                               ) : null}
                               {heartbeatErrorHint ? (
-                                <p className="text-red-700">提示: {heartbeatErrorHint}</p>
+                                <p className="text-[var(--feedback-error-text-deep)]">提示: {heartbeatErrorHint}</p>
                               ) : null}
                             </div>
                           </div>
@@ -2398,7 +2413,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             {storagePreview ? (
-              <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              <div className="space-y-3 rounded-xl border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] p-3 text-sm text-[var(--feedback-warning-text-emphasis)]">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <h3 className="font-semibold">迁移预览</h3>
@@ -2413,13 +2428,13 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 {storagePreview.jobId && !storagePreview.planId ? (
                   <p>预览任务正在后台执行，完成后才能确认迁移。</p>
                 ) : null}
-                {storagePreview.blockers?.map((blocker) => <p key={blocker} className="font-medium text-red-800">无法迁移: {blocker}</p>)}
+                {storagePreview.blockers?.map((blocker) => <p key={blocker} className="font-medium text-[var(--feedback-error-text-stronger)]">无法迁移: {blocker}</p>)}
                 {storagePreview.warnings?.map((warning) => <p key={warning}>提示: {warning}</p>)}
                 <button
                   type="button"
                   onClick={() => setStorageConfirmOpen(true)}
                   disabled={storageAction !== "" || !storagePreview.planId || storageSnapshot?.maintenance || Boolean(storagePreview.blockers?.length)}
-                  className="rounded-lg bg-amber-700 px-3 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-60"
+                  className="rounded-lg bg-[var(--button-warning-background-deep)] px-3 py-2 text-sm font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-warning-background-stronger)] disabled:opacity-60"
                 >
                   确认并迁移
                 </button>
@@ -2434,7 +2449,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               || storageSnapshot.state === "failed"
               || storageSnapshot.progress !== undefined
             ) ? (
-              <div data-testid="storage-migration-progress" className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+              <div data-testid="storage-migration-progress" className="space-y-3 rounded-lg border border-[var(--feedback-information-border-light)] bg-[var(--feedback-information-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-information-text-emphasis)]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="font-medium">当前阶段: {storageMigrationStateText(storageSnapshot.phase || storageSnapshot.state)}</p>
                   {storageSnapshot.jobId ? <span className="font-mono text-xs">jobId: {storageSnapshot.jobId}</span> : null}
@@ -2446,7 +2461,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   </div>
                   <progress
                     aria-label="迁移总进度"
-                    className="mt-1 h-2 w-full accent-blue-600"
+                    className="mt-1 h-2 w-full accent-[var(--feedback-information-control-strong)]"
                     max={1}
                     value={storageProgress(storageSnapshot)}
                   />
@@ -2465,7 +2480,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   <p>预计剩余: {formatStorageDuration(storageSnapshot.etaSeconds)}</p>
                 </div>
                 {storageSnapshot.message ? <p>{storageSnapshot.message}</p> : null}
-                {storageSnapshot.error ? <p className="font-medium text-red-800">错误: {storageSnapshot.error}</p> : null}
+                {storageSnapshot.error ? <p className="font-medium text-[var(--feedback-error-text-stronger)]">错误: {storageSnapshot.error}</p> : null}
                 {storageSnapshot.recoveryMessage ? <p className="font-medium">恢复提示: {storageSnapshot.recoveryMessage}</p> : null}
                 {storageSnapshot.state === "awaiting_restart" ? <p className="font-medium">请重启服务使新数据根目录生效，然后再处理原始数据清理。</p> : null}
                 {storageSnapshot.state === "cleanup_pending" ? <p className="font-medium">原始数据尚未清理完成，可以在服务恢复后重试。</p> : null}
@@ -2484,7 +2499,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             {storageConfirmOpen ? (
-              <div role="dialog" aria-label="确认数据迁移" className="rounded-xl border-2 border-red-300 bg-red-50 p-4 text-sm text-red-900">
+              <div role="dialog" aria-label="确认数据迁移" className="rounded-xl border-2 border-[var(--feedback-error-border-visible)] bg-[var(--feedback-error-background-subtle)] p-4 text-sm text-[var(--feedback-error-text-emphasis)]">
                 <h3 className="font-semibold">确认停止全部智能体并迁移数据？</h3>
                 <p className="mt-2">迁移开始前会停止全部智能体进程并 flush 未写入数据。校验通过后，系统会删除已验证的原始数据。迁移期间请勿关闭服务。</p>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -2492,7 +2507,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void startStorageMigration()}
                     disabled={storageAction !== ""}
-                    className="rounded-lg bg-red-700 px-3 py-2 font-medium text-white hover:bg-red-800 disabled:opacity-60"
+                    className="rounded-lg bg-[var(--button-danger-background-deep)] px-3 py-2 font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-danger-background-stronger)] disabled:opacity-60"
                   >
                     {storageAction === "migrate" ? "启动中..." : "我确认停止全部智能体并继续"}
                   </button>
@@ -2500,7 +2515,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => setStorageConfirmOpen(false)}
                     disabled={storageAction !== ""}
-                    className="rounded-lg border border-red-300 px-3 py-2 hover:bg-red-100 disabled:opacity-60"
+                    className="rounded-lg border border-[var(--feedback-error-border-visible)] px-3 py-2 hover:bg-[var(--feedback-error-background-soft)] disabled:opacity-60"
                   >
                     取消
                   </button>
@@ -2559,7 +2574,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             {envSavedImpact && (envSavedImpact.restartRequiredKeys.length || envSavedImpact.rebuildRequiredKeys.length) ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-warning-text-stronger)]">
                 <span>
                   {envSavedImpact.restartRequiredKeys.length ? `需重启: ${envSavedImpact.restartRequiredKeys.join(", ")}` : ""}
                   {envSavedImpact.restartRequiredKeys.length && envSavedImpact.rebuildRequiredKeys.length ? "；" : ""}
@@ -2570,7 +2585,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void requestEnvRestart()}
                     disabled={envRestarting}
-                    className="rounded-lg border border-transparent bg-amber-600 px-3 py-2 text-sm text-white hover:bg-amber-700 disabled:opacity-60"
+                    className="rounded-lg border border-transparent bg-[var(--button-warning-background-strong)] px-3 py-2 text-sm text-[var(--button-filled-foreground)] hover:bg-[var(--button-warning-background-deep)] disabled:opacity-60"
                   >
                     {envRestarting ? "请求中..." : "重启服务"}
                   </button>
@@ -2579,7 +2594,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             {envConflictMessage ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+              <div className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-error-text-deep)]">
                 {envConflictMessage}
               </div>
             ) : null}
@@ -2660,8 +2675,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="font-medium text-[var(--text)]">{item.label}</h3>
                             <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--muted)]">{item.key}</span>
-                            {item.restartRequired ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">重启生效</span> : null}
-                            {item.rebuildRequired ? <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-700">需 build</span> : null}
+                            {item.restartRequired ? <span className="rounded-full border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">重启生效</span> : null}
+                            {item.rebuildRequired ? <span className="rounded-full border border-[var(--feedback-workspace-info-border-light)] bg-[var(--feedback-workspace-info-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-workspace-info-text-deep)]">需 build</span> : null}
                           </div>
                           <p className="text-sm text-[var(--muted)]">{item.description}</p>
                           <p className="text-xs text-[var(--muted)]">默认: {formatEnvValue(item.defaultValue)} · 来源: {item.source || "未知"}</p>
@@ -2686,7 +2701,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                                 setEnvDraft((prev) => ({ ...prev, [item.key]: "" }));
                                 setEnvPreview(null);
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--feedback-error-border-light)] px-2 py-1 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                               清空
@@ -2769,7 +2784,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                         />
                       )}
                       {item.key === "WEB_API_TOKEN" && envSecretActions[item.key] === "clear" ? (
-                        <p className="text-xs text-red-700">保存后将禁用口令登录。</p>
+                        <p className="text-xs text-[var(--feedback-error-text-deep)]">保存后将禁用口令登录。</p>
                       ) : null}
                     </article>
                   );
@@ -2895,7 +2910,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       type="button"
                       onClick={() => void removeAnnouncement(item.id)}
                       disabled={announcementDeletingId === item.id}
-                      className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                      className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
                     >
                       {announcementDeletingId === item.id ? "删除中..." : "删除"}
                     </button>
@@ -2985,7 +3000,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             </div>
 
-            <div role="log" className="h-56 overflow-y-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-100 whitespace-pre-wrap break-all">
+            <div role="log" className="h-56 overflow-y-auto rounded-lg bg-[var(--admin-log-background)] p-3 font-mono text-xs text-[var(--admin-log-text)] whitespace-pre-wrap break-all">
               {updateLogLines.length ? updateLogLines.join("\n") : "暂无升级输出"}
             </div>
           </section>
@@ -3064,7 +3079,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
 
             <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg)]">
               <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                <AlertTriangle className="h-4 w-4 text-[var(--feedback-warning-text)]" />
                 <h3 className="text-sm font-semibold text-[var(--text)]">最近错误</h3>
                 <span className="ml-auto text-xs text-[var(--muted)]">最近: {formatShortTime(cliErrorStats?.summary.latestAt || "")}</span>
               </div>

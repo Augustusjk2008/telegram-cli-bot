@@ -41,24 +41,22 @@ import type { WebBotClient } from "../services/webBotClient";
 import { ChatScreen } from "../screens/ChatScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
+import { AppearanceProvider, useAppearance } from "../theme/AppearanceProvider";
 import type { ChatWorkbenchStatus, WorkbenchProductMode } from "../workbench/workbenchTypes";
 import { soloModeStorageKey, type SoloSessionSnapshot } from "../workbench/soloTypes";
 import {
   APP_NAME,
   applyChatReadingPreferences,
-  applyUiTheme,
   persistChatBodyFontFamily,
   persistChatBodyFontSize,
   persistChatBodyLineHeight,
   persistChatBodyParagraphSpacing,
   persistChatEnterToSend,
-  persistUiTheme,
   readStoredChatBodyFontFamily,
   readStoredChatBodyFontSize,
   readStoredChatBodyLineHeight,
   readStoredChatBodyParagraphSpacing,
   readStoredChatEnterToSend,
-  readStoredUiTheme,
   type ChatBodyFontFamilyName,
   type ChatBodyFontSizeName,
   type ChatBodyLineHeightName,
@@ -256,9 +254,14 @@ async function resolveVisibleBotSelection(
 }
 
 export function App() {
+  return <AppearanceProvider><AppContent /></AppearanceProvider>;
+}
+
+function AppContent() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
-  const [themeName, setThemeName] = useState<UiThemeName>(() => readStoredUiTheme());
+  const { appearance, bindAccount, selectTheme } = useAppearance();
+  const themeName = appearance.themeId;
   const [chatBodyFontFamily, setChatBodyFontFamily] = useState<ChatBodyFontFamilyName>(() => readStoredChatBodyFontFamily());
   const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
   const [chatBodyLineHeight, setChatBodyLineHeight] = useState<ChatBodyLineHeightName>(() => readStoredChatBodyLineHeight());
@@ -570,9 +573,8 @@ export function App() {
   }, [client]);
 
   useLayoutEffect(() => {
-    applyUiTheme(themeName);
-    persistUiTheme(themeName);
-  }, [themeName]);
+    bindAccount(isLoggedIn && !isGuest(session) && accountKey ? { key: accountKey, client } : null);
+  }, [accountKey, bindAccount, client, isLoggedIn, session?.role]);
 
   useLayoutEffect(() => {
     applyChatReadingPreferences(
@@ -781,8 +783,9 @@ export function App() {
     announcementAutoOpenedRef.current = false;
   }
 
-  function handleThemeChange(nextTheme: UiThemeName) {
-    setThemeName(nextTheme);
+  async function handleThemeChange(nextTheme: UiThemeName) {
+    if (!isLoggedIn || isGuest(session)) return;
+    await selectTheme(nextTheme);
   }
 
   function handleChatBodyFontFamilyChange(nextFontFamily: ChatBodyFontFamilyName) {

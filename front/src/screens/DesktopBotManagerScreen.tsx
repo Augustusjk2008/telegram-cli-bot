@@ -1,4 +1,5 @@
 import { cliTypeLabel } from "../utils/cliType";
+import { ManageThemesButton } from "../components/ThemeDropdown";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -202,7 +203,7 @@ function runtimeBackendLabel(runtimeBackend: ChatExecutionMode) {
 
 function issueClassName(severity: "info" | "warning") {
   return severity === "warning"
-    ? "border-amber-200 bg-amber-50 text-amber-700"
+    ? "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-deep)]"
     : "border-[var(--border)] bg-[var(--surface-strong)] text-[var(--muted)]";
 }
 
@@ -245,23 +246,23 @@ function WorkdirConflictNotice({
   onCancel: () => void;
 }) {
   return (
-    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+    <div className="rounded-md border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] p-3 text-sm text-[var(--feedback-warning-text-stronger)]">
       <div>切换工作区会清空 {conflict.historyCount} 条聊天消息。</div>
-      <div className="mt-1 break-all text-xs text-amber-700">
+      <div className="mt-1 break-all text-xs text-[var(--feedback-warning-text-deep)]">
         {conflict.currentWorkingDir} {"->"} {conflict.requestedWorkingDir}
       </div>
       <div className="mt-3 flex gap-2">
         <button
           type="button"
           onClick={onConfirm}
-          className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
+          className="rounded-md bg-[var(--button-warning-background-strong)] px-3 py-1.5 text-sm font-medium text-[var(--button-filled-foreground)] hover:opacity-90"
         >
           确认切换
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md border border-amber-300 px-3 py-1.5 text-sm hover:bg-amber-100"
+          className="rounded-md border border-[var(--feedback-warning-border-visible)] px-3 py-1.5 text-sm hover:bg-[var(--feedback-warning-background-soft)]"
         >
           取消
         </button>
@@ -859,7 +860,7 @@ function EditPanel({
             </label>
             {clusterSaving ? <span className="text-xs text-[var(--muted)]">保存中...</span> : null}
           </div>
-          {clusterError ? <div className="text-sm text-red-700">{clusterError}</div> : null}
+          {clusterError ? <div className="text-sm text-[var(--feedback-error-text-deep)]">{clusterError}</div> : null}
           {clusterResizeBlocked ? (
             <section role="alert" aria-label="缩容受阻" className="rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--text)]">
               <div className="font-medium">集群规模暂时无法缩小到 {clusterResizeBlocked.targetSize}</div>
@@ -1086,7 +1087,7 @@ function DeleteBotDialog({
               <span>同时删除工作区和所有记录</span>
             </label>
             {deleteWorkspace ? (
-              <div className="mt-3 space-y-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <div className="mt-3 space-y-3 rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-stronger)]">
                 <p>将删除该 Bot 的磁盘工作区目录，且会一并删除历史记录和 session 记录。</p>
                 <div className="break-all font-mono text-xs">{workspacePath || "未设置工作区"}</div>
                 <label className="block text-sm">
@@ -1095,7 +1096,7 @@ function DeleteBotDialog({
                     aria-label="输入永久删除确认词"
                     value={workspaceConfirmText}
                     onChange={(event) => onWorkspaceConfirmTextChange(event.target.value)}
-                    className="mt-2 h-9 w-full rounded-md border border-red-200 bg-white px-3 text-sm text-red-900 outline-none focus:border-red-500"
+                    className="mt-2 h-9 w-full rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--access-badge-background)] px-3 text-sm text-[var(--feedback-error-text-emphasis)] outline-none focus:border-[var(--feedback-error-border)]"
                     autoFocus
                   />
                 </label>
@@ -1118,7 +1119,7 @@ function DeleteBotDialog({
             type="button"
             onClick={onConfirm}
             disabled={busy || (deleteWorkspace && !workspaceConfirmMatched)}
-            className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+            className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
           >
             {busy ? "删除中..." : deleteWorkspace ? "彻底删除" : "删除"}
           </button>
@@ -1503,7 +1504,7 @@ export function DesktopBotManagerScreen({
                 <button
                   type="button"
                   onClick={() => void runBulkAction("delete")}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50"
+                  className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--feedback-error-border-light)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   批量删除
@@ -1541,6 +1542,7 @@ export function DesktopBotManagerScreen({
                 新增智能体
               </button>
             ) : null}
+            <ManageThemesButton />
             {onLogout ? (
               <button
                 type="button"
@@ -1575,10 +1577,10 @@ export function DesktopBotManagerScreen({
       </header>
 
       {manager.error ? (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{manager.error}</div>
+        <div className="border-b border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-4 py-2 text-sm text-[var(--feedback-error-text-deep)]">{manager.error}</div>
       ) : null}
       {manager.notice ? (
-        <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">{manager.notice}</div>
+        <div className="border-b border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-4 py-2 text-sm text-[var(--feedback-success-text-deep)]">{manager.notice}</div>
       ) : null}
 
       <div
@@ -1667,10 +1669,10 @@ export function DesktopBotManagerScreen({
                               <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
                               {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
                               {bot.remoteWorkspace ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span> : null}
-                              {isBotArchived(bot) ? <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span> : null}
+                              {isBotArchived(bot) ? <span className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--feedback-warning-text-deep)]">已归档</span> : null}
                               {current ? <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span> : null}
                               {bot.canOperate === false ? (
-                                <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                                <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
                               ) : null}
                             </span>
                             {issues.length > 0 ? (
@@ -1804,12 +1806,12 @@ export function DesktopBotManagerScreen({
                       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                         <h2 className="min-w-0 max-w-full truncate text-lg font-semibold">{focusedBot.alias}</h2>
                         {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
-                        {isBotArchived(focusedBot) ? <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span> : null}
+                        {isBotArchived(focusedBot) ? <span className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--feedback-warning-text-deep)]">已归档</span> : null}
                         {focusedBot.alias === currentAlias ? (
                           <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
                         ) : null}
                         {focusedBot.canOperate === false ? (
-                          <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                          <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
                         ) : null}
                         {focusedBotIssues.slice(0, 2).map((issue) => (
                           <span key={issue.code} className={clsx("rounded border px-1.5 py-0.5 text-[10px] leading-none", issueClassName(issue.severity))}>
@@ -1909,7 +1911,7 @@ export function DesktopBotManagerScreen({
                         aria-label={`归档 ${focusedBot.alias}`}
                         onClick={() => void manager.archiveBot(focusedBot)}
                         disabled={manager.savingAction !== ""}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-amber-200 px-3 text-sm text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--feedback-warning-border-light)] px-3 text-sm text-[var(--feedback-warning-text-deep)] hover:bg-[var(--feedback-warning-background-subtle)] disabled:opacity-60"
                       >
                         <Archive className="h-4 w-4" />
                         归档
@@ -1921,7 +1923,7 @@ export function DesktopBotManagerScreen({
                         aria-label={`删除 ${focusedBot.alias}`}
                         onClick={() => openDeleteDialog(focusedBot.alias)}
                         disabled={manager.savingAction !== ""}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-200 px-3 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--feedback-error-border-light)] px-3 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
                       >
                         <Trash2 className="h-4 w-4" />
                         删除
@@ -1947,7 +1949,7 @@ export function DesktopBotManagerScreen({
               </span>
             ))}
             {bulkResult.failed.map((item) => (
-              <span key={`failed:${item.alias}`} className="rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-red-700">
+              <span key={`failed:${item.alias}`} className="rounded border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-1.5 py-0.5 text-[var(--feedback-error-text-deep)]">
                 {item.alias}: {item.message}
               </span>
             ))}

@@ -122,14 +122,14 @@ export function WorkbenchHeader({
       data-testid="desktop-workbench-titlebar"
       className="workbench-topbar flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
     >
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="workbench-topbar-context flex min-w-0 items-center gap-2">
         <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)]">
           <AppLogo size={21} decorative />
         </span>
         {productMode && onProductModeChange ? (
           <div
             aria-label="产品模式"
-            className="workbench-segmented inline-flex border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
+            className="workbench-segmented inline-flex shrink-0 border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
             role="group"
           >
             <button
@@ -178,7 +178,7 @@ export function WorkbenchHeader({
               data-testid="bot-switcher-unread-indicator"
               data-unread-bump={hasUnreadOtherBots ? "true" : "false"}
               aria-hidden="true"
-              className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--surface-strong)]"
+              className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--notification-unread)] ring-2 ring-[var(--surface-strong)]"
             />
           ) : null}
           <AnimatePresence mode="wait" initial={false}>
@@ -242,6 +242,7 @@ export function WorkbenchHeader({
               type="button"
               aria-label={label}
               title={label}
+              aria-pressed={viewMode === nextMode}
               onClick={() => onViewModeChange(nextMode)}
               className={clsx(
                 "h-7 px-2 text-xs font-medium transition-colors",
@@ -259,7 +260,7 @@ export function WorkbenchHeader({
           aria-label="退出登录"
           title="退出登录"
           onClick={onLogout}
-          className="inline-flex h-8 w-8 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+          className="workbench-logout inline-flex h-8 w-8 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
         >
           <LogOut className="h-4 w-4" />
         </button>

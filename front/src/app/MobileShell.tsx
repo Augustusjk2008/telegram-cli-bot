@@ -107,7 +107,7 @@ export function MobileShell({
               <span
                 data-testid="bot-switcher-unread-indicator"
                 aria-hidden="true"
-                className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--workbench-titlebar-bg)]"
+                className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--notification-unread)] ring-2 ring-[var(--workbench-titlebar-bg)]"
               />
             ) : null}
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--surface-glass)]">

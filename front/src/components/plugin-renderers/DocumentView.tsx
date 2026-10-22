@@ -211,7 +211,7 @@ function ArtifactImage({
   }, [botAlias, client, image.artifactId]);
 
   if (error) {
-    return <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</div>;
+    return <div className="rounded border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-2 py-1 text-xs text-[var(--feedback-error-text-deep)]">{error}</div>;
   }
   if (!src) {
     return <div className="text-xs text-[var(--muted)]">图片加载中...</div>;
@@ -373,7 +373,7 @@ function DocumentSlide({
             return (
               <div
                 key={index}
-                className="absolute flex items-center justify-center rounded border border-dashed border-black/20 bg-white/60 px-2 text-center text-[10px] text-[var(--muted)]"
+                className="absolute flex items-center justify-center rounded border border-dashed border-[var(--document-placeholder-border)] bg-[var(--document-placeholder-bg)] px-2 text-center text-[10px] text-[var(--muted)]"
                 style={frameStyle(item)}
               >
                 {item.label}
@@ -742,7 +742,7 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
       )}
 
       {windowError ? (
-        <div role="alert" className="flex shrink-0 items-center gap-3 py-3 text-sm text-red-600">
+        <div role="alert" className="flex shrink-0 items-center gap-3 py-3 text-sm text-[var(--feedback-error-text-strong)]">
           <span>{windowError}</span>
           <button type="button" className="shrink-0 text-[var(--accent)] hover:underline" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>重试</button>
         </div>

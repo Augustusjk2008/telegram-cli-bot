@@ -177,7 +177,7 @@ export function PluginsScreen({
         <p className="mt-2 text-sm text-[var(--muted)]">卸载后会停止插件运行时并清理视图缓存。</p>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={() => setPendingUninstallPlugin("")} className={buttonClass()}>取消</button>
-          <button type="button" disabled={!canOperate || updatingPluginId === pendingUninstallPlugin} onClick={() => uninstallPlugin(pendingUninstallPlugin)} className={buttonClass("border-red-200 text-red-700 hover:bg-red-50")}>确认卸载</button>
+          <button type="button" disabled={!canOperate || updatingPluginId === pendingUninstallPlugin} onClick={() => uninstallPlugin(pendingUninstallPlugin)} className={buttonClass("border-[var(--feedback-error-border-light)] text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]")}>确认卸载</button>
         </div>
       </SurfacePanel>
     </div>
@@ -264,7 +264,7 @@ export function PluginsScreen({
                   type="button"
                   onClick={() => setPendingUninstallPlugin(plugin.id)}
                   disabled={!canOperate || updatingPluginId === plugin.id}
-                  className={buttonClass("border-red-200 text-red-700 hover:bg-red-50")}
+                  className={buttonClass("border-[var(--feedback-error-border-light)] text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]")}
                 >
                   卸载
                 </button>

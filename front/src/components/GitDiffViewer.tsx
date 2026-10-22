@@ -94,9 +94,9 @@ export function visibleGitDiffLines(content: string, viewMode: GitDiffViewMode =
 }
 
 function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
-  if (kind === "add") return "bg-emerald-50 text-emerald-700";
-  if (kind === "delete") return "bg-red-50 text-red-700";
-  if (kind === "hunk") return "bg-blue-50 text-blue-700";
+  if (kind === "add") return "bg-[var(--diff-added-background)] text-[var(--diff-added-text)]";
+  if (kind === "delete") return "bg-[var(--diff-deleted-background)] text-[var(--diff-deleted-text)]";
+  if (kind === "hunk") return "bg-[var(--diff-hunk-background)] text-[var(--diff-hunk-text)]";
   if (kind === "meta") return "text-[var(--muted)]";
   return "text-[var(--text)]";
 }
@@ -154,7 +154,7 @@ export function GitDiffViewer({
             data-diff-kind={item.kind}
             className={clsx("flex gap-3 rounded px-3 py-0.5", gitDiffLineClass(item.kind))}
           >
-            <span className="w-8 shrink-0 select-none text-right text-slate-400">{item.lineNumber ?? ""}</span>
+            <span className="w-8 shrink-0 select-none text-right text-[var(--diff-line-number)]">{item.lineNumber ?? ""}</span>
             <span className="min-w-0 flex-1 whitespace-pre-wrap break-all">{item.line}</span>
           </div>
         ))

@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Code2, Eye, Maximize2, Minimize2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
 import { GitDiffViewer } from "../components/GitDiffViewer";
@@ -243,7 +243,46 @@ export function EditorPane({
   }, [activeTab, allowCodeJump, botAlias, client, codeNavigationHoverContextKey, onResolveCodeNavigation]);
 
   const [menuPath, setMenuPath] = useState("");
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const tabMenuRef = useRef<HTMLDivElement | null>(null);
+  const tabMenuTriggerRef = useRef<HTMLElement | null>(null);
   const [pluginMenuOpen, setPluginMenuOpen] = useState(false);
+
+  function openTabMenu(path: string, anchor: HTMLElement) {
+    const trigger = anchor.querySelector<HTMLElement>('[role="tab"]') || anchor;
+    const bounds = anchor.getBoundingClientRect();
+    tabMenuTriggerRef.current = trigger;
+    setMenuPosition({ x: bounds.left, y: bounds.bottom + 4 });
+    setMenuPath((current) => current === path ? "" : path);
+  }
+
+  useLayoutEffect(() => {
+    if (!menuPath || !tabMenuRef.current) return;
+    const bounds = tabMenuRef.current.getBoundingClientRect();
+    const x = Math.max(8, Math.min(menuPosition.x, window.innerWidth - bounds.width - 8));
+    const y = Math.max(8, Math.min(menuPosition.y, window.innerHeight - bounds.height - 8));
+    if (x !== menuPosition.x || y !== menuPosition.y) setMenuPosition({ x, y });
+  }, [menuPath, menuPosition]);
+
+  useEffect(() => {
+    if (!menuPath) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!tabMenuRef.current?.contains(target) && !tabMenuTriggerRef.current?.contains(target)) setMenuPath("");
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMenuPath("");
+      tabMenuTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuPath]);
 
   useEffect(() => {
     setPluginMenuOpen(false);
@@ -303,7 +342,7 @@ export function EditorPane({
                 data-editor-tab-active={isActive ? "true" : "false"}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  setMenuPath((current) => current === tab.path ? "" : tab.path);
+                  openTabMenu(tab.path, event.currentTarget);
                 }}
                 className={clsx(
                   "editor-tab group relative flex h-full shrink-0 items-center gap-1 border-r border-[var(--border)] px-2",
@@ -325,7 +364,7 @@ export function EditorPane({
                   onKeyDown={(event) => {
                     if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
                       event.preventDefault();
-                      setMenuPath(tab.path);
+                      openTabMenu(tab.path, event.currentTarget);
                     }
                   }}
                   className="inline-flex max-w-52 min-w-0 items-center gap-1.5 text-[13px] text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--workbench-focus-ring)]"
@@ -359,7 +398,13 @@ export function EditorPane({
                   ×
                 </button>
                 {menuPath === tab.path ? (
-                  <div className="absolute right-0 top-full z-20 w-44 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]">
+                  <div
+                    ref={tabMenuRef}
+                    role="menu"
+                    aria-label="标签页菜单"
+                    className="desktop-workbench-menu fixed z-40 max-h-[calc(100dvh-16px)] w-44 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+                    style={{ left: menuPosition.x, top: menuPosition.y }}
+                  >
                     <button
                       type="button"
                       onClick={() => {

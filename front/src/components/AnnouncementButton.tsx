@@ -19,7 +19,7 @@ export function AnnouncementButton({ hasUnseen, onClick }: Props) {
         <span
           data-testid="announcement-unseen-dot"
           aria-hidden="true"
-          className="pointer-events-none absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-[var(--surface-strong)]"
+          className="pointer-events-none absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-[var(--notification-unread)] ring-2 ring-[var(--surface-strong)]"
         />
       ) : null}
     </button>

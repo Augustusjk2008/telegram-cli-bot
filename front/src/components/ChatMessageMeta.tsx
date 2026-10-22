@@ -39,8 +39,8 @@ export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage,
   return (
     <div
       className={align === "right"
-        ? `${mobileLayout ? "mb-0.5 gap-1 text-[11px]" : "mb-1.5 gap-2 text-xs"} flex min-w-0 items-center justify-end`
-        : `${mobileLayout ? "mb-0.5 gap-1 text-[11px]" : "mb-1.5 gap-2 text-xs"} flex min-w-0 items-center`}
+        ? `chat-message-meta ${mobileLayout ? "mb-0.5 gap-1 text-[11px]" : "mb-1.5 gap-2 text-xs"} flex min-w-0 items-center justify-end`
+        : `chat-message-meta ${mobileLayout ? "mb-0.5 gap-1 text-[11px]" : "mb-1.5 gap-2 text-xs"} flex min-w-0 items-center`}
     >
       <span
         className={align === "left"

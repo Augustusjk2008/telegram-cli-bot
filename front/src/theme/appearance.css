@@ -1,0 +1,16 @@
+.theme-manager-overlay {
+  width: min(1500px, 100vw);
+  height: min(960px, 100dvh);
+  max-width: 100vw;
+  max-height: 100dvh;
+  padding: 0;
+  margin: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.theme-manager-overlay::backdrop {
+  background: var(--overlay-backdrop-40);
+}

@@ -11,7 +11,8 @@ import { copyText } from "../utils/clipboard";
 import { isExternalHref, isLikelyLocalFileHref, isSafeMarkdownHref } from "../utils/fileLinks";
 import { normalizeLatexMathDelimiters } from "../markdown/latexDelimiters";
 import { remarkPunctuationStrong } from "../markdown/punctuationStrong";
-import { getCachedMermaidRender, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
+import { getCachedMermaidRender, mermaidAppearance, renderMermaidSingleFlight } from "../markdown/mermaidRenderer";
+import { useResolvedAppearance } from "../theme/appearanceRuntime";
 
 type Props = {
   content: string;
@@ -50,41 +51,45 @@ function stringifyCodeChildren(children: ReactNode) {
 }
 
 function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
+  const appearance = useResolvedAppearance();
+  const palette = mermaidAppearance(appearance);
   const diagramIdRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
   const [rendered, setRendered] = useState(() => {
-    const cached = getCachedMermaidRender(code, diagramIdRef.current);
-    return { code, svg: cached?.svg || "", error: cached?.error || "" };
+    const cached = getCachedMermaidRender(code, diagramIdRef.current, palette);
+    return { code, paletteKey: palette.key, svg: cached?.svg || "", error: cached?.error || "" };
   });
 
   useEffect(() => {
-    const cached = getCachedMermaidRender(code, diagramIdRef.current);
+    const cached = getCachedMermaidRender(code, diagramIdRef.current, palette);
     if (cached) {
-      setRendered({ code, ...cached });
+      setRendered({ code, paletteKey: palette.key, ...cached });
       return;
     }
 
     let active = true;
     setRendered((current) => (
-      current.code === code && !current.svg && !current.error
+      current.code === code && current.paletteKey === palette.key && !current.svg && !current.error
         ? current
-        : { code, svg: "", error: "" }
+        : { code, paletteKey: palette.key, svg: "", error: "" }
     ));
 
-    void renderMermaidSingleFlight(code, diagramIdRef.current)
+    const timer = window.setTimeout(() => { void renderMermaidSingleFlight(code, diagramIdRef.current, palette)
       .then((next) => {
         if (!active) {
           return;
         }
-        setRendered({ code, ...next });
-      });
+        setRendered({ code, paletteKey: palette.key, ...next });
+      }); }, 100);
 
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
-  }, [code]);
+  }, [code, palette.key]);
 
-  const svg = rendered.code === code ? rendered.svg : "";
-  const error = rendered.code === code ? rendered.error : "";
+  const matches = rendered.code === code && rendered.paletteKey === palette.key;
+  const svg = matches ? rendered.svg : "";
+  const error = matches ? rendered.error : "";
 
   if (error) {
     return (
@@ -121,8 +126,8 @@ function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
       data-mermaid-diagram="true"
       aria-label="Mermaid 图表"
       className={isChat
-        ? "overflow-auto rounded-xl border border-[var(--border)] bg-white px-3 py-3 [&_svg]:h-auto [&_svg]:max-w-full"
-        : "my-4 overflow-auto rounded-xl border border-[var(--border)] bg-white px-3 py-3 [&_svg]:h-auto [&_svg]:max-w-full"}
+        ? "overflow-auto rounded-xl border border-[var(--border)] bg-[var(--diagram-background)] px-3 py-3 [&_svg]:h-auto [&_svg]:max-w-full"
+        : "my-4 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--diagram-background)] px-3 py-3 [&_svg]:h-auto [&_svg]:max-w-full"}
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );

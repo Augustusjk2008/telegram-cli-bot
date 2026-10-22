@@ -61,8 +61,15 @@ test("document formatting stays selectable and legible across themes and viewpor
   const view = await openDocument(page, {
     pluginId: "docx-preview", viewId: "document", renderer: "document", mode: "snapshot", title: "formatting.docx", payload,
   });
-  for (const theme of ["classic", "deep-space"]) {
-    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((scheme) => {
+      const root = document.documentElement;
+      root.dataset.theme = `theme_fixture_${scheme}`;
+      root.dataset.colorScheme = scheme;
+      root.style.colorScheme = scheme;
+      root.style.setProperty("--surface", scheme === "dark" ? "#17212C" : "#FFFEFD");
+      root.style.setProperty("--text", scheme === "dark" ? "#EBF0F7" : "#3F4650");
+    }, theme);
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       // Exercise a narrow preview host independently of desktop chrome's minimum width.

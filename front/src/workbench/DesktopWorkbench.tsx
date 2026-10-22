@@ -1,7 +1,7 @@
 import { relativeRemotePath } from "../services/remoteWorkspace";
 import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
 import { clsx } from "clsx";
-import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -569,23 +569,39 @@ export function DesktopWorkbench({
     onChatPaneVisibilityChange?.(showChatPane);
   }, [onChatPaneVisibilityChange, showChatPane]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const updateLayoutBounds = () => {
-      const nextColumnsWidthPx = columnsRef.current?.getBoundingClientRect().width ?? 0;
-      const nextCenterHeightPx = centerRowsRef.current?.getBoundingClientRect().height ?? 0;
+      const columns = columnsRef.current;
+      const centerRows = centerRowsRef.current;
+      const columnsStyle = columns ? window.getComputedStyle(columns) : null;
+      const centerStyle = centerRows ? window.getComputedStyle(centerRows) : null;
+      // Client dimensions exclude borders; grid tracks also exclude the container padding.
+      const nextColumnsWidthPx = columns
+        ? columns.clientWidth - (parseFloat(columnsStyle?.paddingLeft || "0") || 0) - (parseFloat(columnsStyle?.paddingRight || "0") || 0)
+        : 0;
+      const nextCenterHeightPx = centerRows
+        ? centerRows.clientHeight - (parseFloat(centerStyle?.paddingTop || "0") || 0) - (parseFloat(centerStyle?.paddingBottom || "0") || 0)
+        : 0;
 
-      setLayoutBounds((current) => ({
-        columnsWidthPx: nextColumnsWidthPx > 0 ? nextColumnsWidthPx : current.columnsWidthPx,
-        centerHeightPx: nextCenterHeightPx > 0 ? nextCenterHeightPx : current.centerHeightPx,
-      }));
+      setLayoutBounds((current) => {
+        const columnsWidthPx = nextColumnsWidthPx > 0 ? nextColumnsWidthPx : current.columnsWidthPx;
+        const centerHeightPx = nextCenterHeightPx > 0 ? nextCenterHeightPx : current.centerHeightPx;
+        return columnsWidthPx === current.columnsWidthPx && centerHeightPx === current.centerHeightPx
+          ? current
+          : { columnsWidthPx, centerHeightPx };
+      });
     };
 
     updateLayoutBounds();
+    const observer = window.ResizeObserver ? new window.ResizeObserver(updateLayoutBounds) : null;
+    if (columnsRef.current) observer?.observe(columnsRef.current);
+    if (centerRowsRef.current) observer?.observe(centerRowsRef.current);
     window.addEventListener("resize", updateLayoutBounds);
     return () => {
+      observer?.disconnect();
       window.removeEventListener("resize", updateLayoutBounds);
     };
-  }, [focusedPane, layoutState.chatWidthPx, layoutState.editorHeightPx, layoutState.sidebarCollapsed, layoutState.sidebarWidthPx]);
+  }, [focusedPane, themeName]);
 
   useEffect(() => {
     if (previousBotAliasRef.current === botAlias) {
@@ -1237,6 +1253,7 @@ export function DesktopWorkbench({
       return (
         <FileTreePane
           tree={fileTree}
+          themeName={themeName}
           onOpenFile={(path) => {
             void openWorkspaceFile(path);
           }}

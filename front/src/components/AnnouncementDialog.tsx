@@ -10,10 +10,10 @@ type Props = {
 };
 
 const severityClass: Record<string, string> = {
-  info: "border-blue-500 bg-blue-500",
-  success: "border-emerald-500 bg-emerald-500",
-  warning: "border-amber-500 bg-amber-500",
-  danger: "border-red-500 bg-red-500",
+  info: "border-[var(--feedback-information-border)] bg-[var(--feedback-information-background)]",
+  success: "border-[var(--feedback-success-border)] bg-[var(--feedback-success-background)]",
+  warning: "border-[var(--feedback-warning-border)] bg-[var(--feedback-warning-background)]",
+  danger: "border-[var(--feedback-error-border)] bg-[var(--feedback-error-background)]",
 };
 
 const allowedInlineTags = new Set(["span", "strong", "b", "em", "i", "u", "s", "code", "br"]);

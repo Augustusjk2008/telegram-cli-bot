@@ -59,10 +59,10 @@ function statusLabel(status: string) {
 
 function statusClass(status: string) {
   const normalized = status.toLowerCase();
-  if (normalized === "added") return "bg-emerald-500/10 text-emerald-700";
-  if (normalized === "deleted") return "bg-red-500/10 text-red-700";
-  if (normalized === "renamed") return "bg-amber-500/10 text-amber-700";
-  if (normalized === "copied") return "bg-sky-500/10 text-sky-700";
+  if (normalized === "added") return "bg-[var(--feedback-success-background-alpha10)] text-[var(--feedback-success-text-deep)]";
+  if (normalized === "deleted") return "bg-[var(--feedback-error-background-alpha10)] text-[var(--feedback-error-text-deep)]";
+  if (normalized === "renamed") return "bg-[var(--feedback-warning-background-alpha10)] text-[var(--feedback-warning-text-deep)]";
+  if (normalized === "copied") return "bg-[var(--feedback-workspace-info-background-alpha10)] text-[var(--feedback-workspace-info-text-deep)]";
   return "bg-[var(--surface-strong)] text-[var(--text)]";
 }
 
@@ -261,7 +261,7 @@ export function SoloSessionChangesTab({
             type="button"
             onClick={() => void handleRollback(pendingRollbackTurn)}
             disabled={rollbacking}
-            className="inline-flex h-8 items-center rounded-md bg-red-600 px-3 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-8 items-center rounded-md bg-[var(--button-danger-background-strong)] px-3 text-xs font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-danger-background-deep)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {rollbacking ? "撤回中..." : "确认撤回"}
           </button>
@@ -280,7 +280,7 @@ export function SoloSessionChangesTab({
               type="button"
               onClick={() => setPendingRollbackTurn(selectedTurn)}
               disabled={rollbacking}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-red-500/30 px-2 text-xs text-red-700 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--feedback-error-border-alpha30)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-alpha10)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RotateCcw className="h-3.5 w-3.5" />
               {rollbacking ? "撤回中..." : "撤回到此轮"}
@@ -304,7 +304,7 @@ export function SoloSessionChangesTab({
           {turnsLoading && turns.length === 0 ? (
             <div className="px-4 py-3 text-sm text-[var(--muted)]">读取中...</div>
           ) : turnsError ? (
-            <div className="px-4 py-3 text-sm text-red-600">{turnsError}</div>
+            <div className="px-4 py-3 text-sm text-[var(--feedback-error-text-strong)]">{turnsError}</div>
           ) : turns.length === 0 ? (
             <div className="px-4 py-3 text-sm text-[var(--muted)]">当前会话暂无可展示的变更</div>
           ) : (
@@ -333,10 +333,10 @@ export function SoloSessionChangesTab({
 
         <section className="min-h-0 overflow-y-auto">
           {notice ? (
-            <div className="border-b border-[var(--workbench-hairline)] px-4 py-2 text-xs text-emerald-700">{notice}</div>
+            <div className="border-b border-[var(--workbench-hairline)] px-4 py-2 text-xs text-[var(--feedback-success-text-deep)]">{notice}</div>
           ) : null}
           {changesError ? (
-            <div className="px-4 py-3 text-sm text-red-600">{changesError}</div>
+            <div className="px-4 py-3 text-sm text-[var(--feedback-error-text-strong)]">{changesError}</div>
           ) : changesLoading ? (
             <div className="px-4 py-3 text-sm text-[var(--muted)]">读取中...</div>
           ) : !selectedTurn || !changes || changes.files.length === 0 ? (
@@ -361,8 +361,8 @@ export function SoloSessionChangesTab({
                     ) : null}
                   </span>
                   <span className={clsx("rounded px-1.5 py-0.5 text-[10px] font-medium", statusClass(file.status))}>{statusLabel(file.status)}</span>
-                  <span className="font-mono text-[11px] text-emerald-700">+{file.additions}</span>
-                  <span className="font-mono text-[11px] text-red-700">-{file.deletions}</span>
+                  <span className="font-mono text-[11px] text-[var(--feedback-success-text-deep)]">+{file.additions}</span>
+                  <span className="font-mono text-[11px] text-[var(--feedback-error-text-deep)]">-{file.deletions}</span>
                 </button>
               ))}
             </div>

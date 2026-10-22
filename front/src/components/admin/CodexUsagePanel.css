@@ -71,17 +71,17 @@
 }
 
 .codex-usage-alert-error {
-  border: 1px solid #fecaca;
-  background: #fef2f2;
-  color: #b91c1c;
+  border: 1px solid var(--usage-error-border);
+  background: var(--usage-error-background);
+  color: var(--usage-error-text);
 }
 
 .codex-usage-alert-success,
 .codex-usage-disabled-history {
-  border: 1px solid #a7f3d0;
+  border: 1px solid var(--usage-success-border);
   border-radius: 0.35rem;
-  background: #ecfdf5;
-  color: #047857;
+  background: var(--usage-success-background);
+  color: var(--usage-success-text);
 }
 
 .codex-usage-disabled-history {

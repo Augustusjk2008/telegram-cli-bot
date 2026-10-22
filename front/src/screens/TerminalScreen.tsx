@@ -17,7 +17,8 @@ import { TerminalActionsBar } from "../terminal/TerminalActionsBar";
 import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDialog";
 import { isTerminalActionVisible, resolveTerminalActionCommand } from "../terminal/terminalActionPlatform";
 import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
-import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
+import type { UiThemeName } from "../theme";
+import { getCurrentAppearance, resolvedTerminalTheme, useResolvedAppearance } from "../theme/appearanceRuntime";
 import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
 
 type Props = {
@@ -107,7 +108,6 @@ export function TerminalScreen({
   client = new MockWebBotClient(),
   isVisible,
   pendingWorkingDir,
-  themeName = DEFAULT_UI_THEME,
   isImmersive = false,
   disabledReason = "",
   embedded = false,
@@ -119,6 +119,7 @@ export function TerminalScreen({
   onCancelPendingWorkingDir,
   onWorkbenchStatusChange,
 }: Props) {
+  const appearance = useResolvedAppearance();
   const terminal = usePersistentTerminal();
   const layoutHandleRef = useRef<number | null>(null);
   const layoutRequestRef = useRef({
@@ -134,7 +135,6 @@ export function TerminalScreen({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRootRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const lastThemeRef = useRef(themeName);
   const isFollowingRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
   const previousVisibleRef = useRef(isVisible);
@@ -410,7 +410,7 @@ export function TerminalScreen({
         ownerId,
         previousRecoveryState: terminal.getClientRecoveryState(ownerId),
         fontSize: terminalFontSize,
-        themeName,
+        theme: resolvedTerminalTheme(getCurrentAppearance()),
         onOpen: () => {
           setIsConnected(true);
           setError("");
@@ -454,7 +454,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [authToken, isVisible, terminal.attachNonce, terminal.getClientRecoveryState, terminal.ownerId, terminal.setClientRecoveryState, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize, themeName]);
+  }, [authToken, isVisible, terminal.attachNonce, terminal.getClientRecoveryState, terminal.ownerId, terminal.setClientRecoveryState, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize]);
 
   useEffect(() => {
     const becameVisible = !previousVisibleRef.current && isVisible;
@@ -516,17 +516,8 @@ export function TerminalScreen({
   }, [instanceId]);
 
   useEffect(() => {
-    if (lastThemeRef.current === themeName) {
-      return;
-    }
-
-    lastThemeRef.current = themeName;
-
-    if (!sessionRef.current) {
-      return;
-    }
-    sessionRef.current.setTheme(themeName);
-  }, [themeName]);
+    sessionRef.current?.setTheme(resolvedTerminalTheme(appearance));
+  }, [appearance.revision, instanceId]);
 
   useEffect(() => {
     return () => {

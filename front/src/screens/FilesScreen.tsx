@@ -1203,12 +1203,12 @@ export function FilesScreen({
       ) : (
         <section className="flex-1 overflow-y-auto p-3">
           {error ? (
-            <SurfacePanel className="mb-4 border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-none">
+            <SurfacePanel className="mb-4 border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-4 py-3 text-sm text-[var(--feedback-error-text-deep)] shadow-none">
               {error}
             </SurfacePanel>
           ) : null}
           {statusText ? (
-            <SurfacePanel role="status" className="mb-4 border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-none">
+            <SurfacePanel role="status" className="mb-4 border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-4 py-3 text-sm text-[var(--feedback-success-text-deep)] shadow-none">
               {statusText}
             </SurfacePanel>
           ) : null}

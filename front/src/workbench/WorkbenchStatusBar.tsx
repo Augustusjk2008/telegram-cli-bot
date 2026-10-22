@@ -185,7 +185,7 @@ export function WorkbenchStatusBar({
           <span
             role="alert"
             data-testid="workbench-language-service-restart-error"
-            className="max-w-[20rem] truncate text-red-600"
+            className="max-w-[20rem] truncate text-[var(--feedback-error-text-strong)]"
             title={languageServiceRestartError}
           >
             重启失败：{languageServiceRestartError}

@@ -129,7 +129,7 @@ export function ChatFinalAnswerActions({
           aria-pressed={favorite}
           onClick={onToggleFavorite}
           className={favorite
-            ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300 bg-amber-50 text-amber-600 hover:bg-amber-100"
+            ? "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--feedback-warning-border-visible)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-strong)] hover:bg-[var(--feedback-warning-background-soft)]"
             : "inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"}
         >
           <Star className={favorite ? "h-3.5 w-3.5 fill-current" : "h-3.5 w-3.5"} />

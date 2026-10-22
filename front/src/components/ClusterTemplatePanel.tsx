@@ -232,7 +232,7 @@ export function ClusterTemplatePanel({ botAlias, client, canManage = true, onApp
         </div>
       </div>
       {schema?.instructions ? <div className="mt-3 text-xs text-[var(--muted)]">{schema.instructions}</div> : null}
-      {error ? <div className="mt-3 text-sm text-red-700">{error}</div> : null}
+      {error ? <div className="mt-3 text-sm text-[var(--feedback-error-text-deep)]">{error}</div> : null}
       {loading ? <div className="mt-3 text-sm text-[var(--muted)]">处理中</div> : null}
       {tab === "templates" ? (
         <div className="mt-4 grid gap-3">

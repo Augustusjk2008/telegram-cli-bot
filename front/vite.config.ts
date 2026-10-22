@@ -340,6 +340,9 @@ export default defineConfig(({mode}) => {
         output: {
           manualChunks(id) {
             const normalized = id.replace(/\\/g, '/');
+            if (normalized.endsWith('/bot/web/theme_catalog.json')) {
+              return 'theme-catalog';
+            }
             if (
               normalized.endsWith('/src/workbench/useCodexVoiceSession.ts')
               || normalized.endsWith('/src/components/CodexVoiceBar.tsx')

@@ -63,6 +63,13 @@ test("editor pane keeps breadcrumbs and tab actions scoped to the selected tab",
   fireEvent.contextMenu(screen.getByRole("tab", { name: "server.ts" }));
   await user.click(screen.getByRole("button", { name: "关闭其他标签页" }));
   expect(onCloseOthers).toHaveBeenCalledWith("src/server.ts");
+  const trigger = screen.getByRole("tab", { name: "server.ts" });
+  trigger.focus();
+  await user.keyboard("{Shift>}{F10}{/Shift}");
+  expect(screen.getByRole("menu", { name: "标签页菜单" })).toBeVisible();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("menu", { name: "标签页菜单" })).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
 });
 
 test("editor pane offers one-click close all when multiple tabs are open", async () => {

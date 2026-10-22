@@ -1,7 +1,13 @@
 import { isCodexCli } from "../utils/cliType";
+import themeCatalog from "../../../bot/web/theme_catalog.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { GIT_CAPABILITY_NAMES, GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
+  PersonalTheme,
+  ThemeAppearance,
+  ThemeLibrary,
+  ThemeCreateInput,
+  ThemeUpdateInput,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -1647,6 +1653,8 @@ function buildMockHdlWindow(rows: TableRow[], request: PluginViewWindowRequest):
 }
 
 export class MockWebBotClient implements WebBotClient {
+  private uiThemeLibraries = new Map<string, ThemeLibrary>();
+
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
       item.alias,
@@ -3305,6 +3313,146 @@ export class MockWebBotClient implements WebBotClient {
       capabilities: [],
       isLocalAdmin: false,
     };
+  }
+
+  private themeAccountId = "";
+
+  bindThemeAccount(accountId: string) { this.themeAccountId = accountId; }
+
+  private builtinUiThemes(): ThemeLibrary {
+    return {
+      schemaVersion: 1,
+      accountId: this.currentAccountId(),
+      revision: 0,
+      selectedThemeId: "paper-daylight",
+      themes: [{
+        schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight",
+        appearance: { colors: { scheme: "light", overrides: {} } }, readonly: true,
+        updatedAt: "1970-01-01T00:00:00Z", version: 1,
+      }],
+    };
+  }
+
+  private uiThemeLibrary(): ThemeLibrary {
+    if (!this.session.isLoggedIn) {
+      throw new WebApiClientError("请先登录", { status: 401, code: "unauthorized" });
+    }
+    if (this.themeAccountId && this.themeAccountId !== this.currentAccountId()) {
+      throw new WebApiClientError("登录账户已在其他页面切换，请刷新页面后管理主题", { status: 409, code: "theme_account_changed" });
+    }
+    if (this.session.role === "guest") return this.builtinUiThemes();
+    return structuredClone(this.uiThemeLibraries.get(this.currentAccountId()) || this.builtinUiThemes());
+  }
+
+  private mutateUiThemes(expectedRevision: number, change: (library: ThemeLibrary) => void): ThemeLibrary {
+    const library = this.uiThemeLibrary();
+    if (this.session.role === "guest" || this.currentAccountId() === "guest") {
+      throw new WebApiClientError("请登录正式账户后管理个人主题", { status: 403, code: "theme_readonly" });
+    }
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+      throw new WebApiClientError("主题库版本必须是非负安全整数", { status: 400, code: "invalid_theme" });
+    }
+    if (expectedRevision !== library.revision) {
+      throw new WebApiClientError("主题库已在其他页面更新，请重新加载后再保存", {
+        status: 409, code: "theme_revision_conflict", data: { revision: library.revision },
+      });
+    }
+    change(library);
+    library.revision += 1;
+    this.uiThemeLibraries.set(this.currentAccountId(), structuredClone(library));
+    return library;
+  }
+
+  private findUiTheme(library: ThemeLibrary, id: string, writable = false): PersonalTheme {
+    const theme = library.themes.find((item) => item.id === id);
+    if (!theme) throw new WebApiClientError("个人主题不存在", { status: 404, code: "theme_not_found" });
+    if (writable && theme.readonly) {
+      throw new WebApiClientError("内置纸感日间是只读主题，请复制后编辑", { status: 403, code: "theme_readonly" });
+    }
+    return theme;
+  }
+
+  private uiThemeName(name: string): string {
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 80 || /[\u0000-\u001f]/.test(name)) {
+      throw new WebApiClientError("主题名称须为 1 到 80 个字符且不含控制字符", { status: 400, code: "invalid_theme" });
+    }
+    return name.trim();
+  }
+
+  private uiThemeInput(input: ThemeCreateInput | ThemeUpdateInput, create: boolean): void {
+    if (input.schemaVersion !== 1) {
+      throw new WebApiClientError("不支持此主题数据版本，请更新应用后重试", { status: 400, code: "unsupported_theme_schema" });
+    }
+    const allowed = ["schemaVersion", "expectedRevision", "name", "appearance", "activate", ...(create ? ["sourceId"] : [])];
+    if (Object.keys(input).some((key) => !allowed.includes(key)) || ("activate" in input && typeof input.activate !== "boolean")) {
+      throw new WebApiClientError("主题请求包含不支持的字段或值", { status: 400, code: "invalid_theme" });
+    }
+  }
+
+  private uiThemeAppearance(appearance: ThemeAppearance): ThemeAppearance {
+    const invalid = () => new WebApiClientError("主题配色包含不支持的字段、颜色或透明度", { status: 400, code: "invalid_theme" });
+    if (!appearance || Object.keys(appearance).some((key) => key !== "colors") || !appearance.colors) throw invalid();
+    const { colors } = appearance;
+    if (Object.keys(colors).some((key) => key !== "scheme" && key !== "overrides")
+      || !["light", "dark"].includes(colors.scheme) || !colors.overrides
+      || typeof colors.overrides !== "object" || Array.isArray(colors.overrides)) throw invalid();
+    const overrides: Record<string, string> = {};
+    for (const [key, value] of Object.entries(colors.overrides)) {
+      const token = themeCatalog.tokens.find((item) => item.key === key);
+      if (!token || typeof value !== "string" || !/^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(value.trim())) throw invalid();
+      let hex = value.trim().slice(1).toUpperCase();
+      if (hex.length <= 4) hex = [...hex].map((char) => char + char).join("");
+      if (hex.length === 6) hex += "FF";
+      if (!token.allowAlpha && hex.slice(-2) !== "FF") throw invalid();
+      overrides[key] = `#${hex}`;
+    }
+    return { colors: { scheme: colors.scheme, overrides } };
+  }
+
+  async listUiThemes(): Promise<ThemeLibrary> {
+    return this.uiThemeLibrary();
+  }
+
+  async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
+    this.uiThemeInput(input, true);
+    return this.mutateUiThemes(input.expectedRevision, (library) => {
+      const source = this.findUiTheme(library, input.sourceId);
+      const theme: PersonalTheme = {
+        schemaVersion: 1, id: `theme_${crypto.randomUUID().replaceAll("-", "")}`,
+        name: this.uiThemeName(input.name), baseId: "paper-daylight",
+        appearance: this.uiThemeAppearance(input.appearance === undefined ? source.appearance : input.appearance),
+        readonly: false, updatedAt: new Date().toISOString(), version: 1,
+      };
+      library.themes.push(theme);
+      if (input.activate) library.selectedThemeId = theme.id;
+    });
+  }
+
+  async updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary> {
+    this.uiThemeInput(input, false);
+    return this.mutateUiThemes(input.expectedRevision, (library) => {
+      const theme = this.findUiTheme(library, id, true);
+      if ("name" in input) theme.name = this.uiThemeName(input.name);
+      if ("appearance" in input) theme.appearance = this.uiThemeAppearance(input.appearance);
+      theme.updatedAt = new Date().toISOString();
+      theme.version += 1;
+      if (input.activate) library.selectedThemeId = id;
+    });
+  }
+
+  async deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
+    return this.mutateUiThemes(expectedRevision, (library) => {
+      this.findUiTheme(library, id, true);
+      library.themes = library.themes.filter((theme) => theme.id !== id);
+      if (library.selectedThemeId === id) library.selectedThemeId = "paper-daylight";
+    });
+  }
+
+  async selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
+    return this.mutateUiThemes(expectedRevision, (library) => {
+      this.findUiTheme(library, id);
+      library.selectedThemeId = id;
+    });
   }
 
   async listAnnouncements(): Promise<AnnouncementListResult> {

@@ -182,9 +182,9 @@ export function ChatContextUsageBadge({ contextUsage, className = "", compact = 
   }
   const compactionCount = compact ? normalizedCompactionCount(contextUsage?.compactionCount) : 0;
   const baseClassName = textContext.isLow
-    ? "inline-flex min-w-0 items-center rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5"
+    ? "inline-flex min-w-0 items-center rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-1.5 py-0.5"
     : "inline-flex min-w-0 items-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-1.5 py-0.5";
-  const textClassName = textContext.isLow ? "font-medium text-red-600" : "text-[var(--muted)]";
+  const textClassName = textContext.isLow ? "font-medium text-[var(--feedback-error-text-strong)]" : "text-[var(--muted)]";
   return (
     <TouchHint content={textContext.title}>
       <button

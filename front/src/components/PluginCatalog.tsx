@@ -230,8 +230,8 @@ export function PluginCatalog({
                 const pluginEnabled = plugin.enabled !== false;
                 const expanded = expandedPluginIds.includes(plugin.id);
                 const toggleButtonClassName = pluginEnabled
-                  ? buttonClass("border-red-500 text-red-600")
-                  : buttonClass("border-emerald-500 text-emerald-600");
+                  ? buttonClass("border-[var(--feedback-error-border)] text-[var(--feedback-error-text-strong)]")
+                  : buttonClass("border-[var(--feedback-success-border)] text-[var(--feedback-success-text-strong)]");
                 const expandButtonClassName = buttonClass("border-[var(--workbench-hairline)] text-[var(--muted)]");
 
                 return (

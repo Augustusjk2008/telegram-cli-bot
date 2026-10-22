@@ -161,7 +161,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
           {session ? `第 ${pageIndex}/${pageCount} 页 · ` : ""}共 {totalRows} 行
         </div>
         {windowError ? (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)]">
             {windowError}
           </div>
         ) : null}
@@ -179,7 +179,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
       </div>
 
       {snapshot && snapshot.payload.rows.length > 5000 ? (
-        <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <div className="border-b border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-3 py-2 text-xs text-[var(--feedback-warning-text-stronger)]">
           当前快照包含 {snapshot.payload.rows.length} 行；建议插件改用 session/heavy 视图降低传输成本。
         </div>
       ) : null}

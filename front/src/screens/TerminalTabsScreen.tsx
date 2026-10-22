@@ -111,7 +111,7 @@ export function TerminalTabsScreen({
 
   return (
     <main data-testid="terminal-tabs-screen" data-ui-density="compact" className="flex h-full min-h-0 flex-col bg-[var(--workbench-panel-bg)]">
-      <div className="flex min-h-10 shrink-0 items-stretch border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
+      <div className="terminal-tab-strip flex min-h-10 shrink-0 items-stretch border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         <div
           role="tablist"
           aria-label="终端选项卡"
@@ -121,7 +121,7 @@ export function TerminalTabsScreen({
             const active = tab.id === terminal.activeTabId;
             const closing = closingTabId === tab.id;
             return (
-              <div key={tab.id} className="flex shrink-0 items-center border-r border-[var(--workbench-hairline)]">
+              <div key={tab.id} data-active={active ? "true" : "false"} className="terminal-tab flex shrink-0 items-center border-r border-[var(--workbench-hairline)]">
                 <button
                   type="button"
                   role="tab"

@@ -64,9 +64,9 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
             className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
           >
             {file.isDir ? (
-              <Folder className="h-4 w-4 shrink-0 text-blue-500" />
+              <Folder className="h-4 w-4 shrink-0 text-[var(--file-list-folder-icon)]" />
             ) : (
-              <FileText className="h-4 w-4 shrink-0 text-gray-500" />
+              <FileText className="h-4 w-4 shrink-0 text-[var(--file-list-file-icon)]" />
             )}
             <div className="min-w-0 flex-1 truncate">
               <span className="font-medium">{file.name}</span>

@@ -1,22 +1,22 @@
 import type { CSSProperties } from "react";
 
 const BOT_ACCENT_COLORS = [
-  "#0891b2",
-  "#2563eb",
-  "#059669",
-  "#ea580c",
-  "#db2777",
-  "#7c3aed",
-  "#0d9488",
-  "#65a30d",
+  "var(--identity-bot1)",
+  "var(--identity-bot2)",
+  "var(--identity-bot3)",
+  "var(--identity-bot4)",
+  "var(--identity-bot5)",
+  "var(--identity-bot6)",
+  "var(--identity-bot7)",
+  "var(--identity-bot8)",
 ];
 
 const BOT_IDENTITY_COLORS = {
-  codex: "#5aa7ff",
-  codexServer: "#c084fc",
-  claude: "#c79270",
-  antigravity: "#6fd99a",
-  deepseek: "#f0a15c",
+  codex: "var(--identity-codex)",
+  codexServer: "var(--identity-codex-server)",
+  claude: "var(--identity-claude)",
+  antigravity: "var(--identity-antigravity)",
+  deepseek: "var(--identity-deepseek)",
 } as const;
 
 function hashAlias(alias: string) {

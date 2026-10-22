@@ -1,12 +1,9 @@
 import { AttachAddon } from "@xterm/addon-attach";
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
-import {
-  DEFAULT_UI_THEME,
-  getTerminalMinimumContrastRatio,
-  getTerminalTheme,
-  type UiThemeName,
-} from "../theme";
+import { Terminal, type ITheme } from "@xterm/xterm";
+import { getTerminalMinimumContrastRatio } from "../theme";
+import { getCurrentAppearance, resolvedTerminalTheme } from "../theme/appearanceRuntime";
+import type { ResolvedAppearance } from "../theme/types";
 import { buildApiUrl, buildWsUrl, publicApiBaseDiagnostics, type PublicBaseDiagnostics } from "../utils/publicBase";
 import {
   decodeTerminalV2Frame,
@@ -23,7 +20,9 @@ export type TerminalSessionOptions = {
   fromSeq?: number;
   previousRecoveryState?: TerminalRecoverySnapshot | null;
   fontSize?: number;
-  themeName?: UiThemeName;
+  theme?: ITheme | ResolvedAppearance;
+  /** Legacy callers use the current resolved appearance. */
+  themeName?: string;
   onOpen?: () => void;
   onClose?: () => void;
   onError?: (message: string) => void;
@@ -45,13 +44,14 @@ export type TerminalSession = {
   getRecoveryState: () => TerminalRecoverySnapshot;
   sendControl: (sequence: string) => void;
   sendText: (text: string) => void;
-  setTheme: (themeName: UiThemeName) => void;
+  setTheme: (theme: ITheme | ResolvedAppearance | string) => void;
 };
 
-function buildTerminalAppearance(themeName: UiThemeName) {
+function buildTerminalAppearance(theme: ITheme | ResolvedAppearance | string = getCurrentAppearance()) {
+  const input = typeof theme === "string" ? getCurrentAppearance() : theme;
   return {
-    minimumContrastRatio: getTerminalMinimumContrastRatio(themeName),
-    theme: getTerminalTheme(themeName),
+    minimumContrastRatio: getTerminalMinimumContrastRatio(),
+    theme: { ...("colors" in input ? resolvedTerminalTheme(input) : input) },
   };
 }
 
@@ -153,13 +153,12 @@ function authHeaders(token: string): Record<string, string> {
 }
 
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
-  const themeName = options.themeName ?? DEFAULT_UI_THEME;
   const term = new Terminal({
     cursorBlink: true,
     convertEol: false,
     fontSize: options.fontSize ?? 13,
     fontFamily: '"Cascadia Code", "Consolas", "Courier New", monospace',
-    ...buildTerminalAppearance(themeName),
+    ...buildTerminalAppearance(options.theme ?? getCurrentAppearance()),
   });
   const fitAddon = new FitAddon();
   let socket: WebSocket | null = null;
@@ -751,8 +750,8 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
         socket.send(text);
       }
     },
-    setTheme: (themeName: UiThemeName) => {
-      const appearance = buildTerminalAppearance(themeName);
+    setTheme: (theme) => {
+      const appearance = buildTerminalAppearance(theme);
       term.options.minimumContrastRatio = appearance.minimumContrastRatio;
       term.options.theme = appearance.theme;
     },

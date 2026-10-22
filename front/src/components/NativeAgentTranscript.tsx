@@ -168,7 +168,7 @@ function PermissionEntry({
                 type="button"
                 disabled={disabled}
                 onClick={() => submit(false)}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--feedback-error-border-light)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <X className="h-3.5 w-3.5" />
                 取消
@@ -190,7 +190,7 @@ function PermissionEntry({
               type="button"
               disabled={disabled}
               onClick={() => submit(false)}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-red-200 px-2 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--feedback-error-border-light)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <X className="h-3.5 w-3.5" />
               拒绝
@@ -412,7 +412,7 @@ const TranscriptEntryRow = memo(function TranscriptEntryRow({
         {shouldRenderEntrySummaryAsMarkdown(entry) ? (
           <ChatMarkdownMessage content={summary} onFileLinkClick={onFileLinkClick} />
         ) : (
-          <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-red-700" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
+          <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-[var(--feedback-error-text-deep)]" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
             {summary}
           </div>
         )}
@@ -663,13 +663,13 @@ export function NativeAgentTranscript({
             </div>
           ) : null}
           {traceExpanded && !isTraceLoading && traceLoadError ? (
-            <div className="py-2 text-xs text-red-700">
+            <div className="py-2 text-xs text-[var(--feedback-error-text-deep)]">
               <div>{traceLoadError}</div>
               {onLoadTrace ? (
                 <button
                   type="button"
                   onClick={onLoadTrace}
-                  className="mt-2 inline-flex rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                  className="mt-2 inline-flex rounded-md border border-[var(--feedback-error-border-light)] px-2 py-1 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]"
                 >
                   重试
                 </button>
@@ -685,7 +685,7 @@ export function NativeAgentTranscript({
           {showFinalResult && (state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
-            <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-red-700" : "text-[var(--text)]"} />
+            <ChatPlainTextMessage content={visibleResultText} className={state === "error" ? "text-[var(--feedback-error-text-deep)]" : "text-[var(--text)]"} />
           ))}
           {showFinalActions ? (
             <ChatFinalAnswerActions

@@ -226,7 +226,7 @@ export function CommandPalette({
                 </div>
               ) : null}
               {loading ? <div className="px-3 py-3 text-sm text-[var(--muted)]">搜索中...</div> : null}
-              {error ? <div className="px-3 py-3 text-sm text-red-600">{error}</div> : null}
+              {error ? <div className="px-3 py-3 text-sm text-[var(--feedback-error-text-strong)]">{error}</div> : null}
               {!loading && !error && query.trim() && items.length === 0 ? (
                 <div className="px-3 py-3 text-sm text-[var(--muted)]">无匹配文件</div>
               ) : null}

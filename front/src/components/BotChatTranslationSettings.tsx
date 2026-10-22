@@ -43,7 +43,7 @@ export function BotChatTranslationSettings({ client, botAlias }: { client: WebBo
         />
       </label>
       {saving ? <p role="status" className="text-xs text-[var(--muted)]">正在保存…</p> : null}
-      {error ? <p role="alert" className="mt-1 text-xs text-red-600">{error}</p> : null}
+      {error ? <p role="alert" className="mt-1 text-xs text-[var(--feedback-error-text-strong)]">{error}</p> : null}
     </section>
   );
 }

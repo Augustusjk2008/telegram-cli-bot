@@ -118,12 +118,12 @@ export function BotSwitcherSheet({
                 className={clsx(
                   "relative min-h-16 w-full overflow-hidden rounded-lg border py-2.5 pl-4 pr-3 text-left transition active:scale-[0.99]",
                   isOffline
-                    ? "cursor-not-allowed border-red-200 bg-red-50/80 opacity-95"
+                    ? "cursor-not-allowed border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle-alpha80)] opacity-95"
                     : currentAlias === bot.alias
                       ? "tcb-soft-selected"
                       : "border-[var(--border)] hover:bg-[var(--surface-strong)]",
                   noAccess
-                    ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px]"
+                    ? "border-[var(--access-restricted-border)] bg-[var(--access-restricted-background-soft)] text-[var(--access-restricted-text-highest)] shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px]"
                     : "",
                 )}
               >
@@ -145,7 +145,7 @@ export function BotSwitcherSheet({
                         </span>
                       ) : null}
                       {noAccess ? (
-                        <span className="shrink-0 rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">
+                        <span className="shrink-0 rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">
                           无权限 · 只读
                         </span>
                       ) : null}

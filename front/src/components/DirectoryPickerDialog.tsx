@@ -348,7 +348,7 @@ export function DirectoryPickerDialog({
               </button>
             </div>
           ) : null}
-          {error ? <p className="mt-2 text-sm text-red-600">{error}</p> : null}
+          {error ? <p className="mt-2 text-sm text-[var(--feedback-error-text-strong)]">{error}</p> : null}
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">

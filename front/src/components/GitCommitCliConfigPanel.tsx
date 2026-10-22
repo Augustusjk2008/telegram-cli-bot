@@ -223,8 +223,8 @@ export function GitCommitCliConfigPanel({
         </div>
       </div>
 
-      {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
-      {notice ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</div> : null}
+      {error ? <div className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)]">{error}</div> : null}
+      {notice ? <div className="rounded-lg border border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-success-text-deep)]">{notice}</div> : null}
       {loading ? <div className="text-xs text-[var(--muted)]">加载中...</div> : null}
       {cliTypeDraft === "deepseek" ? <p className="text-xs text-[var(--muted)]">DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI</p> : null}
 

@@ -94,7 +94,7 @@ export function FilePreviewSurface({
     }
 
     if (error && !result) {
-      return <div role="alert" className="flex items-center gap-3 p-4 text-sm text-red-600">
+      return <div role="alert" className="flex items-center gap-3 p-4 text-sm text-[var(--feedback-error-text-strong)]">
         {error}
         {onRetry ? <button type="button" className="shrink-0 rounded-md border border-[var(--border)] px-2 py-1 text-[var(--text)]" onClick={onRetry}>重试</button> : null}
       </div>;

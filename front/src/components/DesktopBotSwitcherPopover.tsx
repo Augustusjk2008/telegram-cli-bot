@@ -211,7 +211,7 @@ export function DesktopBotSwitcherPopover({
         aria-modal="true"
         aria-label="智能体切换"
         data-testid="desktop-bot-switcher-popover"
-        className="absolute flex min-h-[360px] origin-top-left flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
+        className="desktop-workbench-popover absolute flex min-h-[360px] origin-top-left flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl"
         style={style}
         {...panelMotion}
       >
@@ -284,7 +284,7 @@ export function DesktopBotSwitcherPopover({
                     current ? "tcb-soft-selected" : "hover:bg-[var(--workbench-hover-bg)]",
                     focusedAlias === bot.alias && !current ? "bg-[var(--workbench-hover-bg)]" : "",
                     offline ? "cursor-not-allowed opacity-70" : "",
-                    noAccess ? "border-zinc-500 bg-zinc-100 text-zinc-950 shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-zinc-200" : "",
+                    noAccess ? "border-[var(--access-restricted-border)] bg-[var(--access-restricted-background-soft)] text-[var(--access-restricted-text-highest)] shadow-inner grayscale saturate-0 contrast-125 blur-[0.2px] hover:bg-[var(--access-restricted-background-light)]" : "",
                   )}
                 >
                   <span className="min-w-0">
@@ -300,7 +300,7 @@ export function DesktopBotSwitcherPopover({
                         <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
                       ) : null}
                       {noAccess ? (
-                        <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                        <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
                       ) : null}
                     </span>
                     <span className={clsx(
@@ -345,7 +345,7 @@ export function DesktopBotSwitcherPopover({
                             <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
                           ) : null}
                           {focusedBot.canOperate === false ? (
-                            <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                            <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
                           ) : null}
                           <StatusPill status={effectiveStatus(focusedBot) === "unread" ? "online" : effectiveStatus(focusedBot)} />
                         </div>
@@ -364,7 +364,7 @@ export function DesktopBotSwitcherPopover({
                       {busyNames(focusedBot).length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-1">
                           {busyNames(focusedBot).slice(0, 3).map((name) => (
-                            <span key={name} className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">
+                            <span key={name} className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">
                               {name}
                             </span>
                           ))}
@@ -378,13 +378,13 @@ export function DesktopBotSwitcherPopover({
                     </div>
 
                     {isOffline(focusedBot) ? (
-                      <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs font-medium text-red-700">
+                      <div className="rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-2 py-1.5 text-xs font-medium text-[var(--feedback-error-text-deep)]">
                         离线中，暂不可切换
                       </div>
                     ) : null}
 
                     {focusedBot.canOperate === false ? (
-                      <div className="rounded-md border border-zinc-500 bg-zinc-100 px-2 py-1.5 text-xs font-semibold text-zinc-900 grayscale">
+                      <div className="rounded-md border border-[var(--access-restricted-border)] bg-[var(--access-restricted-background-soft)] px-2 py-1.5 text-xs font-semibold text-[var(--access-restricted-text-emphasis)] grayscale">
                         无操作权限，进入后仅可只读查看
                       </div>
                     ) : null}

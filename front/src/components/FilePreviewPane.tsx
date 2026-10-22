@@ -52,7 +52,7 @@ export function FilePreviewPane({
 
       <footer className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--workbench-hairline)] px-3 py-1.5">
         <div
-          className={error ? "min-w-0 flex-1 truncate text-xs text-red-600" : "min-w-0 flex-1 truncate text-xs text-[var(--muted)]"}
+          className={error ? "min-w-0 flex-1 truncate text-xs text-[var(--feedback-error-text-strong)]" : "min-w-0 flex-1 truncate text-xs text-[var(--muted)]"}
           role={statusText || error ? "status" : undefined}
         >
           {error || statusText}

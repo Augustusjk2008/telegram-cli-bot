@@ -64,7 +64,7 @@ type Props = {
   prefilledWorkdir?: string;
   onWorkdirUpdated?: (workingDir: string) => void;
   themeName?: UiThemeName;
-  onThemeChange?: (themeName: UiThemeName) => void;
+  onThemeChange?: (themeName: UiThemeName) => void | Promise<void>;
   chatBodyFontFamily?: ChatBodyFontFamilyName;
   onChatBodyFontFamilyChange?: (fontFamily: ChatBodyFontFamilyName) => void;
   chatBodyFontSize?: ChatBodyFontSizeName;
@@ -412,12 +412,15 @@ export function SettingsScreen({
     }
   };
 
-  const handleThemeChange = (nextTheme: UiThemeName) => {
+  const handleThemeChange = async (nextTheme: UiThemeName) => {
     if (nextTheme === themeName) {
       return;
     }
-    setNotice("界面主题已切换");
-    onThemeChange?.(nextTheme);
+    setNotice("");
+    try {
+      await onThemeChange?.(nextTheme);
+      setNotice("界面主题已切换");
+    } catch { /* The selector retains and displays the server error. */ }
   };
 
   const handleNotificationToggle = (enabled: boolean) => {

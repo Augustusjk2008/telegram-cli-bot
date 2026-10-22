@@ -71,7 +71,7 @@ function DebugIconButton({
   const tone = primary
     ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-foreground)]"
     : danger
-      ? "border-red-400/60 text-red-500"
+      ? "border-[var(--feedback-error-border-muted-alpha60)] text-[var(--feedback-error-text)]"
       : "border-[var(--border)] text-[var(--text)]";
   return (
     <button
@@ -346,7 +346,7 @@ export function MobileDebugScreen({ authToken = "", botAlias, client }: Props) {
         {view === "source" ? (
           activeSource ? (
             sourceError ? (
-              <div className="p-3 text-sm text-red-500">{sourceError}</div>
+              <div className="p-3 text-sm text-[var(--feedback-error-text)]">{sourceError}</div>
             ) : (
               <FileEditorSurface
                 path={activeSource.path}

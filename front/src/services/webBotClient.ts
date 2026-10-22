@@ -1,4 +1,7 @@
 import type {
+  ThemeLibrary,
+  ThemeCreateInput,
+  ThemeUpdateInput,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -163,12 +166,18 @@ import type {
 import type { AgUiEvent } from "./agUiProtocol";
 
 export interface WebBotClient {
+  bindThemeAccount?(accountId: string): void;
   getPublicHostInfo(): Promise<PublicHostInfo>;
   login(input: { username: string; password: string } | string): Promise<SessionState>;
   register(input: { username: string; password: string; registerCode: string }): Promise<SessionState>;
   loginGuest(): Promise<SessionState>;
   restoreSession(token?: string): Promise<SessionState>;
   logout(): Promise<void>;
+  listUiThemes(): Promise<ThemeLibrary>;
+  createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary>;
+  updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary>;
+  deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
+  selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
   listAnnouncements(): Promise<AnnouncementListResult>;
   markAnnouncementsSeen(latestId: string): Promise<AnnouncementListResult>;
   upsertAnnouncement(input: CreateAnnouncementInput): Promise<AnnouncementItem>;

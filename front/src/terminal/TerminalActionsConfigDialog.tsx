@@ -124,7 +124,7 @@ export function TerminalActionsConfigDialog({
         </header>
 
         {config.errors.length > 0 ? (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="border-b border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-4 py-3 text-sm text-[var(--feedback-error-text-deep)]">
             {config.errors.join("；")}
           </div>
         ) : null}
@@ -163,7 +163,7 @@ export function TerminalActionsConfigDialog({
                   <button type="button" aria-label="下移" onClick={() => moveSelected(1)} disabled={selectedIndex >= actions.length - 1} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] disabled:opacity-50">
                     <ArrowDown className="h-4 w-4" />
                   </button>
-                  <button type="button" aria-label="删除" onClick={removeSelected} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 text-red-700 hover:bg-red-50">
+                  <button type="button" aria-label="删除" onClick={removeSelected} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--feedback-error-border-light)] text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
@@ -288,7 +288,7 @@ export function TerminalActionsConfigDialog({
         </div>
 
         <footer className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-4 py-3">
-          <div className="min-w-0 text-sm text-red-600">{footerError}</div>
+          <div className="min-w-0 text-sm text-[var(--feedback-error-text-strong)]">{footerError}</div>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="rounded-md border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]">取消</button>
             <button

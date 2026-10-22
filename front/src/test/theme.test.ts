@@ -6,7 +6,6 @@ import {
   getTerminalTheme,
   isLightUiTheme,
   persistChatEnterToSend,
-  persistUiTheme,
   readStoredChatEnterToSend,
   readStoredUiTheme,
   UI_THEME_NAMES,
@@ -62,72 +61,33 @@ describe("chat Enter-to-send preference", () => {
 describe("UI themes", () => {
   beforeEach(() => {
     localStorage.clear();
+    applyUiTheme("paper-daylight");
     document.querySelectorAll("link[data-theme-favicon]").forEach((node) => node.remove());
   });
 
-  it("classifies light and dark themes", () => {
-    expect(isLightUiTheme("paper-daylight")).toBe(true);
-    expect(isLightUiTheme("obsidian-linear")).toBe(false);
-    expect(isLightUiTheme("lunar-ceramic")).toBe(true);
-    expect(isLightUiTheme("copper-night")).toBe(false);
-    expect(isLightUiTheme("eclipse-film")).toBe(false);
+  it.each([null, "deep-space", "classic", "obsidian-linear", "theme_missing"])("migrates unauthenticated preference %s to paper", (name) => {
+    if (name) localStorage.setItem(UI_THEME_STORAGE_KEY, name);
+    expect(readStoredUiTheme()).toBe("paper-daylight");
+    expect(localStorage.getItem(UI_THEME_STORAGE_KEY)).toBe("paper-daylight");
+    expect(UI_THEME_NAMES).toEqual(["paper-daylight"]);
+    expect(UI_THEME_OPTIONS.map((option) => option.value)).toEqual(["paper-daylight"]);
   });
 
-  it("defaults to deep-space for missing or unrecognized preferences", () => {
-    expect(readStoredUiTheme()).toBe("deep-space");
-    localStorage.setItem(UI_THEME_STORAGE_KEY, "unknown-theme");
-    expect(readStoredUiTheme()).toBe("deep-space");
-  });
-
-  it.each(UI_THEME_NAMES)("persists and restores selectable theme %s", (name) => {
-    expect(UI_THEME_OPTIONS.some((option) => option.value === name)).toBe(true);
-
-    persistUiTheme(name);
-
-    expect(localStorage.getItem(UI_THEME_STORAGE_KEY)).toBe(name);
-    expect(readStoredUiTheme()).toBe(name);
-  });
-
-  it.each([
-    ["obsidian-linear", "/assets/app-logo-favicon.svg"],
-    ["paper-daylight", "/assets/app-logo-classic.svg"],
-    ["lunar-ceramic", "/assets/app-logo-classic.svg"],
-    ["copper-night", "/assets/app-logo-copper.svg"],
-    ["eclipse-film", "/assets/app-logo-eclipse.svg"],
-  ] as const)("updates the favicon when applying %s", (name, expectedHref) => {
+  it("uses the paper favicon and fully falls back for an unknown identity", () => {
     const favicon = document.createElement("link");
-    favicon.setAttribute("rel", "icon");
     favicon.dataset.themeFavicon = "";
-    favicon.setAttribute("href", "/assets/app-logo-favicon.svg");
     document.head.append(favicon);
-
-    applyUiTheme(name);
-
-    expect(document.documentElement.dataset.theme).toBe(name);
-    expect(favicon.getAttribute("href")).toBe(withPublicBase(expectedHref));
+    applyUiTheme("theme_missing");
+    expect(document.documentElement.dataset.theme).toBe("paper-daylight");
+    expect(isLightUiTheme("theme_missing")).toBe(true);
+    expect(favicon.getAttribute("href")).toBe(withPublicBase("/assets/app-logo-classic.svg"));
   });
 
-  it.each(["obsidian-linear", "paper-daylight"] as const)("provides readable terminal colors for %s", (name) => {
-    const theme = getTerminalTheme(name);
-    const ansiColors = [
-      "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-      "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite",
-    ] as const;
-
-    expect(getTerminalMinimumContrastRatio(name)).toBe(4.5);
-    expect(theme).not.toEqual(getTerminalTheme("deep-space"));
-    expect(relativeLuminance(theme.background) > relativeLuminance(theme.foreground)).toBe(isLightUiTheme(name));
+  it("provides a readable terminal baseline", () => {
+    const theme = getTerminalTheme("paper-daylight");
+    expect(getTerminalMinimumContrastRatio()).toBe(4.5);
     expect(contrastRatio(theme.foreground, theme.background)).toBeGreaterThanOrEqual(4.5);
-    for (const color of ansiColors) {
-      expect(theme[color]).toMatch(/^#[0-9a-f]{6}$/i);
-      // ANSI black retains its background role in dark terminals; xterm adjusts text contrast.
-      if (color !== "black" || isLightUiTheme(name)) {
-        expect(contrastRatio(theme[color], theme.background), color).toBeGreaterThanOrEqual(4.5);
-      }
-    }
     expect(contrastRatio(theme.cursor, theme.background)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(theme.cursorAccent!, theme.cursor)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(theme.selectionForeground!, theme.selectionBackground!)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(theme.selectionForeground!, theme.selectionInactiveBackground!)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(theme.selectionForeground, theme.selectionBackground)).toBeGreaterThanOrEqual(4.5);
   });
 });

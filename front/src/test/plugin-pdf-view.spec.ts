@@ -83,8 +83,15 @@ test(`${extension.toUpperCase()} pages preserve layout, images, selection and lo
   const paper = view.getByTestId("pdf-page");
   await expect(paper).toHaveAttribute("aria-busy", "false");
   await page.getByRole("button", { name: "聚焦编辑器", exact: true }).click();
-  for (const theme of ["classic", "deep-space"]) {
-    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((scheme) => {
+      const root = document.documentElement;
+      root.dataset.theme = `theme_fixture_${scheme}`;
+      root.dataset.colorScheme = scheme;
+      root.style.colorScheme = scheme;
+      root.style.setProperty("--surface", scheme === "dark" ? "#17212C" : "#FFFEFD");
+      root.style.setProperty("--text", scheme === "dark" ? "#EBF0F7" : "#3F4650");
+    }, theme);
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
       await view.evaluate((element, width) => { element.parentElement!.style.width = width === 390 ? "382px" : ""; }, width);

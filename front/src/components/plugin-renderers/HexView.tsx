@@ -13,12 +13,12 @@ function formatOffset(offset: number) {
 function entropyColor(entropy: number) {
   const bounded = Math.max(0, Math.min(1, entropy));
   if (bounded >= 0.75) {
-    return "bg-rose-500";
+    return "bg-[var(--entropy-high)]";
   }
   if (bounded >= 0.45) {
-    return "bg-amber-400";
+    return "bg-[var(--entropy-medium)]";
   }
-  return "bg-emerald-500";
+  return "bg-[var(--entropy-low)]";
 }
 
 export function HexView({ title, payload }: Props) {
@@ -31,7 +31,7 @@ export function HexView({ title, payload }: Props) {
             {payload.statsText || `${payload.fileSizeBytes} B`}
           </span>
           {payload.truncated ? (
-            <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">已截断</span>
+            <span className="rounded border border-[var(--feedback-warning-border-visible)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-stronger)]">已截断</span>
           ) : null}
         </div>
         <div className="mt-3 flex h-4 overflow-hidden rounded border border-[var(--border)] bg-[var(--surface-strong)]">

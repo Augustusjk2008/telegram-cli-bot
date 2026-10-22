@@ -13,18 +13,21 @@ import {
   RefreshCw,
   Upload,
 } from "lucide-react";
-import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
 import type { GitTreeDecorationKind, RemoteWorkspace } from "../services/types";
 import { joinRemotePath } from "../services/remoteWorkspace";
+import type { UiThemeName } from "../theme";
+import { PAPER_STYLE } from "../theme/types";
 import { isAbsolutePathInput } from "../utils/pathInput";
 import { deletePathWithReadonlyConfirmation } from "../utils/deletePath";
 import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
 type Props = {
   tree: UseFileTreeResult;
+  themeName?: UiThemeName;
   onOpenFile: (path: string) => void;
   onCreatedFile: (path: string, content: string, lastModifiedNs?: string) => void;
   onRenamedFile: (oldPath: string, nextPath: string) => void;
@@ -926,6 +929,7 @@ function TreeNodeIcon({ kind }: { kind: TreeIconKind }) {
 
 export function FileTreePane({
   tree,
+  themeName,
   onOpenFile,
   onCreatedFile,
   onRenamedFile,
@@ -967,7 +971,13 @@ export function FileTreePane({
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const moreMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const contextMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
+  const treeScrollTopRef = useRef(0);
+  const rowHeight = PAPER_STYLE.fileTreeRowHeight;
+  const previousRowHeightRef = useRef<number | null>(null);
+  const previousHighlightedPathRef = useRef("");
   const autoScrollFrameRef = useRef<number | null>(null);
   const autoScrollStepRef = useRef(0);
   const inheritedDirDecorations = useMemo(() => {
@@ -1087,6 +1097,28 @@ export function FileTreePane({
     setContextMenu(null);
   }
 
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) return;
+    const bounds = contextMenuRef.current.getBoundingClientRect();
+    const x = clamp(contextMenu.x, TREE_CONTEXT_MENU_PADDING_PX, window.innerWidth - bounds.width - TREE_CONTEXT_MENU_PADDING_PX);
+    const y = clamp(contextMenu.y, TREE_CONTEXT_MENU_PADDING_PX, window.innerHeight - bounds.height - TREE_CONTEXT_MENU_PADDING_PX);
+    if (x !== contextMenu.x || y !== contextMenu.y) {
+      setContextMenu({ ...contextMenu, x, y });
+    }
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setContextMenu(null);
+      contextMenuTriggerRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [contextMenu]);
+
   function resetInternalDrag() {
     stopTreeAutoScroll();
     setDraggedEntryPath("");
@@ -1124,6 +1156,7 @@ export function FileTreePane({
       return;
     }
     event.preventDefault();
+    contextMenuTriggerRef.current = event.currentTarget;
     tree.selectPath(entry.path);
     openContextMenu(entry, absolutePath, event.clientX, event.clientY);
   }
@@ -1136,6 +1169,7 @@ export function FileTreePane({
       return;
     }
     event.preventDefault();
+    contextMenuTriggerRef.current = event.currentTarget;
     tree.selectPath(entry.path);
     const rect = event.currentTarget.getBoundingClientRect();
     openContextMenu(entry, absolutePath, rect.left + 12, rect.bottom + 4);
@@ -1459,7 +1493,7 @@ export function FileTreePane({
       return (
         <div
           className={clsx("flex h-full items-center px-1 text-[11px]", row.tone === "error" ? "text-[var(--status-danger)]" : "text-[var(--muted)]")}
-          style={{ paddingLeft: `${row.depth * 12 + 36}px` }}
+          style={{ height: rowHeight, paddingLeft: `${row.depth * 12 + 36}px` }}
         >
           {row.text}
         </div>
@@ -1485,6 +1519,7 @@ export function FileTreePane({
     return (
       <div
         className="file-tree-row group relative flex h-full min-w-0 items-center text-[13px]"
+        style={{ height: rowHeight }}
         data-tree-path={entry.path}
         data-git-state={gitDecoration || "clean"}
         data-git-ignored={isIgnored ? "true" : "false"}
@@ -1586,6 +1621,34 @@ export function FileTreePane({
     [tree.loading, tree.error, tree.rootEntries, tree.branches, tree.expandedPaths],
   );
 
+  // Restore selection when returning from settings; density changes retain the row anchor.
+  useLayoutEffect(() => {
+    const previousRowHeight = previousRowHeightRef.current;
+    const viewport = treeScrollRef.current;
+    if (!viewport || visibleTreeRows.length === 0) {
+      return;
+    }
+    const revealChanged = Boolean(tree.highlightedPath) && previousHighlightedPathRef.current !== tree.highlightedPath;
+    previousRowHeightRef.current = rowHeight;
+    previousHighlightedPathRef.current = tree.highlightedPath;
+    if (previousRowHeight === rowHeight && !revealChanged) return;
+
+    const viewportHeight = viewport.clientHeight;
+    let nextScrollTop = previousRowHeight === null ? viewport.scrollTop : treeScrollTopRef.current / previousRowHeight * rowHeight;
+    const targetPath = revealChanged ? tree.highlightedPath : tree.selectedPath;
+    const selectedIndex = visibleTreeRows.findIndex((row) => row.type === "entry" && row.entry.path === targetPath);
+    if (selectedIndex >= 0 && viewportHeight > 0) {
+      const selectedTop = selectedIndex * rowHeight;
+      if (selectedTop < nextScrollTop) {
+        nextScrollTop = selectedTop;
+      } else if (selectedTop + rowHeight > nextScrollTop + viewportHeight) {
+        nextScrollTop = selectedTop + rowHeight - viewportHeight;
+      }
+    }
+    viewport.scrollTop = Math.max(0, Math.min(nextScrollTop, visibleTreeRows.length * rowHeight - viewportHeight));
+    viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }, [rowHeight, tree.selectedPath, tree.highlightedPath, visibleTreeRows]);
+
   return (
     <div
       data-testid="desktop-file-tree-dropzone"
@@ -1637,13 +1700,13 @@ export function FileTreePane({
           void handleUpload(files);
         }
       }}
-      className="relative flex h-full min-h-0 flex-col"
+      className="desktop-file-tree-pane relative flex h-full min-h-0 flex-col"
     >
-      <div className="relative flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5">
+      <div className="file-tree-header relative flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5">
         <div
           aria-label={`工作区 ${tree.rootPath}`}
           title={tree.rootPath}
-          className="min-w-0 flex-1 truncate px-1 text-[12px] font-medium text-[var(--text)]"
+          className="file-tree-title min-w-0 flex-1 truncate px-1 text-[12px] font-medium text-[var(--text)]"
         >
           {workspaceBaseName(tree.rootPath, remote)}
         </div>
@@ -1809,6 +1872,11 @@ export function FileTreePane({
       <div
         data-testid="desktop-file-tree-scroll"
         data-root-drop-target={dropTargetPath === ROOT_DROP_TARGET ? "true" : "false"}
+        onScrollCapture={(event) => {
+          if (event.target === treeScrollRef.current) {
+            treeScrollTopRef.current = treeScrollRef.current.scrollTop;
+          }
+        }}
         onClick={(event) => {
           const target = event.target;
           if (target instanceof Element && !target.closest("[data-tree-path]")) {
@@ -1816,7 +1884,7 @@ export function FileTreePane({
           }
         }}
         className={clsx(
-          "flex min-h-0 flex-1 flex-col px-1 py-1",
+          "file-tree-scroll flex min-h-0 flex-1 flex-col px-1 py-1",
           dropTargetPath === ROOT_DROP_TARGET && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
         )}
       >
@@ -1835,7 +1903,7 @@ export function FileTreePane({
           <VirtualList
             viewportRef={treeScrollRef}
             items={visibleTreeRows}
-            rowHeight={24}
+            rowHeight={rowHeight}
             className="flex-1"
             dataTestId="desktop-file-tree-virtual-list"
             onDragOver={(event) => {
@@ -1867,9 +1935,10 @@ export function FileTreePane({
             }}
           />
           <div
+            ref={contextMenuRef}
             role="menu"
             aria-label="文件树菜单"
-            className="fixed z-30 min-w-36 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+            className="desktop-workbench-menu fixed z-30 min-w-36 max-h-[calc(100dvh-16px)] max-w-[calc(100vw-16px)] overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
             onContextMenu={(event) => {
               event.preventDefault();

@@ -1,19 +1,8 @@
-import { withPublicBase } from "./utils/publicBase";
+import { applyResolvedAppearance, getCurrentAppearance, resolvedTerminalTheme } from "./theme/appearanceRuntime";
+import { BUILTIN_THEME, resolveAppearance } from "./theme/resolveAppearance";
 
-export const UI_THEME_NAMES = [
-  "obsidian-linear",
-  "paper-daylight",
-  "deep-space",
-  "classic",
-  "graphite",
-  "lab-light",
-  "ink-paper",
-  "high-contrast",
-  "lunar-ceramic",
-  "copper-night",
-  "eclipse-film",
-] as const;
-export type UiThemeName = typeof UI_THEME_NAMES[number];
+export const UI_THEME_NAMES = ["paper-daylight"] as const;
+export type UiThemeName = string;
 export type ChatBodyFontFamilyName = "sans" | "serif" | "kai" | "fangsong" | "mono";
 export type ChatBodyFontSizeName = "small" | "medium" | "large";
 export type ChatBodyLineHeightName = "tight" | "normal" | "relaxed";
@@ -29,186 +18,30 @@ export const CHAT_BODY_FONT_SIZE_STORAGE_KEY = "web-chat-body-font-size";
 export const CHAT_BODY_LINE_HEIGHT_STORAGE_KEY = "web-chat-body-line-height";
 export const CHAT_BODY_PARAGRAPH_SPACING_STORAGE_KEY = "web-chat-body-paragraph-spacing";
 export const CHAT_ENTER_TO_SEND_STORAGE_KEY = "web-chat-enter-to-send";
-export const DEFAULT_UI_THEME: UiThemeName = "deep-space";
+export const DEFAULT_UI_THEME: UiThemeName = "paper-daylight";
 export const DEFAULT_CHAT_BODY_FONT_FAMILY: ChatBodyFontFamilyName = "sans";
 export const DEFAULT_CHAT_BODY_FONT_SIZE: ChatBodyFontSizeName = "medium";
 export const DEFAULT_CHAT_BODY_LINE_HEIGHT: ChatBodyLineHeightName = "normal";
 export const DEFAULT_CHAT_BODY_PARAGRAPH_SPACING: ChatBodyParagraphSpacingName = "normal";
 
-const UI_THEME_FAVICON_PATHS: Record<UiThemeName, string> = {
-  "obsidian-linear": "/assets/app-logo-favicon.svg",
-  "paper-daylight": "/assets/app-logo-classic.svg",
-  "deep-space": "/assets/app-logo-favicon.svg",
-  classic: "/assets/app-logo-classic.svg",
-  graphite: "/assets/app-logo-favicon.svg",
-  "lab-light": "/assets/app-logo-classic.svg",
-  "ink-paper": "/assets/app-logo-classic.svg",
-  "high-contrast": "/assets/app-logo-favicon.svg",
-  "lunar-ceramic": "/assets/app-logo-classic.svg",
-  "copper-night": "/assets/app-logo-copper.svg",
-  "eclipse-film": "/assets/app-logo-eclipse.svg",
-};
-
-export const UI_THEME_OPTIONS: Array<{
-  value: UiThemeName;
-  label: string;
-  description: string;
+const paper = resolveAppearance(BUILTIN_THEME);
+export const UI_THEME_OPTIONS = [{
+  value: BUILTIN_THEME.id,
+  label: BUILTIN_THEME.name,
+  description: "明亮纸白界面搭配陶橙与柔和蓝灰，适合日间阅读。",
   preview: {
-    accent: string;
-    surface: string;
-    accentStrong: string;
-    border: string;
-    text: string;
-    muted: string;
-  };
-}> = [
-  {
-    value: "obsidian-linear",
-    label: "线性黑曜石",
-    description: "黑曜石深色界面搭配柔和靛紫强调，适合专注工作。",
-    preview: {
-      accent: "#818cf8",
-      surface: "#121215",
-      accentStrong: "#a5b4fc",
-      border: "rgba(255, 255, 255, 0.1)",
-      text: "#f4f4f5",
-      muted: "#a1a1aa",
-    },
+    accent: paper.colors.accent,
+    surface: paper.colors["surface.base"],
+    accentStrong: paper.colors["accent.strong"],
+    border: paper.colors.border,
+    text: paper.colors["text.primary"],
+    muted: paper.colors["text.muted"],
   },
-  {
-    value: "paper-daylight",
-    label: "纸感日间",
-    description: "温润纸色界面搭配陶橙与墨绿，适合日间阅读。",
-    preview: {
-      accent: "#a94a2e",
-      surface: "#faf8f5",
-      accentStrong: "#37685b",
-      border: "rgba(41, 37, 36, 0.14)",
-      text: "#292524",
-      muted: "#6b625b",
-    },
-  },
-  {
-    value: "deep-space",
-    label: "深空轨道",
-    description: "冷色深空控制台风格，适合展示安全、自主可控与任务编排。",
-    preview: {
-      accent: "#6bd3ff",
-      surface: "#0e192a",
-      accentStrong: "#71f2d0",
-      border: "rgba(151, 190, 239, 0.18)",
-      text: "#eaf4ff",
-      muted: "#9cb2ce",
-    },
-  },
-  {
-    value: "classic",
-    label: "经典暖色",
-    description: "延续现有暖色工作界面，阅读压力更低，适合日常使用。",
-    preview: {
-      accent: "#0e8f7f",
-      surface: "#fffbf4",
-      accentStrong: "#cc7a21",
-      border: "rgba(52, 43, 31, 0.12)",
-      text: "#1f1d1a",
-      muted: "#6f685f",
-    },
-  },
-  {
-    value: "graphite",
-    label: "石墨终端",
-    description: "深灰工作台搭配绿与琥珀状态色，适合终端、Git 与调试场景。",
-    preview: {
-      accent: "#94df8e",
-      surface: "#1d2225",
-      accentStrong: "#e3b55b",
-      border: "rgba(214, 222, 229, 0.17)",
-      text: "#e8eaec",
-      muted: "#a0a9b1",
-    },
-  },
-  {
-    value: "lab-light",
-    label: "冷白实验室",
-    description: "冷白与浅灰界面，蓝绿强调，适合办公、文件浏览和长时间阅读。",
-    preview: {
-      accent: "#2563eb",
-      surface: "#ffffff",
-      accentStrong: "#0f766e",
-      border: "rgba(15, 23, 42, 0.12)",
-      text: "#142033",
-      muted: "#64748b",
-    },
-  },
-  {
-    value: "ink-paper",
-    label: "墨纸",
-    description: "低饱和纸面与墨色文字，减轻聊天与文档阅读疲劳。",
-    preview: {
-      accent: "#6f5f3d",
-      surface: "#fffaf1",
-      accentStrong: "#4f7771",
-      border: "rgba(52, 43, 31, 0.13)",
-      text: "#211d19",
-      muted: "#766b5d",
-    },
-  },
-  {
-    value: "high-contrast",
-    label: "高对比",
-    description: "黑白强边界和高亮强调，适合投屏、弱光和可访问性场景。",
-    preview: {
-      accent: "#ffff00",
-      surface: "#000000",
-      accentStrong: "#00ffff",
-      border: "#ffffff",
-      text: "#ffffff",
-      muted: "#d4d4d4",
-    },
-  },
-  {
-    value: "lunar-ceramic",
-    label: "月壤陶瓷",
-    description: "低反射月壤灰、钴紫釉与铁氧化物点缀的浅色工作台。",
-    preview: {
-      accent: "#615a88",
-      surface: "#f4f2ee",
-      accentStrong: "#934737",
-      border: "rgba(45, 48, 54, 0.14)",
-      text: "#2d3036",
-      muted: "#696d77",
-    },
-  },
-  {
-    value: "copper-night",
-    label: "赤铜夜航",
-    description: "酒褐哑光船体搭配赤铜航标与烟紫导航，适合低照度工作。",
-    preview: {
-      accent: "#d88955",
-      surface: "#1e1316",
-      accentStrong: "#a692d7",
-      border: "rgba(239, 199, 165, 0.16)",
-      text: "#f3e5d4",
-      muted: "#b6a092",
-    },
-  },
-  {
-    value: "eclipse-film",
-    label: "日蚀胶片",
-    description: "紫煤黑哑光胶片搭配玫瑰操作色，冰蓝仅用于焦点与信息。",
-    preview: {
-      accent: "#c47791",
-      surface: "#1a1b24",
-      accentStrong: "#9bcbdd",
-      border: "#707486",
-      text: "#f1eff4",
-      muted: "#a7a6b5",
-    },
-  },
-];
+}];
 
-export function isLightUiTheme(themeName: string | undefined): themeName is UiThemeName {
-  return themeName === "classic" || themeName === "lab-light" || themeName === "ink-paper" || themeName === "lunar-ceramic" || themeName === "paper-daylight";
+export function isLightUiTheme(themeName: string | undefined) {
+  const current = getCurrentAppearance();
+  return current.themeId === themeName ? current.scheme === "light" : true;
 }
 
 export const CHAT_BODY_FONT_FAMILY_OPTIONS: Array<{
@@ -249,10 +82,6 @@ export const CHAT_BODY_PARAGRAPH_SPACING_OPTIONS: Array<{
   { value: "relaxed", label: "宽松" },
 ];
 
-function isUiThemeName(value: string): value is UiThemeName {
-  return (UI_THEME_NAMES as readonly string[]).includes(value);
-}
-
 function isChatBodyFontFamilyName(value: string): value is ChatBodyFontFamilyName {
   return value === "sans" || value === "serif" || value === "kai" || value === "fangsong" || value === "mono";
 }
@@ -270,35 +99,19 @@ function isChatBodyParagraphSpacingName(value: string): value is ChatBodyParagra
 }
 
 export function readStoredUiTheme(): UiThemeName {
-  if (typeof window === "undefined") {
-    return DEFAULT_UI_THEME;
-  }
-  try {
-    const raw = window.localStorage.getItem(UI_THEME_STORAGE_KEY)?.trim() || "";
-    return isUiThemeName(raw) ? raw : DEFAULT_UI_THEME;
-  } catch {
-    return DEFAULT_UI_THEME;
-  }
+  // Personal preferences are restored only after the server confirms identity.
+  persistUiTheme(DEFAULT_UI_THEME);
+  return DEFAULT_UI_THEME;
 }
 
-export function persistUiTheme(themeName: UiThemeName) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  try {
-    window.localStorage.setItem(UI_THEME_STORAGE_KEY, themeName);
-  } catch {
-    // Ignore storage failures and keep the in-memory state.
-  }
+export function persistUiTheme(_themeName: UiThemeName) {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(UI_THEME_STORAGE_KEY, DEFAULT_UI_THEME); } catch { /* Storage is optional. */ }
 }
 
 export function applyUiTheme(themeName: UiThemeName) {
-  if (typeof document === "undefined") {
-    return;
-  }
-  document.documentElement.dataset.theme = themeName;
-  const favicon = document.querySelector<HTMLLinkElement>("link[data-theme-favicon]");
-  favicon?.setAttribute("href", withPublicBase(UI_THEME_FAVICON_PATHS[themeName]));
+  const current = getCurrentAppearance();
+  applyResolvedAppearance(current.themeId === themeName ? current : paper);
 }
 
 export function readStoredChatBodyFontFamily(): ChatBodyFontFamilyName {
@@ -498,288 +311,11 @@ export function applyChatReadingPreferences(
   root.style.setProperty("--chat-body-paragraph-spacing", getChatBodyParagraphSpacingValue(paragraphSpacing));
 }
 
-export function getTerminalTheme(themeName: UiThemeName) {
-  if (themeName === "obsidian-linear") {
-    return {
-      background: "#101013",
-      foreground: "#e4e4e7",
-      cursor: "#a5b4fc",
-      cursorAccent: "#101013",
-      selectionBackground: "#373751",
-      selectionForeground: "#f4f4f5",
-      selectionInactiveBackground: "#282832",
-      black: "#09090b",
-      red: "#f87171",
-      green: "#86c995",
-      yellow: "#e8c57a",
-      blue: "#818cf8",
-      magenta: "#c4a1e8",
-      cyan: "#78c4cf",
-      white: "#d4d4d8",
-      brightBlack: "#8b8b96",
-      brightRed: "#fca5a5",
-      brightGreen: "#a7e2b2",
-      brightYellow: "#f5d99b",
-      brightBlue: "#a5b4fc",
-      brightMagenta: "#ddbafa",
-      brightCyan: "#a0dee7",
-      brightWhite: "#f4f4f5",
-    };
-  }
-
-  if (themeName === "paper-daylight") {
-    return {
-      background: "#faf8f5",
-      foreground: "#292524",
-      cursor: "#b75132",
-      cursorAccent: "#ffffff",
-      selectionBackground: "#e4d5c7",
-      selectionForeground: "#292524",
-      selectionInactiveBackground: "#ece4db",
-      black: "#292524",
-      red: "#a33c35",
-      green: "#37685b",
-      yellow: "#806018",
-      blue: "#3b5f9b",
-      magenta: "#805387",
-      cyan: "#2e6a72",
-      white: "#6b625b",
-      brightBlack: "#766c63",
-      brightRed: "#b44338",
-      brightGreen: "#43735f",
-      brightYellow: "#8b671b",
-      brightBlue: "#4a69a1",
-      brightMagenta: "#8d5a91",
-      brightCyan: "#38747c",
-      brightWhite: "#292524",
-    };
-  }
-
-  if (themeName === "lunar-ceramic") {
-    return {
-      background: "#e8e6e2",
-      foreground: "#25282e",
-      cursor: "#615a88",
-      cursorAccent: "#fcfbf8",
-      selectionBackground: "#b4abc9",
-      selectionForeground: "#25282e",
-      selectionInactiveBackground: "#d2cdd9",
-      black: "#17191d",
-      red: "#a13f48",
-      green: "#526a4c",
-      yellow: "#7f5b1c",
-      blue: "#56618e",
-      magenta: "#735b85",
-      cyan: "#615a88",
-      white: "#565a62",
-      brightBlack: "#62666f",
-      brightRed: "#af3b48",
-      brightGreen: "#446e45",
-      brightYellow: "#895a0e",
-      brightBlue: "#4f60a3",
-      brightMagenta: "#7a4f98",
-      brightCyan: "#386d75",
-      brightWhite: "#25282e",
-    };
-  }
-
-  if (themeName === "copper-night") {
-    return {
-      background: "#191514",
-      foreground: "#f3e6d4",
-      cursor: "#d4874d",
-      black: "#100d0c",
-      red: "#c4624f",
-      green: "#81906c",
-      yellow: "#c99a53",
-      blue: "#8091ad",
-      magenta: "#a77991",
-      cyan: "#d4874d",
-      white: "#e2d3c0",
-      brightBlack: "#75675f",
-      brightRed: "#e0836c",
-      brightGreen: "#a4b489",
-      brightYellow: "#e4ba70",
-      brightBlue: "#a5b7d5",
-      brightMagenta: "#c99bb3",
-      brightCyan: "#efad71",
-      brightWhite: "#fff8ef",
-    };
-  }
-
-  if (themeName === "eclipse-film") {
-    return {
-      background: "#15171c",
-      foreground: "#e7e4dc",
-      cursor: "#aab6ca",
-      black: "#0e1014",
-      red: "#bb5c65",
-      green: "#718c7a",
-      yellow: "#ba9855",
-      blue: "#7689a8",
-      magenta: "#987e9d",
-      cyan: "#7689a8",
-      white: "#d8d6d0",
-      brightBlack: "#6b707c",
-      brightRed: "#df7c85",
-      brightGreen: "#91ad99",
-      brightYellow: "#d7b978",
-      brightBlue: "#aab6ca",
-      brightMagenta: "#b79cbd",
-      brightCyan: "#aab6ca",
-      brightWhite: "#f4f1ea",
-    };
-  }
-
-  if (themeName === "classic") {
-    return {
-      background: "#fbf7ef",
-      foreground: "#1d1b18",
-      cursor: "#0f8c78",
-      black: "#2b241c",
-      red: "#ba5938",
-      green: "#2f7a52",
-      yellow: "#9a6b19",
-      blue: "#2d64b3",
-      magenta: "#8e63c7",
-      cyan: "#0f8c78",
-      white: "#efe6d9",
-      brightBlack: "#6d675f",
-      brightRed: "#d47a58",
-      brightGreen: "#52966d",
-      brightYellow: "#b98a33",
-      brightBlue: "#5382cc",
-      brightMagenta: "#a986d8",
-      brightCyan: "#3fa896",
-      brightWhite: "#fffdf9",
-    };
-  }
-
-  if (themeName === "graphite") {
-    return {
-      background: "#111315",
-      foreground: "#e6e8ea",
-      cursor: "#c6f57b",
-      black: "#0b0d0f",
-      red: "#ff6b64",
-      green: "#8fdc8b",
-      yellow: "#e3b55b",
-      blue: "#75a7ff",
-      magenta: "#c792ea",
-      cyan: "#59d6c8",
-      white: "#dfe3e6",
-      brightBlack: "#586069",
-      brightRed: "#ff8f87",
-      brightGreen: "#b1f3ac",
-      brightYellow: "#f0ca78",
-      brightBlue: "#9cc0ff",
-      brightMagenta: "#d9b2f4",
-      brightCyan: "#8be8de",
-      brightWhite: "#ffffff",
-    };
-  }
-
-  if (themeName === "lab-light") {
-    return {
-      background: "#f8fafc",
-      foreground: "#142033",
-      cursor: "#0f766e",
-      black: "#1f2937",
-      red: "#b42318",
-      green: "#157f3b",
-      yellow: "#9a6700",
-      blue: "#2563eb",
-      magenta: "#7c3aed",
-      cyan: "#0891b2",
-      white: "#e5e7eb",
-      brightBlack: "#64748b",
-      brightRed: "#d92d20",
-      brightGreen: "#16a34a",
-      brightYellow: "#ca8a04",
-      brightBlue: "#3b82f6",
-      brightMagenta: "#8b5cf6",
-      brightCyan: "#06b6d4",
-      brightWhite: "#ffffff",
-    };
-  }
-
-  if (themeName === "ink-paper") {
-    return {
-      background: "#f6f1e8",
-      foreground: "#211d19",
-      cursor: "#6f5f3d",
-      black: "#2a241f",
-      red: "#a14d3a",
-      green: "#58784d",
-      yellow: "#8a6b2d",
-      blue: "#536f8d",
-      magenta: "#7a5c7d",
-      cyan: "#4f7771",
-      white: "#eadfce",
-      brightBlack: "#766b5d",
-      brightRed: "#bd614c",
-      brightGreen: "#6f925f",
-      brightYellow: "#a2823e",
-      brightBlue: "#6a84a3",
-      brightMagenta: "#917095",
-      brightCyan: "#67908a",
-      brightWhite: "#fffaf2",
-    };
-  }
-
-  if (themeName === "high-contrast") {
-    return {
-      background: "#000000",
-      foreground: "#ffffff",
-      cursor: "#ffff00",
-      black: "#000000",
-      red: "#ff4d4d",
-      green: "#00ff66",
-      yellow: "#ffff00",
-      blue: "#5aa9ff",
-      magenta: "#ff66ff",
-      cyan: "#00ffff",
-      white: "#f5f5f5",
-      brightBlack: "#8a8a8a",
-      brightRed: "#ff8080",
-      brightGreen: "#66ff99",
-      brightYellow: "#ffff66",
-      brightBlue: "#8fc7ff",
-      brightMagenta: "#ff9cff",
-      brightCyan: "#66ffff",
-      brightWhite: "#ffffff",
-    };
-  }
-
-  return {
-    background: "#07111d",
-    foreground: "#dce7f3",
-    cursor: "#f8fafc",
-    black: "#0f172a",
-    red: "#ef4444",
-    green: "#22c55e",
-    yellow: "#f59e0b",
-    blue: "#60a5fa",
-    magenta: "#c084fc",
-    cyan: "#22d3ee",
-    white: "#e2e8f0",
-    brightBlack: "#334155",
-    brightRed: "#f87171",
-    brightGreen: "#4ade80",
-    brightYellow: "#fbbf24",
-    brightBlue: "#93c5fd",
-    brightMagenta: "#d8b4fe",
-    brightCyan: "#67e8f9",
-    brightWhite: "#f8fafc",
-  };
+export function getTerminalTheme(themeName: UiThemeName = getCurrentAppearance().themeId) {
+  const current = getCurrentAppearance();
+  return resolvedTerminalTheme(current.themeId === themeName ? current : paper);
 }
 
-export function getTerminalMinimumContrastRatio(themeName: UiThemeName) {
-  if (themeName === "high-contrast") {
-    return 7;
-  }
-  if (themeName === "lunar-ceramic" || themeName === "copper-night" || themeName === "eclipse-film" || themeName === "obsidian-linear") {
-    return 4.5;
-  }
-  return isLightUiTheme(themeName) ? 4.5 : 1;
+export function getTerminalMinimumContrastRatio(_themeName?: UiThemeName) {
+  return 4.5;
 }

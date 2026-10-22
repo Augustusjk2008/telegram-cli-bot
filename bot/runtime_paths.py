@@ -245,6 +245,10 @@ def get_auth_accounts_dir() -> Path:
     return get_app_data_root() / "auth" / "accounts"
 
 
+def get_theme_accounts_dir() -> Path:
+    return get_app_data_root() / "themes" / "accounts"
+
+
 def get_auth_username_index_path() -> Path:
     return get_app_data_root() / "auth" / "username_index.json"
 

@@ -57,7 +57,7 @@ export function LoginScreen({
               "linear-gradient(to bottom, var(--hero-grid) 1px, transparent 1px)",
             ].join(","),
             backgroundSize: "32px 32px, 32px 32px",
-            maskImage: "linear-gradient(180deg, rgba(0,0,0,0.9), rgba(0,0,0,0.62) 72%, transparent 100%)",
+            maskImage: "linear-gradient(180deg, var(--login-mask-start), var(--login-mask-end) 72%, transparent 100%)",
           }}
         />
         <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[var(--hero-glow)] to-transparent" />
@@ -208,7 +208,7 @@ export function LoginScreen({
                   </div>
                 ) : null}
                 {error ? (
-                  <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  <div className="rounded-md border border-[var(--login-error-border)] bg-[var(--login-error-background)] px-4 py-3 text-sm text-[var(--login-error-text)]">
                     {error}
                   </div>
                 ) : null}

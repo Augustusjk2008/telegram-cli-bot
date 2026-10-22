@@ -72,7 +72,7 @@ export function FileNameDialog({
           }}
           className="mt-2 w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
         />
-        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+        {error ? <p className="mt-3 text-sm text-[var(--feedback-error-text-strong)]">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="submit"

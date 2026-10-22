@@ -66,7 +66,7 @@ export function LanChatDock({ client, visible }: Props) {
         <MessageCircle className="h-3.5 w-3.5" />
         <span>成员聊天</span>
         {chat.totalUnread > 0 ? (
-          <span className="rounded-full bg-red-500 px-1.5 text-[10px] text-white">{chat.totalUnread}</span>
+          <span className="rounded-full bg-[var(--lan-unread)] px-1.5 text-[10px] text-[var(--button-filled-foreground)]">{chat.totalUnread}</span>
         ) : null}
       </button>
 
@@ -123,7 +123,7 @@ export function LanChatDock({ client, visible }: Props) {
                   </span>
                 </span>
                 {group.unreadCount > 0 ? (
-                  <span className="rounded-full bg-red-500 px-1.5 text-[10px] text-white">{group.unreadCount}</span>
+                  <span className="rounded-full bg-[var(--lan-unread)] px-1.5 text-[10px] text-[var(--button-filled-foreground)]">{group.unreadCount}</span>
                 ) : null}
               </button>
               {dmConversations.map((conversation) => (
@@ -141,7 +141,7 @@ export function LanChatDock({ client, visible }: Props) {
                     </span>
                   </span>
                   {conversation.unreadCount > 0 ? (
-                    <span className="rounded-full bg-red-500 px-1.5 text-[10px] text-white">{conversation.unreadCount}</span>
+                    <span className="rounded-full bg-[var(--lan-unread)] px-1.5 text-[10px] text-[var(--button-filled-foreground)]">{conversation.unreadCount}</span>
                   ) : null}
                 </button>
               ))}
@@ -164,13 +164,13 @@ export function LanChatDock({ client, visible }: Props) {
                       <span className="block truncate text-sm text-[var(--text)]">{participant.displayName}</span>
                       <span className="block truncate text-xs text-[var(--muted)]">{participant.instanceName}</span>
                     </span>
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                    <span className="h-2 w-2 rounded-full bg-[var(--lan-online)]" />
                   </button>
                 ))}
             </div>
           </div>
           {chat.error ? (
-            <div className="border-t border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{chat.error}</div>
+            <div className="border-t border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-xs text-[var(--feedback-error-text-deep)]">{chat.error}</div>
           ) : null}
         </section>
       ) : null}

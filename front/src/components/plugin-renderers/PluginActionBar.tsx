@@ -11,7 +11,7 @@ function variantClass(variant: PluginAction["variant"]) {
     return "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]";
   }
   if (variant === "danger") {
-    return "border-red-300 bg-red-50 text-red-700";
+    return "border-[var(--feedback-error-border-visible)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-deep)]";
   }
   return "border-[var(--border)] text-[var(--text)]";
 }

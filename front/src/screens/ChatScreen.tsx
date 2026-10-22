@@ -1519,7 +1519,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               aria-label="撤回到此消息前"
               title="撤回到此消息前"
               onClick={() => onRequestSoloRollback?.(soloRollbackTarget as SoloRollbackTarget)}
-              className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-red-500/25 text-red-700 hover:bg-red-500/10"
+              className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--feedback-error-border-alpha25)] text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-alpha10)]"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
@@ -1633,7 +1633,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             ) : (
               <ChatPlainTextMessage
                 content={displayText}
-                className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-red-700" : "text-[var(--text)]"}
+                className={isUser ? "text-[var(--accent-foreground)]" : item.state === "error" ? "text-[var(--feedback-error-text-deep)]" : "text-[var(--text)]"}
               />
             )}
           </div>
@@ -5255,7 +5255,7 @@ export function ChatScreen({
             type="button"
             onClick={() => void handleConfirmSoloRollback()}
             disabled={soloRollbacking}
-            className="inline-flex h-8 items-center rounded-md bg-red-600 px-3 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-8 items-center rounded-md bg-[var(--button-danger-background-strong)] px-3 text-xs font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-danger-background-deep)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {soloRollbacking ? "撤回中..." : "确认撤回"}
           </button>

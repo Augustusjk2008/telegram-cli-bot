@@ -65,19 +65,19 @@ function nodeBadges(node: TreeNode) {
 function kindMarker(kind?: TreeNode["kind"]) {
   switch (kind) {
     case "folder":
-      return { text: "D", className: "border-amber-300 bg-amber-50 text-amber-700" };
+      return { text: "D", className: "border-[var(--plugin-tree-folder-border)] bg-[var(--plugin-tree-folder-background)] text-[var(--plugin-tree-folder-text)]" };
     case "file":
-      return { text: "F", className: "border-slate-300 bg-slate-50 text-slate-700" };
+      return { text: "F", className: "border-[var(--plugin-tree-file-border)] bg-[var(--plugin-tree-file-background)] text-[var(--plugin-tree-file-text)]" };
     case "class":
-      return { text: "C", className: "border-sky-300 bg-sky-50 text-sky-700" };
+      return { text: "C", className: "border-[var(--plugin-tree-class-border)] bg-[var(--plugin-tree-class-background)] text-[var(--plugin-tree-class-text)]" };
     case "function":
-      return { text: "fn", className: "border-emerald-300 bg-emerald-50 text-emerald-700" };
+      return { text: "fn", className: "border-[var(--plugin-tree-function-border)] bg-[var(--plugin-tree-function-background)] text-[var(--plugin-tree-function-text)]" };
     case "method":
-      return { text: "m", className: "border-teal-300 bg-teal-50 text-teal-700" };
+      return { text: "m", className: "border-[var(--plugin-tree-method-border)] bg-[var(--plugin-tree-method-background)] text-[var(--plugin-tree-method-text)]" };
     case "heading":
-      return { text: "#", className: "border-violet-300 bg-violet-50 text-violet-700" };
+      return { text: "#", className: "border-[var(--plugin-tree-heading-border)] bg-[var(--plugin-tree-heading-background)] text-[var(--plugin-tree-heading-text)]" };
     default:
-      return { text: "S", className: "border-zinc-300 bg-zinc-50 text-zinc-700" };
+      return { text: "S", className: "border-[var(--plugin-tree-symbol-border)] bg-[var(--plugin-tree-symbol-background)] text-[var(--plugin-tree-symbol-text)]" };
   }
 }
 

@@ -113,7 +113,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
           处理中
         </p>
       ) : null}
-      {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+      {error ? <p className="mt-3 text-sm text-[var(--feedback-error-text-deep)]">{error}</p> : null}
       {status ? (
         <div className="mt-3 grid gap-2 text-sm">
           {(() => {

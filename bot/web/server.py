@@ -117,6 +117,7 @@ from bot.updater import (
     set_update_enabled,
 )
 from .announcement_store import AnnouncementStore
+from .theme_store import ThemeStore
 from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diagnostics, run_chat_store_io
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
@@ -208,6 +209,7 @@ from .routes import (
     terminal_routes,
     remote_routes,
     translation_routes,
+    theme_routes,
 )
 from .api_service import (
     AuthContext,
@@ -1002,7 +1004,7 @@ async def cors_middleware(request: web.Request, handler):
         elif origin and _normalize_origin(origin) in normalized:
             response.headers["Access-Control-Allow-Origin"] = origin
         
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id, X-UI-Account-ID"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
@@ -1018,7 +1020,7 @@ async def cors_middleware(request: web.Request, handler):
     elif not origin and "*" in normalized:
         response.headers["Access-Control-Allow-Origin"] = "*"
 
-    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
+    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id, X-UI-Account-ID"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Credentials"] = "true"
     if request.path.startswith("/api/"):
@@ -1129,6 +1131,7 @@ class WebApiServer:
             preview_chars=PUSHPLUS_PREVIEW_CHARS,
         )
         self.announcement_store = _ANNOUNCEMENT_STORE
+        self.theme_store = ThemeStore()
         self.lan_chat_service = LanChatService(
             repo_root=_REPO_ROOT,
             config_path=get_lan_chat_config_path(),
@@ -5361,6 +5364,7 @@ class WebApiServer:
             bot_settings_routes,
             lan_chat_routes,
             translation_routes,
+            theme_routes,
         ):
             module.register(app, self)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)

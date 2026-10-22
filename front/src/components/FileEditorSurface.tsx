@@ -6,7 +6,7 @@ import type { Extension } from "@codemirror/state";
 import * as codemirrorView from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { CodeNavigationIntent, CodeNavigationKind } from "../services/types";
-import { isLightUiTheme } from "../theme";
+import { useResolvedAppearance } from "../theme/appearanceRuntime";
 import {
   createFileEditorCodeNavigationHover,
   extractFileEditorSymbolAt,
@@ -127,7 +127,7 @@ function createEditorTheme(
       lineHeight: "var(--editor-line-height)",
     },
     ".cm-content": {
-      caretColor: "var(--editor-text)",
+      caretColor: "var(--editor-cursor)",
       fontFamily: "var(--editor-font-family)",
       fontSize: "var(--editor-font-size)",
       lineHeight: "var(--editor-line-height)",
@@ -150,8 +150,41 @@ function createEditorTheme(
       backgroundColor: "var(--editor-selection-bg)",
     },
     ".cm-cursor, .cm-dropCursor": {
-      borderLeftColor: "var(--editor-text)",
+      borderLeftColor: "var(--editor-cursor)",
     },
+    ".cm-searchMatch, .cm-searchMatch-selected": {
+      backgroundColor: "var(--editor-search-bg)",
+    },
+    ".cm-searchMatch-selected": {
+      outline: "1px solid var(--editor-search-border)",
+    },
+    ".cm-tooltip, .cm-tooltip.cm-tooltip-autocomplete, .cm-tooltip.cm-completionInfo": {
+      backgroundColor: "var(--editor-completion-bg)",
+      color: "var(--editor-completion-text)",
+      borderColor: "var(--border)",
+    },
+    ".cm-tooltip-autocomplete ul li[aria-selected]": {
+      backgroundColor: "var(--editor-completion-selected-bg)",
+      color: "var(--editor-completion-text)",
+    },
+    ".cm-diagnostic-error": { borderLeftColor: "var(--editor-diagnostic-error)" },
+    ".cm-diagnostic-warning": { borderLeftColor: "var(--editor-diagnostic-warning)" },
+    ".cm-diagnostic-info, .cm-diagnostic-hint": { borderLeftColor: "var(--editor-diagnostic-info)" },
+    ".cm-lintRange-error": {
+      backgroundImage: "none",
+      textDecoration: "underline wavy var(--editor-diagnostic-error)",
+    },
+    ".cm-lintRange-warning": {
+      backgroundImage: "none",
+      textDecoration: "underline wavy var(--editor-diagnostic-warning)",
+    },
+    ".cm-lintRange-info, .cm-lintRange-hint": {
+      backgroundImage: "none",
+      textDecoration: "underline wavy var(--editor-diagnostic-info)",
+    },
+    ".cm-lintPoint:after": { borderBottomColor: "var(--editor-diagnostic-error)" },
+    ".cm-lintPoint-warning:after": { borderBottomColor: "var(--editor-diagnostic-warning)" },
+    ".cm-lintPoint-info:after, .cm-lintPoint-hint:after": { borderBottomColor: "var(--editor-diagnostic-info)" },
   }, { dark: themeMode === "dark" });
 }
 
@@ -204,8 +237,8 @@ function createDebugExtensions(
         width: "10px",
         height: "10px",
         borderRadius: "9999px",
-        backgroundColor: "var(--status-danger)",
-        boxShadow: "0 0 0 1px var(--status-danger-border)",
+        backgroundColor: "var(--editor-breakpoint)",
+        boxShadow: "0 0 0 1px var(--editor-breakpoint-border)",
       },
       ".cm-debug-current-line": {
         backgroundColor: "var(--editor-active-line-bg)",
@@ -300,15 +333,15 @@ export function FileEditorSurface({
   onSave,
   onClose,
 }: Props) {
+  const appearance = useResolvedAppearance();
   const [editorRuntime, setEditorRuntime] = useState<EditorRuntime | null>(null);
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const [navigationMenuOpen, setNavigationMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const codeNavigationHoverRef = useRef(codeNavigationHover);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
-  const [codeMirrorTheme, setCodeMirrorTheme] = useState<"light" | "dark">(() => (
-    typeof document !== "undefined" && isLightUiTheme(document.documentElement.dataset.theme) ? "light" : "dark"
-  ));
+  // Color variables follow the snapshot on the root; only scheme changes need reconfiguration.
+  const editorTheme = useMemo(() => createEditorTheme(codemirrorView.EditorView, appearance.scheme), [appearance.scheme]);
   const normalizedBreakpointLines = breakpointLines ?? EMPTY_BREAKPOINT_LINES;
   const canShowCodeNavigationHover = Boolean(onResolveCodeNavigation && codeNavigationHover);
   const codeNavigationHoverContextKey = codeNavigationHover?.contextKey ?? codeNavigationHover;
@@ -316,15 +349,6 @@ export function FileEditorSurface({
   useLayoutEffect(() => {
     codeNavigationHoverRef.current = codeNavigationHover;
   }, [codeNavigationHover]);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const syncTheme = () => setCodeMirrorTheme(isLightUiTheme(root.dataset.theme) ? "light" : "dark");
-    const observer = new MutationObserver(syncTheme);
-    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
-    syncTheme();
-    return () => observer.disconnect();
-  }, []);
 
   const codeNavigationHoverExtensions = useMemo(() => {
     if (!canShowCodeNavigationHover) {
@@ -391,7 +415,7 @@ export function FileEditorSurface({
         currentLine,
         onToggleBreakpoint,
       ),
-      createEditorTheme(editorRuntime.viewModule.EditorView, codeMirrorTheme),
+      editorTheme,
     ];
     if (inlineCompletion) {
       extensions.push(...createFileEditorInlineCompletion(inlineCompletion));
@@ -399,7 +423,7 @@ export function FileEditorSurface({
     extensions.push(...codeNavigationHoverExtensions);
     return extensions;
   }, [
-    codeMirrorTheme,
+    editorTheme,
     codeNavigationHoverExtensions,
     currentLine,
     editorRuntime,

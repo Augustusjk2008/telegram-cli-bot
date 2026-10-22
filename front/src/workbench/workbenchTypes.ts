@@ -84,7 +84,6 @@ export const MIN_CHAT_WIDTH_PX = 260;
 export const MIN_EDITOR_HEIGHT_PX = 220;
 export const MIN_TERMINAL_HEIGHT_PX = 160;
 export const MIN_CENTER_WIDTH_PX = 480;
-export const WORKBENCH_HORIZONTAL_PADDING_PX = 4;
 
 export const DEFAULT_DESKTOP_PANE_STATE: DesktopPaneState = {
   sidebarCollapsed: false,
@@ -106,6 +105,7 @@ export const WORKBENCH_HIGHLIGHT_DURATION_MS = 1200;
 export const CLOSED_TAB_HISTORY_LIMIT = 10;
 
 type ClampPaneStateOptions = {
+  /** Grid content dimensions, excluding container padding and borders. */
   containerWidthPx?: number;
   containerHeightPx?: number;
 };
@@ -126,7 +126,7 @@ export function clampPaneState(
 ): DesktopPaneState {
   const availableSidebarWidthPx = Math.max(
     MIN_SIDEBAR_WIDTH_PX + MIN_CHAT_WIDTH_PX,
-    containerWidthPx - WORKBENCH_HORIZONTAL_PADDING_PX - MIN_CENTER_WIDTH_PX - PANE_RESIZER_SIZE_PX * 2,
+    containerWidthPx - MIN_CENTER_WIDTH_PX - PANE_RESIZER_SIZE_PX * 2,
   );
 
   let sidebarWidthPx = Math.max(MIN_SIDEBAR_WIDTH_PX, state.sidebarWidthPx);

@@ -1,4 +1,5 @@
 import { cliTypeLabel } from "../utils/cliType";
+import { ManageThemesButton } from "../components/ThemeDropdown";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -90,7 +91,7 @@ function DeleteBotDialog({
           <span>{remote ? "远程工作区不支持从此处删除" : "同时删除工作区和所有记录"}</span>
         </label>
         {deleteWorkspace ? (
-          <div className="mt-3 space-y-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <div className="mt-3 space-y-3 rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-stronger)]">
             <p>将删除该 Bot 的磁盘工作区目录，且会一并删除历史记录和 session 记录。</p>
             <div className="break-all font-mono text-xs">{workspacePath || "未设置工作区"}</div>
             <label className="block text-sm">
@@ -99,7 +100,7 @@ function DeleteBotDialog({
                 aria-label="输入永久删除确认词"
                 value={workspaceConfirmText}
                 onChange={(event) => onWorkspaceConfirmTextChange(event.target.value)}
-                className="mt-2 h-9 w-full rounded-md border border-red-200 bg-white px-3 text-sm text-red-900 outline-none focus:border-red-500"
+                className="mt-2 h-9 w-full rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--access-badge-background)] px-3 text-sm text-[var(--feedback-error-text-emphasis)] outline-none focus:border-[var(--feedback-error-border)]"
                 autoFocus
               />
             </label>
@@ -118,7 +119,7 @@ function DeleteBotDialog({
             type="button"
             onClick={onConfirm}
             disabled={busy || (deleteWorkspace && !workspaceConfirmMatched)}
-            className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+            className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
           >
             {busy ? "删除中..." : deleteWorkspace ? "彻底删除" : "删除"}
           </button>
@@ -257,6 +258,7 @@ export function BotListScreen({
     <main data-ui-density="compact" className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
       <header className="mb-3 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">智能体管理</h1>
+        <ManageThemesButton />
         {onLogout ? (
           <button
             type="button"
@@ -436,7 +438,7 @@ export function BotListScreen({
                 key={bot.alias}
                 className={
                   isOffline
-                    ? "relative space-y-3 overflow-hidden rounded-2xl border border-red-200 bg-[var(--surface)] p-4 pl-5"
+                    ? "relative space-y-3 overflow-hidden rounded-2xl border border-[var(--feedback-error-border-light)] bg-[var(--surface)] p-4 pl-5"
                     : "relative space-y-3 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 pl-5"
                 }
               >
@@ -456,10 +458,10 @@ export function BotListScreen({
                         <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
                       ) : null}
                       {isArchived ? (
-                        <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] leading-none text-amber-700">已归档</span>
+                        <span className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--feedback-warning-text-deep)]">已归档</span>
                       ) : null}
                       {bot.canOperate === false ? (
-                        <span className="rounded border border-zinc-500 bg-white px-1.5 py-0.5 text-[10px] font-semibold leading-none text-zinc-900">无权限 · 只读</span>
+                        <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
                       ) : null}
                       {bot.status === "unread" ? <StatusPill status="unread" /> : null}
                       <StatusPill status={servicePillStatus} />
@@ -491,7 +493,7 @@ export function BotListScreen({
                     disabled={isOffline}
                     className={
                       isOffline
-                        ? "cursor-not-allowed rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 opacity-100"
+                        ? "cursor-not-allowed rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-strong)] opacity-100"
                         : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
                     }
                   >
@@ -516,7 +518,7 @@ export function BotListScreen({
                           aria-label={`归档 ${bot.alias}`}
                           onClick={() => void archiveBot(bot)}
                           disabled={savingAction !== ""}
-                          className="rounded-lg border border-amber-200 px-3 py-2 text-sm text-amber-700 hover:bg-amber-50 disabled:opacity-60"
+                          className="rounded-lg border border-[var(--feedback-warning-border-light)] px-3 py-2 text-sm text-[var(--feedback-warning-text-deep)] hover:bg-[var(--feedback-warning-background-subtle)] disabled:opacity-60"
                         >
                           归档
                         </button>
@@ -543,7 +545,7 @@ export function BotListScreen({
                           setDeleteWorkspaceConfirmText("");
                         }}
                         disabled={savingAction !== ""}
-                        className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
                       >
                         删除
                       </button>

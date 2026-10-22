@@ -23,7 +23,7 @@ export function MediaView({ botAlias, view, inputPayload = {} }: Props) {
       {mediaType === "video" ? (
         <video
           data-testid="plugin-video"
-          className="max-h-full w-full rounded-lg bg-black object-contain"
+          className="max-h-full w-full rounded-lg bg-[var(--media-background)] object-contain"
           controls
           playsInline
           preload="metadata"

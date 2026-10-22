@@ -105,7 +105,7 @@ export function RemoteReconnectDialog({ client, botAlias, remote, onClose, onCon
   onClose: () => void;
   onConnected: (remote: RemoteWorkspace) => void;
 }) {
-  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4" onClick={(e) => e.stopPropagation()}>
+  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--overlay-remote)] p-4" onClick={(e) => e.stopPropagation()}>
     <section role="dialog" aria-modal="true" aria-label="SSH 重新登录" className="max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto rounded-xl bg-[var(--bg)] p-5 text-[var(--text)]">
       <div className="flex items-center justify-between"><h2 className="font-semibold">SSH 重新登录 · {botAlias}</h2><button type="button" className={remoteButtonClass} onClick={onClose}>关闭</button></div>
       <RemoteConnectionForm client={client} botAlias={botAlias} initial={remote} onConnected={onConnected} />

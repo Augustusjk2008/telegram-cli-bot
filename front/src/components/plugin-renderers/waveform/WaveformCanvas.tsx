@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { WaveformTrack, WaveformTrackSegment } from "../../../services/types";
+import { useResolvedAppearance } from "../../../theme/appearanceRuntime";
 import { getDenseSegmentLayout } from "./denseSegmentLayout";
 
 type Props = {
@@ -12,6 +13,7 @@ type Props = {
 };
 
 export function WaveformCanvas({ track, width, height, startTime, endTime, formatValue }: Props) {
+  const appearance = useResolvedAppearance();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDigitalCanvas = track.width === 1;
   const denseSegments = useMemo(
@@ -24,9 +26,6 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
-      return;
-    }
-    if (typeof navigator !== "undefined" && /jsdom/i.test(navigator.userAgent)) {
       return;
     }
     let context: CanvasRenderingContext2D | null = null;
@@ -45,10 +44,11 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
     const bottom = denseLayout.bandBottom;
     context.clearRect(0, 0, canvas.width, canvas.height);
     const styles = getComputedStyle(canvas);
-    const lineColor = styles.getPropertyValue("--waveform-line").trim() || styles.color || "#eaf4ff";
-    const textColor = styles.getPropertyValue("--waveform-text").trim() || lineColor;
-    const denseFill = styles.getPropertyValue("--waveform-dense-fill").trim() || lineColor;
-    const denseLine = styles.getPropertyValue("--waveform-dense-line").trim() || lineColor;
+    const color = (name: string) => appearance.cssVariables[name] || styles.getPropertyValue(name).trim();
+    const lineColor = color("--waveform-line") || appearance.colors["text.primary"] || styles.color;
+    const textColor = color("--waveform-text") || lineColor;
+    const denseFill = color("--waveform-dense-fill") || lineColor;
+    const denseLine = color("--waveform-dense-line") || lineColor;
     context.strokeStyle = lineColor;
     context.fillStyle = textColor;
     context.lineWidth = 2;
@@ -108,7 +108,7 @@ export function WaveformCanvas({ track, width, height, startTime, endTime, forma
         context.fillText(formatValue ? formatValue(track, segment.value) : segment.value, startX + 8, middle + 4);
       }
     }
-  }, [denseSegments, endTime, formatValue, height, isDigitalCanvas, startTime, track, width]);
+  }, [appearance.revision, denseSegments, endTime, formatValue, height, isDigitalCanvas, startTime, track, width]);
 
   return (
     <canvas

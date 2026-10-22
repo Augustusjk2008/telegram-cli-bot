@@ -101,6 +101,8 @@ export function ChatComposer({
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetError, setPresetError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const presetMenuRef = useRef<HTMLDivElement | null>(null);
+  const presetTriggerRef = useRef<HTMLButtonElement | null>(null);
   const measureTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const presetIdCounterRef = useRef(1);
   const resolvedGlobalPromptPresets = globalPromptPresets ?? [];
@@ -146,6 +148,28 @@ export function ChatComposer({
       setPresetMenuOpen(false);
     }
   }, [inputDisabled]);
+
+  useEffect(() => {
+    if (!presetMenuOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!presetMenuRef.current?.contains(target) && !presetTriggerRef.current?.contains(target)) {
+        setPresetMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setPresetMenuOpen(false);
+      presetTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [presetMenuOpen]);
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
@@ -372,7 +396,7 @@ export function ChatComposer({
                   type="button"
                   aria-label={`删除预设 ${preset.title || index + 1}`}
                   onClick={() => removeDraftPreset(index)}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-red-50 hover:text-red-600"
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--feedback-error-background-subtle)] hover:text-[var(--feedback-error-text-strong)]"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -381,7 +405,7 @@ export function ChatComposer({
           ))}
         </div>
         {presetError ? (
-          <div className="border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{presetError}</div>
+          <div className="border-t border-[var(--feedback-error-border-soft)] bg-[var(--feedback-error-background-subtle)] px-4 py-2 text-sm text-[var(--feedback-error-text-deep)]">{presetError}</div>
         ) : null}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
           <button
@@ -419,7 +443,7 @@ export function ChatComposer({
   return (
     <div data-testid="chat-composer-root" data-pulse={pulse ? "true" : "false"} className={shellClassName}>
       {attachments.length > 0 || uploadingAttachments ? (
-        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-1.5">
+        <div className="chat-composer-attachments mb-1.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-1.5">
           {attachments.map((attachment) => (
             <span
               key={attachment.id}
@@ -440,7 +464,7 @@ export function ChatComposer({
             </span>
           ))}
           {uploadingAttachments ? (
-            <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2.5 py-1 text-xs text-[var(--feedback-warning-text-deep)]">
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
               正在上传附件
             </span>
@@ -462,7 +486,7 @@ export function ChatComposer({
           });
         }}
       >
-          <div data-testid="chat-composer-input-surface" className={inputBarClassName}>
+          <div data-testid="chat-composer-input-surface" className={`chat-composer-input-surface ${inputBarClassName}`}>
           {mobileLayout ? attachmentControl : null}
           <div className={mobileLayout ? "relative order-2 min-h-8 min-w-0 flex-1" : "relative min-h-8 w-full min-w-0"}>
             <textarea
@@ -545,6 +569,7 @@ export function ChatComposer({
             <div className={actionGroupClassName}>
               {showPromptPresetControls ? (
                 <button
+                  ref={presetTriggerRef}
                   type="button"
                   aria-label="打开提示词预设"
                   aria-expanded={presetMenuOpen}
@@ -561,7 +586,7 @@ export function ChatComposer({
                 aria-label="发送"
                 title={uploadingAttachments ? "上传中..." : "发送"}
                 disabled={inputDisabled}
-                className={actionButtonClassName}
+                className={`chat-composer-send ${actionButtonClassName}`}
               >
                 {uploadingAttachments ? (
                   <LoaderCircle className="h-4 w-4 animate-spin" />
@@ -573,6 +598,7 @@ export function ChatComposer({
           </div>
           {presetMenuOpen ? (
             <div
+              ref={presetMenuRef}
               role="listbox"
               aria-label="提示词预设"
               className={presetMenuClassName}

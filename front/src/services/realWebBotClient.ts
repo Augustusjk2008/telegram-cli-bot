@@ -8,6 +8,9 @@ import {
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
+  ThemeLibrary,
+  ThemeCreateInput,
+  ThemeUpdateInput,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -4116,6 +4119,11 @@ function isWebNotificationEvent(value: unknown): value is WebNotificationEvent {
 }
 
 export class RealWebBotClient implements WebBotClient {
+  private themeAccountId = "";
+
+  bindThemeAccount(accountId: string) { this.themeAccountId = accountId; }
+
+  private themeHeaders() { return { "X-UI-Account-ID": this.themeAccountId }; }
   private token = "";
   private notificationPresence: NotificationPresenceUpdate | null = null;
   private notificationPresenceSenders = new Set<(presence: NotificationPresenceUpdate) => void>();
@@ -4473,6 +4481,42 @@ export class RealWebBotClient implements WebBotClient {
     } finally {
       this.token = "";
     }
+  }
+
+  async listUiThemes(): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>("/api/ui/themes", { headers: this.themeHeaders() });
+  }
+
+  async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>("/api/ui/themes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      body: JSON.stringify(input),
+    });
+  }
+
+  async updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>(`/api/ui/themes/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      body: JSON.stringify(input),
+    });
+  }
+
+  async deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>(`/api/ui/themes/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      body: JSON.stringify({ expectedRevision }),
+    });
+  }
+
+  async selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>("/api/ui/theme-selection", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      body: JSON.stringify({ themeId: id, expectedRevision }),
+    });
   }
 
   async listAnnouncements(): Promise<AnnouncementListResult> {

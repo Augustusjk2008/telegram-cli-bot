@@ -1,0 +1,3337 @@
+{
+  "schemaVersion": 1,
+  "tokens": [
+    {
+      "key": "canvas",
+      "label": "页面背景",
+      "group": "基础界面",
+      "description": "应用根画布",
+      "cssVariable": "--bg",
+      "default": "#F7F8FAFF",
+      "allowAlpha": false
+    },
+    {
+      "key": "surface.base",
+      "label": "基础表面",
+      "group": "基础界面",
+      "description": "面板、菜单和内容区域",
+      "cssVariable": "--surface",
+      "default": "#FFFEFDFF",
+      "allowAlpha": false
+    },
+    {
+      "key": "surface.muted",
+      "label": "次级表面",
+      "group": "基础界面",
+      "description": "次级区块背景",
+      "cssVariable": "--surface-muted",
+      "default": "#F2F4F5FF",
+      "allowAlpha": false
+    },
+    {
+      "key": "surface.strong",
+      "label": "突出表面",
+      "group": "基础界面",
+      "description": "输入框和突出内容",
+      "cssVariable": "--surface-strong",
+      "default": "#FFFFFFFF",
+      "allowAlpha": false
+    },
+    {
+      "key": "text.primary",
+      "label": "正文",
+      "group": "基础界面",
+      "description": "常规正文",
+      "cssVariable": "--text",
+      "default": "#3F4650FF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "text.muted",
+      "label": "次级文字",
+      "group": "基础界面",
+      "description": "说明和元信息",
+      "cssVariable": "--muted",
+      "default": "#69727DFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "accent",
+      "label": "强调色",
+      "group": "控件与交互",
+      "description": "按钮和焦点",
+      "cssVariable": "--accent",
+      "default": "#A94A2EFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "accent.strong",
+      "label": "辅助强调色",
+      "group": "控件与交互",
+      "description": "辅助操作",
+      "cssVariable": "--accent-strong",
+      "default": "#37685BFF",
+      "allowAlpha": false
+    },
+    {
+      "key": "accent.foreground",
+      "label": "按钮前景",
+      "group": "控件与交互",
+      "description": "强调按钮上的文字与图标",
+      "cssVariable": "--accent-foreground",
+      "default": "#FFFFFFFF",
+      "allowAlpha": false,
+      "contrastAgainst": "accent",
+      "minContrast": 4.5
+    },
+    {
+      "key": "accent.soft",
+      "label": "柔和强调背景",
+      "group": "控件与交互",
+      "description": "选择和悬停区域",
+      "cssVariable": "--accent-soft",
+      "default": "#A94A2E14",
+      "derive": {
+        "from": "accent",
+        "alpha": 0.08
+      },
+      "allowAlpha": true
+    },
+    {
+      "key": "border",
+      "label": "普通边框",
+      "group": "基础界面",
+      "description": "面板和控件边界",
+      "cssVariable": "--border",
+      "default": "#3F46501F",
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.12
+      },
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "border.strong",
+      "label": "强调边框",
+      "group": "基础界面",
+      "description": "强调控件边界",
+      "cssVariable": "--border-strong",
+      "default": "#3F46503D",
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.24
+      },
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "fileTree.gitAdded",
+      "label": "Git 新增",
+      "group": "文件树与 Git",
+      "description": "新增文件文字",
+      "cssVariable": "--file-tree-git-added",
+      "default": "#15803DFF",
+      "allowAlpha": false,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "fileTree.gitModified",
+      "label": "Git 修改",
+      "group": "文件树与 Git",
+      "description": "修改文件文字",
+      "cssVariable": "--file-tree-git-modified",
+      "default": "#B45309FF",
+      "allowAlpha": false,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "accent.outline",
+      "label": "强调轮廓",
+      "group": "基础界面",
+      "description": "强调轮廓，用于基础界面中的对应界面元素",
+      "cssVariable": "--accent-outline",
+      "default": "#A94A2E5C",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "alpha": 0.36
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "accent.softStrong",
+      "label": "强调选中背景",
+      "group": "基础界面",
+      "description": "强调选中背景，用于基础界面中的对应界面元素",
+      "cssVariable": "--accent-soft-strong",
+      "default": "#A94A2E29",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "alpha": 0.16
+      }
+    },
+    {
+      "key": "canvas.bottom",
+      "label": "页面渐变终点",
+      "group": "基础界面",
+      "description": "页面渐变终点，用于基础界面中的对应界面元素",
+      "cssVariable": "--bg-bottom",
+      "default": "#F7F8FAFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "canvas"
+      }
+    },
+    {
+      "key": "decoration.backgroundGlow",
+      "label": "背景柔光",
+      "group": "装饰",
+      "description": "背景柔光，用于装饰中的对应界面元素",
+      "cssVariable": "--bg-glow",
+      "default": "#B751320F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.focusRing",
+        "alpha": 0.06
+      }
+    },
+    {
+      "key": "decoration.backgroundGlowStrong",
+      "label": "背景辅助柔光",
+      "group": "装饰",
+      "description": "背景辅助柔光，用于装饰中的对应界面元素",
+      "cssVariable": "--bg-glow-strong",
+      "default": "#37685B0A",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.strong",
+        "alpha": 0.04
+      }
+    },
+    {
+      "key": "canvas.top",
+      "label": "页面渐变起点",
+      "group": "基础界面",
+      "description": "页面渐变起点，用于基础界面中的对应界面元素",
+      "cssVariable": "--bg-top",
+      "default": "#F7F8FAFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "canvas"
+      }
+    },
+    {
+      "key": "code.background",
+      "label": "代码块背景",
+      "group": "聊天与输入",
+      "description": "代码块背景，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-bg",
+      "default": "#F7F8FAFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "canvas"
+      }
+    },
+    {
+      "key": "code.border",
+      "label": "代码块边框",
+      "group": "聊天与输入",
+      "description": "代码块边框，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-border",
+      "default": "#3F46501F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "code.copyBackground",
+      "label": "代码复制按钮背景",
+      "group": "聊天与输入",
+      "description": "代码复制按钮背景，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-copy-bg",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "code.copyHover",
+      "label": "代码复制按钮悬停",
+      "group": "聊天与输入",
+      "description": "代码复制按钮悬停，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-copy-bg-hover",
+      "default": "#F2F4F5FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.muted"
+      }
+    },
+    {
+      "key": "code.copyBorder",
+      "label": "代码复制按钮边框",
+      "group": "聊天与输入",
+      "description": "代码复制按钮边框，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-copy-border",
+      "default": "#3F46503D",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border.strong"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "code.copyText",
+      "label": "代码复制按钮文字",
+      "group": "聊天与输入",
+      "description": "代码复制按钮文字，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-copy-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "code.text",
+      "label": "代码块文字",
+      "group": "聊天与输入",
+      "description": "代码块文字，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--code-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "code.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "control.danger",
+      "label": "危险按钮填充",
+      "group": "基础界面",
+      "description": "危险按钮填充，用于基础界面中的对应界面元素",
+      "cssVariable": "--danger",
+      "default": "#B4233DFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "control.dangerForeground",
+      "label": "危险按钮文字",
+      "group": "基础界面",
+      "description": "危险按钮文字，用于基础界面中的对应界面元素",
+      "cssVariable": "--danger-foreground",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "control.danger",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.activeLine",
+      "label": "活动行背景",
+      "group": "编辑器",
+      "description": "活动行背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-active-line-bg",
+      "default": "#F9F2F0FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "mix": {
+          "with": "editor.background",
+          "ratio": 0.07
+        }
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 3
+    },
+    {
+      "key": "editor.activeLineGutter",
+      "label": "活动行行号背景",
+      "group": "编辑器",
+      "description": "活动行行号背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-active-line-gutter-bg",
+      "default": "#EEE5E4FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "mix": {
+          "with": "editor.gutterBackground",
+          "ratio": 0.11
+        }
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 3
+    },
+    {
+      "key": "editor.background",
+      "label": "编辑器背景",
+      "group": "编辑器",
+      "description": "编辑器背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-bg",
+      "default": "#FFFFFFFF",
+      "allowAlpha": false,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "editor.gutterBackground",
+      "label": "行号背景",
+      "group": "编辑器",
+      "description": "行号背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-gutter-bg",
+      "default": "#F7F8FAFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "canvas"
+      }
+    },
+    {
+      "key": "editor.gutterText",
+      "label": "行号文字",
+      "group": "编辑器",
+      "description": "行号文字，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-gutter-text",
+      "default": "#69727DFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.muted"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.selection",
+      "label": "编辑器选区",
+      "group": "编辑器",
+      "description": "编辑器选区，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-selection-bg",
+      "default": "#A94A2E3D",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "alpha": 0.24
+      }
+    },
+    {
+      "key": "editor.syntaxComment",
+      "label": "代码注释",
+      "group": "编辑器",
+      "description": "代码注释，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-comment",
+      "default": "#74685FFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.syntaxFunction",
+      "label": "代码函数",
+      "group": "编辑器",
+      "description": "代码函数，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-function",
+      "default": "#72528CFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.syntaxInvalid",
+      "label": "代码无效语法",
+      "group": "编辑器",
+      "description": "代码无效语法，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-invalid",
+      "default": "#B4233DFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.danger"
+      }
+    },
+    {
+      "key": "editor.syntaxKeyword",
+      "label": "代码关键字",
+      "group": "编辑器",
+      "description": "代码关键字，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-keyword",
+      "default": "#9F432AFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.syntaxMeta",
+      "label": "代码元信息",
+      "group": "编辑器",
+      "description": "代码元信息，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-meta",
+      "default": "#98506CFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.syntaxNumber",
+      "label": "代码数字",
+      "group": "编辑器",
+      "description": "代码数字，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-number",
+      "default": "#895518FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.syntaxString",
+      "label": "代码字符串",
+      "group": "编辑器",
+      "description": "代码字符串，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-string",
+      "default": "#37685BFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.syntaxType",
+      "label": "代码类型",
+      "group": "编辑器",
+      "description": "代码类型，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-syntax-type",
+      "default": "#35637EFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "editor.text",
+      "label": "编辑器正文",
+      "group": "编辑器",
+      "description": "编辑器正文，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "control.focusRing",
+      "label": "键盘焦点",
+      "group": "基础界面",
+      "description": "键盘焦点，用于基础界面中的对应界面元素",
+      "cssVariable": "--focus-ring",
+      "default": "#B75132FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "decoration.heroGlow",
+      "label": "欢迎页光晕",
+      "group": "装饰",
+      "description": "欢迎页光晕，用于装饰中的对应界面元素",
+      "cssVariable": "--hero-glow",
+      "default": "#B751320D",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.focusRing",
+        "alpha": 0.05
+      }
+    },
+    {
+      "key": "decoration.heroGrid",
+      "label": "欢迎页网格",
+      "group": "装饰",
+      "description": "欢迎页网格，用于装饰中的对应界面元素",
+      "cssVariable": "--hero-grid",
+      "default": "#37685B0A",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.strong",
+        "alpha": 0.04
+      }
+    },
+    {
+      "key": "decoration.heroRing",
+      "label": "欢迎页环线",
+      "group": "装饰",
+      "description": "欢迎页环线，用于装饰中的对应界面元素",
+      "cssVariable": "--hero-ring",
+      "default": "#B751321F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.focusRing",
+        "alpha": 0.12
+      }
+    },
+    {
+      "key": "motion.highlight",
+      "label": "动态高光",
+      "group": "装饰",
+      "description": "动态高光，用于装饰中的对应界面元素",
+      "cssVariable": "--motion-highlight",
+      "default": "#B751321F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.focusRing",
+        "alpha": 0.12
+      }
+    },
+    {
+      "key": "motion.highlightSoft",
+      "label": "动态柔和高光",
+      "group": "装饰",
+      "description": "动态柔和高光，用于装饰中的对应界面元素",
+      "cssVariable": "--motion-highlight-soft",
+      "default": "#B751320F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.focusRing",
+        "alpha": 0.06
+      }
+    },
+    {
+      "key": "overlay.backdrop10",
+      "label": "遮罩（10%）",
+      "group": "装饰",
+      "description": "遮罩（10%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-10",
+      "default": "#0000001A",
+      "allowAlpha": true
+    },
+    {
+      "key": "overlay.backdrop20",
+      "label": "遮罩（20%）",
+      "group": "装饰",
+      "description": "遮罩（20%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-20",
+      "default": "#00000033",
+      "allowAlpha": true
+    },
+    {
+      "key": "overlay.backdrop30",
+      "label": "遮罩（30%）",
+      "group": "装饰",
+      "description": "遮罩（30%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-30",
+      "default": "#0000004D",
+      "allowAlpha": true
+    },
+    {
+      "key": "overlay.backdrop35",
+      "label": "遮罩（35%）",
+      "group": "装饰",
+      "description": "遮罩（35%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-35",
+      "default": "#00000059",
+      "allowAlpha": true
+    },
+    {
+      "key": "overlay.backdrop40",
+      "label": "遮罩（40%）",
+      "group": "装饰",
+      "description": "遮罩（40%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-40",
+      "default": "#00000066",
+      "allowAlpha": true
+    },
+    {
+      "key": "overlay.backdrop45",
+      "label": "遮罩（45%）",
+      "group": "装饰",
+      "description": "遮罩（45%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-45",
+      "default": "#00000073",
+      "allowAlpha": true
+    },
+    {
+      "key": "overlay.backdrop50",
+      "label": "遮罩（50%）",
+      "group": "装饰",
+      "description": "遮罩（50%），用于装饰中的对应界面元素",
+      "cssVariable": "--overlay-backdrop-50",
+      "default": "#00000080",
+      "allowAlpha": true
+    },
+    {
+      "key": "status.danger.text",
+      "label": "错误状态文字",
+      "group": "状态与身份",
+      "description": "错误状态文字，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-danger",
+      "default": "#B4233DFF",
+      "allowAlpha": true,
+      "contrastAgainst": "status.danger.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "status.danger.background",
+      "label": "错误状态背景",
+      "group": "状态与身份",
+      "description": "错误状态背景，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-danger-bg",
+      "default": "#B4233D24",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.danger.text",
+        "alpha": 0.14
+      }
+    },
+    {
+      "key": "status.danger.border",
+      "label": "错误状态边框",
+      "group": "状态与身份",
+      "description": "错误状态边框，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-danger-border",
+      "default": "#B4233D61",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.danger.text",
+        "alpha": 0.38
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "status.info.text",
+      "label": "信息状态文字",
+      "group": "状态与身份",
+      "description": "信息状态文字，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-info",
+      "default": "#315F88FF",
+      "allowAlpha": true,
+      "contrastAgainst": "status.info.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "status.info.background",
+      "label": "信息状态背景",
+      "group": "状态与身份",
+      "description": "信息状态背景，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-info-bg",
+      "default": "#315F8824",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.info.text",
+        "alpha": 0.14
+      }
+    },
+    {
+      "key": "status.info.border",
+      "label": "信息状态边框",
+      "group": "状态与身份",
+      "description": "信息状态边框，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-info-border",
+      "default": "#315F8861",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.info.text",
+        "alpha": 0.38
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "status.success.text",
+      "label": "成功状态文字",
+      "group": "状态与身份",
+      "description": "成功状态文字，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-success",
+      "default": "#276749FF",
+      "allowAlpha": true,
+      "contrastAgainst": "status.success.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "status.success.background",
+      "label": "成功状态背景",
+      "group": "状态与身份",
+      "description": "成功状态背景，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-success-bg",
+      "default": "#27674924",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.success.text",
+        "alpha": 0.14
+      }
+    },
+    {
+      "key": "status.success.border",
+      "label": "成功状态边框",
+      "group": "状态与身份",
+      "description": "成功状态边框，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-success-border",
+      "default": "#27674961",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.success.text",
+        "alpha": 0.38
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "status.warning.text",
+      "label": "警告状态文字",
+      "group": "状态与身份",
+      "description": "警告状态文字，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-warning",
+      "default": "#8A530AFF",
+      "allowAlpha": true,
+      "contrastAgainst": "status.warning.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "status.warning.background",
+      "label": "警告状态背景",
+      "group": "状态与身份",
+      "description": "警告状态背景，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-warning-bg",
+      "default": "#8A530A24",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.warning.text",
+        "alpha": 0.14
+      }
+    },
+    {
+      "key": "status.warning.border",
+      "label": "警告状态边框",
+      "group": "状态与身份",
+      "description": "警告状态边框，用于状态与身份中的对应界面元素",
+      "cssVariable": "--status-warning-border",
+      "default": "#8A530A61",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.warning.text",
+        "alpha": 0.38
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "surface.glass",
+      "label": "浮层表面",
+      "group": "基础界面",
+      "description": "浮层表面，用于基础界面中的对应界面元素",
+      "cssVariable": "--surface-glass",
+      "default": "#FFFEFDFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.base"
+      }
+    },
+    {
+      "key": "surface.overlay",
+      "label": "菜单表面",
+      "group": "基础界面",
+      "description": "菜单表面，用于基础界面中的对应界面元素",
+      "cssVariable": "--surface-overlay",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "surface.subtle",
+      "label": "轻量表面",
+      "group": "基础界面",
+      "description": "轻量表面，用于基础界面中的对应界面元素",
+      "cssVariable": "--surface-subtle",
+      "default": "#F2F4F5FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.muted"
+      }
+    },
+    {
+      "key": "terminal.background",
+      "label": "终端背景",
+      "group": "终端",
+      "description": "终端背景，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bg",
+      "default": "#FFFEFDFF",
+      "allowAlpha": false,
+      "terminal": "background"
+    },
+    {
+      "key": "terminal.muted",
+      "label": "终端次级文字",
+      "group": "终端",
+      "description": "终端次级文字，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-muted",
+      "default": "#69727DFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.muted"
+      }
+    },
+    {
+      "key": "terminal.foreground",
+      "label": "终端文字",
+      "group": "终端",
+      "description": "终端文字，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "terminal": "foreground",
+      "contrastAgainst": "terminal.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "workbench.active",
+      "label": "工作区选中背景",
+      "group": "工作台",
+      "description": "工作区选中背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-active-bg",
+      "default": "#A94A2E14",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.soft"
+      }
+    },
+    {
+      "key": "workbench.focusRing",
+      "label": "工作区焦点",
+      "group": "工作台",
+      "description": "工作区焦点，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-focus-ring",
+      "default": "#B75132FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "control.focusRing"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "workbench.hairline",
+      "label": "通用工作区分隔线",
+      "group": "工作台",
+      "description": "通用工作区分隔线，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-hairline",
+      "default": "#3F46501F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "workbench.hover",
+      "label": "工作区悬停背景",
+      "group": "工作台",
+      "description": "工作区悬停背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-hover-bg",
+      "default": "#3F465009",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.035
+      }
+    },
+    {
+      "key": "workbench.hoverBorder",
+      "label": "工作区悬停边框",
+      "group": "工作台",
+      "description": "工作区悬停边框，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-hover-border",
+      "default": "#3F465038",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.22
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "workbench.panel",
+      "label": "面板背景",
+      "group": "工作台",
+      "description": "面板背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-panel-bg",
+      "default": "#FFFEFDFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.base"
+      }
+    },
+    {
+      "key": "workbench.panelElevated",
+      "label": "浮起面板背景",
+      "group": "工作台",
+      "description": "浮起面板背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-panel-elevated-bg",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "workbench.shell",
+      "label": "工作台底色",
+      "group": "工作台",
+      "description": "工作台底色，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-shell-bg",
+      "default": "#F7F8FAFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "canvas"
+      }
+    },
+    {
+      "key": "workbench.sidebar",
+      "label": "侧栏背景",
+      "group": "工作台",
+      "description": "侧栏背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-sidebar-bg",
+      "default": "#FFFEFDFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.base"
+      }
+    },
+    {
+      "key": "workbench.statusbar",
+      "label": "状态栏背景",
+      "group": "工作台",
+      "description": "状态栏背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-statusbar-bg",
+      "default": "#FFFEFDFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.base"
+      }
+    },
+    {
+      "key": "workbench.titlebar",
+      "label": "顶栏背景",
+      "group": "工作台",
+      "description": "顶栏背景，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-titlebar-bg",
+      "default": "#FFFEFDFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.base"
+      }
+    },
+    {
+      "key": "workbench.divider",
+      "label": "纸感分隔线",
+      "group": "工作台",
+      "description": "纸感分隔线，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-divider",
+      "default": "#3F465017",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.09
+      }
+    },
+    {
+      "key": "workbench.accentFill",
+      "label": "工作台按钮填充",
+      "group": "工作台",
+      "description": "工作台按钮填充，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-accent-fill",
+      "default": "#B75A3BFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "workbench.selectedSurface",
+      "label": "工作台选中表面",
+      "group": "工作台",
+      "description": "工作台选中表面，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-selected-surface",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "fileTree.background",
+      "label": "文件树背景",
+      "group": "文件树与 Git",
+      "description": "文件树背景，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-bg",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "fileTree.text",
+      "label": "文件名文字",
+      "group": "文件树与 Git",
+      "description": "文件名文字，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-text",
+      "default": "#465260FF",
+      "allowAlpha": true,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "fileTree.muted",
+      "label": "文件树次级文字",
+      "group": "文件树与 Git",
+      "description": "文件树次级文字，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-muted",
+      "default": "#656F7BFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "fileTree.gitDeleted",
+      "label": "Git 删除",
+      "group": "文件树与 Git",
+      "description": "Git 删除，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-git-deleted",
+      "default": "#B4233DFF",
+      "allowAlpha": true,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "fileTree.gitIgnored",
+      "label": "Git 忽略",
+      "group": "文件树与 Git",
+      "description": "Git 忽略，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-git-ignored",
+      "default": "#656F7BFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "fileTree.muted"
+      },
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "fileTree.hover",
+      "label": "文件树悬停背景",
+      "group": "文件树与 Git",
+      "description": "文件树悬停背景，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-hover",
+      "default": "#F4F7F9FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "fileTree.selected",
+      "label": "文件树选中背景",
+      "group": "文件树与 Git",
+      "description": "文件树选中背景，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-selected",
+      "default": "#EDF4F7FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "fileTree.focus",
+      "label": "文件树焦点",
+      "group": "文件树与 Git",
+      "description": "文件树焦点，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-focus",
+      "default": "#57788DFF",
+      "allowAlpha": true,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 3
+    },
+    {
+      "key": "fileTree.folder",
+      "label": "文件夹图标",
+      "group": "文件树与 Git",
+      "description": "文件夹图标，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-folder",
+      "default": "#6B91A8FF",
+      "allowAlpha": true,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 3
+    },
+    {
+      "key": "fileTree.codeIcon",
+      "label": "代码文件图标",
+      "group": "文件树与 Git",
+      "description": "代码文件图标，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-code-icon",
+      "default": "#526F83FF",
+      "allowAlpha": true,
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 3
+    },
+    {
+      "key": "fileTree.drop",
+      "label": "文件树拖放背景",
+      "group": "文件树与 Git",
+      "description": "文件树拖放背景，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-drop",
+      "default": "#A94A2E14",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.soft"
+      }
+    },
+    {
+      "key": "fileTree.dropBorder",
+      "label": "文件树拖放边线",
+      "group": "文件树与 Git",
+      "description": "文件树拖放边线，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-drop-border",
+      "default": "#A94A2EFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent"
+      },
+      "contrastAgainst": "fileTree.background",
+      "minContrast": 3
+    },
+    {
+      "key": "fileTree.indentGuide",
+      "label": "文件树缩进线",
+      "group": "文件树与 Git",
+      "description": "文件树缩进线，用于文件树与 Git中的对应界面元素",
+      "cssVariable": "--file-tree-indent-guide",
+      "default": "#656F7B52",
+      "allowAlpha": true,
+      "derive": {
+        "from": "fileTree.muted",
+        "alpha": 0.32
+      }
+    },
+    {
+      "key": "chat.userText",
+      "label": "用户消息文字",
+      "group": "聊天与输入",
+      "description": "用户消息文字，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--chat-user-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "chat.userBackground",
+      "minContrast": 4.5
+    },
+    {
+      "key": "chat.userBackground",
+      "label": "用户消息背景",
+      "group": "聊天与输入",
+      "description": "用户消息背景，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--chat-user-bg",
+      "default": "#A94A2E14",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.soft"
+      }
+    },
+    {
+      "key": "chat.userBorder",
+      "label": "用户消息边框",
+      "group": "聊天与输入",
+      "description": "用户消息边框，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--chat-user-border",
+      "default": "#A94A2E5C",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.outline"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "chat.userMarkdownSoft",
+      "label": "用户消息引用背景",
+      "group": "聊天与输入",
+      "description": "用户消息引用背景，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--chat-user-markdown-soft",
+      "default": "#3F46501A",
+      "allowAlpha": true,
+      "derive": {
+        "from": "chat.userText",
+        "alpha": 0.1
+      }
+    },
+    {
+      "key": "chat.userMarkdownOutline",
+      "label": "用户消息强调轮廓",
+      "group": "聊天与输入",
+      "description": "用户消息强调轮廓，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--chat-user-markdown-outline",
+      "default": "#3F465073",
+      "allowAlpha": true,
+      "derive": {
+        "from": "chat.userText",
+        "alpha": 0.45
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "chat.userMarkdownBorder",
+      "label": "用户消息内容边框",
+      "group": "聊天与输入",
+      "description": "用户消息内容边框，用于聊天与输入中的对应界面元素",
+      "cssVariable": "--chat-user-markdown-border",
+      "default": "#3F465040",
+      "allowAlpha": true,
+      "derive": {
+        "from": "chat.userText",
+        "alpha": 0.25
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "shadow.soft",
+      "label": "浮层阴影颜色",
+      "group": "装饰",
+      "description": "浮层阴影颜色，用于装饰中的对应界面元素",
+      "cssVariable": "--shadow-soft-color",
+      "default": "#29252414",
+      "allowAlpha": true
+    },
+    {
+      "key": "shadow.elevated",
+      "label": "高层阴影颜色",
+      "group": "装饰",
+      "description": "高层阴影颜色，用于装饰中的对应界面元素",
+      "cssVariable": "--shadow-elevated-color",
+      "default": "#29252429",
+      "allowAlpha": true
+    },
+    {
+      "key": "shadow.segmented",
+      "label": "分段控件阴影颜色",
+      "group": "装饰",
+      "description": "分段控件阴影颜色，用于装饰中的对应界面元素",
+      "cssVariable": "--shadow-segmented-color",
+      "default": "#37281C17",
+      "allowAlpha": true
+    },
+    {
+      "key": "shadow.composer",
+      "label": "输入区阴影颜色",
+      "group": "装饰",
+      "description": "输入区阴影颜色，用于装饰中的对应界面元素",
+      "cssVariable": "--shadow-composer-color",
+      "default": "#37281C09",
+      "allowAlpha": true
+    },
+    {
+      "key": "shadow.control",
+      "label": "控件投影颜色",
+      "group": "装饰",
+      "description": "控件投影颜色，用于装饰中的对应界面元素",
+      "cssVariable": "--shadow-control-color",
+      "default": "#0000001A",
+      "allowAlpha": true
+    },
+    {
+      "key": "shadow.inset",
+      "label": "内凹控件阴影颜色",
+      "group": "装饰",
+      "description": "内凹控件阴影颜色，用于装饰中的对应界面元素",
+      "cssVariable": "--shadow-inset-color",
+      "default": "#0000000D",
+      "allowAlpha": true
+    },
+    {
+      "key": "scrollbar.thumb",
+      "label": "滚动条颜色",
+      "group": "控件与交互",
+      "description": "滚动条颜色，用于控件与交互中的对应界面元素",
+      "cssVariable": "--scrollbar-thumb",
+      "default": "#69727D7A",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.muted",
+        "alpha": 0.48
+      }
+    },
+    {
+      "key": "scrollbar.webkitThumb",
+      "label": "细滚动条颜色",
+      "group": "控件与交互",
+      "description": "细滚动条颜色，用于控件与交互中的对应界面元素",
+      "cssVariable": "--scrollbar-webkit-thumb",
+      "default": "#69727D75",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.muted",
+        "alpha": 0.46
+      }
+    },
+    {
+      "key": "scrollbar.hover",
+      "label": "滚动条悬停颜色",
+      "group": "控件与交互",
+      "description": "滚动条悬停颜色，用于控件与交互中的对应界面元素",
+      "cssVariable": "--scrollbar-hover",
+      "default": "#A94A2EAD",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "alpha": 0.68
+      }
+    },
+    {
+      "key": "selection.background",
+      "label": "文字选择背景",
+      "group": "控件与交互",
+      "description": "文字选择背景，用于控件与交互中的对应界面元素",
+      "cssVariable": "--selection-bg",
+      "default": "#A94A2E29",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.softStrong"
+      }
+    },
+    {
+      "key": "selection.text",
+      "label": "文字选择前景",
+      "group": "控件与交互",
+      "description": "文字选择前景，用于控件与交互中的对应界面元素",
+      "cssVariable": "--selection-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "selection.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "waveform.line",
+      "label": "波形线条",
+      "group": "图表与插件展示",
+      "description": "波形线条，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--waveform-line",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "waveform.text",
+      "label": "波形标注",
+      "group": "图表与插件展示",
+      "description": "波形标注，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--waveform-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "waveform.denseFill",
+      "label": "密集波形填充",
+      "group": "图表与插件展示",
+      "description": "密集波形填充，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--waveform-dense-fill",
+      "default": "#A94A2EFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent"
+      }
+    },
+    {
+      "key": "waveform.denseLine",
+      "label": "密集波形线条",
+      "group": "图表与插件展示",
+      "description": "密集波形线条，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--waveform-dense-line",
+      "default": "#37685BFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.strong"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pdf.selection",
+      "label": "PDF 文本选区",
+      "group": "图表与插件展示",
+      "description": "PDF 文本选区，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--pdf-selection",
+      "default": "#0064FF4D",
+      "allowAlpha": true
+    },
+    {
+      "key": "media.background",
+      "label": "媒体播放器底色",
+      "group": "图表与插件展示",
+      "description": "媒体播放器底色，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--media-background",
+      "default": "#000000FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "document.placeholderBackground",
+      "label": "文档未知形状底色",
+      "group": "图表与插件展示",
+      "description": "文档未知形状底色，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--document-placeholder-bg",
+      "default": "#FFFFFF99",
+      "allowAlpha": true
+    },
+    {
+      "key": "document.placeholderBorder",
+      "label": "文档未知形状边框",
+      "group": "图表与插件展示",
+      "description": "文档未知形状边框，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--document-placeholder-border",
+      "default": "#00000033",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "decoration.loginMaskStart",
+      "label": "登录页遮罩起点",
+      "group": "装饰",
+      "description": "登录页遮罩起点，用于装饰中的对应界面元素",
+      "cssVariable": "--login-mask-start",
+      "default": "#000000E6",
+      "allowAlpha": true
+    },
+    {
+      "key": "decoration.loginMaskEnd",
+      "label": "登录页遮罩终点",
+      "group": "装饰",
+      "description": "登录页遮罩终点，用于装饰中的对应界面元素",
+      "cssVariable": "--login-mask-end",
+      "default": "#0000009E",
+      "allowAlpha": true
+    },
+    {
+      "key": "terminal.cursor",
+      "label": "终端光标",
+      "group": "终端",
+      "description": "终端光标，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-cursor",
+      "default": "#B75132FF",
+      "allowAlpha": true,
+      "terminal": "cursor",
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "terminal.cursorAccent",
+      "label": "终端光标文字",
+      "group": "终端",
+      "description": "终端光标文字，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-cursor-accent",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "terminal": "cursorAccent",
+      "contrastAgainst": "terminal.cursor",
+      "minContrast": 4.5
+    },
+    {
+      "key": "terminal.selectionBackground",
+      "label": "终端选区背景",
+      "group": "终端",
+      "description": "终端选区背景，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-selection-background",
+      "default": "#F0E1D7FF",
+      "allowAlpha": true,
+      "terminal": "selectionBackground"
+    },
+    {
+      "key": "terminal.selectionForeground",
+      "label": "终端选区文字",
+      "group": "终端",
+      "description": "终端选区文字，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-selection-foreground",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "terminal": "selectionForeground",
+      "contrastAgainst": "terminal.selectionBackground",
+      "minContrast": 4.5
+    },
+    {
+      "key": "terminal.selectionInactiveBackground",
+      "label": "终端非活动选区",
+      "group": "终端",
+      "description": "终端非活动选区，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-selection-inactive-background",
+      "default": "#F5EFEAFF",
+      "allowAlpha": true,
+      "terminal": "selectionInactiveBackground"
+    },
+    {
+      "key": "terminal.black",
+      "label": "终端ANSI 黑",
+      "group": "终端",
+      "description": "终端ANSI 黑，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-black",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "terminal": "black"
+    },
+    {
+      "key": "terminal.red",
+      "label": "终端ANSI 红",
+      "group": "终端",
+      "description": "终端ANSI 红，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-red",
+      "default": "#A33C35FF",
+      "allowAlpha": true,
+      "terminal": "red"
+    },
+    {
+      "key": "terminal.green",
+      "label": "终端ANSI 绿",
+      "group": "终端",
+      "description": "终端ANSI 绿，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-green",
+      "default": "#37685BFF",
+      "allowAlpha": true,
+      "terminal": "green"
+    },
+    {
+      "key": "terminal.yellow",
+      "label": "终端ANSI 黄",
+      "group": "终端",
+      "description": "终端ANSI 黄，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-yellow",
+      "default": "#806018FF",
+      "allowAlpha": true,
+      "terminal": "yellow"
+    },
+    {
+      "key": "terminal.blue",
+      "label": "终端ANSI 蓝",
+      "group": "终端",
+      "description": "终端ANSI 蓝，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-blue",
+      "default": "#3B5F9BFF",
+      "allowAlpha": true,
+      "terminal": "blue"
+    },
+    {
+      "key": "terminal.magenta",
+      "label": "终端ANSI 品红",
+      "group": "终端",
+      "description": "终端ANSI 品红，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-magenta",
+      "default": "#805387FF",
+      "allowAlpha": true,
+      "terminal": "magenta"
+    },
+    {
+      "key": "terminal.cyan",
+      "label": "终端ANSI 青",
+      "group": "终端",
+      "description": "终端ANSI 青，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-cyan",
+      "default": "#2E6A72FF",
+      "allowAlpha": true,
+      "terminal": "cyan"
+    },
+    {
+      "key": "terminal.white",
+      "label": "终端ANSI 白",
+      "group": "终端",
+      "description": "终端ANSI 白，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-white",
+      "default": "#69727DFF",
+      "allowAlpha": true,
+      "terminal": "white"
+    },
+    {
+      "key": "terminal.brightBlack",
+      "label": "终端ANSI 亮黑",
+      "group": "终端",
+      "description": "终端ANSI 亮黑，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-black",
+      "default": "#69727DFF",
+      "allowAlpha": true,
+      "terminal": "brightBlack"
+    },
+    {
+      "key": "terminal.brightRed",
+      "label": "终端ANSI 亮红",
+      "group": "终端",
+      "description": "终端ANSI 亮红，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-red",
+      "default": "#B44338FF",
+      "allowAlpha": true,
+      "terminal": "brightRed"
+    },
+    {
+      "key": "terminal.brightGreen",
+      "label": "终端ANSI 亮绿",
+      "group": "终端",
+      "description": "终端ANSI 亮绿，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-green",
+      "default": "#43735FFF",
+      "allowAlpha": true,
+      "terminal": "brightGreen"
+    },
+    {
+      "key": "terminal.brightYellow",
+      "label": "终端ANSI 亮黄",
+      "group": "终端",
+      "description": "终端ANSI 亮黄，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-yellow",
+      "default": "#8B671BFF",
+      "allowAlpha": true,
+      "terminal": "brightYellow"
+    },
+    {
+      "key": "terminal.brightBlue",
+      "label": "终端ANSI 亮蓝",
+      "group": "终端",
+      "description": "终端ANSI 亮蓝，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-blue",
+      "default": "#4A69A1FF",
+      "allowAlpha": true,
+      "terminal": "brightBlue"
+    },
+    {
+      "key": "terminal.brightMagenta",
+      "label": "终端ANSI 亮品红",
+      "group": "终端",
+      "description": "终端ANSI 亮品红，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-magenta",
+      "default": "#8D5A91FF",
+      "allowAlpha": true,
+      "terminal": "brightMagenta"
+    },
+    {
+      "key": "terminal.brightCyan",
+      "label": "终端ANSI 亮青",
+      "group": "终端",
+      "description": "终端ANSI 亮青，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-cyan",
+      "default": "#38747CFF",
+      "allowAlpha": true,
+      "terminal": "brightCyan"
+    },
+    {
+      "key": "terminal.brightWhite",
+      "label": "终端ANSI 亮白",
+      "group": "终端",
+      "description": "终端ANSI 亮白，用于终端中的对应界面元素",
+      "cssVariable": "--terminal-bright-white",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "terminal": "brightWhite"
+    },
+    {
+      "key": "diagram.background",
+      "label": "图表画布",
+      "group": "图表与插件展示",
+      "description": "图表画布，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-background",
+      "default": "#FFFEFDFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.base"
+      }
+    },
+    {
+      "key": "diagram.text",
+      "label": "图表文字",
+      "group": "图表与插件展示",
+      "description": "图表文字，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "diagram.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "diagram.primary",
+      "label": "主要节点",
+      "group": "图表与插件展示",
+      "description": "主要节点，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-primary",
+      "default": "#F2F4F5FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.muted"
+      }
+    },
+    {
+      "key": "diagram.primaryBorder",
+      "label": "主要节点边框",
+      "group": "图表与插件展示",
+      "description": "主要节点边框，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-primary-border",
+      "default": "#3F46503D",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border.strong"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "diagram.line",
+      "label": "图表连线",
+      "group": "图表与插件展示",
+      "description": "图表连线，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-line",
+      "default": "#69727DFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.muted"
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "diagram.secondary",
+      "label": "次要节点",
+      "group": "图表与插件展示",
+      "description": "次要节点，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-secondary",
+      "default": "#A94A2E14",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.soft"
+      }
+    },
+    {
+      "key": "diagram.tertiary",
+      "label": "补充节点",
+      "group": "图表与插件展示",
+      "description": "补充节点，用于图表与插件展示中的对应界面元素",
+      "cssVariable": "--diagram-tertiary",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "editor.cursor",
+      "label": "编辑器光标",
+      "group": "编辑器",
+      "description": "编辑器光标，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-cursor",
+      "default": "#A94A2EFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 3
+    },
+    {
+      "key": "editor.searchBg",
+      "label": "搜索匹配背景",
+      "group": "编辑器",
+      "description": "搜索匹配背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-search-bg",
+      "default": "#A94A2E29",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.softStrong"
+      }
+    },
+    {
+      "key": "editor.searchBorder",
+      "label": "搜索匹配边框",
+      "group": "编辑器",
+      "description": "搜索匹配边框，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-search-border",
+      "default": "#A94A2E5C",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.outline"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 3
+    },
+    {
+      "key": "editor.completionBg",
+      "label": "补全提示背景",
+      "group": "编辑器",
+      "description": "补全提示背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-completion-bg",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "surface.strong"
+      }
+    },
+    {
+      "key": "editor.completionText",
+      "label": "补全提示文字",
+      "group": "编辑器",
+      "description": "补全提示文字，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-completion-text",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "text.primary"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.completionSelectedBg",
+      "label": "补全选中背景",
+      "group": "编辑器",
+      "description": "补全选中背景，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-completion-selected-bg",
+      "default": "#A94A2E14",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.soft"
+      }
+    },
+    {
+      "key": "editor.diagnosticError",
+      "label": "错误诊断",
+      "group": "编辑器",
+      "description": "错误诊断，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-diagnostic-error",
+      "default": "#B4233DFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.danger.text"
+      }
+    },
+    {
+      "key": "editor.diagnosticWarning",
+      "label": "警告诊断",
+      "group": "编辑器",
+      "description": "警告诊断，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-diagnostic-warning",
+      "default": "#8A530AFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.warning.text"
+      }
+    },
+    {
+      "key": "editor.diagnosticInfo",
+      "label": "信息诊断",
+      "group": "编辑器",
+      "description": "信息诊断，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-diagnostic-info",
+      "default": "#315F88FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.info.text"
+      }
+    },
+    {
+      "key": "editor.breakpoint",
+      "label": "断点标记",
+      "group": "编辑器",
+      "description": "断点标记，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-breakpoint",
+      "default": "#B4233DFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.danger.text"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 3
+    },
+    {
+      "key": "editor.breakpointBorder",
+      "label": "断点轮廓",
+      "group": "编辑器",
+      "description": "断点轮廓，用于编辑器中的对应界面元素",
+      "cssVariable": "--editor-breakpoint-border",
+      "default": "#B4233D61",
+      "allowAlpha": true,
+      "derive": {
+        "from": "status.danger.border"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 3
+    },
+    {
+      "key": "workbench.statusChipBorder",
+      "label": "状态标签边框",
+      "group": "工作台",
+      "description": "状态标签边框，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-status-chip-border",
+      "default": "#3F465017",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border",
+        "alpha": 0.0912
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "workbench.activityBorder",
+      "label": "活动栏选中边框",
+      "group": "工作台",
+      "description": "活动栏选中边框，用于工作台中的对应界面元素",
+      "cssVariable": "--workbench-activity-border",
+      "default": "#A94A2E3D",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "alpha": 0.24
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "chat.streamingBorder",
+      "label": "流式消息边框",
+      "group": "基础界面",
+      "description": "流式消息边框，用于基础界面中的对应界面元素",
+      "cssVariable": "--chat-streaming-border",
+      "default": "#9F4A3182",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "mix": {
+          "with": "workbench.divider",
+          "ratio": 0.46
+        }
+      },
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "chat.streamingShadow",
+      "label": "流式消息阴影",
+      "group": "基础界面",
+      "description": "流式消息阴影，用于基础界面中的对应界面元素",
+      "cssVariable": "--chat-streaming-shadow",
+      "default": "#A94A2E1F",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent",
+        "alpha": 0.12
+      }
+    },
+    {
+      "key": "decoration.emptyArtGlow",
+      "label": "空态插画光晕",
+      "group": "装饰",
+      "description": "空态插画光晕，用于装饰中的对应界面元素",
+      "cssVariable": "--decoration-empty-art-glow",
+      "default": "#37685BB3",
+      "allowAlpha": true,
+      "derive": {
+        "from": "accent.strong",
+        "alpha": 0.7
+      }
+    },
+    {
+      "key": "usage.error.border",
+      "label": "用量面板错误边框",
+      "group": "状态与身份",
+      "description": "用量面板错误边框，用于状态与身份中的对应界面元素",
+      "cssVariable": "--usage-error-border",
+      "default": "#FECACAFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "usage.error.background",
+      "label": "用量面板错误背景",
+      "group": "状态与身份",
+      "description": "用量面板错误背景，用于状态与身份中的对应界面元素",
+      "cssVariable": "--usage-error-background",
+      "default": "#FEF2F2FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "usage.error.text",
+      "label": "用量面板错误文字",
+      "group": "状态与身份",
+      "description": "用量面板错误文字，用于状态与身份中的对应界面元素",
+      "cssVariable": "--usage-error-text",
+      "default": "#B91C1CFF",
+      "allowAlpha": true,
+      "contrastAgainst": "usage.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "usage.success.border",
+      "label": "用量面板成功边框",
+      "group": "状态与身份",
+      "description": "用量面板成功边框，用于状态与身份中的对应界面元素",
+      "cssVariable": "--usage-success-border",
+      "default": "#A7F3D0FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "usage.success.background",
+      "label": "用量面板成功背景",
+      "group": "状态与身份",
+      "description": "用量面板成功背景，用于状态与身份中的对应界面元素",
+      "cssVariable": "--usage-success-background",
+      "default": "#ECFDF5FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "usage.success.text",
+      "label": "用量面板成功文字",
+      "group": "状态与身份",
+      "description": "用量面板成功文字，用于状态与身份中的对应界面元素",
+      "cssVariable": "--usage-success-text",
+      "default": "#047857FF",
+      "allowAlpha": true,
+      "contrastAgainst": "usage.success.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.error.borderLight",
+      "label": "错误边框（浅层）",
+      "group": "状态与身份",
+      "description": "错误边框（浅层）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-border-light",
+      "default": "#FFC9C9FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.error.backgroundSubtle",
+      "label": "错误背景（柔和）",
+      "group": "状态与身份",
+      "description": "错误背景（柔和）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-background-subtle",
+      "default": "#FEF2F2FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.textDeep",
+      "label": "错误文字（深色）",
+      "group": "状态与身份",
+      "description": "错误文字（深色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-text-deep",
+      "default": "#C10007FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.warning.borderLight",
+      "label": "警告边框（浅层）",
+      "group": "状态与身份",
+      "description": "警告边框（浅层）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-border-light",
+      "default": "#FEE685FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.warning.backgroundSubtle",
+      "label": "警告背景（柔和）",
+      "group": "状态与身份",
+      "description": "警告背景（柔和）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-background-subtle",
+      "default": "#FFFBEBFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.warning.textStronger",
+      "label": "警告文字（强化）",
+      "group": "状态与身份",
+      "description": "警告文字（强化）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-text-stronger",
+      "default": "#973C00FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.warning.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.success.borderLight",
+      "label": "成功边框（浅层）",
+      "group": "状态与身份",
+      "description": "成功边框（浅层）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-success-border-light",
+      "default": "#A4F4CFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.success.backgroundSubtle",
+      "label": "成功背景（柔和）",
+      "group": "状态与身份",
+      "description": "成功背景（柔和）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-success-background-subtle",
+      "default": "#ECFDF5FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.success.textDeep",
+      "label": "成功文字（深色）",
+      "group": "状态与身份",
+      "description": "成功文字（深色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-success-text-deep",
+      "default": "#007A55FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.success.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.error.textStronger",
+      "label": "错误文字（强化）",
+      "group": "状态与身份",
+      "description": "错误文字（强化）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-text-stronger",
+      "default": "#9F0712FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.warning.textDeep",
+      "label": "警告文字（深色）",
+      "group": "状态与身份",
+      "description": "警告文字（深色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-text-deep",
+      "default": "#BB4D00FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.warning.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.warning.textEmphasis",
+      "label": "警告文字（强调）",
+      "group": "状态与身份",
+      "description": "警告文字（强调）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-text-emphasis",
+      "default": "#7B3306FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.warning.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "button.warning.backgroundDeep",
+      "label": "警示操作背景（深色）",
+      "group": "控件与交互",
+      "description": "警示操作背景（深色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--button-warning-background-deep",
+      "default": "#BB4D00FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "button.filledForeground",
+      "label": "实色按钮前景",
+      "group": "控件与交互",
+      "description": "实色按钮前景；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--button-filled-foreground",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "button.danger.backgroundStrong",
+      "minContrast": 4.5
+    },
+    {
+      "key": "button.warning.backgroundStronger",
+      "label": "警示操作背景（强化）",
+      "group": "控件与交互",
+      "description": "警示操作背景（强化）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--button-warning-background-stronger",
+      "default": "#973C00FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.information.borderLight",
+      "label": "信息边框（浅层）",
+      "group": "状态与身份",
+      "description": "信息边框（浅层）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-information-border-light",
+      "default": "#BEDBFFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.information.backgroundSubtle",
+      "label": "信息背景（柔和）",
+      "group": "状态与身份",
+      "description": "信息背景（柔和）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-information-background-subtle",
+      "default": "#EFF6FFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.information.textEmphasis",
+      "label": "信息文字（强调）",
+      "group": "状态与身份",
+      "description": "信息文字（强调）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-information-text-emphasis",
+      "default": "#1C398EFF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.information.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.information.controlStrong",
+      "label": "信息控件（突出）",
+      "group": "状态与身份",
+      "description": "信息控件（突出）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-information-control-strong",
+      "default": "#155DFCFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.borderVisible",
+      "label": "错误边框（清晰）",
+      "group": "状态与身份",
+      "description": "错误边框（清晰）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-border-visible",
+      "default": "#FFA2A2FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.error.textEmphasis",
+      "label": "错误文字（强调）",
+      "group": "状态与身份",
+      "description": "错误文字（强调）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-text-emphasis",
+      "default": "#82181AFF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "button.danger.backgroundDeep",
+      "label": "危险操作背景（深色）",
+      "group": "控件与交互",
+      "description": "危险操作背景（深色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--button-danger-background-deep",
+      "default": "#C10007FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "button.danger.backgroundStronger",
+      "label": "危险操作背景（强化）",
+      "group": "控件与交互",
+      "description": "危险操作背景（强化）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--button-danger-background-stronger",
+      "default": "#9F0712FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.backgroundSoft",
+      "label": "错误背景（浅色）",
+      "group": "状态与身份",
+      "description": "错误背景（浅色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-error-background-soft",
+      "default": "#FFE2E2FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "button.warning.backgroundStrong",
+      "label": "警示操作背景（突出）",
+      "group": "控件与交互",
+      "description": "警示操作背景（突出）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--button-warning-background-strong",
+      "default": "#E17100FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.workspaceInfo.borderLight",
+      "label": "工作区提示边框（浅层）",
+      "group": "状态与身份",
+      "description": "工作区提示边框（浅层）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-workspace-info-border-light",
+      "default": "#B8E6FEFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.workspaceInfo.backgroundSubtle",
+      "label": "工作区提示背景（柔和）",
+      "group": "状态与身份",
+      "description": "工作区提示背景（柔和）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-workspace-info-background-subtle",
+      "default": "#F0F9FFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.workspaceInfo.textDeep",
+      "label": "工作区提示文字（深色）",
+      "group": "状态与身份",
+      "description": "工作区提示文字（深色）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-workspace-info-text-deep",
+      "default": "#0069A8FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "admin.log.background",
+      "label": "升级日志背景",
+      "group": "状态与身份",
+      "description": "升级日志背景；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--admin-log-background",
+      "default": "#020618FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "admin.log.text",
+      "label": "升级日志文字",
+      "group": "状态与身份",
+      "description": "升级日志文字；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--admin-log-text",
+      "default": "#F1F5F9FF",
+      "allowAlpha": true,
+      "contrastAgainst": "admin.log.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.warning.text",
+      "label": "警告文字（标准）",
+      "group": "状态与身份",
+      "description": "警告文字（标准）；用于AdminCenterScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-text",
+      "default": "#FE9A00FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.warning.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.warning.borderVisible",
+      "label": "警告边框（清晰）",
+      "group": "状态与身份",
+      "description": "警告边框（清晰）；用于DesktopBotManagerScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-border-visible",
+      "default": "#FFD230FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.warning.backgroundSoft",
+      "label": "警告背景（浅色）",
+      "group": "状态与身份",
+      "description": "警告背景（浅色）；用于DesktopBotManagerScreen等界面对应状态",
+      "cssVariable": "--feedback-warning-background-soft",
+      "default": "#FEF3C6FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "access.badgeBackground",
+      "label": "只读标记底色",
+      "group": "状态与身份",
+      "description": "只读标记底色；用于DesktopBotManagerScreen等界面对应状态",
+      "cssVariable": "--access-badge-background",
+      "default": "#FFFFFFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.border",
+      "label": "错误边框（标准）",
+      "group": "状态与身份",
+      "description": "错误边框（标准）；用于DesktopBotManagerScreen等界面对应状态",
+      "cssVariable": "--feedback-error-border",
+      "default": "#FB2C36FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "access.restricted.border",
+      "label": "访问受限边框（标准）",
+      "group": "状态与身份",
+      "description": "访问受限边框（标准）；用于DesktopBotManagerScreen等界面对应状态",
+      "cssVariable": "--access-restricted-border",
+      "default": "#71717BFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "access.restricted.textEmphasis",
+      "label": "访问受限文字（强调）",
+      "group": "状态与身份",
+      "description": "访问受限文字（强调）；用于DesktopBotManagerScreen等界面对应状态",
+      "cssVariable": "--access-restricted-text-emphasis",
+      "default": "#18181BFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.error.textStrong",
+      "label": "错误文字（突出）",
+      "group": "状态与身份",
+      "description": "错误文字（突出）；用于BotListScreen等界面对应状态",
+      "cssVariable": "--feedback-error-text-strong",
+      "default": "#E7000BFF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.caution.borderLight",
+      "label": "注意边框（浅层）",
+      "group": "状态与身份",
+      "description": "注意边框（浅层）；用于GitScreen等界面对应状态",
+      "cssVariable": "--feedback-caution-border-light",
+      "default": "#FFF085FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.caution.backgroundSubtle",
+      "label": "注意背景（柔和）",
+      "group": "状态与身份",
+      "description": "注意背景（柔和）；用于GitScreen等界面对应状态",
+      "cssVariable": "--feedback-caution-background-subtle",
+      "default": "#FEFCE8FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.caution.textDeep",
+      "label": "注意文字（深色）",
+      "group": "状态与身份",
+      "description": "注意文字（深色）；用于GitScreen等界面对应状态",
+      "cssVariable": "--feedback-caution-text-deep",
+      "default": "#A65F00FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.success.textStrong",
+      "label": "成功文字（突出）",
+      "group": "状态与身份",
+      "description": "成功文字（突出）；用于GitScreen等界面对应状态",
+      "cssVariable": "--feedback-success-text-strong",
+      "default": "#009966FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.success.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.error.borderAlpha25",
+      "label": "错误边框（标准，25%）",
+      "group": "状态与身份",
+      "description": "错误边框（标准，25%）；用于ChatScreen等界面对应状态",
+      "cssVariable": "--feedback-error-border-alpha25",
+      "default": "#FB2C3640",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.error.backgroundAlpha10",
+      "label": "错误背景（标准，10%）",
+      "group": "状态与身份",
+      "description": "错误背景（标准，10%）；用于ChatScreen等界面对应状态",
+      "cssVariable": "--feedback-error-background-alpha10",
+      "default": "#FB2C361A",
+      "allowAlpha": true
+    },
+    {
+      "key": "button.danger.backgroundStrong",
+      "label": "危险操作背景（突出）",
+      "group": "控件与交互",
+      "description": "危险操作背景（突出）；用于ChatScreen等界面对应状态",
+      "cssVariable": "--button-danger-background-strong",
+      "default": "#E7000BFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "login.error.border",
+      "label": "登录错误边框",
+      "group": "状态与身份",
+      "description": "登录错误边框；用于LoginScreen等界面对应状态",
+      "cssVariable": "--login-error-border",
+      "default": "#FB2C364D",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "login.error.background",
+      "label": "登录错误背景",
+      "group": "状态与身份",
+      "description": "登录错误背景；用于LoginScreen等界面对应状态",
+      "cssVariable": "--login-error-background",
+      "default": "#FB2C361A",
+      "allowAlpha": true
+    },
+    {
+      "key": "login.error.text",
+      "label": "登录错误文字",
+      "group": "状态与身份",
+      "description": "登录错误文字；用于LoginScreen等界面对应状态",
+      "cssVariable": "--login-error-text",
+      "default": "#FFC9C9FF",
+      "allowAlpha": true,
+      "contrastAgainst": "login.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "feedback.error.borderMutedAlpha60",
+      "label": "错误边框（次级，60%）",
+      "group": "状态与身份",
+      "description": "错误边框（次级，60%）；用于MobileDebugScreen等界面对应状态",
+      "cssVariable": "--feedback-error-border-muted-alpha60",
+      "default": "#FF646799",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.error.text",
+      "label": "错误文字（标准）",
+      "group": "状态与身份",
+      "description": "错误文字（标准）；用于MobileDebugScreen等界面对应状态",
+      "cssVariable": "--feedback-error-text",
+      "default": "#FB2C36FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.error.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "access.restricted.backgroundSoft",
+      "label": "访问受限背景（浅色）",
+      "group": "状态与身份",
+      "description": "访问受限背景（浅色）；用于DesktopBotSwitcherPopover等界面对应状态",
+      "cssVariable": "--access-restricted-background-soft",
+      "default": "#F4F4F5FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "access.restricted.textHighest",
+      "label": "访问受限文字（最高）",
+      "group": "状态与身份",
+      "description": "访问受限文字（最高）；用于DesktopBotSwitcherPopover等界面对应状态",
+      "cssVariable": "--access-restricted-text-highest",
+      "default": "#09090BFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "access.restricted.backgroundLight",
+      "label": "访问受限背景（浅层）",
+      "group": "状态与身份",
+      "description": "访问受限背景（浅层）；用于DesktopBotSwitcherPopover等界面对应状态",
+      "cssVariable": "--access-restricted-background-light",
+      "default": "#E4E4E7FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.information.border",
+      "label": "信息边框（标准）",
+      "group": "状态与身份",
+      "description": "信息边框（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-information-border",
+      "default": "#2B7FFFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.information.background",
+      "label": "信息背景（标准）",
+      "group": "状态与身份",
+      "description": "信息背景（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-information-background",
+      "default": "#2B7FFFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.success.border",
+      "label": "成功边框（标准）",
+      "group": "状态与身份",
+      "description": "成功边框（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-success-border",
+      "default": "#00BC7DFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.success.background",
+      "label": "成功背景（标准）",
+      "group": "状态与身份",
+      "description": "成功背景（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-success-background",
+      "default": "#00BC7DFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.warning.border",
+      "label": "警告边框（标准）",
+      "group": "状态与身份",
+      "description": "警告边框（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-warning-border",
+      "default": "#FE9A00FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.warning.background",
+      "label": "警告背景（标准）",
+      "group": "状态与身份",
+      "description": "警告背景（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-warning-background",
+      "default": "#FE9A00FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.background",
+      "label": "错误背景（标准）",
+      "group": "状态与身份",
+      "description": "错误背景（标准）；用于AnnouncementDialog等界面对应状态",
+      "cssVariable": "--feedback-error-background",
+      "default": "#FB2C36FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.backgroundSubtleAlpha80",
+      "label": "错误背景（柔和，80%）",
+      "group": "状态与身份",
+      "description": "错误背景（柔和，80%）；用于BotSwitcherSheet等界面对应状态",
+      "cssVariable": "--feedback-error-background-subtle-alpha80",
+      "default": "#FEF2F2CC",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.borderSoft",
+      "label": "错误边框（浅色）",
+      "group": "状态与身份",
+      "description": "错误边框（浅色）；用于ChatComposer等界面对应状态",
+      "cssVariable": "--feedback-error-border-soft",
+      "default": "#FFE2E2FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "feedback.warning.textStrong",
+      "label": "警告文字（突出）",
+      "group": "状态与身份",
+      "description": "警告文字（突出）；用于ConversationHistoryPanel等界面对应状态",
+      "cssVariable": "--feedback-warning-text-strong",
+      "default": "#E17100FF",
+      "allowAlpha": true,
+      "contrastAgainst": "feedback.warning.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "diff.added.background",
+      "label": "差异新增背景",
+      "group": "文件树与 Git",
+      "description": "差异新增背景；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-added-background",
+      "default": "#ECFDF5FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "diff.added.text",
+      "label": "差异新增文字",
+      "group": "文件树与 Git",
+      "description": "差异新增文字；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-added-text",
+      "default": "#007A55FF",
+      "allowAlpha": true,
+      "contrastAgainst": "diff.added.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "diff.deleted.background",
+      "label": "差异删除背景",
+      "group": "文件树与 Git",
+      "description": "差异删除背景；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-deleted-background",
+      "default": "#FEF2F2FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "diff.deleted.text",
+      "label": "差异删除文字",
+      "group": "文件树与 Git",
+      "description": "差异删除文字；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-deleted-text",
+      "default": "#C10007FF",
+      "allowAlpha": true,
+      "contrastAgainst": "diff.deleted.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "diff.hunk.background",
+      "label": "差异区块背景",
+      "group": "文件树与 Git",
+      "description": "差异区块背景；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-hunk-background",
+      "default": "#EFF6FFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "diff.hunk.text",
+      "label": "差异区块文字",
+      "group": "文件树与 Git",
+      "description": "差异区块文字；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-hunk-text",
+      "default": "#1447E6FF",
+      "allowAlpha": true,
+      "contrastAgainst": "diff.hunk.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "diff.lineNumber",
+      "label": "差异行号",
+      "group": "文件树与 Git",
+      "description": "差异行号；用于GitDiffViewer等界面对应状态",
+      "cssVariable": "--diff-line-number",
+      "default": "#90A1B9FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "fileList.folderIcon",
+      "label": "文件列表文件夹图标",
+      "group": "文件树与 Git",
+      "description": "文件列表文件夹图标；用于FileList等界面对应状态",
+      "cssVariable": "--file-list-folder-icon",
+      "default": "#2B7FFFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "fileList.fileIcon",
+      "label": "文件列表文件图标",
+      "group": "文件树与 Git",
+      "description": "文件列表文件图标；用于FileList等界面对应状态",
+      "cssVariable": "--file-list-file-icon",
+      "default": "#6A7282FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "notification.unread",
+      "label": "未读提示",
+      "group": "状态与身份",
+      "description": "未读提示；用于AnnouncementButton等界面对应状态",
+      "cssVariable": "--notification-unread",
+      "default": "#FB2C36FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "overlay.remote",
+      "label": "远程连接遮罩",
+      "group": "装饰",
+      "description": "远程连接遮罩；用于RemoteConnectionForm等界面对应状态",
+      "cssVariable": "--overlay-remote",
+      "default": "#00000066",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.folder.border",
+      "label": "结构树文件夹边框",
+      "group": "图表与插件展示",
+      "description": "结构树文件夹边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-folder-border",
+      "default": "#FFD230FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.folder.background",
+      "label": "结构树文件夹底色",
+      "group": "图表与插件展示",
+      "description": "结构树文件夹底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-folder-background",
+      "default": "#FFFBEBFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.folder.text",
+      "label": "结构树文件夹文字",
+      "group": "图表与插件展示",
+      "description": "结构树文件夹文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-folder-text",
+      "default": "#BB4D00FF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.folder.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "pluginTree.file.border",
+      "label": "结构树文件边框",
+      "group": "图表与插件展示",
+      "description": "结构树文件边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-file-border",
+      "default": "#CAD5E2FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.file.background",
+      "label": "结构树文件底色",
+      "group": "图表与插件展示",
+      "description": "结构树文件底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-file-background",
+      "default": "#F8FAFCFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.file.text",
+      "label": "结构树文件文字",
+      "group": "图表与插件展示",
+      "description": "结构树文件文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-file-text",
+      "default": "#314158FF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.file.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "pluginTree.class.border",
+      "label": "结构树类边框",
+      "group": "图表与插件展示",
+      "description": "结构树类边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-class-border",
+      "default": "#74D4FFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.class.background",
+      "label": "结构树类底色",
+      "group": "图表与插件展示",
+      "description": "结构树类底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-class-background",
+      "default": "#F0F9FFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.class.text",
+      "label": "结构树类文字",
+      "group": "图表与插件展示",
+      "description": "结构树类文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-class-text",
+      "default": "#0069A8FF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.class.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "pluginTree.function.border",
+      "label": "结构树函数边框",
+      "group": "图表与插件展示",
+      "description": "结构树函数边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-function-border",
+      "default": "#5EE9B5FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.function.background",
+      "label": "结构树函数底色",
+      "group": "图表与插件展示",
+      "description": "结构树函数底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-function-background",
+      "default": "#ECFDF5FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.function.text",
+      "label": "结构树函数文字",
+      "group": "图表与插件展示",
+      "description": "结构树函数文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-function-text",
+      "default": "#007A55FF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.function.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "pluginTree.method.border",
+      "label": "结构树方法边框",
+      "group": "图表与插件展示",
+      "description": "结构树方法边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-method-border",
+      "default": "#46EDD5FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.method.background",
+      "label": "结构树方法底色",
+      "group": "图表与插件展示",
+      "description": "结构树方法底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-method-background",
+      "default": "#F0FDFAFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.method.text",
+      "label": "结构树方法文字",
+      "group": "图表与插件展示",
+      "description": "结构树方法文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-method-text",
+      "default": "#00786FFF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.method.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "pluginTree.heading.border",
+      "label": "结构树标题边框",
+      "group": "图表与插件展示",
+      "description": "结构树标题边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-heading-border",
+      "default": "#C4B4FFFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.heading.background",
+      "label": "结构树标题底色",
+      "group": "图表与插件展示",
+      "description": "结构树标题底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-heading-background",
+      "default": "#F5F3FFFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.heading.text",
+      "label": "结构树标题文字",
+      "group": "图表与插件展示",
+      "description": "结构树标题文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-heading-text",
+      "default": "#7008E7FF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.heading.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "pluginTree.symbol.border",
+      "label": "结构树符号边框",
+      "group": "图表与插件展示",
+      "description": "结构树符号边框；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-symbol-border",
+      "default": "#D4D4D8FF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "pluginTree.symbol.background",
+      "label": "结构树符号底色",
+      "group": "图表与插件展示",
+      "description": "结构树符号底色；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-symbol-background",
+      "default": "#FAFAFAFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "pluginTree.symbol.text",
+      "label": "结构树符号文字",
+      "group": "图表与插件展示",
+      "description": "结构树符号文字；用于TreeView等界面对应状态",
+      "cssVariable": "--plugin-tree-symbol-text",
+      "default": "#3F3F47FF",
+      "allowAlpha": true,
+      "contrastAgainst": "pluginTree.symbol.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "entropy.high",
+      "label": "熵图高值",
+      "group": "图表与插件展示",
+      "description": "熵图高值；用于HexView等界面对应状态",
+      "cssVariable": "--entropy-high",
+      "default": "#FF2056FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "entropy.medium",
+      "label": "熵图中值",
+      "group": "图表与插件展示",
+      "description": "熵图中值；用于HexView等界面对应状态",
+      "cssVariable": "--entropy-medium",
+      "default": "#FFB900FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "entropy.low",
+      "label": "熵图低值",
+      "group": "图表与插件展示",
+      "description": "熵图低值；用于HexView等界面对应状态",
+      "cssVariable": "--entropy-low",
+      "default": "#00BC7DFF",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.success.backgroundAlpha10",
+      "label": "成功背景（标准，10%）",
+      "group": "状态与身份",
+      "description": "成功背景（标准，10%）；用于SoloSessionChangesTab等界面对应状态",
+      "cssVariable": "--feedback-success-background-alpha10",
+      "default": "#00BC7D1A",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.warning.backgroundAlpha10",
+      "label": "警告背景（标准，10%）",
+      "group": "状态与身份",
+      "description": "警告背景（标准，10%）；用于SoloSessionChangesTab等界面对应状态",
+      "cssVariable": "--feedback-warning-background-alpha10",
+      "default": "#FE9A001A",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.workspaceInfo.backgroundAlpha10",
+      "label": "工作区提示背景（标准，10%）",
+      "group": "状态与身份",
+      "description": "工作区提示背景（标准，10%）；用于SoloSessionChangesTab等界面对应状态",
+      "cssVariable": "--feedback-workspace-info-background-alpha10",
+      "default": "#00A6F41A",
+      "allowAlpha": true
+    },
+    {
+      "key": "feedback.error.borderAlpha30",
+      "label": "错误边框（标准，30%）",
+      "group": "状态与身份",
+      "description": "错误边框（标准，30%）；用于SoloSessionChangesTab等界面对应状态",
+      "cssVariable": "--feedback-error-border-alpha30",
+      "default": "#FB2C364D",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "lan.unread",
+      "label": "局域网未读消息",
+      "group": "状态与身份",
+      "description": "局域网未读消息；用于LanChatDock等界面对应状态",
+      "cssVariable": "--lan-unread",
+      "default": "#FB2C36FF",
+      "allowAlpha": true
+    },
+    {
+      "key": "lan.online",
+      "label": "局域网在线状态",
+      "group": "状态与身份",
+      "description": "局域网在线状态；用于LanChatDock等界面对应状态",
+      "cssVariable": "--lan-online",
+      "default": "#00BC7DFF",
+      "allowAlpha": true,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot1",
+      "label": "Bot 身份色 1",
+      "group": "状态与身份",
+      "description": "Bot 身份色 1，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot1",
+      "default": "#0891B2FF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot2",
+      "label": "Bot 身份色 2",
+      "group": "状态与身份",
+      "description": "Bot 身份色 2，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot2",
+      "default": "#2563EBFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot3",
+      "label": "Bot 身份色 3",
+      "group": "状态与身份",
+      "description": "Bot 身份色 3，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot3",
+      "default": "#059669FF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot4",
+      "label": "Bot 身份色 4",
+      "group": "状态与身份",
+      "description": "Bot 身份色 4，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot4",
+      "default": "#EA580CFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot5",
+      "label": "Bot 身份色 5",
+      "group": "状态与身份",
+      "description": "Bot 身份色 5，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot5",
+      "default": "#DB2777FF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot6",
+      "label": "Bot 身份色 6",
+      "group": "状态与身份",
+      "description": "Bot 身份色 6，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot6",
+      "default": "#7C3AEDFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot7",
+      "label": "Bot 身份色 7",
+      "group": "状态与身份",
+      "description": "Bot 身份色 7，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot7",
+      "default": "#0D9488FF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.bot8",
+      "label": "Bot 身份色 8",
+      "group": "状态与身份",
+      "description": "Bot 身份色 8，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-bot8",
+      "default": "#65A30DFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 3
+    },
+    {
+      "key": "identity.codex",
+      "label": "Codex 身份色",
+      "group": "状态与身份",
+      "description": "Codex 身份色，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-codex",
+      "default": "#5AA7FFFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "identity.codexServer",
+      "label": "Codex 服务 身份色",
+      "group": "状态与身份",
+      "description": "Codex 服务 身份色，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-codex-server",
+      "default": "#C084FCFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "identity.claude",
+      "label": "Claude 身份色",
+      "group": "状态与身份",
+      "description": "Claude 身份色，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-claude",
+      "default": "#C79270FF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "identity.antigravity",
+      "label": "Antigravity 身份色",
+      "group": "状态与身份",
+      "description": "Antigravity 身份色，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-antigravity",
+      "default": "#6FD99AFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "identity.deepseek",
+      "label": "DeepSeek 身份色",
+      "group": "状态与身份",
+      "description": "DeepSeek 身份色，用于状态与身份中的对应界面元素",
+      "cssVariable": "--identity-deepseek",
+      "default": "#F0A15CFF",
+      "allowAlpha": false,
+      "contrastAgainst": "surface.base",
+      "minContrast": 4.5
+    },
+    {
+      "key": "themeManager.overlay",
+      "label": "调色台确认遮罩",
+      "group": "装饰",
+      "description": "主题管理确认弹层",
+      "cssVariable": "--theme-manager-overlay",
+      "default": "#3F465047",
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.28
+      },
+      "allowAlpha": true
+    },
+    {
+      "key": "themeManager.shadow",
+      "label": "调色台确认阴影",
+      "group": "装饰",
+      "description": "主题管理确认弹层",
+      "cssVariable": "--theme-manager-shadow",
+      "default": "#3F465026",
+      "derive": {
+        "from": "text.primary",
+        "alpha": 0.15
+      },
+      "allowAlpha": true
+    }
+  ]
+}

@@ -53,7 +53,7 @@ export function BotActivitySummary({ bot, className = "", showLatestAnswerTime =
   const text = getBotActivityText(bot, showLatestAnswerTime);
 
   return (
-    <div className={`inline-flex min-h-5 items-center gap-1.5 text-xs ${busy ? "text-amber-700" : "text-[var(--muted)]"} ${className}`}>
+    <div className={`inline-flex min-h-5 items-center gap-1.5 text-xs ${busy ? "text-[var(--feedback-warning-text-deep)]" : "text-[var(--muted)]"} ${className}`}>
       {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
       <span>{text}</span>
     </div>

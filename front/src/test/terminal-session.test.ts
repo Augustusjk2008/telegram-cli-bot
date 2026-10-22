@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
+import * as appearanceRuntime from "../theme/appearanceRuntime";
+import type { ResolvedAppearance } from "../theme/types";
+import type { WebBotClient } from "../services/webBotClient";
 
 const terminalState = vi.hoisted(() => ({
   onData: null as ((data: string) => void) | null,
@@ -6,6 +11,13 @@ const terminalState = vi.hoisted(() => ({
   deferWriteCompletion: false,
   writeCallbacks: [] as Array<() => void>,
   writes: [] as string[],
+  instances: [] as Array<{
+    options: Record<string, unknown>;
+    output: string[];
+    reset: ReturnType<typeof vi.fn>;
+    clear: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }>,
 }));
 
 vi.mock("@xterm/xterm", () => ({
@@ -13,6 +25,11 @@ vi.mock("@xterm/xterm", () => ({
     cols = 120;
     rows = 40;
     options: Record<string, unknown> = {};
+    output: string[] = [];
+    constructor(options: Record<string, unknown>) {
+      this.options = { ...options };
+      terminalState.instances.push(this);
+    }
     textarea = { focus: vi.fn() };
     parser = {
       registerCsiHandler: (
@@ -35,6 +52,7 @@ vi.mock("@xterm/xterm", () => ({
     write(data: string | Uint8Array, callback?: () => void) {
       const text = typeof data === "string" ? data : new TextDecoder().decode(data);
       terminalState.writes.push(text);
+      this.output.push(text);
       const handled = text === "\u001b[c" && terminalState.csiCHandler?.([]) === true;
       if (text === "\u001b[c" && !handled) {
         terminalState.onData?.("\u001b[?1;2c");
@@ -45,10 +63,13 @@ vi.mock("@xterm/xterm", () => ({
         callback?.();
       }
     }
-    reset() {}
-    clear() {}
+    reset = vi.fn(() => { this.output.length = 0; });
+    clear = vi.fn(() => { this.output.length = 0; });
     focus() {}
-    dispose() {}
+    dispose = vi.fn();
+    onWriteParsed() { return { dispose: vi.fn() }; }
+    onScroll() { return { dispose: vi.fn() }; }
+    scrollToBottom() {}
 
     onData(callback: (data: string) => void) {
       terminalState.onData = callback;
@@ -123,9 +144,23 @@ function frame(sequence: bigint, payload: string) {
 }
 
 import { createTerminalSession } from "../services/terminalSession";
+import { TerminalScreen } from "../screens/TerminalScreen";
+import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
+
+const initialAppearance = appearanceRuntime.getCurrentAppearance();
+
+function terminalAppearance(revision: string, foreground: string): ResolvedAppearance {
+  return {
+    ...initialAppearance, themeId: "theme_personal", revision,
+    colors: { ...initialAppearance.colors, "terminal.foreground": foreground, "terminal.background": "#182028FF" },
+  };
+}
 
 describe("terminal session", () => {
   afterEach(() => {
+    cleanup();
+    appearanceRuntime.applyResolvedAppearance(initialAppearance);
+    terminalState.instances.length = 0;
     sockets.length = 0;
     terminalState.onData = null;
     terminalState.csiCHandler = null;
@@ -134,6 +169,71 @@ describe("terminal session", () => {
     terminalState.writes.length = 0;
     window.history.replaceState(null, "", "/");
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it("uses the current snapshot for new terminals and accepts explicit palettes and legacy calls", () => {
+    const snapshot = terminalAppearance("terminal-1", "#E0E1E2FF");
+    appearanceRuntime.applyResolvedAppearance(snapshot);
+    const session = createTerminalSession(document.createElement("div"), { token: "", ownerId: "one", themeName: "paper-daylight" });
+    expect(session.term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(snapshot));
+    expect(session.term.options.theme.foreground).toBe("#E0E1E2FF");
+    const explicit = { background: "#111213", foreground: "#AABBCC", red: "#CC2211" };
+    const second = createTerminalSession(document.createElement("div"), { token: "", ownerId: "two", theme: explicit });
+    expect(second.term.options.theme).toEqual(explicit);
+    const next = terminalAppearance("terminal-2", "#B0C0D0FF");
+    second.setTheme(next);
+    expect(second.term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(next));
+    second.setTheme(explicit);
+    expect(second.term.options.theme).toEqual(explicit);
+    appearanceRuntime.applyResolvedAppearance(next);
+    session.setTheme("theme_personal");
+    expect(session.term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(next));
+    session.dispose();
+    second.dispose();
+  });
+
+  it("an open screen applies same-ID color revisions without recreating its terminal, socket or output buffer", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    appearanceRuntime.applyResolvedAppearance(terminalAppearance("screen-1", "#E0E1E2FF"));
+    const client = {
+      getTerminalSession: vi.fn(async () => ({ started: true, closed: false, cwd: "C:/workspace", ptyMode: true, connectionText: "运行中", lastSeq: 0 })),
+      getTerminalActionsConfig: vi.fn(async () => ({ actions: [], errors: [], runtimePlatform: "windows" })),
+      closeTerminalSession: vi.fn(),
+    } as unknown as WebBotClient;
+    const screen = (isVisible: boolean) => createElement(PersistentTerminalProvider, {
+      client,
+      children: createElement(TerminalScreen, { authToken: "", botAlias: "main", client, isVisible, themeName: "theme_personal" }),
+    });
+    const { rerender } = render(screen(true));
+    await waitFor(() => expect(terminalState.instances).toHaveLength(1));
+    const term = terminalState.instances[0];
+    const socket = sockets[0];
+    const owner = new URL(socket.url).searchParams.get("owner_id");
+    await act(async () => {
+      socket.open();
+      socket.receive(JSON.stringify({ protocol_version: 2, stream_id: "stream-theme", pty_mode: true }));
+      socket.receive(frame(1n, "retained terminal output\r\n"));
+    });
+    await waitFor(() => expect(term.output).toEqual(["retained terminal output\r\n"]));
+    const next = terminalAppearance("screen-2", "#A0B0C0FF");
+    await act(async () => { appearanceRuntime.applyResolvedAppearance(next); });
+    expect(term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(next));
+    expect(term.options.theme).toMatchObject({ foreground: "#A0B0C0FF" });
+    rerender(screen(false));
+    const hidden = terminalAppearance("screen-3", "#B0C0D0FF");
+    await act(async () => { appearanceRuntime.applyResolvedAppearance(hidden); });
+    expect(term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(hidden));
+    expect(terminalState.instances).toHaveLength(1);
+    expect(sockets).toEqual([socket]);
+    expect(new URL(socket.url).searchParams.get("owner_id")).toBe(owner);
+    expect(socket.readyState).toBe(MockWebSocket.OPEN);
+    expect(term.output).toEqual(["retained terminal output\r\n"]);
+    expect(term.reset).not.toHaveBeenCalled();
+    expect(term.clear).not.toHaveBeenCalled();
+    expect(term.dispose).not.toHaveBeenCalled();
+    expect(client.closeTerminalSession).not.toHaveBeenCalled();
   });
 
   it("keeps the active node base and tab owner in the terminal WebSocket URL", () => {

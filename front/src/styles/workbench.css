@@ -126,8 +126,8 @@
 }
 
 .desktop-workbench-root .file-tree-row[data-drop-target="true"] {
-  background: var(--accent-soft);
-  outline: 1px solid var(--accent);
+  background: var(--file-tree-drop);
+  outline: 1px solid var(--file-tree-drop-border);
   outline-offset: -1px;
 }
 
@@ -142,15 +142,10 @@
   background-image: linear-gradient(
     to right,
     transparent 11px,
-    color-mix(in srgb, var(--muted) 32%, transparent) 11px,
-    color-mix(in srgb, var(--muted) 32%, transparent) 12px
+    var(--file-tree-indent-guide) 11px,
+    var(--file-tree-indent-guide) 12px
   );
   background-size: 12px 100%;
-}
-
-:root[data-theme="high-contrast"] .desktop-workbench-root .file-tree-row[data-selected="true"] {
-  outline: 1px solid var(--text);
-  outline-offset: -1px;
 }
 
 .desktop-workbench-root [data-selected="true"] > button {
@@ -197,7 +192,7 @@
   height: 26px;
   align-items: center;
   gap: 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border: 1px solid var(--workbench-status-chip-border);
   background: transparent;
   padding-inline: 6px;
   font-size: 12px;
@@ -217,7 +212,7 @@
 }
 
 .workbench-activity-button[data-active="true"] {
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--workbench-activity-border);
 }
 
 .workbench-activity-button[data-active="true"]::after {
@@ -246,8 +241,8 @@
 }
 
 .chat-message-bubble-delight[data-streaming="true"] {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--workbench-hairline));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--chat-streaming-border);
+  box-shadow: 0 0 0 1px var(--chat-streaming-shadow);
 }
 
 .chat-message-bubble-delight[data-streaming="true"]::after {
@@ -383,7 +378,7 @@
   z-index: 0;
   opacity: var(--editor-empty-art-opacity);
   background:
-    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent-strong) 70%, transparent), transparent 48%),
+    radial-gradient(circle at 50% 42%, var(--decoration-empty-art-glow), transparent 48%),
     linear-gradient(135deg, var(--accent), var(--accent-strong));
   -webkit-mask-image: var(--workbench-empty-mask-image, url("/assets/workbench-editor-empty-mask.png?v=20260531-2"));
   mask-image: var(--workbench-empty-mask-image, url("/assets/workbench-editor-empty-mask.png?v=20260531-2"));
@@ -395,6 +390,281 @@
   mask-position: center;
   -webkit-mask-size: min(78%, 920px) auto;
   mask-size: min(78%, 920px) auto;
+}
+
+/* Paper daylight desktop: edge-to-edge surfaces, inset controls and quiet dividers. */
+:root[data-style-profile="paper"] .desktop-workbench-root {
+  --desktop-workbench-control-radius: 7px;
+  --desktop-workbench-pane-radius: 8px;
+  --workbench-hairline: var(--workbench-divider);
+  background: var(--surface);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-topbar {
+  min-height: 48px;
+  padding: 0 12px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-topbar-context {
+  flex: 1 1 auto;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-topbar-logo {
+  border: 0;
+  background: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-bot-switch {
+  min-width: 80px;
+  height: 30px;
+  border-color: var(--workbench-hairline);
+  border-radius: 7px;
+  background: var(--surface-strong);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-status-chip {
+  border: 0;
+  padding-inline: 4px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-segmented {
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  overflow: visible;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-segmented > button {
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-segmented > .tcb-selected-accent {
+  background: var(--workbench-selected-surface);
+  color: var(--accent);
+  box-shadow: 0 1px 3px var(--shadow-segmented-color), inset 0 0 0 1px var(--workbench-hairline);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-logout {
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
+  padding: 0;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .desktop-workbench-pane {
+  border: 0;
+  box-shadow: none;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .desktop-workbench-pane[data-focused="true"] {
+  box-shadow: 0 0 0 1px var(--workbench-focus-ring), var(--shadow-soft);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root [role="separator"]::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  background: var(--workbench-hairline);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root [role="separator"][aria-orientation="vertical"]::after {
+  inset: 0 1px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root [role="separator"][aria-orientation="horizontal"]::after {
+  inset: 1px 0;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-activity-rail {
+  border-color: var(--workbench-hairline);
+  background: var(--bg);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-rail-toggle {
+  border-color: transparent;
+  background: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-activity-button[data-active="true"] {
+  border-color: transparent;
+  background: var(--accent-soft-strong);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .desktop-file-tree-pane {
+  --text: var(--file-tree-text);
+  --muted: var(--file-tree-muted);
+  --status-success: var(--file-tree-git-added);
+  --status-warning: var(--file-tree-git-modified);
+  --workbench-hover-bg: var(--file-tree-hover);
+  --workbench-active-bg: var(--file-tree-selected);
+  --workbench-focus-ring: var(--file-tree-focus);
+  background: var(--file-tree-bg);
+}
+
+:root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="folder-open"], [data-icon="folder-closed"]) {
+  color: var(--file-tree-folder);
+}
+
+:root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="file-js-ts"], [data-icon="file-c-cpp"], [data-icon="file-csharp"], [data-icon="file-code"]) {
+  color: var(--file-tree-code-icon);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .file-tree-header {
+  padding-inline: 12px;
+  border-color: var(--workbench-hairline);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .file-tree-title {
+  padding-inline: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .file-tree-scroll {
+  padding-inline: 0;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .file-tree-row {
+  margin-inline: 4px;
+  border-radius: 5px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .file-tree-row[data-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--file-tree-folder);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .file-tree-row > button {
+  border-radius: 5px;
+  background: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .editor-tab-strip,
+:root[data-style-profile="paper"] .desktop-workbench-root .terminal-tab-strip {
+  min-height: 36px;
+  height: 36px;
+  padding: 3px 6px;
+  background: var(--surface);
+  border-color: var(--workbench-hairline);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .editor-tab,
+:root[data-style-profile="paper"] .desktop-workbench-root .terminal-tab {
+  border: 0;
+  border-radius: 6px;
+  padding-inline: 8px;
+  margin-right: 3px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .editor-tab[data-editor-tab-active="true"],
+:root[data-style-profile="paper"] .desktop-workbench-root .terminal-tab[data-active="true"] {
+  background: var(--workbench-selected-surface);
+  box-shadow: inset 0 0 0 1px var(--workbench-hairline);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .editor-tab[data-editor-tab-active="true"]::after {
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  background: var(--workbench-accent-fill);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .terminal-tab > [role="tab"] {
+  height: 28px;
+  padding-inline: 4px;
+  border: 0;
+  background: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .editor-breadcrumb {
+  padding-inline: 12px;
+  border-color: var(--workbench-hairline);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-action-header {
+  padding-inline: 12px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-message-meta {
+  font-size: 11px;
+  gap: 8px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-message-meta > span:first-child {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-message-bubble-delight {
+  border-radius: 10px;
+  border-color: var(--workbench-hairline);
+  box-shadow: none;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-user-message {
+  background: var(--chat-user-bg);
+  box-shadow: none;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-delight {
+  padding: 8px 10px;
+  border-top-color: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-input-surface {
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface-strong);
+  box-shadow: 0 2px 6px var(--shadow-composer-color);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-input-surface:focus-within {
+  border-color: var(--accent-outline);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-send {
+  background: var(--workbench-accent-fill);
+  color: var(--accent-foreground);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-send:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-attachments {
+  border-color: transparent;
+  background: transparent;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root :is([role="menu"], [role="listbox"]),
+:root[data-style-profile="paper"] .desktop-workbench-menu,
+:root[data-style-profile="paper"] .desktop-workbench-popover {
+  border-radius: 11px;
+  border-color: var(--workbench-hairline);
+  box-shadow: var(--shadow-soft);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-menu button {
+  color: revert-layer;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .desktop-workbench-statusbar {
+  padding-inline: 12px;
+  border-color: var(--workbench-hairline);
 }
 
 @keyframes workbenchShellReveal {
