@@ -135,7 +135,9 @@ select:disabled {
 
 :root[data-theme="lunar-ceramic"] :where(.backdrop-blur, [class*="backdrop-blur"]),
 :root[data-theme="copper-night"] :where(.backdrop-blur, [class*="backdrop-blur"]),
-:root[data-theme="eclipse-film"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
+:root[data-theme="eclipse-film"] :where(.backdrop-blur, [class*="backdrop-blur"]),
+:root[data-theme="obsidian-linear"] :where(.backdrop-blur, [class*="backdrop-blur"]),
+:root[data-theme="paper-daylight"] :where(.backdrop-blur, [class*="backdrop-blur"]) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
@@ -231,6 +233,7 @@ select:disabled {
 :root[data-theme="classic"] .app-logo-image--deep,
 :root[data-theme="lab-light"] .app-logo-image--deep,
 :root[data-theme="ink-paper"] .app-logo-image--deep,
+:root[data-theme="paper-daylight"] .app-logo-image--deep,
 :root[data-theme="lunar-ceramic"] .app-logo-image--deep,
 :root[data-theme="copper-night"] .app-logo-image--deep,
 :root[data-theme="eclipse-film"] .app-logo-image--deep {
@@ -240,6 +243,7 @@ select:disabled {
 :root[data-theme="classic"] .app-logo-image--classic,
 :root[data-theme="lab-light"] .app-logo-image--classic,
 :root[data-theme="ink-paper"] .app-logo-image--classic,
+:root[data-theme="paper-daylight"] .app-logo-image--classic,
 :root[data-theme="lunar-ceramic"] .app-logo-image--classic {
   display: block;
 }
@@ -310,6 +314,18 @@ select:disabled {
   --chat-markdown-accent-outline: color-mix(in srgb, var(--accent-foreground) 45%, transparent);
   --chat-markdown-border: color-mix(in srgb, var(--accent-foreground) 25%, transparent);
   --chat-markdown-surface: transparent;
+}
+
+:root:is([data-theme="obsidian-linear"], [data-theme="paper-daylight"]) .tcb-selected-accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-outline);
+}
+
+:root:is([data-theme="obsidian-linear"], [data-theme="paper-daylight"]) .chat-user-message {
+  --accent-foreground: var(--text);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-outline);
 }
 
 .chat-plain-text-content > p + p,

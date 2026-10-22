@@ -306,9 +306,9 @@ export function FileEditorSurface({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const codeNavigationHoverRef = useRef(codeNavigationHover);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
-  const codeMirrorTheme = typeof document !== "undefined" && isLightUiTheme(document.documentElement.dataset.theme)
-    ? "light"
-    : "dark";
+  const [codeMirrorTheme, setCodeMirrorTheme] = useState<"light" | "dark">(() => (
+    typeof document !== "undefined" && isLightUiTheme(document.documentElement.dataset.theme) ? "light" : "dark"
+  ));
   const normalizedBreakpointLines = breakpointLines ?? EMPTY_BREAKPOINT_LINES;
   const canShowCodeNavigationHover = Boolean(onResolveCodeNavigation && codeNavigationHover);
   const codeNavigationHoverContextKey = codeNavigationHover?.contextKey ?? codeNavigationHover;
@@ -316,6 +316,15 @@ export function FileEditorSurface({
   useLayoutEffect(() => {
     codeNavigationHoverRef.current = codeNavigationHover;
   }, [codeNavigationHover]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const syncTheme = () => setCodeMirrorTheme(isLightUiTheme(root.dataset.theme) ? "light" : "dark");
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    syncTheme();
+    return () => observer.disconnect();
+  }, []);
 
   const codeNavigationHoverExtensions = useMemo(() => {
     if (!canShowCodeNavigationHover) {

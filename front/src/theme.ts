@@ -1,6 +1,8 @@
 import { withPublicBase } from "./utils/publicBase";
 
 export const UI_THEME_NAMES = [
+  "obsidian-linear",
+  "paper-daylight",
   "deep-space",
   "classic",
   "graphite",
@@ -34,6 +36,8 @@ export const DEFAULT_CHAT_BODY_LINE_HEIGHT: ChatBodyLineHeightName = "normal";
 export const DEFAULT_CHAT_BODY_PARAGRAPH_SPACING: ChatBodyParagraphSpacingName = "normal";
 
 const UI_THEME_FAVICON_PATHS: Record<UiThemeName, string> = {
+  "obsidian-linear": "/assets/app-logo-favicon.svg",
+  "paper-daylight": "/assets/app-logo-classic.svg",
   "deep-space": "/assets/app-logo-favicon.svg",
   classic: "/assets/app-logo-classic.svg",
   graphite: "/assets/app-logo-favicon.svg",
@@ -58,6 +62,32 @@ export const UI_THEME_OPTIONS: Array<{
     muted: string;
   };
 }> = [
+  {
+    value: "obsidian-linear",
+    label: "线性黑曜石",
+    description: "黑曜石深色界面搭配柔和靛紫强调，适合专注工作。",
+    preview: {
+      accent: "#818cf8",
+      surface: "#121215",
+      accentStrong: "#a5b4fc",
+      border: "rgba(255, 255, 255, 0.1)",
+      text: "#f4f4f5",
+      muted: "#a1a1aa",
+    },
+  },
+  {
+    value: "paper-daylight",
+    label: "纸感日间",
+    description: "温润纸色界面搭配陶橙与墨绿，适合日间阅读。",
+    preview: {
+      accent: "#a94a2e",
+      surface: "#faf8f5",
+      accentStrong: "#37685b",
+      border: "rgba(41, 37, 36, 0.14)",
+      text: "#292524",
+      muted: "#6b625b",
+    },
+  },
   {
     value: "deep-space",
     label: "深空轨道",
@@ -178,7 +208,7 @@ export const UI_THEME_OPTIONS: Array<{
 ];
 
 export function isLightUiTheme(themeName: string | undefined): themeName is UiThemeName {
-  return themeName === "classic" || themeName === "lab-light" || themeName === "ink-paper" || themeName === "lunar-ceramic";
+  return themeName === "classic" || themeName === "lab-light" || themeName === "ink-paper" || themeName === "lunar-ceramic" || themeName === "paper-daylight";
 }
 
 export const CHAT_BODY_FONT_FAMILY_OPTIONS: Array<{
@@ -469,6 +499,62 @@ export function applyChatReadingPreferences(
 }
 
 export function getTerminalTheme(themeName: UiThemeName) {
+  if (themeName === "obsidian-linear") {
+    return {
+      background: "#101013",
+      foreground: "#e4e4e7",
+      cursor: "#a5b4fc",
+      cursorAccent: "#101013",
+      selectionBackground: "#373751",
+      selectionForeground: "#f4f4f5",
+      selectionInactiveBackground: "#282832",
+      black: "#09090b",
+      red: "#f87171",
+      green: "#86c995",
+      yellow: "#e8c57a",
+      blue: "#818cf8",
+      magenta: "#c4a1e8",
+      cyan: "#78c4cf",
+      white: "#d4d4d8",
+      brightBlack: "#8b8b96",
+      brightRed: "#fca5a5",
+      brightGreen: "#a7e2b2",
+      brightYellow: "#f5d99b",
+      brightBlue: "#a5b4fc",
+      brightMagenta: "#ddbafa",
+      brightCyan: "#a0dee7",
+      brightWhite: "#f4f4f5",
+    };
+  }
+
+  if (themeName === "paper-daylight") {
+    return {
+      background: "#faf8f5",
+      foreground: "#292524",
+      cursor: "#b75132",
+      cursorAccent: "#ffffff",
+      selectionBackground: "#e4d5c7",
+      selectionForeground: "#292524",
+      selectionInactiveBackground: "#ece4db",
+      black: "#292524",
+      red: "#a33c35",
+      green: "#37685b",
+      yellow: "#806018",
+      blue: "#3b5f9b",
+      magenta: "#805387",
+      cyan: "#2e6a72",
+      white: "#6b625b",
+      brightBlack: "#766c63",
+      brightRed: "#b44338",
+      brightGreen: "#43735f",
+      brightYellow: "#8b671b",
+      brightBlue: "#4a69a1",
+      brightMagenta: "#8d5a91",
+      brightCyan: "#38747c",
+      brightWhite: "#292524",
+    };
+  }
+
   if (themeName === "lunar-ceramic") {
     return {
       background: "#e8e6e2",
@@ -692,7 +778,7 @@ export function getTerminalMinimumContrastRatio(themeName: UiThemeName) {
   if (themeName === "high-contrast") {
     return 7;
   }
-  if (themeName === "lunar-ceramic" || themeName === "copper-night" || themeName === "eclipse-film") {
+  if (themeName === "lunar-ceramic" || themeName === "copper-night" || themeName === "eclipse-film" || themeName === "obsidian-linear") {
     return 4.5;
   }
   return isLightUiTheme(themeName) ? 4.5 : 1;

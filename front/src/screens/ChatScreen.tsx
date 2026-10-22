@@ -1531,7 +1531,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               : [
                   "chat-message-bubble-delight",
                   isUser && isCurrentUserMessage
-                    ? "min-w-0 overflow-hidden rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
+                    ? "chat-user-message min-w-0 overflow-hidden rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
                     : isStreamingAssistant
                       ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]"
                     : item.state === "error"
@@ -1568,7 +1568,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             ) : item.role === "assistant" && item.state !== "streaming" ? (
               <>
                 {item.state === "error" ? (
-                  <ChatPlainTextMessage content={displayText} className="chat-final-answer-compact text-red-700" />
+                  <ChatPlainTextMessage content={displayText} className="chat-final-answer-compact text-[var(--status-danger)]" />
                 ) : (
                   <ChatMarkdownMessage content={displayText} className="chat-final-answer-compact" onFileLinkClick={onFileLinkClick} />
                 )}

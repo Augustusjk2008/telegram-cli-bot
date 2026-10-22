@@ -13,12 +13,14 @@ import {
   Sun,
   Terminal,
 } from "lucide-react";
-import { UI_THEME_OPTIONS, type UiThemeName } from "../theme";
+import { DEFAULT_UI_THEME, UI_THEME_OPTIONS, type UiThemeName } from "../theme";
 
 type ThemeOption = (typeof UI_THEME_OPTIONS)[number];
 type ThemeIconComponent = typeof Orbit;
 
 const THEME_ICONS: Record<UiThemeName, ThemeIconComponent> = {
+  "obsidian-linear": Moon,
+  "paper-daylight": Sun,
   "deep-space": Orbit,
   classic: Sun,
   graphite: Terminal,
@@ -67,7 +69,9 @@ export function ThemeDropdown({
 }: Props) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const selectedOption = UI_THEME_OPTIONS.find((option) => option.value === value) || UI_THEME_OPTIONS[0];
+  const selectedOption = UI_THEME_OPTIONS.find((option) => option.value === value)
+    || UI_THEME_OPTIONS.find((option) => option.value === DEFAULT_UI_THEME)
+    || UI_THEME_OPTIONS[0];
   const SelectedIcon = THEME_ICONS[selectedOption.value] || Moon;
   const compact = variant === "compact";
 

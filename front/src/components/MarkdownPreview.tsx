@@ -91,11 +91,11 @@ function MermaidDiagram({ code, isChat }: { code: string; isChat: boolean }) {
       <div
         data-mermaid-wrapper="true"
         className={isChat
-          ? "rounded-xl border border-dashed border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-          : "my-4 rounded-xl border border-dashed border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"}
+          ? "rounded-xl border border-dashed border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-4 py-3 text-sm text-[var(--status-warning)]"
+          : "my-4 rounded-xl border border-dashed border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-4 py-3 text-sm text-[var(--status-warning)]"}
       >
         <div className="mb-2 font-medium">{error}</div>
-        <pre className="min-w-0 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-white/70 px-3 py-2 font-mono text-[13px] leading-6">
+        <pre className="min-w-0 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-[var(--code-bg)] px-3 py-2 font-mono text-[13px] leading-6 text-[var(--code-text)]">
           {code}
         </pre>
       </div>
@@ -241,7 +241,7 @@ function MarkdownPre({
         {copied ? <CheckCheck className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
       </button>
       {copyFailed ? (
-        <div className="absolute right-2 top-10 z-10 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+        <div className="absolute right-2 top-10 z-10 rounded-md border border-[var(--status-danger-border)] bg-[var(--surface-overlay)] px-2 py-1 text-xs text-[var(--status-danger)]">
           复制失败，请检查剪贴板权限
         </div>
       ) : null}
