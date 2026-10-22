@@ -1,4 +1,4 @@
-export type { PersonalTheme, ThemeAppearance, ThemeLibrary, ThemeCreateInput, ThemeUpdateInput } from "../theme/types";
+export type { UiTheme, ThemeAppearance, ThemeLibrary, ThemeCreateInput, ThemeUpdateInput } from "../theme/types";
 
 export type CliType = "claude" | "codex" | "codex_server" | "antigravity" | "deepseek";
 export type ChatExecutionMode = "cli" | "native_agent";

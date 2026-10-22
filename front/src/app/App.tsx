@@ -260,7 +260,7 @@ export function App() {
 function AppContent() {
   const useMockClient = import.meta.env.MODE === "test" || import.meta.env.VITE_USE_MOCK === "true";
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
-  const { appearance, bindAccount, selectTheme } = useAppearance();
+  const { appearance, bindSession, selectTheme } = useAppearance();
   const themeName = appearance.themeId;
   const [chatBodyFontFamily, setChatBodyFontFamily] = useState<ChatBodyFontFamilyName>(() => readStoredChatBodyFontFamily());
   const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
@@ -573,8 +573,8 @@ function AppContent() {
   }, [client]);
 
   useLayoutEffect(() => {
-    bindAccount(isLoggedIn && !isGuest(session) && accountKey ? { key: accountKey, client } : null);
-  }, [accountKey, bindAccount, client, isLoggedIn, session?.role]);
+    bindSession(isLoggedIn && accountKey ? { key: accountKey, client, canManage: !isGuest(session) } : null);
+  }, [accountKey, bindSession, client, isLoggedIn, session?.role]);
 
   useLayoutEffect(() => {
     applyChatReadingPreferences(

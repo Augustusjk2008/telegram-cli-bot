@@ -1,15 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { PersonalTheme, ThemeLibrary } from "../theme/types";
+import type { UiTheme, ThemeLibrary } from "../theme/types";
 
-const BUILTIN_THEME: PersonalTheme = { schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight", appearance: { colors: { scheme: "light", overrides: {} } }, readonly: true, version: 1, updatedAt: "" };
-const builtinLibrary = (): ThemeLibrary => ({ schemaVersion: 1, revision: 0, selectedThemeId: BUILTIN_THEME.id, themes: [BUILTIN_THEME] });
+const BUILTIN_THEME: UiTheme = { schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight", appearance: { colors: { scheme: "light", overrides: {} } }, readonly: true, version: 1, updatedAt: "" };
+const builtinLibrary = (): ThemeLibrary => ({ schemaVersion: 1, scope: "global", revision: 0, selectedThemeId: BUILTIN_THEME.id, themes: [BUILTIN_THEME] });
 
 test.skip(!process.env.PLAYWRIGHT_BASE_URL, "Requires a user-started application");
 
 async function installThemeFixture(page: Page, withBot = false) {
-  let library: ThemeLibrary = { ...builtinLibrary(), accountId: "theme-member" };
+  let library: ThemeLibrary = builtinLibrary();
+  let identity = { key: "theme-member", role: "member" };
   let serial = 0;
   const mutations: string[] = [];
   const errors: string[] = [];
@@ -32,7 +33,7 @@ async function installThemeFixture(page: Page, withBot = false) {
     const request = route.request();
     const url = new URL(request.url());
     const key = url.pathname.split("/api/")[1];
-    if (key.startsWith("ui/theme")) expect(request.headers()["x-ui-account-id"]).toBe("theme-member");
+    if (key.startsWith("ui/theme")) expect(request.headers()["x-ui-account-id"]).toBeUndefined();
     let data: unknown = {};
     if (key === "ui/themes" && request.method() === "GET") data = library;
     else if (key.startsWith("ui/theme") && request.method() !== "GET") {
@@ -41,7 +42,7 @@ async function installThemeFixture(page: Page, withBot = false) {
       mutations.push(`${request.method()} ${key}`);
       if (request.method() === "POST") {
         const source = library.themes.find((item) => item.id === input.sourceId) || BUILTIN_THEME;
-        const theme: PersonalTheme = { ...source, id: `theme_fixture_${++serial}`, name: input.name, appearance: input.appearance || source.appearance, readonly: false, version: 1, updatedAt: new Date().toISOString() };
+        const theme: UiTheme = { ...source, id: `theme_fixture_${++serial}`, name: input.name, appearance: input.appearance || source.appearance, readonly: false, version: 1, updatedAt: new Date().toISOString() };
         library = { ...library, themes: [...library.themes, theme], selectedThemeId: input.activate ? theme.id : library.selectedThemeId };
       } else if (key === "ui/theme-selection") library = { ...library, selectedThemeId: input.themeId };
       else if (request.method() === "DELETE") {
@@ -53,7 +54,7 @@ async function installThemeFixture(page: Page, withBot = false) {
       }
       library = { ...library, revision: library.revision + 1 };
       data = library;
-    } else if (key === "auth/me") data = { is_logged_in: true, username: "theme-member", account_id: "theme-member", role: "member", current_bot_alias: withBot ? bot.alias : "", capabilities: ["view_bots", "view_bot_status", "view_file_tree", "read_file_content", "write_files", "view_chat_history", "chat_send", "git_ops"] };
+    } else if (key === "auth/me") data = { is_logged_in: true, username: identity.key, account_id: identity.key, role: identity.role, current_bot_alias: withBot ? bot.alias : "", capabilities: ["view_bots", "view_bot_status", "view_file_tree", "read_file_content", "write_files", "view_chat_history", "chat_send", "git_ops"] };
     else if (key === "bots") data = withBot ? [bot] : [];
     else if (key === `bots/${bot.alias}`) data = { bot, session: { working_dir: bot.working_dir, is_processing: false, history_count: 0 }, agents: [{ id: "main", name: "main" }] };
     else if (key.endsWith("/ls")) data = { working_dir: bot.working_dir, entries: [{ name: "added.ts", is_dir: false }, { name: "modified.ts", is_dir: false }, { name: "ignored.log", is_dir: false }] };
@@ -69,11 +70,11 @@ async function installThemeFixture(page: Page, withBot = false) {
     }
     await route.fulfill({ json: { ok: true, data } });
   });
-  return { mutations, errors, library: () => library };
+  return { mutations, errors, library: () => library, setIdentity: (key: string, role = "member") => { identity = { key, role }; } };
 }
 
 for (const [width, height] of [[1600, 1000], [1280, 900], [390, 844], [360, 800]]) {
-  test(`personal theme flow without a Bot at ${width}×${height}`, async ({ page }) => {
+  test(`shared theme flow without a Bot at ${width}×${height}`, async ({ page }) => {
     const fixture = await installThemeFixture(page);
     await page.setViewportSize({ width, height });
     await page.goto("./");
@@ -81,7 +82,7 @@ for (const [width, height] of [[1600, 1000], [1280, 900], [390, 844], [360, 800]
     const manager = page.locator(".theme-manager");
     await expect(manager).toBeVisible();
     await manager.getByRole("button", { name: "复制后编辑" }).click();
-    await manager.getByLabel("主题名称", { exact: true }).fill("个人试色");
+    await manager.getByLabel("主题名称", { exact: true }).fill("共享试色");
     await manager.getByLabel("基础表面 HEX", { exact: true }).fill("#E7EEF4");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "paper-daylight");
     if (width < 768) await manager.getByRole("button", { name: "局部预览", exact: true }).click();
@@ -144,5 +145,37 @@ test("theme management keeps the workbench and chat draft mounted", async ({ pag
   await expect(page.locator('.file-tree-row[data-git-state="added"]').first()).toHaveCSS("height", "26px");
   await page.screenshot({ path: test.info().outputPath("custom-paper-workbench.png") });
   expect(fixture.mutations.every((item) => item.includes("ui/theme"))).toBe(true);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("accounts share themes and the applied choice while guests remain read-only", async ({ page }) => {
+  const fixture = await installThemeFixture(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("./");
+  await page.getByRole("button", { name: "管理主题", exact: true }).click();
+  let manager = page.locator(".theme-manager");
+  await manager.getByRole("button", { name: "复制后编辑" }).click();
+  await manager.getByLabel("主题名称", { exact: true }).fill("共同配色");
+  await manager.getByRole("button", { name: "保存并应用", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "theme_fixture_1");
+  fixture.setIdentity("second-member");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "theme_fixture_1");
+  await page.getByRole("button", { name: "管理主题", exact: true }).click();
+  manager = page.locator(".theme-manager");
+  await expect(manager.getByLabel("主题名称", { exact: true })).toHaveValue("共同配色");
+  await manager.getByLabel("强调色 HEX", { exact: true }).fill("#27654F");
+  await manager.getByRole("button", { name: "保存并应用", exact: true }).click();
+  await expect(page.locator("html")).toHaveCSS("--accent", "#27654FFF");
+  fixture.setIdentity("guest", "guest");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "theme_fixture_1");
+  await expect(page.locator("html")).toHaveCSS("--accent", "#27654FFF");
+  await expect(page.getByRole("button", { name: "管理主题", exact: true })).toHaveCount(0);
+  fixture.setIdentity("theme-member");
+  await page.reload();
+  await expect(page.locator("html")).toHaveCSS("--accent", "#27654FFF");
+  expect(fixture.library().themes).toHaveLength(2);
+  expect(fixture.library().revision).toBe(2);
   expect(fixture.errors).toEqual([]);
 });

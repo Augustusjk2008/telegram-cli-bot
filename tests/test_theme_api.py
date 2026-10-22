@@ -17,7 +17,7 @@ from bot.web.theme_store import ThemeStore
 def api(tmp_path, monkeypatch):
     server = object.__new__(WebApiServer)
     server.manager = SimpleNamespace(main_profile=SimpleNamespace(alias="main"), managed_profiles={})
-    server.theme_store = ThemeStore(tmp_path / "themes" / "accounts")
+    server.theme_store = ThemeStore(tmp_path / "themes" / "library.json")
     sessions = {
         key: WebAuthSession(token=key, account=WebAccount(account_id=key, username=key,
             role="guest" if key == "guest" else "member", session_user_id=index),
@@ -58,62 +58,67 @@ async def test_authenticated_member_crud_works_without_bot_or_admin_permissions(
     status, payload = await request(api, "POST", body=create_input(activate=True))
     assert status == 200
     library = payload["data"]
+    assert library["scope"] == "global" and "accountId" not in library
     theme_id = library["themes"][1]["id"]
     assert library["selectedThemeId"] == theme_id
-    status, payload = await request(api, "PATCH", f"/api/ui/themes/{theme_id}", body={
+    for token in ("alice", "bob", "admin", "guest"):
+        status, shared = await request(api, "GET", token=token)
+        assert status == 200 and shared["data"] == library
+    status, payload = await request(api, "PATCH", f"/api/ui/themes/{theme_id}", token="bob", body={
         "schemaVersion": 1, "expectedRevision": 1, "name": "修改后的名字",
         "appearance": {"colors": {"scheme": "dark", "overrides": {"surface.base": "#123456"}}},
     })
     assert status == 200 and payload["data"]["themes"][1]["appearance"]["colors"]["overrides"] == {"surface.base": "#123456FF"}
+    _, shared = await request(api, "GET", token="alice")
+    assert shared == payload
     status, payload = await request(api, "PATCH", "/api/ui/theme-selection", body={"themeId": "paper-daylight", "expectedRevision": 2})
     assert status == 200 and payload["data"]["selectedThemeId"] == "paper-daylight"
-    status, payload = await request(api, "PATCH", "/api/ui/theme-selection", body={"themeId": theme_id, "expectedRevision": 3})
+    status, payload = await request(api, "PATCH", "/api/ui/theme-selection", token="bob", body={"themeId": theme_id, "expectedRevision": 3})
     assert status == 200 and payload["data"]["selectedThemeId"] == theme_id
-    status, payload = await request(api, "DELETE", f"/api/ui/themes/{theme_id}", body={"expectedRevision": 4})
+    _, shared = await request(api, "GET", token="alice")
+    assert shared == payload
+    status, payload = await request(api, "DELETE", f"/api/ui/themes/{theme_id}", token="bob", body={"expectedRevision": 4})
     assert status == 200 and payload["data"]["selectedThemeId"] == "paper-daylight"
     assert payload["data"]["revision"] == 5 and len(payload["data"]["themes"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_accounts_including_admin_cannot_address_another_library(api):
+async def test_account_headers_and_queries_do_not_select_a_library(api):
     _, created = await request(api, "POST", body=create_input())
-    theme_id = created["data"]["themes"][1]["id"]
     for account in ("bob", "admin"):
         status, payload = await request(api, "GET", "/api/ui/themes?accountId=alice&user_id=100", token=account,
-                                        headers={"X-User-Id": "100", "X-Account-Id": "alice"})
-        assert status == 200 and len(payload["data"]["themes"]) == 1
-        for method, path, body in (
-            ("POST", "/api/ui/themes", create_input(sourceId=theme_id)),
-            ("PATCH", f"/api/ui/themes/{theme_id}", {"schemaVersion": 1, "expectedRevision": 0, "name": "接管"}),
-            ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 0}),
-            ("PATCH", "/api/ui/theme-selection", {"themeId": theme_id, "expectedRevision": 0}),
-        ):
-            status, payload = await request(api, method, path, token=account, body=body)
-            assert status == 404 and payload["error"]["code"] == "theme_not_found"
+                                        headers={"X-User-Id": "100", "X-Account-Id": "alice", "X-UI-Account-ID": "alice"})
+        assert status == 200 and payload == created
         status, payload = await request(api, "POST", token=account, body=create_input(accountId="alice"))
         assert status == 400
-    _, payload = await request(api, "GET")
-    assert len(payload["data"]["themes"]) == 2 and payload["data"]["revision"] == 1
+    status, copied = await request(api, "POST", token="bob", body=create_input(
+        expectedRevision=1, sourceId=created["data"]["themes"][1]["id"], name="共享副本"))
+    assert status == 200 and len(copied["data"]["themes"]) == 3
+    _, payload = await request(api, "GET", token="alice")
+    assert payload == copied
 
 
 @pytest.mark.asyncio
-async def test_guests_read_only_builtin_and_unauthenticated_requests_use_host_auth(api):
+async def test_guests_read_global_library_and_unauthenticated_requests_use_host_auth(api):
+    _, created = await request(api, "POST", body=create_input(activate=True))
     status, payload = await request(api, "GET", token="guest")
-    assert status == 200 and len(payload["data"]["themes"]) == 1
+    assert status == 200 and payload == created
+    before = api.server.theme_store.library_path.read_bytes()
     for method, path, body in (
         ("POST", "/api/ui/themes", create_input()),
         ("PATCH", "/api/ui/themes/paper-daylight", {"schemaVersion": 1, "expectedRevision": 0}),
         ("DELETE", "/api/ui/themes/paper-daylight", {"expectedRevision": 0}),
         ("PATCH", "/api/ui/theme-selection", {"themeId": "paper-daylight", "expectedRevision": 0}),
     ):
-        status, payload = await request(api, method, path, token="guest", body=body)
+        status, payload = await request(api, method, path, token="guest", body=body,
+                                        headers={"X-UI-Account-ID": "alice"})
         assert status == 403 and payload["error"]["code"] == "theme_readonly"
     for token in ("", "invalid-token"):
         status, payload = await request(api, "GET", token=token)
         assert status == 401 and payload["error"]["code"] == "unauthorized"
     status, payload = await request(api, "GET", "/api/ui/themes?token=alice", token="")
     assert status == 401 and payload["error"]["code"] == "query_token_disabled"
-    assert not api.server.theme_store.accounts_dir.exists()
+    assert api.server.theme_store.library_path.read_bytes() == before
 
 
 @pytest.mark.asyncio
@@ -126,7 +131,7 @@ async def test_revision_conflicts_are_409_and_do_not_apply_stale_mutations(api):
         ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 0}),
         ("PATCH", "/api/ui/theme-selection", {"themeId": theme_id, "expectedRevision": 0}),
     ):
-        status, result = await request(api, method, path, body=body)
+        status, result = await request(api, method, path, token="bob", body=body)
         assert status == 409 and result["error"]["code"] == "theme_revision_conflict"
         assert result["error"]["data"]["revision"] == 1
     _, result = await request(api, "GET")
@@ -162,21 +167,19 @@ async def test_cookie_writes_keep_existing_origin_protection(api):
 
 
 @pytest.mark.asyncio
-async def test_theme_account_binding_rejects_cookie_switch_before_any_read_or_write(api):
+async def test_stale_account_header_is_ignored_for_authenticated_reads_and_writes(api):
     headers = {"Cookie": f"{server_module.AUTH_SESSION_COOKIE_NAME}=bob",
                "Origin": "http://example.test", "X-UI-Account-ID": "alice"}
-    for method, body in (("GET", None), ("POST", create_input())):
-        status, payload = await request(api, method, token="", headers=headers, body=body)
-        assert status == 409 and payload["error"]["code"] == "theme_account_changed"
-    assert not api.server.theme_store.accounts_dir.exists()
-    status, payload = await request(api, "GET", token="bob", headers={"X-UI-Account-ID": "bob"})
-    assert status == 200 and payload["data"]["accountId"] == "bob"
+    status, payload = await request(api, "POST", token="", headers=headers, body=create_input())
+    assert status == 200 and payload["data"]["scope"] == "global"
+    status, read = await request(api, "GET", token="", headers=headers)
+    assert status == 200 and read == payload and "accountId" not in read["data"]
 
 
 @pytest.mark.asyncio
 async def test_corrupt_library_falls_back_with_error_and_cannot_be_overwritten(api):
     await request(api, "POST", body=create_input())
-    path = next(api.server.theme_store.accounts_dir.glob("*.json"))
+    path = api.server.theme_store.library_path
     path.write_bytes(b'{"schemaVersion":2,"themes":')
     original = path.read_bytes()
     status, payload = await request(api, "GET")

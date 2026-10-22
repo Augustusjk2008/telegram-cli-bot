@@ -115,7 +115,7 @@ export function TerminalTabsScreen({
         <div
           role="tablist"
           aria-label="终端选项卡"
-          className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+          className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
         >
           {visibleTabs.map((tab) => {
             const active = tab.id === terminal.activeTabId;
@@ -151,7 +151,7 @@ export function TerminalTabsScreen({
             title="新建终端"
             onClick={() => void createTerminal()}
             disabled={Boolean(disabledReason) || creating}
-            className="ml-1 inline-flex h-8 w-8 shrink-0 self-center items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="ml-1 inline-flex h-8 max-h-full w-8 shrink-0 self-center items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
           </button>

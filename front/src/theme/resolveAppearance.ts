@@ -1,9 +1,9 @@
 import catalog from "../../../bot/web/theme_catalog.json";
-import type { ColorToken, PersonalTheme, ResolvedAppearance, ThemeLibrary } from "./types";
+import type { ColorToken, UiTheme, ResolvedAppearance, ThemeLibrary } from "./types";
 import { PAPER_MOTION, PAPER_STYLE } from "./types";
 
 export const THEME_TOKENS = catalog.tokens as ColorToken[];
-export const BUILTIN_THEME: PersonalTheme = {
+export const BUILTIN_THEME: UiTheme = {
   schemaVersion: 1,
   id: "paper-daylight",
   name: "纸感日间",
@@ -15,7 +15,7 @@ export const BUILTIN_THEME: PersonalTheme = {
 };
 
 export function builtinLibrary(): ThemeLibrary {
-  return { schemaVersion: 1, revision: 0, selectedThemeId: BUILTIN_THEME.id, themes: [BUILTIN_THEME] };
+  return { schemaVersion: 1, scope: "global", revision: 0, selectedThemeId: BUILTIN_THEME.id, themes: [BUILTIN_THEME] };
 }
 
 export function normalizeColor(value: string, allowAlpha = true): string | null {
@@ -26,7 +26,7 @@ export function normalizeColor(value: string, allowAlpha = true): string | null 
   return allowAlpha || hex.endsWith("FF") ? hex : null;
 }
 
-export function resolveAppearance(theme: PersonalTheme): ResolvedAppearance {
+export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   if (theme.schemaVersion !== 1) throw new Error("此主题使用了尚不支持的数据版本");
   const colors: Record<string, string> = {};
   const cssVariables: Record<string, string> = {};

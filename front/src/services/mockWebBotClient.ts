@@ -3,7 +3,7 @@ import themeCatalog from "../../../bot/web/theme_catalog.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { GIT_CAPABILITY_NAMES, GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
-  PersonalTheme,
+  UiTheme,
   ThemeAppearance,
   ThemeLibrary,
   ThemeCreateInput,
@@ -1653,7 +1653,7 @@ function buildMockHdlWindow(rows: TableRow[], request: PluginViewWindowRequest):
 }
 
 export class MockWebBotClient implements WebBotClient {
-  private uiThemeLibraries = new Map<string, ThemeLibrary>();
+  private static uiThemeMemory: ThemeLibrary | null = null;
 
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -3315,14 +3315,10 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private themeAccountId = "";
-
-  bindThemeAccount(accountId: string) { this.themeAccountId = accountId; }
-
   private builtinUiThemes(): ThemeLibrary {
     return {
       schemaVersion: 1,
-      accountId: this.currentAccountId(),
+      scope: "global",
       revision: 0,
       selectedThemeId: "paper-daylight",
       themes: [{
@@ -3337,17 +3333,23 @@ export class MockWebBotClient implements WebBotClient {
     if (!this.session.isLoggedIn) {
       throw new WebApiClientError("请先登录", { status: 401, code: "unauthorized" });
     }
-    if (this.themeAccountId && this.themeAccountId !== this.currentAccountId()) {
-      throw new WebApiClientError("登录账户已在其他页面切换，请刷新页面后管理主题", { status: 409, code: "theme_account_changed" });
+    let library: ThemeLibrary;
+    try {
+      const raw = localStorage.getItem("web-mock-ui-themes:global:v1");
+      library = raw ? JSON.parse(raw) : this.builtinUiThemes();
+    } catch {
+      library = MockWebBotClient.uiThemeMemory || this.builtinUiThemes();
     }
-    if (this.session.role === "guest") return this.builtinUiThemes();
-    return structuredClone(this.uiThemeLibraries.get(this.currentAccountId()) || this.builtinUiThemes());
+    if (library.scope !== "global" || library.schemaVersion !== 1) {
+      throw new WebApiClientError("全局主题库格式不受支持", { status: 400, code: "unsupported_theme_schema" });
+    }
+    return structuredClone(library);
   }
 
   private mutateUiThemes(expectedRevision: number, change: (library: ThemeLibrary) => void): ThemeLibrary {
     const library = this.uiThemeLibrary();
     if (this.session.role === "guest" || this.currentAccountId() === "guest") {
-      throw new WebApiClientError("请登录正式账户后管理个人主题", { status: 403, code: "theme_readonly" });
+      throw new WebApiClientError("请登录正式账户后管理全局主题", { status: 403, code: "theme_readonly" });
     }
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
       throw new WebApiClientError("主题库版本必须是非负安全整数", { status: 400, code: "invalid_theme" });
@@ -3359,13 +3361,14 @@ export class MockWebBotClient implements WebBotClient {
     }
     change(library);
     library.revision += 1;
-    this.uiThemeLibraries.set(this.currentAccountId(), structuredClone(library));
+    MockWebBotClient.uiThemeMemory = structuredClone(library);
+    try { localStorage.setItem("web-mock-ui-themes:global:v1", JSON.stringify(library)); } catch { /* Keep the shared in-memory library available. */ }
     return library;
   }
 
-  private findUiTheme(library: ThemeLibrary, id: string, writable = false): PersonalTheme {
+  private findUiTheme(library: ThemeLibrary, id: string, writable = false): UiTheme {
     const theme = library.themes.find((item) => item.id === id);
-    if (!theme) throw new WebApiClientError("个人主题不存在", { status: 404, code: "theme_not_found" });
+    if (!theme) throw new WebApiClientError("主题不存在", { status: 404, code: "theme_not_found" });
     if (writable && theme.readonly) {
       throw new WebApiClientError("内置纸感日间是只读主题，请复制后编辑", { status: 403, code: "theme_readonly" });
     }
@@ -3417,7 +3420,7 @@ export class MockWebBotClient implements WebBotClient {
     this.uiThemeInput(input, true);
     return this.mutateUiThemes(input.expectedRevision, (library) => {
       const source = this.findUiTheme(library, input.sourceId);
-      const theme: PersonalTheme = {
+      const theme: UiTheme = {
         schemaVersion: 1, id: `theme_${crypto.randomUUID().replaceAll("-", "")}`,
         name: this.uiThemeName(input.name), baseId: "paper-daylight",
         appearance: this.uiThemeAppearance(input.appearance === undefined ? source.appearance : input.appearance),

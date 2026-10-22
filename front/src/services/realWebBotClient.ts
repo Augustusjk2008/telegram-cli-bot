@@ -4119,11 +4119,6 @@ function isWebNotificationEvent(value: unknown): value is WebNotificationEvent {
 }
 
 export class RealWebBotClient implements WebBotClient {
-  private themeAccountId = "";
-
-  bindThemeAccount(accountId: string) { this.themeAccountId = accountId; }
-
-  private themeHeaders() { return { "X-UI-Account-ID": this.themeAccountId }; }
   private token = "";
   private notificationPresence: NotificationPresenceUpdate | null = null;
   private notificationPresenceSenders = new Set<(presence: NotificationPresenceUpdate) => void>();
@@ -4484,13 +4479,13 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async listUiThemes(): Promise<ThemeLibrary> {
-    return this.requestJson<ThemeLibrary>("/api/ui/themes", { headers: this.themeHeaders() });
+    return this.requestJson<ThemeLibrary>("/api/ui/themes");
   }
 
   async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>("/api/ui/themes", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
   }
@@ -4498,7 +4493,7 @@ export class RealWebBotClient implements WebBotClient {
   async updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>(`/api/ui/themes/${encodeURIComponent(id)}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
   }
@@ -4506,7 +4501,7 @@ export class RealWebBotClient implements WebBotClient {
   async deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>(`/api/ui/themes/${encodeURIComponent(id)}`, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedRevision }),
     });
   }
@@ -4514,7 +4509,7 @@ export class RealWebBotClient implements WebBotClient {
   async selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>("/api/ui/theme-selection", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json", ...this.themeHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: id, expectedRevision }),
     });
   }

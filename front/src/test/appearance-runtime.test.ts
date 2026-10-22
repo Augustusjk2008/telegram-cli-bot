@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { applyResolvedAppearance, getCurrentAppearance } from "../theme/appearanceRuntime";
 import { BUILTIN_THEME, contrastRatio, normalizeColor, resolveAppearance } from "../theme/resolveAppearance";
-import type { PersonalTheme } from "../theme/types";
+import type { UiTheme } from "../theme/types";
 
-const custom = (overrides: Record<string, string> = {}): PersonalTheme => ({
-  ...BUILTIN_THEME, id: "theme_personal", readonly: false,
+const custom = (overrides: Record<string, string> = {}): UiTheme => ({
+  ...BUILTIN_THEME, id: "theme_custom", readonly: false,
   appearance: { colors: { scheme: "dark", overrides } },
 });
 
 afterEach(() => applyResolvedAppearance(resolveAppearance(BUILTIN_THEME)));
 
-describe("personal theme colors", () => {
+describe("resolved theme colors", () => {
   it("normalizes hex while enforcing opaque canvas values", () => {
     expect(normalizeColor("#aBc")).toBe("#AABBCCFF");
     expect(normalizeColor("#abcd")).toBe("#AABBCCDD");
@@ -18,7 +18,7 @@ describe("personal theme colors", () => {
     expect(normalizeColor("url(https://example.com)")).toBeNull();
     expect(() => resolveAppearance(custom({ canvas: "#ffffff00" }))).toThrow();
     expect(() => resolveAppearance(custom({ "unknown.color": "#ffffff" }))).toThrow();
-    expect(() => resolveAppearance({ ...custom(), schemaVersion: 2 } as unknown as PersonalTheme)).toThrow("版本");
+    expect(() => resolveAppearance({ ...custom(), schemaVersion: 2 } as unknown as UiTheme)).toThrow("版本");
   });
 
   it("derived colors follow a source until independently overridden", () => {
@@ -36,7 +36,7 @@ describe("personal theme colors", () => {
     applyResolvedAppearance(next);
     expect(next.revision).not.toBe(first.revision);
     expect(getCurrentAppearance()).toBe(next);
-    expect(document.documentElement.dataset).toMatchObject({ theme: "theme_personal", colorScheme: "dark", styleProfile: "paper", motionProfile: "paper" });
+    expect(document.documentElement.dataset).toMatchObject({ theme: "theme_custom", colorScheme: "dark", styleProfile: "paper", motionProfile: "paper" });
     expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#654321FF");
   });
 

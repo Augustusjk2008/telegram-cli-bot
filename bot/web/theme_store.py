@@ -1,9 +1,8 @@
-"""Personal UI themes, scoped to authenticated accounts."""
+"""Global UI themes with atomic persistence and legacy account migration."""
 
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import re
@@ -15,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from bot.runtime_paths import get_theme_accounts_dir
+from bot.runtime_paths import get_theme_library_path
 
 BUILTIN_THEME_ID = "paper-daylight"
 _THEME_ID = re.compile(r"theme_[0-9a-f]{32}\Z")
@@ -69,6 +68,7 @@ def _name(value: Any) -> str:
 def builtin_library() -> dict[str, Any]:
     return {
         "schemaVersion": 1,
+        "scope": "global",
         "revision": 0,
         "selectedThemeId": BUILTIN_THEME_ID,
         "themes": [{
@@ -85,15 +85,12 @@ def builtin_library() -> dict[str, Any]:
 
 
 class ThemeStore:
-    def __init__(self, accounts_dir: Path | None = None, *, catalog_path: Path | None = None):
-        self.accounts_dir = Path(accounts_dir) if accounts_dir is not None else get_theme_accounts_dir()
+    def __init__(self, library_path: Path | None = None, *, legacy_accounts_dir: Path | None = None,
+                 catalog_path: Path | None = None):
+        self.library_path = Path(library_path) if library_path is not None else get_theme_library_path()
+        self.legacy_accounts_dir = (Path(legacy_accounts_dir) if legacy_accounts_dir is not None
+                                    else self.library_path.parent / "accounts")
         self.catalog_path = catalog_path or Path(__file__).with_name("theme_catalog.json")
-
-    def _account_path(self, account_id: str) -> Path:
-        if not isinstance(account_id, str) or not account_id.strip() or account_id == "guest":
-            raise ThemeStoreError(403, "theme_readonly", "请登录正式账户后管理个人主题")
-        filename = hashlib.sha256(account_id.encode("utf-8")).hexdigest() + ".json"
-        return self.accounts_dir / filename
 
     def _tokens(self) -> dict[str, dict[str, Any]]:
         try:
@@ -140,17 +137,21 @@ class ThemeStore:
             normalized[key] = color
         return {"colors": {"scheme": colors["scheme"], "overrides": normalized}}
 
-    def _read(self, path: Path) -> dict[str, Any]:
+    def _read_file(self, path: Path, *, legacy: bool = False) -> dict[str, Any] | None:
         try:
             raw = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {"schemaVersion": 1, "revision": 0, "selectedThemeId": BUILTIN_THEME_ID, "themes": []}
         except (OSError, UnicodeError) as exc:
-            raise ThemeStoreError(500, "theme_store_unreadable", "个人主题文件无法读取，原文件已保留，请修复后重试") from exc
+            if isinstance(exc, FileNotFoundError) and not legacy:
+                return None
+            raise ThemeStoreError(500, "theme_store_unreadable", "主题库文件无法读取，原文件已保留，请修复后重试") from exc
         try:
-            data = _object(json.loads(raw), {"schemaVersion", "revision", "selectedThemeId", "themes"},
-                           {"schemaVersion", "revision", "selectedThemeId", "themes"}, "主题库")
+            fields = {"schemaVersion", "revision", "selectedThemeId", "themes"}
+            if not legacy:
+                fields.add("scope")
+            data = _object(json.loads(raw), fields, fields, "主题库")
             _schema(data["schemaVersion"])
+            if not legacy and data["scope"] != "global":
+                _invalid("主题库 scope 必须为 global")
             _revision(data["revision"])
             if not isinstance(data["themes"], list) or not isinstance(data["selectedThemeId"], str):
                 _invalid("主题库结构无效")
@@ -165,20 +166,61 @@ class ThemeStore:
                 ids.add(theme_id)
                 if theme["baseId"] != BUILTIN_THEME_ID or theme["readonly"] is not False:
                     _invalid("自定义主题属性无效")
-                theme["name"] = _name(theme["name"])
+                _name(theme["name"])
                 if _revision(theme["version"]) < 1:
                     _invalid("主题版本无效")
                 if not isinstance(theme["updatedAt"], str):
                     _invalid("主题更新时间无效")
                 if datetime.fromisoformat(theme["updatedAt"].replace("Z", "+00:00")).tzinfo is None:
                     _invalid("主题更新时间缺少时区")
-                theme["appearance"] = self._appearance(theme["appearance"])
+                self._appearance(theme["appearance"])
             if data["selectedThemeId"] not in ids:
                 data["selectedThemeId"] = BUILTIN_THEME_ID
             return data
         except (ValueError, ThemeStoreError) as exc:
             detail = str(exc)
-            raise ThemeStoreError(500, "theme_store_unreadable", f"个人主题文件无法使用，原文件已保留，请修复后重试：{detail}") from exc
+            raise ThemeStoreError(500, "theme_store_unreadable", f"主题库文件无法使用，原文件已保留，请修复后重试：{detail}") from exc
+
+    def _read(self) -> dict[str, Any]:
+        data = self._read_file(self.library_path)
+        if data is not None:
+            return data
+
+        # Called under _STORE_LOCK. Validate every source before publishing the migration.
+        try:
+            paths = sorted((path for path in self.legacy_accounts_dir.iterdir()
+                            if path.suffix.lower() == ".json"), key=lambda path: path.name)
+        except FileNotFoundError:
+            paths = []
+        except OSError as exc:
+            raise ThemeStoreError(500, "theme_store_unreadable",
+                                  "旧主题库目录无法读取，原文件已保留，请修复后重试") from exc
+        sources = [(path, self._read_file(path, legacy=True)) for path in paths]
+        data = {**builtin_library(), "themes": []}
+        reserved_ids = {theme["id"] for _, source in sources for theme in source["themes"]}
+        seen: dict[str, set[str]] = {}
+        for path, source in sources:
+            for theme in source["themes"]:
+                theme_id = theme["id"]
+                content = json.dumps(theme, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                variants = seen.setdefault(theme_id, set())
+                if content in variants:
+                    continue
+                if variants:
+                    attempt = 0
+                    while True:
+                        replacement = "theme_" + uuid.uuid5(uuid.NAMESPACE_URL,
+                            f"orbit-safe-claw:global-theme:{path.name}:{content}:{attempt}").hex
+                        if replacement not in reserved_ids:
+                            break
+                        attempt += 1
+                    reserved_ids.add(replacement)
+                    theme = {**theme, "id": replacement}
+                variants.add(content)
+                data["themes"].append(theme)
+        if sources:
+            self._write(self.library_path, data)
+        return data
 
     @staticmethod
     def _library(data: dict[str, Any]) -> dict[str, Any]:
@@ -186,12 +228,10 @@ class ThemeStore:
         library["themes"].insert(0, builtin_library()["themes"][0])
         return library
 
-    def list_for_account(self, account_id: str, *, guest: bool = False) -> dict[str, Any]:
-        if guest or account_id == "guest":
-            return builtin_library()
+    def list_library(self) -> dict[str, Any]:
         with _STORE_LOCK:
             try:
-                return self._library(self._read(self._account_path(account_id)))
+                return self._library(self._read())
             except ThemeStoreError as exc:
                 if exc.code != "theme_store_unreadable":
                     raise
@@ -210,24 +250,23 @@ class ThemeStore:
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
         except OSError as exc:
-            raise ThemeStoreError(500, "theme_store_write_failed", "个人主题保存失败，已有主题保持不变，请重试") from exc
+            raise ThemeStoreError(500, "theme_store_write_failed", "主题库保存失败，已有主题保持不变，请重试") from exc
         finally:
             if temporary is not None:
                 with suppress(OSError):
                     temporary.unlink()
 
-    def _mutate(self, account_id: str, expected_revision: Any,
+    def _mutate(self, expected_revision: Any,
                 change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
         expected_revision = _revision(expected_revision)
-        path = self._account_path(account_id)
         with _STORE_LOCK:
-            data = self._read(path)
+            data = self._read()
             if data["revision"] != expected_revision:
                 raise ThemeStoreError(409, "theme_revision_conflict", "主题库已在其他页面更新，请重新加载后再保存",
                                       {"revision": data["revision"]})
             change(data)
             data["revision"] += 1
-            self._write(path, data)
+            self._write(self.library_path, data)
             return self._library(data)
 
     @staticmethod
@@ -239,7 +278,7 @@ class ThemeStore:
         for theme in data["themes"]:
             if theme["id"] == theme_id:
                 return theme
-        raise ThemeStoreError(404, "theme_not_found", "个人主题不存在")
+        raise ThemeStoreError(404, "theme_not_found", "主题不存在")
 
     @staticmethod
     def _input(payload: Any, *, create: bool) -> dict[str, Any]:
@@ -256,7 +295,7 @@ class ThemeStore:
             _invalid("sourceId 必须是主题 ID")
         return value
 
-    def create(self, account_id: str, payload: Any) -> dict[str, Any]:
+    def create(self, payload: Any) -> dict[str, Any]:
         value = self._input(payload, create=True)
         name = _name(value["name"])
 
@@ -272,9 +311,9 @@ class ThemeStore:
             if value.get("activate", False):
                 data["selectedThemeId"] = theme["id"]
 
-        return self._mutate(account_id, value["expectedRevision"], change)
+        return self._mutate(value["expectedRevision"], change)
 
-    def update(self, account_id: str, theme_id: str, payload: Any) -> dict[str, Any]:
+    def update(self, theme_id: str, payload: Any) -> dict[str, Any]:
         value = self._input(payload, create=False)
 
         def change(data):
@@ -288,9 +327,9 @@ class ThemeStore:
             if value.get("activate", False):
                 data["selectedThemeId"] = theme_id
 
-        return self._mutate(account_id, value["expectedRevision"], change)
+        return self._mutate(value["expectedRevision"], change)
 
-    def delete(self, account_id: str, theme_id: str, payload: Any) -> dict[str, Any]:
+    def delete(self, theme_id: str, payload: Any) -> dict[str, Any]:
         value = _object(payload, {"expectedRevision"}, {"expectedRevision"}, "删除主题请求")
 
         def change(data):
@@ -298,9 +337,9 @@ class ThemeStore:
             if data["selectedThemeId"] == theme_id:
                 data["selectedThemeId"] = BUILTIN_THEME_ID
 
-        return self._mutate(account_id, value["expectedRevision"], change)
+        return self._mutate(value["expectedRevision"], change)
 
-    def select(self, account_id: str, payload: Any) -> dict[str, Any]:
+    def select(self, payload: Any) -> dict[str, Any]:
         value = _object(payload, {"themeId", "expectedRevision"}, {"themeId", "expectedRevision"}, "应用主题请求")
         if not isinstance(value["themeId"], str):
             _invalid("themeId 必须是主题 ID")
@@ -309,4 +348,4 @@ class ThemeStore:
             self._find(data, value["themeId"])
             data["selectedThemeId"] = value["themeId"]
 
-        return self._mutate(account_id, value["expectedRevision"], change)
+        return self._mutate(value["expectedRevision"], change)

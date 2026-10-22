@@ -99,7 +99,7 @@ function isChatBodyParagraphSpacingName(value: string): value is ChatBodyParagra
 }
 
 export function readStoredUiTheme(): UiThemeName {
-  // Personal preferences are restored only after the server confirms identity.
+  // The shared library is restored after authentication.
   persistUiTheme(DEFAULT_UI_THEME);
   return DEFAULT_UI_THEME;
 }

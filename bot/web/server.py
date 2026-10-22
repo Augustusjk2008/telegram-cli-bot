@@ -1004,7 +1004,7 @@ async def cors_middleware(request: web.Request, handler):
         elif origin and _normalize_origin(origin) in normalized:
             response.headers["Access-Control-Allow-Origin"] = origin
         
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id, X-UI-Account-ID"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
@@ -1020,7 +1020,7 @@ async def cors_middleware(request: web.Request, handler):
     elif not origin and "*" in normalized:
         response.headers["Access-Control-Allow-Origin"] = "*"
 
-    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id, X-UI-Account-ID"
+    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Credentials"] = "true"
     if request.path.startswith("/api/"):

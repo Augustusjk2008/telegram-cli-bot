@@ -7,7 +7,7 @@ export type ThemeAppearance = {
   colors: { scheme: ColorScheme; overrides: Record<string, string> };
 };
 
-export type PersonalTheme = {
+export type UiTheme = {
   schemaVersion: 1;
   id: string;
   name: string;
@@ -20,10 +20,10 @@ export type PersonalTheme = {
 
 export type ThemeLibrary = {
   schemaVersion: 1;
-  accountId?: string;
+  scope: "global";
   revision: number;
   selectedThemeId: string;
-  themes: PersonalTheme[];
+  themes: UiTheme[];
   error?: string;
 };
 

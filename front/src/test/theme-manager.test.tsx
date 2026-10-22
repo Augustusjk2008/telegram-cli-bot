@@ -16,7 +16,7 @@ import {
   resolveAppearance,
 } from "../theme/resolveAppearance";
 import type {
-  PersonalTheme,
+  UiTheme,
   ThemeCreateInput,
   ThemeLibrary,
   ThemeUpdateInput,
@@ -88,7 +88,7 @@ const derivedToken = THEME_TOKENS.find((token) => token.derive)!;
 const alphaToken = THEME_TOKENS.find(
   (token) => token.allowAlpha && token.key !== derivedToken.key,
 )!;
-const customTheme = (): PersonalTheme => ({
+const customTheme = (): UiTheme => ({
   ...BUILTIN_THEME,
   id: "theme_personal",
   name: "我的纸感",
@@ -98,6 +98,7 @@ const customTheme = (): PersonalTheme => ({
 });
 const libraryWith = (theme = customTheme()): ThemeLibrary => ({
   schemaVersion: 1,
+  scope: "global",
   revision: 1,
   selectedThemeId: theme.id,
   themes: [BUILTIN_THEME, theme],
@@ -163,7 +164,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("个人主题管理", () => {
+describe("全局主题管理", () => {
   it("keeps edits local, retains the last valid preview for invalid input, and discards without a write", async () => {
     const rootStyle = document.documentElement.getAttribute("style");
     const rootTheme = document.documentElement.getAttribute("data-theme");
@@ -252,6 +253,7 @@ describe("个人主题管理", () => {
   it("copies a builtin into a draft and creates plus activates it in one transaction", async () => {
     api.library = {
       schemaVersion: 1,
+      scope: "global",
       revision: 1,
       selectedThemeId: BUILTIN_THEME.id,
       themes: [BUILTIN_THEME],

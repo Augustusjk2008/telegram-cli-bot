@@ -246,7 +246,12 @@ def get_auth_accounts_dir() -> Path:
 
 
 def get_theme_accounts_dir() -> Path:
+    """Legacy per-account libraries, retained only for global theme migration."""
     return get_app_data_root() / "themes" / "accounts"
+
+
+def get_theme_library_path() -> Path:
+    return get_app_data_root() / "themes" / "library.json"
 
 
 def get_auth_username_index_path() -> Path:

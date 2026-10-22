@@ -42,7 +42,7 @@ export function ThemeDropdown({ value, onChange, className, variant = "default",
 
   return <div className={clsx("space-y-2", className)}>
     <div ref={rootRef} className="relative">
-      <button type="button" aria-label="界面主题" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}
+      <button type="button" aria-label="界面主题" aria-haspopup="listbox" aria-expanded={open} disabled={context ? !context.canManage || context.loading : false} onClick={() => setOpen(!open)}
         className={clsx("flex w-full items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-glass)] text-left text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]", compact ? "h-8 px-2 text-xs" : "px-3 py-2.5 text-sm")}>
         <Icon className="h-4 w-4 text-[var(--accent)]" /><span className="min-w-0 flex-1 truncate">{selected.name}</span><ChevronDown className="h-4 w-4 text-[var(--muted)]" />
       </button>

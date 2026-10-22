@@ -15,20 +15,20 @@ import {
   normalizeColor,
   resolveAppearance,
 } from "../theme/resolveAppearance";
-import type { PersonalTheme, ThemeLibrary } from "../theme/types";
+import type { UiTheme, ThemeLibrary } from "../theme/types";
 import "../styles/theme-manager.css";
 
 type Draft = {
   revision: number;
-  original: PersonalTheme;
-  theme: PersonalTheme;
+  original: UiTheme;
+  theme: UiTheme;
   sourceId?: string;
   inputs: Record<string, string>;
 };
 type Pane = "themes" | "editor" | "preview";
 type LeaveAction =
   | { kind: "select"; id: string }
-  | { kind: "create"; source: PersonalTheme; name: string }
+  | { kind: "create"; source: UiTheme; name: string }
   | { kind: "cancel" }
   | { kind: "close" }
   | { kind: "external"; action: () => void };
@@ -37,7 +37,7 @@ type Confirmation =
   | { kind: "delete" }
   | { kind: "reload" };
 
-function draftFrom(theme: PersonalTheme, revision: number): Draft {
+function draftFrom(theme: UiTheme, revision: number): Draft {
   return {
     revision,
     original: theme,
@@ -54,7 +54,7 @@ function draftFrom(theme: PersonalTheme, revision: number): Draft {
   };
 }
 
-function editableValue(theme: PersonalTheme) {
+function editableValue(theme: UiTheme) {
   return JSON.stringify([
     theme.name,
     theme.appearance.colors.scheme,
@@ -264,7 +264,7 @@ function ThemePreview({
         </div>
         <pre className="theme-preview-code">
           <code>
-            <span>const</span> theme = <em>"我的主题"</em>;<br />
+            <span>const</span> theme = <em>"新主题"</em>;<br />
             <span>return</span> theme;
           </code>
         </pre>
@@ -662,7 +662,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
   return (
     <section
       className="theme-manager"
-      aria-label="个人主题管理"
+      aria-label="全局主题管理"
       aria-busy={busy || loading}
       data-theme-manager-dirty={dirty ? "true" : "false"}
       onKeyDown={(event) => {
@@ -676,7 +676,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       <header className="theme-manager-header">
         <div>
           <h1>主题管理</h1>
-          <p>为你的工作台调一套配色</p>
+          <p>所有账户共用主题库与应用选择</p>
         </div>
         <div className="theme-manager-header-actions">
           <span>
@@ -697,7 +697,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       </header>
       {!canManage && !loading && (
         <p className="theme-manager-banner">
-          登录正式账户后，可以保存和管理个人主题。
+          登录正式账户后，可以保存和管理全局主题。
         </p>
       )}
       {loading && (
@@ -751,7 +751,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           aria-label="主题列表"
         >
           <div className="theme-manager-panel-title">
-            <h2>我的主题</h2>
+            <h2>全局主题</h2>
             <span>
               {library.themes.filter((theme) => !theme.readonly).length}{" "}
               个自定义
@@ -765,7 +765,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               requestAction({
                 kind: "create",
                 source: BUILTIN_THEME,
-                name: "我的主题",
+                name: "新主题",
               })
             }
           >
@@ -773,7 +773,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           </button>
           {[true, false].map((readonly) => (
             <div className="theme-manager-theme-group" key={String(readonly)}>
-              <h3>{readonly ? "内置主题" : "个人主题"}</h3>
+              <h3>{readonly ? "内置主题" : "自定义主题"}</h3>
               {library.themes
                 .filter((theme) => theme.readonly === readonly)
                 .map((theme) => (

@@ -166,7 +166,6 @@ import type {
 import type { AgUiEvent } from "./agUiProtocol";
 
 export interface WebBotClient {
-  bindThemeAccount?(accountId: string): void;
   getPublicHostInfo(): Promise<PublicHostInfo>;
   login(input: { username: string; password: string } | string): Promise<SessionState>;
   register(input: { username: string; password: string; registerCode: string }): Promise<SessionState>;
