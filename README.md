@@ -179,6 +179,7 @@ HTML 文件上限为 1 MiB，其他单个资源上限为 16 MiB；只提供允�
 
 - 普通聊天可按显式 `agent_id` 进入隔离的 Agent 会话；集群模板用于准备 Bot 级并行槽位和模型档位。
 - 集群工具覆盖动态编组、状态查询、子 Agent 新会话、异步任务创建、轮询和消息等待。
+- CLI（含 DeepSeek Harness）与 Pi 使用相同的集群配置入口，可设置规模、默认超时、写入策略，以及低、中、高三档模型和思考深度。各档留空时继承主 Agent 配置；模型选项来自当前执行后端，Pi 的思考深度选项随所选模型变化。档位覆盖只作用于子任务，已入队任务保留入队时的配置。
 - 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务。Codex（exec / app-server）和 Claude 自动注入 stdio MCP；Antigravity 自动配置工作区 MCP；DeepSeek Harness 在集群轮次通过 `--patch` 加载 MCP；Pi 使用扩展适配同一 bridge。
 - 上述入口均支持本地集群。远程 Antigravity 暂不支持集群；DeepSeek Harness 限于本地 CLI 模式。Antigravity 工作区已有用户管理的同名 `tcb-cluster` 配置时会提示冲突，需要先处理该配置。
 - 同一主会话的普通轮次沿用当前编组和 `run_id`；实际调整编组时切换到返回的新 ID。集群任务和进度保存在内存中，宿主重启后不会恢复正在执行的子任务。

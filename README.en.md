@@ -174,6 +174,7 @@ The toolbar supports refresh, return to the entry page, and retry. Resources are
 ### Sub-agent and Cluster Collaboration
 
 - Regular chats can select an explicit `agent_id` and use an isolated agent session; cluster templates prepare bot-level parallel slots and model tiers.
+- CLI backends (including DeepSeek Harness) and Pi share cluster settings for capacity, default timeout, write policy, and low/medium/high model and reasoning tiers. Blank tier values inherit the main agent configuration. Model choices follow the active backend; Pi reasoning choices follow each tier's selected model. Overrides apply only to child tasks, and queued tasks retain their configuration snapshot.
 - Cluster tools cover dynamic team configuration, status checks, fresh sub-agent sessions, asynchronous task creation, polling, and message waiting.
 - Once bot-level clustering is enabled, the main agent delegates through the shared `tcb-cluster` tool surface. Codex (exec / app-server) and Claude inject stdio MCP; Antigravity configures workspace MCP; DeepSeek Harness loads MCP through `--patch` on cluster turns; Pi adapts the same bridge through an extension.
 - All these backends support local clusters. Remote Antigravity cluster orchestration is unavailable, and DeepSeek Harness is limited to local CLI execution. A user-managed `tcb-cluster` entry in an Antigravity workspace is reported as a configuration conflict and must be resolved first.

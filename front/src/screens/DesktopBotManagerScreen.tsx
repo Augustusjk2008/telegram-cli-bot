@@ -42,6 +42,7 @@ import type {
   ClusterResizeBlockedData,
   ClusterResizeBlocker,
   ClusterStatus,
+  NativeAgentModelsPayload,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -532,6 +533,7 @@ function EditPanel({
   const [clusterConfig, setClusterConfig] = useState<BotClusterConfig>(() => clusterConfigFromBot(bot));
   const [clusterTimeoutDraft, setClusterTimeoutDraft] = useState(() => String(clusterConfigFromBot(bot).defaultTimeoutSeconds));
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
+  const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
   const [clusterResizeBlocked, setClusterResizeBlocked] = useState<ClusterResizeBlockedData | null>(null);
@@ -539,6 +541,7 @@ function EditPanel({
   const dirty = !draftEquals(draft, draftFromBot(bot));
   const directoryBrowserAlias = manager.bots.find((item) => isMainBot(item))?.alias || manager.bots[0]?.alias || "main";
   const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draft.runtimeBackend === "native_agent";
+  const nativeRuntime = getRuntimeBackend(bot) === "native_agent";
 
   useEffect(() => {
     setDraft(draftFromBot(bot));
@@ -569,14 +572,19 @@ function EditPanel({
   useEffect(() => {
     let cancelled = false;
     setClusterError("");
+    setClusterStatus(null);
+    setCliParams(null);
+    setNativeAgentModels(null);
     void Promise.all([
-      bot.cliType === "deepseek" ? Promise.resolve(null) : manager.client.getClusterStatus(bot.alias),
-      manager.client.getCliParams(bot.alias),
+      manager.client.getClusterStatus(bot.alias),
+      nativeRuntime ? Promise.resolve(null) : manager.client.getCliParams(bot.alias),
+      nativeRuntime ? manager.client.getNativeAgentModels(bot.alias) : Promise.resolve(null),
     ])
-      .then(([nextCluster, nextCliParams]) => {
+      .then(([nextCluster, nextCliParams, nextNativeAgentModels]) => {
         if (!cancelled) {
           setClusterStatus(nextCluster);
           setCliParams(nextCliParams);
+          setNativeAgentModels(nextNativeAgentModels);
         }
       })
       .catch((err: Error) => {
@@ -587,7 +595,15 @@ function EditPanel({
     return () => {
       cancelled = true;
     };
-  }, [bot.alias, bot.cliType, manager.client]);
+  }, [bot.alias, bot.cliType, bot.nativeAgent?.model, nativeRuntime, manager.client]);
+
+  function clusterReasoningOptions(model: string): string[] {
+    if (nativeRuntime) {
+      const effectiveModel = model || nativeAgentModels?.selectedModel || bot.nativeAgent?.model;
+      return nativeAgentModels?.items.find((item) => item.id === effectiveModel)?.reasoningEfforts ?? [];
+    }
+    return cliParams?.schema.reasoning_effort?.enum ?? cliParams?.schema.effort?.enum ?? [];
+  }
 
   async function submit(options: UpdateBotWorkdirOptions = {}) {
     const result = await manager.saveBotEdits(bot, draft, options);
@@ -617,6 +633,13 @@ function EditPanel({
         ...(patch.reasoningEfforts || {}),
       },
     };
+    if (nativeRuntime && nativeAgentModels) {
+      for (const tier of ["low", "medium", "high"] as const) {
+        if (!clusterReasoningOptions(next.modelTiers[tier]).includes(next.reasoningEfforts[tier])) {
+          next.reasoningEfforts[tier] = "";
+        }
+      }
+    }
     setClusterSaving(true);
     setClusterError("");
     try {
@@ -952,8 +975,8 @@ function EditPanel({
             <ClusterModelTiersPanel
               value={clusterConfig.modelTiers}
               reasoningEfforts={clusterConfig.reasoningEfforts}
-              modelOptions={cliParams?.schema.model?.enum ?? []}
-              reasoningOptions={cliParams?.schema.reasoning_effort?.enum ?? cliParams?.schema.effort?.enum ?? []}
+              modelOptions={nativeRuntime ? nativeAgentModels?.items.map((item) => item.id) ?? [] : cliParams?.schema.model?.enum ?? []}
+              reasoningOptions={clusterReasoningOptions}
               disabled={!canConfigureBot || clusterSaving}
               onChange={(modelTiers) => void saveCluster({ modelTiers })}
               onReasoningChange={(reasoningEfforts) => void saveCluster({ reasoningEfforts })}
@@ -970,7 +993,7 @@ function EditPanel({
               }}
             />
           ) : null}
-          <ClusterSetupPanel botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
+          <ClusterSetupPanel key={`${bot.alias}:${bot.cliType}:${nativeRuntime}`} botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
       </div>
 
       {draft.runtimeBackend === "cli" ? (

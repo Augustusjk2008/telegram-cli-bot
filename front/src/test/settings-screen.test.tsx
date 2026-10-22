@@ -208,4 +208,9 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   });
   expect(Object.keys(params.schema)).toEqual(["model", "reasoning_effort", "permission_mode", "extra_args"]);
   expect(await screen.findByLabelText("权限模式")).toHaveValue("workspace-write");
+  expect(await screen.findByText("DeepSeek Harness：集群轮次自动注入 MCP")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "生成安装命令" }));
+  expect(await screen.findByText(/DeepSeek Harness 集群轮次会自动注入/)).toBeInTheDocument();
+  expect(screen.queryByText("安装命令", { exact: true })).not.toBeInTheDocument();
+  expect(screen.queryByText("验证命令", { exact: true })).not.toBeInTheDocument();
 });

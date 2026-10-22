@@ -141,10 +141,19 @@ test("cluster model tiers configure model and reasoning independently", async ()
   expect(onReasoningChange).toHaveBeenCalledWith({ low: "ultra", medium: "", high: "" });
 });
 
-test("cluster settings expose one cluster size and hide fixed-role editors when enabled", async () => {
+test.each(["codex", "pi", "deepseek"])("%s exposes the shared cluster controls and hides fixed-role editors when enabled", async (runtime) => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();
+  if (runtime === "pi") {
+    await client.updateBotExecutionConfig("main", {
+      supportedExecutionModes: ["native_agent"], defaultExecutionMode: "native_agent",
+      nativeAgent: { provider: "", model: "", piAgent: "" },
+    });
+  } else {
+    await client.updateBotCli("main", runtime, runtime === "deepseek" ? "dsh" : "codex");
+  }
   await client.updateClusterConfig("main", { enabled: true, maxParallelAgents: 4 });
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
 
   render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
   await user.click(await screen.findByRole("button", { name: "配置" }));
@@ -159,6 +168,101 @@ test("cluster settings expose one cluster size and hide fixed-role editors when 
   expect(screen.getByLabelText("任务超时（秒）")).toHaveAttribute("max", "3600");
   expect(screen.queryByText("集群模板")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
+  for (const tier of ["低档", "中档", "高档"]) {
+    expect(screen.getByLabelText(`${tier}模型`)).toBeEnabled();
+    expect(screen.getByLabelText(`${tier}思考深度`)).toBeEnabled();
+  }
+  await user.click(screen.getByLabelText("启用集群模式"));
+  await waitFor(() => expect(updateCluster).toHaveBeenCalledWith("main", expect.objectContaining({ enabled: false })));
+  expect(screen.getByLabelText("启用集群模式")).not.toBeChecked();
+  await user.click(screen.getByLabelText("启用集群模式"));
+  await waitFor(() => expect(updateCluster).toHaveBeenLastCalledWith("main", expect.objectContaining({ enabled: true })));
+});
+
+test("DeepSeek cluster tiers use and persist the Harness model and reasoning schema", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.updateBotCli("main", "deepseek", "dsh");
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
+  const nativeModels = vi.spyOn(client, "getNativeAgentModels");
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: "配置" }));
+
+  const model = await screen.findByLabelText("低档模型");
+  const effort = screen.getByLabelText("低档思考深度");
+  expect(within(model).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+    .toEqual(["", "none", "deepseek-flash", "deepseek-v4-pro"]);
+  expect(within(effort).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+    .toEqual(["", "none", "off", "low", "high", "max"]);
+  expect(nativeModels).not.toHaveBeenCalled();
+  await user.selectOptions(model, "deepseek-flash");
+  await user.selectOptions(effort, "max");
+  await waitFor(() => expect(updateCluster).toHaveBeenLastCalledWith("main", expect.objectContaining({
+    modelTiers: { low: "deepseek-flash", medium: "", high: "" },
+    reasoningEfforts: { low: "max", medium: "", high: "" },
+  })));
+});
+
+test("Pi cluster tiers use each model's reasoning options and clear incompatible values atomically", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.updateBotExecutionConfig("main", {
+    supportedExecutionModes: ["native_agent"], defaultExecutionMode: "native_agent",
+    nativeAgent: { provider: "pi", model: "pi/main", piAgent: "main" },
+  });
+  client.setClusterStatus("main", {
+    modelTiers: { low: "pi/fast", medium: "", high: "pi/strong" },
+    reasoningEfforts: { low: "low", medium: "xhigh", high: "max" },
+  });
+  const nativeModels = vi.spyOn(client, "getNativeAgentModels").mockResolvedValue({
+    selectedModel: "pi/main",
+    items: [
+      { id: "pi/main", provider: "pi", model: "main", name: "Main", label: "Main", reasoningEfforts: ["off", "high"] },
+      { id: "pi/fast", provider: "pi", model: "fast", name: "Fast", label: "Fast", reasoningEfforts: ["off", "low"] },
+      { id: "pi/strong", provider: "pi", model: "strong", name: "Strong", label: "Strong", reasoningEfforts: ["low", "high", "max"] },
+      { id: "pi/plain", provider: "pi", model: "plain", name: "Plain", label: "Plain", reasoningEfforts: [] },
+    ],
+  });
+  const cliParams = vi.spyOn(client, "getCliParams");
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+  await user.click(await screen.findByRole("button", { name: "配置" }));
+
+  const lowModel = await screen.findByLabelText("低档模型");
+  const optionValues = (label: string) => within(screen.getByLabelText(label)).getAllByRole("option")
+    .filter((option) => !(option as HTMLOptionElement).disabled)
+    .map((option) => (option as HTMLOptionElement).value);
+  expect(nativeModels).toHaveBeenCalledWith("main");
+  expect(cliParams).not.toHaveBeenCalled();
+  expect(optionValues("低档模型")).toEqual(["", "pi/main", "pi/fast", "pi/strong", "pi/plain"]);
+  expect(optionValues("低档思考深度")).toEqual(["", "off", "low"]);
+  expect(optionValues("中档思考深度")).toEqual(["", "off", "high"]);
+  expect(optionValues("高档思考深度")).toEqual(["", "low", "high", "max"]);
+  expect(within(screen.getByLabelText("中档思考深度")).getByRole("option", { name: /xhigh.*不支持/ })).toBeDisabled();
+
+  await user.selectOptions(lowModel, "pi/strong");
+  await waitFor(() => expect(updateCluster).toHaveBeenLastCalledWith("main", expect.objectContaining({
+    modelTiers: { low: "pi/strong", medium: "", high: "pi/strong" },
+    reasoningEfforts: { low: "low", medium: "", high: "max" },
+  })));
+  expect(optionValues("低档思考深度")).toEqual(["", "low", "high", "max"]);
+  expect(screen.getByLabelText("中档思考深度")).toHaveValue("");
+
+  await user.selectOptions(lowModel, "");
+  expect(updateCluster).toHaveBeenLastCalledWith("main", expect.objectContaining({
+    modelTiers: { low: "", medium: "", high: "pi/strong" },
+    reasoningEfforts: { low: "", medium: "", high: "max" },
+  }));
+  expect(screen.getByLabelText("低档思考深度")).toHaveValue("");
+  expect(optionValues("低档思考深度")).toEqual(["", "off", "high"]);
+
+  await user.selectOptions(screen.getByLabelText("高档模型"), "pi/plain");
+  expect(updateCluster).toHaveBeenCalledTimes(3);
+  expect(updateCluster).toHaveBeenLastCalledWith("main", expect.objectContaining({
+    modelTiers: { low: "", medium: "", high: "pi/plain" },
+    reasoningEfforts: { low: "", medium: "", high: "" },
+  }));
+  expect(optionValues("高档思考深度")).toEqual([""]);
 });
 
 test("cluster timeout saves on blur without reloading the bot list", async () => {

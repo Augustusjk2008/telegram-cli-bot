@@ -957,8 +957,9 @@ export function SettingsScreen({
           />
         ) : null}
 
-        {overview && showBotRuntimeSettings && nativeRuntime ? (
+        {overview && showBotRuntimeSettings ? (
           <ClusterSetupPanel
+            key={`${botAlias}:${overview.cliType}:${nativeRuntime}`}
             botAlias={botAlias}
             client={client}
             canManage={canConfigureBot}

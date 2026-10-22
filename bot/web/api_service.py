@@ -3616,6 +3616,18 @@ def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> C
     return CliParamsConfig.from_dict(params)
 
 
+def build_cluster_native_agent_config_override(profile: BotProfile, model_tier: str) -> dict[str, Any]:
+    native_agent = copy.deepcopy(profile.native_agent)
+    tier = model_tier if model_tier in {"low", "medium", "high"} else "medium"
+    model = str(profile.cluster.model_tiers.get(tier) or "").strip()
+    reasoning_effort = str(profile.cluster.reasoning_efforts.get(tier) or "").strip()
+    if model:
+        native_agent["model"] = model
+    if reasoning_effort:
+        native_agent["reasoning_effort"] = reasoning_effort
+    return native_agent
+
+
 def _quote_toml_string(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
@@ -4099,6 +4111,9 @@ async def _run_cluster_agent_task(
                         live_run.user_id,
                         delegated_prompt,
                         agent_id=live_task.agent_id,
+                        native_agent_config_override=build_cluster_native_agent_config_override(
+                            live_task.profile, live_task.model_tier,
+                        ),
                         solo_mode=True,
                         allow_unsafe_cli=live_task.allow_unsafe_cli,
                         suppress_agent_prompt=dynamic_cluster_task,
@@ -7543,6 +7558,7 @@ async def _stream_native_agent_chat(
     task_payload: dict[str, Any] | None = None,
     visible_text: str | None = None,
     agent_id: str = "main",
+    native_agent_config_override: dict[str, Any] | None = None,
     cluster: bool = False,
     mentions: list[dict[str, Any]] | None = None,
     solo_mode: bool = False,
@@ -7560,6 +7576,9 @@ async def _stream_native_agent_chat(
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
+    if native_agent_config_override is not None:
+        profile = copy.copy(profile)
+        profile.native_agent = copy.deepcopy(native_agent_config_override)
 
     service = get_native_agent_service()
     if getattr(profile, "remote_workspace", None):
