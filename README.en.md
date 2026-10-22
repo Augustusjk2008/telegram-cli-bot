@@ -9,7 +9,7 @@
 <h1 align="center">Orbit Safe Claw</h1>
 
 <p align="center">
-  <strong>A self-hosted, multi-workspace AI development console for controlling local Codex, Claude, and Pi from your browser.</strong>
+  <strong>A self-hosted, multi-workspace AI development console for controlling Codex, Claude, Antigravity, DeepSeek Harness, and Pi from your browser.</strong>
 </p>
 
 <p align="center">
@@ -34,14 +34,14 @@
 </p>
 
 > [!NOTE]
-> Orbit Safe Claw does not host models or replace Codex, Claude, or Pi. It connects local AI CLIs, workspaces, and development tools to a remotely accessible web workbench, making multiple repositories, bots, sessions, and sub-agents easier to manage from one place.
+> Orbit Safe Claw connects local AI CLIs, workspaces, and development tools to a remotely accessible web workbench, making multiple repositories, bots, sessions, and sub-agents easier to manage from one place. Model services and authentication come from the selected CLI or Pi configuration.
 
 ## At a Glance
 
 ```mermaid
 flowchart LR
     Browser["🖥️ Browser / Mobile"] --> Orbit["Orbit Safe Claw"]
-    Orbit --> Agents["🤖 Codex · Claude · Pi"]
+    Orbit --> Agents["🤖 Codex · Claude · Antigravity · DeepSeek · Pi"]
     Orbit --> Workbench["💻 Chat · Files · Git · Terminal · Debug"]
     Orbit --> Cluster["🧭 Sub-agents · Cluster"]
     Orbit --> Extend["🧩 Plugins · Admin"]
@@ -59,7 +59,7 @@ flowchart LR
     <td width="33%" valign="top"><strong>🧭 Sub-agents and Clusters</strong><br><br>Split review, implementation, and verification across sub-agents, routing rules, and cluster workflows, then collect results centrally.</td>
   </tr>
   <tr>
-    <td valign="top"><strong>⚡ CLI and Native Execution</strong><br><br>Codex and Claude use the regular CLI stream; the native Pi agent uses AG-UI and preserves tool calls, permission requests, and context usage.</td>
+    <td valign="top"><strong>⚡ CLI and Native Execution</strong><br><br>Codex, Claude, Antigravity, and DeepSeek Harness use CLI streams; the native Pi agent uses AG-UI and preserves tool calls, permission requests, and context usage.</td>
     <td valign="top"><strong>🧩 Extensible Plugin Runtime</strong><br><br>Use <code>plugin.json</code> to add file viewers, settings pages, background processes, and full session-oriented views.</td>
     <td valign="top"><strong>🔒 Local-first and Self-managed</strong><br><br>Keep workspaces, sessions, configuration, and runtime data on your own devices, with user permissions, announcements, and update management included.</td>
   </tr>
@@ -70,7 +70,7 @@ flowchart LR
 ### Windows: Portable Edition Recommended
 
 > [!TIP]
-> The Windows portable package includes Python, Node.js, Git, the Pi CLI, Pi extensions, and the built frontend. Extract it and start immediately. Codex and Claude CLIs are not bundled; install either CLI locally before using it.
+> The Windows portable package includes Python, Node.js, Git, the Pi CLI, Pi extensions, and the built frontend. Extract it and start immediately. Install and configure Codex, Claude, Antigravity, or DeepSeek Harness separately when using those CLIs.
 
 1. Open [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest).
 2. Download `orbit-safe-claw-windows-x64-<version>.zip` and extract it to a writable directory.
@@ -80,7 +80,7 @@ flowchart LR
    .\start.bat
    ```
 
-4. Open the web address shown in the console. The default is `http://127.0.0.1:8765`, and the login token is stored as `WEB_API_TOKEN` in `.env`.
+4. Open the web address shown in the console, normally `http://127.0.0.1:8765`. Direct loopback access provides the local administrator identity, which can create registration codes in Admin Center. The login page uses a username and password; registration requires a code, and guest access is read-only.
 
 For the conventional installer flow, download `orbit-safe-claw-windows-x64-installer-<version>.zip`, extract it, and run `install.bat`.
 
@@ -101,7 +101,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux and macOS require Python 3.10+, Node.js 18+, and Git. The native Pi agent requires Node.js 22+ and bash.
+Linux and macOS require Python 3.10+, Git, and Node.js 22.13+ to satisfy the locked frontend dependencies. The native Pi agent also needs bash. Installers currently check only for Node.js 18+, so verify the actual Node version before installation.
 
 <details>
 <summary><strong>Install from a source snapshot</strong></summary>
@@ -133,16 +133,26 @@ bash install.sh
 
 - Bind the primary bot and managed bots to different repositories, CLIs, and working directories.
 - Web sessions are isolated by bot, shared user domain, and agent; web accounts authorized for the same bot share the corresponding agent conversation.
-- Regular Codex and Claude CLI sessions retain streaming text, status events, traces, and completion events.
+- Codex (exec / app-server), Claude, Antigravity, and DeepSeek Harness CLI sessions retain streaming text, status events, traces, and completion events. Model lists and parameters are saved separately for each CLI type.
 - The native Pi agent retains sessions, tool calls, permission requests, context usage, and execution details.
 
 ### SSH remote workspaces
 
-When creating an agent, select **Remote SSH (Linux)**, enter the SSH connection details, verify the first connection's host key fingerprint, and browse to a remote directory. Remote agents support chat, a file tree, UTF-8 text editing, and independent SSH terminal tabs. The remote host needs SSH/SFTP; Codex, Claude, and Pi run on the Orbit host.
+When creating an agent, select **Remote SSH**, choose Linux / POSIX or Windows, enter the SSH connection details, verify the first connection's host key fingerprint, and browse to a remote directory. Remote agents support chat, a file tree, UTF-8 text editing, file uploads, and independent SSH terminal tabs. The remote host needs SSH/SFTP; AI CLIs and Pi run on the Orbit host. DeepSeek Harness currently supports local workspaces only.
 
 Local control directories default to `~/.tcb/orbit-safe-claw/remote-workspaces/` (respecting `TCB_DATA_DIR`) and contain generated `AGENTS.md` and `CLAUDE.md` instructions. Project files stay remote. Agent tools, file operations, and terminals reuse SSH connections; tools support command batches, bounded file ranges, and exact text edits.
 
-Passwords and key passphrases remain in service memory; use **SSH sign in again** after restarting the service. Private key paths refer to the Orbit host. Text files are limited to 2 MiB. Remote workspaces currently omit Git panels, language services, plugins, debugging, and workspace rollback. Create another agent to use a different remote directory. File APIs stay within the selected root; commands and terminals use the SSH account's permissions, and local CLI tools retain their existing permission settings.
+Uploads from the file panel write to the remote workspace. Chat attachments are saved under `attachments/` in the local control directory for the local agent to process.
+
+Passwords and key passphrases remain in service memory; use **SSH sign in again** after restarting the service. Private key paths refer to the Orbit host. Text files are limited to 2 MiB. Remote workspaces currently omit language services, plugins, debugging, and workspace rollback. Create another agent to use a different remote directory. File APIs stay within the selected root; commands and terminals use the SSH account's permissions, and local CLI tools retain their existing permission settings.
+
+The remote Git panel supports Linux and Windows repositories when the selected directory is the repository root. It provides status, diffs including untracked files, branches, commit graphs and history, staging, commits, initialization, discard, branch creation/switch/reset, stash listing/apply/drop/pop, fetch/pull/push, identity settings, commit-message generation, and smart commits. Stash creation is currently unavailable. Git operations run on the remote host and use its Git identity and credentials. Remote agents use the project's real Git history; shadow Git history and workspace rollback are unavailable.
+
+Git must be available in the SSH account's non-interactive PATH. Missing Git, upstream configuration, or credentials produce diagnostics; Orbit does not install remote software. Fetch, pull, and push disable interactive credential prompts. After a write times out or loses its connection, refresh the state before retrying.
+
+Windows targets need SSH/SFTP and `powershell.exe` (Windows PowerShell 5.1). Project tools such as Git, rg, and compilers must be on the remote account's PATH. Drive paths such as `C:\Projects\demo`, `C:/Projects/demo`, and `/C:/Projects/demo` are normalized to `/C:/Projects/demo`. File APIs reject UNC/device paths, alternate data streams, and junctions/symlinks. Windows 7 SP1 targets require compatible SSH/SFTP and PowerShell 5.1 installations; their terminal behavior and process cleanup still need verification on the actual machine. This compatibility scope applies to the remote target; the Orbit host requires a supported current runtime.
+
+Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and replace files through a temporary file in the same directory while preserving ACLs. Failed replacements or disconnected writes may leave `.orbit-*.tmp` and `.bak` recovery files; inspect the target and recovery paths before retrying.
 
 ### Desktop Workbench
 
@@ -153,15 +163,58 @@ Passwords and key passphrases remain in service memory; use **SSH sign in again*
 - **Debug**: debugging entry points for Python, C/C++, Godot, and generic DAP adapters.
 - **Plugins**: extensible viewers for PDF, DOCX, PPTX, CSV, Vivado waveforms, and more.
 
+### Local HTML Preview
+
+The desktop workbench, chat file links, and mobile preview support interactive local HTML, including JavaScript, ES Modules, styles, images, fonts, relative JSON requests, project links, and hash routes. Use relative resource URLs; Vite builds need `base: "./"`. Each preview remains bound to its original resource directory. Remote SSH workspaces use a static HTML preview.
+
+HTML files are limited to 1 MiB and individual resources to 16 MiB. The preview sandbox isolates the page from the console DOM, login credentials, and management APIs. Hidden directories, sensitive configuration, directory listings, server-side form submissions, external sites, development-server proxies, hot reload, persistent storage, and Service Workers are unavailable.
+
+The toolbar supports refresh, return to the entry page, and retry. Resources are not cached. Preview tickets expire after 15 minutes and are revoked when the preview closes; retry after expiry or a workspace change to create a new ticket.
+
 ### Sub-agent and Cluster Collaboration
 
 - Regular chats can select an explicit `agent_id` and use an isolated agent session; cluster templates prepare bot-level parallel slots and model tiers.
 - Cluster tools cover dynamic team configuration, status checks, fresh sub-agent sessions, asynchronous task creation, polling, and message waiting.
-- Once bot-level clustering is enabled, the main agent delegates through the shared `tcb-cluster` tool surface: Codex and Claude use stdio MCP, while Pi adapts the same bridge through an extension.
+- Once bot-level clustering is enabled, the main agent delegates through the shared `tcb-cluster` tool surface. Codex (exec / app-server) and Claude inject stdio MCP; Antigravity configures workspace MCP; DeepSeek Harness loads MCP through `--patch` on cluster turns; Pi adapts the same bridge through an extension.
+- All these backends support local clusters. Remote Antigravity cluster orchestration is unavailable, and DeepSeek Harness is limited to local CLI execution. A user-managed `tcb-cluster` entry in an Antigravity workspace is reported as a configuration conflict and must be resolved first.
+- Ordinary turns in the same main conversation retain the current team and `run_id`; an actual team change returns a new ID. Tasks and progress are kept in memory, so running sub-agent tasks do not resume after a host restart.
+
+### Single Telegram Gateway
+
+One Telegram bot routes messages to enabled Web Bot aliases. Configure it in Admin Center's environment settings or the project `.env`:
+
+```env
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=<token-from-BotFather>
+TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
+TELEGRAM_BROADCAST_COMPLETIONS=false
+```
+
+Restart the application after saving these settings. The gateway accepts private text messages from the Telegram numeric user-ID allowlist, which is separate from Web `ALLOWED_USER_IDS`. An empty allowlist disables access. The bot token is treated as a secret and is not stored in the Telegram state database or logs.
+
+By default, selecting a bot/agent, sending a message, or opening its panel binds the Telegram private chat to that conversation. Final Web replies for the same `alias + agent_id + conversation_id` are then delivered once to Telegram. Intermediate status, traces, and cluster child-task progress are omitted. Switching Web conversations does not move the binding; open the Telegram panel again or start a new conversation there to bind the new one.
+
+Enable `TELEGRAM_BROADCAST_COMPLETIONS` to notify every allowlisted private-chat user of final Web or Telegram replies. The originating Telegram chat receives its direct reply once. Other recipients receive a completion notification; long replies begin with a preview that can be expanded with the button or by replying `/expand`. Users bound to that conversation also receive continue, new-conversation, and open-Web actions. Delivery retries and expansion read persisted replies without executing the agent task again.
+
+Replies render Markdown headings, emphasis, strikethrough, lists, quotes, links, and code as Telegram rich text and split long messages into segments. Delivery progress and full replies are persisted so unsent segments can resume after a service restart.
+
+| Command | Action |
+|---|---|
+| `/start`, `/help` | List agents and quick actions |
+| `to dev analyze this issue` | Send to `dev`'s current shared conversation |
+| `to dev /new` | Start a new conversation while retaining history |
+| `/config dev` | Show execution mode, model, reasoning effort, and cluster state |
+| `/config dev model <value>` | Set the active mode's model |
+| `/config dev reasoning <value>` | Set reasoning effort |
+| `/config dev cluster on\|off` | Toggle bot-level clustering |
+| `/expand` | Expand the replied-to preview, or the latest preview when sent alone |
+
+The keyboard also provides status, stop, configuration, and help actions. Model choices follow the active CLI or Pi configuration. Changes apply to the next turn; active tasks keep their initial configuration. Telegram and Web share `(Bot, shared user, agent)` sessions and history, and Telegram cancellation uses the Web task and cluster cancellation flow. Open-Web actions require `WEB_PUBLIC_URL` or fixed public forwarding with the `/node/<node-id>/` prefix preserved. Check the token, allowlist, application restart, competing `getUpdates` clients, public URL, and WebSocket proxy when troubleshooting.
 
 ### Administration and Extensions
 
 - Admin Center manages user permissions, invite codes, announcements, updates, and runtime status.
+- Theme management shares one library and selected theme across accounts. Signed-in member accounts can copy, edit, apply, and delete custom themes; guests have read-only access. Copy the built-in Paper Day theme to customize and preview its colors.
 - Codex CLI usage can be aggregated by local calendar day, provider, and model.
 - Cloudflare quick tunnels and fixed public forwarding support controlled mobile access.
 
@@ -180,9 +233,9 @@ Passwords and key passphrases remain in service memory; use **SSH sign in again*
 
 | Mode | Primary target | Transport and presentation |
 |---|---|---|
-| `cli` | Codex, Claude | Legacy SSE: text, status, trace, and completion events |
+| `cli` | Codex exec / app-server, Claude, Antigravity, DeepSeek Harness | Legacy SSE: text, status, trace, and completion events |
 | `native_agent` | Pi | AG-UI: tools, permissions, execution details, context, and native sessions |
-| Cluster | Per-bot configuration and per-conversation teams | Dynamic team setup, asynchronous delegation, polling, result messages, and model tiers |
+| Cluster | All CLI backends above and Pi; per-bot configuration and per-conversation teams | Dynamic team setup, asynchronous delegation, polling, result messages, and model tiers |
 
 ## Security Boundary
 
@@ -209,7 +262,23 @@ WEB_PORT=8765
 WEB_API_TOKEN=<strong-random-token>
 ```
 
-Runtime data is stored in `~/.tcb/orbit-safe-claw` by default. Override it with `TCB_DATA_DIR`.
+`WEB_API_TOKEN` supports legacy API token authentication. Web login credentials are set during account registration.
+
+CLI types and default commands are listed below. `CLI_PATH` / `cli_path` also accepts the executable's full path.
+
+| `CLI_TYPE` / `cli_type` | Default command | Execution |
+|---|---|---|
+| `codex` | `codex` | `codex exec` with JSON events |
+| `codex_server` | `codex` | Persistent `codex app-server --stdio`, under `execution_mode=cli` |
+| `claude` | `claude` | Claude CLI |
+| `antigravity` | `agy` | Antigravity print / stream-json |
+| `deepseek` | `dsh` | DeepSeek Harness headless / JSONL |
+
+DeepSeek Harness supports model and reasoning-effort selection in chat and local clusters. Per-invocation patches apply these selections while preserving global Harness configuration. Native execution and remote workspaces are unavailable. Commit-message generation can independently use Codex, codex server, or Claude; Antigravity and DeepSeek Harness are unsupported for this feature.
+
+`cli_params.codex_server` and `cli_params.codex` keep separate settings with the same parameter definitions and defaults. Switching backends preserves both. Global extra arguments also use separate keys, for example `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`. Both backends share Codex history, model-parameter, and cost semantics.
+
+Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup. Windows portable packages place application data and Pi home under the package's `data/` directory; plugins and chat history still follow the active storage root.
 
 <details>
 <summary><strong>Manage multiple bots</strong></summary>
@@ -233,6 +302,16 @@ Create a local `managed_bots.json` based on `managed_bots.example.json`:
 </details>
 
 ## Advanced Configuration
+
+### Model Cost Estimates
+
+Context details show an **Estimated cost** calculated from `bot/data/model_prices.csv`. Prices are per million tokens, with currency in the `currency` column. Input, cache reads, cache writes, and output are priced separately; reasoning is not charged again on top of output. Claude's optional one-hour cache-write rate is used when that duration is reported.
+
+Models match the CSV's `model` column exactly. Pi first tries `provider/model`, then the model name. Add aliases or dated model IDs as rows, or set `MODEL_PRICES_FILE` in `.env` to use another CSV. Changes apply to subsequent calculations; saved replies retain their cost snapshots. Missing prices, invalid tables, or incomplete usage leave the estimate unavailable.
+
+Codex reports cumulative conversation snapshots. Message details show the increase over the previous turn when the amount rises; equal or lower amounts, missing prior usage, or unloaded prior history display the current amount. Claude shows the invocation's main-model usage, and Pi sums completed model calls for the turn. Cluster child costs stay with their individual replies.
+
+The default table records standard prices checked on 2026-09-05, with references in `source_url`. These are fixed token-cost estimates. Subscription charges and additional long-context, speed, region, or tool pricing rules are not applied automatically; adjust the table for your provider's rates.
 
 <details>
 <summary><strong>Fixed public address with an frp reverse proxy</strong></summary>
@@ -313,7 +392,7 @@ NATIVE_AGENT_ENABLED=true
 
 Pi extensions live in `~/.pi/agent/extensions` by default. If you use `PI_AGENT_SETTINGS` or `NATIVE_AGENT_PI_HOME`, place `workspace-history.ts` and the repository's `bot/cluster/pi_extension/tcb-cluster.ts` in the extensions directory that is actually active. The current setup helper only follows `PI_AGENT_SETTINGS` or the system HOME, so verify the destination manually when only `NATIVE_AGENT_PI_HOME` is set. On Windows, Pi's `shellPath` should preferably point to Git Bash.
 
-Pi runtimes and persisted sessions are currently scoped primarily by the bot/user/agent conversation and working directory. Changing only the model, Pi agent, or reasoning effort inside the same conversation does not automatically rotate the existing Pi session or rollback chain; create a new conversation when full isolation is required.
+Pi runtimes and persisted sessions are isolated by bot, shared user, agent, and conversation. Changing the working directory, model, Pi agent, or reasoning effort invalidates the old Pi session and workspace rollback chain on the next turn. Changes only to model-configuration file contents or ordinary environment variables may rebuild the process while resuming the same session; create a new conversation when full isolation is required.
 
 </details>
 
@@ -345,7 +424,9 @@ This setting only controls the shell inside the web xterm. It does not launch an
 
 ## Updates
 
-Settings and Admin Center can check GitHub Releases and download updates. A downloaded update is applied the next time the application starts or restarts.
+Settings and Admin Center can check GitHub Releases and download updates, or validate a local offline package and prepare it for application.
+
+Source installations apply pending updates when `start.bat` / `start.ps1` or `start.sh` is launched again in full; an in-app restart only restarts the host process. The generated portable launcher and direct `python -m bot` entry point currently do not apply pending packages automatically. Portable users can deploy a complete new release archive. The user should schedule update operations for an appropriate downtime window.
 
 The generated `.env` includes:
 
@@ -392,6 +473,15 @@ npm run build
 ```
 
 Windows is the primary platform, with Linux and macOS installation and startup scripts maintained alongside it. Layout changes should include browser-level checks. Release-package changes should run the backend test suite, frontend gate, lint, and production build.
+
+Browser tests reuse an application already started by the user. Windows defaults to installed Google Chrome. From `front/`, run:
+
+```powershell
+$env:PLAYWRIGHT_BASE_URL = "http://127.0.0.1:8765"
+npm run e2e:smoke
+```
+
+Coding agents must not start development, preview, or temporary HTTP servers. Documentation-only changes need source, command, and link checks; select existing tests according to the affected behavior and avoid new tests for ordinary copy.
 
 ## License, Branding, and Contributions
 

@@ -196,6 +196,6 @@ $env:HDL_PLUGIN_TEST_PYTHON = (Resolve-Path .tmp/hdl-parser-venv/Scripts/python.
 python -m pytest tests/test_hdl_plugin_runtime.py tests/test_plugin_runtime.py tests/test_plugin_service_cache.py tests/test_plugins_host_api.py tests/test_bundled_plugins.py -q
 ```
 
-前端检查使用现有组件和 mock：`npm run test:gate -- src/test/plugin-hdl-view.test.tsx src/test/plugin-table-view.test.tsx src/test/editor-tabs-scope.test.tsx`、`npm run lint`、`npm run build`。
-浏览器验收连接人工已启动的应用：设置 `PLAYWRIGHT_BASE_URL` 后运行 `npx playwright test src/test/plugin-hdl-workbench.spec.ts`。
+在 `front/` 目录运行前端检查，使用现有组件和 mock：`npm run test:gate -- src/test/plugin-hdl-view.test.tsx src/test/plugin-table-view.test.tsx src/test/editor-tabs-scope.test.tsx`、`npm run lint`、`npm run build`。
+浏览器验收同样在 `front/` 目录连接人工已启动的应用：设置 `PLAYWRIGHT_BASE_URL` 后运行 `npm run e2e -- src/test/plugin-hdl-workbench.spec.ts`。
 浏览器测试拦截 API，不修改运行中的用户配置或项目；检查窄窗口、刷新后的独立详情和实际编辑器中的源码位置。

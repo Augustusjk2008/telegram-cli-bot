@@ -1,4 +1,4 @@
 interface:
   display_name: "Orbit Safe Claw Maintenance"
-  short_description: "按需加载 Orbit 原生 Agent、DeepSeek Harness、远程工作区、插件和发布约束"
-  default_prompt: "使用 $orbit-maintenance 修改 Orbit Safe Claw 的原生 Agent、DeepSeek Harness CLI 或基础设施，并按对应约束验证。"
+  short_description: "按需加载 Orbit CLI、Pi、集群、远程工作区、插件和发布约束"
+  default_prompt: "使用 $orbit-maintenance 修改 Orbit Safe Claw 的 CLI、原生 Agent、集群或基础设施，并按对应约束验证。"

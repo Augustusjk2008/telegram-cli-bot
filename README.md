@@ -9,7 +9,7 @@
 <h1 align="center">Orbit Safe Claw</h1>
 
 <p align="center">
-  <strong>在浏览器中统一操控本地 Codex、Claude 与 Pi 的多工作区 AI 开发控制台。</strong>
+  <strong>在浏览器中统一操控 Codex、Claude、Antigravity、DeepSeek Harness 与 Pi 的多工作区 AI 开发控制台。</strong>
 </p>
 
 <p align="center">
@@ -34,14 +34,14 @@
 </p>
 
 > [!NOTE]
-> Orbit Safe Claw 不托管模型，也不替代 Codex、Claude 或 Pi。它把本机 AI CLI、工作区和开发工具接入一个可远程访问的 Web 工作台，让多个仓库、Bot、会话和子 Agent 更容易统一管理。
+> Orbit Safe Claw 把本机 AI CLI、工作区和开发工具接入一个可远程访问的 Web 工作台，让多个仓库、Bot、会话和子 Agent 统一管理。模型服务及其认证由所选 CLI 或 Pi 配置提供。
 
 ## 一眼看懂
 
 ```mermaid
 flowchart LR
     Browser["🖥️ 浏览器 / 移动端"] --> Orbit["Orbit Safe Claw"]
-    Orbit --> Agents["🤖 Codex · Claude · Pi"]
+    Orbit --> Agents["🤖 Codex · Claude · Antigravity · DeepSeek · Pi"]
     Orbit --> Workbench["💻 Chat · Files · Git · Terminal · Debug"]
     Orbit --> Cluster["🧭 子 Agent · Cluster"]
     Orbit --> Extend["🧩 Plugins · Admin"]
@@ -59,7 +59,7 @@ flowchart LR
     <td width="33%" valign="top"><strong>🧭 子 Agent 与集群</strong><br><br>通过子 Agent、路由和集群模式拆分审查、实现与验证任务，并统一回收结果。</td>
   </tr>
   <tr>
-    <td valign="top"><strong>⚡ CLI 与原生执行</strong><br><br>Codex、Claude 使用普通 CLI 流；Pi 原生 Agent 使用 AG-UI，保留工具调用、权限请求和上下文用量。</td>
+    <td valign="top"><strong>⚡ CLI 与原生执行</strong><br><br>Codex、Claude、Antigravity 和 DeepSeek Harness 使用 CLI 流；Pi 原生 Agent 使用 AG-UI，保留工具调用、权限请求和上下文用量。</td>
     <td valign="top"><strong>🧩 可扩展插件运行时</strong><br><br>通过 <code>plugin.json</code> 扩展文件视图、配置页和后台进程，支持重型 session 视图。</td>
     <td valign="top"><strong>🔒 本地优先、自主管理</strong><br><br>工作区、会话、配置和运行数据保留在自己的设备上，并提供用户权限、公告和更新管理。</td>
   </tr>
@@ -70,7 +70,7 @@ flowchart LR
 ### Windows：推荐使用绿色版
 
 > [!TIP]
-> Windows 绿色版内置 Python、Node.js、Git、Pi CLI、Pi 扩展和前端产物；解压即可启动。它不内置 Codex 或 Claude CLI，如需使用请先在本机安装对应 CLI。
+> Windows 绿色版内置 Python、Node.js、Git、Pi CLI、Pi 扩展和前端产物；解压即可启动。使用 Codex、Claude、Antigravity 或 DeepSeek Harness 时，请在本机另行安装并配置对应 CLI。
 
 1. 打开 [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest)。
 2. 下载 `orbit-safe-claw-windows-x64-<version>.zip` 并解压到可写目录。
@@ -80,7 +80,7 @@ flowchart LR
    .\start.bat
    ```
 
-4. 按控制台输出打开 Web 地址。默认地址为 `http://127.0.0.1:8765`，登录口令保存在 `.env` 的 `WEB_API_TOKEN`。
+4. 按控制台输出打开 Web 地址，默认为 `http://127.0.0.1:8765`。直接从本机回环地址访问可使用本地管理员身份，在 Admin Center 创建注册码。登录页使用用户名和密码，注册需要注册码，也提供 guest 只读入口。
 
 需要传统安装流程时，下载 `orbit-safe-claw-windows-x64-installer-<version>.zip`，解压后运行 `install.bat`。
 
@@ -101,7 +101,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux/macOS 需要 Python 3.10+、Node.js 18+ 和 Git；Pi 原生 Agent 需要 Node.js 22+ 和 bash。
+Linux/macOS 需要 Python 3.10+、Git 和满足锁定前端依赖的 Node.js 22.13+；Pi 原生 Agent 还需要 bash。安装器当前只检查 Node.js 18+，请在安装前确认实际 Node 版本满足前端要求。
 
 <details>
 <summary><strong>从源码快照安装</strong></summary>
@@ -133,20 +133,22 @@ bash install.sh
 
 - 主 Bot 与托管 Bot 可绑定不同仓库、CLI 和工作目录。
 - Web session 按 Bot、共享用户域和 Agent 隔离；获准访问同一 Bot 的 Web 账号共享对应 Agent 对话。
-- Codex 与 Claude 普通 CLI 保留流式正文、状态、trace 和完成态。
+- Codex（exec / app-server）、Claude、Antigravity 和 DeepSeek Harness 的 CLI 会话保留流式正文、状态、trace 和完成态；模型列表及参数按 CLI 类型独立保存。
 - Pi 原生 Agent 保留 session、工具调用、权限请求、上下文用量和过程详情。
 
 ### SSH 远程工作区
 
-创建智能体时选择「远程 SSH」，在连接表单选择远程系统（Linux / POSIX 或 Windows），填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，无需安装 Codex、Claude 或 Pi。
+创建智能体时选择「远程 SSH」，在连接表单选择远程系统（Linux / POSIX 或 Windows），填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写、文件上传和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，AI CLI 或 Pi 在 Orbit 宿主机运行。DeepSeek Harness 当前只支持本地工作区。
 
 Agent 仍在运行 Orbit 的电脑上执行。本地控制目录默认位于 `~/.tcb/orbit-safe-claw/remote-workspaces/`（遵循 `TCB_DATA_DIR`），自动生成 `AGENTS.md` 和 `CLAUDE.md`。项目文件留在远程主机；聊天工具、文件操作和终端复用 SSH 连接。Agent 可批量运行命令、读取指定行范围及精确替换文本，减少反复登录和大段内容传输。
+
+文件面板上传写入远程工作区；聊天附件保存在本地控制目录的 `attachments/` 中，供本地 Agent 处理。
 
 密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
 
 远程 Git 面板支持 Linux 和 Windows 上的仓库，所选远程目录必须是仓库顶层目录。Git 页面与本地使用相同的工作台入口和 API 语义，可查看状态、文件树 Git 状态、当前分支、提交图、近期提交、文件差异（包括未跟踪文件），逐文件暂存、取消暂存并手动提交；也支持初始化、丢弃改动、分支创建 / 切换 / 重置、Stash 列表 / 应用 / 删除 / 弹出、Fetch、Pull、Push、Git 身份配置、提交说明生成和智能提交。Stash 创建当前通过能力矩阵标记为不可用。提交和智能提交使用远程仓库的状态与 Diff，实际 Git 操作在远程 SSH 主机执行；提交身份来自远程 Git 配置，请在远程端配置 `user.name` 和 `user.email`。
 
-远程 Git 缺少时，面板显示安装 / PATH 指引和重试入口，应用不会通过 SSH 安装软件。远程仓库、upstream 或 Git 凭据不可用时，操作返回诊断信息；Fetch、Pull、Push 禁止交互式凭据提示。写操作超时或断线后应先刷新状态核对结果，再决定是否重试。远程 Agent 不提供 shadow Git 工作区历史和回滚，远程项目继续使用自身真实仓库历史。
+远程仓库、upstream 或 Git 凭据不可用时，操作返回诊断信息；Fetch、Pull、Push 禁止交互式凭据提示。远程 Agent 不提供 shadow Git 工作区历史和回滚，远程项目继续使用自身真实仓库历史。
 
 Git 必须在远程 SSH 账号的**非交互会话 PATH** 中可用；本地安装 Git 不会提供远程 Git 能力。缺少 Git 时，面板显示安装 / PATH 指引和重试入口，应用不会通过 SSH 安装软件。请按官方 [Linux 安装指引](https://git-scm.com/install/linux) 或 [Windows 安装指引](https://git-scm.com/install/windows) 准备与远程系统兼容的 Git，确认该账号通过 SSH 能执行 `git --version`，再重试。写操作超时或断线后应先刷新状态核对结果，再决定是否重试。
 
@@ -177,7 +179,9 @@ HTML 文件上限为 1 MiB，其他单个资源上限为 16 MiB；只提供允�
 
 - 普通聊天可按显式 `agent_id` 进入隔离的 Agent 会话；集群模板用于准备 Bot 级并行槽位和模型档位。
 - 集群工具覆盖动态编组、状态查询、子 Agent 新会话、异步任务创建、轮询和消息等待。
-- 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务；Codex、Claude 使用 stdio MCP，Pi 使用扩展适配同一 bridge。
+- 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务。Codex（exec / app-server）和 Claude 自动注入 stdio MCP；Antigravity 自动配置工作区 MCP；DeepSeek Harness 在集群轮次通过 `--patch` 加载 MCP；Pi 使用扩展适配同一 bridge。
+- 上述入口均支持本地集群。远程 Antigravity 暂不支持集群；DeepSeek Harness 限于本地 CLI 模式。Antigravity 工作区已有用户管理的同名 `tcb-cluster` 配置时会提示冲突，需要先处理该配置。
+- 同一主会话的普通轮次沿用当前编组和 `run_id`；实际调整编组时切换到返回的新 ID。集群任务和进度保存在内存中，宿主重启后不会恢复正在执行的子任务。
 
 ### Telegram 单 Bot 接入
 
@@ -194,7 +198,9 @@ TELEGRAM_BROADCAST_COMPLETIONS=false
 
 默认使用会话绑定模式：Telegram 用户选择 Bot 和 Agent、发送消息或打开面板后，会将当前会话绑定到该 Telegram 私聊。Web 在相同 `alias + agent_id + conversation_id` 会话中发送消息时，Telegram 会收到一次最终答复；中间状态、trace 和集群子任务过程不会推送。Web 切换会话不会自动迁移 Telegram 绑定，Telegram 通过“新会话”或再次打开面板后才会绑定新会话。
 
-将 `TELEGRAM_BROADCAST_COMPLETIONS` 设为 `true` 并重启后，Web 或 Telegram 的最终答复会发送给 `TELEGRAM_ALLOWED_USER_IDS` 中的所有 Telegram 私聊用户。原始 Telegram 聊天只收到现有直接答复，避免重复；已绑定当前会话的用户会获得“继续聊 / 新会话 / 打开 Web”按钮，广播-only 用户只收到正文和 `context left`。广播发送失败按用户单独重试，不会重新执行智能体任务。
+将 `TELEGRAM_BROADCAST_COMPLETIONS` 设为 `true` 并重启后，Web 或 Telegram 的最终答复会发送给 `TELEGRAM_ALLOWED_USER_IDS` 中的所有 Telegram 私聊用户。原始 Telegram 聊天只收到一次直接答复；其他接收者收到完成通知，长回复先显示摘要，可点击“展开全文”或回复该消息发送 `/expand`。已绑定当前会话的用户还可使用“继续聊 / 新会话 / 打开 Web”按钮。广播发送失败按用户单独重试，展开读取已保存的全文，两者都不会重新执行智能体任务。
+
+最终答复支持标题、粗体、斜体、删除线、列表、引用、链接和代码块等 Markdown 内容，转换为 Telegram 富文本并按消息长度分段。投递进度与全文保存在本地，服务重启后可继续发送尚未完成的片段。
 
 常用命令如下：
 
@@ -207,6 +213,7 @@ TELEGRAM_BROADCAST_COMPLETIONS=false
 | `/config dev model <值>` | 设置当前执行模式使用的模型 |
 | `/config dev reasoning <值>` | 设置当前执行模式的思考强度 |
 | `/config dev cluster on\|off` | 开启或关闭 Bot 级集群 |
+| `/expand` | 回复摘要时展开对应全文；单独发送时展开最近一条摘要 |
 
 底部键盘提供智能体、发消息、新会话、状态、停止任务、配置和帮助入口。配置页会根据当前会话执行模式列出可用模型和思考强度；没有当前会话时使用 Bot 默认执行模式。模型列表来自 CLI 参数配置或 Pi 模型配置，非法值会被拒绝。模型、思考强度和集群开关保存到 Bot 配置，正在运行的任务继续使用启动时的配置，下一轮生效。
 
@@ -217,6 +224,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 ### 管理与扩展
 
 - Admin Center 管理用户权限、邀请码、公告、更新和运行状态。
+- 主题管理提供所有账户共享的主题库和应用选择；正式账户可复制、编辑、应用和删除自定义主题，访客只读。内置「纸感日间」主题可复制后定制，配色可预览并保存。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 
@@ -235,9 +243,9 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 
 | 模式 | 主要目标 | 传输与展示 |
 |---|---|---|
-| `cli` | codex、codex server、Claude | Legacy SSE：正文、状态、trace、完成态 |
+| `cli` | Codex exec / app-server、Claude、Antigravity、DeepSeek Harness | Legacy SSE：正文、状态、trace、完成态 |
 | `native_agent` | Pi | AG-UI：工具、权限、过程、上下文和原生 session |
-| Cluster | 按 Bot 配置、按主会话编组 | 动态编组、异步委派、轮询、消息回告和模型档位 |
+| Cluster | 上述 CLI 与 Pi；按 Bot 配置、按主会话编组 | 动态编组、异步委派、轮询、消息回告和模型档位 |
 
 ## 安全边界
 
@@ -264,16 +272,25 @@ WEB_PORT=8765
 WEB_API_TOKEN=<高强度随机口令>
 ```
 
-CLI 选择支持 `codex`、`codex server` 和 `claude`。`codex` 保留 `codex exec` 入口；
-`codex server` 的内部标识为 `codex_server`，使用常驻 `codex app-server --stdio`，执行模式仍为 `cli`。
-选择 `codex_server` 时，`CLI_PATH` / `cli_path` 仍填写 `codex` 或其可执行文件完整路径。
-创建、编辑智能体和 Git 提交说明配置均可独立选择此入口。
+`WEB_API_TOKEN` 用于兼容 API token 认证；网页登录凭据通过账号注册设置。
+
+CLI 选择和默认命令如下；`CLI_PATH` / `cli_path` 也可填写对应可执行文件的完整路径。
+
+| `CLI_TYPE` / `cli_type` | 默认命令 | 执行入口 |
+|---|---|---|
+| `codex` | `codex` | `codex exec`，JSON 事件流 |
+| `codex_server` | `codex` | 常驻 `codex app-server --stdio`，执行模式为 `cli` |
+| `claude` | `claude` | Claude CLI |
+| `antigravity` | `agy` | Antigravity print / stream-json |
+| `deepseek` | `dsh` | DeepSeek Harness headless / JSONL |
+
+DeepSeek Harness 支持聊天中选择模型、思考深度和本地集群；模型与思考深度通过本次调用的 patch 应用，保留 Harness 全局配置。原生执行和远程工作区暂不支持。Git 提交说明生成可独立选择 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。
 
 `cli_params.codex_server` 与 `cli_params.codex` 独立保存，使用相同的参数定义和默认值；切换入口不会覆盖另一入口的参数。
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。
 两种入口复用 Codex 历史格式、模型参数及费用语义。
 
-运行态数据默认位于 `~/.tcb/orbit-safe-claw`，可通过 `TCB_DATA_DIR` 覆盖。
+应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止启动。Windows 绿色版默认把应用数据和 Pi home 放在包内 `data/`，插件和聊天历史仍遵循当前存储根目录。
 
 <details>
 <summary><strong>托管多个 Bot</strong></summary>
@@ -387,7 +404,7 @@ NATIVE_AGENT_ENABLED=true
 
 Pi 扩展默认位于 `~/.pi/agent/extensions`。使用 `PI_AGENT_SETTINGS` 或 `NATIVE_AGENT_PI_HOME` 时，应把 `workspace-history.ts` 和仓库内 `bot/cluster/pi_extension/tcb-cluster.ts` 放入实际生效的 extensions 目录。当前管理页安装助手只识别 `PI_AGENT_SETTINGS` 或系统 HOME；仅设置 `NATIVE_AGENT_PI_HOME` 时需手动确认目标目录。Windows 的 Pi `shellPath` 建议指向 Git Bash。
 
-Pi runtime 和持久化 session 当前以 Bot/用户/Agent 的 conversation 与工作目录为主要作用域。在同一 conversation 内仅修改模型、Pi Agent 或推理强度，不会自动轮换已有 Pi session 和 rollback 链；需要完全隔离时请新建会话。
+Pi runtime 和持久化 session 按 Bot、共享用户、Agent 和 conversation 隔离。更改工作目录、模型、Pi Agent 或思考深度后，下一轮会失效旧 Pi session 和工作区回滚链。仅修改模型配置文件内容或普通环境变量时，可能重建进程并继续原会话；需要完整隔离时请新建会话。
 
 </details>
 
@@ -419,7 +436,9 @@ WEB_TERMINAL_SHELL_PATH=C:\Program Files\PowerShell\7\pwsh.exe
 
 ## 更新
 
-设置页和 Admin Center 会从 GitHub Releases 检查、下载更新。下载完成后，更新在下次启动或重启时应用。
+设置页和 Admin Center 可从 GitHub Releases 检查、下载更新，也支持校验本地离线包并准备更新。
+
+源码安装通过完整重新运行 `start.bat` / `start.ps1` 或 `start.sh` 应用待更新包；应用内重启只重新运行宿主进程。当前绿色版生成的启动器和直接 `python -m bot` 入口尚未自动应用待更新包，绿色版可下载完整新版本压缩包部署。更新操作应由用户在合适的停机时间执行。
 
 首次安装生成的 `.env` 默认包含：
 
@@ -466,6 +485,15 @@ npm run build
 ```
 
 项目以 Windows 为优先平台，同时维护 Linux/macOS 安装与启动脚本。涉及布局的改动应补充浏览器级检查；涉及发布包时应运行后端测试、前端门禁、lint 和生产构建。
+
+浏览器测试复用用户已经启动的应用。Windows 默认使用已安装的 Google Chrome，在 `front/` 下执行：
+
+```powershell
+$env:PLAYWRIGHT_BASE_URL = "http://127.0.0.1:8765"
+npm run e2e:smoke
+```
+
+编码 Agent 不得自行启动开发、预览或临时 HTTP 服务。纯文档变更核对源码、命令和链接即可；按修改范围选择已有测试，避免为普通文案新增测试。
 
 ## 开源协议、品牌与贡献
 

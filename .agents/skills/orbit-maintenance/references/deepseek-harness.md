@@ -3,18 +3,26 @@
 ## 配置与支持范围
 
 - CLI 类型为 `deepseek`，默认执行命令为 `dsh`；主 Bot 和子 Bot 均可选择。配置入口是 `bot/config.py`、`bot/manager.py`、`bot/cli_params.py`。
-- 当前支持本地工作区的 `execution_mode=cli`。原生执行模式、远程工作区、集群编排和 Git commit message 生成会在启动前拒绝；修改入口时保持前后端边界一致。
+- 当前支持本地工作区的 `execution_mode=cli`，包括 Bot 级 TCB 集群编排。原生执行模式、远程工作区和 Git commit message 生成会在启动前拒绝；修改入口时保持前后端边界一致。
 - 模型和 `reasoning_effort` 可在聊天页选择；空值或 `none` 继承 Harness 配置，思考深度支持 `off/low/high/max`。npm 安装的 dsh 通过每次调用的临时 patch 应用选择，保留原 provider 和其他配置；不修改用户的 Harness 配置。宿主 `extra_args` 仅接受 `--patch <文件路径>` 或 `--patch=<文件路径>`；协议参数、session id 和任务输入由宿主控制。
-- 前端 CLI 标签和默认路径由 `front/src/utils/cliType.ts` 管理；执行模式入口见 `botManagerModel.ts`、`SettingsScreen.tsx`。设置页切换到 DeepSeek 时先关闭已启用的集群，再保存 CLI 配置。
+- `permission_mode` 支持 `read-only/workspace-write/danger-full-access`，默认 `workspace-write`，通过 `DSH_PERMISSION_MODE` 传给 Harness。Web 调用通过 `clamp_unsafe_cli_params()` 限制未获 `allow_unsafe_cli` 的 `danger-full-access`；集群 `allow_write` 不替代这层 CLI 权限配置。
+- 前端 CLI 标签和默认路径由 `front/src/utils/cliType.ts` 管理；执行模式入口见 `front/src/screens/botManagerModel.ts`、`SettingsScreen.tsx`。设置页切换到 DeepSeek 时先保存 CLI 执行模式，再保存 CLI 类型和路径，保留 Bot 的集群开关。
+
+## 本地集群接入
+
+- `bot/web/api_service.py:_cluster_mcp_injected_params()` 调用 `write_deepseek_mcp_patch()`，向 DeepSeek 参数块追加 `--patch <path>`。`bot/cluster/setup.py` 生成包含 `@deepseek-ai/dsh-mcp-client` 的 patch，以当前 Python 执行项目 `bot/cluster/mcp_stdio.py --config <bridge-config>`，传入工作区 cwd，并设置 `failOnStartupError=true`。
+- patch 由宿主管理，位于 cluster MCP 配置目录；管理页准备该文件，DeepSeek 的 MCP 安装、验证、移除命令列表均为空。接入不修改用户 Harness 全局配置。
+- 工具、显式 `run_id` 和编组规则沿用 [native-agent.md](native-agent.md) 的公共 MCP 契约。CLI 子任务的模型档位映射到 DeepSeek 的 `model` 和 `reasoning_effort`。
 
 ## 执行协议
 
 - `bot/cli_params.py:_build_deepseek_args()` 构造 `dsh --profile headless [--patch <path>] --json [--session-id <id>] -`，用户消息通过 stdin 发送；保留中文和多行输入。
-- `bot/deepseek_cli.py` 识别 npm dsh 入口，由 `bot/deepseek_launch.mjs` 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17。模型选择以最后一个临时 `--patch` 覆盖，进程正常退出时清理；自定义可执行文件保留原调用方式。
+- `bot/deepseek_cli.py` 识别 npm dsh 入口及 wrapper 指定的 bundled Node，由 `bot/deepseek_launch.mjs` 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17。模型选择在已有 patch（含集群 patch）后追加临时 `--patch`，保留合并后的 provider 配置，退出回调清理临时文件。自定义可执行文件可沿用原调用方式；显式模型或思考深度选择要求可识别的 npm dsh 入口。
 - `bot/cli.py:DeepSeekJsonStreamParser` 解析 stdout JSONL；`bot/web/api_service.py` 管理进程和轮次。stderr 独立收集，用于失败诊断。
+- Windows 上 dsh 进程使用 breakaway 启动并跳过 Orbit Job Object containment，避免嵌套 job 干扰 Harness 自己的进程隔离；修改统一 CLI 进程生命周期时保留该分支。
 - 成功需要有效 `session.sessionId`、`status.phase=turn_end` 且 `reason.kind=completed`、`final` 事件和进程退出码 0。无效 JSON、缺少结束事件、final 后继续输出运行事件或输出超限都必须保留失败状态。
 - `text` 提供正文预览，`final.text` 替换最终正文。`thinking`、工具调用和工具结果进入 trace；保留 `callId` 配对与步骤去重。
-- `status.phase=step_end` 用量按 `(turn, step)` 去重累加，只使用实际返回的字段；展示为本轮用量。
+- `status.phase=step_end` 用量按 `(turn, step)` 去重累加，仅汇总各步骤共同具备的字段。`bot/web/cli_context_usage.py` 还能按当前 session id 读取 `DSH_HOME`（默认 `~/.dsh`）下的 `contextPressure` projection；`_build_deepseek_context_usage()` 合并会话上下文占用和本轮用量，缺少 projection 时显示本轮用量。当前 DeepSeek 链路不附加费用估算。
 
 ## 会话、历史与前端事件
 
@@ -28,13 +36,13 @@
 协议、流式执行、会话恢复和 trace 变更运行：
 
 ```bash
-python -m pytest tests/test_deepseek_exec.py tests/test_deepseek_history_adapter.py tests/test_cli_streaming.py -k deepseek -q
+python -m pytest tests/test_deepseek_exec.py tests/test_deepseek_history_adapter.py tests/test_cli_streaming.py tests/test_cli_context_usage.py -k deepseek -q
 ```
 
-配置或持久化变更按需运行：
+集群接入、配置或持久化变更按需运行：
 
 ```bash
-python -m pytest tests/test_manager.py tests/test_env_service.py tests/test_sessions.py tests/test_session_store.py -k deepseek -q
+python -m pytest tests/test_cluster_setup.py tests/test_manager.py tests/test_env_service.py tests/test_sessions.py tests/test_session_store.py -k deepseek -q
 ```
 
 前端入口变更选择 `front/src/test/settings-screen.test.tsx`、`bot-manager-delete.test.tsx`、`real-client.test.ts` 中的相关用例；涉及布局时使用已启动的服务做 Playwright 检查。

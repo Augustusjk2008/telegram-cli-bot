@@ -2,9 +2,12 @@
 
 ## Optional Graphviz Runtime
 
-The plugin can use `vendor/graphviz/win-x64/bin/dot.exe` before falling back to system `dot`.
+With `bundledGraphvizEnabled` enabled (the default), the plugin uses
+`vendor/graphviz/win-x64/bin/dot.exe` when that file exists. Otherwise it uses
+the configured `dotPath`, which defaults to `dot` on PATH.
 Graphviz binaries are not committed to this repository. If installed through the plugin action,
 the runtime is stored in the user plugin directory and can be removed by deleting `vendor/graphviz`.
 
-Graphviz is licensed under the Common Public License:
-https://graphviz.gitlab.io/license/
+The host installer records the runtime's Eclipse Public License 2.0 notice in
+`vendor/graphviz/win-x64/MERMAID_VISIO_GRAPHVIZ_NOTICE.txt`:
+https://graphviz.org/license/
