@@ -17,12 +17,12 @@
 ## 执行协议
 
 - `bot/cli_params.py:_build_deepseek_args()` 构造 `dsh --profile headless [--patch <path>] --json [--session-id <id>] -`，用户消息通过 stdin 发送；保留中文和多行输入。
-- `bot/deepseek_cli.py` 识别 npm dsh 入口及 wrapper 指定的 bundled Node，由 `bot/deepseek_launch.mjs` 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17。模型选择在已有 patch（含集群 patch）后追加临时 `--patch`，保留合并后的 provider 配置，退出回调清理临时文件。自定义可执行文件可沿用原调用方式；显式模型或思考深度选择要求可识别的 npm dsh 入口。
+- `bot/deepseek_cli.py` 识别 npm dsh 入口及 wrapper 指定的 bundled Node，由 `bot/deepseek_launch.mjs` 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17。模型选择在已有 patch（含集群 patch）后追加临时 `--patch`，保留合并后的 provider 配置，退出回调清理临时文件。启动器在 JSON 模式通过 `orbit_model` 元数据报告显式选择或继承的模型名，用于费用估算；默认模型配置无法静态读取时跳过该元数据。自定义可执行文件可沿用原调用方式；显式模型或思考深度选择要求可识别的 npm dsh 入口。
 - `bot/cli.py:DeepSeekJsonStreamParser` 解析 stdout JSONL；`bot/web/api_service.py` 管理进程和轮次。stderr 独立收集，用于失败诊断。
 - Windows 上 dsh 进程使用 breakaway 启动并跳过 Orbit Job Object containment，避免嵌套 job 干扰 Harness 自己的进程隔离；修改统一 CLI 进程生命周期时保留该分支。
 - 成功需要有效 `session.sessionId`、`status.phase=turn_end` 且 `reason.kind=completed`、`final` 事件和进程退出码 0。无效 JSON、缺少结束事件、final 后继续输出运行事件或输出超限都必须保留失败状态。
 - `text` 提供正文预览，`final.text` 替换最终正文。`thinking`、工具调用和工具结果进入 trace；保留 `callId` 配对与步骤去重。
-- `status.phase=step_end` 用量按 `(turn, step)` 去重累加，仅汇总各步骤共同具备的字段。`bot/web/cli_context_usage.py` 还能按当前 session id 读取 `DSH_HOME`（默认 `~/.dsh`）下的 `contextPressure` projection；`_build_deepseek_context_usage()` 合并会话上下文占用和本轮用量，缺少 projection 时显示本轮用量。当前 DeepSeek 链路不附加费用估算。
+- `status.phase=step_end` 用量按 `(turn, step)` 去重累加，仅汇总各步骤共同具备的字段；缺少用量或计数无效的步骤会使完整用量不可用。`bot/web/cli_context_usage.py` 还能按当前 session id 读取 `DSH_HOME`（默认 `~/.dsh`）下的 `contextPressure` projection；`_build_deepseek_context_usage()` 合并会话上下文占用和本轮用量，缺少 projection 时显示本轮用量。每轮结束附加并持久化 `scope=turn` 的费用估算，Harness 普通输入已排除缓存，reasoning 已包含在输出中；失败或中断时可计价的已上报用量标记为部分估算。模型未知或用量不完整时不显示费用。默认 CSV 为 Flash 和 Pro 配置 CNY 人民币高峰固定单价，不自动套用空闲时段折扣。
 
 ## 会话、历史与前端事件
 
@@ -36,7 +36,7 @@
 协议、流式执行、会话恢复和 trace 变更运行：
 
 ```bash
-python -m pytest tests/test_deepseek_exec.py tests/test_deepseek_history_adapter.py tests/test_cli_streaming.py tests/test_cli_context_usage.py -k deepseek -q
+python -m pytest tests/test_deepseek_exec.py tests/test_deepseek_history_adapter.py tests/test_cli_streaming.py tests/test_cli_context_usage.py tests/test_model_pricing.py -k deepseek -q
 ```
 
 集群接入、配置或持久化变更按需运行：

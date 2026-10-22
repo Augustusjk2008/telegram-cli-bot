@@ -157,6 +157,7 @@ def test_deepseek_wrapper_uses_bundled_node_from_shim(tmp_path):
 
 
 @pytest.mark.parametrize("selection,expected", [
+    ({}, {"model": "custom-model", "reasoningEffort": "low"}),
     ({"model": "deepseek-v4-pro"}, {"model": "deepseek-v4-pro", "reasoningEffort": "low"}),
     ({"reasoning_effort": "off"}, {"model": "custom-model", "reasoningEffort": "off"}),
     ({"model": "deepseek-flash", "reasoning_effort": "max"}, {"model": "deepseek-flash", "reasoningEffort": "max"}),
@@ -185,11 +186,15 @@ export function composeEntries([patches]) { return patches; }
     cmd, _ = build_cli_command("deepseek", str(shim), "hello", {}, params)
     run = subprocess.run(cmd, input="hello", capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert run.returncode == 0, run.stderr
-    result = json.loads(run.stdout)
+    metadata, result = [json.loads(line) for line in run.stdout.splitlines()]
+    assert metadata == {"type": "orbit_model", "model": expected["model"]}
     assert result["patch"][0]["config"] == {**inherited, **expected}
     assert result["args"][:4] == ["--profile", "headless", "--patch", str(user_patch)]
-    assert result["args"][-4:] == ["--patch", result["patchPath"], "--json", "-"]
-    assert not Path(result["patchPath"]).parent.exists()
+    if selection:
+        assert result["args"][-4:] == ["--patch", result["patchPath"], "--json", "-"]
+        assert not Path(result["patchPath"]).parent.exists()
+    else:
+        assert result["patchPath"] == str(user_patch)
     assert user_patch.read_bytes() == original
 
 
@@ -235,6 +240,19 @@ def test_deepseek_step_usage_is_counted_once_and_missing_fields_stay_absent():
         "input_tokens": 134, "output_tokens": 10, "cache_read_input_tokens": 6016, "total_tokens": 6160,
     }
     assert deepseek_parser(SESSION, COMPLETED, {"type": "final", "text": "ok"}).result().terminal_usage is None
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"inputTokens": 10, "outputTokens": 1, "cacheReadTokens": -1}])
+def test_deepseek_incomplete_step_does_not_produce_a_full_usage_total(usage):
+    parser = deepseek_parser(
+        SESSION,
+        {"type": "status", "phase": "step_end", "turn": 1, "step": 1,
+         "usage": {"inputTokens": 10, "outputTokens": 1, "cacheReadTokens": 100}},
+        {"type": "status", "phase": "step_end", "turn": 1, "step": 2, "usage": usage},
+        COMPLETED,
+        {"type": "final", "text": "ok"},
+    )
+    assert parser.result().terminal_usage is None
 
 
 @pytest.mark.parametrize("events,fragment", [

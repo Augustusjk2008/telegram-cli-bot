@@ -6174,7 +6174,9 @@ async def _stream_cli_chat(
                 cluster_run_id,
                 allow_unsafe_cli=allow_unsafe_cli,
             )
-            turn_model = "" if cli_type == "deepseek" else str(params_for_attempt.get_param(cli_type, "model") or "").strip()
+            turn_model = str(params_for_attempt.get_param(cli_type, "model") or "").strip()
+            if cli_type == "deepseek" and turn_model == "none":
+                turn_model = ""
             output_queue: queue.Queue[Any] = queue.Queue(maxsize=_CLI_OUTPUT_LIMITS.queue_max_chunks)
             server_reader = None
             server_runtime = None
@@ -6364,18 +6366,21 @@ async def _stream_cli_chat(
             latest_preview_text = ""
             last_context_usage_resolved_at = 0.0
 
-            async def with_estimated_cost(context_usage: dict[str, Any] | None) -> dict[str, Any] | None:
-                if cli_type == "deepseek":
-                    return context_usage
+            async def with_estimated_cost(
+                context_usage: dict[str, Any] | None, *, usage_complete: bool = True,
+            ) -> dict[str, Any] | None:
                 parsed = preview_state.result()
-                cost_model = str((context_usage or {}).get("model") or turn_model).strip()
+                cost_model = str(parsed.model or (context_usage or {}).get("model") or turn_model).strip()
                 cost_session_id = parsed.session_id or _current_native_session_id(session, cli_type)
                 estimated_cost = None
-                if cli_type != "antigravity" and cost_model and parsed.terminal_usage is not None:
+                if (
+                    cli_type != "antigravity" and cost_model
+                    and parsed.terminal_usage is not None and parsed.terminal_usage_complete
+                ):
                     estimated_cost = estimate_usage_cost(
                         cost_model, parsed.terminal_usage, protocol=cli_data_provider(cli_type), scope="turn",
                     )
-                elif cli_type != "antigravity" and parsed.terminal_usage is None:
+                elif cli_type not in {"antigravity", "deepseek"} and parsed.terminal_usage is None:
                     try:
                         estimated_cost = await asyncio.wait_for(
                             asyncio.to_thread(turn_cost.estimate_partial, cost_session_id),
@@ -6386,6 +6391,10 @@ async def _stream_cli_chat(
                 if estimated_cost is None:
                     return context_usage
                 if server_reader is not None and (cleanup_abort or server_reader.returncode != 0):
+                    estimated_cost = {**estimated_cost, "is_partial": True}
+                if cli_type == "deepseek" and (
+                    not usage_complete or cleanup_abort or parsed.terminal_status != "completed" or process.returncode != 0
+                ):
                     estimated_cost = {**estimated_cost, "is_partial": True}
                 return {
                     **(context_usage or {
@@ -6613,7 +6622,7 @@ async def _stream_cli_chat(
                             context_usage=status_context_usage,
                         )
                     if status_context_usage:
-                        status_context_usage = _with_turn_model(status_context_usage, turn_model)
+                        status_context_usage = _with_turn_model(status_context_usage, preview_state.result().model or turn_model)
                         if cli_type != "deepseek":
                             await load_compaction_session(status_session_id)
                             (
@@ -6903,7 +6912,7 @@ async def _stream_cli_chat(
                     session_id=native_session_id,
                     context_usage=context_usage,
                 )
-            context_usage = _with_turn_model(context_usage, turn_model)
+            context_usage = _with_turn_model(context_usage, parsed_result.model or turn_model)
             if cli_type != "deepseek":
                 await load_compaction_session(native_session_id)
                 (
@@ -7021,6 +7030,8 @@ async def _stream_cli_chat(
                 failure_usage = _build_deepseek_context_usage(
                     preview_state.result().terminal_usage, session_id=failure_session_id,
                 )
+                if failure_usage is not None:
+                    failure_usage = await with_estimated_cost(failure_usage, usage_complete=False)
             service.append_trace_event(turn_handle, {
                 "kind": "error", "source": "runtime", "summary": failure_detail,
             })

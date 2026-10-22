@@ -124,6 +124,24 @@ describe("context usage cost mapping", () => {
 });
 
 describe("context usage cost details", () => {
+  it("shows DeepSeek turn costs in CNY without subtracting the preceding turn", () => {
+    const messages = [0.00058864, 0.00117728].map((total, index) => ({
+      ...costMessage(String(index), total, "deepseek"),
+      meta: { contextUsage: mapChatMessageContextUsage({
+        provider: "deepseek", status_text: "本轮用量", usage_scope: "turn",
+        estimated_cost: {
+          model: "deepseek-flash", currency: "CNY", scope: "turn", total,
+          input: 0.000268 * (index + 1), cache_read: 0.00024064 * (index + 1),
+          cache_write: 0, output: 0.00008 * (index + 1),
+        },
+      }) },
+    }));
+    const usage = buildDisplayContextUsage(messages).get("1");
+    render(<ChatContextUsageBadge contextUsage={usage} />);
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("cost: CNY 0.00117728");
+  });
+
   it("shows Antigravity CLI usage without inventing a context percentage", () => {
     const mapped = mapChatMessageContextUsage({
       provider: "antigravity",

@@ -15,3 +15,5 @@ claude-opus-4-6,USD,5,0.5,6.25,25,10,https://platform.claude.com/docs/en/about-c
 claude-sonnet-5,USD,2,0.2,2.5,10,4,https://platform.claude.com/docs/en/about-claude/pricing
 claude-sonnet-4-6,USD,3,0.3,3.75,15,6,https://platform.claude.com/docs/en/about-claude/pricing
 claude-haiku-4-5,USD,1,0.1,1.25,5,2,https://platform.claude.com/docs/en/about-claude/pricing
+deepseek-flash,CNY,2,0.04,0,8,,https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+deepseek-v4-pro,CNY,9,0.30,0,27,,https://api-docs.deepseek.com/zh-cn/quick_start/pricing/

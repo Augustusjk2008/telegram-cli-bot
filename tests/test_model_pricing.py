@@ -44,6 +44,22 @@ def test_claude_prices_disjoint_cache_and_both_write_lifetimes(price_file):
     assert cost["total"] == 0.935
 
 
+@pytest.mark.parametrize(("model", "expected"), [
+    ("deepseek-flash", (2, 0.08, 8, 10.08)),
+    ("deepseek-v4-pro", (9, 0.6, 27, 36.6)),
+])
+def test_deepseek_prices_disjoint_input_and_cache_in_cny(monkeypatch, model, expected):
+    monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(DEFAULT_PRICES_PATH))
+    cost = estimate_usage_cost(model, {
+        "input_tokens": 1_000_000, "cache_read_input_tokens": 2_000_000,
+        "output_tokens": 1_000_000, "reasoning_tokens": 500_000,
+    }, protocol="deepseek", scope="turn")
+    assert cost["currency"] == "CNY"
+    assert cost["scope"] == "turn"
+    assert tuple(cost[key] for key in ("input", "cache_read", "output", "total")) == expected
+    assert cost["cache_write"] == 0
+
+
 @pytest.mark.parametrize("usage", [
     {"input_tokens": 3},
     {"input_tokens": True, "output_tokens": 1},

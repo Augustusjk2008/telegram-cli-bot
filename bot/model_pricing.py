@@ -90,7 +90,8 @@ def estimate_usage_cost(
             ordinary_input = input_tokens - cache_read - cache_write
             if ordinary_input < 0:
                 return None
-        elif protocol == "claude":
+        elif protocol in {"claude", "deepseek"}:
+            # Harness 的 inputTokens 已排除缓存输入，与 Claude 的用量桶一致。
             ordinary_input = _token_count(usage, "input_tokens")
             output = _token_count(usage, "output_tokens")
             cache_read = _token_count(usage, "cache_read_input_tokens", default=0)

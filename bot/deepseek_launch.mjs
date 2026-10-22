@@ -18,22 +18,32 @@ function findModelEntry(entries) {
   }
 }
 
+async function loadModelEntry() {
+  const require = createRequire(pathToFileURL(entry));
+  const boot = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")));
+  const { resolveDshHome } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-home-paths")));
+  const installAnchor = join(dirname(entry), "..", "package.json");
+  const profile = boot.loadProfile("dsh", "headless", installAnchor);
+  const overlays = [];
+  for (let index = 2; index < args.length && args[index] === "--patch"; index += 2) {
+    overlays.push(...boot.loadOverlayPatches("dsh", resolve(args[index + 1])));
+  }
+  const patches = boot.readProfilePatches("dsh", {
+    dir: profile.dir, patchPath: profile.patchPath, installAnchor,
+    home: resolveDshHome(), overlays, telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
+  }, profile);
+  return findModelEntry(boot.composeEntries([patches]));
+}
+
 try {
+  let modelEntry;
+  try {
+    modelEntry = await loadModelEntry();
+  } catch (error) {
+    // Optional price metadata must not block an otherwise valid default launch.
+    if (Object.keys(selection).length) throw error;
+  }
   if (Object.keys(selection).length) {
-    const require = createRequire(pathToFileURL(entry));
-    const boot = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")));
-    const { resolveDshHome } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-home-paths")));
-    const installAnchor = join(dirname(entry), "..", "package.json");
-    const profile = boot.loadProfile("dsh", "headless", installAnchor);
-    const overlays = [];
-    for (let index = 2; index < args.length && args[index] === "--patch"; index += 2) {
-      overlays.push(...boot.loadOverlayPatches("dsh", resolve(args[index + 1])));
-    }
-    const patches = boot.readProfilePatches("dsh", {
-      dir: profile.dir, patchPath: profile.patchPath, installAnchor,
-      home: resolveDshHome(), overlays, telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
-    }, profile);
-    const modelEntry = findModelEntry(boot.composeEntries([patches]));
     if (!modelEntry?.id || !modelEntry.config || modelEntry.config.__jsExpr) {
       throw new Error("DeepSeek Harness 无法读取默认模型配置，请检查 headless 的 agent-default-model 配置");
     }
@@ -50,6 +60,10 @@ try {
     writeFileSync(patchPath, JSON.stringify(patch), "utf8");
     const protocolIndex = args.indexOf("--json");
     args.splice(protocolIndex < 0 ? args.length : protocolIndex, 0, "--patch", patchPath);
+  }
+  const model = selection.model ?? modelEntry?.config?.model;
+  if (args.includes("--json") && typeof model === "string" && model.trim()) {
+    process.stdout.write(`${JSON.stringify({ type: "orbit_model", model: model.trim() })}\n`);
   }
   process.argv = [process.execPath, entry, ...args];
   // Call the exported entry explicitly: Node 22.17 has no import.meta.main.

@@ -70,6 +70,8 @@ class CliStreamParseResult:
     terminal_status: Optional[str] = None
     terminal_error: Optional[str] = None
     denied_actions: Optional[List[Any]] = None
+    model: Optional[str] = None
+    terminal_usage_complete: bool = True
 
 
 class DeepSeekJsonStreamParser:
@@ -83,6 +85,7 @@ class DeepSeekJsonStreamParser:
         self._has_final = False
         self._projection_truncated = False
         self._step_usage: dict[tuple[int, int], dict[str, int]] = {}
+        self.model: Optional[str] = None
         self.session_id: Optional[str] = None
         self.terminal_status: Optional[str] = None
         self.total_bytes = 0
@@ -106,9 +109,13 @@ class DeepSeekJsonStreamParser:
             return parsed
         kind = event["type"]
         self._projection_truncated |= event.get("truncated") is True
-        if self._has_final and kind in {"session", "status", "text", "thinking", "tool_call", "tool_result", "final", "error"}:
+        if self._has_final and kind in {"session", "status", "text", "thinking", "tool_call", "tool_result", "final", "error", "orbit_model"}:
             self._errors.append("DeepSeek Harness 在 final 后继续输出运行事件", separator="\n")
-        if kind == "session":
+        if kind == "orbit_model":
+            model = event.get("model")
+            if isinstance(model, str) and model.strip():
+                self.model = model.strip()
+        elif kind == "session":
             session_id = event.get("sessionId")
             if not isinstance(session_id, str) or not session_id.strip():
                 self._errors.append("DeepSeek Harness 未提供有效 sessionId", separator="\n")
@@ -152,16 +159,20 @@ class DeepSeekJsonStreamParser:
 
     def _record_usage(self, event: dict[str, Any]) -> None:
         turn, step, usage = event.get("turn"), event.get("step"), event.get("usage")
-        if type(turn) is not int or type(step) is not int or not isinstance(usage, dict):
+        if type(turn) is not int or type(step) is not int:
             return
+        usage = usage if isinstance(usage, dict) else {}
         names = {
             "inputTokens": "input_tokens", "outputTokens": "output_tokens",
             "cacheReadTokens": "cache_read_input_tokens",
             "cacheWriteTokens": "cache_creation_input_tokens", "totalTokens": "total_tokens",
         }
+        if any(type(usage[key]) is not int or usage[key] < 0 for key in names if key in usage):
+            self._step_usage[(turn, step)] = {}
+            return
         self._step_usage[(turn, step)] = {
             target: usage[source] for source, target in names.items()
-            if type(usage.get(source)) is int and usage[source] >= 0
+            if source in usage
         }
 
     @property
@@ -189,6 +200,12 @@ class DeepSeekJsonStreamParser:
         text = self.preview_text or "(无输出)"
         if self._has_final and self._final.truncated:
             text = f"[回复前部已截断]\n{text}"
+        usage = self.terminal_usage
+        # 可选缓存桶在部分步骤缺失时，公共字段仍可显示，但不足以生成完整费用。
+        usage_complete = usage is not None and all(
+            key in usage for row in self._step_usage.values() for key in row
+            if key != "total_tokens"
+        )
         return CliStreamParseResult(
             final_text=text,
             session_id=self.session_id,
@@ -198,9 +215,11 @@ class DeepSeekJsonStreamParser:
             truncated=self._projection_truncated or any(
                 value.truncated for value in (self._raw_tail, self._text, self._final, self._errors)
             ),
-            terminal_usage=self.terminal_usage,
+            terminal_usage=usage,
             terminal_status="failed" if error else self.terminal_status,
             terminal_error=error or None,
+            model=self.model,
+            terminal_usage_complete=usage_complete,
         )
 
 

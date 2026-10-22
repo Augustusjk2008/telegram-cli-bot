@@ -305,13 +305,13 @@ Create a local `managed_bots.json` based on `managed_bots.example.json`:
 
 ### Model Cost Estimates
 
-Context details show an **Estimated cost** calculated from `bot/data/model_prices.csv`. Prices are per million tokens, with currency in the `currency` column. Input, cache reads, cache writes, and output are priced separately; reasoning is not charged again on top of output. Claude's optional one-hour cache-write rate is used when that duration is reported.
+Context details show a cost calculated from `bot/data/model_prices.csv`. Prices are per million tokens, with currency in the `currency` column: CNY (RMB) for DeepSeek and USD for the other default models. Input, cache reads, cache writes, and output are priced separately; reasoning is not charged again on top of output. Claude's optional one-hour cache-write rate is used when that duration is reported.
 
 Models match the CSV's `model` column exactly. Pi first tries `provider/model`, then the model name. Add aliases or dated model IDs as rows, or set `MODEL_PRICES_FILE` in `.env` to use another CSV. Changes apply to subsequent calculations; saved replies retain their cost snapshots. Missing prices, invalid tables, or incomplete usage leave the estimate unavailable.
 
-Codex reports cumulative conversation snapshots. Message details show the increase over the previous turn when the amount rises; equal or lower amounts, missing prior usage, or unloaded prior history display the current amount. Claude shows the invocation's main-model usage, and Pi sums completed model calls for the turn. Cluster child costs stay with their individual replies.
+Codex reports cumulative conversation snapshots. Message details show the increase over the previous turn when the amount rises; equal or lower amounts, missing prior usage, or unloaded prior history display the current amount. Claude shows the invocation's main-model usage, and Pi sums completed model calls for the turn. DeepSeek Harness prices deduplicated step usage at the end of each turn, with separate uncached-input and cache-read buckets. Both explicit model choices and inherited Harness defaults are supported; interrupted or failed runs retain priceable reported usage as partial estimates. Cluster child costs stay with their individual replies.
 
-The default table records standard prices checked on 2026-09-05, with references in `source_url`. These are fixed token-cost estimates. Subscription charges and additional long-context, speed, region, or tool pricing rules are not applied automatically; adjust the table for your provider's rates.
+DeepSeek uses [official peak CNY prices](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) checked on 2026-10-22. Per million tokens, uncached input / cache reads / output cost 2 / 0.04 / 8 yuan for `deepseek-flash` and 9 / 0.30 / 27 yuan for `deepseek-v4-pro`, with no separate cache-write charge. Official off-peak prices are half these rates; this fixed-rate CSV estimate does not switch by time of day. Other default prices were checked on 2026-09-05, with references in `source_url`. Subscription charges and additional long-context, speed, region, or tool pricing rules are not applied automatically; adjust the table for your provider's rates.
 
 <details>
 <summary><strong>Fixed public address with an frp reverse proxy</strong></summary>

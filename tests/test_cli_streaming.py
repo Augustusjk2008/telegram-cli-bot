@@ -1125,6 +1125,89 @@ def _patch_deepseek_runtime(manager, monkeypatch, processes):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-pro"])
+@pytest.mark.parametrize("inherit_model", [False, True])
+async def test_deepseek_stream_prices_each_turn_and_persists_cost(usage_manager, monkeypatch, model, inherit_model):
+    from bot import config
+    from bot.model_pricing import DEFAULT_PRICES_PATH, estimate_usage_cost
+
+    events = _deepseek_events()
+    step = events[-3]
+    events[-2:-2] = [step, {**step, "step": 2}]
+    metadata = [{"type": "orbit_model", "model": model}] if inherit_model else []
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [
+        _DeepSeekProcess([*metadata, *events]), _DeepSeekProcess([*metadata, *_deepseek_events()]),
+    ])
+    usage_manager.main_profile.cli_params.set_param("deepseek", "model", "none" if inherit_model else model)
+    monkeypatch.setattr(api_service, "estimate_usage_cost", estimate_usage_cost)
+    monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(DEFAULT_PRICES_PATH))
+    monkeypatch.setattr(api_service, "build_cli_command", lambda *_args, **_kwargs: (["dsh"], True))
+    totals = []
+    for prompt in ("hello", "continue"):
+        result = await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, prompt))
+        done = result[-1]
+        assert done["message"]["state"] == "done"
+        usage = done["message"]["meta"]["context_usage"]
+        cost = usage["estimated_cost"]
+        assert cost["model"] == model and cost["currency"] == "CNY" and cost["scope"] == "turn"
+        assert not cost.get("is_partial")
+        totals.append(cost["total"])
+        session = api_service.get_session_for_alias(usage_manager, "main", 1001)
+        saved = await api_service._get_chat_history_service(session).get_latest_native_session_context_usage_async(
+            native_provider="deepseek", native_session_id="session-dsh",
+        )
+        assert saved["estimated_cost"] == cost
+    expected = 0.00058864 if model == "deepseek-flash" else 0.0032808
+    assert totals == pytest.approx([2 * expected, expected])
+    assert len(observed["completions"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", [
+    "missing_final", "nonzero_exit", "output_limit", "stopped", "missing_usage", "missing_cache", "missing_model",
+])
+async def test_deepseek_partial_or_unknown_cost(usage_manager, monkeypatch, ending):
+    from bot import config
+    from bot.model_pricing import DEFAULT_PRICES_PATH, estimate_usage_cost
+
+    events = _deepseek_events()
+    if ending == "missing_final":
+        events = events[:-1]
+    elif ending == "output_limit":
+        events[-2:] = [{"type": "text", "text": "x" * 600}]
+    elif ending == "stopped":
+        events = events[:-2]
+    elif ending == "missing_usage":
+        events.insert(-2, {"type": "status", "phase": "step_end", "turn": 1, "step": 2})
+    elif ending == "missing_cache":
+        events.insert(-2, {"type": "status", "phase": "step_end", "turn": 1, "step": 2,
+                           "usage": {"inputTokens": 1, "outputTokens": 1}})
+    if ending != "missing_model":
+        events.insert(0, {"type": "orbit_model", "model": "deepseek-flash"})
+    process = _DeepSeekProcess(events, returncode=1 if ending == "nonzero_exit" else 0)
+    observed = _patch_deepseek_runtime(usage_manager, monkeypatch, [process])
+    monkeypatch.setattr(api_service, "estimate_usage_cost", estimate_usage_cost)
+    monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(DEFAULT_PRICES_PATH))
+    if ending == "output_limit":
+        start_reader = api_service._start_process_stdout_reader
+        monkeypatch.setattr(api_service, "_start_process_stdout_reader",
+                            lambda proc, output_queue: start_reader(proc, output_queue, max_line_bytes=300))
+    session = api_service.get_session_for_alias(usage_manager, "main", 1001)
+    result = []
+    async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"):
+        result.append(event)
+        if ending == "stopped" and event["type"] == "meta":
+            session.stop_requested = True
+    usage = result[-1]["message"]["meta"].get("context_usage") or {}
+    if ending in {"missing_usage", "missing_cache", "missing_model"}:
+        assert "estimated_cost" not in usage
+    else:
+        assert usage["estimated_cost"]["total"] == pytest.approx(0.00058864)
+        assert usage["estimated_cost"]["is_partial"] is True
+    assert len(observed["completions"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_deepseek_stream_persists_trace_and_restores_conversation_binding(usage_manager, monkeypatch):
     processes = [_DeepSeekProcess(_deepseek_events()), _DeepSeekProcess(_deepseek_events()),
                  _DeepSeekProcess(_deepseek_events("session-new"))]
