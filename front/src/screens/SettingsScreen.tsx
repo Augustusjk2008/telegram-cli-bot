@@ -47,7 +47,7 @@ type Props = {
 
 function settingsPanelClass(extra = "") {
   return clsx(
-    "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-3 shadow-[var(--shadow-surface)]",
+    "space-y-3",
     extra,
   );
 }
@@ -368,7 +368,7 @@ export function SettingsScreen({
         {overview ? (
           <section
               aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-              className={settingsPanelClass("space-y-3 text-sm text-[var(--muted)]")}
+              className={settingsPanelClass("text-sm text-[var(--muted)]")}
             >
               <div className="space-y-1">
                 <h2

@@ -99,13 +99,9 @@ import type {
   ChatSendOptions,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
-  ClusterBundleApplyResult,
-  ClusterBundlePreviewResult,
-  ClusterBundleSchemaResult,
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterTaskStatus,
-  ClusterTemplateListResult,
   ConversationListResult,
   ConversationBulkDeleteResult,
   ConversationDeleteResult,
@@ -239,12 +235,6 @@ export interface WebBotClient {
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
   updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary>;
   updateGlobalPromptPresets(presets: PromptPreset[]): Promise<PromptPreset[]>;
-  getClusterTemplates(botAlias: string): Promise<ClusterTemplateListResult>;
-  getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult>;
-  previewClusterTemplate(botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult>;
-  applyClusterTemplate(botAlias: string, templateId: string, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult>;
-  previewClusterConfigBundle(botAlias: string, bundle: unknown): Promise<ClusterBundlePreviewResult>;
-  applyClusterConfigBundle(botAlias: string, bundle: unknown, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult>;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
   connectCodexVoice(botAlias: string, options: CodexVoiceConnectionOptions): CodexVoiceConnection;
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;

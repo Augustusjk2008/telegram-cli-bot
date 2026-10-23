@@ -37,18 +37,8 @@ def test_manual_agent_mutation_routes_are_not_registered() -> None:
         "get_agents_view",
         "get_cluster_status_view",
         "get_cluster_run_tasks_view",
-        "post_agent_view",
-        "patch_agent_view",
-        "delete_agent_view",
         "post_cluster_setup_prepare",
         "post_cluster_config",
-        "get_cluster_templates_view",
-        "get_bot_cluster_schema_view",
-        "get_cluster_schema_view",
-        "post_cluster_template_preview",
-        "post_cluster_template_apply",
-        "post_cluster_bundle_preview",
-        "post_cluster_bundle_apply",
     )
     app = web.Application()
     register_cluster_routes(app, SimpleNamespace(**{name: handler for name in handler_names}))
@@ -112,29 +102,3 @@ async def test_cluster_resize_keeps_tail_slots_and_restores_ids(
 
     assert after_shrink == ["one", "two", "three"]
     assert [agent.id for agent in profile.agents] == ["one", "two", "three", "cluster-slot-1"]
-
-
-@pytest.mark.asyncio
-async def test_enabled_cluster_rejects_bundle_mutation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = tmp_path / "bots.json"
-    storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-    monkeypatch.setattr(app_settings, "APP_SETTINGS_FILE", tmp_path / "settings.json")
-    profile = BotProfile.from_dict(
-        {
-            "alias": "main",
-            "working_dir": str(tmp_path),
-            "cluster": {"enabled": True, "max_parallel_agents": 1},
-            "agents": [{"id": "slot", "name": "旧名称"}],
-        }
-    )
-    manager = MultiBotManager(profile, str(storage))
-
-    with pytest.raises(ValueError, match="集群已启用"):
-        await manager.replace_bot_cluster_bundle(
-            "main",
-            {"enabled": True, "max_parallel_agents": 1},
-            [{"id": "replacement", "name": "替代"}],
-        )

@@ -175,7 +175,6 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("ANTHROPIC_API_KEY", "Anthropic API Key", "Claude CLI 使用的 Anthropic API key。", "password", "", "advanced", sensitive=True, max_length=8192),
     EnvField("ANTHROPIC_MODEL", "Anthropic 模型", "Claude CLI 使用的 Anthropic 模型。", "string", "claude-3-5-sonnet-20241022", "advanced"),
     EnvField("ANTHROPIC_BASE_URL", "Anthropic Base URL", "Claude CLI 使用的 Anthropic 代理 API 地址。", "string", "", "advanced"),
-    EnvField("TCB_CLUSTER_TEMPLATES_FILE", "集群模板文件", "自定义集群模板文件路径。", "path", "", "advanced"),
     EnvField("CLI_BRIDGE_UPDATE_PACKAGE_KIND", "更新包类型", "强制指定更新包类型。", "select", "", "advanced", options=("", "installer", "portable", "linux", "macos")),
     EnvField("MESSAGES_CONFIG", "消息配置", "自定义消息文案配置文件。", "path", "", "advanced"),
     EnvField("VITE_CHAT_TRACE_PREVIEW_MAX_LINES", "Trace 预览行数", "前端构建期 trace 预览最大行数。", "number", "5", "frontend", restart_required=False, rebuild_required=True, min_value=0, integer=True),

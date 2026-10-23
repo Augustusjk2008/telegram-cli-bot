@@ -61,7 +61,6 @@ test.each([true, false])("starts on the main Agent without the legacy agent drop
     cluster: {
       enabled: clusterEnabled,
       writePolicy: "main_only",
-      conflictPolicy: "snapshot_diff",
       maxParallelAgents: 2,
       defaultTimeoutSeconds: 600,
       modelTiers: { low: "", medium: "", high: "" },
@@ -226,7 +225,6 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
     cluster: {
       enabled: true,
       writePolicy: "main_only",
-      conflictPolicy: "snapshot_diff",
       maxParallelAgents: 2,
       defaultTimeoutSeconds: 600,
       modelTiers: { low: "", medium: "", high: "" },

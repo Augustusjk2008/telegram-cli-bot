@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from bot.cluster.bundles import build_cluster_bundle_schema
 from bot.cluster.config import MODEL_TIER_KEYS, normalize_bot_cluster_config
 from bot.cluster.runtime import ClusterRunRequest, ClusterRuntime
 from bot.models import AgentProfile, BotProfile, UserSession
@@ -31,7 +30,7 @@ def test_cluster_config_normalizes_reasoning_efforts_and_keeps_missing_values_co
     }
     assert configured.to_dict()["reasoning_efforts"] == configured.reasoning_efforts
     assert legacy.reasoning_efforts == {tier: "" for tier in MODEL_TIER_KEYS}
-    assert "reasoning_efforts" in build_cluster_bundle_schema()["schema"]["properties"]["cluster"]["properties"]
+    assert "reasoning_efforts" in configured.to_dict()
 
 
 @pytest.mark.parametrize(

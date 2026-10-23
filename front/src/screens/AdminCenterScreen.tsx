@@ -46,9 +46,6 @@ import type {
 } from "../theme";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
-import { requestThemeManagerLeave, useOptionalAppearance } from "../theme/AppearanceProvider";
-
-const ThemeManagerScreen = lazy(() => import("./ThemeManagerScreen").then((module) => ({ default: module.ThemeManagerScreen })));
 
 const CodexUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
   default: module.CodexUsagePanel,
@@ -78,7 +75,6 @@ type Props = {
 
 type AdminCenterTab =
   | "global"
-  | "themes"
   | "users"
   | "invites"
   | "cli-errors"
@@ -451,7 +447,6 @@ export function AdminCenterScreen({
   onChatEnterToSendChange,
 }: Props) {
   const [activeTab, setActiveTab] = useState<AdminCenterTab>("users");
-  const appearance = useOptionalAppearance();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [bots, setBots] = useState<BotSummary[]>(initialBots);
   const [registerCodes, setRegisterCodes] = useState<RegisterCodeItem[]>([]);
@@ -499,7 +494,6 @@ export function AdminCenterScreen({
   const [envRestarting, setEnvRestarting] = useState(false);
   const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
-    themes: false,
     users: false,
     invites: false,
     "cli-errors": false,
@@ -533,7 +527,6 @@ export function AdminCenterScreen({
     () => [
       ...(canManageEnvConfig ? (["global"] as AdminCenterTab[]) : []),
       "users",
-      "themes",
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
       "codex-usage",
@@ -930,10 +923,6 @@ export function AdminCenterScreen({
     if (activeTab === "global") {
       setLoadedTabs((prev) => ({ ...prev, global: true }));
       setLoading(false);
-    } else if (activeTab === "themes") {
-      setLoadedTabs((prev) => ({ ...prev, themes: true }));
-      setLoading(false);
-      if (refresh) await appearance?.reload().catch(() => {});
     } else if (activeTab === "users") {
       await loadUsers(nextNotice, refresh);
     } else if (activeTab === "invites" && canManageRegisterCodes) {
@@ -1595,7 +1584,7 @@ export function AdminCenterScreen({
           </div>
           <button
             type="button"
-            onClick={() => activeTab === "themes" ? requestThemeManagerLeave(onClose) : onClose()}
+            onClick={onClose}
             className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1610,12 +1599,12 @@ export function AdminCenterScreen({
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
-              onClick={() => activeTab === "themes" && tab !== "themes" ? requestThemeManagerLeave(() => setActiveTab(tab)) : setActiveTab(tab)}
+              onClick={() => setActiveTab(tab)}
               className={activeTab === tab
                 ? "rounded-md px-2.5 py-1.5 text-sm tcb-selected-accent"
                 : "rounded-md border border-[var(--border)] px-2.5 py-1.5 text-sm"}
             >
-              {tab === "global" ? "全局配置" : tab === "themes" ? "主题管理" : tab === "users"
+              {tab === "global" ? "全局配置" : tab === "users"
                 ? "用户"
                 : tab === "invites"
                   ? "邀请"
@@ -1696,10 +1685,6 @@ export function AdminCenterScreen({
             />
           </div>
         ) : null}
-
-        {activeTab === "themes" && appearance ? <section className="h-[min(850px,calc(100dvh-190px))] min-h-[520px]">
-          <Suspense fallback={<p>正在加载主题管理…</p>}><ThemeManagerScreen /></Suspense>
-        </section> : null}
 
         {!loading && activeTab === "users" ? (
           <section aria-labelledby="user-permissions-title" className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">

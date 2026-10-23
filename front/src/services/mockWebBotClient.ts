@@ -69,15 +69,9 @@ import type {
   CliParamsPayload,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
-  ClusterBundleApplyResult,
-  ClusterBundlePreviewResult,
-  ClusterBundleSchemaResult,
-  ClusterConfigBundle,
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterTaskStatus,
-  ClusterTemplateListResult,
-  ClusterTemplateSummary,
   CreateBotInput,
   DebugProfile,
   DebugState,
@@ -198,10 +192,6 @@ import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
 import {
-  findMockClusterTemplate,
-  listMockClusterTemplateSummaries,
-} from "../mocks/clusterTemplates";
-import {
   DEMO_MAIN_WORKDIR,
   DEMO_TEAM_WORKDIR,
 } from "../mocks/demoEnvironment";
@@ -289,7 +279,6 @@ const MOCK_CLI_MODEL_OPTIONS = [
 const DEFAULT_CLUSTER = {
   enabled: false,
   writePolicy: "all_agents" as const,
-  conflictPolicy: "snapshot_diff" as const,
   maxParallelAgents: 3,
   defaultTimeoutSeconds: 1800,
   modelTiers: { low: "", medium: "", high: "" },
@@ -4159,7 +4148,6 @@ export class MockWebBotClient implements WebBotClient {
       ...(current.cluster || DEFAULT_CLUSTER),
       ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
       ...(input.writePolicy ? { writePolicy: input.writePolicy } : {}),
-      ...(input.conflictPolicy ? { conflictPolicy: input.conflictPolicy } : {}),
       ...(typeof input.maxParallelAgents === "number" ? { maxParallelAgents: input.maxParallelAgents } : {}),
       ...(typeof input.defaultTimeoutSeconds === "number" ? { defaultTimeoutSeconds: input.defaultTimeoutSeconds } : {}),
       modelTiers: input.modelTiers
@@ -4171,51 +4159,6 @@ export class MockWebBotClient implements WebBotClient {
     };
     this.bots.set(botAlias, { ...current, cluster });
     return { cluster, status: await this.getClusterStatus(botAlias) };
-  }
-
-  async getClusterTemplates(_botAlias: string): Promise<ClusterTemplateListResult> {
-    return { templates: listMockClusterTemplateSummaries() };
-  }
-
-  async getClusterBundleSchema(_botAlias: string): Promise<ClusterBundleSchemaResult> {
-    return {
-      version: 1,
-      schema: {
-        type: "object",
-        required: ["cluster", "agents"],
-        properties: {
-          id: { type: "string", pattern: "^[a-z][a-z0-9_-]{1,31}$" },
-          agents: { type: "array", maxItems: 8 },
-        },
-      },
-      instructions: "Output only a JSON bundle. All agents are read-only by default. Set an agent's cluster.allow_write=true only when the user explicitly requests parallel code changes.",
-    };
-  }
-
-  async previewClusterTemplate(_botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult> {
-    const bundle = this.findTemplate(templateId);
-    return { bundle, diff: this.buildBundleDiff(bundle) };
-  }
-
-  async applyClusterTemplate(botAlias: string, templateId: string, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult> {
-    if (!confirmOverwriteAgents) {
-      throw new WebApiClientError("应用模板会覆盖当前子 agent 配置，请确认后重试", { status: 409, code: "cluster_bundle_overwrite_not_confirmed" });
-    }
-    const bundle = this.findTemplate(templateId);
-    return this.applyBundle(botAlias, bundle);
-  }
-
-  async previewClusterConfigBundle(botAlias: string, bundle: unknown): Promise<ClusterBundlePreviewResult> {
-    const normalized = this.coerceBundle(bundle);
-    const diff = this.buildBundleDiff(normalized, botAlias);
-    return { bundle: normalized, diff };
-  }
-
-  async applyClusterConfigBundle(botAlias: string, bundle: unknown, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult> {
-    if (!confirmOverwriteAgents) {
-      throw new WebApiClientError("应用配置会覆盖当前子 agent 配置，请确认后重试", { status: 409, code: "cluster_bundle_overwrite_not_confirmed" });
-    }
-    return this.applyBundle(botAlias, this.coerceBundle(bundle));
   }
 
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
@@ -4241,100 +4184,6 @@ export class MockWebBotClient implements WebBotClient {
 
   connectCodexVoice(_botAlias: string, _options: CodexVoiceConnectionOptions): CodexVoiceConnection {
     throw new WebApiClientError("演示模式不提供语音连接", { code: "voice_disabled", status: 403 });
-  }
-
-  private findTemplate(templateId: string): ClusterConfigBundle {
-    const found = findMockClusterTemplate(templateId);
-    if (!found) {
-      throw new WebApiClientError("集群模板不存在", { status: 404, code: "cluster_template_not_found" });
-    }
-    return found;
-  }
-
-  private coerceBundle(raw: unknown): ClusterConfigBundle {
-    const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    return {
-      id: String(value.id || "custom_review"),
-      name: String(value.name || "自定义集群"),
-      description: String(value.description || ""),
-      cluster: {
-        ...(DEFAULT_CLUSTER),
-        ...(value.cluster && typeof value.cluster === "object" ? value.cluster as typeof DEFAULT_CLUSTER : {}),
-      },
-      agents: Array.isArray(value.agents)
-        ? value.agents.map((agent) => {
-            const item = agent && typeof agent === "object" ? agent as Record<string, unknown> : {};
-            return {
-              id: String(item.id || ""),
-              name: String(item.name || ""),
-              systemPrompt: String(item.system_prompt ?? item.systemPrompt ?? ""),
-              enabled: item.enabled !== false,
-              cluster: {
-                ...DEFAULT_AGENT_CLUSTER,
-                ...(item.cluster && typeof item.cluster === "object" ? item.cluster as typeof DEFAULT_AGENT_CLUSTER : {}),
-              },
-            };
-          })
-        : [],
-    };
-  }
-
-  private buildBundleDiff(bundle: ClusterConfigBundle, botAlias = "main") {
-    const current = this.ensureAgents(botAlias).filter((agent) => !agent.isMain);
-    const currentMap = new Map(current.map((agent) => [agent.id, agent]));
-    const nextMap = new Map(bundle.agents.map((agent) => [agent.id, agent]));
-    const deleteAgents = current.filter((agent) => !nextMap.has(agent.id)).map((agent) => agent.id).sort();
-    const createAgents = bundle.agents.filter((agent) => !currentMap.has(agent.id)).map((agent) => agent.id).sort();
-    const updateAgents = bundle.agents
-      .filter((agent) => {
-        const prev = currentMap.get(agent.id);
-        return prev && JSON.stringify({
-          id: prev.id,
-          name: prev.name,
-          systemPrompt: prev.systemPrompt,
-          enabled: prev.enabled,
-          cluster: prev.cluster,
-        }) !== JSON.stringify(agent);
-      })
-      .map((agent) => agent.id)
-      .sort();
-    return {
-      deleteAgents,
-      createAgents,
-      updateAgents,
-      clusterChanges: {},
-      overwritesAgents: deleteAgents.length > 0 || createAgents.length > 0 || updateAgents.length > 0,
-    };
-  }
-
-  private async applyBundle(botAlias: string, bundle: ClusterConfigBundle): Promise<ClusterBundleApplyResult> {
-    const current = this.getBotSummary(botAlias);
-    const nextAgents: AgentSummary[] = bundle.agents.map((agent) => ({
-      id: agent.id,
-      name: agent.name,
-      systemPrompt: agent.systemPrompt,
-      enabled: agent.enabled,
-      isMain: false,
-      cluster: { ...agent.cluster },
-      createdAt: "",
-      updatedAt: "",
-    }));
-    this.agentsByBot.set(botAlias, [
-      { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true, cluster: { ...DEFAULT_AGENT_CLUSTER } },
-      ...nextAgents,
-    ]);
-    this.bots.set(botAlias, {
-      ...current,
-      cluster: { ...bundle.cluster },
-      agents: this.ensureAgents(botAlias).map((item) => this.cloneAgent(item)),
-    });
-    return {
-      cluster: { ...bundle.cluster },
-      agents: nextAgents.map((item) => this.cloneAgent(item)),
-      bundle: structuredClone(bundle),
-      diff: this.buildBundleDiff(bundle, botAlias),
-      status: await this.getClusterStatus(botAlias),
-    };
   }
 
   private ensureConversations(botAlias: string, agentId = "main", executionMode?: string): ConversationSummary[] {

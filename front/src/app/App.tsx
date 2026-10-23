@@ -994,8 +994,6 @@ function AppContent() {
               currentAlias={currentBot}
               onSelect={handleSelectBot}
               onLogout={handleLogout}
-              onOpenBotSettings={openBotSettings}
-              onBotCreated={openBotSettings}
               onBotsChange={setBots}
               canManage={canManageBots}
               canCreateWorkdirDirectory={canCreateWorkdirDirectory}

@@ -256,10 +256,8 @@ from .api_service import (
     open_codex_server_voice_runtime,
     get_cluster_task_status,
     get_terminal_actions_config,
-    get_cluster_bundle_schema,
     get_cli_params_payload,
     get_cluster_status,
-    get_cluster_templates,
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
@@ -311,10 +309,6 @@ from .api_service import (
     update_bot_workdir,
     write_file_content,
     prepare_cluster_setup,
-    preview_cluster_config_bundle,
-    preview_cluster_template,
-    apply_cluster_config_bundle,
-    apply_cluster_template,
     verify_cluster_mcp_request,
 )
 from bot.migrations.runner import migration_diagnostics
@@ -2375,43 +2369,6 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         return _json({"ok": True, "data": await update_cluster_config(self.manager, alias, dict(body or {}))})
-
-    async def get_cluster_templates_view(self, request: web.Request) -> web.Response:
-        await self._with_cluster_bot_config_access(request)
-        alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_cluster_templates(self.manager, alias)})
-
-    async def get_bot_cluster_schema_view(self, request: web.Request) -> web.Response:
-        await self._with_cluster_bot_config_access(request)
-        return _json({"ok": True, "data": get_cluster_bundle_schema()})
-
-    async def get_cluster_schema_view(self, request: web.Request) -> web.Response:
-        await self._with_any_capability(request, {CAP_MANAGE_BOTS, CAP_ADMIN_OPS})
-        return _json({"ok": True, "data": get_cluster_bundle_schema()})
-
-    async def post_cluster_template_preview(self, request: web.Request) -> web.Response:
-        await self._with_cluster_bot_config_access(request)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": preview_cluster_template(self.manager, alias, dict(body or {}))})
-
-    async def post_cluster_template_apply(self, request: web.Request) -> web.Response:
-        await self._with_cluster_bot_config_access(request)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": await apply_cluster_template(self.manager, alias, dict(body or {}))})
-
-    async def post_cluster_bundle_preview(self, request: web.Request) -> web.Response:
-        await self._with_cluster_bot_config_access(request)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": preview_cluster_config_bundle(self.manager, alias, dict(body or {}))})
-
-    async def post_cluster_bundle_apply(self, request: web.Request) -> web.Response:
-        await self._with_cluster_bot_config_access(request)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": await apply_cluster_config_bundle(self.manager, alias, dict(body or {}))})
 
     async def cluster_mcp_ping(self, request: web.Request) -> web.Response:
         verify_cluster_mcp_request(request.headers)

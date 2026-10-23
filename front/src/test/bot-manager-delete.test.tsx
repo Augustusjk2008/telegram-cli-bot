@@ -40,31 +40,6 @@ test("bot list archives and restores a non-main bot", async () => {
   await waitFor(() => expect(unarchiveBot).toHaveBeenCalledWith("team2"));
 });
 
-test("desktop manager opens the shared current-agent settings entry", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const openSettings = vi.fn();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onOpenBotSettings={openSettings} />);
-  await user.click(await screen.findByRole("button", { name: "打开 team2 设置" }));
-  expect(openSettings).toHaveBeenCalledWith("team2");
-  expect(screen.queryByRole("heading", { name: "集群与子智能体" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "保存 CLI 配置" })).not.toBeInTheDocument();
-});
-
-test("desktop manager keeps the create panel and opens settings after creation", async () => {
-  const user = userEvent.setup();
-  const client = new MockWebBotClient();
-  const addBot = vi.spyOn(client, "addBot");
-  const openSettings = vi.fn();
-
-  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} onOpenBotSettings={openSettings} onBotCreated={openSettings} />);
-  await user.type(await screen.findByLabelText("新智能体别名"), "desktop-settings");
-  await user.click(screen.getByRole("button", { name: "创建智能体" }));
-  await waitFor(() => expect(addBot).toHaveBeenCalledWith(expect.objectContaining({ alias: "desktop-settings" })));
-  expect(openSettings).toHaveBeenCalledWith("desktop-settings");
-});
-
 test("cluster model tiers configure model and reasoning independently", async () => {
   const user = userEvent.setup();
   const onReasoningChange = vi.fn();

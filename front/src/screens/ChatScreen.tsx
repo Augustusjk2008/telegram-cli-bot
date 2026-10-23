@@ -4716,7 +4716,6 @@ export function ChatScreen({
       const result = await client.updateClusterConfig(botAlias, {
         enabled: !config.enabled,
         writePolicy: config.writePolicy,
-        conflictPolicy: config.conflictPolicy,
         maxParallelAgents: config.maxParallelAgents,
         defaultTimeoutSeconds: config.defaultTimeoutSeconds,
         modelTiers: config.modelTiers,

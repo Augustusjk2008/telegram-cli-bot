@@ -12,10 +12,8 @@ from typing import Any, Dict, Optional
 from bot import app_settings
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.cli_params import CliParamsConfig, coerce_param_value
-from bot.cluster.config import normalize_agent_cluster_config, normalize_bot_cluster_config
-from bot.cluster.team import ClusterSlotsLockedError
+from bot.cluster.config import normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
-from bot.agents import normalize_agent_id, normalize_agent_name, normalize_agent_prompt, now_iso
 from bot.models import (
     AgentProfile,
     BotProfile,
@@ -256,17 +254,6 @@ class MultiBotManager:
             cli_params=CliParamsConfig.from_dict(profile.cli_params.to_dict()),
         )
 
-    def _persist_profile_agents(self, profile: BotProfile) -> None:
-        if profile.alias == self.main_profile.alias:
-            self._persist_main_profile()
-        else:
-            self._save_profiles()
-
-    @staticmethod
-    def _require_cluster_bundle_mutation_allowed(profile: BotProfile) -> None:
-        if profile.cluster.enabled:
-            raise ClusterSlotsLockedError()
-
     async def update_bot_cluster(self, alias: str, data: dict[str, Any]) -> dict[str, Any]:
         async with self._lock:
             profile = self._get_profile_for_update(alias)
@@ -278,40 +265,6 @@ class MultiBotManager:
             else:
                 self._save_profiles()
             return profile.cluster.to_dict()
-
-    async def replace_bot_cluster_bundle(
-        self,
-        alias: str,
-        cluster: dict[str, Any],
-        agents: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        async with self._lock:
-            profile = self._get_profile_for_update(alias)
-            self._require_cluster_bundle_mutation_allowed(profile)
-            profile.cluster = normalize_bot_cluster_config(cluster)
-            now = now_iso()
-            replaced_agents: list[AgentProfile] = []
-            for item in agents:
-                normalized_id = normalize_agent_id(item.get("id"), allow_main=False)
-                replaced_agents.append(
-                    AgentProfile(
-                        id=normalized_id,
-                        name=normalize_agent_name(item.get("name")),
-                        system_prompt=normalize_agent_prompt(item.get("system_prompt", item.get("systemPrompt"))),
-                        enabled=bool(item.get("enabled", True)),
-                        created_at=str(item.get("created_at") or now),
-                        updated_at=str(item.get("updated_at") or now),
-                        cluster=normalize_agent_cluster_config(item.get("cluster")),
-                    )
-                )
-            profile.agents = replaced_agents
-            if profile.cluster.enabled:
-                profile.ensure_cluster_slots()
-            self._persist_profile_agents(profile)
-            return {
-                "cluster": profile.cluster.to_dict(),
-                "agents": [self._agent_to_summary(profile, agent) for agent in profile.normalized_agents() if agent.id != "main"],
-            }
 
     async def add_bot(
         self,

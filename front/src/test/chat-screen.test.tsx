@@ -616,7 +616,6 @@ test("cluster chat stays on the main Agent, preserves @ text, and sends no dispa
   const cluster = {
     enabled: true,
     writePolicy: "main_only" as const,
-    conflictPolicy: "snapshot_diff" as const,
     maxParallelAgents: 3,
     defaultTimeoutSeconds: 600,
     modelTiers: { low: "", medium: "", high: "" },
@@ -691,7 +690,6 @@ test("toggles the Bot cluster config from chat and only shows an assigned enable
   const cluster = {
     enabled: false,
     writePolicy: "all_agents" as const,
-    conflictPolicy: "block_same_file" as const,
     maxParallelAgents: 2,
     defaultTimeoutSeconds: 900,
     modelTiers: { low: "fast-model", medium: "", high: "strong-model" },
@@ -819,7 +817,6 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     cluster: {
       enabled: true,
       writePolicy: "main_only",
-      conflictPolicy: "snapshot_diff",
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 600,
       modelTiers: { low: "", medium: "", high: "" },
@@ -1400,7 +1397,6 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   const cluster = {
     enabled: true,
     writePolicy: "main_only" as const,
-    conflictPolicy: "snapshot_diff" as const,
     maxParallelAgents: 3,
     defaultTimeoutSeconds: 600,
     modelTiers: { low: "gpt-5.6-mini", medium: "gpt-5.6-codex", high: "gpt-5.6-pro" },

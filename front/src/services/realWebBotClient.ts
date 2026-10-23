@@ -107,12 +107,6 @@ import type {
   BotClusterConfig,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
-  ClusterBundleApplyResult,
-  ClusterBundleDiff,
-  ClusterBundlePreviewResult,
-  ClusterBundleSchemaResult,
-  ClusterConfigBundle,
-  ClusterConfigBundleAgent,
   ClusterMcpState,
   ClusterMcpTargetStatus,
   ClusterModelTiers,
@@ -127,8 +121,6 @@ import type {
   ClusterTeamAssignment,
   ClusterTaskMessage,
   ClusterTaskStatus,
-  ClusterTemplateListResult,
-  ClusterTemplateSummary,
   ConversationBulkDeleteResult,
   ConversationListResult,
   ConversationDeleteResult,
@@ -940,15 +932,6 @@ type RawActiveClusterRun = {
   freeSlots?: number;
   slots?: unknown[];
   tasks?: RawClusterTaskStatus;
-};
-
-type RawClusterTemplateSummary = {
-  id?: string;
-  name?: string;
-  description?: string;
-  agent_count?: number;
-  write_agent_count?: number;
-  max_parallel_agents?: number;
 };
 
 type RawFileEntry = {
@@ -1838,7 +1821,6 @@ function mapBotClusterConfig(raw: unknown): BotClusterConfig {
   return {
     enabled: Boolean(value.enabled),
     writePolicy: rawWritePolicy === "all_agents" ? "all_agents" : "main_only",
-    conflictPolicy: String(value.conflict_policy ?? value.conflictPolicy ?? "snapshot_diff") as BotClusterConfig["conflictPolicy"],
     maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 3),
     defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 1800),
     modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
@@ -2086,78 +2068,10 @@ function mapClusterConfigInput(input: ClusterConfigUpdateInput): Record<string, 
   return {
     ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
     ...(input.writePolicy ? { write_policy: input.writePolicy } : {}),
-    ...(input.conflictPolicy ? { conflict_policy: input.conflictPolicy } : {}),
     ...(typeof input.maxParallelAgents !== "undefined" ? { max_parallel_agents: input.maxParallelAgents } : {}),
     ...(typeof input.defaultTimeoutSeconds !== "undefined" ? { default_timeout_seconds: input.defaultTimeoutSeconds } : {}),
     ...(input.modelTiers ? { model_tiers: input.modelTiers } : {}),
     ...(input.reasoningEfforts ? { reasoning_efforts: input.reasoningEfforts } : {}),
-  };
-}
-
-function mapClusterTemplateSummary(raw: unknown): ClusterTemplateSummary {
-  const value = raw && typeof raw === "object" ? raw as RawClusterTemplateSummary : {};
-  return {
-    id: String(value.id || ""),
-    name: String(value.name || ""),
-    description: String(value.description || ""),
-    agentCount: Number(value.agent_count || 0),
-    writeAgentCount: Number(value.write_agent_count || 0),
-    maxParallelAgents: Number(value.max_parallel_agents || 0),
-  };
-}
-
-function mapClusterConfigBundleAgent(raw: unknown): ClusterConfigBundleAgent {
-  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  return {
-    id: String(value.id || ""),
-    name: String(value.name || ""),
-    systemPrompt: String(value.system_prompt ?? value.systemPrompt ?? ""),
-    enabled: value.enabled !== false,
-    cluster: mapAgentClusterConfig(value.cluster),
-  };
-}
-
-function mapClusterConfigBundle(raw: unknown): ClusterConfigBundle {
-  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  return {
-    id: String(value.id || ""),
-    name: String(value.name || ""),
-    description: String(value.description || ""),
-    cluster: mapBotClusterConfig(value.cluster),
-    agents: Array.isArray(value.agents) ? value.agents.map(mapClusterConfigBundleAgent) : [],
-  };
-}
-
-function mapClusterBundleDiff(raw: unknown): ClusterBundleDiff {
-  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const list = (key: string) => Array.isArray(value[key]) ? value[key].map((item) => String(item)) : [];
-  return {
-    deleteAgents: list("delete_agents"),
-    createAgents: list("create_agents"),
-    updateAgents: list("update_agents"),
-    clusterChanges: value.cluster_changes && typeof value.cluster_changes === "object"
-      ? value.cluster_changes as Record<string, { before: unknown; after: unknown }>
-      : {},
-    overwritesAgents: Boolean(value.overwrites_agents),
-  };
-}
-
-function mapClusterBundlePreviewResult(raw: unknown): ClusterBundlePreviewResult {
-  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  return {
-    bundle: mapClusterConfigBundle(value.bundle),
-    diff: mapClusterBundleDiff(value.diff),
-  };
-}
-
-function mapClusterBundleApplyResult(raw: unknown): ClusterBundleApplyResult {
-  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  return {
-    cluster: mapBotClusterConfig(value.cluster),
-    agents: Array.isArray(value.agents) ? value.agents.map((item) => mapAgentSummary(item as RawAgentSummary)) : [],
-    bundle: mapClusterConfigBundle(value.bundle),
-    diff: mapClusterBundleDiff(value.diff),
-    status: mapClusterStatus(value.status),
   };
 }
 
@@ -4977,64 +4891,6 @@ export class RealWebBotClient implements WebBotClient {
       cluster: mapBotClusterConfig(data.cluster),
       status: mapClusterStatus(data.status),
     };
-  }
-
-  async getClusterTemplates(botAlias: string): Promise<ClusterTemplateListResult> {
-    const data = await this.requestJson<{ templates?: unknown[] }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/templates`, {
-      method: "GET",
-      headers: this.headers(),
-      cache: "no-store",
-    });
-    return { templates: (data.templates || []).map(mapClusterTemplateSummary) };
-  }
-
-  async getClusterBundleSchema(botAlias: string): Promise<ClusterBundleSchemaResult> {
-    const data = await this.requestJson<Record<string, unknown>>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/schema`, {
-      method: "GET",
-      headers: this.headers(),
-      cache: "no-store",
-    });
-    return {
-      version: Number(data.version || 1),
-      schema: data.schema && typeof data.schema === "object" ? data.schema as Record<string, unknown> : {},
-      instructions: String(data.instructions || ""),
-    };
-  }
-
-  async previewClusterTemplate(botAlias: string, templateId: string): Promise<ClusterBundlePreviewResult> {
-    const data = await this.requestJson<unknown>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/templates/preview`, {
-      method: "POST",
-      headers: this.headers({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ template_id: templateId }),
-    });
-    return mapClusterBundlePreviewResult(data);
-  }
-
-  async applyClusterTemplate(botAlias: string, templateId: string, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult> {
-    const data = await this.requestJson<unknown>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/templates/apply`, {
-      method: "POST",
-      headers: this.headers({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ template_id: templateId, confirm_overwrite_agents: confirmOverwriteAgents }),
-    });
-    return mapClusterBundleApplyResult(data);
-  }
-
-  async previewClusterConfigBundle(botAlias: string, bundle: unknown): Promise<ClusterBundlePreviewResult> {
-    const data = await this.requestJson<unknown>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/config-bundle/preview`, {
-      method: "POST",
-      headers: this.headers({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ bundle }),
-    });
-    return mapClusterBundlePreviewResult(data);
-  }
-
-  async applyClusterConfigBundle(botAlias: string, bundle: unknown, confirmOverwriteAgents: boolean): Promise<ClusterBundleApplyResult> {
-    const data = await this.requestJson<unknown>(`/api/admin/bots/${encodeURIComponent(botAlias)}/cluster/config-bundle/apply`, {
-      method: "POST",
-      headers: this.headers({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ bundle, confirm_overwrite_agents: confirmOverwriteAgents }),
-    });
-    return mapClusterBundleApplyResult(data);
   }
 
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {

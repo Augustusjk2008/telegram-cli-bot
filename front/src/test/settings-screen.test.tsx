@@ -125,7 +125,7 @@ test("non-admin session cannot mutate current agent runtime settings", async () 
   expect(screen.queryByLabelText("聊天完成网页通知")).not.toBeInTheDocument();
 });
 
-test("settings include child-agent status and advanced cluster configuration", async () => {
+test("settings expose dynamic cluster controls without fixed child-agent editors", async () => {
   render(
     <SettingsScreen
       botAlias="main"
@@ -135,9 +135,12 @@ test("settings include child-agent status and advanced cluster configuration", a
   );
 
   expect(await screen.findByLabelText("运行后端")).toBeInTheDocument();
-  expect(await screen.findByRole("heading", { name: "集群与子智能体" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "子智能体列表" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "JSON 配置" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "集群模式" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "集群模型档位" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "子智能体列表" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "JSON 配置" })).not.toBeInTheDocument();
+  expect(screen.queryByText("冲突策略")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重新检测" })).not.toBeInTheDocument();
 });
 
 test("remote Antigravity settings expose MCP status, scope and copyable setup guidance", async () => {
@@ -187,7 +190,7 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   });
   expect(Object.keys(params.schema)).toEqual(["model", "reasoning_effort", "permission_mode", "extra_args"]);
   expect(await screen.findByLabelText("权限模式")).toHaveValue("workspace-write");
-  expect(await screen.findByText("DeepSeek Harness：集群轮次自动注入 MCP")).toBeInTheDocument();
+  expect(await screen.findByText("DeepSeek Harness：集群轮次自动注入 MCP。")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "生成安装命令" }));
   expect(await screen.findByText(/DeepSeek Harness 集群轮次会自动注入/)).toBeInTheDocument();
   expect(screen.queryByText("安装命令", { exact: true })).not.toBeInTheDocument();

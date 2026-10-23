@@ -42,14 +42,6 @@ from bot.cli_params import (
     with_global_extra_args,
 )
 from bot.cluster.config import normalize_bot_cluster_config
-from bot.cluster.bundles import (
-    ClusterBundleError,
-    build_cluster_bundle_diff,
-    build_cluster_bundle_schema,
-    get_cluster_template,
-    list_cluster_templates,
-    normalize_cluster_bundle,
-)
 from bot.cluster.runtime import (
     ClusterRuntime,
     ClusterRunRequest,
@@ -1153,83 +1145,6 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
     except ValueError as exc:
         _raise(400, "invalid_cluster_config", str(exc))
     return {"cluster": cluster, "status": get_cluster_status(manager, alias)}
-
-
-def _raise_cluster_bundle_error(exc: ClusterBundleError) -> None:
-    _raise(400, exc.code, exc.message)
-
-
-def get_cluster_bundle_schema() -> dict[str, Any]:
-    return build_cluster_bundle_schema()
-
-
-def get_cluster_templates(manager: MultiBotManager, alias: str) -> dict[str, Any]:
-    _ = get_profile_or_raise(manager, alias)
-    try:
-        return {"templates": list_cluster_templates()}
-    except ClusterBundleError as exc:
-        _raise_cluster_bundle_error(exc)
-    return {"templates": []}
-
-
-def preview_cluster_template(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    try:
-        bundle = get_cluster_template(str(data.get("template_id", data.get("templateId", "")) or ""))
-        return {"bundle": bundle, "diff": build_cluster_bundle_diff(profile, bundle)}
-    except ClusterBundleError as exc:
-        _raise_cluster_bundle_error(exc)
-    return {}
-
-
-async def apply_cluster_template(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
-    if data.get("confirm_overwrite_agents", data.get("confirmOverwriteAgents")) is not True:
-        _raise(409, "cluster_bundle_overwrite_not_confirmed", "应用模板会覆盖当前子 agent 配置，请确认后重试")
-    profile = get_profile_or_raise(manager, alias)
-    if profile.cluster.enabled:
-        _raise(409, "cluster_slots_managed", "集群已启用，不能通过模板修改物理槽位")
-    try:
-        bundle = get_cluster_template(str(data.get("template_id", data.get("templateId", "")) or ""))
-        diff = build_cluster_bundle_diff(profile, bundle)
-    except ClusterBundleError as exc:
-        _raise_cluster_bundle_error(exc)
-    try:
-        result = await manager.replace_bot_cluster_bundle(alias, bundle["cluster"], bundle["agents"])
-    except ValueError as exc:
-        if "集群已启用" in str(exc):
-            _raise(409, "cluster_slots_managed", str(exc))
-        raise
-    return {**result, "bundle": bundle, "diff": diff, "status": get_cluster_status(manager, alias)}
-
-
-def preview_cluster_config_bundle(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    try:
-        bundle = normalize_cluster_bundle(data.get("bundle", data))
-        return {"bundle": bundle, "diff": build_cluster_bundle_diff(profile, bundle)}
-    except ClusterBundleError as exc:
-        _raise_cluster_bundle_error(exc)
-    return {}
-
-
-async def apply_cluster_config_bundle(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
-    if data.get("confirm_overwrite_agents", data.get("confirmOverwriteAgents")) is not True:
-        _raise(409, "cluster_bundle_overwrite_not_confirmed", "应用配置会覆盖当前子 agent 配置，请确认后重试")
-    profile = get_profile_or_raise(manager, alias)
-    if profile.cluster.enabled:
-        _raise(409, "cluster_slots_managed", "集群已启用，不能通过配置包修改物理槽位")
-    try:
-        bundle = normalize_cluster_bundle(data.get("bundle", data))
-        diff = build_cluster_bundle_diff(profile, bundle)
-    except ClusterBundleError as exc:
-        _raise_cluster_bundle_error(exc)
-    try:
-        result = await manager.replace_bot_cluster_bundle(alias, bundle["cluster"], bundle["agents"])
-    except ValueError as exc:
-        if "集群已启用" in str(exc):
-            _raise(409, "cluster_slots_managed", str(exc))
-        raise
-    return {**result, "bundle": bundle, "diff": diff, "status": get_cluster_status(manager, alias)}
 
 
 def get_cluster_task_status(

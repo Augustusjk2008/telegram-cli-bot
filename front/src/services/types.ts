@@ -644,7 +644,6 @@ export type ClusterReasoningEfforts = ClusterTierValues;
 export type BotClusterConfig = {
   enabled: boolean;
   writePolicy: "main_only" | "all_agents";
-  conflictPolicy: "warn_only" | "snapshot_diff" | "block_same_file";
   maxParallelAgents: number;
   defaultTimeoutSeconds: number;
   modelTiers: ClusterModelTiers;
@@ -828,7 +827,6 @@ export type ClusterSetupPrepareResult = {
 export type ClusterConfigUpdateInput = {
   enabled?: boolean;
   writePolicy?: BotClusterConfig["writePolicy"];
-  conflictPolicy?: BotClusterConfig["conflictPolicy"];
   maxParallelAgents?: number;
   defaultTimeoutSeconds?: number;
   modelTiers?: ClusterModelTiers;
@@ -838,62 +836,6 @@ export type ClusterConfigUpdateInput = {
 export type ClusterConfigUpdateResult = {
   cluster: BotClusterConfig;
   status: ClusterStatus;
-};
-
-export type ClusterTemplateSummary = {
-  id: string;
-  name: string;
-  description: string;
-  agentCount: number;
-  writeAgentCount: number;
-  maxParallelAgents: number;
-};
-
-export type ClusterConfigBundleAgent = {
-  id: string;
-  name: string;
-  systemPrompt: string;
-  enabled: boolean;
-  cluster: AgentClusterConfig;
-};
-
-export type ClusterConfigBundle = {
-  id: string;
-  name: string;
-  description: string;
-  cluster: BotClusterConfig;
-  agents: ClusterConfigBundleAgent[];
-};
-
-export type ClusterBundleDiff = {
-  deleteAgents: string[];
-  createAgents: string[];
-  updateAgents: string[];
-  clusterChanges: Record<string, { before: unknown; after: unknown }>;
-  overwritesAgents: boolean;
-};
-
-export type ClusterTemplateListResult = {
-  templates: ClusterTemplateSummary[];
-};
-
-export type ClusterBundlePreviewResult = {
-  bundle: ClusterConfigBundle;
-  diff: ClusterBundleDiff;
-};
-
-export type ClusterBundleApplyResult = {
-  cluster: BotClusterConfig;
-  agents: AgentSummary[];
-  bundle: ClusterConfigBundle;
-  diff: ClusterBundleDiff;
-  status: ClusterStatus;
-};
-
-export type ClusterBundleSchemaResult = {
-  version: number;
-  schema: Record<string, unknown>;
-  instructions: string;
 };
 
 export type AgentScopedOptions = {

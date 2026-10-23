@@ -26,10 +26,10 @@ export function ClusterModelTiersPanel({
   onReasoningChange,
 }: Props) {
   return (
-    <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
-      <h2 className="text-base font-semibold text-[var(--text)]">集群模型档位</h2>
+    <section className="space-y-3 border-t border-[var(--border)] pt-4">
+      <h3 className="text-sm font-semibold text-[var(--text)]">集群模型档位</h3>
       <p className="mt-1 text-sm text-[var(--muted)]">每档可独立选择模型和思考深度；留空时继承主 agent。切换模型时，不支持的思考深度会恢复为继承。</p>
-      <div className="mt-4 divide-y divide-[var(--border)]">
+      <div className="divide-y divide-[var(--border)]">
         {TIER_LABELS.map((tier) => {
           const efforts = typeof reasoningOptions === "function" ? reasoningOptions(value[tier.key]) : reasoningOptions;
           const unsupportedEffort = reasoningEfforts[tier.key] && !efforts.includes(reasoningEfforts[tier.key]);

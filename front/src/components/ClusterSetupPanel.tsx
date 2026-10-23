@@ -94,7 +94,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
           >
             <RefreshCw className="h-4 w-4" />
-            重新检测
+            刷新状态
           </button>
           <button
             type="button"
