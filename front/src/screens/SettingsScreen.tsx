@@ -3,20 +3,18 @@ import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
 import { useEffect, useState } from "react";
-import { Bell, LogOut, Save, SlidersHorizontal } from "lucide-react";
+import { Save } from "lucide-react";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
-import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
+import { BotClusterSettingsPanel } from "../components/BotClusterSettingsPanel";
+import { BotPromptPresetsPanel } from "../components/BotPromptPresetsPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-import { LanguageServicesPanel } from "../components/LanguageServicesPanel";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
-import { ThemeDropdown } from "../components/ThemeDropdown";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import { copyText } from "../utils/clipboard";
 import type {
   BotOverview,
-  BrowserNotificationPermission,
   ChatExecutionMode,
   CliType,
   NativeAgentDraft,
@@ -33,64 +31,23 @@ import {
   DEFAULT_NATIVE_AGENT_DRAFT,
   getRuntimeBackend,
 } from "./botManagerModel";
-import {
-  CHAT_BODY_FONT_FAMILY_OPTIONS,
-  CHAT_BODY_FONT_SIZE_OPTIONS,
-  CHAT_BODY_LINE_HEIGHT_OPTIONS,
-  CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
-  DEFAULT_CHAT_BODY_FONT_FAMILY,
-  DEFAULT_CHAT_BODY_FONT_SIZE,
-  DEFAULT_CHAT_BODY_LINE_HEIGHT,
-  DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
-  DEFAULT_UI_THEME,
-  type ChatBodyFontFamilyName,
-  type ChatBodyFontSizeName,
-  type ChatBodyLineHeightName,
-  type ChatBodyParagraphSpacingName,
-  type UiThemeName,
-} from "../theme";
-import {
-  getBrowserNotificationPermission,
-  readChatCompletionWebNotificationEnabled,
-  requestBrowserNotificationPermission,
-  writeChatCompletionWebNotificationEnabled,
-} from "../utils/chatNotificationEvents";
-
 type Props = {
   botAlias: string;
   client?: WebBotClient;
-  onLogout: () => void;
+  /** Kept for callers compiled against the previous screen contract; the Bot settings UI does not render account actions. */
+  onLogout?: () => void;
+  onOpenBotManager?: () => void;
+  chatEnterToSend?: boolean;
+  onChatEnterToSendChange?: (enabled: boolean) => void;
   embedded?: boolean;
   prefilledWorkdir?: string;
   onWorkdirUpdated?: (workingDir: string) => void;
-  themeName?: UiThemeName;
-  onThemeChange?: (themeName: UiThemeName) => void | Promise<void>;
-  chatBodyFontFamily?: ChatBodyFontFamilyName;
-  onChatBodyFontFamilyChange?: (fontFamily: ChatBodyFontFamilyName) => void;
-  chatBodyFontSize?: ChatBodyFontSizeName;
-  onChatBodyFontSizeChange?: (fontSize: ChatBodyFontSizeName) => void;
-  chatBodyLineHeight?: ChatBodyLineHeightName;
-  onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
-  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
-  onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
-  chatEnterToSend?: boolean;
-  onChatEnterToSendChange?: (enabled: boolean) => void;
   sessionCapabilities?: string[];
-  showBotRuntimeSettings?: boolean;
-  onOpenBotManager?: () => void;
-  onLanguageServerCatalogChanged?: () => void;
 };
 
 function settingsPanelClass(extra = "") {
   return clsx(
     "rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-3 shadow-[var(--shadow-surface)]",
-    extra,
-  );
-}
-
-function settingsActionPanelClass(extra = "") {
-  return clsx(
-    "overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]",
     extra,
   );
 }
@@ -125,13 +82,6 @@ function normalizeNativeAgentDraft(draft: NativeAgentDraft) {
   };
 }
 
-function notificationPermissionText(permission: BrowserNotificationPermission) {
-  if (permission === "granted") return "已允许";
-  if (permission === "denied") return "已拒绝";
-  if (permission === "unsupported") return "浏览器不支持";
-  return "未询问";
-}
-
 function remoteWorkspaceMcpStateLabel(state: string) {
   if (state === "installed") return "已配置";
   if (state === "conflict") return "配置冲突";
@@ -157,31 +107,13 @@ function asWebApiClientError(error: unknown): WebApiClientError | null {
 export function SettingsScreen({
   botAlias,
   client = new MockWebBotClient(),
-  onLogout,
   embedded = false,
   prefilledWorkdir,
   onWorkdirUpdated,
-  themeName = DEFAULT_UI_THEME,
-  onThemeChange,
-  chatBodyFontFamily = DEFAULT_CHAT_BODY_FONT_FAMILY,
-  onChatBodyFontFamilyChange,
-  chatBodyFontSize = DEFAULT_CHAT_BODY_FONT_SIZE,
-  onChatBodyFontSizeChange,
-  chatBodyLineHeight = DEFAULT_CHAT_BODY_LINE_HEIGHT,
-  onChatBodyLineHeightChange,
-  chatBodyParagraphSpacing = DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
-  onChatBodyParagraphSpacingChange,
-  chatEnterToSend = true,
-  onChatEnterToSendChange,
   sessionCapabilities = [],
-  showBotRuntimeSettings = true,
-  onOpenBotManager,
-  onLanguageServerCatalogChanged,
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
-  const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
-  const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
   const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
@@ -194,11 +126,9 @@ export function SettingsScreen({
   const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
-  const [requestingNotificationPermission, setRequestingNotificationPermission] = useState(false);
   const [copiedRemoteMcpItem, setCopiedRemoteMcpItem] = useState("");
   const isMainBot = botAlias === "main";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
-  const canManageLanguageServices = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canCreateWorkdirDirectory =
     sessionCapabilities.length === 0
     || sessionCapabilities.includes("create_workdir_directory")
@@ -238,7 +168,6 @@ export function SettingsScreen({
         setRuntimeBackendDraft(getRuntimeBackend(overviewData));
         setNativeAgentDraft(nativeAgentDraftFromOverview(overviewData));
         setWorkdirDraft(overviewData.remoteWorkspace ? workspaceLabel(overviewData) : normalizePathInput(prefilledWorkdir || overviewData.workingDir));
-        setNotificationPermission(getBrowserNotificationPermission());
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -412,87 +341,11 @@ export function SettingsScreen({
     }
   };
 
-  const handleThemeChange = async (nextTheme: UiThemeName) => {
-    if (nextTheme === themeName) {
-      return;
-    }
-    setNotice("");
-    try {
-      await onThemeChange?.(nextTheme);
-      setNotice("界面主题已切换");
-    } catch { /* The selector retains and displays the server error. */ }
-  };
-
-  const handleNotificationToggle = (enabled: boolean) => {
-    setNotificationEnabled(enabled);
-    writeChatCompletionWebNotificationEnabled(enabled);
-    setNotice(enabled ? "聊天完成通知已开启" : "聊天完成通知已关闭");
-  };
-
-  const requestNotificationPermission = async () => {
-    setRequestingNotificationPermission(true);
-    setError("");
-    setNotice("");
-    try {
-      const nextPermission = await requestBrowserNotificationPermission();
-      setNotificationPermission(nextPermission);
-      if (nextPermission === "granted") {
-        handleNotificationToggle(true);
-      } else if (nextPermission === "denied") {
-        setNotice("浏览器已拒绝通知权限");
-      } else if (nextPermission === "unsupported") {
-        setNotice("当前浏览器不支持通知");
-      }
-    } finally {
-      setRequestingNotificationPermission(false);
-    }
-  };
-
-  const handleChatBodyFontFamilyChange = (nextFontFamily: ChatBodyFontFamilyName) => {
-    if (nextFontFamily === chatBodyFontFamily) {
-      return;
-    }
-    setNotice("聊天正文字体已更新");
-    onChatBodyFontFamilyChange?.(nextFontFamily);
-  };
-
-  const handleChatBodyFontSizeChange = (nextFontSize: ChatBodyFontSizeName) => {
-    if (nextFontSize === chatBodyFontSize) {
-      return;
-    }
-    setNotice("聊天正文字号已更新");
-    onChatBodyFontSizeChange?.(nextFontSize);
-  };
-
-  const handleChatBodyLineHeightChange = (nextLineHeight: ChatBodyLineHeightName) => {
-    if (nextLineHeight === chatBodyLineHeight) {
-      return;
-    }
-    setNotice("聊天行间距已更新");
-    onChatBodyLineHeightChange?.(nextLineHeight);
-  };
-
-  const handleChatBodyParagraphSpacingChange = (nextParagraphSpacing: ChatBodyParagraphSpacingName) => {
-    if (nextParagraphSpacing === chatBodyParagraphSpacing) {
-      return;
-    }
-    setNotice("聊天段间距已更新");
-    onChatBodyParagraphSpacingChange?.(nextParagraphSpacing);
-  };
-
-  const handleChatEnterToSendChange = (enabled: boolean) => {
-    if (enabled === chatEnterToSend) {
-      return;
-    }
-    setNotice("发送快捷键已更新");
-    onChatEnterToSendChange?.(enabled);
-  };
-
   return (
     <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
       {embedded ? null : (
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3">
-          <h1 className="text-xl font-bold">设置</h1>
+          <h1 className="text-xl font-bold">当前智能体设置</h1>
           <p className="text-sm text-[var(--muted)]">{overview?.alias || botAlias}</p>
         </header>
       )}
@@ -512,132 +365,8 @@ export function SettingsScreen({
           </div>
         ) : null}
 
-        <div className={settingsPanelClass("space-y-3")}>
-          <h2 className="text-base font-semibold text-[var(--text)]">界面与阅读</h2>
-
-          <div className="space-y-2">
-            <ThemeDropdown value={themeName} onChange={handleThemeChange} />
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--text)]">聊天正文字体</div>
-              <select
-                aria-label="聊天正文字体"
-                value={chatBodyFontFamily}
-                onChange={(event) => handleChatBodyFontFamilyChange(event.target.value as ChatBodyFontFamilyName)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-              >
-                {CHAT_BODY_FONT_FAMILY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--text)]">聊天行间距</div>
-              <select
-                aria-label="聊天行间距"
-                value={chatBodyLineHeight}
-                onChange={(event) => handleChatBodyLineHeightChange(event.target.value as ChatBodyLineHeightName)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-              >
-                {CHAT_BODY_LINE_HEIGHT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--text)]">聊天正文字号</div>
-              <select
-                aria-label="聊天正文字号"
-                value={chatBodyFontSize}
-                onChange={(event) => handleChatBodyFontSizeChange(event.target.value as ChatBodyFontSizeName)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-              >
-                {CHAT_BODY_FONT_SIZE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--text)]">聊天段间距</div>
-              <select
-                aria-label="聊天段间距"
-                value={chatBodyParagraphSpacing}
-                onChange={(event) => handleChatBodyParagraphSpacingChange(event.target.value as ChatBodyParagraphSpacingName)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-              >
-                {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
-            <span className="text-sm text-[var(--text)]">Enter 键发送消息</span>
-            <input
-              aria-label="Enter 键发送消息"
-              type="checkbox"
-              checked={chatEnterToSend}
-              onChange={(event) => handleChatEnterToSendChange(event.target.checked)}
-              className="h-4 w-4"
-            />
-          </label>
-        </div>
-
-        <div className={settingsPanelClass("space-y-3")}>
-          <div className="flex items-center gap-2">
-            <Bell className="h-5 w-5 text-[var(--accent)]" />
-            <h2 className="text-base font-semibold text-[var(--text)]">通知</h2>
-          </div>
-
-          <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
-            <span className="text-sm text-[var(--text)]">聊天完成网页通知</span>
-            <input
-              aria-label="聊天完成网页通知"
-              type="checkbox"
-              checked={notificationEnabled}
-              onChange={(event) => handleNotificationToggle(event.target.checked)}
-              className="h-4 w-4"
-            />
-          </label>
-
-          <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-              浏览器权限: <span className="font-medium text-[var(--text)]">{notificationPermissionText(notificationPermission)}</span>
-            </div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
-              本地开关: <span className="font-medium text-[var(--text)]">{notificationEnabled ? "已开启" : "已关闭"}</span>
-            </div>
-          </div>
-
-          <div className="flex flex-col items-start gap-2">
-            <button
-              type="button"
-              onClick={() => void requestNotificationPermission()}
-              disabled={requestingNotificationPermission || notificationPermission === "unsupported"}
-              className={settingsButtonClass("plain")}
-            >
-              <Bell className="h-4 w-4" />
-              {requestingNotificationPermission ? "请求中..." : "请求浏览器通知权限"}
-            </button>
-          </div>
-        </div>
-
-        {!loading && overview && !overview.remoteWorkspace && <LanguageServicesPanel
-          botAlias={botAlias}
-          client={client}
-          canManage={canManageLanguageServices}
-          onCatalogChanged={onLanguageServerCatalogChanged}
-        />}
-
         {overview ? (
-          showBotRuntimeSettings ? (
-            <section
+          <section
               aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
               className={settingsPanelClass("space-y-3 text-sm text-[var(--muted)]")}
             >
@@ -646,7 +375,7 @@ export function SettingsScreen({
                   id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
                   className="text-base font-semibold text-[var(--text)]"
                 >
-                  {isMainBot ? "主 Bot 运维" : "Bot 运行配置"}
+                  当前智能体设置
                 </h2>
                 {isMainBot ? (
                   <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置入口。</p>
@@ -675,17 +404,6 @@ export function SettingsScreen({
                 <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
                 <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {workspaceLabel(overview)}</p>
               </div>
-
-              {nativeRuntime && onOpenBotManager ? (
-                <button
-                  type="button"
-                  onClick={onOpenBotManager}
-                  className={settingsButtonClass("plain")}
-                >
-                  <SlidersHorizontal className="h-4 w-4" />
-                  查看管理中心
-                </button>
-              ) : null}
 
               <div className="space-y-3 border-t border-[var(--border)] pt-3">
                 <h3 className="font-medium text-[var(--text)]">运行配置</h3>
@@ -936,8 +654,7 @@ export function SettingsScreen({
                   ) : null}
                 </div>
               ) : null}
-            </section>
-          ) : null
+          </section>
         ) : null}
 
         {showWorkdirPicker ? (
@@ -957,16 +674,9 @@ export function SettingsScreen({
           />
         ) : null}
 
-        {overview && showBotRuntimeSettings ? (
-          <ClusterSetupPanel
-            key={`${botAlias}:${overview.cliType}:${nativeRuntime}`}
-            botAlias={botAlias}
-            client={client}
-            canManage={canConfigureBot}
-          />
-        ) : null}
+        {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} /> : null}
 
-        {overview && showBotRuntimeSettings && !nativeRuntime ? (
+        {overview && !nativeRuntime ? (
           <BotCliParamsPanel
             botAlias={botAlias}
             client={client}
@@ -975,19 +685,7 @@ export function SettingsScreen({
           />
         ) : null}
 
-        <div className={settingsActionPanelClass("divide-y divide-[var(--workbench-hairline)]")}>
-          {embedded ? null : (
-            <button
-              onClick={onLogout}
-              className="flex w-full items-center justify-between px-3 py-2.5 hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
-            >
-              <span className="flex items-center gap-3">
-                <LogOut className="w-5 h-5" />
-                退出登录
-              </span>
-            </button>
-          )}
-        </div>
+        {overview ? <BotPromptPresetsPanel botAlias={botAlias} client={client} canManage={canConfigureBot} /> : null}
       </section>
 
       {pendingWorkdirConflict ? (

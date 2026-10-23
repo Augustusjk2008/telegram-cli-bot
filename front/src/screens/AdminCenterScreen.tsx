@@ -1,5 +1,7 @@
 import { cliTypeLabel } from "../utils/cliType";
 import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
+import { GlobalPromptPresetsPanel } from "../components/GlobalPromptPresetsPanel";
+import { GlobalUiSettingsPanel } from "../components/GlobalUiSettingsPanel";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Copy, Eye, EyeOff, Globe, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
@@ -35,6 +37,13 @@ import type {
   StorageMigrationState,
   TunnelSnapshot,
 } from "../services/types";
+import type {
+  ChatBodyFontFamilyName,
+  ChatBodyFontSizeName,
+  ChatBodyLineHeightName,
+  ChatBodyParagraphSpacingName,
+  UiThemeName,
+} from "../theme";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
 import { requestThemeManagerLeave, useOptionalAppearance } from "../theme/AppearanceProvider";
@@ -52,9 +61,23 @@ type Props = {
   onBotsChange?: (bots: BotSummary[]) => void;
   canManageRegisterCodes?: boolean;
   canManageEnvConfig?: boolean;
+  currentBotAlias?: string | null;
+  themeName?: UiThemeName;
+  onThemeChange?: (themeName: UiThemeName) => void | Promise<void>;
+  chatBodyFontFamily?: ChatBodyFontFamilyName;
+  onChatBodyFontFamilyChange?: (value: ChatBodyFontFamilyName) => void;
+  chatBodyFontSize?: ChatBodyFontSizeName;
+  onChatBodyFontSizeChange?: (value: ChatBodyFontSizeName) => void;
+  chatBodyLineHeight?: ChatBodyLineHeightName;
+  onChatBodyLineHeightChange?: (value: ChatBodyLineHeightName) => void;
+  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
+  onChatBodyParagraphSpacingChange?: (value: ChatBodyParagraphSpacingName) => void;
+  chatEnterToSend?: boolean;
+  onChatEnterToSendChange?: (value: boolean) => void;
 };
 
 type AdminCenterTab =
+  | "global"
   | "themes"
   | "users"
   | "invites"
@@ -413,6 +436,19 @@ export function AdminCenterScreen({
   onBotsChange,
   canManageRegisterCodes = true,
   canManageEnvConfig = true,
+  currentBotAlias,
+  themeName,
+  onThemeChange,
+  chatBodyFontFamily,
+  onChatBodyFontFamilyChange,
+  chatBodyFontSize,
+  onChatBodyFontSizeChange,
+  chatBodyLineHeight,
+  onChatBodyLineHeightChange,
+  chatBodyParagraphSpacing,
+  onChatBodyParagraphSpacingChange,
+  chatEnterToSend,
+  onChatEnterToSendChange,
 }: Props) {
   const [activeTab, setActiveTab] = useState<AdminCenterTab>("users");
   const appearance = useOptionalAppearance();
@@ -478,6 +514,7 @@ export function AdminCenterScreen({
     "native-agent": false,
     storage: false,
     env: false,
+    global: false,
   });
   const [manualPackagePath, setManualPackagePath] = useState("");
   const [registerCodeDraftUses, setRegisterCodeDraftUses] = useState("1");
@@ -494,6 +531,7 @@ export function AdminCenterScreen({
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
   const visibleTabs = useMemo<AdminCenterTab[]>(
     () => [
+      ...(canManageEnvConfig ? (["global"] as AdminCenterTab[]) : []),
       "users",
       "themes",
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
@@ -889,7 +927,10 @@ export function AdminCenterScreen({
   }
 
   async function refreshActiveTab(nextNotice = "", refresh = false) {
-    if (activeTab === "themes") {
+    if (activeTab === "global") {
+      setLoadedTabs((prev) => ({ ...prev, global: true }));
+      setLoading(false);
+    } else if (activeTab === "themes") {
       setLoadedTabs((prev) => ({ ...prev, themes: true }));
       setLoading(false);
       if (refresh) await appearance?.reload().catch(() => {});
@@ -1574,7 +1615,7 @@ export function AdminCenterScreen({
                 ? "rounded-md px-2.5 py-1.5 text-sm tcb-selected-accent"
                 : "rounded-md border border-[var(--border)] px-2.5 py-1.5 text-sm"}
             >
-              {tab === "themes" ? "主题管理" : tab === "users"
+              {tab === "global" ? "全局配置" : tab === "themes" ? "主题管理" : tab === "users"
                 ? "用户"
                 : tab === "invites"
                   ? "邀请"
@@ -1629,6 +1670,31 @@ export function AdminCenterScreen({
           <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm text-[var(--muted)]">
             加载中...
           </section>
+        ) : null}
+
+        {!loading && activeTab === "global" && canManageEnvConfig ? (
+          <div className="space-y-4">
+            <GlobalUiSettingsPanel
+              canManage={canManageEnvConfig}
+              themeName={themeName}
+              onThemeChange={onThemeChange}
+              chatBodyFontFamily={chatBodyFontFamily}
+              onChatBodyFontFamilyChange={onChatBodyFontFamilyChange}
+              chatBodyFontSize={chatBodyFontSize}
+              onChatBodyFontSizeChange={onChatBodyFontSizeChange}
+              chatBodyLineHeight={chatBodyLineHeight}
+              onChatBodyLineHeightChange={onChatBodyLineHeightChange}
+              chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+              onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
+              chatEnterToSend={chatEnterToSend}
+              onChatEnterToSendChange={onChatEnterToSendChange}
+            />
+            <GlobalPromptPresetsPanel
+              client={client}
+              botAlias={currentBotAlias || initialBots[0]?.alias || "main"}
+              canManage={canManageEnvConfig}
+            />
+          </div>
         ) : null}
 
         {activeTab === "themes" && appearance ? <section className="h-[min(850px,calc(100dvh-190px))] min-h-[520px]">

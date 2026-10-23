@@ -69,10 +69,9 @@ async function addNativeBot(client: MockWebBotClient, alias = "native1", piAgent
 
 test("native bot settings hide CLI-only controls and never echo its API key", async () => {
   const client = new MockWebBotClient();
-  const openManager = vi.fn();
   await addNativeBot(client);
 
-  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} onOpenBotManager={openManager} />);
+  render(<SettingsScreen botAlias="native1" client={client} onLogout={() => undefined} />);
 
   expect(await screen.findByLabelText("运行后端")).toHaveValue("native_agent");
   expect(screen.queryByLabelText("CLI 类型")).not.toBeInTheDocument();
@@ -80,9 +79,10 @@ test("native bot settings hide CLI-only controls and never echo its API key", as
   expect(screen.getByLabelText("Native model")).toHaveValue("claude-sonnet-4-5");
   expect(screen.queryByText("sk-settings-1234")).not.toBeInTheDocument();
   expect(screen.queryByText("https://provider.example/v1")).not.toBeInTheDocument();
-
-  await userEvent.click(screen.getByRole("button", { name: "查看管理中心" }));
-  expect(openManager).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByRole("heading", { name: "当前智能体设置" }).length).toBeGreaterThan(0);
+  expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天完成网页通知")).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "语言服务" })).not.toBeInTheDocument();
 });
 
 test("native settings persist the selected Pi agent through the execution config", async () => {
@@ -108,7 +108,7 @@ test("native settings persist the selected Pi agent through the execution config
   expect(await screen.findByText("原生 agent 配置已更新")).toBeInTheDocument();
 });
 
-test("non-admin session cannot mutate runtime or language-service settings", async () => {
+test("non-admin session cannot mutate current agent runtime settings", async () => {
   render(
     <SettingsScreen
       botAlias="main"
@@ -120,34 +120,12 @@ test("non-admin session cannot mutate runtime or language-service settings", asy
 
   expect(await screen.findByLabelText("运行后端")).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存 CLI 配置" })).toBeDisabled();
-  expect(await screen.findByRole("heading", { name: "语言服务" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "重新检测语言服务" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "安装 Pyright" })).not.toBeInTheDocument();
+  expect(screen.getAllByRole("heading", { name: "当前智能体设置" }).length).toBeGreaterThan(0);
+  expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天完成网页通知")).not.toBeInTheDocument();
 });
 
-test("updates the local Enter-to-send preference", async () => {
-  const user = userEvent.setup();
-  const onChatEnterToSendChange = vi.fn();
-
-  render(
-    <SettingsScreen
-      botAlias="main"
-      client={new MockWebBotClient()}
-      onLogout={() => undefined}
-      chatEnterToSend={false}
-      onChatEnterToSendChange={onChatEnterToSendChange}
-    />,
-  );
-
-  const toggle = await screen.findByLabelText("Enter 键发送消息");
-  expect(toggle).not.toBeChecked();
-
-  await user.click(toggle);
-
-  expect(onChatEnterToSendChange).toHaveBeenCalledWith(true);
-});
-
-test("settings do not expose manual child agent configuration", async () => {
+test("settings include child-agent status and advanced cluster configuration", async () => {
   render(
     <SettingsScreen
       botAlias="main"
@@ -157,8 +135,9 @@ test("settings do not expose manual child agent configuration", async () => {
   );
 
   expect(await screen.findByLabelText("运行后端")).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "子 agent" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "新增 agent" })).not.toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "集群与子智能体" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "子智能体列表" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "JSON 配置" })).toBeInTheDocument();
 });
 
 test("remote Antigravity settings expose MCP status, scope and copyable setup guidance", async () => {

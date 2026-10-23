@@ -43,6 +43,8 @@ type Props = {
   onSaveGlobalPromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
   onSaveBotPromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
   onSavePromptPresets?: (presets: PromptPreset[]) => Promise<void> | void;
+  onOpenGlobalPromptSettings?: () => void;
+  onOpenBotPromptSettings?: () => void;
 };
 
 type PresetScope = "global" | "bot";
@@ -79,6 +81,8 @@ export function ChatComposer({
   onSaveGlobalPromptPresets,
   onSaveBotPromptPresets,
   onSavePromptPresets,
+  onOpenGlobalPromptSettings,
+  onOpenBotPromptSettings,
 }: Props) {
   const shellClassName = mobileLayout
     ? "chat-composer-delight bg-[var(--workbench-titlebar-bg)] px-2 py-1"
@@ -615,14 +619,31 @@ export function ChatComposer({
                 <div className="px-3 py-2 text-sm text-[var(--muted)]">暂无预设</div>
               )}
               {canManagePromptPresets ? (
-                <button
-                  type="button"
-                  onClick={() => openPresetEditor("bot")}
-                  className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
-                >
-                  <Settings className="h-4 w-4 text-[var(--muted)]" />
-                  配置预设
-                </button>
+                onOpenGlobalPromptSettings || onOpenBotPromptSettings ? (
+                  <div className="mt-1 space-y-1 border-t border-[var(--border)] pt-1">
+                    {onOpenGlobalPromptSettings ? (
+                      <button type="button" onClick={() => { setPresetMenuOpen(false); onOpenGlobalPromptSettings(); }} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]">
+                        <Settings className="h-4 w-4 text-[var(--muted)]" />
+                        管理全局预设
+                      </button>
+                    ) : null}
+                    {onOpenBotPromptSettings ? (
+                      <button type="button" onClick={() => { setPresetMenuOpen(false); onOpenBotPromptSettings(); }} className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]">
+                        <Settings className="h-4 w-4 text-[var(--muted)]" />
+                        管理当前智能体预设
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openPresetEditor("bot")}
+                    className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--surface-strong)]"
+                  >
+                    <Settings className="h-4 w-4 text-[var(--muted)]" />
+                    配置预设
+                  </button>
+                )
               ) : null}
             </div>
           ) : null}

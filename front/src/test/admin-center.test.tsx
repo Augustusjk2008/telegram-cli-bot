@@ -22,6 +22,28 @@ async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "Codex 额度" });
 }
 
+test("全局配置集中显示通用显示、通知和全局提示词预设", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const updateGlobal = vi.spyOn(client, "updateGlobalPromptPresets");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "全局配置" }));
+
+  expect(await screen.findByRole("heading", { name: "通用显示设置" })).toBeInTheDocument();
+  expect(screen.getAllByText(/影响所有智能体/).length).toBeGreaterThan(0);
+  expect(screen.getByLabelText("聊天正文字体")).toBeInTheDocument();
+  expect(screen.getByLabelText("聊天完成网页通知")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "全局提示词预设" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "新增预设" }));
+  await user.type(screen.getByLabelText("全局预设标题 1"), "全局检查");
+  await user.type(screen.getByLabelText("全局预设内容 1"), "检查所有变更");
+  await user.click(screen.getByRole("button", { name: "保存全局预设" }));
+  await waitFor(() => expect(updateGlobal).toHaveBeenCalledTimes(1));
+});
+
 test("环境配置显示 Codex server 语音开关", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();

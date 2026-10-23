@@ -213,6 +213,29 @@ export function useBotManager({
     }
   }
 
+  async function runBatchToggle(botsToUpdate: BotSummary[], target: "start" | "stop") {
+    const candidates = botsToUpdate.filter((bot) => !isMainBot(bot) && !bot.archived);
+    if (candidates.length === 0) return false;
+    setSavingAction(`batch:${target}`);
+    setError("");
+    setNotice("");
+    try {
+      if (target === "start") {
+        await Promise.all(candidates.filter(isBotOffline).map((bot) => client.startBot(bot.alias)));
+      } else {
+        await Promise.all(candidates.filter((bot) => !isBotOffline(bot)).map((bot) => client.stopBot(bot.alias)));
+      }
+      setNotice(target === "start" ? `已批量启动 ${candidates.length} 个智能体` : `已批量停止 ${candidates.length} 个智能体`);
+      await loadBots();
+      return true;
+    } catch (err) {
+      setError(getErrorMessage(err, target === "start" ? "批量启动智能体失败" : "批量停止智能体失败"));
+      return false;
+    } finally {
+      setSavingAction("");
+    }
+  }
+
   async function archiveBot(bot: BotSummary) {
     if (isMainBot(bot) || bot.archived) {
       return null;
@@ -463,6 +486,7 @@ export function useBotManager({
     updateBotCluster,
     createBot,
     toggleBot,
+    runBatchToggle,
     archiveBot,
     unarchiveBot,
     renameBot,

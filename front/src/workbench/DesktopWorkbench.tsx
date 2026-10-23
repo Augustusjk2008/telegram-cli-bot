@@ -22,10 +22,6 @@ import type { WebBotClient } from "../services/webBotClient";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import "../styles/workbench.css";
 import type {
-  ChatBodyFontFamilyName,
-  ChatBodyFontSizeName,
-  ChatBodyLineHeightName,
-  ChatBodyParagraphSpacingName,
   UiThemeName,
 } from "../theme";
 import {
@@ -160,17 +156,7 @@ type Props = {
   allowTrace?: boolean;
   allowCodeJump?: boolean;
   themeName?: UiThemeName;
-  onThemeChange?: (themeName: UiThemeName) => void;
-  chatBodyFontFamily?: ChatBodyFontFamilyName;
-  onChatBodyFontFamilyChange?: (fontFamily: ChatBodyFontFamilyName) => void;
-  chatBodyFontSize?: ChatBodyFontSizeName;
-  onChatBodyFontSizeChange?: (fontSize: ChatBodyFontSizeName) => void;
-  chatBodyLineHeight?: ChatBodyLineHeightName;
-  onChatBodyLineHeightChange?: (lineHeight: ChatBodyLineHeightName) => void;
-  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
-  onChatBodyParagraphSpacingChange?: (paragraphSpacing: ChatBodyParagraphSpacingName) => void;
   chatEnterToSend?: boolean;
-  onChatEnterToSendChange?: (enabled: boolean) => void;
   sessionCapabilities?: string[];
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
@@ -212,17 +198,7 @@ export function DesktopWorkbench({
   allowTrace = true,
   allowCodeJump = true,
   themeName,
-  onThemeChange,
-  chatBodyFontFamily,
-  onChatBodyFontFamilyChange,
-  chatBodyFontSize,
-  onChatBodyFontSizeChange,
-  chatBodyLineHeight,
-  onChatBodyLineHeightChange,
-  chatBodyParagraphSpacing,
-  onChatBodyParagraphSpacingChange,
   chatEnterToSend = true,
-  onChatEnterToSendChange,
   sessionCapabilities = [],
   viewMode = "desktop",
   hasUnreadOtherBots = false,
@@ -1415,29 +1391,13 @@ export function DesktopWorkbench({
         <SettingsScreen
           botAlias={botAlias}
           client={client}
-          onLogout={() => onLogout?.()}
           embedded
           prefilledWorkdir={pendingSidebarWorkdir || fileTree.rootPath}
           onWorkdirUpdated={(nextWorkdir) => {
             setPendingSidebarWorkdir(nextWorkdir);
             void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: nextWorkdir });
           }}
-          themeName={themeName}
-          onThemeChange={onThemeChange}
-          chatBodyFontFamily={chatBodyFontFamily}
-          onChatBodyFontFamilyChange={onChatBodyFontFamilyChange}
-          chatBodyFontSize={chatBodyFontSize}
-          onChatBodyFontSizeChange={onChatBodyFontSizeChange}
-          chatBodyLineHeight={chatBodyLineHeight}
-          onChatBodyLineHeightChange={onChatBodyLineHeightChange}
-          chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-          onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
-          chatEnterToSend={chatEnterToSend}
-          onChatEnterToSendChange={onChatEnterToSendChange}
           sessionCapabilities={sessionCapabilities}
-          showBotRuntimeSettings={false}
-          onOpenBotManager={onOpenBotManager}
-          onLanguageServerCatalogChanged={refreshLanguageServerCatalogStatus}
         />
         </Suspense>
       );

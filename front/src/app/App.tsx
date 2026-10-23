@@ -470,6 +470,17 @@ function AppContent() {
     setIsTerminalImmersive(false);
   }
 
+  function openBotSettings(alias: string | null = currentBot) {
+    if (!alias) return;
+    setCurrentBot(alias);
+    setCurrentTab("settings");
+    setShowBotManager(false);
+    setShowAdminCenter(false);
+    setShowSwitcher(false);
+    setIsChatImmersive(false);
+    setIsTerminalImmersive(false);
+  }
+
   async function refreshAnnouncements(nextClient = client, autoOpen = false) {
     try {
       const result = await nextClient.listAnnouncements();
@@ -952,6 +963,19 @@ function AppContent() {
             onBotsChange={setBots}
             canManageRegisterCodes={canManageRegisterCodes}
             canManageEnvConfig={canManageEnvConfig}
+            currentBotAlias={currentBot}
+            themeName={themeName}
+            onThemeChange={handleThemeChange}
+            chatBodyFontFamily={chatBodyFontFamily}
+            onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
+            chatBodyFontSize={chatBodyFontSize}
+            onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
+            chatBodyLineHeight={chatBodyLineHeight}
+            onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
+            chatBodyParagraphSpacing={chatBodyParagraphSpacing}
+            onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
+            chatEnterToSend={chatEnterToSend}
+            onChatEnterToSendChange={handleChatEnterToSendChange}
           />
         </Suspense>
         {notificationCenter}
@@ -970,6 +994,8 @@ function AppContent() {
               currentAlias={currentBot}
               onSelect={handleSelectBot}
               onLogout={handleLogout}
+              onOpenBotSettings={openBotSettings}
+              onBotCreated={openBotSettings}
               onBotsChange={setBots}
               canManage={canManageBots}
               canCreateWorkdirDirectory={canCreateWorkdirDirectory}
@@ -988,6 +1014,8 @@ function AppContent() {
             client={client}
             onSelect={handleSelectBot}
             onLogout={handleLogout}
+            onOpenBotSettings={openBotSettings}
+            onBotCreated={openBotSettings}
             onBotsChange={setBots}
             canManage={canManageBots}
             canCreateWorkdirDirectory={canCreateWorkdirDirectory}
@@ -1031,6 +1059,8 @@ function AppContent() {
                 allowTrace={allowTrace}
                 embedded
                 enterToSend={chatEnterToSend}
+                onOpenBotSettings={() => openBotSettings(alias)}
+                onOpenGlobalPromptSettings={openAdminCenter}
                 forcedExecutionMode={instanceKey === chatInstanceKey ? options.forcedExecutionMode : undefined}
                 soloMode={instanceKey === chatInstanceKey ? options.soloMode : false}
                 soloHistoryRevision={instanceKey === chatInstanceKey ? options.soloHistoryRevision : undefined}
@@ -1083,6 +1113,8 @@ function AppContent() {
               disabledReason={chatDisabledReason}
               allowTrace={allowTrace}
               enterToSend={chatEnterToSend}
+              onOpenBotSettings={() => openBotSettings(alias)}
+              onOpenGlobalPromptSettings={openAdminCenter}
               isImmersive={instanceKey === chatInstanceKey ? isChatImmersive : false}
               onToggleImmersive={instanceKey === chatInstanceKey
                 ? () => setIsChatImmersive((prev) => !prev)
@@ -1163,19 +1195,6 @@ function AppContent() {
           key={`settings-${currentBot}`}
           botAlias={currentBot}
           client={client}
-          onLogout={handleLogout}
-          themeName={themeName}
-          onThemeChange={handleThemeChange}
-          chatBodyFontFamily={chatBodyFontFamily}
-          onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
-          chatBodyFontSize={chatBodyFontSize}
-          onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
-          chatBodyLineHeight={chatBodyLineHeight}
-          onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
-          chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-          onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
-          chatEnterToSend={chatEnterToSend}
-          onChatEnterToSendChange={handleChatEnterToSendChange}
           sessionCapabilities={session?.capabilities}
         />
       </div>
@@ -1296,17 +1315,7 @@ function AppContent() {
               allowTrace={allowTrace}
               allowCodeJump={!remoteWorkspace && !structureOnly && !isGuest(session)}
               themeName={themeName}
-              onThemeChange={handleThemeChange}
-              chatBodyFontFamily={chatBodyFontFamily}
-              onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
-              chatBodyFontSize={chatBodyFontSize}
-              onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
-              chatBodyLineHeight={chatBodyLineHeight}
-              onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
-              chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-              onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
               chatEnterToSend={chatEnterToSend}
-              onChatEnterToSendChange={handleChatEnterToSendChange}
               sessionCapabilities={session?.capabilities}
               viewMode={viewMode}
               hasUnreadOtherBots={hasUnreadOtherBots}

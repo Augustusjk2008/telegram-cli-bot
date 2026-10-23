@@ -1,5 +1,4 @@
 import { cliTypeLabel } from "../utils/cliType";
-import { ManageThemesButton } from "../components/ThemeDropdown";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -26,6 +25,8 @@ const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 type Props = {
   client?: WebBotClient;
   onSelect: (alias: string) => void;
+  onOpenBotSettings?: (alias: string) => void;
+  onBotCreated?: (alias: string) => void;
   onLogout?: () => void;
   onBotsChange?: (bots: BotSummary[]) => void;
   canManage?: boolean;
@@ -132,6 +133,8 @@ function DeleteBotDialog({
 export function BotListScreen({
   client = new MockWebBotClient(),
   onSelect,
+  onOpenBotSettings,
+  onBotCreated,
   onLogout,
   onBotsChange,
   canManage = true,
@@ -145,6 +148,7 @@ export function BotListScreen({
   const [deleteHistory, setDeleteHistory] = useState(false);
   const [deleteWorkspace, setDeleteWorkspace] = useState(false);
   const [deleteWorkspaceConfirmText, setDeleteWorkspaceConfirmText] = useState("");
+  const [selectedAliases, setSelectedAliases] = useState<string[]>([]);
   const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
   const {
     bots,
@@ -155,6 +159,7 @@ export function BotListScreen({
     setError,
     createBot,
     toggleBot,
+    runBatchToggle,
     archiveBot,
     unarchiveBot,
     renameBot,
@@ -177,6 +182,11 @@ export function BotListScreen({
       return { ...prev, cliPath: buildCreateDraft(prev.cliType, bots).cliPath };
     });
   }, [bots]);
+
+  useEffect(() => {
+    const available = new Set(bots.filter((bot) => canManage && !isMainBot(bot) && !isBotArchived(bot)).map((bot) => bot.alias));
+    setSelectedAliases((current) => current.filter((alias) => available.has(alias)));
+  }, [bots, canManage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,6 +226,7 @@ export function BotListScreen({
     if (created) {
       setCreateDraft(buildCreateDraft(createDraft.cliType, bots));
       setRemoteCreate(false);
+      onBotCreated?.(created.alias);
     }
   }
 
@@ -229,6 +240,12 @@ export function BotListScreen({
         return next;
       });
     }
+  }
+
+  async function handleBatchToggle(target: "start" | "stop") {
+    const selected = bots.filter((bot) => selectedAliases.includes(bot.alias));
+    const updated = await runBatchToggle(selected, target);
+    if (updated) setSelectedAliases([]);
   }
 
   async function confirmDelete() {
@@ -258,7 +275,6 @@ export function BotListScreen({
     <main data-ui-density="compact" className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
       <header className="mb-3 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">智能体管理</h1>
-        <ManageThemesButton />
         {onLogout ? (
           <button
             type="button"
@@ -281,6 +297,15 @@ export function BotListScreen({
         <div className="mb-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
           {notice}
         </div>
+      ) : null}
+
+      {canManage && bots.some((bot) => !isMainBot(bot) && !isBotArchived(bot)) ? (
+        <section aria-label="批量操作" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+          <span className="text-sm text-[var(--muted)]">已选择 {selectedAliases.length} 个智能体</span>
+          <button type="button" onClick={() => void handleBatchToggle("start")} disabled={selectedAliases.length === 0 || savingAction !== ""} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">批量启动</button>
+          <button type="button" onClick={() => void handleBatchToggle("stop")} disabled={selectedAliases.length === 0 || savingAction !== ""} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">批量停止</button>
+          <button type="button" onClick={() => setSelectedAliases([])} disabled={selectedAliases.length === 0 || savingAction !== ""} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">清除选择</button>
+        </section>
       ) : null}
 
       {canManage ? (
@@ -448,6 +473,15 @@ export function BotListScreen({
                   style={getBotAccentStyle(bot.alias)}
                 />
                 <div className="flex items-start">
+                  {canManage && !isMain && !isArchived ? (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${bot.alias}`}
+                      checked={selectedAliases.includes(bot.alias)}
+                      onChange={(event) => setSelectedAliases((current) => event.target.checked ? [...new Set([...current, bot.alias])] : current.filter((alias) => alias !== bot.alias))}
+                      className="mr-3 mt-1 h-4 w-4 shrink-0"
+                    />
+                  ) : null}
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <h3 className="min-w-0 max-w-full truncate text-lg font-semibold text-[var(--text)]">{bot.alias}</h3>
@@ -499,6 +533,16 @@ export function BotListScreen({
                   >
                     {isOffline ? "不可进入" : "进入"}
                   </button>
+                  {onOpenBotSettings ? (
+                    <button
+                      type="button"
+                      aria-label={`打开 ${bot.alias} 设置`}
+                      onClick={() => onOpenBotSettings(bot.alias)}
+                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    >
+                      打开设置
+                    </button>
+                  ) : null}
                   {canManage && !isMain ? (
                     <>
                       <button

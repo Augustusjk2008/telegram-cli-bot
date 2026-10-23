@@ -70,17 +70,16 @@ test("saving a changed remote workspace sends its connection and root through th
   expect(update).toHaveBeenCalledWith("remote", bot.workingDir, { remoteWorkspace: next });
 });
 
-test("desktop bot editor exposes remote address and workspace changes", async () => {
+test("desktop bot manager shows remote overview and opens shared settings", async () => {
   const bot: BotSummary = { alias: "remote", cliType: "codex", cliPath: "codex", status: "running", workingDir: "C:/control/remote", remoteWorkspace: remote, lastActiveText: "", canOperate: true };
   const client = new MockWebBotClient();
   vi.spyOn(client, "listBots").mockResolvedValue([bot]);
-  vi.spyOn(client, "listRemoteDirectories").mockImplementation(async (_id, path) => ({ workingDir: path, entries: [] }));
-  render(<DesktopBotManagerScreen client={client} currentAlias="remote" onSelect={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "配置" }));
-  expect(screen.getAllByText("dev@linux.test:/home/dev").length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByRole("button", { name: "更换远程地址或工作目录" }));
-  expect(screen.getByLabelText("SSH 主机")).toHaveValue("linux.test");
-  expect(screen.getByRole("button", { name: "保存智能体" })).toBeDisabled();
+  const openSettings = vi.fn();
+  render(<DesktopBotManagerScreen client={client} currentAlias="remote" onSelect={vi.fn()} onOpenBotSettings={openSettings} />);
+  expect(await screen.findByText("dev@linux.test:/home/dev")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "打开 remote 设置" }));
+  expect(openSettings).toHaveBeenCalledWith("remote");
+  expect(screen.queryByRole("button", { name: "更换远程地址或工作目录" })).not.toBeInTheDocument();
 });
 
 test("remote workdir update serializes the selected connection without SSH credentials", async () => {

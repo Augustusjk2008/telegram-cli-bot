@@ -137,6 +137,8 @@ type Props = {
   soloHistoryRevision?: number;
   onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
   onSoloHistoryRollback?: () => void;
+  onOpenGlobalPromptSettings?: () => void;
+  onOpenBotSettings?: () => void;
   mobileLayout?: boolean;
 };
 
@@ -1853,6 +1855,8 @@ export function ChatScreen({
   soloHistoryRevision = 0,
   onSoloSessionInfoChange,
   onSoloHistoryRollback,
+  onOpenGlobalPromptSettings,
+  onOpenBotSettings,
   mobileLayout = false,
 }: Props) {
   const storageScope = accountId?.trim() || "";
@@ -5577,6 +5581,8 @@ export function ChatScreen({
             canManagePromptPresets={canManagePromptPresets}
             onSaveGlobalPromptPresets={handleSaveGlobalPromptPresets}
             onSaveBotPromptPresets={handleSaveBotPromptPresets}
+            onOpenGlobalPromptSettings={onOpenGlobalPromptSettings}
+            onOpenBotPromptSettings={onOpenBotSettings}
           />
         ) : null}
       </div>
