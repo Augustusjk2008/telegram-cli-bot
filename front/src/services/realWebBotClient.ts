@@ -1221,6 +1221,7 @@ type RawCliParamsPayload = {
 };
 
 const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
+const GET_NETWORK_RETRY_DELAY_MS = 500;
 
 type RawTunnelSnapshot = {
   mode: "disabled" | "cloudflare_quick" | "manual" | "fixed_public_forward";
@@ -4118,6 +4119,14 @@ function isWebNotificationEvent(value: unknown): value is WebNotificationEvent {
   return Boolean(value && typeof value === "object" && typeof (value as { type?: unknown }).type === "string");
 }
 
+function isRetryableFetchNetworkError(error: unknown) {
+  if (typeof error !== "object" || error === null) {
+    return error instanceof TypeError;
+  }
+  const name = "name" in error ? String((error as { name?: unknown }).name || "") : "";
+  return name !== "AbortError" && (error instanceof TypeError || name === "TypeError" || name === "NetworkError");
+}
+
 export class RealWebBotClient implements WebBotClient {
   private token = "";
   private notificationPresence: NotificationPresenceUpdate | null = null;
@@ -4131,12 +4140,31 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   private async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(withApiBase(path), {
+    const method = String(init.method || "GET").toUpperCase();
+    const canRetry = method === "GET";
+    const requestInit: RequestInit = {
       ...init,
       cache: "no-store",
       credentials: "same-origin",
       headers: this.headers(init.headers),
-    });
+    };
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < (canRetry ? 2 : 1); attempt += 1) {
+      try {
+        response = await fetch(withApiBase(path), requestInit);
+        break;
+      } catch (error) {
+        if (!canRetry || attempt !== 0 || !isRetryableFetchNetworkError(error)) {
+          throw error;
+        }
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, GET_NETWORK_RETRY_DELAY_MS);
+        });
+      }
+    }
+    if (!response) {
+      throw new Error("请求失败");
+    }
     const responseClone = typeof response.clone === "function" ? response.clone() : null;
     let payload: JsonEnvelope<T>;
     try {

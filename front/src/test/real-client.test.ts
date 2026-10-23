@@ -35,6 +35,7 @@ describe("RealWebBotClient", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     fetchMock.mockReset();
     vi.unstubAllGlobals();
   });
@@ -391,6 +392,48 @@ describe("RealWebBotClient", () => {
     await client.listBots();
     await client.listBots({ includeArchived: true });
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(["/api/bots", "/api/admin/bots"]);
+  });
+
+  test("retries a failed GET once after a fetch network error", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(jsonOk([]));
+
+    const pending = new RealWebBotClient().listBots();
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(pending).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not retry an aborted GET", async () => {
+    const abortError = new DOMException("请求已取消", "AbortError");
+    fetchMock.mockRejectedValueOnce(abortError);
+
+    await expect(new RealWebBotClient().listBots()).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not retry write requests after a network error", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(new RealWebBotClient().logout()).rejects.toThrow("Failed to fetch");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not retry HTTP errors", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      json: async () => ({ ok: false, error: { message: "服务器错误" } }),
+    });
+
+    await expect(new RealWebBotClient().listBots()).rejects.toMatchObject({
+      status: 500,
+      message: "服务器错误",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test("uses the active public base path for auth requests and download links", async () => {

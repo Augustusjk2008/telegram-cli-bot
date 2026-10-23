@@ -429,6 +429,16 @@ function isMissingClusterRunError(err: unknown) {
   );
 }
 
+function isRetryableNetworkError(err: unknown) {
+  if (isAbortError(err)) {
+    return false;
+  }
+  if (err instanceof TypeError) {
+    return true;
+  }
+  return err instanceof Error && (err.name === "TypeError" || err.name === "NetworkError");
+}
+
 function selectScopedConversation(client: WebBotClient, botAlias: string, conversationId: string, agentId: string, executionMode?: ChatExecutionMode) {
   const options = agentOptions(agentId, executionMode);
   return options
@@ -1979,8 +1989,10 @@ export function ChatScreen({
   const soloHistoryRevisionRef = useRef(soloHistoryRevision);
   const previousBotAliasRef = useRef(botAlias);
   const previousStorageScopeRef = useRef(storageScope);
+  const previousForcedExecutionModeRef = useRef(forcedExecutionMode);
   const hasActivatedRef = useRef(false);
   const previousForegroundRef = useRef(isForeground);
+  const previousVisibleRef = useRef(isVisible);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const historyRevisionStateRef = useRef(new HistoryRevisionState());
   const agUiBatchStateRef = useRef<AgUiRunState | null>(null);
@@ -2064,10 +2076,82 @@ export function ChatScreen({
     }
   }, [botAlias, storageScope]);
 
+  const stopAssistantPoll = useCallback(() => {
+    if (assistantPollTimerRef.current !== null) {
+      window.clearTimeout(assistantPollTimerRef.current);
+      assistantPollTimerRef.current = null;
+    }
+  }, []);
+
+  const stopSseRecoveryWatch = useCallback(() => {
+    if (sseRecoveryTimerRef.current !== null) {
+      window.clearTimeout(sseRecoveryTimerRef.current);
+      sseRecoveryTimerRef.current = null;
+    }
+  }, []);
+
+  const abortActiveSseRequest = useCallback(() => {
+    const controller = sseAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    sseAbortControllerRef.current = null;
+    controller.abort();
+  }, []);
+
+  const stopClusterTaskPoll = useCallback(() => {
+    if (clusterTaskPollTimerRef.current !== null) {
+      window.clearTimeout(clusterTaskPollTimerRef.current);
+      clusterTaskPollTimerRef.current = null;
+    }
+  }, []);
+
+  const clearClusterTaskState = useCallback(() => {
+    stopClusterTaskPoll();
+    clusterRunIdRef.current = "";
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+  }, [stopClusterTaskPoll]);
+
+  const cancelInactiveChatTransport = useCallback(() => {
+    abortActiveSseRequest();
+    stopAssistantPoll();
+    stopSseRecoveryWatch();
+    stopClusterTaskPoll();
+    assistantSendVersionRef.current += 1;
+    streamBatcher.cancel();
+    releaseAgUiBatchState();
+    activeTurnBindingRef.current = null;
+    sseLastActivityAtRef.current = null;
+    setNativePermissionPending(false);
+    clearClusterTaskState();
+  }, [
+    abortActiveSseRequest,
+    clearClusterTaskState,
+    releaseAgUiBatchState,
+    stopAssistantPoll,
+    stopClusterTaskPoll,
+    stopSseRecoveryWatch,
+    streamBatcher,
+  ]);
+
+  useEffect(() => () => {
+    cancelInactiveChatTransport();
+  }, [cancelInactiveChatTransport]);
+
   useLayoutEffect(() => {
     const previousBotAlias = previousBotAliasRef.current;
     const previousScope = previousStorageScopeRef.current;
-    if (previousBotAlias === botAlias && previousScope === storageScope) {
+    const previousForcedExecutionMode = previousForcedExecutionModeRef.current;
+    const scopeChanged = previousBotAlias !== botAlias || previousScope !== storageScope;
+    const forcedExecutionModeChanged = previousForcedExecutionMode !== forcedExecutionMode;
+    previousForcedExecutionModeRef.current = forcedExecutionMode;
+    if (!scopeChanged && !forcedExecutionModeChanged) {
+      return;
+    }
+    cancelInactiveChatTransport();
+    if (!scopeChanged) {
       return;
     }
     clearStoredQueuedMessage(previousBotAlias, activeAgentIdRef.current || "main", previousScope);
@@ -2076,13 +2160,11 @@ export function ChatScreen({
     setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     previousBotAliasRef.current = botAlias;
     previousStorageScopeRef.current = storageScope;
-    streamBatcher.flush();
-    assistantSendVersionRef.current += 1;
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
     const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli";
     executionModeRef.current = storedExecutionMode;
     setExecutionModeState(storedExecutionMode);
-  }, [botAlias, forcedExecutionMode, storageScope, streamBatcher]);
+  }, [botAlias, cancelInactiveChatTransport, forcedExecutionMode, storageScope]);
 
   useEffect(() => {
     setClusterSaving(false);
@@ -2298,44 +2380,6 @@ export function ChatScreen({
     return { nextItems, shouldPoll };
   }, [resumeTerminalAutoScroll]);
 
-  const stopAssistantPoll = useCallback(() => {
-    if (assistantPollTimerRef.current !== null) {
-      window.clearTimeout(assistantPollTimerRef.current);
-      assistantPollTimerRef.current = null;
-    }
-  }, []);
-
-  const stopSseRecoveryWatch = useCallback(() => {
-    if (sseRecoveryTimerRef.current !== null) {
-      window.clearTimeout(sseRecoveryTimerRef.current);
-      sseRecoveryTimerRef.current = null;
-    }
-  }, []);
-
-  const abortActiveSseRequest = useCallback(() => {
-    const controller = sseAbortControllerRef.current;
-    if (!controller) {
-      return;
-    }
-    sseAbortControllerRef.current = null;
-    controller.abort();
-  }, []);
-
-  const stopClusterTaskPoll = useCallback(() => {
-    if (clusterTaskPollTimerRef.current !== null) {
-      window.clearTimeout(clusterTaskPollTimerRef.current);
-      clusterTaskPollTimerRef.current = null;
-    }
-  }, []);
-
-  const clearClusterTaskState = useCallback(() => {
-    stopClusterTaskPoll();
-    clusterRunIdRef.current = "";
-    setClusterRunId("");
-    setClusterTaskStatus(null);
-    setClusterTaskError("");
-  }, [stopClusterTaskPoll]);
-
   const pollClusterTasks = useCallback(async () => {
     const runId = clusterRunIdRef.current;
     if (!runId || !isForegroundRef.current) {
@@ -2364,6 +2408,13 @@ export function ChatScreen({
         return;
       }
       setClusterTaskError(err instanceof Error ? err.message : "集群任务状态获取失败");
+      if (isRetryableNetworkError(err)) {
+        stopClusterTaskPoll();
+        clusterTaskPollTimerRef.current = window.setTimeout(() => {
+          clusterTaskPollTimerRef.current = null;
+          void pollClusterTasks();
+        }, CLUSTER_TASK_POLL_INTERVAL_MS);
+      }
     }
   }, [botAlias, clearClusterTaskState, client, stopClusterTaskPoll]);
   pollClusterTasksRef.current = () => {
@@ -2831,6 +2882,12 @@ export function ChatScreen({
   useLayoutEffect(() => {
     const wasForeground = previousForegroundRef.current;
     previousForegroundRef.current = isForeground;
+    const wasVisible = previousVisibleRef.current;
+    previousVisibleRef.current = isVisible;
+
+    if (wasVisible && !isVisible) {
+      cancelInactiveChatTransport();
+    }
 
     if (!isForeground) {
       stopAssistantPoll();
@@ -2864,7 +2921,9 @@ export function ChatScreen({
       stopAssistantPoll();
     }
   }, [
+    cancelInactiveChatTransport,
     isForeground,
+    isVisible,
     loading,
     scheduleAssistantPoll,
     scheduleSseRecoveryWatch,
@@ -3876,10 +3935,7 @@ export function ChatScreen({
     activeAgentIdRef.current = normalized;
     setActiveAgentId(normalized);
     window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), normalized);
-    streamBatcher.flush();
-    assistantSendVersionRef.current += 1;
-    stopAssistantPoll();
-    stopSseRecoveryWatch();
+    cancelInactiveChatTransport();
     loadingRef.current = true;
     setLoading(true);
     setError("");
@@ -3935,7 +3991,7 @@ export function ChatScreen({
         loadingRef.current = false;
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, client, restoreClusterRunFromOverview, setQueuedMessageState, stopAssistantPoll, stopSseRecoveryWatch, storageScope]);
+  }, [applyHistoryView, botAlias, cancelInactiveChatTransport, client, restoreClusterRunFromOverview, setQueuedMessageState, storageScope]);
 
   useEffect(() => {
     if (botOverview?.cluster?.enabled === false) {
@@ -4777,11 +4833,7 @@ export function ChatScreen({
     activeAgentIdRef.current = nextAgentId;
     setActiveAgentId(nextAgentId);
     window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
-    streamBatcher.flush();
-    assistantSendVersionRef.current += 1;
-    stopAssistantPoll();
-    stopSseRecoveryWatch();
-    stopClusterTaskPoll();
+    cancelInactiveChatTransport();
     loadingRef.current = true;
     setLoading(true);
     setError("");
@@ -4792,10 +4844,6 @@ export function ChatScreen({
     setPendingAttachments([]);
     setQueuedMessage(null);
     queuedMessageRef.current = null;
-    setClusterRunId("");
-    setClusterTaskStatus(null);
-    setClusterTaskError("");
-    clusterRunIdRef.current = "";
     isStreamingRef.current = false;
     streamModeRef.current = "";
     setIsStreaming(false);
@@ -4853,12 +4901,10 @@ export function ChatScreen({
     historyPanelOpen,
     loadFavorites,
     loadConversations,
+    cancelInactiveChatTransport,
     restoreClusterRunFromOverview,
     setExecutionMode,
     setPlanMode,
-    stopAssistantPoll,
-    stopClusterTaskPoll,
-    stopSseRecoveryWatch,
     storageScope,
   ]);
 

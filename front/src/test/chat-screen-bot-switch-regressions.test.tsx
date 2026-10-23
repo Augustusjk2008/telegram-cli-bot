@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -124,6 +125,48 @@ test("restarts initial history loading after a hidden cached bot cancels the fir
   });
   expect(await screen.findByText("重新加载历史")).toBeInTheDocument();
   expect(screen.queryByText("加载中...")).not.toBeInTheDocument();
+});
+
+test.each([
+  ["页面隐藏", (rerender: (ui: ReactElement) => void, client: WebBotClient) => {
+    rerender(<ChatScreen botAlias="main" client={client} isVisible={false} />);
+  }],
+  ["Bot 作用域切换", (rerender: (ui: ReactElement) => void, client: WebBotClient) => {
+    rerender(<ChatScreen botAlias="secondary" client={client} isVisible />);
+  }],
+])("释放旧 ChatScreen 的活动 SSE：%s", async (_label, applyScopeChange) => {
+  const pending = createDeferred<ChatMessage>();
+  let signal: AbortSignal | undefined;
+  const client = createClient({
+    getBotOverview: vi.fn().mockResolvedValue(createOverview()),
+    listMessages: vi.fn().mockResolvedValue({ items: [] }),
+    sendMessage: vi.fn<WebBotClient["sendMessage"]>(async (_botAlias, _text, _onChunk, _onStatus, _onTrace, options) => {
+      signal = options?.signal;
+      return pending.promise;
+    }),
+  });
+
+  const { rerender } = render(<ChatScreen botAlias="main" client={client} isVisible />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "正在执行的消息" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(signal).toBeInstanceOf(AbortSignal));
+  expect(signal?.aborted).toBe(false);
+
+  applyScopeChange(rerender, client);
+  expect(signal?.aborted).toBe(true);
+
+  pending.resolve({
+    id: "stale-assistant",
+    role: "assistant",
+    text: "过期回答",
+    createdAt: "2026-10-23T00:00:00Z",
+    state: "done",
+  });
+  await act(async () => {
+    await pending.promise;
+  });
+  expect(screen.queryByText("过期回答")).not.toBeInTheDocument();
 });
 
 test("defers auxiliary data for hidden chats and reuses it across visibility changes", async () => {
