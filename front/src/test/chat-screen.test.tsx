@@ -81,6 +81,7 @@ test.each([true, false])("renders user Markdown, math and diagrams (current user
 });
 
 test("retries Continue after an error in endless mode", async () => {
+  const secondAttempt = deferred<ChatMessage>();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>()
     .mockResolvedValueOnce({
       id: "assistant-endless-error",
@@ -89,20 +90,14 @@ test("retries Continue after an error in endless mode", async () => {
       createdAt: "2026-10-23T00:00:01Z",
       state: "error",
     })
-    .mockResolvedValueOnce({
-      id: "assistant-endless-done",
-      role: "assistant",
-      text: "完成",
-      createdAt: "2026-10-23T00:00:04Z",
-      state: "done",
-    });
+    .mockImplementationOnce(async () => secondAttempt.promise);
   const client = createClient({
     listMessages: async () => ({ items: [{
       id: "assistant-existing",
       role: "assistant",
       text: "上一轮回答",
       createdAt: "2026-10-22T00:00:00Z",
-      state: "done",
+      state: "error",
     }] }),
     sendMessage,
   });
@@ -125,8 +120,74 @@ test("retries Continue after an error in endless mode", async () => {
 
   await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 5000 });
   expect(sendMessage.mock.calls[1][1]).toBe("Continue");
+  expect(screen.getByRole("button", { name: /自动继续 1 次/ })).toBeInTheDocument();
+
+  await act(async () => {
+    secondAttempt.resolve({
+      id: "assistant-endless-done",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-10-23T00:00:04Z",
+      state: "done",
+    });
+    await Promise.resolve();
+  });
   expect(await screen.findByText("完成")).toBeInTheDocument();
   expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+});
+
+test("does not show endless mode after a normal answer", async () => {
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "assistant-normal",
+      role: "assistant",
+      text: "正常完成的回答",
+      createdAt: "2026-10-22T00:00:00Z",
+      state: "done",
+    }] }),
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByText("正常完成的回答")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "无尽模式" })).not.toBeInTheDocument();
+});
+
+test("stopping endless mode terminates the active continuation", async () => {
+  const activeAttempt = deferred<ChatMessage>();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => activeAttempt.promise);
+  const killTask = vi.fn<WebBotClient["killTask"]>(async () => "已发送终止任务请求");
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "assistant-endless-active",
+      role: "assistant",
+      text: "上一轮回答",
+      createdAt: "2026-10-22T00:00:00Z",
+      state: "error",
+    }] }),
+    sendMessage,
+    killTask,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("button", { name: "无尽模式" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "无尽模式" }));
+  expect(await screen.findByRole("dialog", { name: "确认开启无尽模式" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  fireEvent.click(screen.getByTestId("endless-mode-status"));
+  await waitFor(() => expect(killTask).toHaveBeenCalledTimes(1));
+  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+
+  activeAttempt.resolve({
+    id: "assistant-endless-stopped",
+    role: "assistant",
+    text: "已停止",
+    createdAt: "2026-10-23T00:00:02Z",
+    state: "done",
+  });
 });
 
 test("shows the voice bar only for an enabled codex_server CLI scope", async () => {

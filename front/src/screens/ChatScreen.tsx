@@ -20,7 +20,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCheck, Copy, FastForward, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
@@ -1506,6 +1506,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
   const canFavoriteFinalAnswer = item.role === "assistant" && item.state === "done" && Boolean(item.text.trim());
+  const canStartEndlessMode = canContinue && item.state === "error";
   const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
     trace,
     agUiState: agUiRunState,
@@ -1575,7 +1576,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
-                onFastForward={canContinue ? onFastForward : undefined}
+                onFastForward={canStartEndlessMode ? onFastForward : undefined}
                 onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 favorite={favorite}
                 canContinue={canContinue}
@@ -1679,7 +1680,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             favorite={favorite}
             fullAnswerText={displayText}
             onContinue={canContinue ? onContinueFinalAnswer : undefined}
-            onFastForward={canContinue ? onFastForward : undefined}
+            onFastForward={canStartEndlessMode ? onFastForward : undefined}
             onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
             onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
           />
@@ -1881,6 +1882,7 @@ export function ChatScreen({
   const [error, setError] = useState("");
   const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
   const [endlessModeActive, setEndlessModeActive] = useState(false);
+  const [endlessAutoContinueCount, setEndlessAutoContinueCount] = useState(0);
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
@@ -2124,7 +2126,12 @@ export function ChatScreen({
         scheduleEndlessContinue();
         return;
       }
-      endlessContinueSenderRef.current?.();
+      const sender = endlessContinueSenderRef.current;
+      if (!sender) {
+        return;
+      }
+      setEndlessAutoContinueCount((current) => current + 1);
+      sender();
     }, ENDLESS_CONTINUE_DELAY_MS);
   }, []);
 
@@ -4788,6 +4795,7 @@ export function ChatScreen({
     setEndlessModeConfirmOpen(false);
     endlessModeRef.current = true;
     endlessAttemptRef.current = true;
+    setEndlessAutoContinueCount(0);
     setEndlessModeActive(true);
     handleContinueFinalAnswer();
   }, [handleContinueFinalAnswer]);
@@ -4811,6 +4819,9 @@ export function ChatScreen({
 
   async function handleKillTask() {
     stopEndlessMode();
+    if (!isStreamingRef.current) {
+      return;
+    }
     streamBatcher.flush();
     setActionLoading("kill");
     setError("");
@@ -5062,7 +5073,7 @@ export function ChatScreen({
     });
   }, [botAlias, client]);
 
-  const terminateVisible = isStreaming || actionLoading === "kill";
+  const terminateVisible = isStreaming || endlessModeActive || actionLoading === "kill";
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const rawSupportedExecutionModes = getSupportedExecutionModes(botOverview);
   const forcedNativeSupported = forcedExecutionMode === "native_agent"
@@ -5096,7 +5107,7 @@ export function ChatScreen({
   const chatDisabledReason = nativePermissionPending
     ? "等待权限处理"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
-  const killTaskDisabled = readOnly || !isStreaming || actionLoading === "kill";
+  const killTaskDisabled = readOnly || (!isStreaming && !endlessModeActive) || actionLoading === "kill";
   const voiceEnabled = botOverview?.alias === botAlias
     && botOverview?.cliType === "codex_server"
     && effectiveExecutionMode === "cli"
@@ -5548,17 +5559,28 @@ export function ChatScreen({
         onTouchCancel={clearUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
         className={isImmersive
-          ? `flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
-          : `flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
+          ? `relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
+          : `relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
       >
+        {endlessModeActive ? (
+          <div className="pointer-events-none absolute right-3 top-2 z-20">
+            <button
+              type="button"
+              data-testid="endless-mode-status"
+              aria-live="polite"
+              aria-label={`无尽模式运行中，回答出错后已自动继续 ${endlessAutoContinueCount} 次，点击停止`}
+              title={`无尽模式运行中 · 回答出错后已自动继续 ${endlessAutoContinueCount} 次 · 点击停止`}
+              onClick={() => void handleKillTask()}
+              className="pointer-events-auto inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-1.5 text-[11px] font-medium text-[var(--accent)] shadow-[var(--shadow-surface)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+            >
+              <FastForward aria-hidden="true" className="h-3.5 w-3.5 animate-pulse" />
+              <span aria-hidden="true">×{endlessAutoContinueCount}</span>
+            </button>
+          </div>
+        ) : null}
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
-          ) : null}
-          {endlessModeActive ? (
-            <div data-testid="endless-mode-status" role="status" className="mb-2 rounded-lg border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-3 py-2 text-xs text-[var(--accent)]">
-              无尽模式运行中：回答出错时会在 2 秒后自动继续
-            </div>
           ) : null}
           {error ? (
             <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
