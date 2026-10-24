@@ -281,12 +281,49 @@ describe("全局主题管理", () => {
           scheme: "dark",
           overrides: { [colorToken.key]: "#223344FF" },
         },
+        typography: {
+          chatBodyFontFamily: "sans",
+          chatBodyFontSize: "medium",
+          chatBodyLineHeight: "normal",
+          chatBodyParagraphSpacing: "normal",
+        },
       },
       activate: true,
     });
     expect(api.selectTheme).not.toHaveBeenCalled();
     expect(api.updateTheme).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "已应用" })).toBeDisabled();
+  });
+
+  it("saves chat reading settings inside the theme appearance", async () => {
+    render(<ThemeManagerScreen />);
+    fireEvent.change(screen.getByLabelText("聊天正文字体"), {
+      target: { value: "serif" },
+    });
+    fireEvent.change(screen.getByLabelText("聊天行间距"), {
+      target: { value: "relaxed" },
+    });
+    fireEvent.change(screen.getByLabelText("聊天正文字号"), {
+      target: { value: "large" },
+    });
+    fireEvent.change(screen.getByLabelText("聊天段间距"), {
+      target: { value: "tight" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("主题已保存。");
+    expect(api.updateTheme).toHaveBeenLastCalledWith(
+      "theme_personal",
+      expect.objectContaining({
+        appearance: expect.objectContaining({
+          typography: {
+            chatBodyFontFamily: "serif",
+            chatBodyFontSize: "large",
+            chatBodyLineHeight: "relaxed",
+            chatBodyParagraphSpacing: "tight",
+          },
+        }),
+      }),
+    );
   });
 
   it("updates an existing theme with activate, while ordinary save keeps the current selection", async () => {

@@ -71,6 +71,21 @@ def test_global_crud_copy_normalization_and_selection_persist(store):
     assert stored["themes"] == []
 
 
+def test_chat_typography_is_stored_with_the_theme(store):
+    typography = {
+        "chatBodyFontFamily": "serif",
+        "chatBodyFontSize": "large",
+        "chatBodyLineHeight": "relaxed",
+        "chatBodyParagraphSpacing": "tight",
+    }
+    library = store.create(create_input(appearance={
+        "colors": {"scheme": "light", "overrides": {}},
+        "typography": typography,
+    }))
+    assert library["themes"][1]["appearance"]["typography"] == typography
+    assert ThemeStore(store.library_path).list_library()["themes"][1]["appearance"]["typography"] == typography
+
+
 def test_library_results_are_detached(store):
     library = store.create(create_input())
     library["themes"][1]["name"] = "外部修改"
@@ -94,6 +109,13 @@ def test_library_results_are_detached(store):
     {"appearance": {"colors": {"scheme": "light", "overrides": {"surface.base": "#FFF; color:red"}}}},
     {"appearance": {"colors": {"scheme": "light", "overrides": {"surface.base": "#FFFFFF00"}}}},
     {"appearance": {"colors": {"scheme": "light", "overrides": {"surface.base": "#FFFFF"}}}},
+    {"appearance": {"colors": {"scheme": "light", "overrides": {}}, "typography": {
+        "chatBodyFontFamily": "serif", "chatBodyFontSize": "medium", "chatBodyLineHeight": "normal",
+    }}},
+    {"appearance": {"colors": {"scheme": "light", "overrides": {}}, "typography": {
+        "chatBodyFontFamily": "serif", "chatBodyFontSize": "medium", "chatBodyLineHeight": "normal",
+        "chatBodyParagraphSpacing": "normal", "future": "value",
+    }}},
 ])
 def test_invalid_inputs_never_write(store, changes):
     with pytest.raises(ThemeStoreError) as exc:

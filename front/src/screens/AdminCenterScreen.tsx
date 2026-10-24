@@ -38,10 +38,6 @@ import type {
   TunnelSnapshot,
 } from "../services/types";
 import type {
-  ChatBodyFontFamilyName,
-  ChatBodyFontSizeName,
-  ChatBodyLineHeightName,
-  ChatBodyParagraphSpacingName,
   UiThemeName,
 } from "../theme";
 import type { WebBotClient } from "../services/webBotClient";
@@ -61,14 +57,6 @@ type Props = {
   currentBotAlias?: string | null;
   themeName?: UiThemeName;
   onThemeChange?: (themeName: UiThemeName) => void | Promise<void>;
-  chatBodyFontFamily?: ChatBodyFontFamilyName;
-  onChatBodyFontFamilyChange?: (value: ChatBodyFontFamilyName) => void;
-  chatBodyFontSize?: ChatBodyFontSizeName;
-  onChatBodyFontSizeChange?: (value: ChatBodyFontSizeName) => void;
-  chatBodyLineHeight?: ChatBodyLineHeightName;
-  onChatBodyLineHeightChange?: (value: ChatBodyLineHeightName) => void;
-  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
-  onChatBodyParagraphSpacingChange?: (value: ChatBodyParagraphSpacingName) => void;
   chatEnterToSend?: boolean;
   onChatEnterToSendChange?: (value: boolean) => void;
 };
@@ -435,14 +423,6 @@ export function AdminCenterScreen({
   currentBotAlias,
   themeName,
   onThemeChange,
-  chatBodyFontFamily,
-  onChatBodyFontFamilyChange,
-  chatBodyFontSize,
-  onChatBodyFontSizeChange,
-  chatBodyLineHeight,
-  onChatBodyLineHeightChange,
-  chatBodyParagraphSpacing,
-  onChatBodyParagraphSpacingChange,
   chatEnterToSend,
   onChatEnterToSendChange,
 }: Props) {
@@ -1667,14 +1647,6 @@ export function AdminCenterScreen({
               canManage={canManageEnvConfig}
               themeName={themeName}
               onThemeChange={onThemeChange}
-              chatBodyFontFamily={chatBodyFontFamily}
-              onChatBodyFontFamilyChange={onChatBodyFontFamilyChange}
-              chatBodyFontSize={chatBodyFontSize}
-              onChatBodyFontSizeChange={onChatBodyFontSizeChange}
-              chatBodyLineHeight={chatBodyLineHeight}
-              onChatBodyLineHeightChange={onChatBodyLineHeightChange}
-              chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-              onChatBodyParagraphSpacingChange={onChatBodyParagraphSpacingChange}
               chatEnterToSend={chatEnterToSend}
               onChatEnterToSendChange={onChatEnterToSendChange}
             />

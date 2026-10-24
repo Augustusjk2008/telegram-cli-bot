@@ -1,5 +1,11 @@
 import catalog from "../../../bot/web/theme_catalog.json";
 import type { ColorToken, UiTheme, ResolvedAppearance, ThemeLibrary } from "./types";
+import {
+  chatTypographyCssVariables,
+  DEFAULT_CHAT_TYPOGRAPHY,
+  isChatTypography,
+  normalizeChatTypography,
+} from "./chatTypography";
 import { PAPER_MOTION, PAPER_STYLE } from "./types";
 
 export const THEME_TOKENS = catalog.tokens as ColorToken[];
@@ -8,7 +14,7 @@ export const BUILTIN_THEME: UiTheme = {
   id: "paper-daylight",
   name: "纸感日间",
   baseId: "paper-daylight",
-  appearance: { colors: { scheme: "light", overrides: {} } },
+  appearance: { colors: { scheme: "light", overrides: {} }, typography: DEFAULT_CHAT_TYPOGRAPHY },
   readonly: true,
   updatedAt: "",
   version: 1,
@@ -31,11 +37,12 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   const colors: Record<string, string> = {};
   const cssVariables: Record<string, string> = {};
   const tokens = new Map(THEME_TOKENS.map((token) => [token.key, token]));
-  if (!theme.appearance || Object.keys(theme.appearance).some((key) => key !== "colors")
+  if (!theme.appearance || Object.keys(theme.appearance).some((key) => key !== "colors" && key !== "typography")
     || !theme.appearance.colors || !["light", "dark"].includes(theme.appearance.colors.scheme)
     || Object.keys(theme.appearance.colors).some((key) => key !== "scheme" && key !== "overrides")
     || !theme.appearance.colors.overrides || typeof theme.appearance.colors.overrides !== "object"
-    || Array.isArray(theme.appearance.colors.overrides)) throw new Error("此主题包含尚不支持的外观配置");
+    || Array.isArray(theme.appearance.colors.overrides)
+    || (theme.appearance.typography !== undefined && !isChatTypography(theme.appearance.typography))) throw new Error("此主题包含尚不支持的外观配置");
   for (const [key, value] of Object.entries(theme.appearance.colors.overrides)) {
     const token = tokens.get(key);
     if (!token || typeof value !== "string" || !normalizeColor(value, token.allowAlpha)) throw new Error(`主题颜色无效：${key}`);
@@ -61,9 +68,11 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
     const value = resolve(token.key);
     if (token.cssVariable) cssVariables[token.cssVariable] = value;
   }
+  const typography = normalizeChatTypography(theme.appearance.typography);
+  Object.assign(cssVariables, chatTypographyCssVariables(typography));
   // Identity alone cannot detect editing the selected theme in place.
-  const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors]);
-  return { themeId: theme.id, scheme: theme.appearance.colors.scheme, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, revision };
+  const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography]);
+  return { themeId: theme.id, scheme: theme.appearance.colors.scheme, typography, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, revision };
 }
 
 function channels(color: string) {

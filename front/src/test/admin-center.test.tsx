@@ -35,7 +35,7 @@ test("全局配置集中显示通用显示、通知和全局提示词预设", as
   expect(screen.getByLabelText("界面主题")).toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "主题管理" })).not.toBeInTheDocument();
   expect(screen.getAllByText(/影响所有智能体/).length).toBeGreaterThan(0);
-  expect(screen.getByLabelText("聊天正文字体")).toBeInTheDocument();
+  expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
   expect(screen.getByLabelText("聊天完成网页通知")).toBeInTheDocument();
   expect(await screen.findByRole("heading", { name: "全局提示词预设" })).toBeInTheDocument();
 

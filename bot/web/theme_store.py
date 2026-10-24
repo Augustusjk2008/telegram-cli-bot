@@ -19,6 +19,18 @@ from bot.runtime_paths import get_theme_library_path
 BUILTIN_THEME_ID = "paper-daylight"
 _THEME_ID = re.compile(r"theme_[0-9a-f]{32}\Z")
 _HEX_COLOR = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\Z")
+_CHAT_TYPOGRAPHY_DEFAULTS = {
+    "chatBodyFontFamily": "sans",
+    "chatBodyFontSize": "medium",
+    "chatBodyLineHeight": "normal",
+    "chatBodyParagraphSpacing": "normal",
+}
+_CHAT_TYPOGRAPHY_VALUES = {
+    "chatBodyFontFamily": {"sans", "serif", "kai", "fangsong", "mono"},
+    "chatBodyFontSize": {"small", "medium", "large"},
+    "chatBodyLineHeight": {"tight", "normal", "relaxed"},
+    "chatBodyParagraphSpacing": {"tight", "normal", "relaxed"},
+}
 # All store instances in the host share the read/modify/replace boundary.
 _STORE_LOCK = threading.RLock()
 
@@ -76,7 +88,10 @@ def builtin_library() -> dict[str, Any]:
             "id": BUILTIN_THEME_ID,
             "name": "纸感日间",
             "baseId": BUILTIN_THEME_ID,
-            "appearance": {"colors": {"scheme": "light", "overrides": {}}},
+            "appearance": {
+                "colors": {"scheme": "light", "overrides": {}},
+                "typography": dict(_CHAT_TYPOGRAPHY_DEFAULTS),
+            },
             "readonly": True,
             "updatedAt": "1970-01-01T00:00:00Z",
             "version": 1,
@@ -112,7 +127,7 @@ class ThemeStore:
             raise ThemeStoreError(500, "theme_catalog_unavailable", "主题颜色目录无法读取，请检查应用安装文件") from exc
 
     def _appearance(self, value: Any) -> dict[str, Any]:
-        appearance = _object(value, {"colors"}, {"colors"}, "appearance")
+        appearance = _object(value, {"colors", "typography"}, {"colors"}, "appearance")
         colors = _object(appearance["colors"], {"scheme", "overrides"}, {"scheme", "overrides"}, "colors")
         if colors["scheme"] not in ("light", "dark"):
             _invalid("配色模式必须是 light 或 dark")
@@ -135,7 +150,19 @@ class ThemeStore:
             if not tokens[key]["allowAlpha"] and color[-2:] != "FF":
                 _invalid(f"{key} 不支持透明度")
             normalized[key] = color
-        return {"colors": {"scheme": colors["scheme"], "overrides": normalized}}
+        result = {"colors": {"scheme": colors["scheme"], "overrides": normalized}}
+        if "typography" in appearance:
+            typography = _object(
+                appearance["typography"],
+                set(_CHAT_TYPOGRAPHY_DEFAULTS),
+                set(_CHAT_TYPOGRAPHY_DEFAULTS),
+                "typography",
+            )
+            for key, choices in _CHAT_TYPOGRAPHY_VALUES.items():
+                if typography[key] not in choices:
+                    _invalid(f"{key} 包含不支持的值")
+            result["typography"] = {key: typography[key] for key in _CHAT_TYPOGRAPHY_DEFAULTS}
+        return result
 
     def _read_file(self, path: Path, *, legacy: bool = False) -> dict[str, Any] | None:
         try:

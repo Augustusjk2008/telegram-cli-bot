@@ -1,6 +1,7 @@
 import { isCodexCli } from "../utils/cliType";
 import themeCatalog from "../../../bot/web/theme_catalog.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
+import { DEFAULT_CHAT_TYPOGRAPHY, isChatTypography, normalizeChatTypography } from "../theme/chatTypography";
 import { GIT_CAPABILITY_NAMES, GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
 import type {
   UiTheme,
@@ -3312,7 +3313,7 @@ export class MockWebBotClient implements WebBotClient {
       selectedThemeId: "paper-daylight",
       themes: [{
         schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight",
-        appearance: { colors: { scheme: "light", overrides: {} } }, readonly: true,
+        appearance: { colors: { scheme: "light", overrides: {} }, typography: DEFAULT_CHAT_TYPOGRAPHY }, readonly: true,
         updatedAt: "1970-01-01T00:00:00Z", version: 1,
       }],
     };
@@ -3332,7 +3333,13 @@ export class MockWebBotClient implements WebBotClient {
     if (library.scope !== "global" || library.schemaVersion !== 1) {
       throw new WebApiClientError("全局主题库格式不受支持", { status: 400, code: "unsupported_theme_schema" });
     }
-    return structuredClone(library);
+    return structuredClone({
+      ...library,
+      themes: library.themes.map((theme) => ({
+        ...theme,
+        appearance: this.uiThemeAppearance(theme.appearance),
+      })),
+    });
   }
 
   private mutateUiThemes(expectedRevision: number, change: (library: ThemeLibrary) => void): ThemeLibrary {
@@ -3383,7 +3390,7 @@ export class MockWebBotClient implements WebBotClient {
 
   private uiThemeAppearance(appearance: ThemeAppearance): ThemeAppearance {
     const invalid = () => new WebApiClientError("主题配色包含不支持的字段、颜色或透明度", { status: 400, code: "invalid_theme" });
-    if (!appearance || Object.keys(appearance).some((key) => key !== "colors") || !appearance.colors) throw invalid();
+    if (!appearance || Object.keys(appearance).some((key) => key !== "colors" && key !== "typography") || !appearance.colors) throw invalid();
     const { colors } = appearance;
     if (Object.keys(colors).some((key) => key !== "scheme" && key !== "overrides")
       || !["light", "dark"].includes(colors.scheme) || !colors.overrides
@@ -3398,7 +3405,11 @@ export class MockWebBotClient implements WebBotClient {
       if (!token.allowAlpha && hex.slice(-2) !== "FF") throw invalid();
       overrides[key] = `#${hex}`;
     }
-    return { colors: { scheme: colors.scheme, overrides } };
+    if (appearance.typography !== undefined && !isChatTypography(appearance.typography)) throw invalid();
+    return {
+      colors: { scheme: colors.scheme, overrides },
+      typography: normalizeChatTypography(appearance.typography || DEFAULT_CHAT_TYPOGRAPHY),
+    };
   }
 
   async listPublicUiThemes(): Promise<ThemeLibrary> {

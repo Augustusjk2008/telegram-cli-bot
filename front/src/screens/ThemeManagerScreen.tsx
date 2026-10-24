@@ -15,7 +15,14 @@ import {
   normalizeColor,
   resolveAppearance,
 } from "../theme/resolveAppearance";
-import type { UiTheme, ThemeLibrary } from "../theme/types";
+import {
+  CHAT_BODY_FONT_FAMILY_OPTIONS,
+  CHAT_BODY_FONT_SIZE_OPTIONS,
+  CHAT_BODY_LINE_HEIGHT_OPTIONS,
+  CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
+  normalizeChatTypography,
+} from "../theme/chatTypography";
+import type { ChatTypography, UiTheme, ThemeLibrary } from "../theme/types";
 import "../styles/theme-manager.css";
 
 type Draft = {
@@ -44,10 +51,12 @@ function draftFrom(theme: UiTheme, revision: number): Draft {
     theme: {
       ...theme,
       appearance: {
+        ...theme.appearance,
         colors: {
           ...theme.appearance.colors,
           overrides: { ...theme.appearance.colors.overrides },
         },
+        typography: normalizeChatTypography(theme.appearance.typography),
       },
     },
     inputs: {},
@@ -61,6 +70,7 @@ function editableValue(theme: UiTheme) {
     Object.entries(theme.appearance.colors.overrides).sort(([a], [b]) =>
       a.localeCompare(b),
     ),
+    normalizeChatTypography(theme.appearance.typography),
   ]);
 }
 
@@ -365,6 +375,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     invalidTokens.length > 0;
   const editable = canManage && !draft.theme.readonly;
   const valid = Boolean(draft.theme.name.trim()) && invalidTokens.length === 0;
+  const typography = normalizeChatTypography(draft.theme.appearance.typography);
   const visibleTokens = THEME_TOKENS.filter(
     (token) =>
       (!group || token.group === group) &&
@@ -525,6 +536,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         ? {
             ...current.theme,
             appearance: {
+              ...current.theme.appearance,
               colors: {
                 ...current.theme.appearance.colors,
                 overrides: {
@@ -551,11 +563,30 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         theme: {
           ...current.theme,
           appearance: {
+            ...current.theme.appearance,
             colors: { ...current.theme.appearance.colors, overrides },
           },
         },
       };
     });
+  }
+
+  function changeTypography<Key extends keyof ChatTypography>(key: Key, value: ChatTypography[Key]) {
+    if (!editable || busy) return;
+    setNotice("");
+    setDraft((current) => ({
+      ...current,
+      theme: {
+        ...current.theme,
+        appearance: {
+          ...current.theme.appearance,
+          typography: {
+            ...normalizeChatTypography(current.theme.appearance.typography),
+            [key]: value,
+          },
+        },
+      },
+    }));
   }
 
   async function save(activate: boolean) {
@@ -730,7 +761,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         {(
           [
             ["themes", "主题列表"],
-            ["editor", "分组调色"],
+            ["editor", "主题编辑"],
             ["preview", "局部预览"],
           ] as const
         ).map(([id, label]) => (
@@ -834,7 +865,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         <section
           className="theme-manager-editor"
           data-pane="editor"
-          aria-label="分组调色"
+          aria-label="主题编辑"
         >
           <div className="theme-manager-panel-title">
             <h2>{draft.sourceId ? "新主题" : "编辑主题"}</h2>
@@ -904,6 +935,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                     theme: {
                       ...draft.theme,
                       appearance: {
+                        ...draft.theme.appearance,
                         colors: {
                           ...draft.theme.appearance.colors,
                           scheme: event.target.value as "light" | "dark",
@@ -917,6 +949,45 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                 <option value="dark">深色</option>
               </select>
               <small>用于浏览器控件、编辑器和终端适配；颜色可逐项调整。</small>
+              <div className="theme-manager-typography">
+                <strong>聊天正文</strong>
+                <label htmlFor={`${inputId}-chat-font-family`}>聊天正文字体</label>
+                <select
+                  id={`${inputId}-chat-font-family`}
+                  aria-label="聊天正文字体"
+                  value={typography.chatBodyFontFamily}
+                  onChange={(event) => changeTypography("chatBodyFontFamily", event.target.value as ChatTypography["chatBodyFontFamily"])}
+                >
+                  {CHAT_BODY_FONT_FAMILY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <label htmlFor={`${inputId}-chat-line-height`}>聊天行间距</label>
+                <select
+                  id={`${inputId}-chat-line-height`}
+                  aria-label="聊天行间距"
+                  value={typography.chatBodyLineHeight}
+                  onChange={(event) => changeTypography("chatBodyLineHeight", event.target.value as ChatTypography["chatBodyLineHeight"])}
+                >
+                  {CHAT_BODY_LINE_HEIGHT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <label htmlFor={`${inputId}-chat-font-size`}>聊天正文字号</label>
+                <select
+                  id={`${inputId}-chat-font-size`}
+                  aria-label="聊天正文字号"
+                  value={typography.chatBodyFontSize}
+                  onChange={(event) => changeTypography("chatBodyFontSize", event.target.value as ChatTypography["chatBodyFontSize"])}
+                >
+                  {CHAT_BODY_FONT_SIZE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <label htmlFor={`${inputId}-chat-paragraph-spacing`}>聊天段间距</label>
+                <select
+                  id={`${inputId}-chat-paragraph-spacing`}
+                  aria-label="聊天段间距"
+                  value={typography.chatBodyParagraphSpacing}
+                  onChange={(event) => changeTypography("chatBodyParagraphSpacing", event.target.value as ChatTypography["chatBodyParagraphSpacing"])}
+                >
+                  {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
             </div>
           </fieldset>
           <div className="theme-manager-filters">
@@ -955,6 +1026,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                   theme: {
                     ...draft.theme,
                     appearance: {
+                      ...draft.theme.appearance,
                       colors: {
                         scheme: BUILTIN_THEME.appearance.colors.scheme,
                         overrides: {},
@@ -1105,7 +1177,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             <span>{preview.scheme === "dark" ? "深色" : "浅色"}</span>
           </div>
           <p className="theme-manager-hint">
-            调色仅作用于下方示例，保存并应用后更新工作台。
+            编辑仅作用于下方示例，保存并应用后更新工作台。
           </p>
           <ThemePreview appearance={preview} />
           <details
@@ -1144,7 +1216,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               ? "请填写主题名称。"
               : dirty
                 ? "草稿尚未保存"
-                : "配色已保存"}
+                : "主题设置已保存"}
         </div>
         <div className="theme-manager-footer-actions">
           <button

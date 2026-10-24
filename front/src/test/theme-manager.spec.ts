@@ -91,7 +91,7 @@ for (const [width, height] of [[1600, 1000], [1280, 900], [390, 844], [360, 800]
     await expect(page.locator("html")).toHaveAttribute("data-theme", "theme_fixture_1");
     await expect(page.locator("html")).toHaveCSS("--surface", "#E7EEF4FF");
     await page.screenshot({ path: test.info().outputPath(`theme-light-${width}.png`) });
-    if (width < 768) await manager.getByRole("button", { name: "分组调色", exact: true }).click();
+    if (width < 768) await manager.getByRole("button", { name: "主题编辑", exact: true }).click();
     await manager.getByLabel("基础表面 HEX", { exact: true }).fill("#FFFFFF");
     await manager.getByRole("button", { name: "取消", exact: true }).click();
     await manager.getByRole("button", { name: "放弃更改", exact: true }).click();

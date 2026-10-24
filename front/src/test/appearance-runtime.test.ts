@@ -53,6 +53,26 @@ describe("resolved theme colors", () => {
     expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#654321FF");
   });
 
+  it("applies chat reading settings from the selected theme", () => {
+    const theme = {
+      ...custom(),
+      appearance: {
+        colors: { scheme: "dark" as const, overrides: {} },
+        typography: {
+          chatBodyFontFamily: "serif" as const,
+          chatBodyFontSize: "large" as const,
+          chatBodyLineHeight: "tight" as const,
+          chatBodyParagraphSpacing: "relaxed" as const,
+        },
+      },
+    };
+    applyResolvedAppearance(resolveAppearance(theme));
+    expect(document.documentElement.style.getPropertyValue("--chat-body-font-family")).toContain("SimSun");
+    expect(document.documentElement.style.getPropertyValue("--chat-body-font-size")).toBe("17px");
+    expect(document.documentElement.style.getPropertyValue("--chat-body-line-height")).toBe("1.65");
+    expect(document.documentElement.style.getPropertyValue("--chat-body-paragraph-spacing")).toBe("1.1em");
+  });
+
   it("composites translucent foregrounds for contrast hints", () => {
     expect(contrastRatio("#000000", "#FFFFFF")).toBe(21);
     expect(contrastRatio("#00000000", "#FFFFFF")).toBe(1);

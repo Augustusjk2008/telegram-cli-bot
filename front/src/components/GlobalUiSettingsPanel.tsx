@@ -1,22 +1,7 @@
 import { Bell } from "lucide-react";
 import { useState } from "react";
 import { ThemeDropdown } from "./ThemeDropdown";
-import {
-  CHAT_BODY_FONT_FAMILY_OPTIONS,
-  CHAT_BODY_FONT_SIZE_OPTIONS,
-  CHAT_BODY_LINE_HEIGHT_OPTIONS,
-  CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
-  DEFAULT_CHAT_BODY_FONT_FAMILY,
-  DEFAULT_CHAT_BODY_FONT_SIZE,
-  DEFAULT_CHAT_BODY_LINE_HEIGHT,
-  DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
-  DEFAULT_UI_THEME,
-  type ChatBodyFontFamilyName,
-  type ChatBodyFontSizeName,
-  type ChatBodyLineHeightName,
-  type ChatBodyParagraphSpacingName,
-  type UiThemeName,
-} from "../theme";
+import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import {
   getBrowserNotificationPermission,
   readChatCompletionWebNotificationEnabled,
@@ -29,14 +14,6 @@ type Props = {
   canManage?: boolean;
   themeName?: UiThemeName;
   onThemeChange?: (themeName: UiThemeName) => void | Promise<void>;
-  chatBodyFontFamily?: ChatBodyFontFamilyName;
-  onChatBodyFontFamilyChange?: (value: ChatBodyFontFamilyName) => void;
-  chatBodyFontSize?: ChatBodyFontSizeName;
-  onChatBodyFontSizeChange?: (value: ChatBodyFontSizeName) => void;
-  chatBodyLineHeight?: ChatBodyLineHeightName;
-  onChatBodyLineHeightChange?: (value: ChatBodyLineHeightName) => void;
-  chatBodyParagraphSpacing?: ChatBodyParagraphSpacingName;
-  onChatBodyParagraphSpacingChange?: (value: ChatBodyParagraphSpacingName) => void;
   chatEnterToSend?: boolean;
   onChatEnterToSendChange?: (value: boolean) => void;
 };
@@ -52,14 +29,6 @@ export function GlobalUiSettingsPanel({
   canManage = true,
   themeName = DEFAULT_UI_THEME,
   onThemeChange,
-  chatBodyFontFamily = DEFAULT_CHAT_BODY_FONT_FAMILY,
-  onChatBodyFontFamilyChange,
-  chatBodyFontSize = DEFAULT_CHAT_BODY_FONT_SIZE,
-  onChatBodyFontSizeChange,
-  chatBodyLineHeight = DEFAULT_CHAT_BODY_LINE_HEIGHT,
-  onChatBodyLineHeightChange,
-  chatBodyParagraphSpacing = DEFAULT_CHAT_BODY_PARAGRAPH_SPACING,
-  onChatBodyParagraphSpacingChange,
   chatEnterToSend = true,
   onChatEnterToSendChange,
 }: Props) {
@@ -93,8 +62,6 @@ export function GlobalUiSettingsPanel({
     }
   }
 
-  const selectClass = "w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60";
-
   return (
     <section aria-labelledby="global-ui-settings-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
       <div>
@@ -103,32 +70,6 @@ export function GlobalUiSettingsPanel({
       </div>
       <fieldset disabled={!canManage} className="space-y-3">
         <ThemeDropdown value={themeName} onChange={(value) => void changeTheme(value)} />
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="space-y-2">
-            <span className="text-sm font-medium text-[var(--text)]">聊天正文字体</span>
-            <select aria-label="聊天正文字体" value={chatBodyFontFamily} onChange={(event) => onChatBodyFontFamilyChange?.(event.target.value as ChatBodyFontFamilyName)} className={selectClass}>
-              {CHAT_BODY_FONT_FAMILY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-          <label className="space-y-2">
-            <span className="text-sm font-medium text-[var(--text)]">聊天行间距</span>
-            <select aria-label="聊天行间距" value={chatBodyLineHeight} onChange={(event) => onChatBodyLineHeightChange?.(event.target.value as ChatBodyLineHeightName)} className={selectClass}>
-              {CHAT_BODY_LINE_HEIGHT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-          <label className="space-y-2">
-            <span className="text-sm font-medium text-[var(--text)]">聊天正文字号</span>
-            <select aria-label="聊天正文字号" value={chatBodyFontSize} onChange={(event) => onChatBodyFontSizeChange?.(event.target.value as ChatBodyFontSizeName)} className={selectClass}>
-              {CHAT_BODY_FONT_SIZE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-          <label className="space-y-2">
-            <span className="text-sm font-medium text-[var(--text)]">聊天段间距</span>
-            <select aria-label="聊天段间距" value={chatBodyParagraphSpacing} onChange={(event) => onChatBodyParagraphSpacingChange?.(event.target.value as ChatBodyParagraphSpacingName)} className={selectClass}>
-              {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-        </div>
         <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
           <span className="text-sm text-[var(--text)]">Enter 键发送消息</span>
           <input aria-label="Enter 键发送消息" type="checkbox" checked={chatEnterToSend} onChange={(event) => onChatEnterToSendChange?.(event.target.checked)} className="h-4 w-4" />

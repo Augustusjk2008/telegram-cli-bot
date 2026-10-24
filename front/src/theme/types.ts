@@ -1,10 +1,23 @@
 export type ColorScheme = "light" | "dark";
 
+export type ChatBodyFontFamilyName = "sans" | "serif" | "kai" | "fangsong" | "mono";
+export type ChatBodyFontSizeName = "small" | "medium" | "large";
+export type ChatBodyLineHeightName = "tight" | "normal" | "relaxed";
+export type ChatBodyParagraphSpacingName = "tight" | "normal" | "relaxed";
+
+export type ChatTypography = {
+  chatBodyFontFamily: ChatBodyFontFamilyName;
+  chatBodyFontSize: ChatBodyFontSizeName;
+  chatBodyLineHeight: ChatBodyLineHeightName;
+  chatBodyParagraphSpacing: ChatBodyParagraphSpacingName;
+};
+
 export const PAPER_STYLE = { fileTreeRowHeight: 26 } as const;
 export const PAPER_MOTION = { profile: "paper" } as const;
 
 export type ThemeAppearance = {
   colors: { scheme: ColorScheme; overrides: Record<string, string> };
+  typography?: ChatTypography;
 };
 
 export type UiTheme = {
@@ -61,6 +74,7 @@ export type ColorToken = {
 export type ResolvedAppearance = {
   themeId: string;
   scheme: ColorScheme;
+  typography: ChatTypography;
   colors: Record<string, string>;
   cssVariables: Record<string, string>;
   styleProfile: "paper";

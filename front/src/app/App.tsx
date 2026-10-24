@@ -46,21 +46,8 @@ import type { ChatWorkbenchStatus, WorkbenchProductMode } from "../workbench/wor
 import { soloModeStorageKey, type SoloSessionSnapshot } from "../workbench/soloTypes";
 import {
   APP_NAME,
-  applyChatReadingPreferences,
-  persistChatBodyFontFamily,
-  persistChatBodyFontSize,
-  persistChatBodyLineHeight,
-  persistChatBodyParagraphSpacing,
   persistChatEnterToSend,
-  readStoredChatBodyFontFamily,
-  readStoredChatBodyFontSize,
-  readStoredChatBodyLineHeight,
-  readStoredChatBodyParagraphSpacing,
   readStoredChatEnterToSend,
-  type ChatBodyFontFamilyName,
-  type ChatBodyFontSizeName,
-  type ChatBodyLineHeightName,
-  type ChatBodyParagraphSpacingName,
   type UiThemeName,
 } from "../theme";
 import { hasCapability, isGuest } from "../utils/capabilities";
@@ -262,10 +249,6 @@ function AppContent() {
   const [client, setClient] = useState<WebBotClient>(() => useMockClient ? new MockWebBotClient() : new RealWebBotClient());
   const { appearance, bindSession, selectTheme } = useAppearance();
   const themeName = appearance.themeId;
-  const [chatBodyFontFamily, setChatBodyFontFamily] = useState<ChatBodyFontFamilyName>(() => readStoredChatBodyFontFamily());
-  const [chatBodyFontSize, setChatBodyFontSize] = useState<ChatBodyFontSizeName>(() => readStoredChatBodyFontSize());
-  const [chatBodyLineHeight, setChatBodyLineHeight] = useState<ChatBodyLineHeightName>(() => readStoredChatBodyLineHeight());
-  const [chatBodyParagraphSpacing, setChatBodyParagraphSpacing] = useState<ChatBodyParagraphSpacingName>(() => readStoredChatBodyParagraphSpacing());
   const [chatEnterToSend, setChatEnterToSend] = useState(() => readStoredChatEnterToSend());
   const [viewMode, setViewMode] = useState<ViewMode>(() => readStoredViewMode());
   const [viewportWidth, setViewportWidth] = useState(() => readViewportWidth());
@@ -589,19 +572,6 @@ function AppContent() {
       : { key: "login", client, canManage: false, previewOnly: true });
   }, [accountKey, bindSession, client, isLoggedIn, session?.role]);
 
-  useLayoutEffect(() => {
-    applyChatReadingPreferences(
-      chatBodyFontFamily,
-      chatBodyFontSize,
-      chatBodyLineHeight,
-      chatBodyParagraphSpacing,
-    );
-    persistChatBodyFontFamily(chatBodyFontFamily);
-    persistChatBodyFontSize(chatBodyFontSize);
-    persistChatBodyLineHeight(chatBodyLineHeight);
-    persistChatBodyParagraphSpacing(chatBodyParagraphSpacing);
-  }, [chatBodyFontFamily, chatBodyFontSize, chatBodyLineHeight, chatBodyParagraphSpacing]);
-
   useEffect(() => {
     persistChatEnterToSend(chatEnterToSend);
   }, [chatEnterToSend]);
@@ -801,22 +771,6 @@ function AppContent() {
     await selectTheme(nextTheme);
   }
 
-  function handleChatBodyFontFamilyChange(nextFontFamily: ChatBodyFontFamilyName) {
-    setChatBodyFontFamily(nextFontFamily);
-  }
-
-  function handleChatBodyFontSizeChange(nextFontSize: ChatBodyFontSizeName) {
-    setChatBodyFontSize(nextFontSize);
-  }
-
-  function handleChatBodyLineHeightChange(nextLineHeight: ChatBodyLineHeightName) {
-    setChatBodyLineHeight(nextLineHeight);
-  }
-
-  function handleChatBodyParagraphSpacingChange(nextParagraphSpacing: ChatBodyParagraphSpacingName) {
-    setChatBodyParagraphSpacing(nextParagraphSpacing);
-  }
-
   function handleChatEnterToSendChange(enabled: boolean) {
     setChatEnterToSend(enabled);
   }
@@ -966,14 +920,6 @@ function AppContent() {
             currentBotAlias={currentBot}
             themeName={themeName}
             onThemeChange={handleThemeChange}
-            chatBodyFontFamily={chatBodyFontFamily}
-            onChatBodyFontFamilyChange={handleChatBodyFontFamilyChange}
-            chatBodyFontSize={chatBodyFontSize}
-            onChatBodyFontSizeChange={handleChatBodyFontSizeChange}
-            chatBodyLineHeight={chatBodyLineHeight}
-            onChatBodyLineHeightChange={handleChatBodyLineHeightChange}
-            chatBodyParagraphSpacing={chatBodyParagraphSpacing}
-            onChatBodyParagraphSpacingChange={handleChatBodyParagraphSpacingChange}
             chatEnterToSend={chatEnterToSend}
             onChatEnterToSendChange={handleChatEnterToSendChange}
           />
