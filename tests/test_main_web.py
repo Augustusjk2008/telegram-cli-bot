@@ -46,7 +46,7 @@ async def test_run_all_bots_stops_web_server_with_restart_policy(monkeypatch, re
          patch.object(main_module, "WebApiServer", return_value=fake_web_server):
         await main_module.run_all_bots()
     fake_web_server.start.assert_awaited_once()
-    start_telegram_gateway.assert_awaited_once_with(fake_manager)
+    start_telegram_gateway.assert_awaited_once()
     fake_telegram_gateway.stop.assert_awaited_once()
     fake_web_server.stop.assert_awaited_once_with(preserve_tunnel=restart_requested)
     fake_native_service.shutdown.assert_awaited_once()

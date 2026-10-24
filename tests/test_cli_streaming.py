@@ -144,6 +144,7 @@ def test_antigravity_cli_params_include_discovered_models(
     profile = usage_manager.main_profile
     profile.cli_type = "antigravity"
     profile.cli_path = "agy"
+    monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", {})
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "agy.exe")
     monkeypatch.setattr(
         api_service.subprocess,
