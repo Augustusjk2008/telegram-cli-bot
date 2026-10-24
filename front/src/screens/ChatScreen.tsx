@@ -213,6 +213,7 @@ const INITIAL_IDLE_CHAT_POLL_DELAY_MS = 5000;
 const IDLE_CHAT_POLL_INTERVAL_MS = 10_000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
+const ENDLESS_CONTINUE_DELAY_MS = 2000;
 const CHAT_ATTACHMENT_LINE_RE = /^(?:Attachment path:|附件路径为[:：])\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
@@ -570,6 +571,7 @@ function findNewNotifiableTerminalMessage(previousItems: ChatMessage[], nextItem
     if (
       item.role !== "assistant"
       || item.state === "streaming"
+      || item.state === "error"
       || isCancelledChatCompletion(item)
       || String(item.meta?.completionState || "").trim().toLowerCase() === "streaming"
     ) {
@@ -1404,6 +1406,7 @@ type ChatMessageRowProps = {
   onRetryAnswerTranslation: (id: string) => Promise<void>;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   onContinueFinalAnswer?: () => void;
+  onFastForward?: () => void;
   onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
   onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   messageClientStateKey: string;
@@ -1430,6 +1433,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onTranslationViewChange,
   onRetryAnswerTranslation,
   onContinueFinalAnswer,
+  onFastForward,
   onToggleFavoriteAnswer,
   onReplyNativePermission,
   messageClientStateKey,
@@ -1571,6 +1575,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
+                onFastForward={canContinue ? onFastForward : undefined}
                 onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 favorite={favorite}
                 canContinue={canContinue}
@@ -1674,6 +1679,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
             favorite={favorite}
             fullAnswerText={displayText}
             onContinue={canContinue ? onContinueFinalAnswer : undefined}
+            onFastForward={canContinue ? onFastForward : undefined}
             onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
             onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
           />
@@ -1700,6 +1706,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleRetryAnswerTranslation: (id: string) => Promise<void>;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   handleContinueFinalAnswer: () => void;
+  handleFastForward: () => void;
   handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
   handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   handleRequestSoloRollback?: (target: SoloRollbackTarget) => void;
@@ -1721,6 +1728,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleTranslationViewChange,
   handleRetryAnswerTranslation,
   handleContinueFinalAnswer,
+  handleFastForward,
   handleToggleFavoriteAnswer,
   handleReplyNativePermission,
   handleRequestSoloRollback,
@@ -1748,6 +1756,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         onTranslationViewChange={handleTranslationViewChange}
         onRetryAnswerTranslation={handleRetryAnswerTranslation}
         onContinueFinalAnswer={handleContinueFinalAnswer}
+        onFastForward={handleFastForward}
         onToggleFavoriteAnswer={handleToggleFavoriteAnswer}
         onReplyNativePermission={handleReplyNativePermission}
         messageClientStateKey={row.messageClientStateKey}
@@ -1776,6 +1785,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     assistantName,
     executingPlanMessageId,
     handleContinueFinalAnswer,
+    handleFastForward,
     handleCopyFinalAnswer,
     handleTranslationViewChange,
     handleRetryAnswerTranslation,
@@ -1869,6 +1879,8 @@ export function ChatScreen({
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
+  const [endlessModeActive, setEndlessModeActive] = useState(false);
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
@@ -1975,6 +1987,10 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
+  const endlessContinueTimerRef = useRef<number | null>(null);
+  const endlessModeRef = useRef(false);
+  const endlessAttemptRef = useRef(false);
+  const endlessContinueSenderRef = useRef<(() => void) | null>(null);
   const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean; forceHistory?: boolean }) => Promise<boolean>) | null>(null);
   const voiceTaskBindingRef = useRef<VoiceTaskBinding | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
@@ -2080,6 +2096,38 @@ export function ChatScreen({
     }
   }, [botAlias, storageScope]);
 
+  const clearEndlessContinueTimer = useCallback(() => {
+    if (endlessContinueTimerRef.current !== null) {
+      window.clearTimeout(endlessContinueTimerRef.current);
+      endlessContinueTimerRef.current = null;
+    }
+  }, []);
+
+  const stopEndlessMode = useCallback(() => {
+    endlessModeRef.current = false;
+    endlessAttemptRef.current = false;
+    clearEndlessContinueTimer();
+    setEndlessModeActive(false);
+    setEndlessModeConfirmOpen(false);
+  }, [clearEndlessContinueTimer]);
+
+  const scheduleEndlessContinue = useCallback(() => {
+    if (!endlessModeRef.current || endlessContinueTimerRef.current !== null) {
+      return;
+    }
+    endlessContinueTimerRef.current = window.setTimeout(() => {
+      endlessContinueTimerRef.current = null;
+      if (!endlessModeRef.current) {
+        return;
+      }
+      if (loadingRef.current || isStreamingRef.current) {
+        scheduleEndlessContinue();
+        return;
+      }
+      endlessContinueSenderRef.current?.();
+    }, ENDLESS_CONTINUE_DELAY_MS);
+  }, []);
+
   const stopAssistantPoll = useCallback(() => {
     if (assistantPollTimerRef.current !== null) {
       window.clearTimeout(assistantPollTimerRef.current);
@@ -2119,6 +2167,7 @@ export function ChatScreen({
   }, [stopClusterTaskPoll]);
 
   const cancelInactiveChatTransport = useCallback(() => {
+    stopEndlessMode();
     abortActiveSseRequest();
     stopAssistantPoll();
     stopSseRecoveryWatch();
@@ -2134,6 +2183,7 @@ export function ChatScreen({
     abortActiveSseRequest,
     clearClusterTaskState,
     releaseAgUiBatchState,
+    stopEndlessMode,
     stopAssistantPoll,
     stopClusterTaskPoll,
     stopSseRecoveryWatch,
@@ -3725,6 +3775,7 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    stopEndlessMode();
     setConversationLoading(true);
     setError("");
     try {
@@ -3774,6 +3825,7 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    stopEndlessMode();
     setConversationLoading(true);
     setError("");
     try {
@@ -3827,6 +3879,7 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    stopEndlessMode();
     setConversationLoading(true);
     setError("");
     try {
@@ -3856,6 +3909,7 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    stopEndlessMode();
     setDeletingConversationId(conversation.id);
     setConversationLoading(true);
     setError("");
@@ -3898,6 +3952,7 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    stopEndlessMode();
     setDeletingConversationId("__all__");
     setConversationLoading(true);
     setError("");
@@ -4090,6 +4145,7 @@ export function ChatScreen({
       attachments?: PendingChatAttachment[];
       clearPendingAttachments?: boolean;
       sendOptions?: ChatSendOptions;
+      suppressError?: boolean;
       onSuccess?: (message: ChatMessage) => void;
       onError?: (message: string) => void;
     } = {},
@@ -4188,6 +4244,9 @@ export function ChatScreen({
       turnId: message?.turnId || streamTurnId || undefined,
       streamStartedAtMs: localStartedAtMs,
     });
+    const removeLocalAttempt = () => {
+      setItems((current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
+    };
 
     let recoverIncompleteStream = false;
     try {
@@ -4334,26 +4393,30 @@ export function ChatScreen({
         ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta) }
         : finalizedMessage;
 
-      setItems((prev) => upsertActiveAssistantMessage(
-        prev,
-        activeAssistantTarget(finalizedMessage),
-        finalizedMessage,
-        (item, final) => {
-          const mergedMeta = mergeMessageMeta(
-            item.meta,
-            final.meta,
-            undefined,
-            { traceMode: "replace" },
-          );
-          return {
-            ...final,
-            ...mergeMessageTranslation(item, final),
-            meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
-          };
-        },
-      ));
+      if (options.suppressError && finalizedMessage.state === "error") {
+        removeLocalAttempt();
+      } else {
+        setItems((prev) => upsertActiveAssistantMessage(
+          prev,
+          activeAssistantTarget(finalizedMessage),
+          finalizedMessage,
+          (item, final) => {
+            const mergedMeta = mergeMessageMeta(
+              item.meta,
+              final.meta,
+              undefined,
+              { traceMode: "replace" },
+            );
+            return {
+              ...final,
+              ...mergeMessageTranslation(item, final),
+              meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
+            };
+          },
+        ));
+      }
       options.onSuccess?.(callbackMessage);
-      if (!isCancelledChatCompletion(finalizedMessage)) {
+      if (finalizedMessage.state !== "error" && !isCancelledChatCompletion(finalizedMessage)) {
         onUnreadResult?.(
           botAlias,
           finalizedMessage.updatedAt || "",
@@ -4391,7 +4454,9 @@ export function ChatScreen({
         ));
       } else {
         const message = err instanceof Error ? err.message : "发送失败";
-        if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
+        if (options.suppressError) {
+          removeLocalAttempt();
+        } else if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
           setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
             ...item,
             text: message,
@@ -4515,6 +4580,7 @@ export function ChatScreen({
     if (activeAgentIdRef.current !== "main") {
       return;
     }
+    stopEndlessMode();
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
@@ -4659,7 +4725,7 @@ export function ChatScreen({
       sendOptions,
     });
     return true;
-  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode]);
+  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode, stopEndlessMode]);
 
   const handleCancelQueuedMessage = useCallback(() => {
     setQueuedMessageState(null, {
@@ -4672,6 +4738,10 @@ export function ChatScreen({
     if (activeAgentIdRef.current !== "main") {
       return;
     }
+    const endlessMode = endlessModeRef.current;
+    if (endlessMode) {
+      endlessAttemptRef.current = true;
+    }
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     void sendMessageInternal("Continue", {
@@ -4680,11 +4750,67 @@ export function ChatScreen({
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
         ...(soloMode && nativeSend ? { soloMode: true } : {}),
       },
+      suppressError: endlessMode,
+      onSuccess: endlessMode ? (message) => {
+        if (!endlessModeRef.current) {
+          return;
+        }
+        endlessAttemptRef.current = false;
+        if (message.state === "error") {
+          scheduleEndlessContinue();
+        } else {
+          stopEndlessMode();
+        }
+      } : undefined,
+      onError: endlessMode ? () => {
+        if (!endlessModeRef.current) {
+          return;
+        }
+        endlessAttemptRef.current = false;
+        scheduleEndlessContinue();
+      } : undefined,
     });
-  }, [sendMessageInternal, soloMode]);
+  }, [scheduleEndlessContinue, sendMessageInternal, soloMode, stopEndlessMode]);
+
+  endlessContinueSenderRef.current = handleContinueFinalAnswer;
+
+  const handleOpenEndlessMode = useCallback(() => {
+    if (endlessModeRef.current || loadingRef.current || isStreamingRef.current) {
+      return;
+    }
+    setEndlessModeConfirmOpen(true);
+  }, []);
+
+  const handleConfirmEndlessMode = useCallback(() => {
+    if (endlessModeRef.current) {
+      return;
+    }
+    setEndlessModeConfirmOpen(false);
+    endlessModeRef.current = true;
+    endlessAttemptRef.current = true;
+    setEndlessModeActive(true);
+    handleContinueFinalAnswer();
+  }, [handleContinueFinalAnswer]);
+
+  useEffect(() => {
+    if (!endlessModeRef.current || !endlessAttemptRef.current || loading || isStreaming) {
+      return;
+    }
+    const latestAssistant = [...items].reverse().find((item) => item.role === "assistant" && item.state !== "streaming");
+    if (!latestAssistant) {
+      return;
+    }
+    endlessAttemptRef.current = false;
+    if (latestAssistant.state === "error") {
+      scheduleEndlessContinue();
+    } else {
+      stopEndlessMode();
+    }
+  }, [isStreaming, items, loading, scheduleEndlessContinue, stopEndlessMode]);
 
 
   async function handleKillTask() {
+    stopEndlessMode();
     streamBatcher.flush();
     setActionLoading("kill");
     setError("");
@@ -5286,6 +5412,31 @@ export function ChatScreen({
     });
   }
 
+  const endlessModeDialog = endlessModeConfirmOpen ? (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
+      <div role="dialog" aria-modal="true" aria-label="确认开启无尽模式" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
+        <h2 className="text-sm font-semibold text-[var(--text)]">开启无尽模式</h2>
+        <p className="mt-2 text-sm text-[var(--muted)]">将自动发送“Continue”。如果回答出错，会等待 2 秒后继续，直到获得正常回答。</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setEndlessModeConfirmOpen(false)}
+            className="inline-flex h-8 items-center rounded-md border border-[var(--workbench-hairline)] px-3 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)]"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirmEndlessMode}
+            className="inline-flex h-8 items-center rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:opacity-90"
+          >
+            确认开启
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   const soloRollbackDialog = soloRollbackTarget ? (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
       <div role="dialog" aria-modal="true" aria-label="确认撤回" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
@@ -5404,6 +5555,11 @@ export function ChatScreen({
           {loading ? (
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
           ) : null}
+          {endlessModeActive ? (
+            <div data-testid="endless-mode-status" role="status" className="mb-2 rounded-lg border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-3 py-2 text-xs text-[var(--accent)]">
+              无尽模式运行中：回答出错时会在 2 秒后自动继续
+            </div>
+          ) : null}
           {error ? (
             <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {error}
@@ -5428,6 +5584,7 @@ export function ChatScreen({
             handleTranslationViewChange={handleTranslationViewChange}
             handleRetryAnswerTranslation={handleRetryAnswerTranslation}
             handleContinueFinalAnswer={handleContinueFinalAnswer}
+            handleFastForward={handleOpenEndlessMode}
             handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
             handleReplyNativePermission={handleReplyNativePermission}
             handleRequestSoloRollback={handleRequestSoloRollback}
@@ -5586,6 +5743,7 @@ export function ChatScreen({
         ) : null}
       </div>
 
+      {endlessModeDialog && typeof document !== "undefined" ? createPortal(endlessModeDialog, document.body) : endlessModeDialog}
       {soloRollbackDialog && typeof document !== "undefined" ? createPortal(soloRollbackDialog, document.body) : soloRollbackDialog}
 
       {shouldUseInlinePreview && previewName ? (

@@ -5,6 +5,26 @@ import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import type { ChatMessageContextUsage } from "../services/types";
 
 describe("ChatFinalAnswerActions", () => {
+  it("offers fast-forward mode beside Continue", async () => {
+    const user = userEvent.setup();
+    const onContinue = vi.fn();
+    const onFastForward = vi.fn();
+
+    render(
+      <ChatFinalAnswerActions
+        canContinue
+        onContinue={onContinue}
+        onFastForward={onFastForward}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "无尽模式" }));
+
+    expect(onContinue).toHaveBeenCalledOnce();
+    expect(onFastForward).toHaveBeenCalledOnce();
+  });
+
   it("builds the full answer only when the copy action is used", async () => {
     const user = userEvent.setup();
     const buildFullAnswerText = vi.fn(() => "[过程]\n大段过程内容");

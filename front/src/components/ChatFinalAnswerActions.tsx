@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CheckCheck, ClipboardList, Copy, Gauge, Play, Star } from "lucide-react";
+import { CheckCheck, ClipboardList, Copy, FastForward, Gauge, Play, Star } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
 import { copyText } from "../utils/clipboard";
 import { ChatContextUsageBadge, formatContextUsageDetails } from "./ChatContextUsageBadge";
@@ -12,6 +12,7 @@ type Props = {
   fullAnswerText?: string;
   buildFullAnswerText?: () => string;
   onContinue?: () => void;
+  onFastForward?: () => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
   onToggleFavorite?: () => void;
 };
@@ -24,6 +25,7 @@ export function ChatFinalAnswerActions({
   fullAnswerText,
   buildFullAnswerText,
   onContinue,
+  onFastForward,
   onCopyFinalAnswer,
   onToggleFavorite,
 }: Props) {
@@ -49,7 +51,7 @@ export function ChatFinalAnswerActions({
     }
   }, []);
 
-  if (!translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && onContinue)) {
+  if (!translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && (onContinue || onFastForward))) {
     return null;
   }
 
@@ -144,6 +146,17 @@ export function ChatFinalAnswerActions({
           className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
         >
           <Play className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+      {canContinue && onFastForward ? (
+        <button
+          type="button"
+          aria-label="无尽模式"
+          title="无尽模式"
+          onClick={onFastForward}
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+        >
+          <FastForward className="h-3.5 w-3.5" />
         </button>
       ) : null}
       {contextDetails ? (

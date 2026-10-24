@@ -25,6 +25,7 @@ type Props = {
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
   onContinue?: () => void;
+  onFastForward?: () => void;
   onToggleFavorite?: () => void;
   favorite?: boolean;
   canContinue?: boolean;
@@ -524,6 +525,7 @@ export function NativeAgentTranscript({
   onFileLinkClick,
   onCopyFinalAnswer,
   onContinue,
+  onFastForward,
   onToggleFavorite,
   favorite = false,
   canContinue = false,
@@ -626,7 +628,7 @@ export function NativeAgentTranscript({
     : latestProgress?.kind === "tool" ? `执行工具：${latestProgress.label}` : "执行中";
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
-  const showFinalActions = state !== "streaming" && (showCopyFinalAnswer || Boolean(contextUsage));
+  const showFinalActions = state !== "streaming" && (showCopyFinalAnswer || Boolean(contextUsage) || (canContinue && Boolean(onContinue || onFastForward)));
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
@@ -695,6 +697,7 @@ export function NativeAgentTranscript({
               favorite={favorite}
               buildFullAnswerText={showCopyFinalAnswer ? () => formatTranscriptFullAnswer(renderItems, resultText, originalResultText) : undefined}
               onContinue={onContinue}
+              onFastForward={onFastForward}
               onCopyFinalAnswer={onCopyFinalAnswer}
               onToggleFavorite={onToggleFavorite}
             />

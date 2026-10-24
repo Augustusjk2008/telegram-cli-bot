@@ -80,6 +80,55 @@ test.each([true, false])("renders user Markdown, math and diagrams (current user
   expect(await within(message).findByLabelText("Mermaid 图表")).toContainHTML("<text>Start to End</text>");
 });
 
+test("retries Continue after an error in endless mode", async () => {
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>()
+    .mockResolvedValueOnce({
+      id: "assistant-endless-error",
+      role: "assistant",
+      text: "temporary failure",
+      createdAt: "2026-10-23T00:00:01Z",
+      state: "error",
+    })
+    .mockResolvedValueOnce({
+      id: "assistant-endless-done",
+      role: "assistant",
+      text: "完成",
+      createdAt: "2026-10-23T00:00:04Z",
+      state: "done",
+    });
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "assistant-existing",
+      role: "assistant",
+      text: "上一轮回答",
+      createdAt: "2026-10-22T00:00:00Z",
+      state: "done",
+    }] }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  expect(await screen.findByRole("button", { name: "无尽模式" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "无尽模式" }));
+  expect(await screen.findByRole("dialog", { name: "确认开启无尽模式" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
+
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(sendMessage.mock.calls[0][1]).toBe("Continue");
+  expect(screen.getByTestId("endless-mode-status")).toBeInTheDocument();
+  expect(screen.queryByText("temporary failure")).not.toBeInTheDocument();
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 5000 });
+  expect(sendMessage.mock.calls[1][1]).toBe("Continue");
+  expect(await screen.findByText("完成")).toBeInTheDocument();
+  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+});
+
 test("shows the voice bar only for an enabled codex_server CLI scope", async () => {
   const client = createClient({
     getBotOverview: async () => ({
