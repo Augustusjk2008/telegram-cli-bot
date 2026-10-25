@@ -5,6 +5,11 @@ export function defaultCliPathForType(cliType: string) {
   return "codex";
 }
 
+export function cliPathPlaceholderForType(cliType: string) {
+  if (cliType === "deepseek") return "桌面版安装目录\\resources\\runtime\\cli\\bin\\dsh.cmd";
+  return defaultCliPathForType(cliType);
+}
+
 export function cliTypeLabel(cliType: string) {
   if (cliType === "codex_server") return "codex server";
   if (cliType === "antigravity") return "Antigravity CLI";

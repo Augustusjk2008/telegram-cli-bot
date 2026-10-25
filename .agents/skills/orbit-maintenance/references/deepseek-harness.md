@@ -4,7 +4,7 @@
 
 - CLI 类型为 `deepseek`，默认执行命令为 `dsh`；主 Bot 和子 Bot 均可选择。配置入口是 `bot/config.py`、`bot/manager.py`、`bot/cli_params.py`。
 - 当前支持本地工作区的 `execution_mode=cli`，包括 Bot 级 TCB 集群编排。原生执行模式、远程工作区和 Git commit message 生成会在启动前拒绝；修改入口时保持前后端边界一致。
-- 模型和 `reasoning_effort` 可在聊天页选择；空值或 `none` 继承 Harness 配置，思考深度支持 `off/low/high/max`。npm 安装的 dsh 通过每次调用的临时 patch 应用选择，保留原 provider 和其他配置；不修改用户的 Harness 配置。宿主 `extra_args` 仅接受 `--patch <文件路径>` 或 `--patch=<文件路径>`；协议参数、session id 和任务输入由宿主控制。
+- 模型和 `reasoning_effort` 可在聊天页选择；空值或 `none` 继承 Harness 配置，思考深度支持 `off/low/high/max`。DeepSeek Harness 必须使用桌面版 `resources\runtime\cli\bin\dsh.cmd`，每次调用通过桌面版内置 Electron 和 dsh 包的临时 patch 应用选择；桌面 profile 中的模型路由、`llm-pi-ai`、`llm-deepseek` 以及 credentials 服务 patch 会临时桥接到 headless profile，使桌面端配置的 provider（例如 `opencode-go`）和凭据环境变量映射继续生效。npm shim 与 `DeepSeek Harness.exe` GUI 路径会被拒绝，不修改用户的 Harness 配置。宿主 `extra_args` 仅接受 `--patch <文件路径>` 或 `--patch=<文件路径>`；协议参数、session id 和任务输入由宿主控制。
 - `permission_mode` 支持 `read-only/workspace-write/danger-full-access`，默认 `workspace-write`，通过 `DSH_PERMISSION_MODE` 传给 Harness。Web 调用通过 `clamp_unsafe_cli_params()` 限制未获 `allow_unsafe_cli` 的 `danger-full-access`；集群 `allow_write` 不替代这层 CLI 权限配置。
 - 前端 CLI 标签和默认路径由 `front/src/utils/cliType.ts` 管理；执行模式入口见 `front/src/screens/botManagerModel.ts`、`SettingsScreen.tsx`。设置页切换到 DeepSeek 时先保存 CLI 执行模式，再保存 CLI 类型和路径，保留 Bot 的集群开关。
 
@@ -17,7 +17,7 @@
 ## 执行协议
 
 - `bot/cli_params.py:_build_deepseek_args()` 构造 `dsh --profile headless [--patch <path>] --json [--session-id <id>] -`，用户消息通过 stdin 发送；保留中文和多行输入。
-- `bot/deepseek_cli.py` 识别 npm dsh 入口及 wrapper 指定的 bundled Node，由 `bot/deepseek_launch.mjs` 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17。模型选择在已有 patch（含集群 patch）后追加临时 `--patch`，保留合并后的 provider 配置，退出回调清理临时文件。启动器在 JSON 模式通过 `orbit_model` 元数据报告显式选择或继承的模型名，用于费用估算；默认模型配置无法静态读取时跳过该元数据。自定义可执行文件可沿用原调用方式；显式模型或思考深度选择要求可识别的 npm dsh 入口。
+- `bot/deepseek_cli.py` 解析桌面版 `dsh.cmd` 中的 Electron 与 `dsh-desktop-host` 路径，由 `bot/deepseek_launch.mjs` 在 Electron Node 模式中加载桌面版内置 dsh 的 `runCli()` 与 profile 组合逻辑，兼容缺少 `import.meta.main` 的运行时。模型选择在已有 patch（含集群 patch）后追加临时 `--patch`，保留合并后的 provider 配置，退出回调清理临时文件。启动器在 JSON 模式通过 `orbit_model` 元数据报告显式选择或继承的模型名，用于费用估算；默认模型配置无法静态读取时跳过该元数据。npm shim 与 GUI exe 不作为后备入口。
 - `bot/cli.py:DeepSeekJsonStreamParser` 解析 stdout JSONL；`bot/web/api_service.py` 管理进程和轮次。stderr 独立收集，用于失败诊断。
 - Windows 上 dsh 进程使用 breakaway 启动并跳过 Orbit Job Object containment，避免嵌套 job 干扰 Harness 自己的进程隔离；修改统一 CLI 进程生命周期时保留该分支。
 - 成功需要有效 `session.sessionId`、`status.phase=turn_end` 且 `reason.kind=completed`、`final` 事件和进程退出码 0。无效 JSON、缺少结束事件、final 后继续输出运行事件或输出超限都必须保留失败状态。

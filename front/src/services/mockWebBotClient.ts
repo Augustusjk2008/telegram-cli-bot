@@ -483,7 +483,7 @@ function createMockEnvItems(): EnvConfigItem[] {
     {
       key: "CLI_PATH",
       label: "CLI 路径",
-      description: "CLI 可执行文件名或绝对路径。",
+      description: "CLI 可执行文件名或绝对路径；DeepSeek Harness 必须使用桌面版 resources\\runtime\\cli\\bin\\dsh.cmd。",
       type: "path",
       category: "basic",
       value: "codex",

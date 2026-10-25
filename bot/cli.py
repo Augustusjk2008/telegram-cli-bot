@@ -18,6 +18,7 @@ from bot.cli_params import (
     build_codex_project_trust_config_arg,
     get_cli_output_limits,
 )
+from bot.deepseek_cli import is_desktop_dsh_invocation
 from bot.platform.executables import build_executable_invocation
 from bot.platform.executables import resolve_cli_executable as _resolve_cli_executable
 
@@ -864,6 +865,9 @@ def build_cli_command(
             or "workspace-write"
         ).strip()
         env["DSH_PERMISSION_MODE"] = permission_mode or "workspace-write"
+        if is_desktop_dsh_invocation(cmd):
+            # Scope Electron's Node mode to this child environment only.
+            env["ELECTRON_RUN_AS_NODE"] = "1"
     return cmd, use_stdin
 
 

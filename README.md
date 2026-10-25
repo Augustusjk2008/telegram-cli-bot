@@ -285,7 +285,7 @@ CLI 选择和默认命令如下；`CLI_PATH` / `cli_path` 也可填写对应可�
 | `antigravity` | `agy` | Antigravity print / stream-json |
 | `deepseek` | `dsh` | DeepSeek Harness headless / JSONL |
 
-DeepSeek Harness 支持聊天中选择模型、思考深度和本地集群；模型与思考深度通过本次调用的 patch 应用，保留 Harness 全局配置。原生执行和远程工作区暂不支持。Git 提交说明生成可独立选择 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。
+DeepSeek Harness 必须使用桌面版安装目录中的 `resources\runtime\cli\bin\dsh.cmd`。不要填写 `DeepSeek Harness.exe`，也不要填写 npm 目录下的 `dsh.cmd`；桌面版应用可以关闭，项目会通过它自带的 Electron 和 `dsh-desktop-host` 运行内置 CLI。聊天中仍可选择模型、思考深度和本地集群；项目会把桌面 profile 中的模型路由、provider 凭据映射和本地 credentials 服务临时桥接到 headless 执行，再通过本次调用的 patch 覆盖模型与思考深度，保留其他 Harness 配置且不修改 Harness 全局配置。原生执行和远程工作区暂不支持。Git 提交说明生成可独立选择 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。
 
 `cli_params.codex_server` 与 `cli_params.codex` 独立保存，使用相同的参数定义和默认值；切换入口不会覆盖另一入口的参数。
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。

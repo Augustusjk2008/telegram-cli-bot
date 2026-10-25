@@ -67,7 +67,7 @@ _NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("CLI_TYPE", "CLI 类型", "主 Bot 使用的本地 CLI。", "select", "codex", "basic", options=("codex", "codex_server", "claude", "antigravity", "deepseek")),
-    EnvField("CLI_PATH", "CLI 路径", "CLI 可执行文件路径或 PATH 中的命令名。", "path", "codex", "basic"),
+    EnvField("CLI_PATH", "CLI 路径", f"CLI 可执行文件路径或 PATH 中的命令名；DeepSeek Harness 必须填写 {config.DEEPSEEK_DESKTOP_CLI_PATH_HINT}。", "path", "codex", "basic"),
     EnvField(
         "CLI_MODEL_OPTIONS",
         "模型选项表",

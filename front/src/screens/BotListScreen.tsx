@@ -1,4 +1,4 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliPathPlaceholderForType, cliTypeLabel } from "../utils/cliType";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -369,14 +369,19 @@ export function BotListScreen({
             </div>
           ) : null}
           {createDraft.runtimeBackend === "cli" ? (
-            <input
-              aria-label="新智能体 CLI 路径"
-              type="text"
-              value={createDraft.cliPath}
-              onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-              placeholder={defaultCliPathForType(createDraft.cliType)}
-            />
+            <>
+              <input
+                aria-label="新智能体 CLI 路径"
+                type="text"
+                value={createDraft.cliPath}
+                onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+                placeholder={cliPathPlaceholderForType(createDraft.cliType)}
+              />
+              {createDraft.cliType === "deepseek" ? (
+                <span className="text-xs text-[var(--muted)]">DeepSeek Harness 必须使用桌面版 dsh.cmd；不要填写 DeepSeek Harness.exe 或 npm 目录下的 dsh.cmd。</span>
+              ) : null}
+            </>
           ) : null}
           {createDraft.runtimeBackend === "cli" && createDraft.cliType !== "deepseek" ? (
             <label className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">

@@ -1,4 +1,4 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliPathPlaceholderForType, cliTypeLabel } from "../utils/cliType";
 import { ManageThemesButton } from "../components/ThemeDropdown";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
@@ -193,7 +193,7 @@ function createDraftEquals(left: CreateDraft, right: CreateDraft) {
 }
 
 function cliPathPlaceholder(cliType: CliType) {
-  return defaultCliPathForType(cliType);
+  return cliPathPlaceholderForType(cliType);
 }
 
 function runtimeBackendLabel(runtimeBackend: ChatExecutionMode) {
@@ -410,6 +410,9 @@ function CreatePanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm"
             placeholder={cliPathPlaceholder(draft.cliType)}
           />
+          {draft.cliType === "deepseek" ? (
+            <span className="text-xs text-[var(--muted)]">DeepSeek Harness 必须使用桌面版 dsh.cmd；不要填写 DeepSeek Harness.exe 或 npm 目录下的 dsh.cmd。</span>
+          ) : null}
           </label>
         ) : null}
         {draft.runtimeBackend === "cli" && draft.cliType !== "deepseek" ? (
@@ -787,6 +790,9 @@ function EditPanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
             placeholder={cliPathPlaceholder(draft.cliType)}
           />
+          {draft.cliType === "deepseek" ? (
+            <span className="text-xs text-[var(--muted)]">DeepSeek Harness 必须使用桌面版 dsh.cmd；不要填写 DeepSeek Harness.exe 或 npm 目录下的 dsh.cmd。</span>
+          ) : null}
           </label>
         ) : null}
       </div>

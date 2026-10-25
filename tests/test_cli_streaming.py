@@ -1118,6 +1118,13 @@ def _patch_deepseek_runtime(manager, monkeypatch, processes):
         return original_complete(service, handle, **kwargs)
 
     monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_: "dsh")
+    monkeypatch.setattr(
+        "bot.cli_params.build_deepseek_invocation",
+        lambda _resolved, _params: [
+            "DeepSeek Harness.exe", "--expose-internals", "deepseek_launch.mjs",
+            "desktop", "DeepSeek Harness.exe", "dsh-entry", "desktop-host", "{}",
+        ],
+    )
     monkeypatch.setattr(api_service.subprocess, "Popen", spawn)
     monkeypatch.setattr(api_service.ChatHistoryService, "complete_turn", complete)
     monkeypatch.setattr(api_service, "estimate_usage_cost", Mock(side_effect=AssertionError("unknown model price")))

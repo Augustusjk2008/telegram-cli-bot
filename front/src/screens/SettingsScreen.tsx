@@ -1,4 +1,4 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliPathPlaceholderForType, cliTypeLabel } from "../utils/cliType";
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
@@ -454,8 +454,13 @@ export function SettingsScreen({
                       disabled={!canManageBotRuntime}
                       onChange={(event) => setCliPathDraft(event.target.value)}
                       className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                      placeholder={defaultCliPathForType(cliTypeDraft)}
+                      placeholder={cliPathPlaceholderForType(cliTypeDraft)}
                     />
+                    {cliTypeDraft === "deepseek" ? (
+                      <span className="text-xs text-[var(--muted)]">
+                        必须使用桌面版 dsh.cmd（桌面版安装目录\resources\runtime\cli\bin\dsh.cmd）；不要填写 DeepSeek Harness.exe 或 npm 目录下的 dsh.cmd。
+                      </span>
+                    ) : null}
                   </label>
                   </div>
                 ) : (

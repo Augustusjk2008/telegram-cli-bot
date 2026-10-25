@@ -188,6 +188,9 @@ DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity", "deepseek"}
+# Display guidance only; the actual installation directory is resolved from
+# the dsh.cmd wrapper so it can move with a user's Desktop installation.
+DEEPSEEK_DESKTOP_CLI_PATH_HINT = r"桌面版安装目录\resources\runtime\cli\bin\dsh.cmd"
 
 
 def _refresh_environment_config() -> None:
