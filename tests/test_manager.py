@@ -13,6 +13,7 @@ import pytest
 from bot import app_settings
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
+from bot.platform import executables
 
 
 @pytest.mark.asyncio
@@ -49,6 +50,26 @@ def test_deepseek_profile_without_path_loads_dsh(temp_dir):
     for alias in ("main", "deepseekbot"):
         profile = manager.get_profile(alias)
         assert (profile.cli_type, profile.cli_path) == ("deepseek", "dsh")
+
+
+def test_dsh_desktop_fallback_is_used_after_npm_candidates(temp_dir, monkeypatch):
+    npm_path = temp_dir / "npm" / "dsh.cmd"
+    desktop_path = temp_dir / "dsh-install" / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd"
+    npm_path.parent.mkdir(parents=True)
+    desktop_path.parent.mkdir(parents=True)
+    npm_path.write_text("@echo off", encoding="utf-8")
+    desktop_path.write_text("@echo off", encoding="utf-8")
+
+    monkeypatch.setattr(executables.os, "name", "nt")
+    monkeypatch.setattr(executables.shutil, "which", lambda _path: None)
+    monkeypatch.setenv("APPDATA", str(temp_dir))
+    monkeypatch.setenv("USERPROFILE", str(temp_dir / "profile"))
+    monkeypatch.setattr(executables, "_iter_windows_dsh_candidates", lambda: [str(desktop_path)])
+
+    assert executables.resolve_cli_executable("dsh") == str(npm_path.resolve())
+
+    npm_path.unlink()
+    assert executables.resolve_cli_executable("dsh") == str(desktop_path.resolve())
 
 
 @pytest.mark.asyncio
@@ -176,6 +197,20 @@ class TestManagerValidation:
 
         assert profile.cli_path == "agy"
         assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["cli_path"] == "agy"
+
+    @pytest.mark.asyncio
+    async def test_deepseek_desktop_cli_path_roundtrip(self, temp_dir: Path):
+        storage = temp_dir / "bots.json"
+        desktop_cli = temp_dir / "DeepSeek Harness" / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd"
+        desktop_cli.parent.mkdir(parents=True)
+        desktop_cli.write_text("@echo off", encoding="utf-8")
+        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
+
+        await manager.set_bot_cli("main", "deepseek", str(desktop_cli))
+
+        restored = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
+        assert restored.main_profile.cli_type == "deepseek"
+        assert restored.main_profile.cli_path == str(desktop_cli)
 
     @pytest.mark.asyncio
     async def test_main_bot_workdir_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):

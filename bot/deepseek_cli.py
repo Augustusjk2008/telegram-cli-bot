@@ -20,6 +20,58 @@ _DSH_NODE_RE = re.compile(
 )
 
 
+def _is_desktop_shim(shim: str) -> bool:
+    """Recognize the official Desktop wrapper without matching npm shims."""
+    normalized = shim.replace("\\", "/").lower()
+    return (
+        "dsh-desktop-host" in normalized
+        and "deepseek harness.exe" in normalized
+        and "app.asar" in normalized
+    )
+
+
+def _resolve_desktop_node(executable: Path) -> Path | None:
+    """Resolve the Node runtime shipped with an official Desktop install."""
+    try:
+        install_root = executable.parents[4]
+    except IndexError:
+        return None
+    candidates = (
+        install_root / "resources" / "runtime" / "primary-runtime" / "dependencies" / "node" / "bin" / "node.exe",
+        install_root / "resources" / "runtime" / "node.exe",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def _desktop_patch_requires_cluster_mcp(params: dict[str, Any]) -> bool:
+    extra_args = params.get("extra_args") or []
+    if not isinstance(extra_args, (list, tuple)):
+        return False
+    index = 0
+    while index < len(extra_args):
+        arg = str(extra_args[index])
+        if arg == "--patch":
+            index += 1
+            patch_path = str(extra_args[index]) if index < len(extra_args) else ""
+        elif arg.startswith("--patch="):
+            patch_path = arg.partition("=")[2]
+        else:
+            index += 1
+            continue
+        if patch_path:
+            try:
+                patch_text = Path(patch_path).read_text(encoding="utf-8")[:262_144]
+            except (OSError, UnicodeError):
+                patch_text = ""
+            if "@deepseek-ai/dsh-mcp-client" in patch_text or "orbit-tcb-cluster-mcp" in patch_text:
+                return True
+        index += 1
+    return False
+
+
 def _resolve_dsh_entry_from_shim(executable: Path, shim: str) -> Path | None:
     candidates: list[Path] = []
     for match in _DSH_ENTRY_RE.finditer(shim):
@@ -77,7 +129,7 @@ def build_deepseek_invocation(resolved_cli: str, params: dict[str, Any]) -> list
     selection = {}
     for source, target in (("model", "model"), ("reasoning_effort", "reasoningEffort")):
         value = str(params.get(source) or "").strip()
-        if value and value != "none":
+        if value and value.casefold() != "none":
             selection[target] = value
     if selection.get("reasoningEffort") not in {None, "off", "low", "high", "max"}:
         raise ValueError("DeepSeek Harness 思考深度仅支持 off、low、high、max")
@@ -85,15 +137,29 @@ def build_deepseek_invocation(resolved_cli: str, params: dict[str, Any]) -> list
     executable = Path(resolved_cli)
     entry = executable.resolve()
     shim_node: Path | None = None
+    desktop_wrapper = False
     if executable.suffix.lower() in {".cmd", ".ps1", ".bat"}:
         try:
             shim = executable.read_text(encoding="utf-8").replace("\\", "/")
         except (OSError, UnicodeError):
             shim = ""
-        resolved_entry = _resolve_dsh_entry_from_shim(executable, shim)
-        if resolved_entry is not None:
-            entry = resolved_entry
-        shim_node = _resolve_dsh_node_from_shim(executable, shim)
+        desktop_wrapper = _is_desktop_shim(shim)
+        if not desktop_wrapper:
+            resolved_entry = _resolve_dsh_entry_from_shim(executable, shim)
+            if resolved_entry is not None:
+                entry = resolved_entry
+            shim_node = _resolve_dsh_node_from_shim(executable, shim)
+
+    if desktop_wrapper:
+        if not selection and not _desktop_patch_requires_cluster_mcp(params):
+            return build_executable_invocation(resolved_cli)
+        node = _resolve_desktop_node(executable)
+        if not node:
+            raise ValueError("DeepSeek Harness Desktop 启动失败：未找到 Desktop 内置 Node.js")
+        return [
+            str(node), str(Path(__file__).with_name("deepseek_launch.mjs")),
+            "--desktop", resolved_cli, json.dumps(selection, ensure_ascii=False),
+        ]
     try:
         manifest = json.loads((entry.parent.parent / "package.json").read_text(encoding="utf-8"))
         is_npm_cli = (

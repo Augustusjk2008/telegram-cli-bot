@@ -285,7 +285,13 @@ CLI 选择和默认命令如下；`CLI_PATH` / `cli_path` 也可填写对应可�
 | `antigravity` | `agy` | Antigravity print / stream-json |
 | `deepseek` | `dsh` | DeepSeek Harness headless / JSONL |
 
-DeepSeek Harness 支持聊天中选择模型、思考深度和本地集群；模型与思考深度通过本次调用的 patch 应用，保留 Harness 全局配置。原生执行和远程工作区暂不支持。Git 提交说明生成可独立选择 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。
+DeepSeek Harness 同时支持 npm 版和官方 Desktop 版。npm 版通过 `npm install -g @deepseek-ai/dsh` 安装并使用本机 Node.js；Desktop 版安装官方 Windows 应用后，可在 `Manage dsh Command → Install` 注册命令，也可以在 Orbit 中填写完整路径，例如 `D:\Programs\dsh\resources\runtime\cli\bin\dsh.cmd`。Desktop CLI 使用应用内置运行时，关闭 Desktop 窗口后仍可执行 headless 任务。
+
+Orbit 的路径优先级为显式完整路径、PATH、Windows npm 目录和 Desktop 安装注册信息。双安装环境下，已填写的 Desktop 完整路径会保持为 Desktop wrapper；模型、思考深度、权限、JSONL 和 session 续接沿用同一套调用契约。模型与思考深度通过本次调用的 patch 应用，保留 Harness 全局配置。
+
+Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否能被 headless profile 加载；当前已验证的 Desktop `0.2.1-rc.3` 不提供该 profile entry，因此 Orbit 会明确拒绝 Desktop 集群任务并保留普通聊天能力，等待包含该 client 的 Desktop 版本。
+
+官方 Desktop CLI 说明：[Terminal command](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md#terminal-command)。原生执行和远程工作区暂不支持。Git 提交说明生成可独立选择 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。
 
 `cli_params.codex_server` 与 `cli_params.codex` 独立保存，使用相同的参数定义和默认值；切换入口不会覆盖另一入口的参数。
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。

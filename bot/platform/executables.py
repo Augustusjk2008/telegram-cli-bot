@@ -6,6 +6,9 @@ import stat
 from typing import Optional
 
 
+_WINDOWS_DSH_CLI_RELATIVE = os.path.join("resources", "runtime", "cli", "bin", "dsh.cmd")
+
+
 def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> Optional[str]:
     path = (cli_path or "").strip().strip('"').strip("'")
     if not path:
@@ -77,6 +80,12 @@ def resolve_cli_executable(cli_path: str, working_dir: Optional[str] = None) -> 
                 if found:
                     return found
 
+        if path.lower() == "dsh":
+            for candidate in _iter_windows_dsh_candidates():
+                found = _existing_file(candidate)
+                if found:
+                    return found
+
     return None
 
 
@@ -128,6 +137,62 @@ def _iter_posix_user_bin_dirs() -> list[str]:
 
     seen: set[str] = set()
     return [item for item in dirs if item and not (item in seen or seen.add(item))]
+
+
+def _iter_windows_dsh_candidates() -> list[str]:
+    """Return Desktop-installed dsh wrappers after PATH/npm resolution."""
+    roots: list[str] = []
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        roots.extend(
+            os.path.join(local_app_data, "Programs", name)
+            for name in ("DeepSeek Harness", "dsh")
+        )
+        roots.extend(
+            os.path.join(local_app_data, name)
+            for name in ("DeepSeek Harness", "dsh")
+        )
+
+    try:
+        import winreg
+    except ImportError:
+        winreg = None
+
+    if winreg is not None:
+        registry_paths = (
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        )
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for registry_path in registry_paths:
+                try:
+                    with winreg.OpenKey(hive, registry_path) as uninstall_key:
+                        index = 0
+                        while True:
+                            try:
+                                subkey_name = winreg.EnumKey(uninstall_key, index)
+                            except OSError:
+                                break
+                            index += 1
+                            try:
+                                with winreg.OpenKey(uninstall_key, subkey_name) as entry:
+                                    display_name = str(winreg.QueryValueEx(entry, "DisplayName")[0] or "")
+                                    install_location = str(
+                                        winreg.QueryValueEx(entry, "InstallLocation")[0] or ""
+                                    ).strip().strip('"')
+                            except OSError:
+                                continue
+                            if install_location and (
+                                "deepseek harness" in display_name.lower()
+                                or display_name.strip().lower() == "dsh"
+                            ):
+                                roots.append(install_location)
+                except OSError:
+                    continue
+
+    candidates = [os.path.join(root, _WINDOWS_DSH_CLI_RELATIVE) for root in roots if root]
+    seen: set[str] = set()
+    return [item for item in candidates if not (item.casefold() in seen or seen.add(item.casefold()))]
 
 
 def build_executable_invocation(resolved_path: str) -> list[str]:
