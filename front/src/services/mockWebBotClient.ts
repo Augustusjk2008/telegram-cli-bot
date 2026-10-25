@@ -1,4 +1,3 @@
-import { isCodexCli } from "../utils/cliType";
 import themeCatalog from "../../../bot/web/theme_catalog.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { DEFAULT_CHAT_TYPOGRAPHY, isChatTypography, normalizeChatTypography } from "../theme/chatTypography";
@@ -75,6 +74,7 @@ import type {
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
   ClusterSetupPrepareResult,
+  ClusterMcpTargetStatus,
   ClusterStatus,
   ClusterTaskStatus,
   CreateBotInput,
@@ -288,7 +288,20 @@ const DEFAULT_CLUSTER = {
   defaultTimeoutSeconds: 1800,
   modelTiers: { low: "", medium: "", high: "" },
   reasoningEfforts: { low: "", medium: "", high: "" },
+  tierConfigs: {
+    low: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+    medium: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+    high: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+  },
 };
+
+function cloneClusterTierConfigs(value?: typeof DEFAULT_CLUSTER.tierConfigs) {
+  return {
+    low: { ...DEFAULT_CLUSTER.tierConfigs.low, ...(value?.low || {}) },
+    medium: { ...DEFAULT_CLUSTER.tierConfigs.medium, ...(value?.medium || {}) },
+    high: { ...DEFAULT_CLUSTER.tierConfigs.high, ...(value?.high || {}) },
+  };
+}
 const DEFAULT_AGENT_CLUSTER = {
   allowCluster: true,
   allowWrite: false,
@@ -1733,6 +1746,7 @@ export class MockWebBotClient implements WebBotClient {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
           reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+          tierConfigs: cloneClusterTierConfigs(),
         },
       },
     ]),
@@ -2939,6 +2953,7 @@ export class MockWebBotClient implements WebBotClient {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
           reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+          tierConfigs: cloneClusterTierConfigs(),
         },
       };
     }
@@ -2976,11 +2991,13 @@ export class MockWebBotClient implements WebBotClient {
             ...base.cluster,
             modelTiers: { ...base.cluster.modelTiers },
             reasoningEfforts: { ...base.cluster.reasoningEfforts },
+            tierConfigs: cloneClusterTierConfigs(base.cluster.tierConfigs),
           }
         : {
             ...DEFAULT_CLUSTER,
             modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
             reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+            tierConfigs: cloneClusterTierConfigs(),
           },
     };
   }
@@ -4125,6 +4142,9 @@ export class MockWebBotClient implements WebBotClient {
         reasoningEfforts: input.reasoningEfforts
           ? { ...input.reasoningEfforts }
           : { ...(current.cluster?.reasoningEfforts || DEFAULT_CLUSTER.reasoningEfforts) },
+        tierConfigs: input.tierConfigs
+          ? cloneClusterTierConfigs(input.tierConfigs)
+          : cloneClusterTierConfigs(current.cluster?.tierConfigs),
       },
     });
   }
@@ -4137,28 +4157,42 @@ export class MockWebBotClient implements WebBotClient {
       && bot.supportedExecutionModes.length === 1
       && bot.supportedExecutionModes[0] === "native_agent"
     ) ? "pi" : bot.cliType;
+    const configuredCliTypes = Array.from(new Set([
+      activeCliType,
+      ...Object.values(cluster.tierConfigs || {})
+        .map((config) => String(config.cliType || "").trim() || activeCliType)
+        .filter(Boolean),
+    ]));
+    const targetStatus = (cliType: string): ClusterMcpTargetStatus => {
+      if (cliType === "deepseek") return { state: "runtime_ready", message: "集群轮次自动注入 MCP" };
+      if (cliType === "antigravity") return {
+        state: "installed",
+        message: "Antigravity 工作区 MCP 已配置",
+        configPath: "C:\\workspace\\.agents\\mcp_config.json",
+        scope: "workspace",
+        allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
+      };
+      if (cliType === "pi") return { state: "installed", message: "Pi 集群扩展已配置" };
+      return { state: "runtime_ready", message: "运行态可用" };
+    };
+    const targets = Object.fromEntries(configuredCliTypes.map((cliType) => [cliType, targetStatus(cliType)]));
     return {
       enabled: Boolean(cluster.enabled),
       modelTiers: { ...cluster.modelTiers },
       reasoningEfforts: { ...cluster.reasoningEfforts },
+      tierConfigs: cloneClusterTierConfigs(cluster.tierConfigs),
       mcp: {
         serverName: "tcb-cluster",
         activeCliType,
         tools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
         runtime: { state: "runtime_ready", message: "运行态可用" },
-        codex: isCodexCli(activeCliType) ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        claude: activeCliType === "claude" ? { state: "runtime_ready", message: "运行态可用" } : { state: "not_checked", message: "未使用" },
-        deepseek: activeCliType === "deepseek" ? { state: "runtime_ready", message: "集群轮次自动注入 MCP" } : { state: "not_checked", message: "未使用" },
-        antigravity: activeCliType === "antigravity"
-          ? {
-            state: "installed",
-            message: "Antigravity 工作区 MCP 已配置",
-            configPath: "C:\\workspace\\.agents\\mcp_config.json",
-            scope: "workspace",
-            allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
-          }
-          : { state: "not_checked", message: "未使用" },
-        pi: activeCliType === "pi" ? { state: "installed", message: "Pi 集群扩展已配置" } : { state: "not_checked", message: "未使用" },
+        codex: targets.codex || { state: "not_checked", message: "未使用" },
+        claude: targets.claude || { state: "not_checked", message: "未使用" },
+        deepseek: targets.deepseek || { state: "not_checked", message: "未使用" },
+        antigravity: targets.antigravity || { state: "not_checked", message: "未使用" },
+        pi: targets.pi || { state: "not_checked", message: "未使用" },
+        targets,
+        byCliType: targets,
       },
       agents: this.ensureAgents(botAlias)
         .filter((agent) => !agent.isMain)
@@ -4270,6 +4304,9 @@ export class MockWebBotClient implements WebBotClient {
       reasoningEfforts: input.reasoningEfforts
         ? { ...input.reasoningEfforts }
         : { ...(current.cluster?.reasoningEfforts || DEFAULT_CLUSTER.reasoningEfforts) },
+      tierConfigs: input.tierConfigs
+        ? cloneClusterTierConfigs(input.tierConfigs)
+        : cloneClusterTierConfigs(current.cluster?.tierConfigs),
     };
     this.bots.set(botAlias, { ...current, cluster });
     return { cluster, status: await this.getClusterStatus(botAlias) };
@@ -7402,6 +7439,7 @@ export class MockWebBotClient implements WebBotClient {
         ...DEFAULT_CLUSTER,
         modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
         reasoningEfforts: { ...DEFAULT_CLUSTER.reasoningEfforts },
+        tierConfigs: cloneClusterTierConfigs(),
       },
     };
     this.bots.set(alias, bot);
@@ -7582,8 +7620,8 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
-  async getCliParams(botAlias: string): Promise<CliParamsPayload> {
-    return this.getCliParamsForType(botAlias, this.getBotSummary(botAlias).cliType);
+  async getCliParams(botAlias: string, cliType?: CliType): Promise<CliParamsPayload> {
+    return this.getCliParamsForType(botAlias, cliType || this.getBotSummary(botAlias).cliType);
   }
 
   private getCliParamsForType(botAlias: string, cliType: CliType): CliParamsPayload {

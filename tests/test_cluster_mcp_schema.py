@@ -38,6 +38,14 @@ def test_python_mcp_registers_explicit_tool_safety_annotations() -> None:
     assert tools["ask_agent"]["annotations"]["destructiveHint"] is False
 
 
+def test_ask_agent_description_uses_bot_tier_for_cli_selection() -> None:
+    description = mcp_stdio._tools_for_environment()[4]["description"]
+
+    assert "Bot's low/medium/high tier configuration selects the actual CLI" in description
+    assert "cli_type" not in mcp_stdio._tools_for_environment()[4]["inputSchema"]["properties"]
+    assert "cli_path" not in mcp_stdio._tools_for_environment()[4]["inputSchema"]["properties"]
+
+
 def test_python_mcp_forwards_each_call_run_id_without_caching(monkeypatch, tmp_path: Path) -> None:
     seen_run_ids: list[str] = []
 

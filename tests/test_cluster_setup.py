@@ -100,6 +100,46 @@ def test_deepseek_cluster_tier_uses_harness_reasoning_parameter():
     assert params.get_param("deepseek", "reasoning_effort") == "max"
 
 
+def test_cluster_status_reports_each_configured_cli_target(monkeypatch, tmp_path):
+    from bot.cluster.config import normalize_bot_cluster_config
+    from bot.models import BotProfile
+    from bot.web import api_service
+
+    profile = BotProfile(
+        alias="main",
+        working_dir=str(tmp_path),
+        cli_type="codex",
+        cluster=normalize_bot_cluster_config({
+            "enabled": True,
+            "tier_configs": {
+                "low": {"cli_type": "claude"},
+                "high": {"cli_type": "deepseek", "provider": "account"},
+            },
+        }),
+    )
+
+    class Manager:
+        main_profile = profile
+        managed_profiles = {}
+
+    monkeypatch.setattr(
+        api_service,
+        "_cluster_mcp_target_status",
+        lambda _profile, cli_type, *, active_cli_type: {
+            "state": "runtime_ready",
+            "message": cli_type,
+        },
+    )
+    monkeypatch.setattr(api_service, "_cluster_runtime_mcp_status", lambda: {"state": "runtime_ready", "message": "ok"})
+
+    status = api_service.get_cluster_status(Manager(), "main")
+
+    assert status["mcp"]["target_cli_types"] == ["codex", "claude", "deepseek"]
+    assert set(status["mcp"]["targets"]) == {"codex", "codex_server", "claude", "deepseek", "antigravity", "pi"}
+    assert status["mcp"]["targets"]["claude"]["state"] == "runtime_ready"
+    assert status["mcp"]["targets"]["codex_server"]["state"] == "not_checked"
+
+
 def test_antigravity_workspace_mcp_setup_preserves_other_servers_and_restores_on_stop(tmp_path):
     config_path = tmp_path / ".agents" / "mcp_config.json"
     config_path.parent.mkdir(parents=True)

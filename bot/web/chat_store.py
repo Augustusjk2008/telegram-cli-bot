@@ -1101,11 +1101,11 @@ class ChatStore:
             """
             SELECT id
             FROM conversations
-            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ? AND native_provider = ? AND archived_at IS NULL
+            WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND cli_type = ? AND working_dir = ? AND session_epoch = ? AND native_provider = ? AND archived_at IS NULL
             ORDER BY updated_at DESC, created_at DESC, id DESC
             LIMIT 1
             """,
-            (bot_id, user_id, str(agent_id or "main"), working_dir, session_epoch, native_provider),
+            (bot_id, user_id, str(agent_id or "main"), cli_type, working_dir, session_epoch, native_provider),
         ).fetchone()
 
         if row is not None:
@@ -1390,6 +1390,7 @@ class ChatStore:
         agent_id: str,
         assignment_revision: int,
         execution_mode: str,
+        cli_type: str = "",
     ) -> dict[str, Any] | None:
         conn = self._connect(create=False)
         if conn is None:
@@ -1398,6 +1399,7 @@ class ChatStore:
         normalized_agent_id = str(agent_id or "").strip()
         normalized_assignment_revision = int(assignment_revision)
         normalized_mode = str(execution_mode or "").strip().lower()
+        normalized_cli_type = str(cli_type or "").strip().lower()
         if normalized_assignment_revision < 1:
             raise ValueError("assignment_revision 必须是正整数")
         provider_clause = "AND native_provider = ?"
@@ -1405,6 +1407,7 @@ class ChatStore:
         if normalized_mode == "cli":
             provider_clause = "AND COALESCE(native_provider, '') != 'native_agent'"
             provider_params = []
+        cli_clause = "AND cli_type = ?" if normalized_cli_type else ""
         with closing(conn):
             with conn:
                 row = conn.execute(
@@ -1417,6 +1420,7 @@ class ChatStore:
                       AND archived_at IS NULL
                       AND status = 'active'
                       {provider_clause}
+                      {cli_clause}
                     ORDER BY updated_at DESC, created_at DESC, id DESC
                     LIMIT 1
                     """,
@@ -1425,6 +1429,7 @@ class ChatStore:
                         normalized_agent_id,
                         normalized_assignment_revision,
                         *provider_params,
+                        *([normalized_cli_type] if normalized_cli_type else []),
                     ],
                 ).fetchone()
         return self._conversation_from_row(row) if row is not None else None
@@ -2107,9 +2112,9 @@ class ChatStore:
                     """
                     SELECT id
                     FROM conversations
-                    WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND archived_at IS NULL
+                    WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ? AND cli_type = ? AND working_dir = ? AND archived_at IS NULL
                     """,
-                    (normalized_conversation_id, bot_id, user_id, str(agent_id or "main"), working_dir),
+                    (normalized_conversation_id, bot_id, user_id, str(agent_id or "main"), cli_type, working_dir),
                 ).fetchone()
                 if row is None:
                     raise KeyError(normalized_conversation_id)

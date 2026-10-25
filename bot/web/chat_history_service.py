@@ -516,10 +516,18 @@ class ChatHistoryService:
         active_conversation_id = _active_conversation_id(session)
         if active_conversation_id:
             try:
-                active_provider = self.store.get_conversation_native_provider(active_conversation_id)
+                active_conversation = self.store.get_conversation(active_conversation_id)
+                active_provider = str(active_conversation.get("native_provider") or "")
+                active_cli_type = str(active_conversation.get("cli_type") or "").strip().lower()
             except KeyError:
                 active_provider = ""
+                active_cli_type = ""
             if str(active_provider or "").strip().lower() != str(native_provider or "").strip().lower():
+                with session._lock:
+                    session.active_conversation_id = None
+                session.persist()
+                active_conversation_id = ""
+            elif active_cli_type and active_cli_type != str(profile.cli_type or "").strip().lower():
                 with session._lock:
                     session.active_conversation_id = None
                 session.persist()

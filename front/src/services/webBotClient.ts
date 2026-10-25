@@ -456,7 +456,7 @@ export interface WebBotClient {
   stopBot(botAlias: string): Promise<BotSummary>;
   archiveBot(botAlias: string): Promise<BotSummary>;
   unarchiveBot(botAlias: string): Promise<BotSummary>;
-  getCliParams(botAlias: string): Promise<CliParamsPayload>;
+  getCliParams(botAlias: string, cliType?: import("./types").CliType): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
   updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;

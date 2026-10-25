@@ -13,6 +13,7 @@ def _create_conversation(
     agent_id: str = "main",
     title: str = "主会话",
     native_provider: str = "native_agent",
+    cli_type: str = "codex",
     parent: str | None = None,
     assignment_revision: int | None = None,
 ) -> str:
@@ -21,7 +22,7 @@ def _create_conversation(
         bot_alias="main",
         user_id=2,
         agent_id=agent_id,
-        cli_type="codex",
+        cli_type=cli_type,
         working_dir=str(store.workspace_dir),
         session_epoch=0,
         native_provider=native_provider,
@@ -138,6 +139,47 @@ def test_child_conversation_binding_can_be_found_by_parent_assignment_and_mode(t
         assignment_revision=2,
         execution_mode="native_agent",
     ) is None
+
+
+def test_child_conversation_binding_keeps_codex_and_codex_server_separate(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    parent = _create_conversation(store)
+    codex = _create_conversation(
+        store,
+        agent_id="cluster-slot-1",
+        title="Codex 子会话",
+        parent=parent,
+        assignment_revision=3,
+        native_provider="codex",
+        cli_type="codex",
+    )
+    codex_server = _create_conversation(
+        store,
+        agent_id="cluster-slot-1",
+        title="Codex Server 子会话",
+        parent=parent,
+        assignment_revision=3,
+        native_provider="codex",
+        cli_type="codex_server",
+    )
+
+    found_codex = store.find_active_cluster_child_conversation(
+        parent_conversation_id=parent,
+        agent_id="cluster-slot-1",
+        assignment_revision=3,
+        execution_mode="cli",
+        cli_type="codex",
+    )
+    found_server = store.find_active_cluster_child_conversation(
+        parent_conversation_id=parent,
+        agent_id="cluster-slot-1",
+        assignment_revision=3,
+        execution_mode="cli",
+        cli_type="codex_server",
+    )
+
+    assert found_codex is not None and found_codex["id"] == codex
+    assert found_server is not None and found_server["id"] == codex_server
 
 
 def test_deactivating_child_conversations_preserves_history_but_prevents_runtime_reuse(tmp_path: Path) -> None:

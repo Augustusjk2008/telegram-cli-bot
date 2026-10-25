@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 
-from bot.web.chat_history_service import StreamingPersistenceBuffer
+from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
+from bot.models import BotProfile, UserSession
+from bot.web.chat_store import ChatStore
 
 
 class _ControlledLoop:
@@ -94,3 +96,36 @@ async def test_streaming_trace_keeps_fast_flush_interval() -> None:
     assert service.trace_batches == [[{"kind": "tool_call", "summary": "run"}]]
     assert buffer.trace_flush_count == 1
     assert buffer.flush_count == 1
+
+
+def test_start_turn_does_not_reuse_codex_server_conversation_for_codex(tmp_path) -> None:
+    store = ChatStore(tmp_path)
+    old_conversation_id = store.create_conversation(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2,
+        agent_id="worker",
+        cli_type="codex_server",
+        working_dir=str(tmp_path),
+        session_epoch=0,
+        native_provider="codex",
+    )
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2,
+        agent_id="worker",
+        working_dir=str(tmp_path),
+        active_conversation_id=old_conversation_id,
+        _persist_enabled=False,
+    )
+
+    handle = ChatHistoryService(store).start_turn(
+        profile=BotProfile(alias="main", cli_type="codex", working_dir=str(tmp_path)),
+        session=session,
+        user_text="continue",
+        native_provider="codex",
+    )
+
+    assert handle.conversation_id != old_conversation_id
+    assert store.get_conversation(handle.conversation_id)["cli_type"] == "codex"

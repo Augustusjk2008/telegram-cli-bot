@@ -57,3 +57,37 @@ test("cluster model tiers configure model and reasoning independently", async ()
   await user.selectOptions(screen.getByLabelText("低档思考深度"), "ultra");
   expect(onReasoningChange).toHaveBeenCalledWith({ low: "ultra", medium: "", high: "" });
 });
+
+test("cluster model tiers select a CLI and expose its parameter namespace", async () => {
+  const user = userEvent.setup();
+  const onTierConfigChange = vi.fn();
+  const props = {
+    value: { low: "", medium: "", high: "" },
+    reasoningEfforts: { low: "", medium: "", high: "" },
+    modelOptions: [],
+    reasoningOptions: [],
+    tierConfigs: {
+      low: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+      medium: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+      high: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+    },
+    inheritedCliType: "codex",
+    cliParamsByType: {
+      codex: { cliType: "codex", params: {}, defaults: {}, schema: { model: { type: "string", enum: ["codex-model"] } } },
+      claude: { cliType: "claude", params: {}, defaults: {}, schema: { model: { type: "string", enum: ["claude-model"] } } },
+    },
+    onTierConfigChange,
+    onChange: vi.fn(),
+    onReasoningChange: vi.fn(),
+  } as ComponentProps<typeof ClusterModelTiersPanel>;
+
+  render(<ClusterModelTiersPanel {...props} />);
+  await user.selectOptions(screen.getByLabelText("低档执行 CLI"), "claude");
+
+  expect(onTierConfigChange).toHaveBeenCalledWith("low", expect.objectContaining({
+    cliType: "claude",
+    model: "",
+    reasoningEffort: "",
+  }));
+  expect(screen.getByLabelText("低档模型")).toHaveValue("");
+});

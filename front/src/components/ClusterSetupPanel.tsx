@@ -26,24 +26,19 @@ function cliLabel(cliType: string) {
   return CLI_LABELS[cliType] || cliType;
 }
 
-function targetStatus(status: ClusterStatus): { activeCliType: string; activeStatus: ClusterMcpTargetStatus | undefined } {
-  const activeCliType = status.mcp.activeCliType === "pi"
-    ? "pi"
-    : status.mcp.activeCliType === "claude"
-      ? "claude"
-      : status.mcp.activeCliType === "antigravity"
-        ? "antigravity"
-        : status.mcp.activeCliType === "deepseek" ? "deepseek" : status.mcp.activeCliType === "codex_server" ? "codex_server" : "codex";
-  const activeStatus = activeCliType === "pi"
-    ? status.mcp.pi
-    : activeCliType === "claude"
-      ? status.mcp.claude
-      : activeCliType === "antigravity"
-        ? status.mcp.antigravity
-        : activeCliType === "deepseek"
-          ? status.mcp.deepseek
-        : status.mcp.codex;
-  return { activeCliType, activeStatus };
+function targetStatuses(status: ClusterStatus): Array<[string, ClusterMcpTargetStatus]> {
+  const targets = status.mcp.targets || status.mcp.byCliType;
+  if (targets && Object.keys(targets).length > 0) return Object.entries(targets);
+  const legacy: Array<[string, ClusterMcpTargetStatus | undefined]> = [
+    ["codex", status.mcp.codex],
+    ["codex_server", status.mcp.codexServer],
+    ["claude", status.mcp.claude],
+    ["deepseek", status.mcp.deepseek],
+    ["antigravity", status.mcp.antigravity],
+    ["pi", status.mcp.pi],
+  ];
+  const active = legacy.find(([cliType]) => cliType === status.mcp.activeCliType);
+  return (active?.[1] ? [[active[0], active[1]]] : legacy.filter((entry): entry is [string, ClusterMcpTargetStatus] => Boolean(entry[1])));
 }
 
 export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props) {
@@ -116,20 +111,14 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
       {error ? <p className="mt-3 text-sm text-[var(--feedback-error-text-deep)]">{error}</p> : null}
       {status ? (
         <div className="mt-3 grid gap-2 text-sm">
-          {(() => {
-            const { activeCliType, activeStatus } = targetStatus(status);
-            return (
-              <div className="grid gap-1">
-                <div>{cliLabel(activeCliType)}：{activeStatus?.message || activeStatus?.state || "未检测"}</div>
-                {activeStatus?.configPath ? <div className="break-all text-xs text-[var(--muted)]">配置：{activeStatus.configPath}</div> : null}
-                {activeStatus?.scope ? <div className="text-xs text-[var(--muted)]">范围：{activeStatus.scope}</div> : null}
-                {activeStatus?.allowedTools?.length ? (
-                  <div className="text-xs text-[var(--muted)]">允许工具：{activeStatus.allowedTools.join("、")}</div>
-                ) : null}
-              </div>
-            );
-          })()}
-          {status.mcp.pi ? <div>Pi：{status.mcp.pi.message || status.mcp.pi.state}</div> : null}
+          {targetStatuses(status).map(([cliType, target]) => (
+            <div key={cliType} className="grid gap-1 border-b border-[var(--border)] pb-2 last:border-0">
+              <div>{cliLabel(cliType)}：{target.message || target.state || "未检测"}</div>
+              {target.configPath ? <div className="break-all text-xs text-[var(--muted)]">配置：{target.configPath}</div> : null}
+              {target.scope ? <div className="text-xs text-[var(--muted)]">范围：{target.scope}</div> : null}
+              {target.allowedTools?.length ? <div className="text-xs text-[var(--muted)]">允许工具：{target.allowedTools.join("、")}</div> : null}
+            </div>
+          ))}
         </div>
       ) : null}
       {prepare ? (
@@ -142,6 +131,20 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
           {prepare.mcpSetupSnippet ? (
             <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-sm text-[var(--muted)]">
               {prepare.mcpSetupSnippet}
+            </div>
+          ) : null}
+          {prepare.targets && Object.keys(prepare.targets).length > 0 ? (
+            <div className="grid gap-3">
+              {Object.entries(prepare.targets).map(([cliType, target]) => (
+                <div key={cliType} className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
+                  <div className="font-medium text-[var(--text)]">{cliLabel(target.cliType || cliType)}</div>
+                  {target.message ? <p className="mt-1 text-xs text-[var(--muted)]">{target.message}</p> : null}
+                  {target.installCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-2 text-xs">安装：{commandText(target.installCommand)}</pre> : null}
+                  {target.verifyCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-2 text-xs">验证：{commandText(target.verifyCommand)}</pre> : null}
+                  {target.deepseekPatchPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">DeepSeek patch：{target.deepseekPatchPath}</p> : null}
+                  {target.piExtensionPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">Pi 扩展：{target.piExtensionPath}</p> : null}
+                </div>
+              ))}
             </div>
           ) : null}
           {prepare.installCommand.length > 0 ? <div>

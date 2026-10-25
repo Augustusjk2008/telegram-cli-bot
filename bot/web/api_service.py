@@ -42,7 +42,13 @@ from bot.cli_params import (
     normalize_cli_model_options,
     with_global_extra_args,
 )
-from bot.cluster.config import normalize_bot_cluster_config
+from bot.cluster.config import (
+    CLUSTER_CLI_TYPES,
+    MODEL_TIER_KEYS,
+    ClusterExecutionSnapshot,
+    normalize_bot_cluster_config,
+    resolve_cluster_execution,
+)
 from bot.cluster.runtime import (
     ClusterRuntime,
     ClusterRunRequest,
@@ -854,6 +860,20 @@ def _cluster_mcp_config_path() -> Path:
     return get_cluster_mcp_config_path()
 
 
+def _cluster_target_cli_types(profile: BotProfile) -> list[str]:
+    """Return the deduplicated CLI entries used by the main Bot and tiers."""
+    active = _profile_cluster_active_cli_type(profile)
+    result: list[str] = []
+    for candidate in [active, normalize_cli_type(profile.cli_type), *[
+        str(getattr(config, "cli_type", "") or "").strip().lower()
+        for config in (profile.cluster.tier_configs or {}).values()
+    ]]:
+        if candidate in CLUSTER_CLI_TYPES or candidate == "pi":
+            if candidate not in result:
+                result.append(candidate)
+    return result or [normalize_cli_type(profile.cli_type)]
+
+
 def _cluster_bridge_url() -> str:
     return f"http://127.0.0.1:{WEB_PORT}"
 
@@ -873,11 +893,16 @@ def verify_cluster_mcp_request(request_headers: dict[str, str]) -> None:
 
 
 def _cluster_cli_path(profile: BotProfile, cli_type: str) -> str:
-    try:
-        active_cli_type = normalize_cli_type(profile.cli_type)
-    except ValueError:
-        active_cli_type = ""
-    return profile.cli_path if cli_data_provider(active_cli_type) == cli_data_provider(cli_type) and profile.cli_path else cli_data_provider(cli_type)
+    normalized = normalize_cli_type(cli_type)
+    if normalized == normalize_cli_type(profile.cli_type) and profile.cli_path:
+        return str(profile.cli_path)
+    for tier_config in (profile.cluster.tier_configs or {}).values():
+        if str(getattr(tier_config, "cli_type", "") or "").strip().lower() != normalized:
+            continue
+        configured = str(getattr(tier_config, "cli_path", "") or "").strip()
+        if configured:
+            return configured
+    return config.default_cli_path(normalized)
 
 
 def _cluster_runtime_mcp_status() -> dict[str, str]:
@@ -907,7 +932,7 @@ def _cluster_unsupported_target_status() -> dict[str, str]:
 
 
 def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli_type: str) -> dict[str, Any]:
-    if cli_data_provider(cli_type) != cli_data_provider(active_cli_type):
+    if cli_type != active_cli_type:
         return _cluster_inactive_target_status()
     if cli_type == "deepseek":
         return {
@@ -1014,20 +1039,37 @@ def _cluster_pi_mcp_target_status(*, active_cli_type: str) -> dict[str, str]:
 def get_cluster_status(manager: MultiBotManager, alias: str) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     active_cli_type = _profile_cluster_active_cli_type(profile)
+    target_cli_types = _cluster_target_cli_types(profile)
+    target_statuses = {
+        cli_type: (
+            _cluster_mcp_target_status(profile, cli_type, active_cli_type=cli_type)
+            if cli_type in target_cli_types
+            else _cluster_inactive_target_status()
+        )
+        for cli_type in ("codex", "codex_server", "claude", "deepseek", "antigravity")
+    }
+    target_statuses["pi"] = (
+        _cluster_pi_mcp_target_status(active_cli_type="pi")
+        if "pi" in target_cli_types
+        else _cluster_inactive_target_status()
+    )
     return {
         "enabled": bool(profile.cluster.enabled),
         "model_tiers": dict(profile.cluster.model_tiers),
         "reasoning_efforts": dict(profile.cluster.reasoning_efforts),
+        "tier_configs": {
+            tier: profile.cluster.tier_configs[tier].to_dict()
+            for tier in MODEL_TIER_KEYS
+        },
         "mcp": {
             "server_name": CLUSTER_MCP_SERVER_NAME,
             "active_cli_type": active_cli_type,
+            "target_cli_types": target_cli_types,
             "tools": list(CLUSTER_MCP_TOOL_NAMES),
             "runtime": _cluster_runtime_mcp_status(),
-            "codex": _cluster_mcp_target_status(profile, "codex", active_cli_type=active_cli_type),
-            "claude": _cluster_mcp_target_status(profile, "claude", active_cli_type=active_cli_type),
-            "deepseek": _cluster_mcp_target_status(profile, "deepseek", active_cli_type=active_cli_type),
-            "antigravity": _cluster_mcp_target_status(profile, "antigravity", active_cli_type=active_cli_type),
-            "pi": _cluster_pi_mcp_target_status(active_cli_type=active_cli_type),
+            **target_statuses,
+            "targets": target_statuses,
+            "by_cli_type": target_statuses,
         },
         "agents": [
             {
@@ -1053,58 +1095,107 @@ def prepare_cluster_setup(manager: MultiBotManager, alias: str) -> dict[str, Any
         repo_root=_REPO_ROOT,
         bridge_url=_cluster_bridge_url(),
     )
-    if active_cli_type == "antigravity":
-        setup = ensure_antigravity_mcp_config(profile.working_dir, launcher.launcher_path)
-        return {
-            **launcher.to_dict(),
-            "install_command": [],
-            "verify_command": build_cli_verify_command("antigravity", profile.cli_path),
-            "remove_command": [],
-            "workspace_mcp_config_path": setup["config_path"],
-            "workspace_mcp_scope": "workspace",
-            "mcp_allowed_tools": list(setup.get("allowed_tools") or CLUSTER_MCP_TOOL_NAMES),
-            "mcp_setup_state": "conflict" if setup.get("conflict") else "installed",
-            "statusline_command": [sys.executable, str(_REPO_ROOT / "bot" / "antigravity_statusline.py")],
-            "code": "cluster_mcp_config_conflict" if setup.get("conflict") else "",
-            "message": setup.get("message") or "Antigravity 工作区 MCP 已配置",
-        }
-    if active_cli_type == "pi":
-        extension_path = write_pi_cluster_extension(repo_root=_REPO_ROOT)
-        return {
-            **launcher.to_dict(),
-            "install_command": [],
-            "verify_command": [],
-            "remove_command": [],
-            "pi_extension_path": str(extension_path),
-            "pi_extension_name": "tcb-cluster.ts",
-            "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
-        }
-    if active_cli_type == "deepseek":
-        patch_path = write_deepseek_mcp_patch(
-            working_dir=profile.working_dir,
-            repo_root=_REPO_ROOT,
-        )
-        return {
-            **launcher.to_dict(),
-            "install_command": [],
-            "verify_command": [],
-            "remove_command": [],
-            "deepseek_patch_path": str(patch_path),
-            "mcp_setup_state": "runtime",
-            "mcp_setup_snippet": "DeepSeek Harness 集群轮次会自动注入 tcb-cluster MCP，无需修改 Harness 全局配置。",
-            "message": "DeepSeek Harness 集群 MCP 已准备，下一次集群轮次会自动加载。",
-        }
-    cli_type = active_cli_type if active_cli_type in {"codex", "codex_server", "claude"} else profile.cli_type
+    target_setups: list[dict[str, Any]] = []
+    for cli_type in _cluster_target_cli_types(profile):
+        cli_path = _cluster_cli_path(profile, cli_type) if cli_type in CLUSTER_CLI_TYPES else ""
+        entry: dict[str, Any] = {"cli_type": cli_type}
+        if cli_type == "antigravity":
+            setup = ensure_antigravity_mcp_config(profile.working_dir, launcher.launcher_path)
+            entry.update({
+                "install_command": [],
+                "verify_command": build_cli_verify_command(cli_type, cli_path),
+                "remove_command": [],
+                "workspace_mcp_config_path": setup["config_path"],
+                "workspace_mcp_scope": "workspace",
+                "mcp_allowed_tools": list(setup.get("allowed_tools") or CLUSTER_MCP_TOOL_NAMES),
+                "mcp_setup_state": "conflict" if setup.get("conflict") else "installed",
+                "statusline_command": [sys.executable, str(_REPO_ROOT / "bot" / "antigravity_statusline.py")],
+                "code": "cluster_mcp_config_conflict" if setup.get("conflict") else "",
+                "message": setup.get("message") or "Antigravity 工作区 MCP 已配置",
+            })
+        elif cli_type == "pi":
+            extension_path = write_pi_cluster_extension(repo_root=_REPO_ROOT)
+            entry.update({
+                "install_command": [],
+                "verify_command": [],
+                "remove_command": [],
+                "pi_extension_path": str(extension_path),
+                "pi_extension_name": "tcb-cluster.ts",
+                "self_test_command": build_pi_mcp_self_test_command(launcher.config_path),
+            })
+        elif cli_type == "deepseek":
+            patch_path = write_deepseek_mcp_patch(
+                working_dir=profile.working_dir,
+                repo_root=_REPO_ROOT,
+            )
+            entry.update({
+                "install_command": [],
+                "verify_command": [],
+                "remove_command": [],
+                "deepseek_patch_path": str(patch_path),
+                "mcp_setup_state": "runtime",
+                "mcp_setup_snippet": "DeepSeek Harness 集群轮次会自动注入 tcb-cluster MCP，无需修改 Harness 全局配置。",
+                "message": "DeepSeek Harness 集群 MCP 已准备，下一次集群轮次会自动加载。",
+            })
+        else:
+            entry.update({
+                "install_command": build_cli_install_command(
+                    cli_type=cli_type,
+                    cli_path=cli_path,
+                    launcher_path=launcher.launcher_path,
+                ),
+                "verify_command": build_cli_verify_command(cli_type, cli_path),
+                "remove_command": build_cli_remove_command(cli_type, cli_path),
+            })
+        target_setups.append(entry)
+
+    primary = next((item for item in target_setups if item["cli_type"] == active_cli_type), target_setups[0])
     return {
         **launcher.to_dict(),
-        "install_command": build_cli_install_command(
-            cli_type=cli_type,
-            cli_path=profile.cli_path,
-            launcher_path=launcher.launcher_path,
-        ),
-        "verify_command": build_cli_verify_command(cli_type, profile.cli_path),
-        "remove_command": build_cli_remove_command(cli_type, profile.cli_path),
+        **primary,
+        "targets": target_setups,
     }
+
+
+def _validate_cluster_deepseek_tiers(
+    profile: BotProfile,
+    cluster: Any,
+) -> None:
+    """Validate configured DeepSeek tier selections when a catalog is available."""
+    for tier in MODEL_TIER_KEYS:
+        tier_config = (cluster.tier_configs or {}).get(tier)
+        if tier_config is None:
+            continue
+        effective_cli_type = str(tier_config.cli_type or profile.cli_type or "").strip().lower()
+        if effective_cli_type != "deepseek":
+            continue
+        provider = str(tier_config.provider or "").strip()
+        model = str(tier_config.model or "").strip()
+        reasoning_effort = str(tier_config.reasoning_effort or "").strip().lower()
+        if reasoning_effort and reasoning_effort not in {"off", "low", "high", "max", "none"}:
+            raise ValueError(f"DeepSeek 档位 {tier} 的 reasoning_effort 无效")
+        if not provider and not model and not reasoning_effort:
+            continue
+        candidate = copy.copy(profile)
+        candidate.cli_type = "deepseek"
+        candidate.cli_path = _cluster_cli_path(profile, "deepseek")
+        base_params = candidate.cli_params.get_params("deepseek")
+        catalog = _get_deepseek_catalog(candidate, base_params)
+        allowed_providers = {
+            str(item or "").strip()
+            for item in catalog.get("_allowed_providers", [])
+            if str(item or "").strip()
+        }
+        if provider and allowed_providers and provider not in allowed_providers:
+            raise ValueError(f"DeepSeek provider 无效: {provider}")
+        provider_key = provider or str(base_params.get("provider") or "").strip()
+        allowed_models = catalog.get("_allowed_models_by_provider", {}).get(provider_key, [])
+        if model and allowed_models and model not in {str(item or "").strip() for item in allowed_models}:
+            raise ValueError(f"DeepSeek 模型不属于 provider {provider_key or '当前 provider'}: {model}")
+        allowed_efforts = catalog.get("_allowed_reasoning_efforts_by_provider", {}).get(provider_key, [])
+        if reasoning_effort and reasoning_effort != "none" and allowed_efforts:
+            if reasoning_effort not in {str(item or "").strip().lower() for item in allowed_efforts}:
+                raise ValueError(f"DeepSeek provider {provider_key or '当前 provider'} 不支持思考深度: {reasoning_effort}")
 
 
 async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1112,11 +1203,62 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
         async with _CLUSTER_TEAM_SERVICE.bot_lock(alias):
             source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
             profile = get_profile_or_raise(manager, alias)
-            next_config = normalize_bot_cluster_config(source)
+            merged_source = profile.cluster.to_dict()
+            if isinstance(source, dict):
+                merged_source.update(source)
+                raw_tiers = source.get("tier_configs", source.get("tierConfigs"))
+                if isinstance(raw_tiers, dict):
+                    merged_tiers = dict(merged_source.get("tier_configs") or {})
+                    for tier, value in raw_tiers.items():
+                        if isinstance(value, dict):
+                            merged_tier = dict(merged_tiers.get(tier) or {})
+                            merged_tier.update(value)
+                            merged_tiers[tier] = merged_tier
+                    merged_source["tier_configs"] = merged_tiers
+                else:
+                    legacy_models = source.get("model_tiers")
+                    legacy_efforts = source.get("reasoning_efforts", source.get("reasoningEfforts"))
+                    merged_tiers = dict(merged_source.get("tier_configs") or {})
+                    if isinstance(legacy_models, dict) or isinstance(legacy_efforts, dict):
+                        for tier in MODEL_TIER_KEYS:
+                            merged_tier = dict(merged_tiers.get(tier) or {})
+                            if isinstance(legacy_models, dict) and tier in legacy_models:
+                                merged_tier["model"] = legacy_models.get(tier)
+                            if isinstance(legacy_efforts, dict) and tier in legacy_efforts:
+                                merged_tier["reasoning_effort"] = legacy_efforts.get(tier)
+                            merged_tiers[tier] = merged_tier
+                        merged_source["tier_configs"] = merged_tiers
+            next_config = normalize_bot_cluster_config(merged_source)
+            validation_profile = copy.copy(profile)
+            validation_profile.cluster = next_config
+            validation_mode = (
+                NATIVE_AGENT_PROVIDER
+                if _profile_cluster_active_cli_type(profile) == "pi"
+                else EXECUTION_MODE_CLI
+            )
+            if validation_mode == EXECUTION_MODE_CLI and not next_config.enabled:
+                validation_profile.remote_workspace = {}
+            for tier in MODEL_TIER_KEYS:
+                resolve_cluster_execution(
+                    validation_profile,
+                    tier,
+                    execution_mode=validation_mode,
+                )
+            _validate_cluster_deepseek_tiers(profile, next_config)
+            current_uses_antigravity = (
+                normalize_cli_type(profile.cli_type) == "antigravity"
+                or any(
+                    str(getattr(item, "cli_type", "") or "").strip().lower() == "antigravity"
+                    for item in (profile.cluster.tier_configs or {}).values()
+                )
+            )
+            next_uses_antigravity = any(
+                str(getattr(item, "cli_type", "") or "").strip().lower() == "antigravity"
+                for item in (next_config.tier_configs or {}).values()
+            )
             remove_antigravity_config = (
                 not next_config.enabled
-                and bool(profile.cluster.enabled)
-                and normalize_cli_type(profile.cli_type) == "antigravity"
+                and (bool(profile.cluster.enabled) or current_uses_antigravity or next_uses_antigravity)
             )
             current_size = max(1, int(profile.cluster.max_parallel_agents or 1))
             target_size = max(1, int(next_config.max_parallel_agents or 1))
@@ -1833,7 +1975,12 @@ def get_cli_params_payload(
         _raise(400, "missing_cli_type", "缺少 CLI 类型")
 
     try:
-        params = profile.cli_params.get_params(resolved_cli_type)
+        normalize_cli_type(resolved_cli_type)
+        target_profile = copy.copy(profile)
+        target_profile.cli_type = resolved_cli_type
+        target_profile.cli_path = _cluster_cli_path(profile, resolved_cli_type)
+        target_profile.cli_params = CliParamsConfig.from_dict(profile.cli_params.to_dict())
+        params = target_profile.cli_params.get_params(resolved_cli_type)
         schema = get_params_schema(resolved_cli_type)
         if resolved_cli_type == "antigravity":
             configured_options = (
@@ -1842,7 +1989,7 @@ def get_cli_params_payload(
                 else None
             )
             if configured_options is None:
-                configured_options = _get_antigravity_model_options(profile)
+                configured_options = _get_antigravity_model_options(target_profile)
             else:
                 configured_options = [
                     *configured_options,
@@ -1856,7 +2003,7 @@ def get_cli_params_payload(
                 else None
             )
             static_options = DEEPSEEK_MODEL_OPTIONS if table_options is None else table_options
-            deepseek_catalog = deepseek_catalog or _get_deepseek_catalog(profile, params)
+            deepseek_catalog = deepseek_catalog or _get_deepseek_catalog(target_profile, params)
             selected_provider = deepseek_catalog.get("selected_provider")
             catalog_options = deepseek_catalog.get("model_options_by_provider", {}).get(selected_provider or "")
             configured_options = catalog_options or static_options
@@ -1873,9 +2020,11 @@ def get_cli_params_payload(
 
     payload = {
         "cli_type": resolved_cli_type,
+        "cli_path": str(target_profile.cli_path or ""),
         "params": copy.deepcopy(params),
         "schema": schema,
         "defaults": defaults,
+        "availability": "available" if resolve_cli_executable(target_profile.cli_path, target_profile.working_dir) else "missing",
     }
     if resolved_cli_type == "deepseek":
         payload.update(
@@ -2624,8 +2773,11 @@ def _select_conversation_locked(
     conversation_id: str,
     agent_id: str = "main",
     execution_mode: str = "",
+    profile_override: BotProfile | None = None,
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    if profile_override is not None:
+        profile = copy.deepcopy(profile_override)
     requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         is_processing = bool(session.is_processing)
@@ -2657,6 +2809,15 @@ def _select_conversation_locked(
         _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
     if str(conversation.get("archived_at") or "").strip():
         _raise(404, "conversation_not_found", "未找到会话")
+
+    conversation_cli_type = str(conversation.get("cli_type") or profile.cli_type).strip().lower()
+    expected_cli_type = normalize_cli_type(profile.cli_type)
+    try:
+        conversation_cli_type = normalize_cli_type(conversation_cli_type)
+    except ValueError:
+        conversation_cli_type = ""
+    if conversation_cli_type != expected_cli_type:
+        _raise(409, "conversation_cli_type_mismatch", "会话的 CLI 类型与当前执行配置不一致")
 
     native_provider = cli_data_provider(str(conversation.get("native_provider") or profile.cli_type))
     if str(conversation.get("native_provider") or "").strip().lower() == NATIVE_AGENT_PROVIDER:
@@ -3943,31 +4104,36 @@ def _build_cli_env(cli_type: str) -> dict[str, str]:
     return env
 
 
+def _cluster_execution_profile(
+    profile: BotProfile,
+    execution: ClusterExecutionSnapshot | None,
+) -> BotProfile:
+    """Build the profile a queued child task is allowed to execute with."""
+    result = copy.deepcopy(profile)
+    if execution is None or execution.execution_mode != EXECUTION_MODE_CLI:
+        return result
+    result.cli_type = execution.cli_type
+    result.cli_path = execution.cli_path
+    result.cli_params = copy.deepcopy(execution.params_config)
+    return result
+
+
 def build_cluster_cli_params_override(profile: BotProfile, model_tier: str) -> CliParamsConfig:
-    params = profile.cli_params.to_dict()
-    cli_type = normalize_cli_type(profile.cli_type)
-    tier = model_tier if model_tier in {"low", "medium", "high"} else "medium"
-    model = str(profile.cluster.model_tiers.get(tier) or "").strip()
-    reasoning_effort = str(profile.cluster.reasoning_efforts.get(tier) or "").strip()
-    if model or reasoning_effort:
-        params.setdefault(cli_type, {})
-    if model:
-        params[cli_type]["model"] = model
-    if reasoning_effort:
-        parameter_name = "reasoning_effort" if cli_data_provider(cli_type) == "codex" or cli_type == "deepseek" else "effort"
-        params[cli_type][parameter_name] = reasoning_effort
-    return CliParamsConfig.from_dict(params)
+    execution = resolve_cluster_execution(profile, model_tier, execution_mode=EXECUTION_MODE_CLI)
+    return copy.deepcopy(execution.params_config)
 
 
 def build_cluster_native_agent_config_override(profile: BotProfile, model_tier: str) -> dict[str, Any]:
     native_agent = copy.deepcopy(profile.native_agent)
-    tier = model_tier if model_tier in {"low", "medium", "high"} else "medium"
-    model = str(profile.cluster.model_tiers.get(tier) or "").strip()
-    reasoning_effort = str(profile.cluster.reasoning_efforts.get(tier) or "").strip()
-    if model:
-        native_agent["model"] = model
-    if reasoning_effort:
-        native_agent["reasoning_effort"] = reasoning_effort
+    execution = resolve_cluster_execution(
+        profile,
+        model_tier,
+        execution_mode=NATIVE_AGENT_PROVIDER,
+    )
+    if execution.model:
+        native_agent["model"] = execution.model
+    if execution.reasoning_effort:
+        native_agent["reasoning_effort"] = execution.reasoning_effort
     return native_agent
 
 
@@ -4378,6 +4544,11 @@ def _ensure_cluster_child_conversation(
         run.user_id,
         task.agent_id,
     )
+    execution = getattr(task, "execution_snapshot", None) or getattr(task, "execution", None)
+    task_profile = _cluster_execution_profile(profile, execution)
+    task_cli_type = normalize_cli_type(
+        execution.cli_type if execution is not None else task_profile.cli_type
+    )
     with child_session._lock:
         if child_session.is_processing:
             raise ClusterToolError("cluster_agent_busy", "子 agent 正在运行，请等待完成后重试")
@@ -4390,6 +4561,7 @@ def _ensure_cluster_child_conversation(
             agent_id=task.agent_id,
             assignment_revision=task.assignment_revision,
             execution_mode=task_execution_mode,
+            cli_type=task_cli_type,
         )
     if existing is not None:
         _select_conversation_locked(
@@ -4399,10 +4571,11 @@ def _ensure_cluster_child_conversation(
             str(existing["id"]),
             agent_id=task.agent_id,
             execution_mode=task_execution_mode,
+            profile_override=task_profile,
         )
         return str(existing["id"])
     _store, conversation_id = _create_agent_conversation(
-        profile,
+        task_profile,
         child_session,
         execution_mode=task_execution_mode,
         cluster_parent_conversation_id=run.main_conversation_id,
@@ -4441,6 +4614,13 @@ async def _run_cluster_agent_task(
                 dynamic_cluster_task = bool(live_run.main_conversation_id)
                 if dynamic_cluster_task:
                     _ensure_cluster_child_conversation(manager, live_run, live_task)
+                execution = getattr(live_task, "execution_snapshot", None) or getattr(live_task, "execution", None)
+                task_profile = _cluster_execution_profile(live_task.profile, execution)
+                task_execution_mode = (
+                    execution.execution_mode
+                    if execution is not None
+                    else str(live_task.execution_mode or live_run.execution_mode)
+                )
                 delegated_prompt = (
                     _build_cluster_delegated_prompt(live_task)
                     if dynamic_cluster_task
@@ -4458,20 +4638,29 @@ async def _run_cluster_agent_task(
                         native_agent_config_override=build_cluster_native_agent_config_override(
                             live_task.profile, live_task.model_tier,
                         ),
+                        cluster=True,
+                        mentions=live_run.mentions,
+                        cluster_run_id=run_id,
                         solo_mode=True,
                         allow_unsafe_cli=live_task.allow_unsafe_cli,
                         suppress_agent_prompt=dynamic_cluster_task,
                         translate_chat=False,
                     )
-                    if live_task.execution_mode == NATIVE_AGENT_PROVIDER
+                    if task_execution_mode == NATIVE_AGENT_PROVIDER
                     else _stream_cli_chat(
                         manager,
                         live_run.bot_alias,
                         live_run.user_id,
                         delegated_prompt,
                         agent_id=live_task.agent_id,
-                        cli_params_override=build_cluster_cli_params_override(live_task.profile, live_task.model_tier),
+                        profile_override=task_profile,
+                        cli_params_override=(
+                            copy.deepcopy(execution.params_config)
+                            if execution is not None
+                            else build_cluster_cli_params_override(live_task.profile, live_task.model_tier)
+                        ),
                         allow_unsafe_cli=live_task.allow_unsafe_cli,
+                        cluster_run_id=run_id,
                         suppress_agent_prompt=dynamic_cluster_task,
                         translate_chat=False,
                     )
@@ -6369,6 +6558,7 @@ async def _stream_cli_chat(
     *,
     request: _ChatRunRequest | None = None,
     agent_id: str = "main",
+    profile_override: BotProfile | None = None,
     cli_params_override: CliParamsConfig | None = None,
     allow_unsafe_cli: bool = False,
     cluster_run_id: str = "",
@@ -6381,6 +6571,8 @@ async def _stream_cli_chat(
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
     profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    if profile_override is not None:
+        profile = copy.deepcopy(profile_override)
     cli_type = normalize_cli_type(profile.cli_type)
     remote_chat = None
     if getattr(profile, "remote_workspace", None):
@@ -7916,6 +8108,7 @@ async def _stream_native_agent_chat(
     actor: dict[str, Any] | None = None,
     protocol: str = "",
     allow_unsafe_cli: bool = False,
+    cluster_run_id: str = "",
     resume_stream_id: str = "",
     resume_turn_id: str = "",
     after_sequence: int = 0,
@@ -7996,6 +8189,9 @@ async def _stream_native_agent_chat(
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
         )
+        effective_cluster_run_id = str(cluster_run_id or "").strip() or (
+            cluster_run.run_id if cluster_run is not None else ""
+        )
         execution_id = session._execution_id
 
         async def produce() -> AsyncIterator[dict[str, Any]]:
@@ -8010,7 +8206,7 @@ async def _stream_native_agent_chat(
                     history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                     actor=_actor_from_request(request_obj),
                     protocol=protocol,
-                    cluster_run_id=cluster_run.run_id if cluster_run else "",
+                    cluster_run_id=effective_cluster_run_id,
                     solo_mode=solo_mode,
                     suppress_agent_prompt=suppress_agent_prompt,
                 )

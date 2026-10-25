@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from bot.cluster.config import ClusterExecutionSnapshot, resolve_cluster_execution
 from bot.models import BotProfile
 
 
@@ -35,6 +36,7 @@ class AskAgentRequest:
     responsibility: str = ""
     team_revision: int = 0
     assignment_revision: int = 0
+    execution: ClusterExecutionSnapshot | None = None
 
 
 @dataclass
@@ -69,6 +71,11 @@ class ClusterAgentTask:
     output: str = ""
     error: str = ""
     messages: list[ClusterAgentTaskMessage] = field(default_factory=list)
+    execution: ClusterExecutionSnapshot | None = None
+
+    @property
+    def execution_snapshot(self) -> ClusterExecutionSnapshot | None:
+        return self.execution
 
 
 @dataclass
@@ -303,6 +310,11 @@ class ClusterRuntime:
     def create_agent_task(self, run_id: str, request: AskAgentRequest) -> ClusterAgentTask:
         run = self._runs[str(run_id)]
         now = self._now_iso()
+        execution = request.execution or resolve_cluster_execution(
+            run.profile,
+            request.model_tier,
+            execution_mode=run.execution_mode,
+        )
         task = ClusterAgentTask(
             task_id=f"clt_{uuid.uuid4().hex[:12]}",
             agent_id=request.agent_id,
@@ -314,11 +326,12 @@ class ClusterRuntime:
             responsibility=request.responsibility,
             team_revision=request.team_revision,
             assignment_revision=request.assignment_revision,
-            execution_mode=run.execution_mode,
+            execution_mode=execution.execution_mode,
             allow_unsafe_cli=run.allow_unsafe_cli,
             profile=copy.deepcopy(run.profile),
             status="queued",
             created_at=now,
+            execution=copy.deepcopy(execution),
         )
         run.tasks[task.task_id] = task
         run.events.append({
@@ -326,6 +339,8 @@ class ClusterRuntime:
             "task_id": task.task_id,
             "agent_id": task.agent_id,
             "model_tier": task.model_tier,
+            "cli_type": execution.cli_type,
+            "execution_mode": execution.execution_mode,
             "message_preview": task.message[:120],
             "created_at": now,
         })
@@ -500,6 +515,10 @@ class ClusterRuntime:
             "agent_id": task.agent_id,
             "status": task.status,
             "model_tier": task.model_tier,
+            "cli_type": task.execution.cli_type if task.execution is not None else "",
+            "execution_mode": task.execution.execution_mode if task.execution is not None else task.execution_mode,
+            "model": task.execution.model if task.execution is not None else "",
+            "reasoning_effort": task.execution.reasoning_effort if task.execution is not None else "",
             "timeout_seconds": task.timeout_seconds,
             "deadline_exceeded": self._task_deadline_exceeded(task),
             "allow_write": task.allow_write,
@@ -775,6 +794,14 @@ class ClusterRuntime:
             for task in candidate_run.tasks.values()
         ):
             raise ClusterToolError("cluster_agent_busy", "子 agent 正在另一轮任务中，请等待完成后重试")
+        try:
+            execution = resolve_cluster_execution(
+                run.profile,
+                model_tier,
+                execution_mode=run.execution_mode,
+            )
+        except ValueError as exc:
+            raise ClusterToolError("cluster_execution_unsupported", str(exc)) from exc
         return AskAgentRequest(
             agent_id=agent_id,
             message=message,
@@ -785,6 +812,7 @@ class ClusterRuntime:
             responsibility=str((assignment or {}).get("responsibility") or "").strip(),
             team_revision=run.team_revision,
             assignment_revision=max(0, int((assignment or {}).get("assignment_revision") or 0)),
+            execution=execution,
         )
 
     @staticmethod

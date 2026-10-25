@@ -31,6 +31,16 @@ function tasksForAssignment(
   ));
 }
 
+function cliLabel(cliType: string) {
+  return {
+    codex: "Codex",
+    codex_server: "Codex Server",
+    claude: "Claude",
+    antigravity: "Antigravity",
+    deepseek: "DeepSeek",
+  }[cliType] || cliType;
+}
+
 export function ClusterTeamPanel({
   team,
   capacity,
@@ -105,6 +115,9 @@ export function ClusterTeamPanel({
           const modelTier = [...matchingTasks]
             .reverse()
             .find((task) => String(task.modelTier || "").trim())?.modelTier || "medium";
+          const cliType = [...matchingTasks]
+            .reverse()
+            .find((task) => String(task.cliType || "").trim())?.cliType;
           return (
             <div
               key={`${assignment.agentId}:${assignment.assignmentRevision}`}
@@ -123,6 +136,7 @@ export function ClusterTeamPanel({
                     {processing ? "处理中" : "待命"}
                   </span>
                   <span className="text-xs text-[var(--muted)]">模型档位：{modelTier}</span>
+                  {cliType ? <span className="text-xs text-[var(--muted)]">执行 CLI：{cliLabel(String(cliType))}</span> : null}
                 </div>
               </div>
               {!viewingChild ? (

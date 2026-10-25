@@ -116,8 +116,12 @@ import type {
   ClusterConfigUpdateResult,
   ClusterMcpState,
   ClusterMcpTargetStatus,
+  ClusterModelTier,
+  ClusterTierConfig,
+  ClusterTierConfigs,
   ClusterModelTiers,
   ClusterReasoningEfforts,
+  ClusterSetupTarget,
   ClusterSetupPrepareResult,
   ClusterStatus,
   ClusterAgentTask,
@@ -880,6 +884,13 @@ type RawClusterAgentTask = {
   status?: string;
   model_tier?: string;
   modelTier?: string;
+  cli_type?: string;
+  cliType?: string;
+  execution_mode?: string;
+  executionMode?: string;
+  model?: string;
+  reasoning_effort?: string;
+  reasoningEffort?: string;
   timeout_seconds?: number;
   timeoutSeconds?: number;
   deadline_exceeded?: boolean;
@@ -1198,7 +1209,8 @@ type RawOfflineUpdatePackageList = {
 };
 
 type RawCliParamsPayload = {
-  cli_type: CliType;
+  cli_type?: CliType;
+  cliType?: CliType;
   params: Record<string, unknown>;
   defaults: Record<string, unknown>;
   schema: Record<string, {
@@ -1218,6 +1230,10 @@ type RawCliParamsPayload = {
   catalogStatus?: unknown;
   catalog_diagnostic?: unknown;
   catalogDiagnostic?: unknown;
+  availability?: unknown;
+  available?: unknown;
+  diagnostic?: unknown;
+  status?: unknown;
   provider_changed?: unknown;
   providerChanged?: unknown;
   session_reset?: unknown;
@@ -1858,16 +1874,48 @@ function mapClusterReasoningEfforts(raw: unknown): ClusterReasoningEfforts {
   return mapClusterModelTiers(raw);
 }
 
+const CLUSTER_MODEL_TIERS: ClusterModelTier[] = ["low", "medium", "high"];
+
+function mapClusterTierConfig(
+  raw: unknown,
+  fallbackModel = "",
+  fallbackReasoningEffort = "",
+): ClusterTierConfig {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return {
+    cliType: String(value.cli_type ?? value.cliType ?? "").trim(),
+    cliPath: String(value.cli_path ?? value.cliPath ?? "").trim(),
+    provider: String(value.provider ?? "").trim(),
+    model: String(value.model ?? fallbackModel ?? "").trim(),
+    reasoningEffort: String(value.reasoning_effort ?? value.reasoningEffort ?? fallbackReasoningEffort ?? "").trim(),
+  };
+}
+
+function mapClusterTierConfigs(
+  raw: unknown,
+  modelTiers: ClusterModelTiers,
+  reasoningEfforts: ClusterReasoningEfforts,
+): ClusterTierConfigs {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  return Object.fromEntries(CLUSTER_MODEL_TIERS.map((tier) => [
+    tier,
+    mapClusterTierConfig(value[tier], modelTiers[tier], reasoningEfforts[tier]),
+  ])) as ClusterTierConfigs;
+}
+
 function mapBotClusterConfig(raw: unknown): BotClusterConfig {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const rawWritePolicy = String(value.write_policy ?? value.writePolicy ?? "all_agents");
+  const modelTiers = mapClusterModelTiers(value.model_tiers ?? value.modelTiers);
+  const reasoningEfforts = mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts);
   return {
     enabled: Boolean(value.enabled),
     writePolicy: rawWritePolicy === "all_agents" ? "all_agents" : "main_only",
     maxParallelAgents: Number(value.max_parallel_agents ?? value.maxParallelAgents ?? 3),
     defaultTimeoutSeconds: Number(value.default_timeout_seconds ?? value.defaultTimeoutSeconds ?? 1800),
-    modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
-    reasoningEfforts: mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts),
+    modelTiers,
+    reasoningEfforts,
+    tierConfigs: mapClusterTierConfigs(value.tier_configs ?? value.tierConfigs, modelTiers, reasoningEfforts),
   };
 }
 
@@ -1949,20 +1997,33 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
         : undefined,
     };
   };
+  const rawTargets = mcp.targets ?? mcp.by_cli_type ?? mcp.byCliType ?? mcp.target_statuses ?? mcp.targetStatuses;
+  const targets: Record<string, ClusterMcpTargetStatus> = {};
+  if (rawTargets && typeof rawTargets === "object" && !Array.isArray(rawTargets)) {
+    for (const [cliType, target] of Object.entries(rawTargets as Record<string, unknown>)) {
+      targets[cliType] = mapTarget(target);
+    }
+  }
+  const targetFor = (cliType: string, legacy: unknown) => mapTarget(legacy ?? targets[cliType]);
+  const modelTiers = mapClusterModelTiers(value.model_tiers ?? value.modelTiers);
+  const reasoningEfforts = mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts);
   return {
     enabled: Boolean(value.enabled),
-    modelTiers: mapClusterModelTiers(value.model_tiers ?? value.modelTiers),
-    reasoningEfforts: mapClusterReasoningEfforts(value.reasoning_efforts ?? value.reasoningEfforts),
+    modelTiers,
+    reasoningEfforts,
+    tierConfigs: mapClusterTierConfigs(value.tier_configs ?? value.tierConfigs, modelTiers, reasoningEfforts),
     mcp: {
       serverName: String(mcp.server_name || mcp.serverName || "tcb-cluster"),
       activeCliType: String(mcp.active_cli_type || mcp.activeCliType || "codex"),
       tools: Array.isArray(mcp.tools) ? mcp.tools.map((tool) => String(tool)) : undefined,
       runtime: mapTarget(mcp.runtime),
-      codex: mapTarget(mcp.codex),
-      claude: mapTarget(mcp.claude),
-      deepseek: mcp.deepseek ? mapTarget(mcp.deepseek) : undefined,
-      antigravity: mcp.antigravity ? mapTarget(mcp.antigravity) : undefined,
-      pi: mcp.pi ? mapTarget(mcp.pi) : undefined,
+      codex: targetFor("codex", mcp.codex),
+      codexServer: mcp.codex_server || targets.codex_server ? targetFor("codex_server", mcp.codex_server) : undefined,
+      claude: targetFor("claude", mcp.claude),
+      deepseek: mcp.deepseek || targets.deepseek ? targetFor("deepseek", mcp.deepseek) : undefined,
+      antigravity: mcp.antigravity || targets.antigravity ? targetFor("antigravity", mcp.antigravity) : undefined,
+      pi: mcp.pi || targets.pi ? targetFor("pi", mcp.pi) : undefined,
+      ...(Object.keys(targets).length ? { targets, byCliType: targets } : {}),
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
       const agent = rawAgent && typeof rawAgent === "object" ? rawAgent as Record<string, unknown> : {};
@@ -2004,6 +2065,10 @@ function mapClusterAgentTask(raw: RawClusterAgentTask): ClusterAgentTask {
       : undefined,
     status: String(raw.status || "queued") as ClusterAgentTask["status"],
     modelTier: String(raw.model_tier ?? raw.modelTier ?? "") as ClusterAgentTask["modelTier"],
+    cliType: String(raw.cli_type ?? raw.cliType ?? "") || undefined,
+    executionMode: String(raw.execution_mode ?? raw.executionMode ?? "") || undefined,
+    model: String(raw.model || "") || undefined,
+    reasoningEffort: String(raw.reasoning_effort ?? raw.reasoningEffort ?? "") || undefined,
     allowWrite: Boolean(raw.allow_write ?? raw.allowWrite),
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
     startedAt: String(raw.started_at ?? raw.startedAt ?? ""),
@@ -2073,12 +2138,56 @@ function mapActiveClusterRun(raw: unknown) {
   };
 }
 
+function mapClusterSetupTarget(raw: unknown, cliType?: string): ClusterSetupTarget {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const list = (snake: string, camel: string) => {
+    const rawList = value[snake] ?? value[camel];
+    return Array.isArray(rawList) ? rawList.map((item) => String(item)) : undefined;
+  };
+  return {
+    cliType: String(value.cli_type ?? value.cliType ?? cliType ?? "") || undefined,
+    deepseekPatchPath: String(value.deepseek_patch_path || value.deepseekPatchPath || "") || undefined,
+    installCommand: list("install_command", "installCommand"),
+    verifyCommand: list("verify_command", "verifyCommand"),
+    removeCommand: list("remove_command", "removeCommand"),
+    piExtensionPath: String(value.pi_extension_path || value.piExtensionPath || "") || undefined,
+    piExtensionName: String(value.pi_extension_name || value.piExtensionName || "") || undefined,
+    selfTestCommand: list("self_test_command", "selfTestCommand"),
+    workspaceMcpConfigPath: String(value.workspace_mcp_config_path || value.workspaceMcpConfigPath || "") || undefined,
+    workspaceMcpScope: String(value.workspace_mcp_scope || value.workspaceMcpScope || "") || undefined,
+    mcpAllowedTools: Array.isArray(value.mcp_allowed_tools ?? value.mcpAllowedTools)
+      ? ((value.mcp_allowed_tools ?? value.mcpAllowedTools) as unknown[]).map((tool) => String(tool))
+      : undefined,
+    mcpSetupState: String(value.mcp_setup_state || value.mcpSetupState || "") || undefined,
+    mcpSetupSnippet: String(value.mcp_setup_snippet || value.mcpSetupSnippet || "") || undefined,
+    statuslineCommand: list("statusline_command", "statuslineCommand"),
+    unsupported: value.unsupported === true,
+    code: String(value.code || "") || undefined,
+    message: String(value.message || "") || undefined,
+  };
+}
+
 function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
   const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const list = (snake: string, camel: string) => {
     const rawList = value[snake] ?? value[camel];
     return Array.isArray(rawList) ? rawList.map((item) => String(item)) : [];
   };
+  const rawTargets = value.targets ?? value.by_cli_type ?? value.byCliType ?? value.target_setups ?? value.targetSetups;
+  const targets: Record<string, ClusterSetupTarget> = {};
+  if (rawTargets && typeof rawTargets === "object") {
+    if (Array.isArray(rawTargets)) {
+      for (const target of rawTargets) {
+        const item = target && typeof target === "object" ? target as Record<string, unknown> : {};
+        const cliType = String(item.cli_type ?? item.cliType ?? "").trim();
+        if (cliType) targets[cliType] = mapClusterSetupTarget(item, cliType);
+      }
+    } else {
+      for (const [cliType, target] of Object.entries(rawTargets as Record<string, unknown>)) {
+        targets[cliType] = mapClusterSetupTarget(target, cliType);
+      }
+    }
+  }
   return {
     serverName: String(value.server_name || value.serverName || "tcb-cluster"),
     launcherPath: String(value.launcher_path || value.launcherPath || ""),
@@ -2104,10 +2213,20 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     unsupported: value.unsupported === true,
     code: String(value.code || ""),
     message: String(value.message || ""),
+    ...(Object.keys(targets).length ? { targets, byCliType: targets } : {}),
   };
 }
 
 function mapClusterConfigInput(input: ClusterConfigUpdateInput): Record<string, unknown> {
+  const tierConfigs = input.tierConfigs
+    ? Object.fromEntries(Object.entries(input.tierConfigs).map(([tier, config]) => [tier, {
+      cli_type: config.cliType,
+      cli_path: config.cliPath,
+      provider: config.provider,
+      model: config.model,
+      reasoning_effort: config.reasoningEffort,
+    }]))
+    : undefined;
   return {
     ...(typeof input.enabled !== "undefined" ? { enabled: input.enabled } : {}),
     ...(input.writePolicy ? { write_policy: input.writePolicy } : {}),
@@ -2115,6 +2234,7 @@ function mapClusterConfigInput(input: ClusterConfigUpdateInput): Record<string, 
     ...(typeof input.defaultTimeoutSeconds !== "undefined" ? { default_timeout_seconds: input.defaultTimeoutSeconds } : {}),
     ...(input.modelTiers ? { model_tiers: input.modelTiers } : {}),
     ...(input.reasoningEfforts ? { reasoning_efforts: input.reasoningEfforts } : {}),
+    ...(tierConfigs ? { tier_configs: tierConfigs } : {}),
   };
 }
 
@@ -2830,11 +2950,18 @@ function mapCliParamsPayload(raw: RawCliParamsPayload): CliParamsPayload {
   const selectedProvider = String(raw.selected_provider ?? raw.selectedProvider ?? raw.params?.provider ?? "").trim();
   const catalogStatus = String(raw.catalog_status ?? raw.catalogStatus ?? "").trim();
   const catalogDiagnostic = String(raw.catalog_diagnostic ?? raw.catalogDiagnostic ?? "").trim();
+  const availability = String(raw.availability ?? (raw.available === false ? "missing" : "") ?? "").trim();
+  const diagnostic = String(raw.diagnostic ?? raw.status ?? "").trim();
   return {
-    cliType: raw.cli_type,
+    cliType: raw.cli_type ?? raw.cliType ?? "codex",
+    ...(String((raw as RawCliParamsPayload & { cli_path?: unknown; cliPath?: unknown }).cli_path ?? (raw as RawCliParamsPayload & { cliPath?: unknown }).cliPath ?? "").trim()
+      ? { cliPath: String((raw as RawCliParamsPayload & { cli_path?: unknown; cliPath?: unknown }).cli_path ?? (raw as RawCliParamsPayload & { cliPath?: unknown }).cliPath).trim() }
+      : {}),
     params: raw.params || {},
     defaults: raw.defaults || {},
     schema: raw.schema || {},
+    ...(availability ? { availability } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
     ...(providerOptions ? { providerOptions } : {}),
     ...(Object.keys(modelOptionsByProvider).length ? { modelOptionsByProvider } : {}),
     ...(selectedProvider ? { selectedProvider } : {}),
@@ -7453,8 +7580,11 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
-  async getCliParams(botAlias: string): Promise<CliParamsPayload> {
-    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`);
+  async getCliParams(botAlias: string, cliType?: CliType): Promise<CliParamsPayload> {
+    const params = new URLSearchParams();
+    if (cliType) params.set("cli_type", cliType);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params${suffix}`);
     return mapCliParamsPayload(data);
   }
 

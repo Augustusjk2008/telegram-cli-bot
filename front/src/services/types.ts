@@ -641,6 +641,16 @@ export type ClusterTierValues = {
 export type ClusterModelTiers = ClusterTierValues;
 export type ClusterReasoningEfforts = ClusterTierValues;
 
+export type ClusterTierConfig = {
+  cliType: CliType | string;
+  cliPath: string;
+  provider: string;
+  model: string;
+  reasoningEffort: string;
+};
+
+export type ClusterTierConfigs = Record<ClusterModelTier, ClusterTierConfig>;
+
 export type BotClusterConfig = {
   enabled: boolean;
   writePolicy: "main_only" | "all_agents";
@@ -648,6 +658,7 @@ export type BotClusterConfig = {
   defaultTimeoutSeconds: number;
   modelTiers: ClusterModelTiers;
   reasoningEfforts: ClusterReasoningEfforts;
+  tierConfigs?: ClusterTierConfigs;
 };
 
 export type AgentClusterConfig = {
@@ -692,16 +703,20 @@ export type ClusterStatus = {
   enabled: boolean;
   modelTiers: ClusterModelTiers;
   reasoningEfforts: ClusterReasoningEfforts;
+  tierConfigs?: ClusterTierConfigs;
   mcp: {
     serverName: string;
     activeCliType: CliType | string;
     tools?: string[];
     runtime?: ClusterMcpTargetStatus;
     codex: ClusterMcpTargetStatus;
+    codexServer?: ClusterMcpTargetStatus;
     claude: ClusterMcpTargetStatus;
     deepseek?: ClusterMcpTargetStatus;
     antigravity?: ClusterMcpTargetStatus;
     pi?: ClusterMcpTargetStatus;
+    targets?: Record<string, ClusterMcpTargetStatus>;
+    byCliType?: Record<string, ClusterMcpTargetStatus>;
   };
   agents: ClusterAgentStatus[];
 };
@@ -715,6 +730,10 @@ export type ClusterAgentTask = {
   assignmentRevision?: number;
   status: "queued" | "running" | "completed" | "failed" | "cancelled" | string;
   modelTier: ClusterModelTier | string;
+  cliType?: CliType | string;
+  executionMode?: ChatExecutionMode | string;
+  model?: string;
+  reasoningEffort?: string;
   allowWrite: boolean;
   createdAt: string;
   startedAt: string;
@@ -822,6 +841,28 @@ export type ClusterSetupPrepareResult = {
   unsupported?: boolean;
   code?: string;
   message?: string;
+  targets?: Record<string, ClusterSetupTarget>;
+  byCliType?: Record<string, ClusterSetupTarget>;
+};
+
+export type ClusterSetupTarget = {
+  cliType?: CliType | string;
+  deepseekPatchPath?: string;
+  installCommand?: string[];
+  verifyCommand?: string[];
+  removeCommand?: string[];
+  piExtensionPath?: string;
+  piExtensionName?: string;
+  selfTestCommand?: string[];
+  workspaceMcpConfigPath?: string;
+  workspaceMcpScope?: string;
+  mcpAllowedTools?: string[];
+  mcpSetupState?: string;
+  mcpSetupSnippet?: string;
+  statuslineCommand?: string[];
+  unsupported?: boolean;
+  code?: string;
+  message?: string;
 };
 
 export type ClusterConfigUpdateInput = {
@@ -831,6 +872,7 @@ export type ClusterConfigUpdateInput = {
   defaultTimeoutSeconds?: number;
   modelTiers?: ClusterModelTiers;
   reasoningEfforts?: ClusterReasoningEfforts;
+  tierConfigs?: ClusterTierConfigs;
 };
 
 export type ClusterConfigUpdateResult = {
@@ -2723,9 +2765,12 @@ export type DeepSeekSelectionRequest = {
 
 export type CliParamsPayload = {
   cliType: CliType;
+  cliPath?: string;
   params: Record<string, unknown>;
   defaults: Record<string, unknown>;
   schema: Record<string, CliParamField>;
+  availability?: "available" | "missing" | "unsupported" | "error" | string;
+  diagnostic?: string;
   providerOptions?: DeepSeekProviderOption[];
   modelOptionsByProvider?: Record<string, DeepSeekModelOption[]>;
   selectedProvider?: string;
