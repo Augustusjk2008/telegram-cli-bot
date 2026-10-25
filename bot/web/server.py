@@ -108,14 +108,9 @@ from bot.runtime_paths import (
     get_tunnel_state_path,
 )
 from bot.session_store import close_session_store, session_store_diagnostics
-from bot.updater import (
-    check_for_updates,
-    download_latest_update,
-    get_update_status,
-    list_offline_update_packages,
-    prepare_offline_update,
-    set_update_enabled,
-)
+from bot.updater import list_offline_update_packages
+from bot.update_service import get_update_service, UpdateServiceError, ACTIVE_PHASES
+from bot.update_state import UpdateConflict
 from .announcement_store import AnnouncementStore
 from .theme_store import ThemeStore
 from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diagnostics, run_chat_store_io
@@ -1097,7 +1092,12 @@ class WebApiServer:
         self.storage_migration_api = StorageMigrationApi(
             storage_migration_service,
             stop_all_agents=storage_migration_stop_all_agents,
+            update_guard=self._guard_storage_update,
         )
+        self._update_service = None
+        self._update_readiness = None
+        self._update_exit_pending = False
+        self._update_active_requests = 0
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._loop_lag_task: asyncio.Task[None] | None = None
@@ -1742,6 +1742,21 @@ class WebApiServer:
         return self._exposure_service.snapshot()
 
     async def health(self, request: web.Request) -> web.Response:
+        import secrets
+        from bot.version import APP_VERSION
+        from bot.update_migration_gate import frontend_readiness
+        if self._update_readiness is None:
+            self._update_readiness = await asyncio.to_thread(
+                frontend_readiness, _REPO_ROOT, self._get_static_dir(), self._web_base_path())
+        try:
+            build = json.loads((_REPO_ROOT / ".update-manifest.json").read_text(encoding="utf-8")).get("commit", "")
+        except (OSError, ValueError):
+            build = ""
+        readiness = {"migrations": config.MIGRATIONS_READY, "web": self._site is not None,
+                     "frontend": self._update_readiness}
+        expected_token = os.environ.get("TCB_UPDATE_HEALTH_TOKEN", "")
+        received_token = request.headers.get("X-TCB-Update-Token", "") if request is not None else ""
+        health_token = expected_token if expected_token and secrets.compare_digest(received_token, expected_token) else ""
         return _json(
             {
                 "ok": True,
@@ -1753,6 +1768,16 @@ class WebApiServer:
                 "node_id": TCB_NODE_ID,
                 "base_path": self._web_base_path(),
                 "host_info": _build_public_host_info(),
+                "version": APP_VERSION,
+                "build": build,
+                "build_id": build,
+                "job_id": os.environ.get("TCB_UPDATE_JOB_ID", ""),
+                "update_job_id": os.environ.get("TCB_UPDATE_JOB_ID", ""),
+                "token": health_token,
+                "health_token": health_token,
+                "update_health_token": health_token,
+                "ready": all(readiness.values()),
+                "readiness": readiness,
             }
         )
 
@@ -4880,7 +4905,145 @@ class WebApiServer:
 
     async def admin_get_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": get_update_status(_REPO_ROOT)})
+        return _json({"ok": True, "data": await self._update_call(self.update_service.status)})
+
+    @property
+    def update_service(self):
+        if self._update_service is None:
+            self._update_service = get_update_service(_REPO_ROOT)
+        return self._update_service
+
+    async def _update_call(self, method, *args, **kwargs):
+        try:
+            return await asyncio.to_thread(method, *args, **kwargs)
+        except UpdateServiceError as exc:
+            raise WebApiError(exc.status, exc.code, str(exc)) from exc
+        except UpdateConflict as exc:
+            raise WebApiError(409, "update_conflict", str(exc)) from exc
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_update", str(exc)) from exc
+
+    def _guard_storage_update(self):
+        if config.UPDATE_DRAINING or config.UPDATE_REQUESTED:
+            raise StorageMigrationApiError(409, "update_busy", "宿主正在进行升级交接")
+        job = self.update_service.store.read().get("job") or {}
+        if job.get("phase") in ACTIVE_PHASES:
+            raise StorageMigrationApiError(409, "update_busy", "请先完成或取消当前升级任务")
+
+    def _update_idle_reason(self):
+        if self._update_active_requests:
+            return "宿主仍有执行中的变更请求"
+        if self.storage_migration_api.maintenance or self.storage_migration_api._begin_in_progress:
+            return "存储迁移正在进行中"
+        if any(task is not None and not task.done() for task in (
+                self.storage_migration_api._preview_task, self.storage_migration_api._task)):
+            return "存储迁移仍有运行中的任务"
+        from bot.runtime_paths import get_storage_journal_path
+        try:
+            migration = json.loads(get_storage_journal_path().read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            migration = {}
+        except (OSError, ValueError):
+            return "无法确认存储迁移状态"
+        if migration.get("state") in {"stopping", "copying", "rewriting", "verifying", "committing", "awaiting_restart", "cleanup_pending"}:
+            return "存储迁移尚未完成"
+        from bot.sessions import sessions, sessions_lock
+        from .api_service import _CLUSTER_RUNTIME
+        with sessions_lock:
+            if any(session.is_processing or getattr(session, "_lifecycle_operation", "")
+                   or (session.process is not None and session.process.poll() is None)
+                   for session in sessions.values()):
+                return "智能体仍有运行中的任务"
+        if any(task.status in {"queued", "running"} for run in _CLUSTER_RUNTIME._runs.values() for task in run.tasks.values()):
+            return "集群仍有排队或运行中的任务"
+        service = get_native_agent_service()
+        if any(not channel.diagnostics().get("finished") for channel in service._turn_channels.values()):
+            return "原生智能体仍有运行中的任务"
+        if config.RESTART_REQUESTED:
+            return "宿主正在重启"
+        return ""
+
+    def _schedule_update_exit(self, job_id, state_file):
+        self._update_exit_pending = True
+        async def delayed_exit():
+            await asyncio.sleep(RESTART_RESPONSE_DELAY_SECONDS)
+            config.request_update(job_id, state_file)
+        self._restart_task = asyncio.create_task(delayed_exit())
+
+    async def admin_update_job_action(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        body = await self._parse_json(request)
+        revision = body.get("revision")
+        if type(revision) is not int or revision < 0:
+            raise WebApiError(400, "invalid_update_revision", "revision 必须是非负整数")
+        job_id, action = request.match_info["job_id"], request.match_info["action"]
+        if action == "apply":
+            async with self.storage_migration_api._lock:
+                if config.UPDATE_DRAINING or config.UPDATE_REQUESTED:
+                    raise WebApiError(409, "update_restarting", "宿主正在进行升级交接")
+                config.UPDATE_DRAINING = True
+                # State validation and idle inspection execute on the event loop as one handoff.
+                try:
+                    data = self.update_service.request_apply(
+                        job_id, revision, idle_check=self._update_idle_reason,
+                        request_exit=self._schedule_update_exit,
+                        health={"host": self._host, "port": self._port, "base_path": self._web_base_path(),
+                                "instance_id": self._instance_id, "node_id": TCB_NODE_ID})
+                except UpdateServiceError as exc:
+                    raise WebApiError(exc.status, exc.code, str(exc)) from exc
+                except (UpdateConflict, ValueError) as exc:
+                    raise WebApiError(409, "update_conflict", str(exc)) from exc
+                finally:
+                    if not self._update_exit_pending:
+                        config.UPDATE_DRAINING = False
+        elif action in {"cancel", "retry"}:
+            if action == "retry":
+                async with self.storage_migration_api._lock:
+                    self._ensure_update_preparation_allowed()
+                    data = await self._update_call(self.update_service.retry, job_id, revision)
+            else:
+                data = await self._update_call(self.update_service.cancel, job_id, revision)
+        else:
+            raise WebApiError(404, "update_action_not_found", "更新操作不存在")
+        return _json({"ok": True, "data": data}, status=202)
+
+    async def admin_update_job_events(self, request: web.Request) -> web.StreamResponse:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return await self._subscribe_update(request, request.match_info["job_id"])
+
+    async def _subscribe_update(self, request, job_id):
+        state = await self._update_call(self.update_service.status)
+        await self._update_call(self.update_service._require_job, state, job_id)
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"})
+        await response.prepare(request)
+        try:
+            async for event in self.update_service.events(job_id):
+                await response.write(_format_sse(event["type"], event))
+            await response.write_eof()
+        except _CLIENT_DISCONNECT_ERRORS:
+            pass
+        return response
+
+    async def admin_update_offline_upload(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        if self.storage_migration_api.maintenance:
+            raise WebApiError(409, "storage_migration_busy", "存储迁移正在进行中")
+        reader = await request.multipart()
+        field = await reader.next()
+        if field is None or field.name != "file" or not field.filename:
+            raise WebApiError(400, "missing_update_file", "需要 multipart file 更新包")
+        async def chunks():
+            while chunk := await field.read_chunk(1024 * 1024):
+                yield chunk
+        try:
+            async with self.storage_migration_api._lock:
+                self._ensure_update_preparation_allowed()
+                data = await self.update_service.upload(field.filename, chunks())
+        except UpdateServiceError as exc:
+            raise WebApiError(exc.status, exc.code, str(exc)) from exc
+        except UpdateConflict as exc:
+            raise WebApiError(409, "update_conflict", str(exc)) from exc
+        return _json({"ok": True, "data": data}, status=202)
 
     async def admin_runtime_diagnostics(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -4909,119 +5072,56 @@ class WebApiServer:
     async def admin_patch_update(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         body = await self._parse_json(request)
-        data = set_update_enabled(bool(body.get("update_enabled", True)), _REPO_ROOT)
+        data = await self._update_call(self.update_service.set_enabled, body.get("update_enabled"))
         return _json({"ok": True, "data": data})
 
     async def admin_update_check(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        data = await asyncio.to_thread(check_for_updates, _REPO_ROOT)
+        data = await self._update_call(self.update_service.check)
         return _json({"ok": True, "data": data})
+
+    def _ensure_update_preparation_allowed(self):
+        if self.storage_migration_api.maintenance:
+            raise WebApiError(409, "storage_migration_busy", "存储迁移正在进行中")
 
     async def admin_update_download(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        repo_root = Path(__file__).resolve().parents[2]
-        data = await asyncio.to_thread(download_latest_update, repo_root)
-        return _json({"ok": True, "data": data})
+        async with self.storage_migration_api._lock:
+            self._ensure_update_preparation_allowed()
+            data = await self._update_call(self.update_service.start_online)
+        return _json({"ok": True, "data": data}, status=202)
 
     async def admin_update_download_stream(self, request: web.Request) -> web.StreamResponse:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        await self._parse_json(request)
-
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
-        )
-        await response.prepare(request)
-
-        client_disconnected = False
-        async for event in stream_update_download(_REPO_ROOT):
-            if client_disconnected:
-                continue
-            try:
-                await response.write(_format_sse(event["type"], event))
-            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                client_disconnected = True
-                logger.debug("更新下载 SSE 客户端已断开，继续在后台下载")
-
-        if not client_disconnected:
-            try:
-                await response.write_eof()
-            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                logger.debug("更新下载 SSE 客户端在结束前断开")
-        return response
+        async with self.storage_migration_api._lock:
+            self._ensure_update_preparation_allowed()
+            data = await self._update_call(self.update_service.start_online)
+        return await self._subscribe_update(request, data["job"]["job_id"])
 
     async def admin_update_offline_packages(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         data = await asyncio.to_thread(list_offline_update_packages, _REPO_ROOT)
         return _json({"ok": True, "data": data})
 
-    async def admin_update_offline_prepare(self, request: web.Request) -> web.Response:
+    async def _start_offline_request(self, request):
         await self._with_capability(request, CAP_ADMIN_OPS)
+        self._ensure_update_preparation_allowed()
         body = await self._parse_json(request)
-        package_path = str(body.get("path") or body.get("package_path") or "").strip()
-        version = str(body.get("version") or "").strip()
-        if not package_path:
-            raise WebApiError(400, "missing_package_path", "离线包路径不能为空")
-        data = await asyncio.to_thread(prepare_offline_update, _REPO_ROOT, package_path, version=version)
-        return _json({"ok": True, "data": data})
+        path = body.get("path") or body.get("package_path") or ""
+        version = body.get("version", "")
+        if not isinstance(path, str) or not isinstance(version, str):
+            raise WebApiError(400, "invalid_update_package", "path 和 version 必须是字符串")
+        async with self.storage_migration_api._lock:
+            self._ensure_update_preparation_allowed()
+            return await self._update_call(self.update_service.start_offline, path, version)
+
+    async def admin_update_offline_prepare(self, request: web.Request) -> web.Response:
+        data = await self._start_offline_request(request)
+        return _json({"ok": True, "data": data}, status=202)
 
     async def admin_update_offline_prepare_stream(self, request: web.Request) -> web.StreamResponse:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        body = await self._parse_json(request)
-        package_path = str(body.get("path") or body.get("package_path") or "").strip()
-        version = str(body.get("version") or "").strip()
-        if not package_path:
-            raise WebApiError(400, "missing_package_path", "离线包路径不能为空")
-
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            },
-        )
-        await response.prepare(request)
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-        def progress(line: str) -> None:
-            loop.call_soon_threadsafe(
-                queue.put_nowait,
-                {"type": "progress", "phase": "log", "downloaded_bytes": 0, "message": line},
-            )
-
-        task = asyncio.create_task(
-            asyncio.to_thread(prepare_offline_update, _REPO_ROOT, package_path, version=version, log_callback=progress)
-        )
-        client_disconnected = False
-        try:
-            while not task.done() or not queue.empty():
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
-                except asyncio.TimeoutError:
-                    continue
-                if client_disconnected:
-                    continue
-                try:
-                    await response.write(_format_sse("progress", event))
-                except _CLIENT_DISCONNECT_ERRORS:
-                    client_disconnected = True
-            data = await task
-            done = {"type": "done", "phase": "log", "downloaded_bytes": 0, "percent": 100, "status": data}
-            if not client_disconnected:
-                await response.write(_format_sse("done", done))
-                await response.write_eof()
-        except Exception as exc:
-            error = {"type": "error", "phase": "error", "downloaded_bytes": 0, "message": str(exc)}
-            if not client_disconnected:
-                await response.write(_format_sse("error", error))
-                await response.write_eof()
-        return response
+        data = await self._start_offline_request(request)
+        return await self._subscribe_update(request, data["job"]["job_id"])
 
     async def admin_env_get(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -5259,27 +5359,41 @@ class WebApiServer:
         return _json({"ok": True, "data": {"bot": self._decorate_bot_for_auth(auth, build_bot_summary(self.manager, alias))}})
 
     async def _auto_refresh_update_status(self) -> None:
-        status = get_update_status(_REPO_ROOT)
-        if not status.get("update_enabled"):
-            return
+        from scripts.update_package import compare_versions
         try:
-            checked_status = await asyncio.to_thread(check_for_updates, _REPO_ROOT)
-            latest_version = str(checked_status.get("last_available_version") or "").strip()
-            current_version = str(checked_status.get("current_version") or "").strip()
-            pending_version = str(
-                checked_status.get("pending_update_version")
-                or status.get("pending_update_version")
-                or ""
-            ).strip()
-            if latest_version and latest_version != current_version and latest_version != pending_version:
-                logger.info("检测到新版本 %s，开始后台下载更新包", latest_version)
-                await asyncio.to_thread(download_latest_update, _REPO_ROOT)
+            status = await asyncio.to_thread(self.update_service.status)
+            if not status.get("update_enabled"):
+                return
+            checked = await asyncio.to_thread(self.update_service.check)
+            if (checked["last_check"].get("ok") is not True or checked["last_check"].get("cached")
+                    or not checked.get("update_enabled")):
+                return
+            latest = checked.get("last_available_version")
+            if latest and compare_versions(latest, checked.get("current_version", "")) > 0:
+                async with self.storage_migration_api._lock:
+                    self._ensure_update_preparation_allowed()
+                    await asyncio.to_thread(self.update_service.start_online, release=checked["last_check"]["release"])
         except Exception as exc:
-            logger.warning("自动后台下载更新失败: %s", exc)
+            logger.warning("自动后台准备更新失败: %s", exc)
+
+    def _update_maintenance_middleware(self):
+        @web.middleware
+        async def dispatch(request, handler):
+            if (self._update_exit_pending or config.UPDATE_DRAINING or config.UPDATE_REQUESTED) and "/api/admin/update" not in request.path and not request.path.endswith("/api/health"):
+                raise WebApiError(503, "update_restarting", "更新正在交接，请等待宿主重新启动")
+            track = "/api/admin/update" not in request.path and request.method in {"POST", "PATCH", "PUT", "DELETE"}
+            if track:
+                self._update_active_requests += 1
+            try:
+                return await handler(request)
+            finally:
+                if track:
+                    self._update_active_requests -= 1
+        return dispatch
 
     def _build_app(self) -> web.Application:
         app = web.Application(
-            middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware, remote_routes.middleware(self)],
+            middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware, self._update_maintenance_middleware(), remote_routes.middleware(self)],
             client_max_size=25 * 1024 * 1024,
         )
         self._register_app_routes(app)
@@ -5324,6 +5438,10 @@ class WebApiServer:
             theme_routes,
         ):
             module.register(app, self)
+        app.router.add_get("/api/admin/update/jobs/current", self.admin_get_update)
+        app.router.add_get("/api/admin/update/jobs/{job_id}/events", self.admin_update_job_events)
+        app.router.add_post("/api/admin/update/jobs/{job_id}/{action:apply|cancel|retry}", self.admin_update_job_action)
+        app.router.add_post("/api/admin/update/offline/upload", self.admin_update_offline_upload)
         app.router.add_get("/api/notifications/settings", self.get_notification_settings)
         app.router.add_post("/api/notifications/pushplus/test", self.post_pushplus_test)
         app.router.add_get("/api/notifications/ws", self.notifications_ws)
@@ -5502,15 +5620,19 @@ class WebApiServer:
         await self._site.start()
         self._start_loop_stall_watchdog()
         self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
-        if get_update_status().get("update_enabled"):
-            self._update_task = asyncio.create_task(self._auto_refresh_update_status())
-        if self._fixed_forward_service.should_autostart():
-            fixed_snapshot = await self._fixed_forward_service.start()
-            logger.debug("固定公网转发状态: %s %s", fixed_snapshot.get("status"), fixed_snapshot.get("public_url") or "")
-        if self._tunnel_service.should_autostart():
-            tunnel_snapshot = await self._tunnel_service.start()
-            await self._notify_or_schedule_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
-            logger.debug("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
+        self._update_task = asyncio.create_task(self._auto_refresh_update_status())
+        try:
+            if self._fixed_forward_service.should_autostart():
+                fixed_snapshot = await self._fixed_forward_service.start()
+                logger.debug("固定公网转发状态: %s %s", fixed_snapshot.get("status"), fixed_snapshot.get("public_url") or "")
+            if self._tunnel_service.should_autostart():
+                tunnel_snapshot = await self._tunnel_service.start()
+                await self._notify_or_schedule_tunnel_public_url(tunnel_snapshot, reason="web_server_start")
+                logger.debug("Web tunnel 状态: %s %s", tunnel_snapshot.get("status"), tunnel_snapshot.get("public_url") or "")
+        except Exception:
+            if not os.environ.get("TCB_UPDATE_JOB_ID"):
+                raise
+            logger.exception("升级启动期间公网隧道暂不可用，核心 Web 已启动")
         local_url = TunnelService._build_local_url(self._host, self._port)
         logger.debug(
             "Web API 已启动: %s (token=%s, allowed_origins=%s, node_id=%s, base_path=%s, public_url=%s, fixed_public_url=%s)",

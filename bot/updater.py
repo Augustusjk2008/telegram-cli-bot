@@ -11,6 +11,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import re
+import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -62,51 +65,16 @@ class _PackageStreamError(RuntimeError):
 
 
 def get_update_status(repo_root: Path | None = None) -> dict[str, Any]:
-    settings = app_settings._load_settings()
-    return {
-        "current_version": APP_VERSION,
-        "current_package_kind": detect_update_package_kind(repo_root),
-        "update_enabled": bool(settings["update_enabled"]),
-        "update_channel": settings["update_channel"] or "release",
-        "last_checked_at": settings["last_checked_at"],
-        "last_available_version": settings["last_available_version"],
-        "last_available_release_url": settings["last_available_release_url"],
-        "last_available_notes": settings["last_available_notes"],
-        "pending_update_version": settings["pending_update_version"],
-        "pending_update_path": settings["pending_update_path"],
-        "pending_update_notes": settings["pending_update_notes"],
-        "pending_update_platform": settings["pending_update_platform"],
-        "pending_update_package_kind": settings["pending_update_package_kind"],
-        "pending_update_sha256": settings.get("pending_update_sha256", ""),
-        "update_last_error": settings["update_last_error"],
-    }
-
+    from bot.update_service import get_update_service
+    return get_update_service(repo_root).status()
 
 def set_update_enabled(enabled: bool, repo_root: Path | None = None) -> dict[str, Any]:
-    settings = app_settings._load_settings()
-    settings["update_enabled"] = bool(enabled)
-    app_settings._save_settings(settings)
-    return get_update_status(repo_root)
-
+    from bot.update_service import get_update_service
+    return get_update_service(repo_root).set_enabled(enabled)
 
 def check_for_updates(repo_root: Path | None = None) -> dict[str, Any]:
-    settings = app_settings._load_settings()
-    settings["last_checked_at"] = _now_iso()
-    settings["update_last_error"] = ""
-
-    try:
-        release = _fetch_latest_release()
-    except Exception as exc:
-        settings["update_last_error"] = str(exc)
-        app_settings._save_settings(settings)
-        return get_update_status(repo_root)
-
-    settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
-    settings["last_available_release_url"] = str(release.get("html_url") or "")
-    settings["last_available_notes"] = str(release.get("body") or "")
-    app_settings._save_settings(settings)
-    return get_update_status(repo_root)
-
+    from bot.update_service import get_update_service
+    return get_update_service(repo_root).check()
 
 def _build_url_opener():
     proxy_url = app_settings.get_git_proxy_url()
@@ -167,53 +135,79 @@ def _looks_like_portable_install(repo_root: Path) -> bool:
     ) or (repo_root / "PORTABLE-README.txt").exists()
 
 
-def download_latest_update(
-    repo_root: Path | None = None,
-    progress_callback: Any | None = None,
-) -> dict[str, Any]:
-    effective_progress_callback = progress_callback or _print_download_progress
-    settings = app_settings._load_settings()
-    settings["last_checked_at"] = _now_iso()
-    settings["update_last_error"] = ""
-    _emit_download_log(effective_progress_callback, "正在检查最新版本信息")
-    package_kind = detect_update_package_kind(repo_root)
-    _emit_download_log(effective_progress_callback, f"当前安装类型: {_format_update_package_kind(package_kind)}")
+def download_latest_update(repo_root: Path | None = None, progress_callback: Any | None = None) -> dict[str, Any]:
+    from bot.update_service import get_update_service
+    return get_update_service(repo_root).start_online()
 
-    try:
-        release = _fetch_latest_release()
-        settings["last_available_version"] = _normalize_tag_name(release.get("tag_name"))
-        settings["last_available_release_url"] = str(release.get("html_url") or "")
-        settings["last_available_notes"] = str(release.get("body") or "")
 
-        asset = _select_release_asset(release.get("assets", []), package_kind)
-        checksum_asset = _select_release_checksum_asset(release.get("assets", []), str(asset.get("name") or ""))
-        cache_root = _prepare_update_cache_dir(repo_root, progress_callback=effective_progress_callback)
-        target_path = cache_root / asset["name"]
-        checksum_path = cache_root / checksum_asset["name"]
-        _emit_download_log(effective_progress_callback, f"找到更新包: {asset['name']}")
-        _download_file(
-            asset["browser_download_url"],
-            target_path,
-            progress_callback=effective_progress_callback,
-        )
-        _download_text_file(checksum_asset["browser_download_url"], checksum_path)
-        expected_sha256 = _read_sha256_file(checksum_path, asset["name"])
-        _verify_file_sha256(target_path, expected_sha256)
-    except Exception as exc:
-        settings["update_last_error"] = str(exc)
-        app_settings._save_settings(settings)
-        raise
+def _download_release_package(repo_root: Path, job_dir: Path, release: dict,
+                              progress_callback=None) -> Path:
+    """Download only assets belonging to the already selected release."""
+    from scripts.update_package import normalize_path, normalize_version
+    normalize_version(release.get("tag_name"))
+    kind = detect_update_package_kind(repo_root)
+    asset = _select_release_asset(release.get("assets", []), kind)
+    checksum = _select_release_checksum_asset(release.get("assets", []), asset.get("name", ""))
+    for item in (asset, checksum):
+        name = normalize_path(str(item.get("name") or ""))
+        if not name or "/" in name:
+            raise RuntimeError("Release 资产文件名无效")
+    target = Path(job_dir) / asset["name"]
+    checksum_path = Path(job_dir) / checksum["name"]
+    _download_text_file(checksum["browser_download_url"], checksum_path)
+    expected = _read_sha256_file(checksum_path, asset["name"])
+    _download_file(asset["browser_download_url"], target, progress_callback)
+    _verify_file_sha256(target, expected)
+    return target
 
-    settings["pending_update_version"] = _normalize_tag_name(release["tag_name"])
-    settings["pending_update_path"] = str(target_path)
-    settings["pending_update_notes"] = str(release.get("body") or "")
-    settings["pending_update_platform"] = _pending_update_platform(package_kind)
-    settings["pending_update_package_kind"] = package_kind
-    settings["pending_update_sha256"] = expected_sha256
-    app_settings._save_settings(settings)
-    _emit_download_log(effective_progress_callback, f"更新包已保存到: {target_path}")
-    return get_update_status(repo_root)
 
+def prepare_update_payload(repo_root: Path, package_path: Path, job_dir: Path, *,
+                           expected_version="", progress_callback=None) -> dict[str, Any]:
+    from scripts.update_package import inspect_package, ownership_plan, normalize_version
+    from bot.runtime_paths import get_app_data_root, get_tcb_home_root
+    root, package = Path(repo_root).resolve(), Path(package_path).resolve()
+    _assert_no_unfinished_legacy_transactions(root)
+    if not package.is_file():
+        raise RuntimeError(f"更新包不存在: {package}")
+    version_file = root / "VERSION"
+    current = normalize_version(version_file.read_text(encoding="utf-8-sig") if version_file.exists() else APP_VERSION)
+    staging = Path(job_dir).resolve() / "staging"
+    kind = detect_update_package_kind(root)
+    digest = _file_sha256(package)
+    if package.parent != Path(job_dir).resolve():
+        from scripts.update_transaction import durable_copy
+        suffix = ".zip" if _is_zip_package(package) else ".tar.gz" if _is_tar_gz_package(package) else ""
+        if not suffix:
+            raise RuntimeError("更新包只支持 .zip 或 .tar.gz")
+        frozen_package = Path(job_dir).resolve() / ("package" + suffix)
+        frozen_package.parent.mkdir(parents=True, exist_ok=True)
+        if shutil.disk_usage(frozen_package.parent).free < package.stat().st_size + 64 * 1024**2:
+            raise RuntimeError("离线包缓存空间不足")
+        durable_copy(package, frozen_package)
+        if _file_sha256(frozen_package) != digest:
+            raise RuntimeError("复制期间离线更新包发生变化，请重新选择")
+        package = frozen_package
+    manifest = inspect_package(package, staging_dir=staging, expected_version=expected_version,
+                               current_version=current, expected_kind=kind,
+                               expected_platform=_expected_distribution_platform(kind),
+                               progress_callback=progress_callback)
+    if _file_sha256(package) != digest:
+        raise RuntimeError("校验期间更新包发生变化，请重新选择")
+    files, deleted = ownership_plan(root, manifest)
+    for runtime_root in (get_app_data_root(), get_tcb_home_root()):
+        runtime_root = Path(runtime_root).resolve()
+        if runtime_root.is_relative_to(root):
+            for relative in [*files, *deleted]:
+                if (root / relative).resolve().is_relative_to(runtime_root):
+                    raise RuntimeError(f"程序文件清单覆盖当前存储位置: {relative}")
+    backup_size = sum((root / name).stat().st_size for name in [*files, *deleted] if (root / name).is_file())
+    if shutil.disk_usage(job_dir).free < backup_size + 64 * 1024**2:
+        raise RuntimeError("更新恢复备份空间不足")
+    return {"current_version": current, "target_version": manifest["version"], "package_kind": kind,
+            "package_sha256": digest, "package_path": str(package), "staging_dir": str(staging),
+            "files": files, "delete_paths": deleted, "manifest": manifest,
+            "original_hashes": {name: _file_sha256(root / name) if (root / name).is_file() else None
+                                for name in [*files, *deleted]}}
 
 def list_offline_update_packages(repo_root: Path | None = None) -> dict[str, Any]:
     root = Path(repo_root or Path.cwd()).resolve()
@@ -229,10 +223,12 @@ def list_offline_update_packages(repo_root: Path | None = None) -> dict[str, Any
             valid = True
             error = ""
             try:
-                distribution = _read_package_distribution_from_package(path)
+                from scripts.update_package import inspect_package
+                distribution = inspect_package(path, current_version=APP_VERSION,
+                                               expected_kind=detect_update_package_kind(root),
+                                               expected_platform=_expected_distribution_platform(detect_update_package_kind(root)))
                 package_kind = distribution.get("package_kind") or ""
                 version = distribution.get("version") or ""
-                _validate_package_distribution(root, distribution, package_name=path.name)
             except Exception as exc:
                 valid = False
                 error = str(exc)
@@ -251,44 +247,14 @@ def list_offline_update_packages(repo_root: Path | None = None) -> dict[str, Any
     return {"artifacts_dir": str(artifacts_dir), "items": items}
 
 
-def prepare_offline_update(
-    repo_root: Path | None,
-    package_path: Path | str,
-    *,
-    version: str = "",
-    log_callback: Any | None = None,
-) -> dict[str, Any]:
+def prepare_offline_update(repo_root: Path | None, package_path: Path | str, *, version: str = "",
+                           log_callback: Any | None = None) -> dict[str, Any]:
+    from bot.update_service import get_update_service
     root = Path(repo_root or Path.cwd()).resolve()
     package = Path(package_path).expanduser()
     if not package.is_absolute():
-        package = (root / package).resolve()
-    _emit_apply_log(log_callback, f"正在校验离线更新包: {package.name}")
-    if not package.exists():
-        raise RuntimeError(f"更新包不存在: {package}")
-    _validate_package_file(package)
-    distribution = _read_package_distribution_from_package(package)
-    _validate_package_distribution(root, distribution, package_name=package.name)
-    package_kind = distribution.get("package_kind") or detect_update_package_kind(root)
-    package_version = _normalize_tag_name(distribution.get("version"))
-    settings = app_settings._load_settings()
-    settings["pending_update_version"] = (
-        _normalize_tag_name(version)
-        or package_version
-        or _normalize_tag_name(settings.get("last_available_version"))
-        or "offline"
-    )
-    settings["pending_update_path"] = str(package)
-    settings["pending_update_notes"] = "离线更新包"
-    settings["pending_update_platform"] = (
-        str(distribution.get("platform") or "").strip() or _pending_update_platform(package_kind)
-    )
-    settings["pending_update_package_kind"] = package_kind
-    settings["pending_update_sha256"] = _file_sha256(package)
-    settings["update_last_error"] = ""
-    app_settings._save_settings(settings)
-    _emit_apply_log(log_callback, "离线更新包已设置为待应用。关闭当前程序后重新运行 start.bat 生效。")
-    return get_update_status(root)
-
+        package = root / package
+    return get_update_service(root).start_offline(package, version)
 
 def _print_download_progress(progress: dict[str, Any]) -> None:
     message = str(progress.get("message") or "").strip()
@@ -303,196 +269,15 @@ def _emit_apply_log(log_callback: Any | None, message: str) -> None:
 
 
 def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> dict[str, Any]:
-    repo_root = Path(repo_root).resolve()
-    _recover_interrupted_update_applications(repo_root, log_callback=log_callback)
-    settings = app_settings._load_settings()
-    pending_path = str(settings.get("pending_update_path") or "").strip()
-    pending_version = _normalize_tag_name(settings.get("pending_update_version"))
-    current_version = _normalize_tag_name(APP_VERSION)
-    if pending_version and pending_version == current_version:
-        _clear_pending_update(settings)
-        settings["update_last_error"] = ""
-        app_settings._save_settings(settings)
-        _emit_apply_log(log_callback, f"当前版本已是 {current_version}，跳过待更新包。")
-        return {
-            "applied": False,
-            "skipped": True,
-            "reason": "already_current_version",
-            "version": current_version,
-        }
-    if not pending_path:
-        _emit_apply_log(log_callback, "没有待应用的更新。")
-        return {"applied": False, "reason": "no_pending_update"}
-    if pending_version:
-        _emit_apply_log(log_callback, f"开始应用待更新版本: {pending_version}")
-    else:
-        _emit_apply_log(log_callback, "开始应用待更新版本。")
-
-    package_path = Path(pending_path)
-    if not package_path.is_absolute():
-        package_path = (repo_root / package_path).resolve()
-    if not package_path.exists():
-        settings["update_last_error"] = f"更新包不存在: {package_path}"
-        app_settings._save_settings(settings)
-        _emit_apply_log(log_callback, settings["update_last_error"])
-        return {"applied": False, "reason": "missing_package", "path": str(package_path)}
-    expected_sha256 = str(settings.get("pending_update_sha256") or "").strip()
-    if expected_sha256:
-        try:
-            _verify_file_sha256(package_path, expected_sha256)
-        except Exception as exc:
-            settings["update_last_error"] = str(exc)
-            app_settings._save_settings(settings)
-            _emit_apply_log(log_callback, settings["update_last_error"])
-            return {
-                "applied": False,
-                "reason": "checksum_mismatch",
-                "package_path": str(package_path),
-                "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-            }
-
+    """Compatibility command: recover interrupted legacy writes, never consume a ready package."""
     try:
-        distribution = _read_package_distribution_from_package(package_path)
-        _validate_package_distribution(repo_root, distribution, package_name=package_path.name)
+        _recover_interrupted_update_applications(Path(repo_root).resolve(), log_callback=log_callback)
     except Exception as exc:
-        settings["update_last_error"] = str(exc)
-        _clear_pending_update(settings)
-        app_settings._save_settings(settings)
-        _emit_apply_log(log_callback, settings["update_last_error"])
-        return {
-            "applied": False,
-            "reason": "invalid_package",
-            "package_path": str(package_path),
-            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        }
-
-    try:
-        package_entry_paths = _list_package_entry_paths(package_path)
-    except _PackageStreamError as exc:
-        settings["update_last_error"] = str(exc)
-        _clear_pending_update(settings)
-        app_settings._save_settings(settings)
-        _emit_apply_log(log_callback, settings["update_last_error"])
-        return {
-            "applied": False,
-            "reason": "invalid_package",
-            "package_path": str(package_path),
-            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        }
-
-    try:
-        write_plan = _build_update_write_plan(repo_root, package_entry_paths)
-    except RuntimeError as exc:
-        settings["update_last_error"] = str(exc)
-        _clear_pending_update(settings)
-        app_settings._save_settings(settings)
-        _emit_apply_log(log_callback, settings["update_last_error"])
-        return {
-            "applied": False,
-            "reason": "invalid_package",
-            "package_path": str(package_path),
-            "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        }
-
-    write_targets = {relative_path: target_path for target_path, relative_path in write_plan}
-    _preserve_legacy_announcement_reads(
-        repo_root,
-        [relative_path for _target_path, relative_path in write_plan],
-        log_callback=log_callback,
-    )
-    needs_frontend_build = _needs_frontend_build(
-        repo_root,
-        [relative_path for _target_path, relative_path in write_plan],
-    )
-    extracted_files = 0
-    frontend_built = False
-    try:
-        with tempfile.TemporaryDirectory(prefix=".update-apply-", dir=repo_root) as temp_root_str:
-            temp_root = Path(temp_root_str)
-            journal_path = temp_root / "journal.jsonl"
-            backups = _backup_update_targets(write_plan, temp_root=temp_root, journal_path=journal_path)
-
-            try:
-                def _write_entry(relative_path: str, stream) -> None:
-                    nonlocal extracted_files
-                    if _is_protected_update_path(relative_path):
-                        return
-                    target_path = write_targets.get(relative_path)
-                    if target_path is None:
-                        raise _PackageStreamError(_format_invalid_package_message(package_path, f"非法归档路径: {relative_path}"))
-                    _emit_apply_log(log_callback, f"正在更新: {relative_path}")
-                    _replace_target_from_stream(
-                        target_path,
-                        stream,
-                        journal_path=journal_path,
-                        backup_record=backups[target_path],
-                    )
-                    extracted_files += 1
-
-                _stream_package_entries(package_path, _write_entry)
-            except _PackageStreamError as exc:
-                _restore_update_targets(backups)
-                settings["update_last_error"] = str(exc)
-                _clear_pending_update(settings)
-                app_settings._save_settings(settings)
-                _emit_apply_log(log_callback, settings["update_last_error"])
-                return {
-                    "applied": False,
-                    "reason": "invalid_package",
-                    "package_path": str(package_path),
-                    "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-                }
-            except Exception:
-                _restore_update_targets(backups)
-                raise
-
-            if needs_frontend_build:
-                _emit_apply_log(log_callback, "正在重建前端资源...")
-                build_success, build_output = _build_updated_frontend(repo_root)
-                if not build_success:
-                    _restore_update_targets(backups)
-                    settings["update_last_error"] = build_output
-                    app_settings._save_settings(settings)
-                    if build_output:
-                        for line in str(build_output).splitlines():
-                            if line.strip():
-                                _emit_apply_log(log_callback, line)
-                    return {
-                        "applied": False,
-                        "reason": "frontend_build_failed",
-                        "frontend_built": False,
-                        "files_written": extracted_files,
-                        "package_path": str(package_path),
-                        "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-                    }
-                frontend_built = True
-                if build_output:
-                    for line in str(build_output).splitlines():
-                        if line.strip():
-                            _emit_apply_log(log_callback, line)
-                _emit_apply_log(log_callback, "前端资源重建完成。")
-            else:
-                _emit_apply_log(log_callback, "未检测到前端改动，跳过前端重建。")
-            _sync_runtime_announcements_from_package(
-                package_path,
-                [relative_path for _target_path, relative_path in write_plan],
-                log_callback=log_callback,
-            )
-    except Exception:
-        raise
-
-    _clear_pending_update(settings)
-    settings["update_last_error"] = ""
-    app_settings._save_settings(settings)
-    _emit_apply_log(log_callback, "更新应用完成。")
-    return {
-        "applied": True,
-        "version": pending_version or _normalize_tag_name(settings.get("last_available_version")),
-        "frontend_built": frontend_built,
-        "files_written": extracted_files,
-        "package_path": str(package_path),
-    }
-
+        return {"applied": False, "reason": "recovery_required", "error": str(exc)}
+    status = get_update_status(repo_root)
+    if status.get("job"):
+        return {"applied": False, "reason": "explicit_application_required", "status": status}
+    return {"applied": False, "reason": "no_pending_update"}
 
 def _fetch_latest_release() -> dict[str, Any]:
     repository = str(APP_UPDATE_REPOSITORY or "").strip()
@@ -565,13 +350,15 @@ def _download_text_file(url: str, target: Path) -> None:
 
 
 def _read_sha256_file(path: Path, package_name: str) -> str:
-    text = path.read_text(encoding="utf-8").strip()
+    text = path.read_text(encoding="utf-8-sig").strip()
     for line in text.splitlines():
         parts = line.strip().split()
         if not parts:
             continue
         digest = parts[0].lower()
         if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest):
+            if len(parts) > 1 and " ".join(parts[1:]).lstrip("*") != package_name:
+                continue
             return digest
     raise RuntimeError(f"更新包校验文件无效: {package_name}.sha256")
 
@@ -697,76 +484,75 @@ def _default_user_cache_root() -> Path:
     return Path.home() / ".cache"
 
 
-def _download_file(
-    url: str,
-    target: Path,
-    progress_callback: Any | None = None,
-) -> None:
+def _download_file(url: str, target: Path, progress_callback: Any | None = None) -> None:
+    import http.client
     target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target.with_suffix(target.suffix + ".tmp")
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/octet-stream",
-            "User-Agent": f"cli-bridge/{APP_VERSION}",
-        },
-    )
-    if temp_path.exists():
-        temp_path.unlink()
+    partial = target.with_name(target.name + ".part")
+    metadata = target.with_name(target.name + ".resume.json")
     opener = _build_url_opener()
-    with opener.open(request, timeout=60) as response:
-        total_bytes = _parse_content_length(response.headers.get("Content-Length"))
-        _emit_download_log(progress_callback, f"开始下载更新包: {target.name}", total_bytes=total_bytes)
-        _emit_download_progress(
-            progress_callback,
-            phase="starting",
-            downloaded_bytes=0,
-            total_bytes=total_bytes,
-        )
-        downloaded_bytes = 0
-        last_logged_percent = -10
-        with temp_path.open("wb") as handle:
-            while True:
-                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                downloaded_bytes += len(chunk)
-                _emit_download_progress(
-                    progress_callback,
-                    phase="downloading",
-                    downloaded_bytes=downloaded_bytes,
-                    total_bytes=total_bytes,
-                )
-                percent = _calculate_progress_percent(downloaded_bytes, total_bytes)
-                if total_bytes and percent >= last_logged_percent + 10:
-                    _emit_download_log(
-                        progress_callback,
-                        f"已下载 {downloaded_bytes} / {total_bytes} bytes ({percent}%)",
-                        downloaded_bytes=downloaded_bytes,
-                        total_bytes=total_bytes,
-                    )
-                    last_logged_percent = percent
-    if total_bytes is not None and downloaded_bytes != total_bytes:
-        if temp_path.exists():
-            temp_path.unlink()
-        raise RuntimeError(f"更新包下载不完整: 期望 {total_bytes} bytes，实际 {downloaded_bytes} bytes")
-
-    try:
-        _validate_package_file(temp_path, package_name=target.name)
-    except Exception:
-        if temp_path.exists():
-            temp_path.unlink()
-        raise
-
-    temp_path.replace(target)
-    final_size = target.stat().st_size if target.exists() else 0
-    _emit_download_log(
-        progress_callback,
-        f"下载完成: {target.name} ({final_size} bytes)",
-        downloaded_bytes=final_size,
-        total_bytes=final_size or None,
-    )
+    last_error = None
+    for attempt in range(3):
+        try:
+            previous = json.loads(metadata.read_text(encoding="utf-8")) if metadata.exists() else {}
+        except (ValueError, OSError):
+            previous = {}
+        offset = partial.stat().st_size if partial.exists() else 0
+        etag = str(previous.get("etag") or "")
+        resumable = offset > 0 and etag and not etag.startswith("W/") and previous.get("url") == url
+        headers = {"Accept": "application/octet-stream", "User-Agent": f"cli-bridge/{APP_VERSION}"}
+        if resumable:
+            headers.update(Range=f"bytes={offset}-", **{"If-Range": etag})
+        _emit_download_log(progress_callback, f"正在下载 {target.name}（尝试 {attempt + 1}/3）")
+        try:
+            request = urllib.request.Request(url, headers=headers)
+            with opener.open(request, timeout=60) as response:
+                status = getattr(response, "status", 200)
+                length = _parse_content_length(response.headers.get("Content-Length"))
+                current_etag = str(response.headers.get("ETag") or "")
+                append = status == 206
+                if append:
+                    match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
+                    if (not resumable or current_etag != etag or not match
+                            or int(match[1]) != offset or int(match[2]) != int(match[3]) - 1
+                            or (length is not None and length != int(match[2]) - offset + 1)
+                            or (previous.get("total") is not None and previous["total"] != int(match[3]))):
+                        partial.unlink(missing_ok=True)
+                        metadata.unlink(missing_ok=True)
+                        raise OSError("断点响应的 ETag、范围或总长度不一致")
+                    total = int(match[3])
+                elif status == 200:
+                    offset, total = 0, length
+                else:
+                    raise OSError(f"下载响应状态无效: {status}")
+                if total is not None and shutil.disk_usage(target.parent).free < total - offset + 64 * 1024**2:
+                    raise RuntimeError("下载更新包的磁盘空间不足")
+                metadata.write_text(json.dumps({"url": url, "etag": current_etag, "total": total}), encoding="utf-8")
+                downloaded = offset
+                with partial.open("ab" if append else "wb") as handle:
+                    while True:
+                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        downloaded += len(chunk)
+                        if total is not None and downloaded > total:
+                            raise OSError("更新包下载长度超过响应长度")
+                        _emit_download_progress(progress_callback, phase="downloading", downloaded_bytes=downloaded, total_bytes=total)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if total is not None and downloaded != total:
+                    raise OSError(f"更新包下载不完整: 期望 {total} bytes，实际 {downloaded} bytes")
+            _validate_package_file(partial, package_name=target.name)
+            partial.replace(target)
+            metadata.unlink(missing_ok=True)
+            _emit_download_log(progress_callback, f"下载完成: {target.name}", downloaded_bytes=downloaded, total_bytes=downloaded)
+            return
+        except (urllib.error.URLError, OSError, http.client.IncompleteRead) as exc:
+            last_error = exc
+            if attempt < 2:
+                _emit_download_log(progress_callback, f"下载暂时失败，稍后重试: {exc}")
+                time.sleep(0.25 * 2 ** attempt)
+    raise RuntimeError(f"下载失败，已保留可校验的断点文件: {last_error}")
 
 
 def _parse_content_length(raw_value: Any) -> int | None:
@@ -863,7 +649,7 @@ def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
     if success:
         return success, output
 
-    installed, install_output = _run_frontend_build_command([npm_path, "install"], front_root)
+    installed, install_output = _run_frontend_build_command([npm_path, "ci", "--no-audit", "--no-fund"], front_root)
     if not installed:
         return installed, install_output
     return _run_frontend_build_command(build_command, front_root)
@@ -905,7 +691,7 @@ def _read_distribution_marker_from_package(package_path: Path) -> bytes:
 
 def _read_package_distribution_from_bytes(raw_bytes: bytes, *, package_name: str) -> dict[str, str]:
     try:
-        payload = json.loads(raw_bytes.decode("utf-8"))
+        payload = json.loads(raw_bytes.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"更新包分发标记无效: {package_name}") from exc
     if not isinstance(payload, dict):
@@ -963,6 +749,7 @@ def _build_update_write_plan(
 
 
 def _resolve_update_target_path(repo_root: Path, relative_path: str) -> Path:
+    from scripts.update_transaction import safe_target
     root = Path(repo_root).resolve()
     try:
         normalized_path = _normalize_archive_path(relative_path)
@@ -970,12 +757,7 @@ def _resolve_update_target_path(repo_root: Path, relative_path: str) -> Path:
         raise RuntimeError(f"更新包包含非法路径: {relative_path}") from exc
     if not normalized_path:
         raise RuntimeError(f"更新包包含非法路径: {relative_path}")
-    target_path = (root / normalized_path).resolve(strict=False)
-    try:
-        target_path.relative_to(root)
-    except ValueError as exc:
-        raise RuntimeError(f"更新包包含非法路径: {relative_path}") from exc
-    return target_path
+    return safe_target(root, normalized_path)
 
 
 def _preserve_legacy_announcement_reads(
@@ -1062,7 +844,16 @@ def _merge_announcement_content(target: dict[str, Any], source: dict[str, Any]) 
 
 def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
 
 
 def _sync_runtime_announcements_from_package(
@@ -1071,10 +862,6 @@ def _sync_runtime_announcements_from_package(
     *,
     log_callback: Any | None = None,
 ) -> bool:
-    normalized_paths = {str(path or "").replace("\\", "/").strip("/") for path in relative_paths}
-    if ANNOUNCEMENTS_FILE not in normalized_paths:
-        return False
-
     package_content: dict[str, Any] | None = None
 
     def _capture(relative_path: str, stream) -> None:
@@ -1105,66 +892,87 @@ def _sync_runtime_announcements_from_package(
     return True
 
 
-def _backup_update_targets(
-    write_plan: list[tuple[Path, str]],
-    *,
-    temp_root: Path,
-    journal_path: Path,
-) -> dict[Path, dict[str, str]]:
-    backups: dict[Path, dict[str, str]] = {}
-    for index, (target_path, relative_path) in enumerate(write_plan):
-        if target_path in backups:
+def _backup_update_targets(write_plan, *, temp_root: Path, journal_path: Path):
+    from scripts.update_transaction import Transaction
+    transaction = Transaction(temp_root.parent, temp_root)
+    records = transaction.backup([relative for _, relative in write_plan])
+    return {Path(record["target_path"]): {**record, "journal_path": str(journal_path)}
+            for record in records.values()}
+
+def _restore_update_targets(backups):
+    from scripts.update_transaction import RecoveryRequired, Transaction, atomic_copy, sha256
+    if not backups:
+        return
+    first = next(iter(backups.values()))
+    if first.get("journal_path"):
+        directory = Path(first["journal_path"]).parent
+        Transaction(directory.parent, directory).rollback()
+        return
+    for target, record in backups.items():
+        backup_text = str(record.get("backup_path") or "")
+        if record.get("restored_sha256") and target.is_file() and sha256(target) == record["restored_sha256"]:
             continue
-        backup_path = ""
-        if target_path.exists():
-            if not target_path.is_file():
-                raise IsADirectoryError(str(target_path))
-            backup_file = temp_root / f"backup-{index:04d}"
-            target_path.replace(backup_file)
-            backup_path = str(backup_file)
-        record = {
-            "target_path": str(target_path),
-            "relative_path": relative_path,
-            "backup_path": backup_path,
-            "write_path": "",
-        }
-        backups[target_path] = record
-        _append_update_journal(journal_path, {"event": "backup", **record})
-    return backups
-
-
-def _restore_update_targets(backups: dict[Path, dict[str, str]]) -> None:
-    for target_path, record in backups.items():
-        write_path = str(record.get("write_path") or "").strip()
-        if write_path:
-            temp_output = Path(write_path)
-            if temp_output.exists():
-                temp_output.unlink()
-        backup_path = str(record.get("backup_path") or "").strip()
-        if not backup_path:
-            if target_path.exists():
-                target_path.unlink()
+        if not backup_text:
+            if target.exists():
+                raise RecoveryRequired(f"旧事务缺少目标的归属证明，保留现场: {target}")
             continue
-        if target_path.exists():
-            target_path.unlink()
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        Path(backup_path).replace(target_path)
-
+        backup = Path(backup_text)
+        if not backup.is_file():
+            raise RecoveryRequired(f"旧事务备份缺失，保留目标与现场: {backup}")
+        if target.exists():
+            if not target.is_file():
+                raise RecoveryRequired(f"旧事务恢复目标不是普通文件: {target}")
+            current_hash = sha256(target)
+            if current_hash == sha256(backup):
+                continue
+            if current_hash != record.get("new_sha256"):
+                raise RecoveryRequired(f"旧事务无法证明当前目标归属，保留目标与备份: {target}")
+        atomic_copy(backup, target)
+        record["restored_sha256"] = sha256(target)
 
 def _recover_interrupted_update_applications(repo_root: Path, log_callback: Any | None = None) -> None:
-    for temp_root in repo_root.glob(".update-apply-*"):
-        if not temp_root.is_dir():
+    from scripts.update_transaction import RecoveryRequired, Transaction, read_journal
+    for directory in repo_root.glob(".update-apply-*"):
+        if not directory.is_dir():
             continue
-        journal_path = temp_root / "journal.jsonl"
-        if not journal_path.exists():
-            shutil.rmtree(temp_root, ignore_errors=True)
+        if directory.is_symlink() or (hasattr(directory, "is_junction") and directory.is_junction()):
+            raise RecoveryRequired(f"事务目录经过链接，保留现场: {directory}")
+        journal = directory / "journal.jsonl"
+        if not journal.is_file():
+            raise RecoveryRequired(f"旧更新事务缺少日志，恢复材料已保留: {directory}")
+        records = read_journal(journal)
+        if records and records[0].get("event") == "begin":
+            Transaction(repo_root, directory).recover()
             continue
-        backups = _read_update_journal(journal_path)
-        if backups:
-            _emit_apply_log(log_callback, f"检测到未完成的更新应用，正在回滚: {temp_root.name}")
-            _restore_update_targets(backups)
-        shutil.rmtree(temp_root, ignore_errors=True)
+        if any(record.get("event") == "legacy_recovered" for record in records):
+            continue
+        backups = _read_update_journal(journal)
+        if not backups:
+            raise RecoveryRequired(f"旧事务日志不足以恢复，保留现场: {directory}")
+        for target, record in backups.items():
+            if _resolve_update_target_path(repo_root, record.get("relative_path", "")) != target.resolve():
+                raise RecoveryRequired(f"旧事务目标不属于当前安装: {target}")
+            backup = record.get("backup_path")
+            if backup and Path(backup).resolve().parent != directory.resolve():
+                raise RecoveryRequired(f"旧事务备份路径不属于事务目录: {backup}")
+        _emit_apply_log(log_callback, f"正在恢复未完成的旧更新事务: {directory.name}")
+        _restore_update_targets(backups)
+        _append_update_journal(journal, {"event": "legacy_recovered"})
 
+
+def _assert_no_unfinished_legacy_transactions(repo_root: Path) -> None:
+    """Preparation cannot restore application files while the old host is running."""
+    from scripts.update_transaction import RecoveryRequired, read_journal
+    for directory in repo_root.glob(".update-apply-*"):
+        if not directory.is_dir():
+            continue
+        journal = directory / "journal.jsonl"
+        records = read_journal(journal) if journal.is_file() else []
+        if records and records[-1].get("event") in {"committed", "rolled_back", "legacy_recovered"}:
+            continue
+        raise RecoveryRequired(
+            f"recovery_required: 请退出旧宿主后用新版本的 recover-legacy --repo-root 参数指定安装目录恢复旧事务，保留目录: {directory}"
+        )
 
 def _read_update_journal(journal_path: Path) -> dict[Path, dict[str, str]]:
     backups: dict[Path, dict[str, str]] = {}
@@ -1208,95 +1016,37 @@ def _read_update_journal(journal_path: Path) -> dict[Path, dict[str, str]]:
     return backups
 
 
-def _replace_target_from_stream(
-    target_path: Path,
-    stream,
-    *,
-    journal_path: Path,
-    backup_record: dict[str, str],
-) -> None:
+def _replace_target_from_stream(target_path: Path, stream, *, journal_path: Path, backup_record: dict) -> None:
+    from scripts.update_transaction import sha256, sync_directory
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        prefix=f".{target_path.name}.update-",
-        suffix=".tmp",
-        dir=target_path.parent,
-        delete=False,
-    ) as handle:
-        temp_output = Path(handle.name)
-        backup_record["write_path"] = str(temp_output)
-        _append_update_journal(
-            journal_path,
-            {
-                "event": "stage",
-                "target_path": str(target_path),
-                "relative_path": backup_record.get("relative_path") or "",
-                "backup_path": backup_record.get("backup_path") or "",
-                "write_path": str(temp_output),
-            },
-        )
-        try:
-            while True:
-                chunk = stream.read(DOWNLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                handle.write(chunk)
+    fd, name = tempfile.mkstemp(prefix=f".{target_path.name}.update-", dir=target_path.parent)
+    staged = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            shutil.copyfileobj(stream, handle, DOWNLOAD_CHUNK_SIZE)
             handle.flush()
             os.fsync(handle.fileno())
-        except Exception:
-            if temp_output.exists():
-                temp_output.unlink()
-            raise
-    temp_output.replace(target_path)
+        backup_record.update(write_path=str(staged), new_sha256=sha256(staged))
+        _append_update_journal(journal_path, {**backup_record, "event": "apply_intent"})
+        staged.replace(target_path)
+        sync_directory(target_path.parent)
+        _append_update_journal(journal_path, {**backup_record, "event": "applied"})
+    finally:
+        staged.unlink(missing_ok=True)
 
 
-def _stream_package_entries(
-    package_path: Path,
-    consumer: Any,
-    *,
-    open_files: bool = True,
-) -> None:
-    if _is_zip_package(package_path):
-        if not zipfile.is_zipfile(package_path):
-            raise _PackageStreamError(_format_invalid_package_message(package_path))
-        try:
-            with zipfile.ZipFile(package_path) as archive:
-                for member in archive.infolist():
-                    if member.is_dir():
-                        continue
-                    relative_path = _normalize_archive_path_for_stream(package_path, member.filename)
-                    if not relative_path:
-                        continue
-                    if not open_files:
-                        consumer(relative_path, None)
-                        continue
-                    with archive.open(member, "r") as extracted:
-                        consumer(relative_path, extracted)
-            return
-        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
-            raise _PackageStreamError(_format_invalid_package_message(package_path, exc)) from exc
-
-    if _is_tar_gz_package(package_path):
-        try:
-            with tarfile.open(package_path, "r:gz") as archive:
-                for member in archive:
-                    if not member.isfile():
-                        continue
-                    relative_path = _normalize_archive_path_for_stream(package_path, member.name)
-                    if not relative_path:
-                        continue
-                    if not open_files:
-                        consumer(relative_path, None)
-                        continue
-                    extracted = archive.extractfile(member)
-                    if extracted is None:
-                        continue
-                    with extracted:
-                        consumer(relative_path, extracted)
-            return
-        except (OSError, tarfile.TarError) as exc:
-            raise _PackageStreamError(_format_invalid_package_message(package_path, exc)) from exc
-
-    raise _PackageStreamError(f"不支持的更新包格式: {package_path.name}")
+def _stream_package_entries(package_path: Path, consumer: Any, *, open_files: bool = True) -> None:
+    from scripts.update_package import archive_entries
+    try:
+        with archive_entries(package_path) as entries:
+            for relative_path, _size, _mode, opener in entries:
+                if not open_files:
+                    consumer(relative_path, None)
+                else:
+                    with opener() as stream:
+                        consumer(relative_path, stream)
+    except (ValueError, zipfile.BadZipFile, tarfile.TarError) as exc:
+        raise _PackageStreamError(_format_invalid_package_message(package_path, exc)) from exc
 
 
 def _validate_package_file(package_path: Path, package_name: str | None = None) -> None:
@@ -1358,20 +1108,8 @@ def _format_invalid_package_message(
 
 
 def _normalize_archive_path(raw_path: str) -> str:
-    raw_value = str(raw_path or "")
-    if not raw_value:
-        return ""
-    if raw_value.startswith(("/", "\\")):
-        raise ValueError(f"非法归档路径: {raw_value}")
-    parts: list[str] = []
-    for part in raw_value.replace("\\", "/").split("/"):
-        if not part or part == ".":
-            continue
-        if part == ".." or ":" in part:
-            raise ValueError(f"非法归档路径: {raw_value}")
-        parts.append(part)
-    return "/".join(parts)
-
+    from scripts.update_package import normalize_path
+    return normalize_path(raw_path)
 
 def _normalize_archive_path_for_stream(package_path: Path, raw_path: str) -> str:
     try:
@@ -1383,9 +1121,8 @@ def _normalize_archive_path_for_stream(package_path: Path, raw_path: str) -> str
 
 
 def _is_protected_update_path(relative_path: str) -> bool:
-    root_name = relative_path.split("/", 1)[0]
-    return relative_path in PROTECTED_UPDATE_PATHS or root_name in PROTECTED_UPDATE_PATHS
-
+    from scripts.update_package import protected
+    return protected(relative_path)
 
 def _needs_frontend_build(repo_root: Path, relative_paths: list[str]) -> bool:
     normalized = [str(path or "").replace("\\", "/").strip("/") for path in relative_paths]
@@ -1398,10 +1135,8 @@ def _needs_frontend_build(repo_root: Path, relative_paths: list[str]) -> bool:
 
 
 def _append_update_journal(journal_path: Path, record: dict[str, Any]) -> None:
-    with journal_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False))
-        handle.write("\n")
-
+    from scripts.update_transaction import append_journal
+    append_journal(journal_path, record)
 
 def _clear_pending_update(settings: dict[str, Any]) -> None:
     settings["pending_update_version"] = ""
@@ -1428,8 +1163,18 @@ def main(argv: list[str] | None = None) -> int:
     subcommands = parser.add_subparsers(dest="command", required=True)
     apply_parser = subcommands.add_parser("apply-pending")
     apply_parser.add_argument("--repo-root", default=os.getcwd())
+    recover_parser = subcommands.add_parser("recover-legacy", help="在宿主退出后恢复旧版文件事务")
+    recover_parser.add_argument("--repo-root", required=True)
+    recover_parser.add_argument("--host-stopped", action="store_true", required=True)
     args = parser.parse_args(argv)
 
+    if args.command == "recover-legacy":
+        try:
+            _recover_interrupted_update_applications(Path(args.repo_root).resolve(), log_callback=print)
+            return 0
+        except Exception as exc:
+            print(f"recovery_required: {exc}", file=sys.stderr)
+            return 78
     if args.command == "apply-pending":
         result = apply_pending_update(Path(args.repo_root).resolve(), log_callback=print)
         return 0 if result.get("applied") or result.get("reason") in {"no_pending_update", "already_current_version"} else 1

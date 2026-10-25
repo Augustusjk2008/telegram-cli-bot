@@ -7,6 +7,7 @@ import {
   GENERAL_CODEX_RATE_LIMIT_ID,
   GPT_RESERVE_RATE_LIMIT_ID,
 } from "../services/types";
+import type { AppUpdatePhase, AppUpdateStatus } from "../services/types";
 
 function createAdminClient() {
   const client = new MockWebBotClient();
@@ -15,6 +16,157 @@ function createAdminClient() {
     listBots: vi.fn(async () => []),
   });
 }
+
+async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdateStatus> {
+  const client = createAdminClient();
+  const status = await client.downloadUpdate();
+  return { ...status, revision: 10, currentVersion: "1.0.0", latestVersion: "2.0.0", job: {
+    ...status.job!, jobId: "persisted-job", revision: 10, phase, currentVersion: "1.0.0", targetVersion: "2.0.0",
+    progress: { phase: "download", percent: 42, downloadedBytes: 42, totalBytes: 100, message: "校验更新包" },
+  } };
+}
+
+async function openUpdates(client: MockWebBotClient, user: ReturnType<typeof userEvent.setup>) {
+  const view = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "升级" }));
+  return view;
+}
+
+test("升级任务重新进入后恢复，离线列表失败仍保留在线任务", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const status = await updateFixture("preparing");
+  const current = vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue(status);
+  const prepare = vi.spyOn(client, "downloadUpdate");
+  vi.spyOn(client, "listOfflineUpdatePackages").mockRejectedValue(new Error("离线目录不可访问"));
+  const view = await openUpdates(client, user);
+  expect(await screen.findByTestId("update-job")).toHaveTextContent("42%");
+  expect(screen.getByText("离线目录不可访问")).toBeInTheDocument();
+  view.unmount();
+  await openUpdates(client, user);
+  expect(await screen.findByTestId("update-job")).toHaveTextContent("persisted-job");
+  expect(current).toHaveBeenCalledTimes(2);
+  expect(prepare).not.toHaveBeenCalled();
+});
+
+test("在线查询失败时仍加载离线包列表", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  vi.spyOn(client, "getCurrentUpdateJob").mockRejectedValue(new Error("连接暂不可用"));
+  vi.spyOn(client, "listOfflineUpdatePackages").mockResolvedValue({ artifactsDir: "D:/packages", items: [
+    { name: "invalid.zip", path: "D:/packages/invalid.zip", version: "2.0.0", packageKind: "installer", sizeBytes: 1, valid: false, error: "哈希不匹配" },
+  ] });
+  await openUpdates(client, user);
+  expect(await screen.findByText("哈希不匹配")).toBeInTheDocument();
+  expect(screen.getByText(/正在确认后台状态/)).toBeInTheDocument();
+});
+
+test("保存自动下载开关不会清除正在提交的准备操作或接受旧修订", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const ready = await updateFixture();
+  const idle = { ...ready, job: null };
+  vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue(idle);
+  let resolvePrepare!: (status: AppUpdateStatus) => void;
+  vi.spyOn(client, "downloadUpdate").mockImplementation(() => new Promise((resolve) => { resolvePrepare = resolve; }));
+  vi.spyOn(client, "setUpdateEnabled").mockResolvedValue({ ...idle, revision: 11, updateEnabled: false });
+  await openUpdates(client, user);
+  await user.click(await screen.findByRole("button", { name: "准备更新" }));
+  await user.click(screen.getByRole("checkbox", { name: "自动下载更新" }));
+  expect(screen.getByRole("button", { name: "提交准备中..." })).toBeDisabled();
+  resolvePrepare({ ...ready, revision: 12, updateEnabled: false, job: { ...ready.job!, revision: 12, phase: "preparing" } });
+  expect(await screen.findByTestId("update-job")).toHaveTextContent("正在准备");
+  expect(screen.getByRole("checkbox", { name: "自动下载更新" })).not.toBeChecked();
+});
+
+test("应用断线只查询后台，成功必须匹配运行版本", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const ready = await updateFixture();
+  const current = vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue(ready);
+  const apply = vi.spyOn(client, "applyUpdateJob").mockImplementation(async () => {
+    current.mockRejectedValue(new TypeError("Failed to fetch"));
+    throw new TypeError("Failed to fetch");
+  });
+  await openUpdates(client, user);
+  await user.click(await screen.findByRole("button", { name: "应用更新" }));
+  expect(screen.getByRole("dialog", { name: "确认应用更新" })).toHaveTextContent("服务将暂时断开");
+  await user.click(screen.getByRole("button", { name: "确认应用并重启服务" }));
+  expect(apply).toHaveBeenCalledWith("persisted-job", 10);
+  await screen.findByText(/正在确认后台状态/);
+  expect(screen.queryByText(/任务阶段: 升级成功/)).not.toBeInTheDocument();
+  const reportedSuccess = { ...ready, revision: 11, job: { ...ready.job!, revision: 11, phase: "succeeded" as const } };
+  current.mockResolvedValue(reportedSuccess);
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  expect(await screen.findByText(/任务阶段: 正在核对运行版本/)).toBeInTheDocument();
+  current.mockResolvedValue({ ...reportedSuccess, currentVersion: "2.0.0" });
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  expect(await screen.findByText(/任务阶段: 升级成功/)).toBeInTheDocument();
+  expect(apply).toHaveBeenCalledTimes(1);
+});
+
+test("确认框绑定任务修订，后台变化要求重新确认", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const ready = await updateFixture();
+  const current = vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue(ready);
+  const apply = vi.spyOn(client, "applyUpdateJob");
+  await openUpdates(client, user);
+  await user.click(await screen.findByRole("button", { name: "应用更新" }));
+  current.mockResolvedValue({ ...ready, revision: 11, job: { ...ready.job!, revision: 11 } });
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "确认应用并重启服务" })).toBeDisabled());
+  expect(apply).not.toHaveBeenCalled();
+});
+
+test("持久化失败可重试、准备可取消、上传使用选中文件", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  let status = await updateFixture("failed");
+  status.job!.error = "依赖准备失败";
+  vi.spyOn(client, "getCurrentUpdateJob").mockImplementation(async () => status);
+  const retry = vi.spyOn(client, "retryUpdateJob").mockImplementation(async () => {
+    status = { ...status, revision: 11, job: { ...status.job!, phase: "preparing", revision: 11, error: "" } };
+    return status;
+  });
+  const cancel = vi.spyOn(client, "cancelUpdateJob").mockImplementation(async () => {
+    status = { ...status, revision: 12, job: { ...status.job!, phase: "cancelled", revision: 12 } };
+    return status;
+  });
+  const upload = vi.spyOn(client, "uploadOfflineUpdate").mockRejectedValue(new Error("包清单与文件哈希不匹配"));
+  await openUpdates(client, user);
+  expect(await screen.findByText("依赖准备失败")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "重试" }));
+  expect(retry).toHaveBeenCalledWith("persisted-job", 10);
+  await user.click(await screen.findByRole("button", { name: "取消准备" }));
+  expect(cancel).toHaveBeenCalledWith("persisted-job", 11);
+  const file = new File(["package"], "update.zip", { type: "application/zip" });
+  await user.upload(screen.getByLabelText("从此设备上传升级包"), file);
+  await user.click(screen.getByRole("button", { name: "上传并准备" }));
+  expect(upload).toHaveBeenCalledWith(file);
+  expect(await screen.findByText("包清单与文件哈希不匹配")).toBeInTheDocument();
+});
+
+test("缓存检查失败阻止在线准备，不支持的启动器阻止应用", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const ready = await updateFixture();
+  const current = vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue({ ...ready, job: null,
+    lastCheck: { checkedAt: "2026-10-24", ok: false, cached: true, error: "Release 查询失败" },
+  });
+  await openUpdates(client, user);
+  expect(await screen.findByText(/Release 查询失败/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "准备更新" })).toBeDisabled();
+  current.mockResolvedValue({ ...ready, launcher: { supported: false, protocol: 0, command: ".\\start.bat", reason: "需使用官方启动器" } });
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  expect(await screen.findByRole("button", { name: "应用更新" })).toBeDisabled();
+  expect(screen.getByText(".\\start.bat")).toBeInTheDocument();
+  current.mockResolvedValue({ ...ready, job: { ...ready.job!, requiresPreparation: true } });
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  expect(await screen.findByRole("button", { name: "重试" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "应用更新" })).toBeDisabled();
+});
 
 async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText("用户权限");

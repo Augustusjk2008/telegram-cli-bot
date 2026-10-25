@@ -394,6 +394,11 @@ function Sync-FrontendAssets {
         return
     }
 
+    if ((Test-Path -LiteralPath (Join-Path $RootDir ".update-manifest.json")) -and -not (Test-Truthy $env:TCB_STARTUP_FORCE_FRONTEND_BUILD)) {
+        & $PythonRuntime.Command @($PythonRuntime.Arguments + @("-c", "import sys; from bot.update_preparation import frontend_is_current; sys.exit(0 if frontend_is_current(sys.argv[1]) else 1)", $RootDir))
+        if ($LASTEXITCODE -eq 0) { return }
+    }
+
     $frontendInputs = @(
         "front\package.json",
         "front\package-lock.json",
@@ -795,6 +800,19 @@ if (-not $ServiceProcess) {
 try {
     Set-Location $scriptDir
 
+    $cachedLauncherPath = Join-Path $scriptDir ".tcb/startup/update-launcher.json"
+    if (Test-Path -LiteralPath $cachedLauncherPath) {
+        $cachedLauncher = Get-Content -Raw -LiteralPath $cachedLauncherPath | ConvertFrom-Json
+        if (Test-Path -LiteralPath $cachedLauncher.state_file) {
+            $cachedState = Get-Content -Raw -LiteralPath $cachedLauncher.state_file | ConvertFrom-Json
+            if ($cachedState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
+                $env:WEB_ENABLED = "true"
+                & $cachedLauncher.control_python_executable $cachedLauncher.runner_path supervise --repo-root $scriptDir --state-file $cachedLauncher.state_file --python $cachedLauncher.python_executable
+                exit $LASTEXITCODE
+            }
+        }
+    }
+
     Ensure-EnvFile -Path $envPath -RootDir $scriptDir
 
     $projectVenvPythonPath = Get-ProjectVenvPythonPath -RootDir $scriptDir
@@ -809,9 +827,22 @@ try {
     }
 
     $env:CLI_BRIDGE_SUPERVISOR = "1"
+    $env:CLI_BRIDGE_UPDATE_PROTOCOL = "1"
     $env:WEB_ENABLED = "true"
 
     $script:pythonRuntime = $pythonRuntime
+    $launcherJson = & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @((Join-Path $scriptDir "scripts/update_runner.py"), "launcher-info", "--repo-root", $scriptDir))
+    if ($LASTEXITCODE -ne 0) { throw "无法准备独立升级启动器。" }
+    $launcher = ($launcherJson -join "`n") | ConvertFrom-Json
+    $env:CLI_BRIDGE_UPDATE_STATE_FILE = $launcher.state_file
+    $script:pythonRuntime = New-PythonRuntime -Command $launcher.python_executable
+    if ($env:CLI_BRIDGE_UPDATE_STATE_FILE -and (Test-Path -LiteralPath $launcher.state_file)) {
+        $updateState = Get-Content -Raw -LiteralPath $launcher.state_file | ConvertFrom-Json
+        if ($updateState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
+            & $launcher.control_python_executable $launcher.runner_path supervise --repo-root $scriptDir --state-file $launcher.state_file --python $launcher.python_executable
+            exit $LASTEXITCODE
+        }
+    }
     if (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL) {
         $script:pythonDependencyRepairAttempted = $true
         $script:pythonRuntime = Sync-PythonDependencies `
@@ -824,25 +855,6 @@ try {
     if ($script:lastPythonExitCode -ne 0) {
         Write-Fail "迁移旧版 .env 配置失败。"
         exit $script:lastPythonExitCode
-    }
-
-    Invoke-PythonStartupStep -Arguments @("-c", "import bot.updater")
-    if ($script:lastPythonExitCode -ne 0) {
-        Write-Fail "Python 更新模块启动检查失败。"
-        exit $script:lastPythonExitCode
-    }
-
-    & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot.updater", "apply-pending", "--repo-root", $scriptDir))
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "应用待更新版本失败，请检查 .web_admin_settings.json 和更新包缓存。"
-        Write-Warn "更新未成功应用，继续启动当前程序。"
-    }
-
-    if (Test-Truthy $env:TCB_STARTUP_FORCE_DEP_INSTALL) {
-        $script:pythonRuntime = Sync-PythonDependencies `
-            -PythonRuntime $script:pythonRuntime `
-            -RootDir $scriptDir `
-            -ForceInstall
     }
 
     Sync-FrontendAssets -PythonRuntime $script:pythonRuntime -RootDir $scriptDir
@@ -859,18 +871,11 @@ try {
     }
 
     Show-TunnelHint -Path $envPath
+    $launcher.python_executable = $script:pythonRuntime.Command
 
-    while ($true) {
-        & $script:pythonRuntime.Command @($script:pythonRuntime.Arguments + @("-m", "bot", "--tcb-migrations-checked"))
-        $exitCode = $LASTEXITCODE
+    & $launcher.control_python_executable $launcher.runner_path supervise --repo-root $scriptDir --state-file $launcher.state_file --python $launcher.python_executable
+    exit $LASTEXITCODE
 
-        if ($exitCode -ne $restartExitCode) {
-            exit $exitCode
-        }
-
-        Write-Info "收到重启请求，1 秒后重新启动。"
-        Start-Sleep -Seconds 1
-    }
 } catch {
     Write-Fail $_.Exception.Message
     exit 1

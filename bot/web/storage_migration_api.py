@@ -48,9 +48,11 @@ class StorageMigrationApi:
         service: Any | None = None,
         *,
         stop_all_agents: Callable[[], Awaitable[object] | object] | None = None,
+        update_guard: Callable[[], object] | None = None,
     ):
         self.service = service
         self.stop_all_agents = stop_all_agents
+        self.update_guard = update_guard
         self._lock = asyncio.Lock()
         self._maintenance = False
         self._plans: dict[str, dict[str, Any]] = {}
@@ -281,6 +283,8 @@ class StorageMigrationApi:
                 {"state": self._status.get("state", "stopping"), "maintenance": True},
             )
         async with self._lock:
+            if self.update_guard is not None:
+                self.update_guard()
             if self._maintenance or (self._preview_task is not None and not self._preview_task.done()):
                 raise StorageMigrationApiError(409, "storage_migration_busy", "存储迁移正在进行中")
             job_id = uuid.uuid4().hex
@@ -424,6 +428,8 @@ class StorageMigrationApi:
                 {"state": "stopping", "maintenance": False},
             )
         async with self._lock:
+            if self.update_guard is not None:
+                self.update_guard()
             if (
                 self._maintenance
                 or (self._task is not None and not self._task.done())
@@ -473,6 +479,8 @@ class StorageMigrationApi:
 
     async def retry(self) -> dict[str, Any]:
         async with self._lock:
+            if self.update_guard is not None:
+                self.update_guard()
             if self._task is not None and not self._task.done():
                 raise StorageMigrationApiError(409, "storage_migration_busy", "存储迁移正在进行中")
             if self.service is None:

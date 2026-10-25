@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from bot import updater
+from scripts import update_package
 
 
 REQUIRED_RELEASE_LEGAL_FILES = (
@@ -228,7 +230,7 @@ def test_updated_frontend_build_installs_dependencies_then_retries(monkeypatch, 
     assert updater._build_updated_frontend(tmp_path)[0] is True
     assert commands == [
         (["npm", "run", "build"], front_root),
-        (["npm", "install"], front_root),
+        (["npm", "ci", "--no-audit", "--no-fund"], front_root),
         (["npm", "run", "build"], front_root),
     ]
 
@@ -261,3 +263,356 @@ def test_updated_frontend_build_keeps_legacy_script_precedence(monkeypatch, tmp_
     assert updater._build_updated_frontend(tmp_path)[0] is True
     expected = [str(script_path.resolve())] if os.name == "nt" else ["bash", str(script_path.resolve())]
     assert commands == [(expected, tmp_path)]
+
+
+def update_archive(tmp_path, *, version="3.1.0", additions=None, manifest_changes=None):
+    contents = {
+        "VERSION": version.encode(), "requirements.txt": b"aiohttp==3.11.0\n",
+        "bot/main.py": b"print('new')\n", "front/dist/index.html": b"<html></html>",
+        "front/dist/build-info.json": json.dumps({"version": version, "base_path": "/", "api_base_url": "", "root_base": True,
+            "source_files": {"VERSION": hashlib.sha256(version.encode()).hexdigest()}}).encode(),
+        ".distribution.json": json.dumps({"version": version, "packageKind": "installer", "platform": "windows-x64"}).encode(),
+    }
+    contents.update(additions or {})
+    files = {p: hashlib.sha256(raw).hexdigest() for p, raw in contents.items() if not update_package.protected(p)}
+    manifest = {
+        "schema_version": 1, "update_protocol": 1, "version": version, "package_kind": "installer",
+        "platform": "windows-x64", "architecture": "x64", "commit": "a" * 40, "dirty": False,
+        "files": files, "dependencies": {"requirements_sha256": files["requirements.txt"]},
+        "frontend": {"base_path": "/", "files": {p: h for p, h in files.items() if p.startswith("front/dist/")}},
+        "migrations": {"backward_compatible": True},
+    }
+    manifest.update(manifest_changes or {})
+    contents[update_package.MANIFEST] = json.dumps(manifest).encode()
+    path = tmp_path / "payload.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, raw in contents.items():
+            archive.writestr(name, raw)
+    return path, manifest
+
+
+@pytest.mark.parametrize("left,right,result", [
+    ("3.10.0", "3.9.9", 1), ("v3.1.0", "3.1.0", 0), ("3.1.0-rc.2", "3.1.0-rc.10", -1),
+    ("3.1.0", "3.1.0-beta", 1), ("3.1.0+build2", "3.1.0+build1", 0),
+])
+def test_update_version_comparison(left, right, result):
+    assert update_package.compare_versions(left, right) == result
+
+
+@pytest.mark.parametrize("version", ["offline", "3", "3.01.0", "3.1.0-01", "3.1.0-rc..1"])
+def test_update_invalid_versions(version):
+    with pytest.raises(ValueError):
+        update_package.normalize_version(version)
+
+
+def test_update_payload_versions_types_platforms_and_hashes(tmp_path):
+    package, _ = update_archive(tmp_path)
+    assert update_package.inspect_package(package, expected_version="v3.1.0")["version"] == "3.1.0"
+    for kwargs in ({"expected_version": "3.2.0"}, {"current_version": "4.0.0"},
+                   {"expected_kind": "portable"}, {"expected_platform": "linux-x64"}):
+        with pytest.raises(ValueError):
+            update_package.inspect_package(package, **kwargs)
+    package, _ = update_archive(tmp_path, additions={"VERSION": b"3.2.0"})
+    with pytest.raises(ValueError, match="不一致"):
+        update_package.inspect_package(package)
+    package, manifest = update_archive(tmp_path)
+    manifest["files"]["bot/main.py"] = "0" * 64
+    package, _ = update_archive(tmp_path, manifest_changes=manifest)
+    with pytest.raises(ValueError, match="哈希不一致"):
+        update_package.inspect_package(package)
+
+
+@pytest.mark.parametrize("changes", [{"commit": ""}, {"dirty": "false"}, {"dependencies": None},
+                                     {"architecture": []}, {"package_kind": []}])
+def test_invalid_update_manifest_metadata_is_rejected(tmp_path, changes):
+    package, _ = update_archive(tmp_path, manifest_changes=changes)
+    with pytest.raises(ValueError):
+        update_package.inspect_package(package)
+
+
+@pytest.mark.parametrize("names", [
+    ["bot/main.py", "BOT/MAIN.py"], ["bot", "bot/main.py"], ["bot/main.py", "BOT"],
+    ["data/file."] , ["CON.txt"], ["C:/outside"], ["../outside"],
+])
+def test_archive_rejects_windows_aliases_and_conflicting_targets(tmp_path, names):
+    path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        for name in names:
+            archive.writestr(name, b"x")
+    with pytest.raises(ValueError):
+        with update_package.archive_entries(path):
+            pass
+
+
+def test_archive_rejects_tar_links(tmp_path):
+    path = tmp_path / "links.tar.gz"
+    with tarfile.open(path, "w:gz") as archive:
+        item = tarfile.TarInfo("bot/link")
+        item.type, item.linkname = tarfile.SYMTYPE, "../../outside"
+        archive.addfile(item)
+    with pytest.raises(ValueError, match="链接"):
+        with update_package.archive_entries(path):
+            pass
+
+
+def test_payload_preserves_configuration_and_requires_ownership(tmp_path):
+    package, manifest = update_archive(tmp_path, additions={".ENV": b"secret", "data/pi-home/.pi/agent/models.json": b"keys"})
+    staging = tmp_path / "stage"
+    update_package.inspect_package(package, staging_dir=staging)
+    assert not (staging / ".ENV").exists()
+    assert not (staging / "data").exists()
+    install = tmp_path / "app"
+    (install / "bot").mkdir(parents=True)
+    target = install / "bot/main.py"
+    target.write_text("my modification")
+    with pytest.raises(ValueError, match="本地修改"):
+        update_package.ownership_plan(install, manifest)
+    baseline = {"files": {"bot/main.py": update_package.file_hash(target), "obsolete.py": hashlib.sha256(b"old").hexdigest()}}
+    (install / update_package.MANIFEST).write_text(json.dumps(baseline))
+    (install / "obsolete.py").write_bytes(b"old")
+    files, deleted = update_package.ownership_plan(install, manifest)
+    assert "bot/main.py" in files and deleted == ["obsolete.py"]
+    target.write_text("changed after baseline")
+    with pytest.raises(ValueError, match="本地修改"):
+        update_package.ownership_plan(install, manifest)
+
+
+def test_publish_only_rejects_stale_commit_and_dirty_payload(tmp_path):
+    package, _ = update_archive(tmp_path)
+    assert update_package.main(["verify", "--commit", "b" * 40, str(package)]) == 1
+    package, _ = update_archive(tmp_path, manifest_changes={"dirty": True})
+    assert update_package.main(["verify", "--require-clean", str(package)]) == 1
+
+
+def test_owned_release_files_allow_next_source_update_despite_older_git_head(monkeypatch, tmp_path):
+    _, manifest = update_archive(tmp_path)
+    install = tmp_path / "install"
+    (install / ".git").mkdir(parents=True)
+    (install / "bot").mkdir()
+    target = install / "bot/main.py"
+    target.write_text("previous release bytes")
+    (install / update_package.MANIFEST).write_text(json.dumps({"files": {"bot/main.py": update_package.file_hash(target)}}))
+    monkeypatch.setattr(update_package, "_git", lambda *args: "bot/main.py\0")
+    assert "bot/main.py" in update_package.ownership_plan(install, manifest)[0]
+    target.unlink()
+    with pytest.raises(ValueError, match="本地修改"):
+        update_package.ownership_plan(install, manifest)
+
+
+def test_legacy_recovery_missing_material_preserves_target(tmp_path):
+    target = tmp_path / "app.py"
+    target.write_text("only surviving copy")
+    transaction = tmp_path / ".update-apply-legacy"
+    transaction.mkdir()
+    updater._append_update_journal(transaction / "journal.jsonl", {
+        "event": "backup", "target_path": str(target), "relative_path": "app.py",
+        "backup_path": str(transaction / "missing"),
+    })
+    with pytest.raises(RuntimeError, match="备份缺失"):
+        updater._recover_interrupted_update_applications(tmp_path)
+    assert target.read_text() == "only surviving copy"
+    assert transaction.exists()
+
+
+def test_legacy_recovery_preserves_manual_repair_when_ownership_is_unknown(tmp_path):
+    target = tmp_path / "app.py"
+    target.write_text("manual repair")
+    directory = tmp_path / ".update-apply-legacy"
+    directory.mkdir()
+    backup = directory / "backup-0000"
+    backup.write_text("old version")
+    updater._append_update_journal(directory / "journal.jsonl", {
+        "event": "backup", "target_path": str(target), "relative_path": "app.py", "backup_path": str(backup),
+    })
+    with pytest.raises(RuntimeError, match="无法证明"):
+        updater._recover_interrupted_update_applications(tmp_path)
+    assert target.read_text() == "manual repair" and backup.read_text() == "old version"
+
+
+def test_preparation_never_restores_legacy_files_in_a_running_installation(tmp_path):
+    directory = tmp_path / ".update-apply-legacy"
+    directory.mkdir()
+    backup = directory / "backup-0000"
+    backup.write_text("old version")
+    target = tmp_path / "app.py"
+    updater._append_update_journal(directory / "journal.jsonl", {
+        "event": "backup", "target_path": str(target), "relative_path": "app.py", "backup_path": str(backup),
+    })
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        updater._assert_no_unfinished_legacy_transactions(tmp_path)
+    assert not target.exists() and backup.exists()
+
+
+def test_generated_caches_are_excluded_from_ownership_and_retirement(tmp_path):
+    cache = "bot/__pycache__/main.cpython-312.pyc"
+    package, manifest = update_archive(tmp_path, additions={cache: b"generated cache"})
+    stage = tmp_path / "stage"
+    update_package.inspect_package(package, staging_dir=stage)
+    assert not (stage / cache).exists()
+    installed = tmp_path / "app"
+    installed.mkdir()
+    (installed / update_package.MANIFEST).write_text(json.dumps({"files": {cache: "0" * 64}}))
+    assert cache not in update_package.ownership_plan(installed, manifest)[1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows case-insensitive filesystem contract")
+def test_windows_case_only_rename_does_not_schedule_deletion(tmp_path):
+    _, manifest = update_archive(tmp_path)
+    root = tmp_path / "app"
+    (root / "bot").mkdir(parents=True)
+    target = root / "bot/Main.py"
+    target.write_bytes(b"print('new')\n")
+    (root / update_package.MANIFEST).write_text(json.dumps({"files": {"bot/Main.py": update_package.file_hash(target)}}))
+    files, deleted = update_package.ownership_plan(root, manifest)
+    assert "bot/main.py" in files and "bot/Main.py" not in deleted
+
+
+def test_existing_parent_file_conflict_is_detected_during_preparation(tmp_path):
+    _, manifest = update_archive(tmp_path)
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "bot").write_text("local file")
+    with pytest.raises(RuntimeError, match="父级不是目录"):
+        update_package.ownership_plan(root, manifest)
+    assert (root / "bot").read_text() == "local file"
+
+
+def test_downloader_resumes_only_the_same_etag_and_range(monkeypatch, tmp_path):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("VERSION", "3.1.0")
+    payload = output.getvalue()
+    split = len(payload) // 2
+    requests = []
+
+    class Response:
+        def __init__(self, resumed):
+            self.status = 206 if resumed else 200
+            self.headers = {"ETag": '"immutable"', "Content-Length": str(len(payload) - split if resumed else len(payload))}
+            if resumed:
+                self.headers["Content-Range"] = f"bytes {split}-{len(payload)-1}/{len(payload)}"
+            self.resumed, self.calls = resumed, 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def read(self, _):
+            self.calls += 1
+            if self.resumed:
+                return payload[split:] if self.calls == 1 else b""
+            if self.calls == 1:
+                return payload[:split]
+            raise OSError("connection dropped")
+
+    class Opener:
+        def open(self, request, **_):
+            requests.append(request)
+            return Response(len(requests) > 1)
+
+    monkeypatch.setattr(updater, "_build_url_opener", Opener)
+    monkeypatch.setattr(updater.time, "sleep", lambda _: None)
+    target = tmp_path / "download.zip"
+    updater._download_file("https://example.invalid/asset", target)
+    assert target.read_bytes() == payload
+    assert requests[1].get_header("Range") == f"bytes={split}-"
+    assert requests[1].get_header("If-range") == '"immutable"'
+
+
+def test_downloader_cancellation_is_not_retried(monkeypatch, tmp_path):
+    class Cancelled(RuntimeError):
+        pass
+
+    def progress(_):
+        raise Cancelled("cancelled")
+
+    monkeypatch.setattr(updater, "_build_url_opener", lambda: None)
+    with pytest.raises(Cancelled):
+        updater._download_file("https://example.invalid", tmp_path / "update.zip", progress)
+
+
+def test_tar_root_directory_is_accepted(tmp_path):
+    package = tmp_path / "root.tar.gz"
+    with tarfile.open(package, "w:gz") as archive:
+        root = tarfile.TarInfo(".")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
+        item = tarfile.TarInfo("./VERSION")
+        item.size = 5
+        archive.addfile(item, io.BytesIO(b"3.1.0"))
+    with update_package.archive_entries(package) as entries:
+        assert [item[0] for item in entries] == ["VERSION"]
+
+
+def test_offline_payload_is_frozen_then_applied_and_restored_without_user_data(monkeypatch, tmp_path):
+    from scripts.update_transaction import Transaction
+    package, _ = update_archive(tmp_path, additions={".env": b"package defaults", ".web_announcements.json": b"{}"})
+    root = tmp_path / "installation"
+    root.mkdir()
+    (root / "VERSION").write_text("3.0.0")
+    (root / ".env").write_text("user secret")
+    (root / ".web_announcements.json").write_text("user announcements")
+    (root / update_package.MANIFEST).write_text(json.dumps({"files": {"VERSION": update_package.file_hash(root / "VERSION")}}))
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda *args: "installer")
+    job_dir = tmp_path / "state" / "jobs" / "job"
+    prepared = updater.prepare_update_payload(root, package, job_dir, expected_version="3.1.0")
+    assert Path(prepared["package_path"]).parent == job_dir
+    assert (root / "VERSION").read_text() == "3.0.0"
+    assert ".env" not in prepared["files"] and ".web_announcements.json" not in prepared["files"]
+    package.unlink()
+    assert Path(prepared["package_path"]).is_file()
+    transaction = Transaction(root, job_dir / "transaction")
+    transaction.apply(Path(prepared["staging_dir"]), prepared["files"], prepared["delete_paths"],
+                      expected_hashes=prepared["original_hashes"])
+    assert (root / "VERSION").read_text() == "3.1.0"
+    transaction.recover()
+    assert (root / "VERSION").read_text() == "3.0.0"
+    assert (root / ".env").read_text() == "user secret"
+    assert (root / ".web_announcements.json").read_text() == "user announcements"
+
+
+def test_release_manifest_records_build_identity_and_only_named_pi_extensions(monkeypatch, tmp_path):
+    package, _ = update_archive(tmp_path)
+    stage = tmp_path / "stage"
+    update_package.inspect_package(package, staging_dir=stage)
+    extension = "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"
+    (stage / extension).parent.mkdir(parents=True)
+    (stage / extension).write_text("bundled")
+    (stage / "data/pi-home/.pi/agent/models.json").write_text("private")
+    monkeypatch.setattr(update_package, "_git", lambda root, *args: "c" * 40 if args[0] == "rev-parse" else " M bot/main.py")
+    manifest = update_package.create_manifest(stage, tmp_path, managed_data_files=[extension])
+    assert manifest["commit"] == "c" * 40 and manifest["dirty"] is True
+    assert extension in manifest["files"]
+    assert "data/pi-home/.pi/agent/models.json" not in manifest["files"]
+    assert manifest["frontend"]["files"]["front/dist/index.html"] == update_package.file_hash(stage / "front/dist/index.html")
+
+
+def test_build_identity_rejects_new_commit_or_changed_dirty_contents(monkeypatch, tmp_path):
+    data = {"commit": "a" * 40, "diff": "first edit"}
+    def git(root, *args):
+        return data["commit"] if args[0] == "rev-parse" else data["diff"] if args[0] == "diff" else " M bot/main.py"
+    monkeypatch.setattr(update_package, "_git", git)
+    identity = update_package.source_identity(tmp_path)
+    monkeypatch.setenv("TCB_RELEASE_SOURCE_COMMIT", identity["commit"])
+    monkeypatch.setenv("TCB_RELEASE_SOURCE_FINGERPRINT", identity["fingerprint"])
+    data["diff"] = "second edit"
+    with pytest.raises(ValueError, match="工作树发生变化"):
+        update_package.verify_source_identity(tmp_path)
+    data["diff"], data["commit"] = "first edit", "b" * 40
+    with pytest.raises(ValueError, match="源码提交"):
+        update_package.verify_source_identity(tmp_path)
+
+
+def test_release_manifest_rejects_stale_frontend_source_snapshot(monkeypatch, tmp_path):
+    package, _ = update_archive(tmp_path)
+    stage = tmp_path / "stage"
+    update_package.inspect_package(package, staging_dir=stage)
+    info_path = stage / "front/dist/build-info.json"
+    info = json.loads(info_path.read_text())
+    info["source_files"]["VERSION"] = "0" * 64
+    info_path.write_text(json.dumps(info))
+    monkeypatch.setattr(update_package, "_git", lambda root, *args: "c" * 40 if args[0] == "rev-parse" else "")
+    with pytest.raises(ValueError, match="前端构建后源码发生变化"):
+        update_package.create_manifest(stage, tmp_path)

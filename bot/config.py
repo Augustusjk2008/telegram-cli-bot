@@ -559,6 +559,11 @@ logging.getLogger("aiohttp").setLevel(logging.WARNING)
 RESTART_REQUESTED = False
 RESTART_EVENT: Optional[asyncio.Event] = None
 RESTART_EXIT_CODE = 75
+UPDATE_EXIT_CODE = 76
+UPDATE_REQUESTED = False
+UPDATE_DRAINING = False
+UPDATE_JOB_ID = ""
+MIGRATIONS_READY = False
 RESTART_SUPERVISOR_ENV = "CLI_BRIDGE_SUPERVISOR"
 
 
@@ -601,3 +606,19 @@ def request_restart():
     if RESTART_EVENT is not None:
         RESTART_EVENT.set()
     logger.info("重启请求已发出")
+
+
+def request_update(job_id: str, state_file: str) -> None:
+    """Request the supervised upgrade handoff after the host has flushed sessions."""
+    global UPDATE_REQUESTED, UPDATE_JOB_ID, UPDATE_DRAINING
+    if os.environ.get("CLI_BRIDGE_UPDATE_PROTOCOL", "").strip() != "1":
+        raise RuntimeError("当前启动器不支持升级交接")
+    from bot.update_state import write_host_handoff
+    write_host_handoff(state_file, job_id)
+    UPDATE_REQUESTED = True
+    UPDATE_DRAINING = True
+    UPDATE_JOB_ID = job_id
+    os.environ["CLI_BRIDGE_UPDATE_STATE_FILE"] = state_file
+    os.environ["CLI_BRIDGE_UPDATE_JOB_ID"] = job_id
+    if RESTART_EVENT is not None:
+        RESTART_EVENT.set()

@@ -1,3 +1,4 @@
+import { AppUpdatePanel } from "../components/admin/AppUpdatePanel";
 import { cliTypeLabel } from "../utils/cliType";
 import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
 import { GlobalPromptPresetsPanel } from "../components/GlobalPromptPresetsPanel";
@@ -10,8 +11,6 @@ import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
   AnnouncementItem,
-  AppUpdateDownloadProgress,
-  AppUpdateStatus,
   BotSummary,
   Capability,
   CliErrorStatsResult,
@@ -28,7 +27,6 @@ import type {
   NativeAgentConfigPayload,
   NativeAgentPreflightCheck,
   NativeAgentPreflightResult,
-  OfflineUpdatePackageList,
   RegisterCodeCreateResult,
   RegisterCodeItem,
   NotificationSettingsStatus,
@@ -136,14 +134,6 @@ const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "admin_ops", label: "管理操作" },
   { id: "manage_register_codes", label: "邀请码/用户" },
 ];
-
-function formatPackageKind(kind?: string) {
-  if (kind === "installer") return "Windows 安装版";
-  if (kind === "portable") return "Windows 绿色版";
-  if (kind === "linux") return "Linux";
-  if (kind === "macos") return "macOS";
-  return "未知";
-}
 
 function formatEnvValue(value: EnvConfigValue | undefined, masked = false) {
   if (masked) return "********";
@@ -430,8 +420,7 @@ export function AdminCenterScreen({
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [bots, setBots] = useState<BotSummary[]>(initialBots);
   const [registerCodes, setRegisterCodes] = useState<RegisterCodeItem[]>([]);
-  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
-  const [offlinePackages, setOfflinePackages] = useState<OfflineUpdatePackageList | null>(null);
+  const [updateRefreshKey, setUpdateRefreshKey] = useState(0);
   const [cliErrorStats, setCliErrorStats] = useState<CliErrorStatsResult | null>(null);
   const [cliErrorHours, setCliErrorHours] = useState(24);
   const [codexUsagePanelKey, setCodexUsagePanelKey] = useState(0);
@@ -490,13 +479,10 @@ export function AdminCenterScreen({
     env: false,
     global: false,
   });
-  const [manualPackagePath, setManualPackagePath] = useState("");
   const [registerCodeDraftUses, setRegisterCodeDraftUses] = useState("1");
   const [createdRegisterCode, setCreatedRegisterCode] = useState<RegisterCodeCreateResult | null>(null);
   const [registerCodeCreating, setRegisterCodeCreating] = useState(false);
   const [registerCodeActionId, setRegisterCodeActionId] = useState("");
-  const [updateAction, setUpdateAction] = useState<"" | "toggle" | "check" | "download" | "offline">("");
-  const [updateLogLines, setUpdateLogLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -608,35 +594,6 @@ export function AdminCenterScreen({
       }
     } catch (nextError) {
       setError(getErrorMessage(nextError, "加载邀请码失败"));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
-
-  async function loadUpdates(nextNotice = "", refresh = false) {
-    if (refresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-    setError("");
-    if (!nextNotice) {
-      setNotice("");
-    }
-    try {
-      const [updateData, packageData] = await Promise.all([
-        client.getUpdateStatus(),
-        client.listOfflineUpdatePackages(),
-      ]);
-      setUpdateStatus(updateData);
-      setOfflinePackages(packageData);
-      setLoadedTabs((prev) => ({ ...prev, updates: true }));
-      if (nextNotice) {
-        setNotice(nextNotice);
-      }
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载升级信息失败"));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -915,7 +872,9 @@ export function AdminCenterScreen({
         setCodexUsagePanelKey((current) => current + 1);
       }
     } else if (activeTab === "updates") {
-      await loadUpdates(nextNotice, refresh);
+      setLoadedTabs((prev) => ({ ...prev, updates: true }));
+      setLoading(false);
+      if (refresh) setUpdateRefreshKey((previous) => previous + 1);
     } else if (activeTab === "network") {
       await loadNetworkAccess(nextNotice, refresh);
     } else if (activeTab === "notifications") {
@@ -978,13 +937,6 @@ export function AdminCenterScreen({
       window.clearInterval(timer);
     };
   }, [activeTab, client, storagePreview?.jobId, storagePreview?.planId, isStorageMigrationActive(storageSnapshot)]);
-
-  const appendUpdateLog = (message?: string) => {
-    if (!message) {
-      return;
-    }
-    setUpdateLogLines((prev) => [...prev, message]);
-  };
 
   const updateUserBotGrant = async (user: AdminUser, alias: string, enabled: boolean) => {
     const nextAllowed = enabled
@@ -1088,89 +1040,6 @@ export function AdminCenterScreen({
       setError(getErrorMessage(nextError, "删除邀请码失败"));
     } finally {
       setRegisterCodeActionId("");
-    }
-  };
-
-  const saveUpdateToggle = async (enabled: boolean) => {
-    setUpdateAction("toggle");
-    setError("");
-    setNotice("");
-    try {
-      const nextStatus = await client.setUpdateEnabled(enabled);
-      setUpdateStatus(nextStatus);
-      setNotice(enabled ? "已启用自动下载更新" : "已关闭自动下载更新");
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "保存更新设置失败"));
-    } finally {
-      setUpdateAction("");
-    }
-  };
-
-  const checkOnlineUpdate = async () => {
-    setUpdateAction("check");
-    setError("");
-    setNotice("");
-    setUpdateLogLines(["检查联网更新"]);
-    try {
-      const nextStatus = await client.checkForUpdate();
-      setUpdateStatus(nextStatus);
-      appendUpdateLog(`当前版本: ${nextStatus.currentVersion}`);
-      appendUpdateLog(`可用版本: ${nextStatus.latestVersion || "暂无"}`);
-      setNotice("已检查联网更新");
-    } catch (nextError) {
-      const message = getErrorMessage(nextError, "检查更新失败");
-      appendUpdateLog(`失败原因: ${message}`);
-      setError(message);
-    } finally {
-      setUpdateAction("");
-    }
-  };
-
-  const downloadOnlineUpdate = async () => {
-    setUpdateAction("download");
-    setError("");
-    setNotice("");
-    setUpdateLogLines([]);
-    try {
-      const nextStatus = await client.downloadUpdateStream((event: AppUpdateDownloadProgress) => {
-        appendUpdateLog(event.message);
-      });
-      setUpdateStatus(nextStatus);
-      appendUpdateLog("已设置待应用");
-      setNotice("联网更新包已下载");
-    } catch (nextError) {
-      const message = getErrorMessage(nextError, "联网下载失败");
-      appendUpdateLog(`失败原因: ${message}`);
-      setError(message);
-    } finally {
-      setUpdateAction("");
-    }
-  };
-
-  const prepareOffline = async (path: string, version = "") => {
-    const normalizedPath = path.trim();
-    if (!normalizedPath) {
-      setError("本地离线包路径不能为空");
-      return;
-    }
-    setUpdateAction("offline");
-    setError("");
-    setNotice("");
-    setUpdateLogLines([]);
-    try {
-      const nextStatus = await client.prepareOfflineUpdateStream(normalizedPath, version, (event) => {
-        appendUpdateLog(event.message);
-      });
-      setUpdateStatus(nextStatus);
-      setManualPackagePath(normalizedPath);
-      appendUpdateLog("已设置待应用");
-      setNotice("离线升级包已设置");
-    } catch (nextError) {
-      const message = getErrorMessage(nextError, "离线升级失败");
-      appendUpdateLog(`失败原因: ${message}`);
-      setError(message);
-    } finally {
-      setUpdateAction("");
     }
   };
 
@@ -2946,88 +2815,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </div>
         ) : null}
 
-        {!loading && activeTab === "updates" ? (
-          <section aria-labelledby="update-center-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-            <div>
-              <h2 id="update-center-title" className="text-base font-semibold text-[var(--text)]">升级</h2>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">当前版本: {updateStatus?.currentVersion || "未知"}</p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">当前包: {formatPackageKind(updateStatus?.currentPackageKind)}</p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">可用版本: {updateStatus?.latestVersion || "暂无"}</p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">待应用: {updateStatus?.pendingUpdateVersion || "无"}</p>
-            </div>
-
-            <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-sm">
-              <span>自动下载更新</span>
-              <input
-                type="checkbox"
-                checked={Boolean(updateStatus?.updateEnabled)}
-                disabled={updateAction === "toggle"}
-                onChange={(event) => void saveUpdateToggle(event.target.checked)}
-              />
-            </label>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void checkOnlineUpdate()}
-                disabled={updateAction !== ""}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                {updateAction === "check" ? "检查中..." : "检查联网更新"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void downloadOnlineUpdate()}
-                disabled={updateAction !== ""}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                {updateAction === "download" ? "下载中..." : "联网下载"}
-              </button>
-            </div>
-
-            <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
-              <p className="text-sm text-[var(--muted)]">离线包目录: {offlinePackages?.artifactsDir || ".release-local/artifacts"}</p>
-              <div className="flex flex-wrap gap-2">
-                {offlinePackages?.items.map((item) => (
-                  <button
-                    key={item.path}
-                    type="button"
-                    disabled={updateAction !== "" || !item.valid}
-                    onClick={() => void prepareOffline(item.path, item.version)}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                    title={item.valid ? item.path : item.error || item.path}
-                  >
-                    {item.name} · {formatPackageKind(item.packageKind)}
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  aria-label="本地离线包路径"
-                  value={manualPackagePath}
-                  onChange={(event) => setManualPackagePath(event.target.value)}
-                  placeholder="本地离线包路径"
-                  className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                />
-                <button
-                  type="button"
-                  onClick={() => void prepareOffline(manualPackagePath)}
-                  disabled={updateAction !== ""}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                >
-                  使用本地包升级
-                </button>
-              </div>
-            </div>
-
-            <div role="log" className="h-56 overflow-y-auto rounded-lg bg-[var(--admin-log-background)] p-3 font-mono text-xs text-[var(--admin-log-text)] whitespace-pre-wrap break-all">
-              {updateLogLines.length ? updateLogLines.join("\n") : "暂无升级输出"}
-            </div>
-          </section>
-        ) : null}
+        {activeTab === "updates" ? <AppUpdatePanel client={client} refreshKey={updateRefreshKey} /> : null}
 
         {!loading && activeTab === "cli-errors" ? (
           <section aria-labelledby="cli-error-stats-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">

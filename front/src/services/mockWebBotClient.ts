@@ -2072,6 +2072,10 @@ export class MockWebBotClient implements WebBotClient {
     ],
   };
   private updateStatus: AppUpdateStatus = {
+    revision: 0,
+    job: null,
+    launcher: { supported: true, protocol: 1, command: "start.bat", reason: "" },
+    lastCheck: { checkedAt: "", ok: null, cached: false, error: "" },
     currentVersion: APP_VERSION,
     currentPackageKind: "installer",
     updateEnabled: true,
@@ -6235,11 +6239,68 @@ export class MockWebBotClient implements WebBotClient {
     return { ...this.updateStatus };
   }
 
+  private advanceUpdate(phase: NonNullable<AppUpdateStatus["job"]>["phase"]): AppUpdateStatus {
+    const revision = this.updateStatus.revision + 1;
+    const oldJob = this.updateStatus.job;
+    this.updateStatus = {
+      ...this.updateStatus,
+      revision,
+      job: {
+        jobId: oldJob?.jobId || `mock-update-${revision}`,
+        revision, phase,
+        currentVersion: this.updateStatus.currentVersion,
+        targetVersion: this.updateStatus.pendingUpdateVersion || this.updateStatus.latestVersion,
+        packageKind: this.updateStatus.pendingUpdatePackageKind,
+        packageSha256: "mock-sha256",
+        progress: { phase, downloadedBytes: 1024, totalBytes: 1024, percent: 100, message: "准备完成" },
+        error: "", launcher: this.updateStatus.launcher, backupDir: "", jobDir: "mock-update", result: null,
+      },
+    };
+    return { ...this.updateStatus };
+  }
+
+  async getCurrentUpdateJob(): Promise<AppUpdateStatus> {
+    if (this.updateStatus.job?.phase === "waiting_restart") return this.advanceUpdate("awaiting_health");
+    if (this.updateStatus.job?.phase === "awaiting_health") {
+      this.updateStatus.currentVersion = this.updateStatus.job.targetVersion;
+      return this.advanceUpdate("succeeded");
+    }
+    return this.getUpdateStatus();
+  }
+
+  private requireUpdateJob(jobId: string, revision: number) {
+    if (this.updateStatus.job?.jobId !== jobId || this.updateStatus.job.revision !== revision) {
+      throw new WebApiClientError("升级任务已变化，请刷新后重试", { status: 409 });
+    }
+  }
+
+  async applyUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus> {
+    this.requireUpdateJob(jobId, revision);
+    return this.advanceUpdate("waiting_restart");
+  }
+
+  async cancelUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus> {
+    this.requireUpdateJob(jobId, revision);
+    return this.advanceUpdate("cancelled");
+  }
+
+  async retryUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus> {
+    this.requireUpdateJob(jobId, revision);
+    return this.advanceUpdate("ready");
+  }
+
+  async uploadOfflineUpdate(file: File): Promise<AppUpdateStatus> {
+    if (!/\.(zip|tar\.gz)$/i.test(file.name)) throw new Error("升级包格式不支持");
+    return this.downloadUpdate();
+  }
+
   async setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus> {
     this.updateStatus = {
       ...this.updateStatus,
       updateEnabled: enabled,
     };
+    this.updateStatus.revision += 1;
+    if (this.updateStatus.job) this.updateStatus.job = { ...this.updateStatus.job, revision: this.updateStatus.revision };
     return { ...this.updateStatus };
   }
 
@@ -6247,6 +6308,7 @@ export class MockWebBotClient implements WebBotClient {
     this.updateStatus = {
       ...this.updateStatus,
       lastCheckedAt: "2026-04-15T10:00:00+08:00",
+      lastCheck: { checkedAt: "2026-04-15T10:00:00+08:00", ok: true, cached: false, error: "" },
       latestVersion: APP_VERSION,
       latestReleaseUrl: MOCK_RELEASE_URL,
       latestNotes: "Bugfixes",
@@ -6268,7 +6330,7 @@ export class MockWebBotClient implements WebBotClient {
       pendingUpdatePackageKind: packageKind,
       lastError: "",
     };
-    return { ...this.updateStatus };
+    return this.advanceUpdate("ready");
   }
 
   async downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus> {
@@ -6316,7 +6378,7 @@ export class MockWebBotClient implements WebBotClient {
       pendingUpdatePackageKind: selected.packageKind,
       lastError: "",
     };
-    return { ...this.updateStatus };
+    return this.advanceUpdate("ready");
   }
 
   async prepareOfflineUpdateStream(

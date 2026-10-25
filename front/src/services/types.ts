@@ -2988,7 +2988,38 @@ export type GitProxySettings = {
 
 export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "macos" | "unknown" | "";
 
+export type AppUpdatePhase = "preparing" | "ready" | "waiting_restart" | "applying" | "awaiting_health"
+  | "succeeded" | "failed" | "cancelled" | "rolling_back" | "rolled_back" | "recovery_required";
+
+export type AppUpdateLauncher = {
+  supported: boolean;
+  protocol: number;
+  command: string;
+  reason: string;
+};
+
+export type AppUpdateJob = {
+  jobId: string;
+  revision: number;
+  phase: AppUpdatePhase;
+  currentVersion: string;
+  targetVersion: string;
+  packageKind: AppUpdatePackageKind;
+  packageSha256: string;
+  progress: AppUpdateDownloadProgress;
+  error: string;
+  launcher: AppUpdateLauncher;
+  backupDir: string;
+  jobDir: string;
+  result: unknown;
+  requiresPreparation?: boolean;
+};
+
 export type AppUpdateStatus = {
+  revision: number;
+  job: AppUpdateJob | null;
+  launcher: AppUpdateLauncher;
+  lastCheck: { checkedAt: string; ok: boolean | null; cached: boolean; error: string };
   currentVersion: string;
   currentPackageKind: AppUpdatePackageKind;
   updateEnabled: boolean;

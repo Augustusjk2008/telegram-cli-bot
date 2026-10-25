@@ -101,7 +101,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux/macOS 需要 Python 3.10+、Git 和满足锁定前端依赖的 Node.js 22.13+；Pi 原生 Agent 还需要 bash。安装器当前只检查 Node.js 18+，请在安装前确认实际 Node 版本满足前端要求。
+Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+；Pi 原生 Agent 还需要 bash。安装器会检查这些运行时版本。
 
 <details>
 <summary><strong>从源码快照安装</strong></summary>
@@ -437,9 +437,27 @@ WEB_TERMINAL_SHELL_PATH=C:\Program Files\PowerShell\7\pwsh.exe
 
 ## 更新
 
-设置页和 Admin Center 可从 GitHub Releases 检查、下载更新，也支持校验本地离线包并准备更新。
+Admin Center 提供“检查更新 → 准备更新 → 应用更新”。自动下载只准备任务；准备完成后由管理员确认应用。关闭页面、刷新或普通重启都会保留任务。任务按安装目录隔离，多份安装共享数据根目录时也各自处理升级。
 
-源码安装通过完整重新运行 `start.bat` / `start.ps1` 或 `start.sh` 应用待更新包；应用内重启只重新运行宿主进程。当前绿色版生成的启动器和直接 `python -m bot` 入口尚未自动应用待更新包，绿色版可下载完整新版本压缩包部署。更新操作应由用户在合适的停机时间执行。
+官方 Windows 源码入口 `start.bat` / `start.ps1`、Windows 绿色版启动器和 Linux/macOS `start.sh` 使用独立执行器交接。普通重启退出码为 `75`，确认应用更新使用 `76`。直接 `python -m bot` 或未知 supervisor 可以检查和准备；管理中心会显示对应安装的官方启动命令。
+
+准备阶段验证版本、平台、包类型、SHA-256、文件清单和本地修改，并在独立目录准备依赖及前端。绿色版使用包内运行时；源码离线升级要求现有环境满足目标依赖，或通过本地 pip 资源提供所需依赖。需要本地构建前端时使用 Node.js 22.13+ 与 `npm ci`；部署路径不匹配且禁止重建时会阻止应用。
+
+应用前必须等待 Agent、集群任务和存储迁移结束。应用期间服务暂时断开；新实例通过版本、任务标识、本地健康接口和前端资源检查后，任务才显示成功。失败时保留备份，恢复旧程序和旧环境并再次验证。`recovery_required` 表示需要人工处理，任务结果中会提供恢复命令；保留对应任务目录及日志，处理文件冲突后再运行该命令。
+
+`.env`、真实 Bot 配置、存储定位器指向的数据、插件、历史、附件和 Pi 模型密钥受保护。绿色版 Pi `settings.json` / `models.json` 在首次启动且缺失时生成；两项随包扩展按旧文件哈希验证后更新。程序恢复不覆盖用户数据；无法确认向后兼容的数据迁移在停机前阻止自动应用。
+
+首次从没有新执行器的旧版升级，需要使用完整新包中的 `scripts/update_bootstrap.py`。先在安装目录之外解压新包，核对 Release 的 SHA-256，再用新包的 Python（绿色版）或可用 Python（源码版）执行。例如：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:/upgrade/new/scripts/update_bootstrap.ps1 -RepoRoot C:/OrbitSafeClaw -WorkDir C:/upgrade/session -Package C:/upgrade/new-release.zip -Sha256 <新包SHA256> -Python C:/upgrade/new/runtime/python/python.exe -HealthUrl http://127.0.0.1:8765/api/health
+```
+
+源码版将 `-Python` 改为可用的 Python 路径。Linux/macOS 在新包目录运行 `python scripts/update_bootstrap.py`，使用对应的 `--repo-root`、`--work-dir`、`--package`、`--sha256` 和 `--health-url` 参数。健康地址应使用实际端口和路径前缀。没有 Git 或旧文件清单的安装，还需提供 `--baseline-package <原版本完整包> --baseline-sha256 <原包SHA256>` 证明程序文件归属；用户修改会作为冲突保留。准备完成后，由用户退出旧服务，再执行工具输出的含 `--resume --apply --host-stopped` 的应用命令。工具同时输出独立恢复命令。Linux/macOS 使用相同参数及对应 `.tar.gz` 包。引导工作目录必须保留到升级或恢复验证完成。
+
+如果检测到旧 `.update-apply-*` 事务，先退出旧宿主，在解压的新版本目录运行 `python -m bot.updater recover-legacy --repo-root <旧安装目录> --host-stopped`，然后重新准备。无法确认目标归属或缺少备份时会保留现场并返回 `recovery_required`。
+
+PowerShell 引导入口的基线参数为 `-BaselinePackage` 和 `-BaselineSha256`。同一安装同时只允许一个宿主；数据目录迁移后，启动器会从新宿主接收当前任务状态的位置。
 
 首次安装生成的 `.env` 默认包含：
 

@@ -101,7 +101,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux and macOS require Python 3.10+, Git, and Node.js 22.13+ to satisfy the locked frontend dependencies. The native Pi agent also needs bash. Installers currently check only for Node.js 18+, so verify the actual Node version before installation.
+Linux and macOS require Python 3.10+, Git, and Node.js 22.13+. The native Pi agent also needs bash. Installers check these runtime versions.
 
 <details>
 <summary><strong>Install from a source snapshot</strong></summary>
@@ -425,9 +425,27 @@ This setting only controls the shell inside the web xterm. It does not launch an
 
 ## Updates
 
-Settings and Admin Center can check GitHub Releases and download updates, or validate a local offline package and prepare it for application.
+Admin Center provides “Check → Prepare → Apply”. Automatic downloads prepare a job; an administrator explicitly confirms application. Jobs survive page refreshes, disconnects and ordinary restarts, and are isolated by installation directory even when installations share an application-data root.
 
-Source installations apply pending updates when `start.bat` / `start.ps1` or `start.sh` is launched again in full; an in-app restart only restarts the host process. The generated portable launcher and direct `python -m bot` entry point currently do not apply pending packages automatically. Portable users can deploy a complete new release archive. The user should schedule update operations for an appropriate downtime window.
+The official Windows source launchers (`start.bat` / `start.ps1`), Windows portable launcher and Linux/macOS `start.sh` hand control to an independent executor. Exit `75` requests an ordinary restart; exit `76` applies a confirmed job. Direct `python -m bot` and unknown supervisors support checking and preparation; Admin Center shows the official command for that installation.
+
+Preparation checks versions, platform, package kind, SHA-256, the file manifest and local modifications, then prepares dependencies and frontend assets in separate directories. Portable packages contain the runtime. Offline source upgrades require compatible installed dependencies or local pip resources. Local frontend builds require Node.js 22.13+ and use `npm ci`; incompatible deployment paths with rebuilding disabled prevent application.
+
+Wait for agents, cluster tasks and storage migration to finish before applying. The service disconnects temporarily. Success requires a new instance with the expected version, job identity, local health response and complete frontend resources. Failure restores the old program and environment and verifies them again. A `recovery_required` result includes a recovery command; retain the job directory and logs, resolve the reported conflicts, and run that command.
+
+Updates protect `.env`, real Bot configuration, storage-locator data, plugins, history, attachments and Pi credentials. Portable Pi `settings.json` and `models.json` are created only when missing at first launch; the two bundled extensions are updated only after ownership/hash checks. Program recovery preserves user data. Unverified or incompatible data migrations prevent automatic application before shutdown.
+
+For the first upgrade from a version without this executor, extract the full new release outside the installation and use its `scripts/update_bootstrap.py`. Verify the release SHA-256 and run with the new portable Python or an available source-installation Python:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:/upgrade/new/scripts/update_bootstrap.ps1 -RepoRoot C:/OrbitSafeClaw -WorkDir C:/upgrade/session -Package C:/upgrade/new-release.zip -Sha256 <NEW_SHA256> -Python C:/upgrade/new/runtime/python/python.exe -HealthUrl http://127.0.0.1:8765/api/health
+```
+
+For a source installation, set `-Python` to its available Python executable. Linux/macOS run `python scripts/update_bootstrap.py` from the extracted release with the equivalent `--repo-root`, `--work-dir`, `--package`, `--sha256`, and `--health-url` options. Use the actual local port and path prefix for the health URL. Installations without Git or a previous file manifest also require `--baseline-package <ORIGINAL_RELEASE> --baseline-sha256 <ORIGINAL_SHA256>` to establish program-file ownership; modified files remain conflicts. After preparation, exit the old service yourself, then run the printed apply command containing `--resume --apply --host-stopped`. The tool also prints an independent recovery command. Linux/macOS use the same options and their `.tar.gz` release. Retain the bootstrap workspace until application or recovery has been verified.
+
+If an old `.update-apply-*` transaction is detected, exit the old host, run `python -m bot.updater recover-legacy --repo-root <OLD_INSTALLATION> --host-stopped` from the extracted new release, then prepare again. Missing backups or uncertain target ownership preserve the recovery materials and return `recovery_required`.
+
+The PowerShell bootstrap uses `-BaselinePackage` and `-BaselineSha256` for the baseline. Each installation permits one host at a time; after a storage move, the new host reports the current task-state location to its launcher.
 
 The generated `.env` includes:
 

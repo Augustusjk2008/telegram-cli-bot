@@ -437,35 +437,13 @@ function Install-PortablePiExtensions {
         throw "未找到 Pi 集群扩展文件: $piClusterExtensionSource"
     }
     Copy-Item -LiteralPath $piClusterExtensionSource -Destination (Join-Path $extensionsRoot "tcb-cluster.ts") -Force
-}
-
-function Initialize-PortablePiConfig {
-    param([string]$PackageRoot)
-
-    Write-Step "初始化包内 Pi 配置"
-    $piAgentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
-    [void](New-Item -ItemType Directory -Path $piAgentRoot -Force)
-
-    $settingsPath = Join-Path $piAgentRoot "settings.json"
-    if (-not (Test-Path -LiteralPath $settingsPath)) {
-        $settings = [ordered]@{
-            backend = "pi"
-            model = ""
-            reasoning_effort = ""
-            pi_agent = ""
-            workspace_history_enabled = $true
-            shellPath = ""
-        } | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText($settingsPath, [string]$settings, $script:Utf8NoBomEncoding)
+    $managed = [ordered]@{}
+    foreach ($name in @("workspace-history.ts", "tcb-cluster.ts")) {
+        $relative = "data/pi-home/.pi/agent/extensions/$name"
+        $managed[$relative] = (Get-FileHash -LiteralPath (Join-Path $PackageRoot $relative) -Algorithm SHA256).Hash.ToLowerInvariant()
     }
-
-    $modelsPath = Join-Path $piAgentRoot "models.json"
-    if (-not (Test-Path -LiteralPath $modelsPath)) {
-        $models = [ordered]@{
-            providers = [ordered]@{}
-        } | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText($modelsPath, [string]$models, $script:Utf8NoBomEncoding)
-    }
+    $registration = [ordered]@{ schema_version = 1; files = $managed } | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText((Join-Path $PackageRoot "runtime\pi-managed-files.json"), $registration, $script:Utf8NoBomEncoding)
 }
 
 function Write-PortableEnv {
@@ -621,44 +599,25 @@ function Ensure-PortableWebToken {
 function Set-PortablePiShellPath {
     param([string]$PackageRoot)
 
+    if ($env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1") { return }
     $agentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
     [void](New-Item -ItemType Directory -Path $agentRoot -Force)
-    $settingsPath = Join-Path $PackageRoot "data\pi-home\.pi\agent\settings.json"
+    $settingsPath = Join-Path $agentRoot "settings.json"
     if (-not (Test-Path -LiteralPath $settingsPath)) {
-        $settingsContent = @(
-            "{",
-            '  "backend": "pi",',
-            '  "model": "",',
-            '  "reasoning_effort": "",',
-            '  "pi_agent": "",',
-            '  "workspace_history_enabled": true,',
-            '  "shellPath": ""',
-            "}"
-        ) -join "`n"
-        [System.IO.File]::WriteAllText($settingsPath, $settingsContent, $script:Utf8NoBomEncoding)
+        $settings = [ordered]@{
+            backend = "pi"
+            model = ""
+            reasoning_effort = ""
+            pi_agent = ""
+            workspace_history_enabled = $true
+            shellPath = (Join-Path $PackageRoot "tools\git\bin\bash.exe")
+        } | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($settingsPath, [string]$settings, $script:Utf8NoBomEncoding)
     }
-    $modelsPath = Join-Path $PackageRoot "data\pi-home\.pi\agent\models.json"
+    $modelsPath = Join-Path $agentRoot "models.json"
     if (-not (Test-Path -LiteralPath $modelsPath)) {
         [System.IO.File]::WriteAllText($modelsPath, '{"providers":{}}', $script:Utf8NoBomEncoding)
     }
-    $gitBash = Join-Path $PackageRoot "tools\git\bin\bash.exe"
-
-    $settings = $null
-    try {
-        $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        $settings = $null
-    }
-    if ($null -eq $settings) {
-        $settings = [pscustomobject]@{}
-    }
-    if ($settings.PSObject.Properties.Name -contains "shellPath") {
-        $settings.shellPath = $gitBash
-    } else {
-        Add-Member -InputObject $settings -NotePropertyName "shellPath" -NotePropertyValue $gitBash
-    }
-    $settingsJson = $settings | ConvertTo-Json -Depth 10
-    [System.IO.File]::WriteAllText($settingsPath, [string]$settingsJson, $script:Utf8NoBomEncoding)
 }
 
 function Set-PortableRuntimeEnv {
@@ -684,16 +643,13 @@ function Invoke-RepoModule {
     )
 
     $bootstrapPath = Join-Path $scriptDir "runtime\portable_bootstrap.py"
-    & $pythonExe $bootstrapPath $Module $scriptDir @Arguments
-    return $LASTEXITCODE
+    & $pythonExe $bootstrapPath $Module $scriptDir @Arguments | Out-Host
+    return [int]$LASTEXITCODE
 }
 
 Set-Location $scriptDir
 
 $pythonExe = Join-Path $scriptDir "runtime\python\python.exe"
-if (-not (Test-Path -LiteralPath $pythonExe)) {
-    throw "Can't find Python: $pythonExe"
-}
 
 Prepend-Path -Entries @(
     (Join-Path $scriptDir "runtime\node"),
@@ -707,6 +663,21 @@ Prepend-Path -Entries @(
 
 $env:CLI_BRIDGE_SUPERVISOR = "1"
 Set-PortableRuntimeEnv -PackageRoot $scriptDir
+
+$cachedLauncherPath = Join-Path $scriptDir ".tcb/startup/update-launcher.json"
+if (Test-Path -LiteralPath $cachedLauncherPath) {
+    $cachedLauncher = Get-Content -Raw -LiteralPath $cachedLauncherPath | ConvertFrom-Json
+    if (Test-Path -LiteralPath $cachedLauncher.state_file) {
+        $cachedState = Get-Content -Raw -LiteralPath $cachedLauncher.state_file | ConvertFrom-Json
+        if ($cachedState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
+            & $cachedLauncher.control_python_executable $cachedLauncher.runner_path supervise --repo-root $scriptDir --state-file $cachedLauncher.state_file --python $cachedLauncher.python_executable
+            exit $LASTEXITCODE
+        }
+    }
+}
+if (-not (Test-Path -LiteralPath $pythonExe)) {
+    throw "Can't find Python: $pythonExe"
+}
 
 Write-Host ("[INFO] Start dir: {0}" -f $scriptDir)
 Write-Host ("[INFO] Start mode: {0}" -f $Mode)
@@ -725,14 +696,17 @@ Import-DotEnv -Path $envPath
 Set-PortablePiShellPath -PackageRoot $scriptDir
 Set-PortableRuntimeEnv -PackageRoot $scriptDir
 
-while ($true) {
-    $exitCode = Invoke-RepoModule -Module "bot"
-    if ($exitCode -ne $restartExitCode) {
-        exit $exitCode
-    }
-    Write-Host "[INFO] Restarting in 1 sec..."
-    Start-Sleep -Seconds 1
+if ($env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1") {
+    exit (Invoke-RepoModule -Module "bot")
 }
+$env:CLI_BRIDGE_UPDATE_PROTOCOL = "1"
+$launcherJson = & $pythonExe (Join-Path $scriptDir "scripts\update_runner.py") launcher-info --repo-root $scriptDir
+if ($LASTEXITCODE -ne 0) { throw "Cannot prepare the independent update launcher." }
+$launcher = ($launcherJson -join "`n") | ConvertFrom-Json
+$env:CLI_BRIDGE_UPDATE_STATE_FILE = $launcher.state_file
+& $launcher.control_python_executable $launcher.runner_path supervise --repo-root $scriptDir --state-file $launcher.state_file --python $launcher.python_executable
+exit $LASTEXITCODE
+
 '@
     $startPs1 = $startPs1 -replace "`r?`n", "`r`n"
     [System.IO.File]::WriteAllText((Join-Path $PackageRoot "start.ps1"), $startPs1, $script:Utf8BomEncoding)
@@ -990,11 +964,31 @@ function Write-DistributionMarker {
         packageKind = $PackageKind
         platform = $Platform
         version = $Version
+        updateProtocol = 1
+        architecture = "x64"
     } | ConvertTo-Json
     Set-Content -LiteralPath (Join-Path $Root ".distribution.json") -Value $payload -Encoding UTF8
+    foreach ($relative in @("data/pi-home/.pi/agent/settings.json", "data/pi-home/.pi/agent/models.json")) {
+        if (Test-Path -LiteralPath (Join-Path $Root $relative)) {
+            throw "绿色包不能携带 Pi 用户配置，请保留首次启动生成策略: $relative"
+        }
+    }
+    Invoke-CheckedCommand -FilePath "python" -Arguments @(
+        (Join-Path $script:RepoRoot "scripts/update_package.py"), "create",
+        "--root", $Root, "--source-root", $script:RepoRoot,
+        "--managed-data-file", "data/pi-home/.pi/agent/extensions/workspace-history.ts",
+        "--managed-data-file", "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"
+    ) -FailureMessage "生成绿色版更新清单失败"
 }
 
 try {
+    $identityArguments = @((Join-Path $script:RepoRoot "scripts/update_package.py"), "identity", "--source-root", $script:RepoRoot)
+    if ($env:TCB_RELEASE_SOURCE_COMMIT) { $identityArguments += "--verify" }
+    $identityJson = & python @identityArguments
+    if ($LASTEXITCODE -ne 0) { throw "无法固定绿色版构建源码身份。" }
+    $identity = ($identityJson -join "`n") | ConvertFrom-Json
+    $env:TCB_RELEASE_SOURCE_COMMIT = $identity.commit
+    $env:TCB_RELEASE_SOURCE_FINGERPRINT = $identity.fingerprint
     $version = Get-AppVersion
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $packageName = if ([string]::IsNullOrWhiteSpace($PackageName)) {
@@ -1023,7 +1017,6 @@ try {
     Install-EmbeddedNode -PackageRoot $packageRoot
     Install-PortablePi -PackageRoot $packageRoot
     Install-PortablePiExtensions -PackageRoot $packageRoot
-    Initialize-PortablePiConfig -PackageRoot $packageRoot
     Write-PortableEnv -PackageRoot $packageRoot
     Write-PortableScripts -PackageRoot $packageRoot
     Write-PortableReadme -PackageRoot $packageRoot -Version $version

@@ -412,9 +412,25 @@ def restore_system_sleep():
             logger.warning("恢复系统睡眠失败")
 
 
+async def _wait_update_acceptance(job_id: str, state_file: str) -> None:
+    """Keep new work paused until the external executor accepts this host."""
+    from bot.update_state import UpdateStore
+    store = UpdateStore(Path(_package_root), state_root=Path(state_file).parent)
+    while True:
+        state = await asyncio.to_thread(store.read)
+        job = state.get("job") or {}
+        if job.get("job_id") == job_id and job.get("phase") in {"succeeded", "rolled_back"}:
+            config.UPDATE_DRAINING = False
+            return
+        await asyncio.sleep(0.1)
+
+
 async def run_all_bots():
     _install_asyncio_exception_filter(asyncio.get_running_loop())
     config.RESTART_REQUESTED = False
+    config.UPDATE_REQUESTED = False
+    startup_update_job = os.environ.get("TCB_UPDATE_JOB_ID", "")
+    config.UPDATE_DRAINING = bool(startup_update_job)
     config.RESTART_EVENT = asyncio.Event()
     if not config.WEB_ENABLED:
         raise RuntimeError("WEB_ENABLED 不能为 false")
@@ -452,14 +468,25 @@ async def run_all_bots():
         storage_migration_stop_all_agents=stop_all_agents_for_storage_migration,
     )
     telegram_gateway = None
+    acceptance_task = asyncio.create_task(_wait_update_acceptance(
+        startup_update_job, os.environ.get("CLI_BRIDGE_UPDATE_STATE_FILE", ""),
+    )) if startup_update_job else None
     try:
         await web_server.start()
         logger.debug("Web API 已附加到主进程")
         _print_web_access_lines(runtime_bind)
         await _open_local_browser(runtime_bind)
-        telegram_gateway = await start_telegram_gateway(manager, chat_url=web_server.chat_public_url)
+        try:
+            telegram_gateway = await start_telegram_gateway(manager, chat_url=web_server.chat_public_url)
+        except Exception:
+            if not os.environ.get("TCB_UPDATE_JOB_ID"):
+                raise
+            logger.exception("升级启动期间 Telegram 暂不可用，核心 Web 已启动")
         await config.RESTART_EVENT.wait()
     finally:
+        if acceptance_task is not None:
+            acceptance_task.cancel()
+            await asyncio.gather(acceptance_task, return_exceptions=True)
         if telegram_gateway is not None:
             await telegram_gateway.stop()
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
@@ -514,10 +541,24 @@ def main():
             safe_print(message)
             sys.exit(1)
         except Exception as e:
+            if config.UPDATE_REQUESTED:
+                try:
+                    from bot.update_service import get_update_service
+                    get_update_service().fail_handoff(config.UPDATE_JOB_ID, str(e))
+                except Exception:
+                    logger.exception("无法持久化升级交接失败状态")
+                config.UPDATE_REQUESTED = False
+                config.UPDATE_DRAINING = False
+            if os.environ.get("TCB_UPDATE_JOB_ID"):
+                logger.exception("升级后的宿主启动失败: %s", e)
+                raise SystemExit(1) from e
             logger.exception("运行异常，%s秒后自动重试: %s", MAIN_LOOP_RETRY_DELAY, e)
             safe_print(f"运行异常，将在 {MAIN_LOOP_RETRY_DELAY} 秒后自动重试: {e}")
             time.sleep(MAIN_LOOP_RETRY_DELAY)
             continue
+
+        if config.UPDATE_REQUESTED:
+            raise SystemExit(config.UPDATE_EXIT_CODE)
 
         if config.RESTART_REQUESTED:
             safe_print(msgs.get("startup", "restart"))

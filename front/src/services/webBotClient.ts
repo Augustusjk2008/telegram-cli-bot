@@ -378,6 +378,11 @@ export interface WebBotClient {
   getGitProxySettings(): Promise<GitProxySettings>;
   updateGitProxySettings(address: string): Promise<GitProxySettings>;
   getUpdateStatus(): Promise<AppUpdateStatus>;
+  getCurrentUpdateJob(): Promise<AppUpdateStatus>;
+  applyUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus>;
+  cancelUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus>;
+  retryUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus>;
+  uploadOfflineUpdate(file: File): Promise<AppUpdateStatus>;
   setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus>;
   checkForUpdate(): Promise<AppUpdateStatus>;
   downloadUpdateStream(onProgress: (event: AppUpdateDownloadProgress) => void): Promise<AppUpdateStatus>;

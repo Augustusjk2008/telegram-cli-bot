@@ -551,9 +551,23 @@ write_distribution_marker() {
 {
   "packageKind": "$package_kind",
   "platform": "$platform",
-  "version": "$marker_version"
+  "version": "$marker_version",
+  "updateProtocol": 1
 }
 JSON
+  run_checked_command "$repo_root" "生成更新清单失败" \
+    "$python_bin" "$repo_root/scripts/update_package.py" create --root "$root" --source-root "$repo_root"
+}
+
+assert_release_update_payloads() {
+  local commit
+  commit="$(git_output "读取待发布提交失败" rev-parse HEAD | head -n 1)"
+  local arguments=(verify --version "$normalized_version" --commit "$commit" --source-root "$repo_root")
+  [[ "$should_publish" == "1" ]] && arguments+=(--require-clean)
+  [[ -n "${windows_archive:-}" ]] && arguments+=("$windows_archive")
+  arguments+=("$windows_installer_archive" "$linux_archive" "$macos_archive")
+  run_checked_command "$repo_root" "发布产物版本、提交或文件完整性校验失败" \
+    "$python_bin" "$repo_root/scripts/update_package.py" "${arguments[@]}"
 }
 
 resolve_powershell_command() {
@@ -576,6 +590,11 @@ new_release_archives() {
   local normalized_version="$1"
   reset_directory "$artifacts_dir"
   reset_directory "$stage_root"
+
+  local source_identity
+  source_identity="$("$python_bin" "$repo_root/scripts/update_package.py" identity --source-root "$repo_root" --plain)" || fail "无法固定构建源码身份"
+  read -r TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT <<< "$source_identity"
+  export TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT
 
   local stage_dir="$stage_root/snapshot-$normalized_version"
   mkdir -p "$stage_dir"
@@ -866,9 +885,14 @@ main() {
   if [[ "$should_build" == "1" ]]; then
     new_release_archives "$normalized_version"
   else
+    local source_identity
+    source_identity="$("$python_bin" "$repo_root/scripts/update_package.py" identity --source-root "$repo_root" --plain)" || fail "无法固定待发布源码身份"
+    read -r TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT <<< "$source_identity"
+    export TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT
     get_existing_release_archives "$normalized_version"
   fi
   assert_release_archives_contain_legal_files
+  assert_release_update_payloads
 
   if [[ -n "${windows_archive:-}" ]]; then
     write_info "Windows 绿色版包: $windows_archive"
@@ -881,6 +905,8 @@ main() {
   new_archive_checksum_files
 
   if [[ "$should_publish" == "1" ]]; then
+    run_checked_command "$repo_root" "发布前源码身份发生变化" \
+      "$python_bin" "$repo_root/scripts/update_package.py" identity --source-root "$repo_root" --verify
     ensure_tag_at_head "$release_tag"
     publish_github_release "$release_tag" "$normalized_repository" "$release_notes_path" "$normalized_release_branch"
   else

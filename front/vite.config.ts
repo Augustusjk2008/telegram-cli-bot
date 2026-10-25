@@ -1,5 +1,6 @@
 /// <reference types="vitest" />
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -300,9 +301,34 @@ export default defineConfig(({mode}) => {
   const viteBasePath = useRootBuildBase
     ? '/'
     : normalizeBasePath(publicBuildPath || env.VITE_BASE_PATH || env.WEB_BASE_PATH);
+  const buildSources: Record<string, string> = {};
+  function recordBuildSource(relative: string) {
+    const absolute = path.join(repoRoot, relative);
+    if (!fs.existsSync(absolute)) return;
+    if (fs.statSync(absolute).isDirectory()) {
+      for (const name of fs.readdirSync(absolute).sort()) recordBuildSource(`${relative}/${name}`);
+    } else {
+      buildSources[relative] = createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
+    }
+  }
+  for (const relative of ['VERSION', 'bot/web/theme_catalog.json', 'front/src', 'front/public',
+    'front/scripts', 'front/index.html', 'front/vite.config.ts', 'front/package.json',
+    'front/package-lock.json', 'front/tsconfig.json']) recordBuildSource(relative);
   return {
     base: viteBasePath,
-    plugins: [react(), tailwindcss(), thirdPartyLicensePlugin(frontRoot), pdfjsAssetsPlugin(frontRoot)],
+    plugins: [react(), tailwindcss(), thirdPartyLicensePlugin(frontRoot), pdfjsAssetsPlugin(frontRoot), {
+      name: 'update-build-info',
+      generateBundle() {
+        this.emitFile({
+          type: 'asset', fileName: 'build-info.json',
+          source: JSON.stringify({
+            schema_version: 1, version: appVersion, base_path: viteBasePath,
+            api_base_url: publicEnv.VITE_API_BASE_URL || '', root_base: useRootBuildBase,
+            source_files: buildSources,
+          }),
+        });
+      },
+    }],
     test: {
       globals: true,
       environment: 'jsdom',

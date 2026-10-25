@@ -15,6 +15,12 @@ if _package_root not in sys.path:
 
 ensure_nofile_limit()
 
+if __name__ == "__main__" and getattr(sys.modules.get("bot"), "__path__", None) != []:
+    import atexit
+    from bot.update_state import begin_host_execution
+    _host_execution_lease = begin_host_execution(_package_root)
+    atexit.register(_host_execution_lease.close)
+
 from bot.migrations.runner import run_pending_migrations
 
 _MIGRATIONS_CHECKED_ARG = "--tcb-migrations-checked"
@@ -44,6 +50,11 @@ else:
     run_pending_migrations(repo_root=_package_root)
 
 from bot.main import main
+
+# Importing main also loads config; isolated entrypoint fixtures may supply only main.
+_runtime_config = sys.modules.get("bot.config")
+if _runtime_config is not None:
+    _runtime_config.MIGRATIONS_READY = True
 
 if __name__ == "__main__":
     main()

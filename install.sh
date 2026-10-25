@@ -432,10 +432,10 @@ install_linux_system_dependencies() {
   run_command "更新 apt 软件包索引" $SUDO apt-get update
   run_command "安装系统依赖" $SUDO apt-get install -y python3 python3-pip python3-venv git curl ca-certificates
 
-  if ! command -v node >/dev/null 2>&1 || ! node --version | grep -Eq '^v(18|[2-9][0-9])\.'; then
+  if ! command -v node >/dev/null 2>&1 || ! version_ge "$(node --version | sed 's/^v//')" "22.13"; then
     step "安装 Node.js LTS"
     info "开始配置 NodeSource 软件源"
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash -
     info "NodeSource 软件源配置完成"
     run_command "安装 Node.js LTS" $SUDO apt-get install -y nodejs
   fi
@@ -452,7 +452,7 @@ install_macos_system_dependencies() {
   fi
   if ! command -v node >/dev/null 2>&1; then
     packages+=("node")
-  elif ! version_ge "$(node --version | sed 's/^v//')" "18"; then
+  elif ! version_ge "$(node --version | sed 's/^v//')" "22.13"; then
     packages+=("node")
   fi
   if ! command -v git >/dev/null 2>&1; then
@@ -486,13 +486,13 @@ else
   warn "未检测到 Python"
 fi
 
-step "检查 Node.js 18+"
+step "检查 Node.js 22.13+"
 if command -v node >/dev/null 2>&1; then
   node_version="$(node --version | sed 's/^v//')"
-  if version_ge "$node_version" "18"; then
+  if version_ge "$node_version" "22.13"; then
     info "已检测到 Node.js ${node_version}"
   else
-    warn "Node.js 版本过低: ${node_version}，需要 18+"
+    warn "Node.js 版本过低: ${node_version}，需要 22.13+"
   fi
 else
   warn "未检测到 Node.js"
@@ -554,6 +554,10 @@ fi
 python_version="$("$python_bin" --version 2>&1 | awk '{print $2}')"
 if ! version_ge "$python_version" "3.10"; then
   fail "Python 版本过低: ${python_version}，需要 3.10+"
+  exit 1
+fi
+if ! command -v node >/dev/null 2>&1 || ! version_ge "$(node --version | sed 's/^v//')" "22.13"; then
+  fail "Node.js 版本未满足 22.13+，请升级后重试"
   exit 1
 fi
 run_command "创建 Python 虚拟环境" "${python_bin:-python3}" -m venv .venv

@@ -40,6 +40,57 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("maps persisted update jobs and check failures without dropping legacy fields", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      current_version: "1.0.0", update_enabled: true, revision: 7,
+      last_available_version: "2.0.0", pending_update_notes: "Release notes",
+      last_check: { checked_at: "2026-10-24", ok: false, cached: true, error: "Release unavailable" },
+      launcher: { supported: true, protocol: 1, command: "start.bat", reason: "" },
+      job: { job_id: "job-1", revision: 7, phase: "failed", current_version: "1.0.0", target_version: "2.0.0",
+        package_kind: "portable", package_sha256: "abc", progress: { phase: "verify", downloaded_bytes: 50, total_bytes: 100, percent: 50, message: "校验中" },
+        error: "Hash mismatch", backup_dir: "D:/backup", job_dir: "D:/job", result: { recovered: true }, requires_preparation: true },
+    }));
+    const status = await new RealWebBotClient().getCurrentUpdateJob();
+    expect(status).toMatchObject({ currentVersion: "1.0.0", pendingUpdateNotes: "Release notes", revision: 7,
+      lastCheck: { checkedAt: "2026-10-24", ok: false, cached: true, error: "Release unavailable" },
+      job: { jobId: "job-1", revision: 7, phase: "failed", targetVersion: "2.0.0", packageKind: "portable", packageSha256: "abc",
+        progress: { downloadedBytes: 50, totalBytes: 100, percent: 50 }, error: "Hash mismatch", backupDir: "D:/backup", jobDir: "D:/job", result: { recovered: true }, requiresPreparation: true },
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/update/jobs/current");
+  });
+
+  test("binds update actions to job and revision, preserving the node prefix and upload multipart", async () => {
+    window.history.replaceState(null, "", "/node/update-host/");
+    vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/update-host" });
+    fetchMock.mockResolvedValue(jsonOk({ current_version: "1", update_enabled: false }));
+    const client = new RealWebBotClient();
+    await client.applyUpdateJob("job/id", 9);
+    await client.cancelUpdateJob("job/id", 10);
+    await client.retryUpdateJob("job/id", 11);
+    for (const [index, action] of ["apply", "cancel", "retry"].entries()) {
+      expect(fetchMock.mock.calls[index][0]).toBe(`/node/update-host/api/admin/update/jobs/job%2Fid/${action}`);
+      expect(JSON.parse(fetchMock.mock.calls[index][1].body)).toEqual({ revision: 9 + index });
+      expect(fetchMock.mock.calls[index][1].method).toBe("POST");
+    }
+    const file = new File(["zip"], "update.zip");
+    await client.uploadOfflineUpdate(file);
+    const [url, request] = fetchMock.mock.calls[3];
+    expect(url).toBe("/node/update-host/api/admin/update/offline/upload");
+    expect(request.body.get("file")).toBe(file);
+    expect(request.headers["Content-Type"]).toBeUndefined();
+  });
+
+  test("update apply conflicts retain the API error and never replay the mutation", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 409, json: async () => ({ ok: false, error: { code: "revision_conflict", message: "任务已变化" } }) });
+    await expect(new RealWebBotClient().applyUpdateJob("job", 1)).rejects.toMatchObject({ status: 409, code: "revision_conflict", message: "任务已变化" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("legacy update stream disconnect never becomes an accepted completion", async () => {
+    fetchMock.mockResolvedValue(streamOk('event: progress\ndata: {"phase":"download","percent":100}\n\n'));
+    await expect(new RealWebBotClient().downloadUpdateStream(vi.fn())).rejects.toThrow("连接已中断");
+  });
+
   test("preserves DeepSeek through creation, editing and overview mapping", async () => {
     const bot = { alias: "deepseek", cli_type: "deepseek", status: "running", working_dir: "C:/workspace" };
     const client = new RealWebBotClient();

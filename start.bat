@@ -74,8 +74,7 @@ echo [INFO] Starting service with %PS_EXE%...
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
     echo [ERROR] Service exited with code: %EXIT_CODE%
-    echo [INFO] Press any key to retry. Close this window to stop.
+    echo [INFO] Recovery details are recorded in the update task.
     pause >nul
-    goto START_SERVICE
 )
-exit /b 0
+exit /b %EXIT_CODE%

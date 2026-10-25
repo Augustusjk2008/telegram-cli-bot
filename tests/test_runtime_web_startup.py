@@ -113,6 +113,107 @@ async def test_health_reports_runtime_port(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_health_update_identity_readiness_and_private_token(monkeypatch, tmp_path):
+    import bot.web.server as server_module
+    from bot import config
+    dist = tmp_path / "front" / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text('<script src="/node/test/assets/app.js"></script>', encoding="utf-8")
+    (dist / "assets" / "app.js").write_text("app", encoding="utf-8")
+    monkeypatch.setattr(server_module, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(server_module, "WEB_BASE_PATH", "/node/test")
+    monkeypatch.setattr(config, "MIGRATIONS_READY", True)
+    monkeypatch.setenv("TCB_UPDATE_JOB_ID", "update-one")
+    monkeypatch.setenv("TCB_UPDATE_HEALTH_TOKEN", "secret-token")
+    server = WebApiServer(object(), host="127.0.0.1", port=9988, instance_id="new-host")
+    server._site = object()
+    monkeypatch.setattr(server, "_get_static_dir", lambda: str(dist))
+    public = json.loads((await server.health(None)).text)
+    assert public["update_health_token"] == ""
+    health = json.loads((await server.health(SimpleNamespace(headers={"X-TCB-Update-Token": "secret-token"}))).text)
+    assert health["ready"] is True
+    assert health["update_job_id"] == "update-one"
+    assert health["update_health_token"] == "secret-token"
+    assert health["instance_id"] == "new-host"
+    assert health["port"] == 9988
+    (dist / "assets" / "app.js").unlink()
+    server._update_readiness = None
+    assert json.loads((await server.health(None)).text)["ready"] is False
+
+
+def test_health_readiness_checks_assets_behind_outer_proxy_prefix(tmp_path):
+    from bot.update_migration_gate import frontend_readiness
+    static = tmp_path / "front" / "dist"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text('<script src="/hub/node/test/assets/app.js"></script>')
+    asset = static / "assets" / "app.js"
+    asset.write_text("app")
+    assert frontend_readiness(tmp_path, static, "/node/test")
+    asset.unlink()
+    assert not frontend_readiness(tmp_path, static, "/node/test")
+
+
+@pytest.mark.asyncio
+async def test_health_acceptance_keeps_new_work_paused_until_executor_confirmation(monkeypatch, tmp_path):
+    import asyncio
+    from bot import main as main_module, config
+    from bot.update_state import UpdateStore
+    monkeypatch.setattr(main_module, "_package_root", str(tmp_path))
+    monkeypatch.setattr(config, "UPDATE_DRAINING", True)
+    store = UpdateStore(tmp_path, state_root=tmp_path / "state")
+    store.mutate(lambda state: state.update(job={"job_id": "current", "phase": "awaiting_health"}))
+    watcher = asyncio.create_task(main_module._wait_update_acceptance("current", str(store.state_path)))
+    try:
+        await asyncio.sleep(0.02)
+        assert config.UPDATE_DRAINING is True and not watcher.done()
+        store.mutate(lambda state: state["job"].update(phase="succeeded"))
+        await asyncio.wait_for(watcher, 2)
+        assert config.UPDATE_DRAINING is False
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+
+
+def test_update_exit_is_independent_of_restart(monkeypatch):
+    from bot import config
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_PROTOCOL", "1")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_STATE_FILE", "")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_JOB_ID", "")
+    monkeypatch.setattr(config, "RESTART_EVENT", SimpleNamespace(set=lambda: None))
+    monkeypatch.setattr(config, "RESTART_REQUESTED", False)
+    monkeypatch.setattr(config, "UPDATE_REQUESTED", False)
+    monkeypatch.setattr(config, "UPDATE_DRAINING", False)
+    monkeypatch.setattr(config, "UPDATE_JOB_ID", "")
+    config.request_update("job", "temporary-state")
+    assert config.UPDATE_REQUESTED is True
+    assert config.RESTART_REQUESTED is False
+    assert config.UPDATE_EXIT_CODE == 76
+    assert config.RESTART_EXIT_CODE == 75
+
+
+def test_main_returns_upgrade_exit_after_host_cleanup(monkeypatch):
+    from bot import config
+    import bot.main as main_module
+    monkeypatch.setattr(config, "UPDATE_REQUESTED", False)
+    monkeypatch.setattr(config, "RESTART_REQUESTED", False)
+    monkeypatch.setattr(main_module, "validate_cli_type", lambda value: None)
+    monkeypatch.setattr(main_module, "_startup_summary_lines", lambda msgs: [])
+    for name in ("disable_console_quick_edit", "suppress_windows_error_dialogs", "prevent_system_sleep"):
+        monkeypatch.setattr(main_module, name, lambda: None)
+    cleaned = []
+    async def host():
+        try:
+            config.UPDATE_REQUESTED = True
+        finally:
+            cleaned.append(True)
+    monkeypatch.setattr(main_module, "run_all_bots", host)
+    with pytest.raises(SystemExit) as result:
+        main_module.main()
+    assert result.value.code == 76
+    assert cleaned == [True]
+
+
+@pytest.mark.asyncio
 async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")
     monkeypatch.setattr("bot.web.server.WEB_FIXED_PUBLIC_FORWARD_ENABLED", False)

@@ -147,7 +147,6 @@ from bot.sessions import (
     sessions_lock,
     update_bot_working_dir,
 )
-from bot.updater import download_latest_update
 from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
@@ -508,6 +507,11 @@ def _finish_control_execution(session: UserSession, execution_id: str | None) ->
             session._execution_detached = False
 
 
+def _require_update_admission() -> None:
+    if config.UPDATE_DRAINING or config.UPDATE_REQUESTED:
+        _raise(503, "update_restarting", "更新正在交接，请等待宿主重新启动")
+
+
 @contextmanager
 def _session_lifecycle_scope(
     session: UserSession, *, conversation_change: bool = False,
@@ -515,6 +519,7 @@ def _session_lifecycle_scope(
 ):
     """Reserve a shared session across async preparation and conversation-store IO."""
     with session._lock:
+        _require_update_admission()
         _check_expected_conversation(session, expected_conversation_id)
         if (session.is_processing or getattr(session, "_lifecycle_operation", "")
                 or getattr(session, "_control_stop_task", None) is not None
@@ -1266,6 +1271,8 @@ async def handle_cluster_mcp_tool(
     tool_name: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    if tool_name in {"ask_agent", "configure_team", "new_agent_session"}:
+        _require_update_admission()
     try:
         run = _CLUSTER_RUNTIME.get_run(run_id)
         if run is None:
@@ -1290,6 +1297,7 @@ async def handle_cluster_mcp_tool(
             return {"ok": True, "data": configured}
         if tool_name == "new_agent_session":
             def create_child_session() -> tuple[str, str]:
+                _require_update_admission()
                 _require_cluster_run_control_ready(run_id)
                 _require_current_cluster_team(manager, run)
                 agent_id = _CLUSTER_RUNTIME.validate_new_agent_session(run_id, payload)
@@ -1364,11 +1372,13 @@ async def handle_cluster_mcp_tool(
                 run.user_id,
                 parent_conversation_id,
             ):
+                _require_update_admission()
                 _require_cluster_run_control_ready(run_id)
                 _require_current_cluster_team(manager, run)
                 request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
                 task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
         else:
+            _require_update_admission()
             _require_cluster_run_control_ready(run_id)
             _require_current_cluster_team(manager, run)
             request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
@@ -3802,6 +3812,7 @@ def _start_cluster_run_if_requested(
         return None
     if str(agent_id or "main").strip().lower() != "main" or solo_mode or internal_continuation:
         return None
+    _require_update_admission()
     saved_team_state = team_state if isinstance(team_state, dict) else {}
     request = ClusterRunRequest(
         bot_alias=alias,
@@ -6005,6 +6016,7 @@ async def _stream_cli_chat(
         _raise(400, "cli_not_found", msg("chat", "no_cli", cli_path=profile.cli_path))
 
     with session._lock:
+        _require_update_admission()
         if (session.is_processing or session._lifecycle_operation == "conversation"
                 or session._control_stop_task is not None or session._native_abort_task is not None):
             _raise(409, "session_busy", msg("chat", "busy"))
@@ -7989,73 +8001,18 @@ def resolve_terminal_action_for_bot(
 
 
 async def _stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:
-    target_repo_root = (repo_root or Path(__file__).resolve().parents[2]).resolve()
-    event_queue: queue.Queue[Any] = queue.Queue(maxsize=64)
-    worker_done = threading.Event()
-    consumer_closed = threading.Event()
-
-    def on_progress(progress: dict[str, Any]) -> None:
-        item = {
-            "type": "progress",
-            **progress,
-        }
-        while not consumer_closed.is_set():
-            try:
-                event_queue.put_nowait(item)
-                return
-            except queue.Full:
-                try:
-                    event_queue.get_nowait()
-                except queue.Empty:
-                    return
-
-    def put_critical(item: Any) -> None:
-        while not consumer_closed.is_set():
-            try:
-                event_queue.put(item, timeout=0.1)
-                return
-            except queue.Full:
-                continue
-
-    def run_download() -> None:
-        try:
-            status = download_latest_update(
-                repo_root=target_repo_root,
-                progress_callback=on_progress,
-            )
-            put_critical(
-                {
-                    "type": "done",
-                    "status": status,
-                }
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            put_critical(exc)
-        finally:
-            worker_done.set()
-
-    threading.Thread(target=run_download, daemon=True).start()
-
-    try:
-        while not worker_done.is_set() or not event_queue.empty():
-            try:
-                item = event_queue.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-                continue
-
-            if isinstance(item, Exception):
-                raise item
-            yield item
-    finally:
-        consumer_closed.set()
+    from bot.update_service import get_update_service
+    service = get_update_service(repo_root)
+    status = await asyncio.to_thread(service.start_online)
+    async for event in service.events(status["job"]["job_id"]):
+        yield event
 
 
 async def stream_update_download(repo_root: Path | None = None) -> AsyncIterator[dict[str, Any]]:
     try:
         async for event in _stream_update_download(repo_root):
             yield event
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:
         yield {"type": "error", "code": "update_download_failed", "message": str(exc)}
 
 

@@ -505,8 +505,25 @@ function Write-DistributionMarker {
         packageKind = $PackageKind
         platform = $Platform
         version = $Version
+        updateProtocol = 1
+        architecture = $(if ($Platform -like "*universal*") { "universal" } else { "x64" })
     } | ConvertTo-Json
     Set-Content -LiteralPath (Join-Path $Root ".distribution.json") -Value $payload -Encoding UTF8
+    Invoke-CheckedCommand -FilePath "python" -Arguments @(
+        (Join-Path $script:RepoRoot "scripts/update_package.py"), "create",
+        "--root", $Root, "--source-root", $script:RepoRoot
+    ) -FailureMessage "生成更新清单失败"
+}
+
+function Assert-ReleaseUpdatePayloads {
+    param($Archives, [string]$Version, [bool]$RequireClean)
+    $commit = (Invoke-Git -Arguments @("rev-parse", "HEAD") -FailureMessage "读取待发布提交失败" | Out-String).Trim()
+    $arguments = @((Join-Path $script:RepoRoot "scripts/update_package.py"), "verify", "--version", $Version, "--commit", $commit, "--source-root", $script:RepoRoot)
+    if ($RequireClean) { $arguments += "--require-clean" }
+    foreach ($archive in @($Archives.WindowsArchive, $Archives.WindowsInstallerArchive, $Archives.LinuxArchive, $Archives.MacOSArchive)) {
+        if (-not [string]::IsNullOrWhiteSpace($archive)) { $arguments += $archive }
+    }
+    Invoke-CheckedCommand -FilePath "python" -Arguments $arguments -FailureMessage "发布产物版本、提交或文件完整性校验失败"
 }
 
 function New-Sha256File {
@@ -538,6 +555,12 @@ function New-ReleaseArchives {
 
     Reset-Directory -Path $script:ArtifactsDir
     Reset-Directory -Path $script:StageRoot
+
+    $identityJson = & python (Join-Path $script:RepoRoot "scripts/update_package.py") identity --source-root $script:RepoRoot
+    if ($LASTEXITCODE -ne 0) { throw "无法固定构建源码身份。" }
+    $identity = ($identityJson -join "`n") | ConvertFrom-Json
+    $env:TCB_RELEASE_SOURCE_COMMIT = $identity.commit
+    $env:TCB_RELEASE_SOURCE_FINGERPRINT = $identity.fingerprint
 
     $stageDir = Join-Path $script:StageRoot ("snapshot-{0}" -f $NormalizedVersion)
     [void](New-Item -ItemType Directory -Path $stageDir -Force)
@@ -815,9 +838,15 @@ try {
     if ($shouldBuild) {
         $archives = New-ReleaseArchives -NormalizedVersion $normalizedVersion
     } else {
+        $identityJson = & python (Join-Path $script:RepoRoot "scripts/update_package.py") identity --source-root $script:RepoRoot
+        if ($LASTEXITCODE -ne 0) { throw "无法固定待发布源码身份。" }
+        $identity = ($identityJson -join "`n") | ConvertFrom-Json
+        $env:TCB_RELEASE_SOURCE_COMMIT = $identity.commit
+        $env:TCB_RELEASE_SOURCE_FINGERPRINT = $identity.fingerprint
         $archives = Get-ExistingReleaseArchives -NormalizedVersion $normalizedVersion
     }
     Assert-ReleaseArchivesContainLegalFiles -Archives $archives
+    Assert-ReleaseUpdatePayloads -Archives $archives -Version $normalizedVersion -RequireClean $shouldPublish
 
     if ($archives.WindowsArchive) {
         Write-Info ("Windows 绿色版包: {0}" -f $archives.WindowsArchive)
@@ -830,6 +859,9 @@ try {
     $checksumArchives = New-ArchiveChecksumFiles -Archives $archives
 
     if ($shouldPublish) {
+        Invoke-CheckedCommand -FilePath "python" -Arguments @(
+            (Join-Path $script:RepoRoot "scripts/update_package.py"), "identity", "--source-root", $script:RepoRoot, "--verify"
+        ) -FailureMessage "发布前源码身份发生变化"
         Ensure-TagAtHead -ReleaseTag $releaseTag
         Publish-GitHubRelease -ReleaseTag $releaseTag -Repo $normalizedRepository -WindowsArchive $archives.WindowsArchive -WindowsInstallerArchive $archives.WindowsInstallerArchive -LinuxArchive $archives.LinuxArchive -MacOSArchive $archives.MacOSArchive -ChecksumArchives $checksumArchives -ReleaseNotesFile $releaseNotesPath -ReleaseBranch $normalizedReleaseBranch
     } else {

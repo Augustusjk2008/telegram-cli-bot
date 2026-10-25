@@ -61,6 +61,7 @@ if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
 fi
 
 export CLI_BRIDGE_SUPERVISOR=1
+export CLI_BRIDGE_UPDATE_PROTOCOL=1
 export WEB_ENABLED="true"
 
 info() {
@@ -127,6 +128,15 @@ show_tunnel_hint() {
     echo "如需外网访问，可在 .env 中设置 WEB_TUNNEL_MODE=cloudflare_quick，或配置反向代理后填写 WEB_PUBLIC_URL。"
   fi
 }
+
+cached_launcher="$SCRIPT_DIR/.tcb/startup/update-launcher.json"
+cached_control_file="$SCRIPT_DIR/.tcb/startup/update-control-python"
+if [[ -f "$cached_launcher" && -f "$cached_control_file" ]]; then
+  cached_control="$(cat "$cached_control_file")"
+  if "$cached_control" -c 'import json, pathlib, sys; info=json.load(open(sys.argv[1])); state=pathlib.Path(info["state_file"]); sys.exit(0 if state.exists() and (json.loads(state.read_text()).get("job") or {}).get("phase") in {"applying","awaiting_health","rolling_back","recovery_required"} else 1)' "$cached_launcher"; then
+    exec "$cached_control" -c 'import json,runpy,sys; info=json.load(open(sys.argv[1])); sys.argv=[info["runner_path"],"supervise","--repo-root",sys.argv[2],"--state-file",info["state_file"],"--python",info["python_executable"]]; runpy.run_path(info["runner_path"],run_name="__main__")' "$cached_launcher" "$SCRIPT_DIR"
+  fi
+fi
 
 if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
@@ -318,6 +328,12 @@ sync_frontend_assets() {
     return 0
   fi
 
+  if [[ -f "$SCRIPT_DIR/.update-manifest.json" ]] && ! is_truthy "${TCB_STARTUP_FORCE_FRONTEND_BUILD:-}"; then
+    if "$PYTHON_BIN" -c 'import sys; from bot.update_preparation import frontend_is_current; sys.exit(0 if frontend_is_current(sys.argv[1]) else 1)' "$SCRIPT_DIR"; then
+      return 0
+    fi
+  fi
+
   local frontend_hash stamp_path build_script dist_index build_log
   frontend_hash="$(
     hash_startup_paths \
@@ -380,6 +396,15 @@ sync_frontend_assets() {
   write_stamp "$stamp_path" "$frontend_hash"
 }
 
+launcher_info="$("$PYTHON_BIN" "$SCRIPT_DIR/scripts/update_runner.py" launcher-info --repo-root "$SCRIPT_DIR")"
+CONTROL_PYTHON="$(printf '%s' "$launcher_info" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["control_python_executable"])')"
+UPDATE_RUNNER="$(printf '%s' "$launcher_info" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["runner_path"])')"
+export CLI_BRIDGE_UPDATE_STATE_FILE="$(printf '%s' "$launcher_info" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["state_file"])')"
+PYTHON_BIN="$(printf '%s' "$launcher_info" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["python_executable"])')"
+if [[ -f "$CLI_BRIDGE_UPDATE_STATE_FILE" ]] && "$CONTROL_PYTHON" -c 'import json,sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("job") or {}).get("phase") in {"applying","awaiting_health","rolling_back","recovery_required"} else 1)' "$CLI_BRIDGE_UPDATE_STATE_FILE"; then
+  exec "$CONTROL_PYTHON" "$UPDATE_RUNNER" supervise --repo-root "$SCRIPT_DIR" --state-file "$CLI_BRIDGE_UPDATE_STATE_FILE" --python "$PYTHON_BIN"
+fi
+
 if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
   python_dependency_repair_attempted=1
   sync_python_dependencies 1
@@ -390,14 +415,6 @@ if ! run_python_startup_step -m bot.env_migration --env-path "$SCRIPT_DIR/.env";
   exit "$last_python_exit_code"
 fi
 
-if ! run_python_startup_step -c "import bot.updater"; then
-  echo "[错误] Python 更新模块启动检查失败。" >&2
-  exit "$last_python_exit_code"
-fi
-"$PYTHON_BIN" -m bot.updater apply-pending --repo-root "$SCRIPT_DIR"
-if is_truthy "${TCB_STARTUP_FORCE_DEP_INSTALL:-}"; then
-  sync_python_dependencies 1
-fi
 sync_frontend_assets
 if ! run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
   echo "[错误] 运行数据迁移失败。" >&2
@@ -410,13 +427,4 @@ fi
 show_tunnel_hint
 raise_nofile_limit
 
-while true; do
-  set +e
-  "$PYTHON_BIN" -m bot --tcb-migrations-checked
-  exit_code=$?
-  set -e
-  if [[ "$exit_code" -ne 75 ]]; then
-    exit "$exit_code"
-  fi
-  sleep 1
-done
+exec "$CONTROL_PYTHON" "$UPDATE_RUNNER" supervise --repo-root "$SCRIPT_DIR" --state-file "$CLI_BRIDGE_UPDATE_STATE_FILE" --python "$PYTHON_BIN"

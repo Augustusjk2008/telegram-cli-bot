@@ -224,7 +224,7 @@ function Get-NodeInfo {
         Command      = $nodePath
         PrefixArgs   = @()
         Minimum      = "18.0.0"
-        IsSufficient = (Test-MinimumVersion -CurrentVersion $Matches[1] -MinimumVersion "18.0.0")
+        IsSufficient = (Test-MinimumVersion -CurrentVersion $Matches[1] -MinimumVersion "22.13.0")
     }
 }
 
@@ -407,13 +407,13 @@ function Get-PythonInstallerUrl {
 }
 
 function Get-NodeInstallerUrl {
-    $checksums = Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/latest-v20.x/SHASUMS256.txt"
+    $checksums = Invoke-WebRequest -UseBasicParsing -Uri "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt"
     $match = [regex]::Match($checksums.Content, "(?m)^[0-9a-f]+\s+(node-v[0-9]+\.[0-9]+\.[0-9]+-x64\.msi)$")
     if (-not $match.Success) {
         throw "无法解析 Node.js 官方安装包地址。"
     }
 
-    return "https://nodejs.org/dist/latest-v20.x/{0}" -f $match.Groups[1].Value
+    return "https://nodejs.org/dist/latest-v22.x/{0}" -f $match.Groups[1].Value
 }
 
 function Install-PythonFallback {
@@ -895,8 +895,8 @@ try {
         Write-Warn "当前只检测到 py 启动器，start.ps1 默认使用 python 命令。若后续启动失败，请重新运行安装器或确认 Python 已加入 PATH。"
     }
 
-    Write-Step "检查 Node.js 18+"
-    $nodeInfo = Ensure-Tool -DisplayName "Node.js" -Detector ${function:Get-NodeInfo} -MinimumVersion "18.0.0" -WingetPackageId "OpenJS.NodeJS.LTS" -FallbackInstaller ${function:Install-NodeFallback}
+    Write-Step "检查 Node.js 22.13+"
+    $nodeInfo = Ensure-Tool -DisplayName "Node.js" -Detector ${function:Get-NodeInfo} -MinimumVersion "22.13.0" -WingetPackageId "OpenJS.NodeJS.LTS" -FallbackInstaller ${function:Install-NodeFallback}
 
     Write-Step "检查 Git"
     $gitInfo = Ensure-Tool -DisplayName "Git" -Detector ${function:Get-GitInfo} -MinimumVersion "2.0.0" -WingetPackageId "Git.Git" -FallbackInstaller ${function:Install-GitFallback}

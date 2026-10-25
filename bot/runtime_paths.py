@@ -237,6 +237,11 @@ def get_app_settings_path() -> Path:
     return get_app_data_root() / "config" / "app_settings.json"
 
 
+def get_update_state_root(repo_root: str | Path) -> Path:
+    from bot.update_state import installation_id
+    return get_app_data_root() / "updates" / installation_id(repo_root)
+
+
 def get_auth_secret_path() -> Path:
     return get_app_data_root() / "auth" / "secret.json"
 

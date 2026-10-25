@@ -24,6 +24,8 @@ import type {
   AnnouncementListResult,
   AnnouncementSeverity,
   AppUpdateDownloadProgress,
+  AppUpdateJob,
+  AppUpdateLauncher,
   AppUpdatePackageKind,
   AppUpdateStatus,
   Capability,
@@ -1422,6 +1424,25 @@ type RawGitProxySettings = {
 };
 
 type RawAppUpdateStatus = {
+  revision?: number;
+  job?: {
+    job_id: string;
+    revision: number;
+    phase: AppUpdateJob["phase"];
+    current_version?: string;
+    target_version?: string;
+    package_kind?: AppUpdatePackageKind;
+    package_sha256?: string;
+    progress?: RawAppUpdateDownloadProgress;
+    error?: string;
+    launcher?: Partial<AppUpdateLauncher>;
+    backup_dir?: string;
+    job_dir?: string;
+    result?: unknown;
+    requires_preparation?: boolean;
+  } | null;
+  launcher?: Partial<AppUpdateLauncher>;
+  last_check?: { checked_at?: string; ok?: boolean; cached?: boolean; error?: string };
   current_version: string;
   current_package_kind?: AppUpdatePackageKind;
   update_enabled: boolean;
@@ -3349,8 +3370,41 @@ function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
   };
 }
 
+function mapUpdateLauncher(raw?: Partial<AppUpdateLauncher>): AppUpdateLauncher {
+  return {
+    supported: raw?.supported === true,
+    protocol: raw?.protocol ?? 0,
+    command: raw?.command || "",
+    reason: raw?.reason || "",
+  };
+}
+
 function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
   return {
+    revision: raw.revision ?? raw.job?.revision ?? 0,
+    launcher: mapUpdateLauncher(raw.launcher ?? raw.job?.launcher),
+    lastCheck: {
+      checkedAt: raw.last_check?.checked_at || raw.last_checked_at || "",
+      ok: raw.last_check?.ok ?? null,
+      cached: raw.last_check?.cached === true,
+      error: raw.last_check?.error || "",
+    },
+    job: raw.job ? {
+      jobId: raw.job.job_id,
+      revision: raw.job.revision,
+      phase: raw.job.phase,
+      currentVersion: raw.job.current_version || "",
+      targetVersion: raw.job.target_version || "",
+      packageKind: raw.job.package_kind || "",
+      packageSha256: raw.job.package_sha256 || "",
+      progress: mapAppUpdateDownloadProgress(raw.job.progress || {}),
+      error: raw.job.error || "",
+      launcher: mapUpdateLauncher(raw.job.launcher ?? raw.launcher),
+      backupDir: raw.job.backup_dir || "",
+      jobDir: raw.job.job_dir || "",
+      result: raw.job.result ?? null,
+      requiresPreparation: raw.job.requires_preparation === true,
+    } : null,
     currentVersion: raw.current_version || "",
     currentPackageKind: raw.current_package_kind || "",
     updateEnabled: Boolean(raw.update_enabled),
@@ -6618,6 +6672,39 @@ export class RealWebBotClient implements WebBotClient {
   async getUpdateStatus(): Promise<AppUpdateStatus> {
     const data = await this.requestJson<RawAppUpdateStatus>("/api/admin/update");
     return mapAppUpdateStatus(data);
+  }
+
+  async getCurrentUpdateJob(): Promise<AppUpdateStatus> {
+    return mapAppUpdateStatus(await this.requestJson<RawAppUpdateStatus>("/api/admin/update/jobs/current"));
+  }
+
+  private async updateJobAction(jobId: string, revision: number, action: "apply" | "cancel" | "retry"): Promise<AppUpdateStatus> {
+    const data = await this.requestJson<RawAppUpdateStatus>(`/api/admin/update/jobs/${encodeURIComponent(jobId)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ revision }),
+    });
+    return mapAppUpdateStatus(data);
+  }
+
+  async applyUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus> {
+    return this.updateJobAction(jobId, revision, "apply");
+  }
+
+  async cancelUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus> {
+    return this.updateJobAction(jobId, revision, "cancel");
+  }
+
+  async retryUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus> {
+    return this.updateJobAction(jobId, revision, "retry");
+  }
+
+  async uploadOfflineUpdate(file: File): Promise<AppUpdateStatus> {
+    const body = new FormData();
+    body.append("file", file);
+    return mapAppUpdateStatus(await this.requestJson<RawAppUpdateStatus>("/api/admin/update/offline/upload", {
+      method: "POST", body,
+    }));
   }
 
   async setUpdateEnabled(enabled: boolean): Promise<AppUpdateStatus> {

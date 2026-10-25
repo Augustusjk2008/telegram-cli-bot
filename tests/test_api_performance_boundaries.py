@@ -196,23 +196,17 @@ async def test_update_download_progress_is_bounded_and_keeps_done(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    def fake_download(*, repo_root, progress_callback):
-        assert repo_root == tmp_path.resolve()
-        for index in range(1000):
-            progress_callback({"index": index})
-        return {"ready": True}
-
-    monkeypatch.setattr(api_service, "download_latest_update", fake_download)
-
-    events = [
-        event
-        async for event in api_service._stream_update_download(tmp_path)
-    ]
-
-    progress = [event for event in events if event["type"] == "progress"]
-    assert progress
-    assert progress[-1]["index"] == 999
-    assert events[-1] == {"type": "done", "status": {"ready": True}}
+    from bot.update_service import UpdateService
+    from bot.update_state import UpdateStore
+    service = UpdateService(tmp_path, store=UpdateStore(tmp_path, state_root=tmp_path / "state"))
+    latest = {"revision": 1000, "job": {"job_id": "test", "phase": "ready", "progress": {"index": 999}}}
+    monkeypatch.setattr(service, "status", lambda: latest)
+    monkeypatch.setattr(service, "start_online", lambda: latest)
+    monkeypatch.setattr("bot.update_service.get_update_service", lambda root: service)
+    events = [event async for event in api_service._stream_update_download(tmp_path)]
+    assert [event["type"] for event in events] == ["job", "progress", "done"]
+    assert events[1]["index"] == 999
+    assert events[-1] == {"type": "done", "status": latest}
 
 
 def test_list_conversations_uses_native_batch_decorator(

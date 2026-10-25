@@ -1,3 +1,4 @@
+"""Check required license/notice file presence; update_package verifies payload integrity."""
 from __future__ import annotations
 
 import sys
