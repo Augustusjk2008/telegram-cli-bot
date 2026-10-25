@@ -1798,7 +1798,7 @@ test("native user bubble rollback confirms and refreshes history outside solo mo
 });
 
 
-test("DeepSeek selects and saves chat models and thinking while retaining CLI boundaries", async () => {
+test("DeepSeek selects provider, model, and thinking atomically while retaining CLI boundaries", async () => {
   const client = createClient({
     getBotOverview: async () => ({
       alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
@@ -1806,9 +1806,10 @@ test("DeepSeek selects and saves chat models and thinking while retaining CLI bo
     }),
   });
   await client.updateBotCli("main", "deepseek", "dsh");
-  const updateParam = vi.spyOn(client, "updateCliParam");
+  const updateSelection = vi.spyOn(client, "updateDeepSeekSelection");
   const upload = vi.spyOn(client, "uploadChatAttachment");
   render(<ChatScreen botAlias="main" client={client} />);
+  const provider = await screen.findByRole("combobox", { name: "Provider" });
   const model = await screen.findByRole("combobox", { name: "模型" });
   const thinking = screen.getByRole("combobox", { name: "思考深度" });
   expect(model).toHaveValue("none");
@@ -1819,13 +1820,29 @@ test("DeepSeek selects and saves chat models and thinking while retaining CLI bo
     .toEqual(["none", "off", "low", "high", "max"]);
   await userEvent.selectOptions(model, "deepseek-v4-pro");
   await waitFor(() => expect(model).toHaveValue("deepseek-v4-pro"));
-  expect(updateParam).toHaveBeenLastCalledWith("main", "model", "deepseek-v4-pro", "deepseek");
+  expect(updateSelection).toHaveBeenLastCalledWith("main", {
+    provider: "deepseek",
+    model: "deepseek-v4-pro",
+    reasoningEffort: "none",
+  });
   for (const effort of ["high", "off", "none"]) {
     await userEvent.selectOptions(thinking, effort);
     await waitFor(() => expect(thinking).toHaveValue(effort));
-    expect(updateParam).toHaveBeenLastCalledWith("main", "reasoning_effort", effort, "deepseek");
+    expect(updateSelection).toHaveBeenLastCalledWith("main", {
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      reasoningEffort: effort,
+    });
     expect((await client.getCliParams("main")).params.reasoning_effort).toBe(effort);
   }
+  await userEvent.selectOptions(provider, "siliconflow");
+  await waitFor(() => expect(provider).toHaveValue("siliconflow"));
+  expect(updateSelection).toHaveBeenLastCalledWith("main", {
+    provider: "siliconflow",
+    model: "deepseek-v4-pro",
+    reasoningEffort: "high",
+  });
+  expect(await screen.findByTestId("deepseek-selection-notice")).toHaveTextContent("下一轮将建立新会话");
   await userEvent.selectOptions(model, "none");
   await waitFor(() => expect(model).toHaveValue("none"));
   expect((await client.getCliParams("main")).params.model).toBeNull();
@@ -1856,4 +1873,35 @@ test("DeepSeek preserves a selected custom model in mobile chat options", async 
   await userEvent.selectOptions(thinking, "max");
   await waitFor(() => expect(thinking).toHaveValue("max"));
   expect((await client.getCliParams("main")).params).toMatchObject({ model: "deepseek-custom", reasoning_effort: "max" });
+});
+
+test("DeepSeek keeps an editable model input when the selected provider has no model catalog", async () => {
+  const client = createClient({
+    getBotOverview: async () => ({
+      alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
+      supportedExecutionModes: ["cli"], defaultExecutionMode: "cli",
+    }),
+  });
+  await client.updateBotCli("main", "deepseek", "dsh");
+  const base = await client.getCliParams("main");
+  vi.spyOn(client, "getCliParams").mockResolvedValue({
+    ...base,
+    providerOptions: [base.providerOptions?.[0] || { id: "deepseek", label: "DeepSeek" }],
+    modelOptionsByProvider: { deepseek: [] },
+    selectedProvider: "deepseek",
+    schema: { ...base.schema, model: { ...base.schema.model, enum: ["none"] } },
+  });
+  const updateSelection = vi.spyOn(client, "updateDeepSeekSelection");
+
+  render(<ChatScreen botAlias="main" client={client} mobileLayout />);
+  await userEvent.click(await screen.findByRole("button", { name: "聊天选项" }));
+  const model = await screen.findByLabelText("模型");
+  await userEvent.type(model, "deepseek-custom");
+  await userEvent.tab();
+
+  await waitFor(() => expect(updateSelection).toHaveBeenCalledWith("main", {
+    provider: "deepseek",
+    model: "deepseek-custom",
+    reasoningEffort: "none",
+  }));
 });

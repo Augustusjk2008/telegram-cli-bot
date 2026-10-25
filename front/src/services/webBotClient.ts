@@ -30,6 +30,8 @@ import type {
   CodexUsageStatsQuery,
   BotExecutionConfigInput,
   CliParamsPayload,
+  DeepSeekSelectionRequest,
+  DeepSeekSelectionResponse,
   CreateBotInput,
   DebugProfile,
   DebugState,
@@ -456,6 +458,7 @@ export interface WebBotClient {
   unarchiveBot(botAlias: string): Promise<BotSummary>;
   getCliParams(botAlias: string): Promise<CliParamsPayload>;
   updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload>;
+  updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse>;
   resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload>;
   getTunnelStatus(): Promise<TunnelSnapshot>;
   startTunnel(): Promise<TunnelSnapshot>;

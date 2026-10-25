@@ -275,7 +275,9 @@ CLI types and default commands are listed below. `CLI_PATH` / `cli_path` also ac
 | `antigravity` | `agy` | Antigravity print / stream-json |
 | `deepseek` | `dsh` | DeepSeek Harness headless / JSONL |
 
-DeepSeek Harness supports model and reasoning-effort selection in chat and local clusters. Per-invocation patches apply these selections while preserving global Harness configuration. Native execution and remote workspaces are unavailable. Commit-message generation can independently use Codex, codex server, or Claude; Antigravity and DeepSeek Harness are unsupported for this feature.
+DeepSeek Harness supports provider, model, and reasoning-effort selection in chat and local clusters. Orbit reads the dsh profile catalog, filters models and reasoning levels by the selected provider, and keeps a custom model input when a provider has no enumerable models. Selections are stored per Bot and applied through a per-invocation patch while preserving global Harness configuration. Switching providers clears the current Web user's DeepSeek session binding; model changes within one provider keep the session. Native execution and remote workspaces are unavailable. Commit-message generation can independently use Codex, codex server, or Claude; Antigravity and DeepSeek Harness are unsupported for this feature.
+
+Desktop execution temporarily bridges the Desktop profile's `agent-default-model`, `credentials`, `llm-pi-ai`, and `llm-deepseek` entries into headless execution. Catalog and diagnostic surfaces expose provider/model metadata only; credential contents stay out of API responses, stdout, stderr, and history. Catalog failures keep the current selection and static model candidates available.
 
 `cli_params.codex_server` and `cli_params.codex` keep separate settings with the same parameter definitions and defaults. Switching backends preserves both. Global extra arguments also use separate keys, for example `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`. Both backends share Codex history, model-parameter, and cost semantics.
 

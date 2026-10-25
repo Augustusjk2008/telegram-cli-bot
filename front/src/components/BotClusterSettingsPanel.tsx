@@ -118,8 +118,27 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
       const selected = model || nativeModels?.selectedModel || overview?.nativeAgent?.model || "";
       return nativeModels?.items.find((item) => item.id === selected)?.reasoningEfforts || [];
     }
+    if (cliParams?.cliType === "deepseek") {
+      const providerId = cliParams.selectedProvider || String(cliParams.params.provider || "");
+      const provider = cliParams.providerOptions?.find((item) => item.id === providerId);
+      const providerModels = cliParams.modelOptionsByProvider?.[providerId] || [];
+      const selectedModel = providerModels.find((item) => item.id === model);
+      return selectedModel?.reasoningEfforts || provider?.reasoningEfforts || cliParams.schema.reasoning_effort?.enum || [];
+    }
     return cliParams?.schema.reasoning_effort?.enum || cliParams?.schema.effort?.enum || [];
   }
+
+  const deepSeekProviderId = cliParams?.cliType === "deepseek"
+    ? cliParams.selectedProvider || String(cliParams.params.provider || "")
+    : "";
+  const hasDeepSeekProviderModelCatalog = cliParams?.cliType === "deepseek"
+    && Boolean(deepSeekProviderId)
+    && Boolean(cliParams.modelOptionsByProvider && Object.prototype.hasOwnProperty.call(cliParams.modelOptionsByProvider, deepSeekProviderId));
+  const deepSeekModelOptions = cliParams?.cliType === "deepseek"
+    ? (hasDeepSeekProviderModelCatalog
+      ? cliParams.modelOptionsByProvider?.[deepSeekProviderId]?.map((model) => model.id) || []
+      : cliParams.schema.model?.enum || [])
+    : [];
 
   return (
     <section aria-labelledby="bot-cluster-settings-title" className="space-y-5 border-t border-[var(--border)] pt-5 text-sm">
@@ -138,7 +157,8 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
         <label className="grid gap-1"><span className="font-medium text-[var(--text)]">子 Agent 写入策略</span><select aria-label="子 Agent 写入策略" value={cluster.writePolicy} disabled={!canManage || saving} onChange={(event) => void save({ writePolicy: event.target.value as BotClusterConfig["writePolicy"] })} className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3"><option value="main_only">仅主 Agent 可写</option><option value="all_agents">允许子 Agent 写入</option></select></label>
         <label className="grid gap-1"><span className="font-medium text-[var(--text)]">默认超时（秒）</span><input aria-label="任务超时（秒）" type="number" min={60} max={3600} value={timeoutDraft} disabled={!canManage || saving} onChange={(event) => setTimeoutDraft(event.target.value)} onBlur={() => void saveTimeout()} className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3" /></label>
       </div>
-      <ClusterModelTiersPanel value={cluster.modelTiers} reasoningEfforts={cluster.reasoningEfforts} modelOptions={nativeRuntime ? nativeModels?.items.map((item) => item.id) || [] : cliParams?.schema.model?.enum || []} reasoningOptions={reasoningOptions} disabled={!canManage || saving} onChange={(value) => void save({ modelTiers: value })} onReasoningChange={(value) => void save({ reasoningEfforts: value })} />
+      {cliParams?.cliType === "deepseek" ? <p className="text-xs text-[var(--muted)]">集群档位继承主 Bot 的 Provider：{cliParams.providerOptions?.find((item) => item.id === deepSeekProviderId)?.label || deepSeekProviderId || "默认"}。</p> : null}
+      <ClusterModelTiersPanel value={cluster.modelTiers} reasoningEfforts={cluster.reasoningEfforts} modelOptions={nativeRuntime ? nativeModels?.items.map((item) => item.id) || [] : cliParams?.cliType === "deepseek" && hasDeepSeekProviderModelCatalog ? deepSeekModelOptions : cliParams?.schema.model?.enum || []} reasoningOptions={reasoningOptions} disabled={!canManage || saving} onChange={(value) => void save({ modelTiers: value })} onReasoningChange={(value) => void save({ reasoningEfforts: value })} />
       <ClusterSetupPanel botAlias={botAlias} client={client} canManage={canManage} />
     </section>
   );

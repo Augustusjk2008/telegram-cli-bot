@@ -4,7 +4,8 @@
 
 - CLI 类型为 `deepseek`，默认执行命令为 `dsh`；主 Bot 和子 Bot 均可选择。配置入口是 `bot/config.py`、`bot/manager.py`、`bot/cli_params.py`。
 - 当前支持本地工作区的 `execution_mode=cli`，包括 Bot 级 TCB 集群编排。原生执行模式、远程工作区和 Git commit message 生成会在启动前拒绝；修改入口时保持前后端边界一致。
-- 模型和 `reasoning_effort` 可在聊天页选择；空值或 `none` 继承 Harness 配置，思考深度支持 `off/low/high/max`。npm 版和官方 Desktop 版都通过每次调用的临时 patch 应用选择，保留原 provider 和其他配置；不修改用户的 Harness 配置。宿主 `extra_args` 仅接受 `--patch <文件路径>` 或 `--patch=<文件路径>`；协议参数、session id 和任务输入由宿主控制。
+- provider、模型和 `reasoning_effort` 可在聊天页选择；空值或 `none` 继承 Harness 配置，思考深度支持 `off/low/high/max`。npm 版和官方 Desktop 版都通过每次调用的临时 patch 应用选择，保留其他配置；不修改用户的 Harness 配置。Desktop 会临时桥接 `agent-default-model`、`credentials`、`llm-pi-ai` 和 `llm-deepseek` entry。provider 切换清理当前 Web 用户和 agent 的 DeepSeek session 绑定，同一 provider 内切换模型保留 session。宿主 `extra_args` 仅接受 `--patch <文件路径>` 或 `--patch=<文件路径>`；协议参数、session id 和任务输入由宿主控制。
+- `bot/deepseek_launch.mjs --describe-models` 返回受控 provider catalog，只包含 provider、模型、思考深度和默认值。catalog 读取有大小和超时限制；失败时后端保留当前选择和静态模型候选。凭据内容、API key、环境变量实际值和原始 profile 不得进入 API、stdout、stderr 或历史。
 - 官方 Desktop 的 wrapper 通常位于安装目录下的 `resources\\runtime\\cli\\bin\\dsh.cmd`，使用 Desktop 内置运行时，不要求系统 Node.js。Windows 自动发现只对 `dsh` 启用 Desktop 安装注册信息 fallback；显式完整路径、PATH 和 npm 目录保持更高优先级。
 - Desktop 集群轮次会通过 `--dump-config` 预检 `@deepseek-ai/dsh-mcp-client`；如果 headless profile 返回 `orbit-tcb-cluster-mcp` 不存在，Orbit 会在启动前返回明确诊断并暂停该 Desktop 版本的集群任务。当前验证的 Desktop `0.2.1-rc.3` 属于此情况。
 - `permission_mode` 支持 `read-only/workspace-write/danger-full-access`，默认 `workspace-write`，通过 `DSH_PERMISSION_MODE` 传给 Harness。Web 调用通过 `clamp_unsafe_cli_params()` 限制未获 `allow_unsafe_cli` 的 `danger-full-access`；集群 `allow_write` 不替代这层 CLI 权限配置。
@@ -19,8 +20,8 @@
 ## 执行协议
 
 - `bot/cli_params.py:_build_deepseek_args()` 构造 `dsh --profile headless [--patch <path>] --json [--session-id <id>] -`，用户消息通过 stdin 发送；保留中文和多行输入。
-- `bot/deepseek_cli.py` 识别 npm dsh 入口和官方 Desktop wrapper，并按入口类型分流。npm 版由 `bot/deepseek_launch.mjs` 使用 Node 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17；Desktop 版直接调用官方 wrapper，并通过 `--dump-config` 提取默认模型条目后追加临时 `--patch`，保留合并后的 provider 配置，子进程退出后清理临时文件。启动器在 JSON 模式通过 `orbit_model` 元数据报告显式选择或继承的模型名，用于费用估算；默认模型配置无法静态读取时跳过该元数据。自定义可执行文件可沿用原调用方式；无法识别入口时，只有显式模型或思考深度选择会在启动前失败。
-- `bot/cli.py:DeepSeekJsonStreamParser` 解析 stdout JSONL；`bot/web/api_service.py` 管理进程和轮次。stderr 独立收集，用于失败诊断。
+- `bot/deepseek_cli.py` 识别 npm dsh 入口和官方 Desktop wrapper，并按入口类型分流。npm 版由 `bot/deepseek_launch.mjs` 使用 Node 显式调用导出的 `runCli()`，兼容缺少 `import.meta.main` 的 Node 22.17；Desktop 版直接调用官方 wrapper，并通过 `--dump-config` 提取默认模型条目后追加临时 `--patch`，保留合并后的 provider 配置，子进程退出后清理临时文件。启动器在 JSON 模式通过 `orbit_model` 元数据报告 provider 和模型，用于费用估算与诊断；默认模型配置无法静态读取时跳过该元数据。自定义可执行文件可沿用原调用方式；无法识别入口时，只有显式 provider、模型或思考深度选择会在启动前失败。
+- `bot/cli.py:DeepSeekJsonStreamParser` 解析 stdout JSONL 并保存 `orbit_model.provider`；`bot/web/api_service.py` 管理进程和轮次。stderr 独立收集，用于失败诊断。
 - Windows 上 dsh 进程使用 breakaway 启动并跳过 Orbit Job Object containment，避免嵌套 job 干扰 Harness 自己的进程隔离；修改统一 CLI 进程生命周期时保留该分支。
 - 成功需要有效 `session.sessionId`、`status.phase=turn_end` 且 `reason.kind=completed`、`final` 事件和进程退出码 0。无效 JSON、缺少结束事件、final 后继续输出运行事件或输出超限都必须保留失败状态。
 - `text` 提供正文预览，`final.text` 替换最终正文。`thinking`、工具调用和工具结果进入 trace；保留 `callId` 配对与步骤去重。

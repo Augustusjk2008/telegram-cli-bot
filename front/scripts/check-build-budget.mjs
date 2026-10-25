@@ -5,7 +5,8 @@ const root = process.cwd();
 const dist = path.resolve(root, 'dist');
 const manifestPath = path.resolve(dist, '.vite', 'manifest.json');
 const limits = {
-  entry: 650 * 1024,
+    // Chat provider catalogs add a small amount of always-loaded selection UI.
+    entry: 660 * 1024,
   vendor: 500 * 1024,
   mermaid: 650 * 1024,
 };

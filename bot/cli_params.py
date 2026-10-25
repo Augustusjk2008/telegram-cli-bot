@@ -126,12 +126,14 @@ DEFAULT_ANTIGRAVITY_PARAMS = {
 
 DEEPSEEK_PERMISSION_MODES = ["read-only", "workspace-write", "danger-full-access"]
 DEFAULT_DEEPSEEK_PARAMS = {
+    "provider": None,
     "model": None,
     "reasoning_effort": None,
     "permission_mode": "workspace-write",
     "extra_args": [],
 }
 DEEPSEEK_MODEL_OPTIONS = ["none", "deepseek-flash", "deepseek-v4-pro"]
+DEEPSEEK_REASONING_EFFORT_OPTIONS = ["none", "off", "low", "high", "max"]
 
 ANTIGRAVITY_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"]
 
@@ -149,12 +151,17 @@ SUPPORTED_CLI_TYPES = set(DEFAULT_PARAMS_MAP.keys())
 
 PARAM_SCHEMA_MAP = {
     "deepseek": {
+        "provider": {
+            "type": "string",
+            "description": "Provider 选择，none 使用 Harness 默认 Provider",
+            "nullable": True,
+        },
         "model": {"type": "string", "description": "模型选择，none 使用 Harness 配置", "nullable": True},
         "reasoning_effort": {
             "type": "string",
             "description": "思考深度，none 使用 Harness 配置，off 关闭思考",
             "nullable": True,
-            "enum": ["none", "off", "low", "high", "max"],
+            "enum": DEEPSEEK_REASONING_EFFORT_OPTIONS,
         },
         "permission_mode": {
             "type": "string",
@@ -244,6 +251,8 @@ class CliParamsConfig:
                 # 合并配置，保留默认值中不存在的键
                 default = config.get_params(cli_type)
                 default.update(cli_data)
+                if cli_type == "deepseek":
+                    default.update(normalize_deepseek_params(default))
                 setattr(config, cli_type, default)
         
         return config
@@ -338,6 +347,42 @@ def normalize_cli_model_options(options: Optional[List[str]]) -> List[str]:
     for option in REQUIRED_CLI_MODEL_OPTIONS:
         add_option(option)
 
+    return normalized
+
+
+def normalize_deepseek_value(value: Any) -> Optional[str]:
+    """Normalize the nullable DeepSeek selection values."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized or normalized.casefold() == MODEL_OPTION_NONE:
+        return None
+    return normalized
+
+
+def normalize_deepseek_selection(
+    provider: Any = None,
+    model: Any = None,
+    reasoning_effort: Any = None,
+) -> Dict[str, Optional[str]]:
+    """Normalize the three user-selectable DeepSeek fields as one selection."""
+    return {
+        "provider": normalize_deepseek_value(provider),
+        "model": normalize_deepseek_value(model),
+        "reasoning_effort": normalize_deepseek_value(reasoning_effort),
+    }
+
+
+def normalize_deepseek_params(params: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return normalized DeepSeek selection fields without dropping other options."""
+    normalized = dict(params)
+    normalized.update(
+        normalize_deepseek_selection(
+            provider=normalized.get("provider"),
+            model=normalized.get("model"),
+            reasoning_effort=normalized.get("reasoning_effort"),
+        )
+    )
     return normalized
 
 
@@ -447,8 +492,8 @@ def coerce_param_value(cli_type: str, key: str, value: Any) -> Any:
     field_type = field["type"]
     nullable = bool(field.get("nullable", False))
 
-    if key == "model" and isinstance(value, str) and value.strip().lower() == MODEL_OPTION_NONE:
-        value = None
+    if cli_type == "deepseek" and key in {"provider", "model", "reasoning_effort"}:
+        return normalize_deepseek_value(value)
 
     if nullable and (value is None or (isinstance(value, str) and not value.strip())):
         return None

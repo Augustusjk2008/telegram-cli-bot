@@ -105,6 +105,10 @@ import type {
   CodexUsageStatsQuery,
   CodexUsageTimeBasis,
   CliParamsPayload,
+  DeepSeekModelOption,
+  DeepSeekProviderOption,
+  DeepSeekSelectionRequest,
+  DeepSeekSelectionResponse,
   CliType,
   AgentClusterConfig,
   BotClusterConfig,
@@ -1204,6 +1208,23 @@ type RawCliParamsPayload = {
     nullable?: boolean;
     integer?: boolean;
   }>;
+  provider_options?: unknown;
+  providerOptions?: unknown;
+  model_options_by_provider?: unknown;
+  modelOptionsByProvider?: unknown;
+  selected_provider?: unknown;
+  selectedProvider?: unknown;
+  catalog_status?: unknown;
+  catalogStatus?: unknown;
+  catalog_diagnostic?: unknown;
+  catalogDiagnostic?: unknown;
+  provider_changed?: unknown;
+  providerChanged?: unknown;
+  session_reset?: unknown;
+  sessionReset?: unknown;
+  selection_notice?: unknown;
+  selectionNotice?: unknown;
+  payload?: RawCliParamsPayload;
 };
 
 const RESTART_SERVICE_REQUEST_TIMEOUT_MS = 4000;
@@ -2715,12 +2736,120 @@ function mapFavoriteAnswerItem(raw: RawFavoriteAnswerItem): FavoriteAnswerItem {
   };
 }
 
+function mapDeepSeekModelOption(raw: unknown): DeepSeekModelOption | null {
+  if (typeof raw === "string") {
+    const id = raw.trim();
+    return id ? { id, label: id } : null;
+  }
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const item = raw as Record<string, unknown>;
+  const id = String(item.id ?? item.model_id ?? item.model ?? item.value ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  const rawReasoningEfforts = item.reasoning_efforts ?? item.reasoningEfforts;
+  const reasoningEfforts = Array.isArray(rawReasoningEfforts)
+    ? rawReasoningEfforts.map(String).filter(Boolean)
+    : undefined;
+  const defaultReasoningEffort = String(item.default_reasoning_effort ?? item.defaultReasoningEffort ?? "").trim();
+  const label = String(item.label ?? item.display_name ?? item.name ?? id).trim() || id;
+  return {
+    id,
+    label,
+    ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+  };
+}
+
+function mapDeepSeekProviderOption(raw: unknown): DeepSeekProviderOption | null {
+  if (typeof raw === "string") {
+    const id = raw.trim();
+    return id ? { id, label: id } : null;
+  }
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const item = raw as Record<string, unknown>;
+  const id = String(item.id ?? item.provider_id ?? item.provider ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  const models = item.model_options ?? item.modelOptions ?? item.models;
+  const modelOptions = Array.isArray(models)
+    ? models.map(mapDeepSeekModelOption).filter((model): model is DeepSeekModelOption => Boolean(model))
+    : undefined;
+  const rawReasoningEfforts = item.reasoning_efforts ?? item.reasoningEfforts;
+  const reasoningEfforts = Array.isArray(rawReasoningEfforts)
+    ? rawReasoningEfforts.map(String).filter(Boolean)
+    : undefined;
+  const defaultModel = String(item.default_model ?? item.defaultModel ?? "").trim();
+  const defaultReasoningEffort = String(item.default_reasoning_effort ?? item.defaultReasoningEffort ?? "").trim();
+  const label = String(item.label ?? item.display_name ?? item.name ?? id).trim() || id;
+  return {
+    id,
+    label,
+    ...(defaultModel ? { defaultModel } : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(modelOptions ? { modelOptions } : {}),
+    ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
+  };
+}
+
+function mapDeepSeekModelOptionsByProvider(raw: unknown): Record<string, DeepSeekModelOption[]> {
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const result: Record<string, DeepSeekModelOption[]> = {};
+  for (const [provider, models] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(models)) {
+      continue;
+    }
+    const normalized = models
+      .map(mapDeepSeekModelOption)
+      .filter((model): model is DeepSeekModelOption => Boolean(model));
+    result[provider] = normalized;
+  }
+  return result;
+}
+
 function mapCliParamsPayload(raw: RawCliParamsPayload): CliParamsPayload {
+  const rawProviderOptions = raw.provider_options ?? raw.providerOptions;
+  const providerOptions = Array.isArray(rawProviderOptions)
+    ? rawProviderOptions
+      .map(mapDeepSeekProviderOption)
+      .filter((provider): provider is DeepSeekProviderOption => Boolean(provider))
+    : undefined;
+  const modelOptionsByProvider = mapDeepSeekModelOptionsByProvider(raw.model_options_by_provider ?? raw.modelOptionsByProvider);
+  for (const provider of providerOptions || []) {
+    if (!Object.prototype.hasOwnProperty.call(modelOptionsByProvider, provider.id)) {
+      modelOptionsByProvider[provider.id] = provider.modelOptions || [];
+    }
+  }
+  const selectedProvider = String(raw.selected_provider ?? raw.selectedProvider ?? raw.params?.provider ?? "").trim();
+  const catalogStatus = String(raw.catalog_status ?? raw.catalogStatus ?? "").trim();
+  const catalogDiagnostic = String(raw.catalog_diagnostic ?? raw.catalogDiagnostic ?? "").trim();
   return {
     cliType: raw.cli_type,
     params: raw.params || {},
     defaults: raw.defaults || {},
     schema: raw.schema || {},
+    ...(providerOptions ? { providerOptions } : {}),
+    ...(Object.keys(modelOptionsByProvider).length ? { modelOptionsByProvider } : {}),
+    ...(selectedProvider ? { selectedProvider } : {}),
+    ...(catalogStatus ? { catalogStatus } : {}),
+    ...(catalogDiagnostic ? { catalogDiagnostic } : {}),
+  };
+}
+
+function mapDeepSeekSelectionResponse(raw: RawCliParamsPayload): DeepSeekSelectionResponse {
+  const payload = raw.payload || raw;
+  return {
+    ...mapCliParamsPayload(payload),
+    ...(raw.provider_changed ?? raw.providerChanged ? { providerChanged: Boolean(raw.provider_changed ?? raw.providerChanged) } : {}),
+    ...(raw.session_reset ?? raw.sessionReset ? { sessionReset: Boolean(raw.session_reset ?? raw.sessionReset) } : {}),
+    ...(raw.selection_notice ?? raw.selectionNotice ? { selectionNotice: String(raw.selection_notice ?? raw.selectionNotice) } : {}),
   };
 }
 
@@ -7438,6 +7567,25 @@ export class RealWebBotClient implements WebBotClient {
       }),
     });
     return mapCliParamsPayload(data);
+  }
+
+  async updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse> {
+    const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        cli_type: "deepseek",
+        selection: {
+          provider: selection.provider,
+          model: selection.model,
+          reasoning_effort: selection.reasoningEffort,
+          ...(selection.agentId && selection.agentId !== "main" ? { agent_id: selection.agentId } : {}),
+        },
+      }),
+    });
+    return mapDeepSeekSelectionResponse(data);
   }
 
   async resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload> {

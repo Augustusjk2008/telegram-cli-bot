@@ -55,6 +55,7 @@ import type {
   ChatSendOptions,
   ChatStatusUpdate,
   CliParamsPayload,
+  DeepSeekProviderOption,
   ChatTraceEvent,
   ConversationSummary,
   FavoriteAnswerItem,
@@ -1880,6 +1881,7 @@ export function ChatScreen({
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [selectionNotice, setSelectionNotice] = useState("");
   const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
   const [endlessModeActive, setEndlessModeActive] = useState(false);
   const [endlessAutoContinueCount, setEndlessAutoContinueCount] = useState(0);
@@ -2778,6 +2780,7 @@ export function ChatScreen({
     loadingRef.current = true;
     setLoading(true);
     setError("");
+    setSelectionNotice("");
     setItems([]);
     setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     setWorkingDir("");
@@ -4887,15 +4890,83 @@ export function ChatScreen({
     }
   }
 
-  async function handleModelChange(nextModel: string) {
-    if (!nextModel || nextModel === selectedModel) {
+  async function handleDeepSeekSelectionChange(input: { provider?: string; model?: string; reasoningEffort?: string }) {
+    if (cliParams?.cliType !== "deepseek") {
+      return;
+    }
+    const nextProvider = input.provider ?? selectedDeepSeekProvider;
+    const providerChanged = nextProvider !== selectedDeepSeekProvider;
+    const providerOption = deepSeekProviderOptions.find((provider) => provider.id === nextProvider);
+    const providerModels = cliParams.modelOptionsByProvider?.[nextProvider] || [];
+    const defaultModel = providerOption?.defaultModel || providerModels[0]?.id || selectedModel;
+    const nextModel = input.model !== undefined
+      ? input.model
+      : providerChanged
+      ? defaultModel
+      : selectedModel;
+    const selectedNextModel = providerModels.find((model) => model.id === nextModel);
+    const defaultReasoningEffort = providerOption?.defaultReasoningEffort
+      || selectedNextModel?.defaultReasoningEffort
+      || selectedNextModel?.reasoningEfforts?.[0]
+      || providerOption?.reasoningEfforts?.[0]
+      || selectedReasoningEffort;
+    const nextReasoningEffort = input.reasoningEffort !== undefined
+      ? input.reasoningEffort
+      : providerChanged
+      ? defaultReasoningEffort
+      : selectedReasoningEffort;
+    const next = await client.updateDeepSeekSelection(botAlias, {
+      provider: nextProvider || null,
+      model: nextModel && nextModel !== MODEL_OPTION_NONE ? nextModel : null,
+      reasoningEffort: nextReasoningEffort || null,
+      ...(activeAgentId !== "main" ? { agentId: activeAgentId } : {}),
+    });
+    setCliParams(next);
+    if (next.selectionNotice || next.sessionReset || next.providerChanged || providerChanged) {
+      const notice = next.selectionNotice || "已切换 DeepSeek Provider，下一轮将建立新会话。";
+      setSelectionNotice(notice);
+      if (providerChanged) {
+        appendSystemMessage(notice);
+      }
+    }
+    if (providerChanged || next.sessionReset || next.providerChanged) {
+      try {
+        const refreshedOverview = await getScopedOverview(client, botAlias, activeAgentIdRef.current, executionModeRef.current);
+        botOverviewRef.current = refreshedOverview;
+        setBotOverview(refreshedOverview);
+      } catch {
+        // The atomic selection has already been saved; keep the notice if overview refresh is unavailable.
+      }
+    }
+  }
+
+  async function handleProviderChange(nextProvider: string) {
+    if (nextProvider === selectedDeepSeekProvider) {
       return;
     }
 
     setModelSaving(true);
     setError("");
     try {
-      if (nativeExecutionMode) {
+      await handleDeepSeekSelectionChange({ provider: nextProvider });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Provider 切换失败");
+    } finally {
+      setModelSaving(false);
+    }
+  }
+
+  async function handleModelChange(nextModel: string) {
+    if ((!nextModel && !deepSeekModelEditable) || nextModel === selectedModel) {
+      return;
+    }
+
+    setModelSaving(true);
+    setError("");
+    try {
+      if (cliParams?.cliType === "deepseek") {
+        await handleDeepSeekSelectionChange({ model: nextModel });
+      } else if (nativeExecutionMode) {
         const nextModelItem = nativeModelOptions.find((model) => model.id === nextModel);
         const nextReasoningEffort = resolveNativeReasoningEffort(nextModelItem, nativeSelectedReasoningEffort);
         const next = await client.updateNativeAgentModel(botAlias, nextModel, { reasoningEffort: nextReasoningEffort });
@@ -4936,7 +5007,9 @@ export function ChatScreen({
     setModelSaving(true);
     setError("");
     try {
-      if (nativeExecutionMode && nativeSelectedModel) {
+      if (cliParams?.cliType === "deepseek") {
+        await handleDeepSeekSelectionChange({ reasoningEffort: nextReasoningEffort });
+      } else if (nativeExecutionMode && nativeSelectedModel) {
         const next = await client.updateNativeAgentModel(botAlias, nativeSelectedModel, { reasoningEffort: nextReasoningEffort });
         setNativeAgentModels({
           items: next.items,
@@ -5170,7 +5243,25 @@ export function ChatScreen({
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
     : true);
-  const cliModelOptions = cliParams?.schema.model?.enum ?? [];
+  const deepSeekProviderOptions: DeepSeekProviderOption[] = cliParams?.cliType === "deepseek"
+    ? cliParams.providerOptions || []
+    : [];
+  const selectedDeepSeekProvider = cliParams?.cliType === "deepseek"
+    ? String(cliParams.selectedProvider || cliParams.params.provider || (deepSeekProviderOptions.length === 1 ? deepSeekProviderOptions[0].id : ""))
+    : "";
+  const selectedDeepSeekProviderOption = deepSeekProviderOptions.find((provider) => provider.id === selectedDeepSeekProvider);
+  const hasDeepSeekProviderModelCatalog = cliParams?.cliType === "deepseek"
+    && Boolean(selectedDeepSeekProvider)
+    && Boolean(cliParams.modelOptionsByProvider && Object.prototype.hasOwnProperty.call(cliParams.modelOptionsByProvider, selectedDeepSeekProvider));
+  const selectedDeepSeekModelOptions = hasDeepSeekProviderModelCatalog
+    ? cliParams?.modelOptionsByProvider?.[selectedDeepSeekProvider] || []
+    : [];
+  const deepSeekModelEditable = cliParams?.cliType === "deepseek"
+    && hasDeepSeekProviderModelCatalog
+    && selectedDeepSeekModelOptions.length === 0;
+  const cliModelOptions = cliParams?.cliType === "deepseek" && hasDeepSeekProviderModelCatalog
+    ? [MODEL_OPTION_NONE, ...selectedDeepSeekModelOptions.map((model) => model.id)]
+    : cliParams?.schema.model?.enum ?? [];
   const nativeModelOptions = nativeAgentModels?.items ?? [];
   const nativeSelectedModel = nativeAgentModels?.selectedModel
     || botOverview?.nativeAgent?.model
@@ -5184,11 +5275,18 @@ export function ChatScreen({
   );
   const selectedModel = nativeExecutionMode
     ? nativeSelectedModel
+    : deepSeekModelEditable
+    ? String(cliParams?.params.model ?? cliParams?.defaults.model ?? "")
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
   const cliReasoningParamKey = cliParams?.cliType === "claude" || cliParams?.cliType === "antigravity"
     ? "effort"
     : "reasoning_effort";
-  const cliReasoningEffortOptions = cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
+  const cliReasoningEffortOptions = cliParams?.cliType === "deepseek"
+    ? selectedDeepSeekModelOptions.find((model) => model.id === selectedModel)?.reasoningEfforts
+      || selectedDeepSeekProviderOption?.reasoningEfforts
+      || cliParams.schema[cliReasoningParamKey]?.enum
+      || []
+    : cliParams?.schema[cliReasoningParamKey]?.enum ?? [];
   const cliSelectedReasoningEffort = String(
     cliParams?.params[cliReasoningParamKey]
       ?? cliParams?.defaults[cliReasoningParamKey]
@@ -5225,14 +5323,18 @@ export function ChatScreen({
   const childSessionModel = nativeExecutionMode
     ? nativeSelectedModel
     : botOverview?.cluster?.modelTiers[childModelTier] || selectedModel;
+  const childSessionProvider = !nativeExecutionMode && cliParams?.cliType === "deepseek"
+    ? selectedDeepSeekProviderOption?.label || selectedDeepSeekProvider || "默认"
+    : "";
   const childSessionReasoningEffort = nativeExecutionMode
     ? nativeSelectedReasoningEffort
     : botOverview?.cluster?.reasoningEfforts[childModelTier] || selectedReasoningEffort;
   const childReadOnlyStatus = [
     "会话只读",
+    childSessionProvider ? `Provider：${childSessionProvider}` : "",
     `模型：${childSessionModel && childSessionModel !== MODEL_OPTION_NONE ? childSessionModel : "默认"}`,
     `思考深度：${childSessionReasoningEffort || "默认"}`,
-  ].join(" · ");
+  ].filter(Boolean).join(" · ");
   const visibleModelOptions = useMemo<ChatComposerModelOption[]>(() => {
     if (nativeExecutionMode) {
       const options = nativeModelOptions.map((model) => ({
@@ -5245,6 +5347,9 @@ export function ChatScreen({
       }
       return options;
     }
+    if (deepSeekModelEditable) {
+      return [];
+    }
     const options = cliModelOptions.map((model) => ({
       value: model,
       label: model === MODEL_OPTION_NONE ? "默认" : model,
@@ -5253,7 +5358,10 @@ export function ChatScreen({
       return [{ value: selectedModel, label: selectedModel }, ...options];
     }
     return options;
-  }, [cliModelOptions, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
+  }, [cliModelOptions, deepSeekModelEditable, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
+  const deepSeekProviderDescription = cliParams?.cliType === "deepseek"
+    ? cliParams.catalogDiagnostic || (cliParams.catalogStatus ? `catalog：${cliParams.catalogStatus}` : "")
+    : "";
   const messageContentWidthClass = embedded
     ? `mx-auto w-full max-w-5xl ${mobileLayout ? "space-y-2" : "space-y-3"}`
     : `w-full ${mobileLayout ? "space-y-2" : "space-y-3"}`;
@@ -5498,9 +5606,15 @@ export function ChatScreen({
           killTaskDisabled={killTaskDisabled}
           killTaskBusy={actionLoading === "kill"}
           mobileLayout={mobileLayout}
+          providerOptions={deepSeekProviderOptions}
+          selectedProvider={selectedDeepSeekProvider}
+          providerDescription={deepSeekProviderDescription}
+          providerDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || (!nativeExecutionMode && !cliParams)}
+          onProviderChange={cliParams?.cliType === "deepseek" ? (provider) => void handleProviderChange(provider) : undefined}
           modelOptions={visibleModelOptions}
           selectedModel={selectedModel}
-          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+          modelEditable={deepSeekModelEditable}
+          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!nativeExecutionMode && !cliParams)}
           onModelChange={(model) => void handleModelChange(model)}
           reasoningEffortOptions={visibleReasoningEffortOptions}
           selectedReasoningEffort={selectedReasoningEffort}
@@ -5585,6 +5699,11 @@ export function ChatScreen({
           {error ? (
             <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {error}
+            </div>
+          ) : null}
+          {selectionNotice ? (
+            <div data-testid="deepseek-selection-notice" className="rounded-lg border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-3 py-2 text-sm text-[var(--status-info)] shadow-[var(--shadow-surface)]">
+              {selectionNotice}
             </div>
           ) : null}
           {items.length === 0 && !isStreaming && !loading ? (
@@ -5746,9 +5865,15 @@ export function ChatScreen({
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
             placeholder={voiceInputLocked ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
+            providerOptions={deepSeekProviderOptions}
+            selectedProvider={selectedDeepSeekProvider}
+            providerDescription={deepSeekProviderDescription}
+            providerDisabled={modelSaving || readOnly || (!nativeExecutionMode && !cliParams)}
+            onProviderChange={cliParams?.cliType === "deepseek" ? (provider) => void handleProviderChange(provider) : undefined}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
-            modelDisabled={modelSaving || readOnly || visibleModelOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+            modelEditable={!mobileLayout && deepSeekModelEditable}
+            modelDisabled={modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!nativeExecutionMode && !cliParams)}
             onModelChange={(model) => void handleModelChange(model)}
             reasoningEffortOptions={mobileLayout ? [] : visibleReasoningEffortOptions}
             selectedReasoningEffort={selectedReasoningEffort}

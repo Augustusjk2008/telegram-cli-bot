@@ -10,7 +10,7 @@ const desktop = launcherArgs[0] === "--desktop";
 const entry = desktop ? launcherArgs[1] : launcherArgs[0];
 const selectionJson = desktop ? launcherArgs[2] : launcherArgs[1];
 const args = launcherArgs.slice(desktop ? 3 : 2);
-const selection = JSON.parse(selectionJson);
+const selection = normalizeSelection(JSON.parse(selectionJson));
 let patchDirectory;
 
 const runtimeBin = dirname(process.execPath);
@@ -21,6 +21,10 @@ if (!pathEntries.some((item) => item.toLowerCase() === runtimeBin.toLowerCase())
 }
 
 const DUMP_CONFIG_MAX_BYTES = 2 * 1024 * 1024;
+const CATALOG_MAX_BYTES = 512 * 1024;
+const CATALOG_MAX_PROVIDERS = 128;
+const CATALOG_MAX_MODELS = 256;
+const BRIDGED_ENTRY_IDS = new Set(["agent-default-model", "credentials", "llm-pi-ai", "llm-deepseek"]);
 
 function findModelEntry(entries) {
   for (const row of entries) {
@@ -32,21 +36,279 @@ function findModelEntry(entries) {
   }
 }
 
-async function loadModelEntry() {
+function isDescribeModels() {
+  return args.includes("--describe-models");
+}
+
+function normalizeSelection(selectionValue) {
+  const result = {};
+  if (!selectionValue || typeof selectionValue !== "object" || Array.isArray(selectionValue)) return result;
+  for (const [source, target] of [["provider", "provider"], ["model", "model"], ["reasoning_effort", "reasoningEffort"], ["reasoningEffort", "reasoningEffort"]]) {
+    const value = selectionValue[source];
+    if (typeof value === "string" && value.trim() && value.trim().toLowerCase() !== "none") result[target] = value.trim();
+  }
+  return result;
+}
+
+function diagnosticText(error) {
+  return String(error?.message || error || "DeepSeek catalog 读取失败")
+    .replace(/((?:api[_-]?key|token|secret|password|authorization|credential)[^\s:=]*)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\r?\n/g, " ")
+    .slice(0, 512);
+}
+
+function safeBridgeValue(value, key = "", depth = 0) {
+  if (depth > 8) return undefined;
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") {
+    if (/^(?:api[_-]?key|token|secret|password|authorization|cookie|value)$/i.test(key)) return undefined;
+    if (/api[_-]?key|token|secret|password|authorization|cookie/i.test(key) && key !== "apiKeyEnv") return undefined;
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => safeBridgeValue(item, key, depth + 1)).filter((item) => item !== undefined);
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const result = {};
+  for (const [childKey, childValue] of Object.entries(value)) {
+    if (/^(?:api[_-]?key|token|secret|password|authorization|cookie|headers?)$/i.test(childKey)) continue;
+    const safe = safeBridgeValue(childValue, childKey, depth + 1);
+    if (safe !== undefined) result[childKey] = safe;
+  }
+  return result;
+}
+
+function safeBridgeEntry(entry) {
+  if (!entry || typeof entry !== "object") return undefined;
+  const id = typeof entry.id === "string" ? entry.id : "";
+  const name = typeof entry.name === "string" ? entry.name : "";
+  if (!id || !name || !BRIDGED_ENTRY_IDS.has(id)) return undefined;
+  const result = { id, name };
+  if (entry.disabled === true) result.disabled = true;
+  if (entry.config && typeof entry.config === "object" && !Array.isArray(entry.config) && !entry.config.__jsExpr) {
+    const config = safeBridgeValue(entry.config, "config");
+    if (config && typeof config === "object" && Object.keys(config).length) result.config = config;
+  }
+  return result;
+}
+
+async function loadHeadlessProfile({ includeOverlays = true } = {}) {
   const require = createRequire(pathToFileURL(entry));
   const boot = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")));
   const { resolveDshHome } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-home-paths")));
   const installAnchor = join(dirname(entry), "..", "package.json");
   const profile = boot.loadProfile("dsh", "headless", installAnchor);
   const overlays = [];
-  for (let index = 2; index < args.length && args[index] === "--patch"; index += 2) {
-    overlays.push(...boot.loadOverlayPatches("dsh", resolve(args[index + 1])));
+  if (includeOverlays) {
+    for (let index = 2; index < args.length && args[index] === "--patch"; index += 2) {
+      overlays.push(...boot.loadOverlayPatches("dsh", resolve(args[index + 1])));
+    }
   }
   const patches = boot.readProfilePatches("dsh", {
     dir: profile.dir, patchPath: profile.patchPath, installAnchor,
     home: resolveDshHome(), overlays, telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
   }, profile);
-  return findModelEntry(boot.composeEntries([patches]));
+  return { boot, profile, patches, entries: boot.composeEntries([patches]) };
+}
+
+async function loadDesktopProfileEntries() {
+  const require = createRequire(pathToFileURL(entry));
+  const boot = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")));
+  const { resolveDshHome } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-home-paths")));
+  const installAnchor = join(dirname(entry), "..", "package.json");
+  const profileDir = join(resolveDshHome(), "profiles", "desktop");
+  let profile;
+  if (typeof boot.loadProfileDirectory === "function") {
+    profile = boot.loadProfileDirectory("dsh", profileDir, installAnchor);
+  } else {
+    profile = boot.loadProfile("dsh", "desktop", installAnchor);
+  }
+  const patches = [
+    ...profile.layers.flatMap((layer) => layer.patches || []),
+    ...(profile.patches || []),
+  ];
+  return { boot, profile, entries: boot.composeEntries([patches]) };
+}
+
+async function loadModelEntry() {
+  const profile = await loadHeadlessProfile();
+  return findModelEntry(profile.entries);
+}
+
+function normalizeEfforts(value) {
+  if (Array.isArray(value)) return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))];
+  if (value && typeof value === "object") return [...new Set(Object.keys(value).map((item) => item.trim()).filter(Boolean))];
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  return [];
+}
+
+function catalogModelOptions(provider, source) {
+  const models = [];
+  const add = (raw, fallbackId = "") => {
+    if (typeof raw === "string") {
+      const id = raw.trim();
+      if (id) models.push({ id, label: id });
+      return;
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const id = String(raw.id || fallbackId || "").trim();
+    if (!id) return;
+    const efforts = normalizeEfforts(raw.reasoningEfforts ?? raw.reasoning_efforts ?? raw.reasoning);
+    const defaultReasoningEffort = String(raw.defaultReasoningEffort ?? raw.default_reasoning_effort ?? raw.reasoningEffort ?? "").trim();
+    models.push({
+      id,
+      label: String(raw.label || raw.name || id).trim() || id,
+      ...(efforts.length ? { reasoningEfforts: efforts } : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    });
+  };
+  const configured = source?.models;
+  if (Array.isArray(configured)) configured.forEach((item) => add(item));
+  else if (configured && typeof configured === "object") Object.entries(configured).forEach(([id, item]) => add(item, id));
+  const overrides = source?.modelOverrides;
+  if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
+    Object.entries(overrides).forEach(([id, item]) => add(item, id));
+  }
+  const seen = new Set();
+  return models.filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  }).slice(0, CATALOG_MAX_MODELS);
+}
+
+function collectModelCatalog(entries) {
+  let selectedProvider = "";
+  let selectedModel = "";
+  const providerMap = new Map();
+  const ensureProvider = (id, source = {}) => {
+    const providerId = String(id || "").trim();
+    if (!providerId) return undefined;
+    let current = providerMap.get(providerId);
+    if (!current) {
+      current = {
+        id: providerId,
+        label: String(source.displayName || source.label || providerId).trim() || providerId,
+        models: [],
+        reasoningEfforts: normalizeEfforts(source.reasoningEfforts ?? source.reasoning_efforts ?? source.reasoning),
+        defaultModel: String(source.defaultModel || source.default_model || source.model || "").trim(),
+        defaultReasoningEffort: String(source.defaultReasoningEffort || source.default_reasoning_effort || source.reasoningEffort || "").trim(),
+      };
+      providerMap.set(providerId, current);
+    } else {
+      current.label = String(source.displayName || source.label || current.label).trim() || current.label;
+      current.reasoningEfforts = [...new Set([...current.reasoningEfforts, ...normalizeEfforts(source.reasoningEfforts ?? source.reasoning_efforts ?? source.reasoning)])];
+      current.defaultModel ||= String(source.defaultModel || source.default_model || source.model || "").trim();
+      current.defaultReasoningEffort ||= String(source.defaultReasoningEffort || source.default_reasoning_effort || source.reasoningEffort || "").trim();
+    }
+    const modelOptions = catalogModelOptions(providerId, source);
+    const seen = new Set(current.models.map((item) => item.id));
+    for (const item of modelOptions) if (!seen.has(item.id)) current.models.push(item);
+    if (!current.defaultModel && current.models[0]) current.defaultModel = current.models[0].id;
+    if (!current.defaultReasoningEffort && current.models[0]?.defaultReasoningEffort) current.defaultReasoningEffort = current.models[0].defaultReasoningEffort;
+    return current;
+  };
+
+  for (const row of Array.isArray(entries) ? entries : []) {
+    if (!row || typeof row !== "object") continue;
+    if (row.id === "agent-default-model" || row.name === "@deepseek-ai/dsh-agent-default-model") {
+      const config = row.config && typeof row.config === "object" ? row.config : {};
+      selectedProvider = String(config.provider || "").trim();
+      selectedModel = String(config.model || "").trim();
+    }
+    const config = row.config && typeof row.config === "object" && !Array.isArray(row.config) ? row.config : {};
+    if (config.providers && typeof config.providers === "object" && !Array.isArray(config.providers)) {
+      for (const [provider, source] of Object.entries(config.providers)) ensureProvider(provider, source || {});
+    }
+    if (row.id === "llm-deepseek" || row.id === "llm-deepseek-account") {
+      const provider = String(config.provider || config.id || selectedProvider || "").trim();
+      if (provider) ensureProvider(provider, config);
+    }
+  }
+
+  if (selectedProvider) {
+    const selectedRow = ensureProvider(selectedProvider, { models: selectedModel ? [selectedModel] : [] });
+    if (selectedRow && selectedModel && !selectedRow.models.some((model) => model.id === selectedModel)) {
+      selectedRow.models.unshift({ id: selectedModel, label: selectedModel });
+    }
+  }
+  const providers = [...providerMap.values()].slice(0, CATALOG_MAX_PROVIDERS).map((provider) => {
+    const models = provider.models.slice(0, CATALOG_MAX_MODELS);
+    const reasoningEfforts = [...new Set([
+      ...provider.reasoningEfforts,
+      ...models.flatMap((model) => model.reasoningEfforts || []),
+    ])];
+    return {
+      id: provider.id,
+      label: provider.label,
+      ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
+      ...(provider.defaultReasoningEffort ? { defaultReasoningEffort: provider.defaultReasoningEffort } : {}),
+      ...(models.length ? { modelOptions: models } : {}),
+      ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
+    };
+  });
+  const selected = selectedProvider || providers[0]?.id || "";
+  const selectedProviderRow = providers.find((provider) => provider.id === selected);
+  let selectedOptions = selectedProviderRow?.modelOptions || [];
+  if (selectedModel && !selectedOptions.some((model) => model.id === selectedModel)) {
+    selectedOptions = [{ id: selectedModel, label: selectedModel }, ...selectedOptions];
+  }
+  const modelOptionsByProvider = Object.fromEntries(providers.map((provider) => [provider.id, provider.modelOptions || []]));
+  const modelOptions = selectedOptions.map((model) => model.id);
+  const reasoningEfforts = [...new Set([
+    ...(selectedProviderRow?.reasoningEfforts || []),
+    ...selectedOptions.flatMap((model) => model.reasoningEfforts || []),
+  ])];
+  return {
+    providers,
+    selectedProvider: selected,
+    selectedModel: selectedModel || selectedProviderRow?.defaultModel || selectedOptions[0]?.id || "",
+    modelOptions,
+    modelOptionsByProvider,
+    reasoningEfforts,
+    status: providers.length ? "ready" : "fallback",
+    diagnostic: providers.length ? "" : "未发现可枚举的 DeepSeek provider，保留当前模型和静态候选",
+  };
+}
+
+async function loadDesktopBridgeEntries() {
+  try {
+    const profile = await loadDesktopProfileEntries();
+    return profile.entries.map(safeBridgeEntry).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function describeModels() {
+  try {
+    let entries = [];
+    if (desktop) {
+      try {
+        const headless = await loadHeadlessProfile({ includeOverlays: false });
+        const bridge = await loadDesktopBridgeEntries();
+        entries = bridge.length ? headless.boot.composeEntries([headless.patches, bridge]) : headless.entries;
+      } catch {
+        entries = [];
+      }
+      if (!entries.length) {
+        try {
+          const modelEntry = await loadDesktopModelEntry(entry);
+          entries = modelEntry ? [modelEntry] : [];
+        } catch {
+          entries = [];
+        }
+      }
+    } else {
+      entries = (await loadHeadlessProfile({ includeOverlays: false })).entries;
+    }
+    return collectModelCatalog(entries);
+  } catch (error) {
+    return {
+      providers: [], selectedProvider: "", selectedModel: "", modelOptions: [], modelOptionsByProvider: {},
+      reasoningEfforts: [], status: "error", diagnostic: diagnosticText(error),
+    };
+  }
 }
 
 function parseYamlScalar(value) {
@@ -294,10 +556,25 @@ function runDesktop(target, targetArgs) {
   });
 }
 
+if (isDescribeModels()) {
+  const catalog = await describeModels();
+  let output = JSON.stringify(catalog);
+  if (Buffer.byteLength(output, "utf8") > CATALOG_MAX_BYTES) {
+    output = JSON.stringify({
+      providers: [], selectedProvider: catalog.selectedProvider || "", selectedModel: catalog.selectedModel || "",
+      modelOptions: [], modelOptionsByProvider: {}, reasoningEfforts: [], status: "error", diagnostic: "DeepSeek catalog 输出过大",
+    });
+  }
+  process.stdout.write(`${output}\n`);
+  process.exit(0);
+}
+
 try {
   let modelEntry;
+  let desktopBridgeEntries = [];
   if (desktop) {
     modelEntry = await loadDesktopModelEntry(entry);
+    if (Object.keys(selection).length) desktopBridgeEntries = await loadDesktopBridgeEntries();
   } else {
     try {
       modelEntry = await loadModelEntry();
@@ -325,13 +602,22 @@ try {
       cleanupPatch();
       process.exit(143);
     });
+    if (desktopBridgeEntries.length) {
+      const bridgePath = join(patchDirectory, "desktop-bridge.json");
+      writeFileSync(bridgePath, JSON.stringify(desktopBridgeEntries), "utf8");
+      const profileEnd = args[0] === "--profile" ? 2 : 0;
+      args.splice(profileEnd, 0, "--patch", bridgePath);
+    }
     writeFileSync(patchPath, JSON.stringify(patch), "utf8");
     const protocolIndex = args.indexOf("--json");
     args.splice(protocolIndex < 0 ? args.length : protocolIndex, 0, "--patch", patchPath);
   }
   const model = selection.model ?? modelEntry?.config?.model;
+  const provider = selection.provider ?? modelEntry?.config?.provider;
   if (args.includes("--json") && typeof model === "string" && model.trim()) {
-    process.stdout.write(`${JSON.stringify({ type: "orbit_model", model: model.trim() })}\n`);
+    const metadata = { type: "orbit_model", model: model.trim() };
+    if (typeof provider === "string" && provider.trim()) metadata.provider = provider.trim();
+    process.stdout.write(`${JSON.stringify(metadata)}\n`);
   }
   if (desktop) {
     try {

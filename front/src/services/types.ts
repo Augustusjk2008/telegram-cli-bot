@@ -2696,11 +2696,47 @@ export type CliParamField = {
   integer?: boolean;
 };
 
+export type DeepSeekCatalogStatus = "ready" | "fallback" | "unavailable" | "error" | "unknown" | string;
+
+export type DeepSeekModelOption = {
+  id: string;
+  label?: string;
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
+};
+
+export type DeepSeekProviderOption = {
+  id: string;
+  label: string;
+  defaultModel?: string;
+  defaultReasoningEffort?: string;
+  modelOptions?: DeepSeekModelOption[];
+  reasoningEfforts?: string[];
+};
+
+export type DeepSeekSelectionRequest = {
+  provider: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  agentId?: string;
+};
+
 export type CliParamsPayload = {
   cliType: CliType;
   params: Record<string, unknown>;
   defaults: Record<string, unknown>;
   schema: Record<string, CliParamField>;
+  providerOptions?: DeepSeekProviderOption[];
+  modelOptionsByProvider?: Record<string, DeepSeekModelOption[]>;
+  selectedProvider?: string;
+  catalogStatus?: DeepSeekCatalogStatus;
+  catalogDiagnostic?: string;
+};
+
+export type DeepSeekSelectionResponse = CliParamsPayload & {
+  providerChanged?: boolean;
+  sessionReset?: boolean;
+  selectionNotice?: string;
 };
 
 export type CreateBotInput = {

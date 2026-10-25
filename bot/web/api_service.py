@@ -38,6 +38,7 @@ from bot.cli_params import (
     get_cli_model_options,
     get_default_params,
     get_params_schema,
+    normalize_deepseek_selection,
     normalize_cli_model_options,
     with_global_extra_args,
 )
@@ -70,6 +71,10 @@ from bot.git_runtime import apply_git_fsmonitor_disabled_env
 from bot.prompts import render_prompt
 from bot import config
 from bot.config import CLI_MODEL_OPTIONS, WEB_PORT
+try:
+    from bot.deepseek_cli import discover_deepseek_catalog
+except ImportError:
+    discover_deepseek_catalog = None
 from bot.cli import (
     AntigravityJsonStreamParser,
     ClaudeJsonStreamParser,
@@ -1417,6 +1422,341 @@ _ANTIGRAVITY_MODEL_CACHE_TTL_SECONDS = 300.0
 _antigravity_model_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
 _antigravity_model_cache_lock = threading.Lock()
 
+_DEEPSEEK_CATALOG_AVAILABLE = "ready"
+_DEEPSEEK_CATALOG_FALLBACK = "fallback"
+_DEEPSEEK_CATALOG_FALLBACK_MESSAGE = "DeepSeek Provider catalog 不可用，已使用静态模型选项"
+_DEEPSEEK_CATALOG_SECRET_RE = re.compile(
+    r"(?i)\b(api[_ -]?key|token|secret|password|credentials?)\b\s*[:=]\s*[^\s,;]+"
+)
+
+
+def _deepseek_catalog_text(value: Any, default: str = "") -> str:
+    candidate = str(value or "").strip()
+    return candidate or default
+
+
+def _deepseek_catalog_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, Mapping):
+            item = item.get("id") or item.get("model") or item.get("value")
+        candidate = _deepseek_catalog_text(item)
+        if not candidate or candidate.casefold() == "none" or candidate in seen:
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+    return result
+
+
+def _deepseek_catalog_mapping_value(source: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in source:
+            return source.get(key)
+    return None
+
+
+def _redact_deepseek_catalog_diagnostic(value: Any) -> str:
+    if isinstance(value, Mapping):
+        value = value.get("message") or value.get("diagnostic") or value.get("code") or ""
+    diagnostic = _deepseek_catalog_text(value)
+    if not diagnostic:
+        return ""
+    return _DEEPSEEK_CATALOG_SECRET_RE.sub("<redacted>", diagnostic[:500])
+
+
+def _deepseek_catalog_invocation(
+    profile: BotProfile,
+    params: Mapping[str, Any],
+) -> tuple[Any, str]:
+    if not callable(discover_deepseek_catalog):
+        return None, _DEEPSEEK_CATALOG_FALLBACK_MESSAGE
+    resolved_cli = resolve_cli_executable(profile.cli_path, profile.working_dir)
+    if not resolved_cli:
+        return None, "未找到 DeepSeek CLI，已使用静态模型选项"
+
+    values = {
+        "profile": profile,
+        "params": dict(params),
+        "resolved_cli": str(resolved_cli),
+        "resolved_cli_path": str(resolved_cli),
+        "cli_path": str(resolved_cli),
+        "executable": str(resolved_cli),
+        "working_dir": str(profile.working_dir or ""),
+        "cwd": str(profile.working_dir or ""),
+    }
+    try:
+        signature = inspect.signature(discover_deepseek_catalog)
+        positional: list[Any] = []
+        keyword: dict[str, Any] = {}
+        has_varargs = False
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_POSITIONAL:
+                has_varargs = True
+                continue
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                continue
+            if parameter.name not in values:
+                if parameter.default is inspect.Parameter.empty:
+                    raise TypeError(f"unsupported catalog parameter: {parameter.name}")
+                continue
+            value = values[parameter.name]
+            if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
+                positional.append(value)
+            elif parameter.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+                keyword[parameter.name] = value
+            elif parameter.kind == inspect.Parameter.KEYWORD_ONLY:
+                keyword[parameter.name] = value
+        if has_varargs and not positional and not keyword:
+            return discover_deepseek_catalog(str(resolved_cli), str(profile.working_dir or ""), dict(params)), ""
+        return discover_deepseek_catalog(*positional, **keyword), ""
+    except Exception as exc:
+        logger.warning("DeepSeek Provider catalog discovery failed: %s", type(exc).__name__)
+        return None, "DeepSeek Provider catalog 读取失败，已使用静态模型选项"
+
+
+def _normalize_deepseek_catalog(
+    raw: Any,
+    *,
+    current_provider: str | None,
+    current_model: str | None,
+    diagnostic: str = "",
+) -> dict[str, Any]:
+    source = raw if isinstance(raw, Mapping) else {}
+    provider_items: list[dict[str, Any]] = []
+    provider_by_id: dict[str, dict[str, Any]] = {}
+    model_options_by_provider: dict[str, list[str]] = {}
+    reasoning_efforts_by_provider: dict[str, list[str]] = {}
+    default_models_by_provider: dict[str, str] = {}
+    default_reasoning_by_provider: dict[str, str] = {}
+
+    def ensure_provider(provider_id: Any, *, name: Any = None) -> dict[str, Any] | None:
+        normalized_id = _deepseek_catalog_text(provider_id)
+        if not normalized_id:
+            return None
+        record = provider_by_id.get(normalized_id)
+        if record is None:
+            record = {
+                "id": normalized_id,
+                "label": _deepseek_catalog_text(name, normalized_id),
+                "model_options": [],
+                "reasoning_efforts": [],
+                "default_model": None,
+                "default_reasoning_effort": None,
+            }
+            provider_by_id[normalized_id] = record
+            provider_items.append(record)
+        elif name and record["label"] == record["id"]:
+            record["label"] = _deepseek_catalog_text(name, record["id"])
+        return record
+
+    raw_provider_items = _deepseek_catalog_mapping_value(source, "providers", "provider_options", "providerOptions")
+    if isinstance(raw_provider_items, Mapping):
+        raw_provider_items = [
+            {"id": provider_id, **(item if isinstance(item, Mapping) else {})}
+            for provider_id, item in raw_provider_items.items()
+        ]
+    for item in raw_provider_items if isinstance(raw_provider_items, (list, tuple)) else []:
+        if isinstance(item, Mapping):
+            provider_id = _deepseek_catalog_mapping_value(item, "id", "provider", "provider_id", "providerId")
+            name = _deepseek_catalog_mapping_value(item, "name", "label", "display_name", "displayName")
+            record = ensure_provider(provider_id, name=name)
+            if record is None:
+                continue
+            model_values = _deepseek_catalog_mapping_value(item, "model_options", "models", "modelOptions")
+            effort_values = _deepseek_catalog_mapping_value(
+                item,
+                "reasoning_efforts",
+                "reasoningEfforts",
+            )
+            models = _deepseek_catalog_list(model_values)
+            efforts = _deepseek_catalog_list(effort_values)
+            if models:
+                model_options_by_provider[record["id"]] = models
+            if efforts:
+                reasoning_efforts_by_provider[record["id"]] = efforts
+            default_model = _deepseek_catalog_text(
+                _deepseek_catalog_mapping_value(item, "default_model", "defaultModel")
+            )
+            default_effort = _deepseek_catalog_text(
+                _deepseek_catalog_mapping_value(item, "default_reasoning_effort", "defaultReasoningEffort")
+            )
+            if default_model:
+                default_models_by_provider[record["id"]] = default_model
+            if default_effort:
+                default_reasoning_by_provider[record["id"]] = default_effort
+        else:
+            ensure_provider(item)
+
+    raw_models_by_provider = _deepseek_catalog_mapping_value(
+        source,
+        "model_options_by_provider",
+        "modelOptionsByProvider",
+    )
+    if isinstance(raw_models_by_provider, Mapping):
+        for provider_id, values in raw_models_by_provider.items():
+            record = ensure_provider(provider_id)
+            if record is None:
+                continue
+            models = _deepseek_catalog_list(values)
+            if models:
+                model_options_by_provider[record["id"]] = models
+
+    raw_efforts_by_provider = _deepseek_catalog_mapping_value(
+        source,
+        "reasoning_efforts_by_provider",
+        "reasoningEffortsByProvider",
+    )
+    if isinstance(raw_efforts_by_provider, Mapping):
+        for provider_id, values in raw_efforts_by_provider.items():
+            record = ensure_provider(provider_id)
+            if record is None:
+                continue
+            efforts = _deepseek_catalog_list(values)
+            if efforts:
+                reasoning_efforts_by_provider[record["id"]] = efforts
+
+    global_reasoning_efforts = _deepseek_catalog_list(
+        _deepseek_catalog_mapping_value(source, "reasoning_efforts", "reasoningEfforts")
+    )
+
+    raw_model_options = _deepseek_catalog_mapping_value(source, "model_options", "modelOptions")
+    if isinstance(raw_model_options, (list, tuple)):
+        for item in raw_model_options:
+            if not isinstance(item, Mapping):
+                continue
+            provider_id = _deepseek_catalog_mapping_value(item, "provider", "provider_id", "providerId")
+            model_id = _deepseek_catalog_mapping_value(item, "id", "model", "model_id", "modelId")
+            record = ensure_provider(provider_id, name=item.get("provider_name") or item.get("providerName"))
+            model = _deepseek_catalog_text(model_id)
+            if record is None or not model or model.casefold() == "none":
+                continue
+            values = model_options_by_provider.setdefault(record["id"], [])
+            if model not in values:
+                values.append(model)
+            efforts = _deepseek_catalog_list(
+                _deepseek_catalog_mapping_value(item, "reasoning_efforts", "reasoningEfforts")
+            )
+            if efforts:
+                reasoning_efforts_by_provider.setdefault(record["id"], [])
+                for effort in efforts:
+                    if effort not in reasoning_efforts_by_provider[record["id"]]:
+                        reasoning_efforts_by_provider[record["id"]].append(effort)
+
+    raw_default_models = _deepseek_catalog_mapping_value(
+        source,
+        "default_models_by_provider",
+        "defaultModelsByProvider",
+    )
+    if isinstance(raw_default_models, Mapping):
+        for provider_id, value in raw_default_models.items():
+            if (record := ensure_provider(provider_id)) is not None:
+                default_models_by_provider[record["id"]] = _deepseek_catalog_text(value)
+
+    raw_default_efforts = _deepseek_catalog_mapping_value(
+        source,
+        "default_reasoning_efforts_by_provider",
+        "defaultReasoningEffortsByProvider",
+    )
+    if isinstance(raw_default_efforts, Mapping):
+        for provider_id, value in raw_default_efforts.items():
+            if (record := ensure_provider(provider_id)) is not None:
+                default_reasoning_by_provider[record["id"]] = _deepseek_catalog_text(value)
+
+    for record in provider_items:
+        provider_id = record["id"]
+        models = list(model_options_by_provider.get(provider_id, record["model_options"]))
+        efforts = list(reasoning_efforts_by_provider.get(provider_id, record["reasoning_efforts"]))
+        record["model_options"] = models
+        record["reasoning_efforts"] = efforts
+        record["default_model"] = default_models_by_provider.get(provider_id) or (models[0] if models else None)
+        record["default_reasoning_effort"] = (
+            default_reasoning_by_provider.get(provider_id) or (efforts[0] if efforts else None)
+        )
+        model_options_by_provider[provider_id] = models
+        reasoning_efforts_by_provider[provider_id] = efforts
+        if record["default_model"]:
+            default_models_by_provider[provider_id] = record["default_model"]
+        if record["default_reasoning_effort"]:
+            default_reasoning_by_provider[provider_id] = record["default_reasoning_effort"]
+
+    selected_provider = normalize_deepseek_selection(
+        provider=_deepseek_catalog_mapping_value(source, "selected_provider", "selectedProvider")
+    )["provider"]
+    selected_provider = current_provider or selected_provider
+    if selected_provider is None and len(provider_items) == 1:
+        selected_provider = provider_items[0]["id"]
+    actual_catalog_provider_count = len(provider_items)
+    if selected_provider and selected_provider not in provider_by_id:
+        ensure_provider(selected_provider)
+        model_options_by_provider.setdefault(selected_provider, [])
+        reasoning_efforts_by_provider.setdefault(selected_provider, [])
+    if current_provider and current_provider not in provider_by_id:
+        ensure_provider(current_provider)
+        model_options_by_provider.setdefault(current_provider, [])
+        reasoning_efforts_by_provider.setdefault(current_provider, [])
+    if global_reasoning_efforts and selected_provider:
+        reasoning_efforts_by_provider.setdefault(selected_provider, list(global_reasoning_efforts))
+
+    selected_model = normalize_deepseek_selection(
+        model=_deepseek_catalog_mapping_value(source, "selected_model", "selectedModel")
+    )["model"]
+    selected_model = current_model or selected_model
+    if selected_model is None and selected_provider:
+        selected_model = default_models_by_provider.get(selected_provider)
+
+    raw_status = _deepseek_catalog_text(_deepseek_catalog_mapping_value(source, "catalog_status", "status"))
+    has_catalog = actual_catalog_provider_count > 0
+    status = _DEEPSEEK_CATALOG_AVAILABLE if has_catalog else _DEEPSEEK_CATALOG_FALLBACK
+    if raw_status.casefold() in {"fallback", "unavailable", "error"}:
+        status = _DEEPSEEK_CATALOG_FALLBACK
+    elif raw_status.casefold() in {"available", "ready", "ok"} and has_catalog:
+        status = _DEEPSEEK_CATALOG_AVAILABLE
+    safe_diagnostic = _redact_deepseek_catalog_diagnostic(
+        _deepseek_catalog_mapping_value(source, "catalog_diagnostic", "diagnostic", "message", "error")
+    ) or diagnostic
+    if status == _DEEPSEEK_CATALOG_FALLBACK and not safe_diagnostic:
+        safe_diagnostic = _DEEPSEEK_CATALOG_FALLBACK_MESSAGE
+
+    return {
+        "provider_options": provider_items,
+        "model_options_by_provider": model_options_by_provider,
+        "reasoning_efforts_by_provider": reasoning_efforts_by_provider,
+        "selected_provider": selected_provider,
+        "selected_model": selected_model,
+        "catalog_status": status,
+        "catalog_diagnostic": safe_diagnostic or None,
+        "_allowed_providers": [item["id"] for item in provider_items],
+        "_allowed_models_by_provider": {
+            provider_id: list(values)
+            for provider_id, values in model_options_by_provider.items()
+            if values
+        },
+        "_allowed_reasoning_efforts_by_provider": {
+            provider_id: list(values)
+            for provider_id, values in reasoning_efforts_by_provider.items()
+            if values
+        },
+        "_default_models_by_provider": dict(default_models_by_provider),
+    }
+
+
+def _get_deepseek_catalog(profile: BotProfile, params: Mapping[str, Any]) -> dict[str, Any]:
+    selection = normalize_deepseek_selection(
+        provider=params.get("provider"),
+        model=params.get("model"),
+        reasoning_effort=params.get("reasoning_effort"),
+    )
+    raw, diagnostic = _deepseek_catalog_invocation(profile, params)
+    return _normalize_deepseek_catalog(
+        raw,
+        current_provider=selection["provider"],
+        current_model=selection["model"],
+        diagnostic=diagnostic,
+    )
+
 
 def _apply_cli_model_options(
     schema: dict[str, Any],
@@ -1480,7 +1820,13 @@ def _get_antigravity_model_options(profile: BotProfile) -> list[str]:
     return normalize_cli_model_options([*discovered, current_model])
 
 
-def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
+def get_cli_params_payload(
+    manager: MultiBotManager,
+    alias: str,
+    cli_type: Optional[str] = None,
+    *,
+    deepseek_catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     resolved_cli_type = (cli_type or profile.cli_type or "").strip().lower()
     if not resolved_cli_type:
@@ -1509,7 +1855,11 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
                 if isinstance(CLI_MODEL_OPTIONS, Mapping)
                 else None
             )
-            configured_options = DEEPSEEK_MODEL_OPTIONS if table_options is None else table_options
+            static_options = DEEPSEEK_MODEL_OPTIONS if table_options is None else table_options
+            deepseek_catalog = deepseek_catalog or _get_deepseek_catalog(profile, params)
+            selected_provider = deepseek_catalog.get("selected_provider")
+            catalog_options = deepseek_catalog.get("model_options_by_provider", {}).get(selected_provider or "")
+            configured_options = catalog_options or static_options
             schema = _apply_cli_model_options(
                 schema,
                 [*configured_options, str(params.get("model") or "")],
@@ -1521,12 +1871,29 @@ def get_cli_params_payload(manager: MultiBotManager, alias: str, cli_type: Optio
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
 
-    return {
+    payload = {
         "cli_type": resolved_cli_type,
         "params": copy.deepcopy(params),
         "schema": schema,
         "defaults": defaults,
     }
+    if resolved_cli_type == "deepseek":
+        payload.update(
+            {
+                "provider_options": copy.deepcopy(deepseek_catalog.get("provider_options", [])),
+                "model_options_by_provider": copy.deepcopy(
+                    deepseek_catalog.get("model_options_by_provider", {})
+                ),
+                "reasoning_efforts_by_provider": copy.deepcopy(
+                    deepseek_catalog.get("reasoning_efforts_by_provider", {})
+                ),
+                "selected_provider": deepseek_catalog.get("selected_provider"),
+                "selected_model": deepseek_catalog.get("selected_model"),
+                "catalog_status": deepseek_catalog.get("catalog_status", _DEEPSEEK_CATALOG_FALLBACK),
+                "catalog_diagnostic": deepseek_catalog.get("catalog_diagnostic"),
+            }
+        )
+    return payload
 
 
 def get_native_agent_config_payload() -> dict[str, Any]:
@@ -1675,6 +2042,57 @@ async def update_cli_params(
         _raise(400, "invalid_param_value", str(exc))
 
     return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
+
+
+async def update_deepseek_selection(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    provider: Any = None,
+    model: Any = None,
+    reasoning_effort: Any = None,
+    agent_id: str = "main",
+) -> dict[str, Any]:
+    """Validate and persist the DeepSeek selection as one user-visible update."""
+    profile = get_profile_or_raise(manager, alias)
+    if str(profile.cli_type or "").strip().lower() != "deepseek":
+        _raise(400, "invalid_cli_type", "只有 DeepSeek Bot 支持 provider 选择")
+
+    catalog = await asyncio.to_thread(
+        _get_deepseek_catalog,
+        profile,
+        profile.cli_params.get_params("deepseek"),
+    )
+    try:
+        selection_result = await manager.update_deepseek_selection(
+            alias,
+            provider,
+            model,
+            reasoning_effort,
+            user_id=chat_session_user_id(user_id),
+            agent_id=agent_id,
+            allowed_providers=catalog.get("_allowed_providers"),
+            allowed_models_by_provider=catalog.get("_allowed_models_by_provider"),
+            allowed_reasoning_efforts_by_provider=catalog.get(
+                "_allowed_reasoning_efforts_by_provider"
+            ),
+            default_models_by_provider=catalog.get("_default_models_by_provider"),
+        )
+    except ValueError as exc:
+        _raise(400, "invalid_deepseek_selection", str(exc))
+
+    payload = await asyncio.to_thread(get_cli_params_payload, manager, alias, "deepseek")
+    provider_changed = bool(selection_result.get("provider_changed"))
+    payload.update(
+        {
+            "provider_changed": provider_changed,
+            "session_reset": bool(selection_result.get("session_invalidated")),
+        }
+    )
+    if provider_changed:
+        payload["selection_notice"] = "已切换 DeepSeek Provider，下一轮将建立新会话。"
+    return payload
 
 
 async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optional[str] = None) -> dict[str, Any]:
@@ -4267,6 +4685,7 @@ def _context_usage_signature(context_usage: dict[str, Any] | None) -> tuple[tupl
 def _build_deepseek_context_usage(
     usage: dict[str, Any] | None, *, session_id: str,
     context_usage: dict[str, Any] | None = None,
+    provider: str | None = None,
 ) -> dict[str, Any] | None:
     base = dict(context_usage) if isinstance(context_usage, dict) else {}
     if not usage and not base:
@@ -4286,9 +4705,10 @@ def _build_deepseek_context_usage(
     has_context = any(
         key in base for key in ("used_tokens", "context_used", "context_window", "context_left_percent")
     )
+    selected_provider = str(provider or "").strip()
     return {
         **base,
-        "provider": "deepseek",
+        "provider": selected_provider or str(base.get("provider") or "deepseek").strip() or "deepseek",
         "source": base.get("source") or "deepseek_headless",
         "session_id": session_id,
         "usage_scope": base.get("usage_scope") or ("conversation" if has_context else "turn"),
@@ -6562,6 +6982,7 @@ async def _stream_cli_chat(
                             preview_state.result().terminal_usage,
                             session_id=status_session_id,
                             context_usage=status_context_usage,
+                            provider=preview_state.result().provider,
                         )
                     if status_context_usage:
                         status_context_usage = _with_turn_model(status_context_usage, preview_state.result().model or turn_model)
@@ -6853,6 +7274,7 @@ async def _stream_cli_chat(
                     parsed_result.terminal_usage,
                     session_id=native_session_id,
                     context_usage=context_usage,
+                    provider=parsed_result.provider,
                 )
             context_usage = _with_turn_model(context_usage, parsed_result.model or turn_model)
             if cli_type != "deepseek":
@@ -6970,7 +7392,9 @@ async def _stream_cli_chat(
             failure_output = "\n\n".join(part for part in (failure_detail, partial_text) if part)
             if preview_state is not None:
                 failure_usage = _build_deepseek_context_usage(
-                    preview_state.result().terminal_usage, session_id=failure_session_id,
+                    preview_state.result().terminal_usage,
+                    session_id=failure_session_id,
+                    provider=preview_state.result().provider,
                 )
                 if failure_usage is not None:
                     failure_usage = await with_estimated_cost(failure_usage, usage_complete=False)

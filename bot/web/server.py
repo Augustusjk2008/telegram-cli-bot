@@ -291,6 +291,7 @@ from .api_service import (
     select_conversation,
     delete_chat_attachment,
     update_cli_params,
+    update_deepseek_selection,
     update_cluster_config,
     update_bot_cli,
     update_bot_execution_config,
@@ -3711,15 +3712,52 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def patch_cli_params(self, request: web.Request) -> web.Response:
-        await self._with_bot_config_access(request)
+        auth = await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
+        selection = body.get("selection")
+        if isinstance(selection, dict) and str(body.get("cli_type") or "").strip().lower() == "deepseek":
+            selection_agent_id = selection.get("agent_id", selection.get("agentId"))
+            data = await update_deepseek_selection(
+                self.manager,
+                alias=alias,
+                user_id=self._chat_user_id(auth),
+                agent_id=self._request_agent_id(
+                    request,
+                    {**body, "agent_id": selection_agent_id} if selection_agent_id is not None else body,
+                ),
+                provider=selection.get("provider"),
+                model=selection.get("model"),
+                reasoning_effort=selection.get(
+                    "reasoning_effort",
+                    selection.get("reasoningEffort"),
+                ),
+            )
+            return _json({"ok": True, "data": data})
         data = await update_cli_params(
             self.manager,
             alias=alias,
             cli_type=body.get("cli_type"),
             key=str(body.get("key", "")),
             value=body.get("value"),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def patch_deepseek_selection(self, request: web.Request) -> web.Response:
+        auth = await self._with_bot_config_access(request)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await update_deepseek_selection(
+            self.manager,
+            alias=alias,
+            user_id=self._chat_user_id(auth),
+            agent_id=self._request_agent_id(request, body),
+            provider=body.get("provider", body.get("selected_provider")),
+            model=body.get("model", body.get("selected_model")),
+            reasoning_effort=body.get(
+                "reasoning_effort",
+                body.get("reasoningEffort", body.get("selected_reasoning_effort")),
+            ),
         )
         return _json({"ok": True, "data": data})
 

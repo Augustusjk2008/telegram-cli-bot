@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Trash2, X } from "lucide-react";
-import type { PromptPreset } from "../services/types";
+import type { DeepSeekProviderOption, PromptPreset } from "../services/types";
 
 export type ChatComposerModelOption = {
   value: string;
@@ -28,8 +28,14 @@ type Props = {
   uploadingAttachments?: boolean;
   placeholder?: string;
   modelDescription?: string;
+  providerOptions?: DeepSeekProviderOption[];
+  selectedProvider?: string;
+  providerDescription?: string;
+  providerDisabled?: boolean;
+  onProviderChange?: (provider: string) => void;
   modelOptions?: ChatComposerModelOption[];
   selectedModel?: string;
+  modelEditable?: boolean;
   modelDisabled?: boolean;
   onModelChange?: (model: string) => void;
   reasoningEffortOptions?: string[];
@@ -66,8 +72,14 @@ export function ChatComposer({
   uploadingAttachments = false,
   placeholder = "输入消息",
   modelDescription,
+  providerOptions = [],
+  selectedProvider = "",
+  providerDescription,
+  providerDisabled = false,
+  onProviderChange,
   modelOptions = [],
   selectedModel = "",
+  modelEditable = false,
   modelDisabled = false,
   onModelChange,
   reasoningEffortOptions = [],
@@ -104,6 +116,7 @@ export function ChatComposer({
   });
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetError, setPresetError] = useState("");
+  const [draftModel, setDraftModel] = useState(selectedModel);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const presetTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -117,6 +130,13 @@ export function ChatComposer({
   const editingPresetScopeLabel = editingPresetScope === "global" ? "全局" : "当前 Bot";
   const showPromptPresetControls = showAnyPromptPresets || canManagePromptPresets;
   const selectedModelOption = modelOptions.find((model) => model.value === selectedModel);
+  useEffect(() => setDraftModel(selectedModel), [selectedModel]);
+  const commitDraftModel = () => {
+    const nextModel = draftModel.trim();
+    if (nextModel !== selectedModel) {
+      onModelChange?.(nextModel);
+    }
+  };
   const composerTextareaBaseClassName = mobileLayout
     ? "block max-h-72 min-h-8 w-full resize-none border-0 bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60"
     : "max-h-72 min-h-8 w-full resize-none border border-transparent bg-transparent px-1.5 py-1.5 leading-5 text-[var(--text)] outline-none placeholder:text-[var(--muted)] disabled:opacity-60";
@@ -533,24 +553,68 @@ export function ChatComposer({
           </div>
           <div data-testid="chat-composer-toolbar" className={mobileLayout ? "order-3 flex shrink-0 items-center gap-0.5" : "flex min-w-0 items-center gap-0.5"}>
             {!mobileLayout ? attachmentControl : null}
-            {modelDescription ? <span className="truncate text-xs text-[var(--muted)]" title={modelDescription}>{modelDescription}</span> : null}
-            {modelOptions.length > 0 ? (
-              <div className={mobileLayout ? "hidden" : "relative min-w-[4.25rem] max-w-[8.5rem] flex-[0_1_8.5rem]"}>
+            {!mobileLayout && providerOptions.length > 1 ? (
+              <div className="relative min-w-[4.75rem] max-w-[8.5rem] flex-[0_1_8.5rem]">
                 <select
-                  aria-label="模型"
-                  title={selectedModelOption?.title || selectedModelOption?.label || "模型"}
-                  value={selectedModel}
-                  disabled={inputDisabled || modelDisabled || !onModelChange}
-                  onChange={(event) => onModelChange?.(event.target.value)}
+                  aria-label="Provider"
+                  title={providerDescription || "Provider"}
+                  value={selectedProvider}
+                  disabled={inputDisabled || providerDisabled || !onProviderChange}
+                  onChange={(event) => onProviderChange?.(event.target.value)}
                   className={compactSelectClassName}
                 >
-                  {modelOptions.map((model) => (
-                    <option key={model.value} value={model.value} title={model.title}>
-                      {model.label}
-                    </option>
-                  ))}
+                  {!selectedProvider ? <option value="">默认 Provider</option> : null}
+                  {providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
                 </select>
                 <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-0.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--muted)]" />
+              </div>
+            ) : !mobileLayout && providerOptions.length === 1 ? (
+              <span aria-label="Provider" title={providerDescription || "Provider"} className="max-w-[8rem] truncate px-1.5 text-xs font-medium text-[var(--muted)]">
+                {providerOptions[0].label}
+              </span>
+            ) : null}
+            {modelDescription ? <span className="truncate text-xs text-[var(--muted)]" title={modelDescription}>{modelDescription}</span> : null}
+            {modelOptions.length > 0 || modelEditable ? (
+              <div className={mobileLayout ? "hidden" : "relative min-w-[4.25rem] max-w-[8.5rem] flex-[0_1_8.5rem]"}>
+                {modelEditable ? (
+                  <>
+                    <input
+                      aria-label="模型"
+                      list="chat-composer-model-options"
+                      title="模型"
+                      value={draftModel}
+                      disabled={inputDisabled || modelDisabled || !onModelChange}
+                      onChange={(event) => setDraftModel(event.target.value)}
+                      onBlur={commitDraftModel}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitDraftModel();
+                        }
+                      }}
+                      className={compactSelectClassName}
+                    />
+                    <datalist id="chat-composer-model-options">{modelOptions.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}</datalist>
+                  </>
+                ) : (
+                  <>
+                    <select
+                      aria-label="模型"
+                      title={selectedModelOption?.title || selectedModelOption?.label || "模型"}
+                      value={selectedModel}
+                      disabled={inputDisabled || modelDisabled || !onModelChange}
+                      onChange={(event) => onModelChange?.(event.target.value)}
+                      className={compactSelectClassName}
+                    >
+                      {modelOptions.map((model) => (
+                        <option key={model.value} value={model.value} title={model.title}>
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-0.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--muted)]" />
+                  </>
+                )}
               </div>
             ) : null}
             {reasoningEffortOptions.length > 0 ? (

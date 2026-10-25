@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square, X } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
-import type { ChatExecutionMode } from "../services/types";
+import type { ChatExecutionMode, DeepSeekProviderOption } from "../services/types";
 
 type Props = {
   executionMode: ChatExecutionMode;
@@ -26,8 +26,14 @@ type Props = {
   killTaskBusy?: boolean;
   mobileLayout?: boolean;
   modelDescription?: string;
+  providerOptions?: DeepSeekProviderOption[];
+  selectedProvider?: string;
+  providerDescription?: string;
+  providerDisabled?: boolean;
+  onProviderChange?: (provider: string) => void;
   modelOptions?: ChatComposerModelOption[];
   selectedModel?: string;
+  modelEditable?: boolean;
   modelDisabled?: boolean;
   onModelChange?: (model: string) => void;
   reasoningEffortOptions?: string[];
@@ -65,8 +71,14 @@ export function ChatActionBar({
   killTaskBusy = false,
   mobileLayout = false,
   modelDescription,
+  providerOptions = [],
+  selectedProvider = "",
+  providerDescription,
+  providerDisabled = false,
+  onProviderChange,
   modelOptions = [],
   selectedModel = "",
+  modelEditable = false,
   modelDisabled = false,
   onModelChange,
   reasoningEffortOptions = [],
@@ -75,9 +87,17 @@ export function ChatActionBar({
   onReasoningEffortChange,
 }: Props) {
   const [mobileOptionsOpen, setMobileOptionsOpen] = useState(false);
+  const [draftModel, setDraftModel] = useState(selectedModel);
   const optionsRootRef = useRef<HTMLElement>(null);
   const optionsTriggerRef = useRef<HTMLButtonElement>(null);
   const optionsPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => setDraftModel(selectedModel), [selectedModel]);
+  const commitDraftModel = () => {
+    const nextModel = draftModel.trim();
+    if (nextModel !== selectedModel) {
+      onModelChange?.(nextModel);
+    }
+  };
   function closeOptions() {
     setMobileOptionsOpen(false);
     optionsTriggerRef.current?.focus();
@@ -102,9 +122,11 @@ export function ChatActionBar({
     };
   }, [mobileLayout, mobileOptionsOpen]);
   if (mobileLayout) {
-    const selectedModelLabel = modelDescription || modelOptions.find((option) => option.value === selectedModel)?.label || "模型";
+    const selectedModelLabel = modelDescription || modelOptions.find((option) => option.value === selectedModel)?.label || selectedModel || "模型";
+    const selectedProviderLabel = providerOptions.find((option) => option.id === selectedProvider)?.label || selectedProvider || "默认 Provider";
     const optionsSummary = [
       executionMode === "native_agent" ? "原生" : "CLI",
+      providerOptions.length > 0 ? selectedProviderLabel : "",
       selectedModelLabel,
       selectedReasoningEffort,
     ].filter(Boolean).join(" · ");
@@ -178,18 +200,59 @@ export function ChatActionBar({
                 ))}
               </div>
             ) : <p className="mb-2 text-xs">执行模式：{executionMode === "native_agent" ? "原生 agent" : "CLI"}</p>}
-            {modelDescription ? <p className="mb-2 text-xs text-[var(--muted)]">{modelDescription}</p> : null}
-            {modelOptions.length > 0 ? (
+            {providerOptions.length > 1 ? (
               <label className="mb-2 block text-xs text-[var(--muted)]">
-                模型
+                Provider
                 <select
-                  value={selectedModel}
-                  disabled={modelDisabled || !onModelChange}
-                  onChange={(event) => onModelChange?.(event.target.value)}
+                  aria-label="Provider"
+                  value={selectedProvider}
+                  disabled={providerDisabled || !onProviderChange}
+                  onChange={(event) => onProviderChange?.(event.target.value)}
                   className="mt-1 h-8 w-full rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)]"
                 >
-                  {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.title || option.label}</option>)}
+                  {!selectedProvider ? <option value="">默认 Provider</option> : null}
+                  {providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
                 </select>
+                {providerDescription ? <span className="mt-1 block text-[11px]">{providerDescription}</span> : null}
+              </label>
+            ) : providerOptions.length === 1 ? (
+              <p className="mb-2 text-xs text-[var(--muted)]" aria-label="Provider">
+                Provider：{providerOptions[0].label}
+                {providerDescription ? <span className="ml-1">· {providerDescription}</span> : null}
+              </p>
+            ) : null}
+            {modelDescription ? <p className="mb-2 text-xs text-[var(--muted)]">{modelDescription}</p> : null}
+            {modelOptions.length > 0 || modelEditable ? (
+              <label className="mb-2 block text-xs text-[var(--muted)]">
+                模型
+                {modelEditable ? (
+                  <input
+                    aria-label="模型"
+                    list="chat-action-bar-model-options"
+                    value={draftModel}
+                    disabled={modelDisabled || !onModelChange}
+                    onChange={(event) => setDraftModel(event.target.value)}
+                    onBlur={commitDraftModel}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitDraftModel();
+                      }
+                    }}
+                    className="mt-1 h-8 w-full rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)]"
+                  />
+                ) : (
+                  <select
+                    aria-label="模型"
+                    value={selectedModel}
+                    disabled={modelDisabled || !onModelChange}
+                    onChange={(event) => onModelChange?.(event.target.value)}
+                    className="mt-1 h-8 w-full rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)]"
+                  >
+                    {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.title || option.label}</option>)}
+                  </select>
+                )}
+                {modelEditable ? <datalist id="chat-action-bar-model-options">{modelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</datalist> : null}
               </label>
             ) : null}
             {reasoningEffortOptions.length > 0 ? (

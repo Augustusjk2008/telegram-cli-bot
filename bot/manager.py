@@ -6,12 +6,19 @@ import asyncio
 import json
 import logging
 import os
+import zlib
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from bot import app_settings
 from bot.cli import resolve_cli_executable, validate_cli_type
-from bot.cli_params import CliParamsConfig, coerce_param_value
+from bot.chat_identity import chat_session_user_id
+from bot.cli_params import (
+    CliParamsConfig,
+    coerce_param_value,
+    normalize_deepseek_selection,
+)
 from bot.cluster.config import normalize_bot_cluster_config
 from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.models import (
@@ -35,6 +42,52 @@ from bot.profile_store import (
 from bot.sessions import update_bot_alias, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> bool:
+    """Clear one shared chat binding in memory and in the durable session store."""
+    normalized_alias = str(alias or "").strip().lower()
+    normalized_user_id = chat_session_user_id(user_id)
+    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+    bot_id = -int(zlib.adler32(f"web:{normalized_alias}".encode("utf-8")))
+
+    from bot.sessions import get_bot_sessions
+
+    for session in get_bot_sessions(normalized_alias):
+        if chat_session_user_id(session.user_id) != normalized_user_id:
+            continue
+        if str(session.agent_id or "main").strip().lower() != normalized_agent_id:
+            continue
+        with session._lock:
+            had_binding = bool(session.deepseek_session_id)
+            session.deepseek_session_id = None
+        if had_binding:
+            session.persist()
+        return had_binding
+
+    from bot.session_store import load_session, save_session
+
+    stored = load_session(bot_id, normalized_user_id, agent_id=normalized_agent_id)
+    if not isinstance(stored, dict) or not stored.get("deepseek_session_id"):
+        return False
+    save_session(
+        bot_id=bot_id,
+        user_id=normalized_user_id,
+        agent_id=normalized_agent_id,
+        codex_session_id=stored.get("codex_session_id"),
+        claude_session_id=stored.get("claude_session_id"),
+        antigravity_conversation_id=stored.get("antigravity_conversation_id"),
+        native_agent_session_id=stored.get("native_agent_session_id"),
+        working_dir=stored.get("working_dir"),
+        browse_dir=stored.get("browse_dir"),
+        message_count=stored.get("message_count"),
+        last_activity=stored.get("last_activity"),
+        local_history_backend=stored.get("local_history_backend"),
+        session_epoch=stored.get("session_epoch"),
+        active_conversation_id=stored.get("active_conversation_id"),
+        agent_prompt_hash_seen=stored.get("agent_prompt_hash_seen"),
+    )
+    return True
 
 
 async def _close_codex_server_runtimes(alias: str, *, require_idle: bool = True) -> None:
@@ -655,6 +708,101 @@ class MultiBotManager:
                 self._persist_main_profile()
             else:
                 self._save_profiles()
+
+    async def update_deepseek_selection(
+        self,
+        alias: str,
+        provider: Any,
+        model: Any,
+        reasoning_effort: Any,
+        *,
+        user_id: int | None = None,
+        agent_id: str = "main",
+        allowed_providers: Sequence[str] | None = None,
+        allowed_models_by_provider: Mapping[str, Sequence[str]] | None = None,
+        allowed_reasoning_efforts_by_provider: Mapping[str, Sequence[str]] | None = None,
+        default_models_by_provider: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a DeepSeek provider/model/effort selection atomically."""
+        normalized_alias = str(alias or "").strip().lower()
+        normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
+        requested = normalize_deepseek_selection(provider, model, reasoning_effort)
+
+        async with self._lock:
+            profile = self._get_profile_for_update(normalized_alias)
+            if str(profile.cli_type or "").strip().lower() != "deepseek":
+                raise ValueError("只有 DeepSeek Bot 支持 provider 选择")
+
+            current_params = profile.cli_params.get_params("deepseek")
+            current = normalize_deepseek_selection(
+                provider=current_params.get("provider"),
+                model=current_params.get("model"),
+                reasoning_effort=current_params.get("reasoning_effort"),
+            )
+            selected_provider = requested["provider"]
+            if (
+                selected_provider is not None
+                and allowed_providers is not None
+                and selected_provider not in {str(item or "").strip() for item in allowed_providers}
+            ):
+                raise ValueError(f"DeepSeek provider 不可用: {selected_provider}")
+
+            if (
+                selected_provider != current["provider"]
+                and requested["model"] is None
+                and default_models_by_provider
+            ):
+                requested["model"] = normalize_deepseek_selection(
+                    model=default_models_by_provider.get(selected_provider or "")
+                )["model"]
+
+            selected_model = requested["model"]
+            model_options = (allowed_models_by_provider or {}).get(selected_provider or "")
+            normalized_model_options = {
+                str(item or "").strip()
+                for item in (model_options or [])
+                if str(item or "").strip()
+            }
+            if selected_model is not None and normalized_model_options and selected_model not in normalized_model_options:
+                raise ValueError(
+                    f"DeepSeek model `{selected_model}` 不属于 provider `{selected_provider or 'default'}`"
+                )
+
+            effort_options = (allowed_reasoning_efforts_by_provider or {}).get(selected_provider or "")
+            normalized_effort_options = {
+                str(item or "").strip()
+                for item in (effort_options or [])
+                if str(item or "").strip()
+            }
+            if (
+                requested["reasoning_effort"] is not None
+                and normalized_effort_options
+                and requested["reasoning_effort"] not in normalized_effort_options
+            ):
+                raise ValueError(
+                    f"DeepSeek 思考深度 `{requested['reasoning_effort']}` 不属于 provider `{selected_provider or 'default'}`"
+                )
+
+            profile.cli_params.deepseek.update(requested)
+            if normalized_alias == self.main_profile.alias:
+                self._persist_main_profile()
+            else:
+                self._save_profiles()
+
+            provider_changed = current["provider"] != requested["provider"]
+            session_invalidated = False
+            if provider_changed and user_id is not None:
+                session_invalidated = _clear_deepseek_session_binding(
+                    normalized_alias,
+                    user_id,
+                    normalized_agent_id,
+                )
+
+            return {
+                "params": dict(profile.cli_params.get_params("deepseek")),
+                "provider_changed": provider_changed,
+                "session_invalidated": session_invalidated,
+            }
 
     async def reset_bot_cli_params(self, alias: str, cli_type: Optional[str] = None) -> None:
         normalized_alias = str(alias or "").strip().lower()

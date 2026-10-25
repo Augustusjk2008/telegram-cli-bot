@@ -16,7 +16,7 @@ type Props = {
 
 type DraftValues = Record<string, string | boolean>;
 
-const CHAT_CONTROLLED_CLI_PARAM_KEYS = ["model", "reasoning_effort", "effort"] as const;
+const CHAT_CONTROLLED_CLI_PARAM_KEYS = ["provider", "model", "reasoning_effort", "effort"] as const;
 const CHAT_CONTROLLED_CLI_PARAM_KEY_SET = new Set<string>(CHAT_CONTROLLED_CLI_PARAM_KEYS);
 const MODEL_OPTION_NONE = "none";
 
@@ -211,7 +211,14 @@ export function BotCliParamsPanel({
       {notice ? <div className="mt-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">{notice}</div> : null}
       {loading ? <div className="mt-4 text-sm text-[var(--muted)]">加载中...</div> : null}
       {cliParams?.cliType === "deepseek" ? (
-        <p className="mt-3 text-sm text-[var(--muted)]">模型和思考深度可在聊天中选择；headless 模式下运行 pwsh 等工具需要选择 danger-full-access。</p>
+        <div className="mt-3 space-y-1 text-sm text-[var(--muted)]">
+          <p>Provider、模型和思考深度可在聊天中原子选择；headless 模式下运行 pwsh 等工具需要选择 danger-full-access。</p>
+          <p>
+            当前 Provider：{cliParams.selectedProvider || String(cliParams.params.provider || "默认")}
+            {cliParams.catalogStatus ? ` · catalog：${cliParams.catalogStatus}` : ""}
+          </p>
+          {cliParams.catalogDiagnostic ? <p className="text-[var(--status-warning)]">{cliParams.catalogDiagnostic}</p> : null}
+        </div>
       ) : null}
 
       <div className="mt-3 space-y-3">

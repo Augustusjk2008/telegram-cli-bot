@@ -174,6 +174,16 @@ def test_cli_model_options_table_is_applied_per_cli_type(
     }
     monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", table)
     monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", table)
+    monkeypatch.setattr(
+        api_service,
+        "discover_deepseek_catalog",
+        lambda *_args, **_kwargs: {
+            "providers": [{"id": "table-provider", "modelOptions": [{"id": "dsh-model"}]}],
+            "selectedProvider": "table-provider",
+            "selectedModel": "dsh-model",
+            "status": "ready",
+        },
+    )
 
     for cli_type, expected in table.items():
         usage_manager.main_profile.cli_type = cli_type
@@ -1024,6 +1034,18 @@ def test_deepseek_context_usage_keeps_projection_without_turn_usage():
         "context_left_percent": 99,
         "status_text": "上下文占用",
     }
+
+
+def test_deepseek_context_usage_retains_selected_provider():
+    result = api_service._build_deepseek_context_usage(
+        {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        session_id="session-dsh",
+        provider="deepseek-account",
+    )
+
+    assert result is not None
+    assert result["provider"] == "deepseek-account"
+    assert result["total_tokens"] == 5
 
 
 @pytest.mark.asyncio

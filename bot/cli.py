@@ -71,6 +71,7 @@ class CliStreamParseResult:
     terminal_error: Optional[str] = None
     denied_actions: Optional[List[Any]] = None
     model: Optional[str] = None
+    provider: Optional[str] = None
     terminal_usage_complete: bool = True
 
 
@@ -86,6 +87,7 @@ class DeepSeekJsonStreamParser:
         self._projection_truncated = False
         self._step_usage: dict[tuple[int, int], dict[str, int]] = {}
         self.model: Optional[str] = None
+        self.provider: Optional[str] = None
         self.session_id: Optional[str] = None
         self.terminal_status: Optional[str] = None
         self.total_bytes = 0
@@ -115,6 +117,9 @@ class DeepSeekJsonStreamParser:
             model = event.get("model")
             if isinstance(model, str) and model.strip():
                 self.model = model.strip()
+            provider = event.get("provider")
+            if isinstance(provider, str) and provider.strip():
+                self.provider = provider.strip()
         elif kind == "session":
             session_id = event.get("sessionId")
             if not isinstance(session_id, str) or not session_id.strip():
@@ -219,6 +224,7 @@ class DeepSeekJsonStreamParser:
             terminal_status="failed" if error else self.terminal_status,
             terminal_error=error or None,
             model=self.model,
+            provider=self.provider,
             terminal_usage_complete=usage_complete,
         )
 

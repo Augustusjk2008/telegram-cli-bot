@@ -185,12 +185,16 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   const params = await client.getCliParams("deepseek-migration");
   expect(params).toMatchObject({
     cliType: "deepseek",
-    params: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
-    defaults: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
+    params: { provider: null, model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
+    defaults: { provider: null, model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
   });
-  expect(Object.keys(params.schema)).toEqual(["model", "reasoning_effort", "permission_mode", "extra_args"]);
+  expect(Object.keys(params.schema)).toEqual(["provider", "model", "reasoning_effort", "permission_mode", "extra_args"]);
   expect(await screen.findByLabelText("权限模式")).toHaveValue("workspace-write");
   expect(await screen.findByText("DeepSeek Harness：集群轮次自动注入 MCP。")).toBeInTheDocument();
+  const lowTierModel = await screen.findByLabelText("低档模型");
+  expect(within(lowTierModel).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
+    .toEqual(["", "deepseek-flash", "deepseek-v4-pro"]);
+  expect(await screen.findByText("集群档位继承主 Bot 的 Provider：DeepSeek。")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "生成安装命令" }));
   expect(await screen.findByText(/DeepSeek Harness 集群轮次会自动注入/)).toBeInTheDocument();
   expect(screen.queryByText("安装命令", { exact: true })).not.toBeInTheDocument();

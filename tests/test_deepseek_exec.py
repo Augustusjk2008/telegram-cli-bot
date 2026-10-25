@@ -28,6 +28,7 @@ def test_deepseek_uses_stdin_and_only_returned_session_ids(monkeypatch, prompt):
     monkeypatch.setattr("bot.deepseek_cli.build_executable_invocation", lambda path: [path])
     config = CliParamsConfig()
     assert get_default_params("deepseek") == {
+        "provider": None,
         "model": None,
         "reasoning_effort": None,
         "permission_mode": "workspace-write",
@@ -192,7 +193,11 @@ def test_deepseek_desktop_selection_uses_dump_config_and_cleans_patch(desktop_ds
     run = subprocess.run(command, input="hello", capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert run.returncode == 0, run.stderr
     metadata, result = [json.loads(line) for line in run.stdout.splitlines()]
-    assert metadata == {"type": "orbit_model", "model": "deepseek-v4-pro"}
+    assert metadata == {
+        "type": "orbit_model",
+        "provider": "deepseek-official",
+        "model": "deepseek-v4-pro",
+    }
     assert result["args"] == [
         "--profile", "headless", "--patch", str(user_patch),
         "--patch", result["patchPath"], "--json", "-",
@@ -300,10 +305,10 @@ def test_deepseek_wrapper_uses_bundled_node_from_shim(tmp_path):
 
 
 @pytest.mark.parametrize("selection,expected", [
-    ({}, {"model": "custom-model", "reasoningEffort": "low"}),
-    ({"model": "deepseek-v4-pro"}, {"model": "deepseek-v4-pro", "reasoningEffort": "low"}),
-    ({"reasoning_effort": "off"}, {"model": "custom-model", "reasoningEffort": "off"}),
-    ({"model": "deepseek-flash", "reasoning_effort": "max"}, {"model": "deepseek-flash", "reasoningEffort": "max"}),
+    ({}, {"provider": "deepseek-account", "model": "custom-model", "reasoningEffort": "low"}),
+    ({"model": "deepseek-v4-pro"}, {"provider": "deepseek-account", "model": "deepseek-v4-pro", "reasoningEffort": "low"}),
+    ({"reasoning_effort": "off"}, {"provider": "deepseek-account", "model": "custom-model", "reasoningEffort": "off"}),
+    ({"model": "deepseek-flash", "reasoning_effort": "max"}, {"provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "max"}),
 ])
 def test_deepseek_selection_overlays_preserve_provider_and_cleanup(npm_dsh, tmp_path, selection, expected):
     shim, package = npm_dsh
@@ -330,7 +335,11 @@ export function composeEntries([patches]) { return patches; }
     run = subprocess.run(cmd, input="hello", capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert run.returncode == 0, run.stderr
     metadata, result = [json.loads(line) for line in run.stdout.splitlines()]
-    assert metadata == {"type": "orbit_model", "model": expected["model"]}
+    assert metadata == {
+        "type": "orbit_model",
+        "provider": expected["provider"],
+        "model": expected["model"],
+    }
     assert result["patch"][0]["config"] == {**inherited, **expected}
     assert result["args"][:4] == ["--profile", "headless", "--patch", str(user_patch)]
     if selection:
@@ -359,6 +368,7 @@ def test_deepseek_rejects_protocol_and_task_overrides(extra):
 def test_deepseek_final_replaces_committed_preview_and_excludes_process_events():
     parser = deepseek_parser(
         SESSION,
+        {"type": "orbit_model", "provider": "deepseek-account", "model": "deepseek-flash"},
         {"type": "thinking", "text": "private reasoning"},
         {"type": "tool_call", "callId": "call-1", "tool": "read", "input": {"file_path": "probe.txt"}},
         {"type": "tool_result", "callId": "call-1", "status": "completed", "result": "file content"},
@@ -370,6 +380,7 @@ def test_deepseek_final_replaces_committed_preview_and_excludes_process_events()
     result = parser.result()
     assert result.final_text == parser.preview_text == "完整最终回答"
     assert result.session_id == "session-test"
+    assert result.provider == "deepseek-account"
     assert result.terminal_status == "completed"
     assert result.error_text is None
     assert result.truncated is True

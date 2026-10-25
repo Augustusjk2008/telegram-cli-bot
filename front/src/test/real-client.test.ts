@@ -117,6 +117,51 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("sends DeepSeek selection atomically and maps the provider catalog", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      cli_type: "deepseek",
+      params: { provider: "siliconflow", model: "deepseek-v4-pro", reasoning_effort: "high" },
+      defaults: { provider: null, model: null, reasoning_effort: null },
+      schema: { model: { type: "string", enum: ["none", "deepseek-v4-pro"] } },
+      provider_options: [
+        { id: "deepseek", label: "DeepSeek" },
+        { id: "siliconflow", label: "SiliconFlow", default_model: "deepseek-v4-pro" },
+      ],
+      model_options_by_provider: {
+        siliconflow: [{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", reasoning_efforts: ["low", "high"] }],
+      },
+      selected_provider: "siliconflow",
+      catalog_status: "ready",
+      provider_changed: true,
+      session_reset: true,
+      selection_notice: "下一轮建立新会话",
+    }));
+
+    const result = await new RealWebBotClient().updateDeepSeekSelection("deepseek", {
+      provider: "siliconflow",
+      model: "deepseek-v4-pro",
+      reasoningEffort: "high",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/deepseek/cli-params");
+    expect(fetchMock.mock.calls[0][1].method).toBe("PATCH");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      cli_type: "deepseek",
+      selection: { provider: "siliconflow", model: "deepseek-v4-pro", reasoning_effort: "high" },
+    });
+    expect(result).toMatchObject({
+      cliType: "deepseek",
+      selectedProvider: "siliconflow",
+      catalogStatus: "ready",
+      providerChanged: true,
+      sessionReset: true,
+      selectionNotice: "下一轮建立新会话",
+      modelOptionsByProvider: {
+        siliconflow: [{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", reasoningEfforts: ["low", "high"] }],
+      },
+    });
+  });
+
   test("creates a scoped voice WebSocket and cleans up after remote close", async () => {
     class FakeWebSocket {
       static OPEN = 1;

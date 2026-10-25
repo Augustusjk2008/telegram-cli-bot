@@ -69,6 +69,9 @@ import type {
   CodexUsageStatsQuery,
   CliType,
   CliParamsPayload,
+  DeepSeekModelOption,
+  DeepSeekSelectionRequest,
+  DeepSeekSelectionResponse,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
   ClusterSetupPrepareResult,
@@ -302,11 +305,41 @@ function defaultCliPathForType(cliType: string) {
 
 function buildMockCliParams(cliType: string): CliParamsPayload {
   if (cliType === "deepseek") {
+    const providerOptions = [
+      {
+        id: "deepseek",
+        label: "DeepSeek",
+        defaultModel: "deepseek-flash",
+        defaultReasoningEffort: "off",
+        reasoningEfforts: ["none", "off", "low", "high", "max"],
+      },
+      {
+        id: "siliconflow",
+        label: "SiliconFlow",
+        defaultModel: "deepseek-v4-pro",
+        defaultReasoningEffort: "high",
+        reasoningEfforts: ["none", "low", "high", "max"],
+      },
+    ];
+    const modelOptionsByProvider: Record<string, DeepSeekModelOption[]> = {
+      deepseek: [
+        { id: "deepseek-flash", label: "DeepSeek Flash", reasoningEfforts: ["none", "off", "low", "high", "max"], defaultReasoningEffort: "off" },
+        { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", reasoningEfforts: ["none", "off", "low", "high", "max"], defaultReasoningEffort: "high" },
+      ],
+      siliconflow: [
+        { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", reasoningEfforts: ["none", "low", "high", "max"], defaultReasoningEffort: "high" },
+        { id: "deepseek-chat-custom", label: "自定义模型", reasoningEfforts: ["none", "low", "high", "max"], defaultReasoningEffort: "low" },
+      ],
+    };
     return {
       cliType,
-      params: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
-      defaults: { model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
+      params: { provider: null, model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
+      defaults: { provider: null, model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
       schema: {
+        provider: {
+          type: "string", description: "Provider", nullable: true,
+          enum: providerOptions.map((provider) => provider.id),
+        },
         model: {
           type: "string", description: "模型选择", nullable: true,
           enum: ["none", "deepseek-flash", "deepseek-v4-pro"],
@@ -321,6 +354,10 @@ function buildMockCliParams(cliType: string): CliParamsPayload {
         },
         extra_args: { type: "string_list", description: "额外参数（仅支持 --patch）" },
       },
+      providerOptions,
+      modelOptionsByProvider,
+      selectedProvider: "deepseek",
+      catalogStatus: "ready",
     };
   }
   if (cliType === "antigravity") {
@@ -425,6 +462,24 @@ function cloneCliParamsPayload(payload: CliParamsPayload): CliParamsPayload {
         },
       ]),
     ),
+    ...(payload.providerOptions ? {
+      providerOptions: payload.providerOptions.map((provider) => ({
+        ...provider,
+        ...(provider.modelOptions ? { modelOptions: provider.modelOptions.map((model) => ({ ...model, reasoningEfforts: model.reasoningEfforts ? [...model.reasoningEfforts] : undefined })) } : {}),
+        ...(provider.reasoningEfforts ? { reasoningEfforts: [...provider.reasoningEfforts] } : {}),
+      })),
+    } : {}),
+    ...(payload.modelOptionsByProvider ? {
+      modelOptionsByProvider: Object.fromEntries(
+        Object.entries(payload.modelOptionsByProvider).map(([provider, models]) => [
+          provider,
+          models.map((model) => ({ ...model, reasoningEfforts: model.reasoningEfforts ? [...model.reasoningEfforts] : undefined })),
+        ]),
+      ),
+    } : {}),
+    ...(payload.selectedProvider ? { selectedProvider: payload.selectedProvider } : {}),
+    ...(payload.catalogStatus ? { catalogStatus: payload.catalogStatus } : {}),
+    ...(payload.catalogDiagnostic ? { catalogDiagnostic: payload.catalogDiagnostic } : {}),
   };
 }
 
@@ -7598,9 +7653,48 @@ export class MockWebBotClient implements WebBotClient {
         ...payload.params,
         [key]: nextValue,
       },
+      ...(payload.cliType === "deepseek" && key === "provider"
+        ? { selectedProvider: String(nextValue || payload.selectedProvider || "").trim() || undefined }
+        : {}),
     };
     this.cliParamsByBot.set(botAlias, { ...this.cliParamsByBot.get(botAlias), [payload.cliType]: cloneCliParamsPayload(next) });
     return cloneCliParamsPayload(next);
+  }
+
+  async updateDeepSeekSelection(botAlias: string, selection: DeepSeekSelectionRequest): Promise<DeepSeekSelectionResponse> {
+    const payload = this.getCliParamsForType(botAlias, "deepseek");
+    const currentProvider = String(payload.selectedProvider || payload.params.provider || "").trim();
+    const nextProvider = String(selection.provider || "").trim();
+    const effectiveNextProvider = nextProvider || currentProvider;
+    const providerChanged = currentProvider !== effectiveNextProvider;
+    const nextModel = !selection.model || selection.model === "none" ? null : selection.model;
+    const next = {
+      ...payload,
+      params: {
+        ...payload.params,
+        provider: nextProvider || null,
+        model: nextModel,
+        reasoning_effort: selection.reasoningEffort || null,
+      },
+      selectedProvider: effectiveNextProvider || payload.selectedProvider,
+      schema: {
+        ...payload.schema,
+        model: {
+          ...payload.schema.model,
+          enum: [
+            "none",
+            ...(payload.modelOptionsByProvider?.[effectiveNextProvider || payload.selectedProvider || ""] || []).map((model) => model.id),
+          ].filter((value, index, values) => values.indexOf(value) === index),
+        },
+      },
+    };
+    this.cliParamsByBot.set(botAlias, { ...this.cliParamsByBot.get(botAlias), deepseek: cloneCliParamsPayload(next) });
+    return {
+      ...cloneCliParamsPayload(next),
+      providerChanged,
+      sessionReset: providerChanged,
+      ...(providerChanged ? { selectionNotice: "已切换 DeepSeek Provider，下一轮将建立新会话。" } : {}),
+    };
   }
 
   async resetCliParams(botAlias: string, cliType?: string): Promise<CliParamsPayload> {
