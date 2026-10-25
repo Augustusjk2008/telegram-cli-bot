@@ -44,6 +44,10 @@ async def post_theme(request: web.Request) -> web.Response:
     return await _dispatch(request, "create")
 
 
+async def post_import(request: web.Request) -> web.Response:
+    return await _dispatch(request, "import_themes")
+
+
 async def patch_theme(request: web.Request) -> web.Response:
     return await _dispatch(request, "update")
 
@@ -61,6 +65,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/public/ui/themes", get_public_themes)
     app.router.add_get("/api/ui/themes", get_themes)
     app.router.add_post("/api/ui/themes", post_theme)
+    app.router.add_post("/api/ui/themes/import", post_import)
     app.router.add_patch("/api/ui/themes/{theme_id}", patch_theme)
     app.router.add_delete("/api/ui/themes/{theme_id}", delete_theme)
     app.router.add_patch("/api/ui/theme-selection", patch_selection)

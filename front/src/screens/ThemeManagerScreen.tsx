@@ -23,6 +23,7 @@ import {
   normalizeChatTypography,
 } from "../theme/chatTypography";
 import type { ChatTypography, UiTheme, ThemeLibrary } from "../theme/types";
+import { downloadThemeDocument, portableTheme, readThemeFile } from "../theme/themeTransfer";
 import "../styles/theme-manager.css";
 
 type Draft = {
@@ -36,6 +37,7 @@ type Pane = "themes" | "editor" | "preview";
 type LeaveAction =
   | { kind: "select"; id: string }
   | { kind: "create"; source: UiTheme; name: string }
+  | { kind: "import"; file: File }
   | { kind: "cancel" }
   | { kind: "close" }
   | { kind: "external"; action: () => void };
@@ -339,6 +341,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     canManage,
     reload,
     createTheme,
+    importThemes,
     updateTheme,
     deleteTheme,
     selectTheme,
@@ -359,6 +362,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
   const reloadRequested = useRef<"keep" | "discard" | null>(null);
   const busy = operationBusy || Boolean(reloadRequested.current);
   const nameInput = useRef<HTMLInputElement>(null);
+  const importInput = useRef<HTMLInputElement>(null);
   const inputId = useId();
   const groups = useMemo(
     () => [...new Set(THEME_TOKENS.map((token) => token.group))],
@@ -491,6 +495,10 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     }
     if (action.kind === "external") {
       action.action();
+      return;
+    }
+    if (action.kind === "import") {
+      void importFile(action.file, currentLibrary);
       return;
     }
     if (action.kind === "create") {
@@ -628,6 +636,43 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     } finally {
       operationInFlight.current = false;
       setBusy(false);
+    }
+  }
+
+  async function importFile(file: File, currentLibrary: ThemeLibrary) {
+    if (!canManage || operationInFlight.current || reloadRequested.current) return;
+    operationInFlight.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const document = await readThemeFile(file);
+      const result = await importThemes(document, currentLibrary.revision);
+      const previousIds = new Set(currentLibrary.themes.map((theme) => theme.id));
+      const imported = result.themes.filter((theme) => !previousIds.has(theme.id));
+      if (!imported.length) throw new Error("未收到导入后的主题，请重新加载主题库确认。");
+      setDraft(draftFrom(imported[0], result.revision));
+      setActivePane("editor");
+      setNotice(`已导入 ${imported.length} 个主题，可编辑或应用。当前应用主题保持不变。`);
+    } catch (cause) {
+      setError(failureMessage(cause));
+    } finally {
+      operationInFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  function exportThemes(pack: boolean) {
+    if (busy || loading || library.error || (!pack && dirty)) return;
+    setError("");
+    try {
+      downloadThemeDocument(
+        pack ? { schemaVersion: 1, themes: library.themes.map(portableTheme) } : portableTheme(draft.original),
+        pack ? "pack" : draft.original.name,
+      );
+      setNotice(pack ? `已导出主题包，包含 ${library.themes.length} 个已保存主题。` : "已导出当前主题。");
+    } catch (cause) {
+      setError(failureMessage(cause));
     }
   }
 
@@ -802,6 +847,28 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           >
             ＋ 新建主题
           </button>
+          <div className="theme-manager-transfer">
+            <input
+              ref={importInput}
+              type="file"
+              accept=".json,application/json"
+              aria-label="导入主题 JSON 文件"
+              hidden
+              disabled={!canManage || busy || loading}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) requestAction({ kind: "import", file });
+              }}
+            />
+            <button type="button" disabled={!canManage || busy || loading} onClick={() => importInput.current?.click()}>
+              导入 JSON
+            </button>
+            <button type="button" disabled={busy || loading || Boolean(library.error)} onClick={() => exportThemes(true)}>
+              导出主题包
+            </button>
+            <p className="theme-manager-hint">支持单个主题与多主题包。同名主题自动编号；主题包导出全部已保存主题。</p>
+          </div>
           {[true, false].map((readonly) => (
             <div className="theme-manager-theme-group" key={String(readonly)}>
               <h3>{readonly ? "内置主题" : "自定义主题"}</h3>
@@ -870,6 +937,12 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           <div className="theme-manager-panel-title">
             <h2>{draft.sourceId ? "新主题" : "编辑主题"}</h2>
             <span>{dirty ? "有未保存的更改" : "已保存"}</span>
+          </div>
+          <div className="theme-manager-export">
+            <button type="button" disabled={dirty || busy || loading || Boolean(library.error)} onClick={() => exportThemes(false)}>
+              导出当前主题
+            </button>
+            {dirty && <small>保存草稿后可导出当前主题。</small>}
           </div>
           {draft.theme.readonly && (
             <div className="theme-manager-readonly">
@@ -1345,7 +1418,9 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                 {busy
                   ? "请等待当前操作完成，再选择是否离开。"
                   : dirty
-                    ? "离开前，可以保存这份配色，或放弃本次更改。"
+                    ? confirmation.action.kind === "import"
+                      ? "导入后会打开新主题，可以先保存这份配色，或放弃本次更改。"
+                      : "离开前，可以保存这份配色，或放弃本次更改。"
                     : "更改已保存，可以离开此页。"}
               </p>
               {!valid && (

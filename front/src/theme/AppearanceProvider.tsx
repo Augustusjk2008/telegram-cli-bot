@@ -162,6 +162,7 @@ function useAppearanceState() {
   }, [accept]);
 
   const createTheme = useCallback((input: CreateInput) => mutate((client, revision) => client.createUiTheme({ ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
+  const importThemes = useCallback((document: unknown, expectedRevision: number) => mutate((client) => client.importUiThemes({ document, expectedRevision })), [mutate]);
   const updateTheme = useCallback((id: string, input: UpdateInput) => mutate((client, revision) => client.updateUiTheme(id, { ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
   const deleteTheme = useCallback((id: string) => mutate((client, revision) => client.deleteUiTheme(id, revision)), [mutate]);
   const selectTheme = useCallback(async (id: string) => {
@@ -176,7 +177,7 @@ function useAppearanceState() {
   const openManager = useCallback(() => { if (sessionRef.current && !sessionRef.current.previewOnly && sessionRef.current.canManage !== false) setManagerOpen(true); }, []);
   const closeManager = useCallback(() => setManagerOpen(false), []);
   const canManage = Boolean(session && !session.previewOnly && session.canManage !== false);
-  return { library, appearance, loading, error, canManage, canSelect: Boolean(session?.previewOnly || canManage), bindSession, reload, createTheme, updateTheme, deleteTheme, selectTheme, managerOpen, openManager, closeManager };
+  return { library, appearance, loading, error, canManage, canSelect: Boolean(session?.previewOnly || canManage), bindSession, reload, createTheme, importThemes, updateTheme, deleteTheme, selectTheme, managerOpen, openManager, closeManager };
 }
 
 type AppearanceContextValue = ReturnType<typeof useAppearanceState>;

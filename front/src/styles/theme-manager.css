@@ -193,7 +193,26 @@
 }
 .theme-manager-new {
   width: 100%;
+  margin-bottom: 10px;
+}
+.theme-manager-transfer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 20px;
+}
+.theme-manager-transfer > button {
+  flex: 1 1 auto;
+}
+.theme-manager-transfer > p {
+  flex-basis: 100%;
+}
+.theme-manager-export {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 .theme-manager-theme-group {
   display: grid;

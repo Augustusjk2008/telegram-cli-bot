@@ -57,6 +57,10 @@ export type ThemeUpdateInput = {
   activate?: boolean;
 };
 
+export type PortableTheme = Pick<UiTheme, "schemaVersion" | "name" | "baseId" | "appearance">;
+export type ThemeDocument = PortableTheme | { schemaVersion: 1; themes: PortableTheme[] };
+export type ThemeImportInput = { expectedRevision: number; document: unknown };
+
 export type ColorToken = {
   key: string;
   label: string;

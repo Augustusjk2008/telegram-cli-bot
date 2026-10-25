@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { builtinLibrary } from "../theme/resolveAppearance";
+import { portableTheme } from "../theme/themeTransfer";
 
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
@@ -16,11 +17,34 @@ test("theme requests use the global API without account-specific headers", async
   await client.updateUiTheme("theme_test", { schemaVersion: 1, expectedRevision: 1, name: "重命名" });
   await client.deleteUiTheme("theme_test", 2);
   await client.selectUiTheme("paper-daylight", 3);
-  expect(fetch).toHaveBeenCalledTimes(6);
+  const input = { expectedRevision: 4, document: portableTheme(builtinLibrary().themes[0]) };
+  await client.importUiThemes(input);
+  expect(fetch).toHaveBeenCalledTimes(7);
+  expect(fetch.mock.calls[6][0]).toMatch(/\/api\/ui\/themes\/import$/);
+  expect(fetch.mock.calls[6][1]?.method).toBe("POST");
+  expect(JSON.parse(fetch.mock.calls[6][1]?.body as string)).toEqual(input);
   expect(fetch.mock.calls[0][0]).toMatch(/\/api\/public\/ui\/themes$/);
   for (const [, options] of fetch.mock.calls) {
     expect(new Headers(options?.headers).get("X-UI-Account-ID")).toBeNull();
   }
+});
+
+test("exported single themes and packs can be imported as editable copies", async () => {
+  const client = new MockWebBotClient();
+  await client.login({ username: "alice", password: "password" });
+  const document = portableTheme(builtinLibrary().themes[0]);
+  expect(Object.keys(document).sort()).toEqual(["appearance", "baseId", "name", "schemaVersion"]);
+  const single = await client.importUiThemes({ expectedRevision: 0, document });
+  const pack = { schemaVersion: 1, themes: single.themes.map(portableTheme) };
+  const result = await client.importUiThemes({ expectedRevision: 1, document: pack });
+  expect(result.revision).toBe(2);
+  expect(result.themes).toHaveLength(4);
+  expect(new Set(result.themes.map((theme) => theme.id)).size).toBe(4);
+  expect(result.selectedThemeId).toBe("paper-daylight");
+  expect(result.themes.slice(1).every((theme) => !theme.readonly)).toBe(true);
+  expect(result.themes[2].appearance).toEqual(document.appearance);
+  await expect(client.importUiThemes({ expectedRevision: 2, document: { ...pack, themes: [...pack.themes, { ...document, baseId: "unknown" }] } })).rejects.toMatchObject({ status: 400 });
+  expect(await client.listUiThemes()).toEqual(result);
 });
 
 

@@ -4,6 +4,7 @@ import copy
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,14 @@ from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
 
 def create_input(**changes):
     return {"schemaVersion": 1, "expectedRevision": 0, "sourceId": BUILTIN_THEME_ID, "name": "我的主题", **changes}
+
+
+def portable_theme(**changes):
+    return {
+        "schemaVersion": 1, "name": "导入主题", "baseId": BUILTIN_THEME_ID,
+        "appearance": {"colors": {"scheme": "dark", "overrides": {"border": "#ABCDEF80"}}},
+        **changes,
+    }
 
 
 @pytest.fixture
@@ -84,6 +93,97 @@ def test_chat_typography_is_stored_with_the_theme(store):
     }))
     assert library["themes"][1]["appearance"]["typography"] == typography
     assert ThemeStore(store.library_path).list_library()["themes"][1]["appearance"]["typography"] == typography
+
+
+@pytest.mark.parametrize("bundle", [False, True])
+def test_import_portable_roundtrip_preserves_appearance_and_creates_fresh_themes(store, bundle):
+    library = store.create(create_input(activate=True, appearance={
+        "colors": {"scheme": "dark", "overrides": {"surface.base": "#123", "border": "#abc8"}},
+        "typography": {
+            "chatBodyFontFamily": "kai", "chatBodyFontSize": "large",
+            "chatBodyLineHeight": "relaxed", "chatBodyParagraphSpacing": "tight",
+        },
+    }))
+    library = store.update(library["selectedThemeId"], {"schemaVersion": 1, "expectedRevision": 1})
+    sources = library["themes"] if bundle else library["themes"][1:]
+    documents = [{key: theme[key] for key in ("schemaVersion", "name", "baseId", "appearance")}
+                 for theme in sources]
+    document = {"schemaVersion": 1, "themes": documents} if bundle else documents[0]
+    started = datetime.now(timezone.utc)
+    result = store.import_themes({"expectedRevision": 2, "document": json.loads(json.dumps(document))})
+    finished = datetime.now(timezone.utc)
+
+    assert result["revision"] == 3 and result["selectedThemeId"] == library["selectedThemeId"]
+    assert result["themes"][:2] == library["themes"]
+    assert len(result["themes"]) == 2 + len(sources)
+    assert len({theme["id"] for theme in result["themes"]}) == len(result["themes"])
+    for source, imported in zip(sources, result["themes"][2:]):
+        assert imported["appearance"] == source["appearance"]
+        assert imported["name"] == source["name"] + " (2)"
+        assert imported["baseId"] == BUILTIN_THEME_ID and imported["schemaVersion"] == 1
+        assert imported["readonly"] is False and imported["version"] == 1
+        assert started <= datetime.fromisoformat(imported["updatedAt"]) <= finished
+    assert ThemeStore(store.library_path).list_library() == result
+
+
+def test_import_resolves_names_across_existing_and_batch_themes_with_length_limit(store):
+    name = "长" * 80
+    library = store.create(create_input(name=name))
+    reserved = name[:76] + " (2)"
+    documents = [portable_theme(name=value) for value in (reserved, name, name, "纸感日间", "纸感日间")]
+    result = store.import_themes({"expectedRevision": 1, "document": {"schemaVersion": 1, "themes": documents}})
+    assert result["themes"][:2] == library["themes"]
+    assert [theme["name"] for theme in result["themes"][2:]] == [
+        reserved, name[:76] + " (3)", name[:76] + " (4)", "纸感日间 (2)", "纸感日间 (3)",
+    ]
+    assert all(len(theme["name"]) <= 80 for theme in result["themes"])
+    assert all("typography" not in theme["appearance"] for theme in result["themes"][2:])
+
+
+@pytest.mark.parametrize("document", [
+    None, [], {},
+    {"schemaVersion": 1, "themes": []},
+    {"schemaVersion": 1, "themes": {}},
+    {"schemaVersion": 2, "themes": [portable_theme()]},
+    {"schemaVersion": True, "themes": [portable_theme()]},
+    {"schemaVersion": 1, "themes": [{"schemaVersion": 1, "themes": [portable_theme()]}]},
+    {**portable_theme(), "themes": [portable_theme()]},
+    {key: value for key, value in portable_theme().items() if key != "baseId"},
+])
+def test_invalid_import_documents_never_create_library(store, document):
+    with pytest.raises(ThemeStoreError) as exc:
+        store.import_themes({"expectedRevision": 0, "document": document})
+    assert exc.value.status == 400
+    assert not store.library_path.parent.exists()
+
+
+@pytest.mark.parametrize("changes", [
+    {"schemaVersion": 2}, {"baseId": "custom"}, {"name": " "}, {"name": "长" * 81},
+    {"id": BUILTIN_THEME_ID}, {"readonly": False}, {"version": 1}, {"updatedAt": "2026-10-25T00:00:00Z"},
+    {"format": "theme"},
+    {"appearance": {"colors": {"scheme": "light", "overrides": {"unknown": "#FFFFFF"}}}},
+    {"appearance": {"colors": {"scheme": "light", "overrides": {"surface.base": "#FFFFFF00"}}}},
+])
+def test_invalid_theme_in_import_batch_preserves_entire_library(store, changes):
+    store.create(create_input(activate=True))
+    before = store.library_path.read_bytes()
+    with pytest.raises(ThemeStoreError) as exc:
+        store.import_themes({"expectedRevision": 1, "document": {
+            "schemaVersion": 1, "themes": [portable_theme(), portable_theme(**changes)],
+        }})
+    assert exc.value.status == 400
+    assert store.library_path.read_bytes() == before
+
+
+def test_invalid_import_does_not_publish_legacy_migration(store):
+    legacy = write_legacy(store, "old.json", [legacy_theme(1)])
+    before = legacy.read_bytes()
+    with pytest.raises(ThemeStoreError):
+        store.import_themes({"expectedRevision": 0, "document": {
+            "schemaVersion": 1, "themes": [portable_theme(), portable_theme(name="")],
+        }})
+    assert not store.library_path.exists()
+    assert legacy.read_bytes() == before
 
 
 def test_library_results_are_detached(store):

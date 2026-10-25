@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   publish: undefined as ((next: ThemeLibrary) => void) | undefined,
   canManage: true,
   createTheme: vi.fn(),
+  importThemes: vi.fn(),
   updateTheme: vi.fn(),
   deleteTheme: vi.fn(),
   selectTheme: vi.fn(),
@@ -71,6 +72,8 @@ vi.mock("../theme/AppearanceProvider", () => ({
       },
       createTheme: (input: Omit<ThemeCreateInput, "expectedRevision">) =>
         update(() => api.createTheme(input)),
+      importThemes: (document: unknown, revision: number) =>
+        update(() => api.importThemes(document, revision)),
       updateTheme: (
         id: string,
         input: Omit<ThemeUpdateInput, "expectedRevision">,
@@ -165,6 +168,47 @@ afterEach(() => {
 });
 
 describe("全局主题管理", () => {
+  it("saves a pending draft before import and submits the new library revision", async () => {
+    const imported = { ...customTheme(), id: "theme_imported", name: "导入配色" };
+    const document = { schemaVersion: 1, themes: [{ name: imported.name }] };
+    const file = Object.assign(new File([], "themes.json"), { text: async () => JSON.stringify(document) });
+    api.importThemes.mockImplementationOnce(async () => ({
+      ...api.library!, revision: 3, themes: [...api.library!.themes, imported],
+    }));
+    render(<ThemeManagerScreen />);
+    fireEvent.change(screen.getByLabelText("主题名称"), { target: { value: "先保存的草稿" } });
+    expect(screen.getByRole("button", { name: "导出当前主题" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("导入主题 JSON 文件"), { target: { files: [file] } });
+    expect(api.importThemes).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存后离开" }));
+    await screen.findByText(/已导入 1 个主题/);
+    expect(api.importThemes).toHaveBeenCalledWith(document, 2);
+    expect(api.updateTheme).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("主题名称")).toHaveValue(imported.name);
+    expect(api.selectTheme).not.toHaveBeenCalled();
+  });
+
+  it("retains the draft when importing invalid JSON and allows the same file to be retried", async () => {
+    const read = vi.fn().mockResolvedValue("invalid json");
+    const file = Object.assign(new File([], "theme.json"), { text: read });
+    render(<ThemeManagerScreen />);
+    fireEvent.change(screen.getByLabelText("主题名称"), { target: { value: "保留草稿" } });
+    const input = screen.getByLabelText("导入主题 JSON 文件");
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "放弃更改" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("JSON 文件格式无效");
+    expect(api.importThemes).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("主题名称")).toHaveValue("保留草稿");
+    read.mockResolvedValueOnce('\uFEFF{"schemaVersion":1}');
+    api.importThemes.mockRejectedValueOnce(Object.assign(new Error("conflict"), { status: 409 }));
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "放弃更改" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("其他页面更新"));
+    expect(api.importThemes).toHaveBeenCalledWith({ schemaVersion: 1 }, 1);
+    expect(screen.getByLabelText("主题名称")).toHaveValue("保留草稿");
+    expect(input).toHaveValue("");
+  });
+
   it("keeps edits local, retains the last valid preview for invalid input, and discards without a write", async () => {
     const rootStyle = document.documentElement.getAttribute("style");
     const rootTheme = document.documentElement.getAttribute("data-theme");

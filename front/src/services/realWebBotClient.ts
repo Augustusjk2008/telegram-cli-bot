@@ -11,6 +11,7 @@ import type {
   ThemeLibrary,
   ThemeCreateInput,
   ThemeUpdateInput,
+  ThemeImportInput,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -4484,6 +4485,14 @@ export class RealWebBotClient implements WebBotClient {
 
   async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>("/api/ui/themes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  }
+
+  async importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary> {
+    return this.requestJson<ThemeLibrary>("/api/ui/themes/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),

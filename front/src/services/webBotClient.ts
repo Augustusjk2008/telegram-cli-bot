@@ -2,6 +2,7 @@ import type {
   ThemeLibrary,
   ThemeCreateInput,
   ThemeUpdateInput,
+  ThemeImportInput,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -171,6 +172,7 @@ export interface WebBotClient {
   listPublicUiThemes(): Promise<ThemeLibrary>;
   listUiThemes(): Promise<ThemeLibrary>;
   createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary>;
+  importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary>;
   updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary>;
   deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
   selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;

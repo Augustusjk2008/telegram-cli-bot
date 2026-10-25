@@ -9,6 +9,7 @@ import type {
   ThemeLibrary,
   ThemeCreateInput,
   ThemeUpdateInput,
+  ThemeImportInput,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -3436,6 +3437,49 @@ export class MockWebBotClient implements WebBotClient {
       };
       library.themes.push(theme);
       if (input.activate) library.selectedThemeId = theme.id;
+    });
+  }
+
+  async importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary> {
+    return this.mutateUiThemes(input.expectedRevision, (library) => {
+      const object = (value: unknown, fields: string[]): Record<string, unknown> => {
+        if (!value || typeof value !== "object" || Array.isArray(value)
+          || Object.keys(value).some((key) => !fields.includes(key))
+          || fields.some((key) => !Object.hasOwn(value, key))) {
+          throw new WebApiClientError("主题 JSON 包含不支持的字段或缺少必要字段", { status: 400, code: "invalid_theme" });
+        }
+        return value as Record<string, unknown>;
+      };
+      const schema = (value: Record<string, unknown>) => {
+        if (value.schemaVersion !== 1) throw new WebApiClientError("不支持此主题数据版本，请更新应用后重试", { status: 400, code: "unsupported_theme_schema" });
+      };
+      object(input, ["expectedRevision", "document"]);
+      let items: unknown[];
+      if (input.document && typeof input.document === "object" && "themes" in input.document) {
+        const pack = object(input.document, ["schemaVersion", "themes"]);
+        schema(pack);
+        if (!Array.isArray(pack.themes) || !pack.themes.length) throw new WebApiClientError("主题包须包含至少一个主题", { status: 400, code: "invalid_theme" });
+        items = pack.themes;
+      } else items = [input.document];
+      const names = new Set(library.themes.map((theme) => theme.name));
+      const imported = items.map((item): UiTheme => {
+        const value = object(item, ["schemaVersion", "name", "baseId", "appearance"]);
+        schema(value);
+        if (value.baseId !== "paper-daylight") throw new WebApiClientError("主题基准须为纸感日间", { status: 400, code: "invalid_theme" });
+        const original = this.uiThemeName(value.name as string);
+        let name = original;
+        for (let index = 2; names.has(name); index += 1) {
+          const suffix = ` (${index})`;
+          name = `${Array.from(original).slice(0, 80 - suffix.length).join("")}${suffix}`;
+        }
+        names.add(name);
+        return {
+          schemaVersion: 1, id: `theme_${crypto.randomUUID().replaceAll("-", "")}`,
+          name, baseId: "paper-daylight", appearance: this.uiThemeAppearance(value.appearance as ThemeAppearance),
+          readonly: false, updatedAt: new Date().toISOString(), version: 1,
+        };
+      });
+      library.themes.push(...imported);
     });
   }
 

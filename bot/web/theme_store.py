@@ -159,7 +159,7 @@ class ThemeStore:
                 "typography",
             )
             for key, choices in _CHAT_TYPOGRAPHY_VALUES.items():
-                if typography[key] not in choices:
+                if not isinstance(typography[key], str) or typography[key] not in choices:
                     _invalid(f"{key} 包含不支持的值")
             result["typography"] = {key: typography[key] for key in _CHAT_TYPOGRAPHY_DEFAULTS}
         return result
@@ -337,6 +337,50 @@ class ThemeStore:
             data["themes"].append(theme)
             if value.get("activate", False):
                 data["selectedThemeId"] = theme["id"]
+
+        return self._mutate(value["expectedRevision"], change)
+
+    def import_themes(self, payload: Any) -> dict[str, Any]:
+        fields = {"expectedRevision", "document"}
+        value = _object(payload, fields, fields, "导入主题请求")
+        theme_fields = {"schemaVersion", "name", "baseId", "appearance"}
+        document = _object(value["document"], theme_fields | {"themes"}, {"schemaVersion"}, "主题文档")
+        _schema(document["schemaVersion"])
+        if "themes" in document:
+            _object(document, {"schemaVersion", "themes"}, {"schemaVersion", "themes"}, "主题包")
+            themes = document["themes"]
+            if not isinstance(themes, list) or not themes:
+                _invalid("主题包必须包含至少一个主题")
+        else:
+            themes = [document]
+
+        imported = []
+        for theme in themes:
+            _object(theme, theme_fields, theme_fields, "主题")
+            _schema(theme["schemaVersion"])
+            if theme["baseId"] != BUILTIN_THEME_ID:
+                _invalid("主题 baseId 必须为 paper-daylight")
+            imported.append({
+                "schemaVersion": 1, "name": _name(theme["name"]), "baseId": BUILTIN_THEME_ID,
+                "appearance": self._appearance(theme["appearance"]),
+            })
+
+        def change(data):
+            names = {theme["name"] for theme in data["themes"]}
+            names.add(builtin_library()["themes"][0]["name"])
+            updated_at = datetime.now(timezone.utc).isoformat()
+            for theme in imported:
+                name = theme["name"]
+                number = 2
+                while name in names:
+                    suffix = f" ({number})"
+                    name = theme["name"][:80 - len(suffix)] + suffix
+                    number += 1
+                names.add(name)
+                data["themes"].append({
+                    **theme, "id": "theme_" + uuid.uuid4().hex, "name": name,
+                    "readonly": False, "updatedAt": updated_at, "version": 1,
+                })
 
         return self._mutate(value["expectedRevision"], change)
 

@@ -40,7 +40,19 @@ async function installThemeFixture(page: Page, withBot = false) {
       const input = request.postDataJSON();
       if (input.expectedRevision !== library.revision) return route.fulfill({ status: 409, json: { ok: false, error: { code: "theme_revision_conflict", message: "版本冲突" } } });
       mutations.push(`${request.method()} ${key}`);
-      if (request.method() === "POST") {
+      if (key === "ui/themes/import") {
+        const documents = input.document.themes || [input.document];
+        const names = new Set(library.themes.map((theme) => theme.name));
+        const imported = documents.map((document): UiTheme => {
+          expect(Object.keys(document).sort()).toEqual(["appearance", "baseId", "name", "schemaVersion"]);
+          expect(document.schemaVersion).toBe(1);
+          let name = document.name;
+          for (let index = 2; names.has(name); index += 1) name = `${document.name} (${index})`;
+          names.add(name);
+          return { ...document, name, id: `theme_fixture_${++serial}`, readonly: false, version: 1, updatedAt: new Date().toISOString() };
+        });
+        library = { ...library, themes: [...library.themes, ...imported] };
+      } else if (request.method() === "POST") {
         const source = library.themes.find((item) => item.id === input.sourceId) || BUILTIN_THEME;
         const theme: UiTheme = { ...source, id: `theme_fixture_${++serial}`, name: input.name, appearance: input.appearance || source.appearance, readonly: false, version: 1, updatedAt: new Date().toISOString() };
         library = { ...library, themes: [...library.themes, theme], selectedThemeId: input.activate ? theme.id : library.selectedThemeId };
@@ -71,6 +83,60 @@ async function installThemeFixture(page: Page, withBot = false) {
     await route.fulfill({ json: { ok: true, data } });
   });
   return { mutations, errors, library: () => library, setIdentity: (key: string, role = "member") => { identity = { key, role }; } };
+}
+
+for (const width of [1280, 360]) {
+  test(`theme JSON downloads and file imports at width ${width}`, async ({ page }) => {
+    const fixture = await installThemeFixture(page);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("./");
+    await page.getByRole("button", { name: "管理主题", exact: true }).click();
+    const manager = page.locator(".theme-manager");
+    const downloadSingle = page.waitForEvent("download");
+    await manager.getByRole("button", { name: "导出当前主题", exact: true }).click();
+    const single = await downloadSingle;
+    await single.saveAs(test.info().outputPath("theme-single.json"));
+    const singleContent = await readFile((await single.path())!);
+    expect(single.suggestedFilename()).toBe("orbit-theme-纸感日间.json");
+    const singleTheme = JSON.parse(singleContent.toString("utf8"));
+    expect(singleTheme.name).toBe("纸感日间");
+    expect(singleTheme.appearance.typography.chatBodyFontFamily).toBe("sans");
+    if (width < 768) await manager.getByRole("button", { name: "主题列表", exact: true }).click();
+    const chooseSingle = page.waitForEvent("filechooser");
+    await manager.getByRole("button", { name: "导入 JSON", exact: true }).click();
+    await (await chooseSingle).setFiles({ name: single.suggestedFilename(), mimeType: "application/json", buffer: singleContent });
+    await expect(manager.getByLabel("主题名称", { exact: true })).toHaveValue("纸感日间 (2)");
+    await manager.getByLabel("主题名称", { exact: true }).fill("分享配色");
+    await manager.getByLabel("强调色 HEX", { exact: true }).fill("#2468AC");
+    await manager.getByLabel("聊天正文字体", { exact: true }).selectOption("serif");
+    await manager.getByRole("button", { name: "保存并应用", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "theme_fixture_1");
+    if (width < 768) await manager.getByRole("button", { name: "主题列表", exact: true }).click();
+    const downloadPack = page.waitForEvent("download");
+    await manager.getByRole("button", { name: "导出主题包", exact: true }).click();
+    const pack = await downloadPack;
+    await pack.saveAs(test.info().outputPath("theme-pack.json"));
+    const packContent = await readFile((await pack.path())!);
+    const document = JSON.parse(packContent.toString("utf8"));
+    expect(document.themes).toHaveLength(2);
+    expect(document.themes[1].appearance.typography.chatBodyFontFamily).toBe("serif");
+    expect(document.themes[1].appearance.colors.overrides.accent).toBe("#2468ACFF");
+    const choosePack = page.waitForEvent("filechooser");
+    await manager.getByRole("button", { name: "导入 JSON", exact: true }).click();
+    await (await choosePack).setFiles({ name: pack.suggestedFilename(), mimeType: "application/json", buffer: packContent });
+    await expect(manager.getByText(/已导入 2 个主题/)).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "theme_fixture_1");
+    expect(fixture.library().themes).toHaveLength(4);
+    expect(fixture.library().themes[3].name).toBe("分享配色 (2)");
+    expect(fixture.library().themes[3].appearance).toEqual(fixture.library().themes[1].appearance);
+    await expect(manager.getByLabel("主题名称", { exact: true })).toBeEditable();
+    await page.screenshot({ path: test.info().outputPath(`theme-json-editor-${width}.png`) });
+    if (width < 768) await manager.getByRole("button", { name: "主题列表", exact: true }).click();
+    await expect(manager.getByRole("button", { name: "导出主题包", exact: true })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`theme-json-library-${width}.png`) });
+    expect(fixture.errors).toEqual([]);
+  });
 }
 
 for (const [width, height] of [[1600, 1000], [1280, 900], [390, 844], [360, 800]]) {

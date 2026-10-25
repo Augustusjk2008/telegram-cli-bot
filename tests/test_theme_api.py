@@ -51,6 +51,53 @@ def create_input(**changes):
     return {"schemaVersion": 1, "expectedRevision": 0, "sourceId": "paper-daylight", "name": "个人主题", **changes}
 
 
+def import_input(**changes):
+    return {"expectedRevision": 0, "document": {
+        "schemaVersion": 1, "name": "导入主题", "baseId": "paper-daylight",
+        "appearance": {"colors": {"scheme": "light", "overrides": {}}},
+    }, **changes}
+
+
+@pytest.mark.asyncio
+async def test_member_imports_single_and_bundle_through_registered_routes(api):
+    status, imported = await request(api, "POST", "/node/theme-test/api/ui/themes/import", body=import_input())
+    assert status == 200 and imported["ok"] is True
+    status, shared = await request(api, "GET", token="bob")
+    assert status == 200 and shared == imported
+    themes = [import_input()["document"], import_input()["document"]]
+    status, imported = await request(api, "POST", "/api/ui/themes/import", token="bob", body=import_input(
+        expectedRevision=1, document={"schemaVersion": 1, "themes": themes}))
+    assert status == 200 and len(imported["data"]["themes"]) == 4
+    status, shared = await request(api, "GET")
+    assert status == 200 and shared == imported
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enum_value", [[], {}])
+async def test_import_non_string_typography_returns_400_without_writing(api, enum_value):
+    body = import_input()
+    body["document"]["appearance"]["typography"] = {
+        "chatBodyFontFamily": enum_value, "chatBodyFontSize": "medium",
+        "chatBodyLineHeight": "normal", "chatBodyParagraphSpacing": "normal",
+    }
+    status, payload = await request(api, "POST", "/api/ui/themes/import", body=body)
+    assert status == 400 and payload["error"]["code"] == "invalid_theme"
+    assert not api.server.theme_store.library_path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    {"document": import_input()["document"]},
+    import_input(expectedRevision=True),
+    import_input(activate=True),
+    import_input(document={"schemaVersion": 2, "themes": [import_input()["document"]]}),
+])
+async def test_import_request_validation_returns_400(api, body):
+    status, payload = await request(api, "POST", "/api/ui/themes/import", body=body)
+    assert status == 400 and payload["ok"] is False
+    assert not api.server.theme_store.library_path.exists()
+
+
 @pytest.mark.asyncio
 async def test_authenticated_member_crud_works_without_bot_or_admin_permissions(api):
     status, payload = await request(api, "GET", "/node/theme-test/api/ui/themes")
@@ -106,6 +153,7 @@ async def test_guests_read_global_library_and_unauthenticated_requests_use_host_
     before = api.server.theme_store.library_path.read_bytes()
     for method, path, body in (
         ("POST", "/api/ui/themes", create_input()),
+        ("POST", "/api/ui/themes/import", import_input()),
         ("PATCH", "/api/ui/themes/paper-daylight", {"schemaVersion": 1, "expectedRevision": 0}),
         ("DELETE", "/api/ui/themes/paper-daylight", {"expectedRevision": 0}),
         ("PATCH", "/api/ui/theme-selection", {"themeId": "paper-daylight", "expectedRevision": 0}),
@@ -131,6 +179,7 @@ async def test_login_page_can_read_themes_without_auth_but_cannot_mutate_them(ap
         assert status == 200 and payload == created
     for method, path, body in (
         ("POST", "/api/ui/themes", create_input(expectedRevision=1)),
+        ("POST", "/api/ui/themes/import", import_input(expectedRevision=1)),
         ("PATCH", f"/api/ui/themes/{theme_id}", {"schemaVersion": 1, "expectedRevision": 1, "name": "修改"}),
         ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 1}),
         ("PATCH", "/api/ui/theme-selection", {"themeId": "paper-daylight", "expectedRevision": 1}),
@@ -146,6 +195,7 @@ async def test_revision_conflicts_are_409_and_do_not_apply_stale_mutations(api):
     theme_id = payload["data"]["themes"][1]["id"]
     for method, path, body in (
         ("POST", "/api/ui/themes", create_input(activate=True)),
+        ("POST", "/api/ui/themes/import", import_input()),
         ("PATCH", f"/api/ui/themes/{theme_id}", {"schemaVersion": 1, "expectedRevision": 0, "name": "旧草稿", "activate": True}),
         ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 0}),
         ("PATCH", "/api/ui/theme-selection", {"themeId": theme_id, "expectedRevision": 0}),
@@ -205,5 +255,7 @@ async def test_corrupt_library_falls_back_with_error_and_cannot_be_overwritten(a
     assert status == 200 and "原文件已保留" in payload["data"]["error"]
     assert len(payload["data"]["themes"]) == 1
     status, payload = await request(api, "POST", body=create_input())
+    assert status == 500 and payload["error"]["code"] == "theme_store_unreadable"
+    status, payload = await request(api, "POST", "/api/ui/themes/import", body=import_input())
     assert status == 500 and payload["error"]["code"] == "theme_store_unreadable"
     assert path.read_bytes() == original
