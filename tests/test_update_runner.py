@@ -234,6 +234,25 @@ def test_official_child_registers_current_storage_location(installation, monkeyp
                     pytest.fail("the child must keep its host lease")
 
 
+def test_official_child_accepts_handoff_when_windows_venv_changes_parent_pid(installation, monkeypatch, tmp_path):
+    from bot.update_state import begin_host_execution
+    root, old_store = installation
+    moved = tmp_path / "new-storage" / "updates"
+    pointer = old_store.execution_lock_root / "host-handoff-child-nonce.json"
+    monkeypatch.setattr("bot.runtime_paths.get_update_state_root", lambda repo: moved)
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_PROTOCOL", "1")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_SUPERVISOR_PID", "not-the-final-venv-parent")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_STATE_FILE", str(old_store.state_path))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF", str(pointer))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", "child-nonce")
+
+    with runner.supervisor_lock(old_store):
+        with begin_host_execution(root):
+            payload = json.loads(pointer.read_text())
+            assert payload["state_file"] == str(moved / "state.json")
+            assert payload["host_pid"] == os.getpid()
+
+
 def test_same_version_recovery_verifies_the_previous_build(installation, monkeypatch):
     root, store = installation
     (Path(store.read()["job"]["staging_dir"]) / "VERSION").write_text("1.0.0")

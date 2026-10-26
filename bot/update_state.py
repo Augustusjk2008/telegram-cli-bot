@@ -54,11 +54,39 @@ def write_host_handoff(state_file, job_id=""):
         Path(name).unlink(missing_ok=True)
 
 
+def _is_official_host(directory: Path) -> bool:
+    """Recognize a host launched by the supervisor, including Windows venv hosts.
+
+    A Windows venv executable can reparent the final interpreter process, so its
+    ``os.getppid()`` may differ from the supervisor PID.  The supervisor's
+    one-time handoff filename and token provide the fallback identity check.
+    """
+    if os.environ.get("CLI_BRIDGE_UPDATE_PROTOCOL") != "1":
+        return False
+
+    if os.environ.get("CLI_BRIDGE_UPDATE_SUPERVISOR_PID") == str(os.getppid()):
+        return True
+
+    handoff_text = os.environ.get("CLI_BRIDGE_UPDATE_HANDOFF", "").strip()
+    token = os.environ.get("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", "").strip()
+    if not handoff_text or not token:
+        return False
+
+    try:
+        handoff_path = Path(handoff_text).resolve()
+        return (
+            handoff_path.parent == directory.resolve()
+            and handoff_path.name == f"host-handoff-{token}.json"
+            and not handoff_path.exists()
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def begin_host_execution(repo_root):
     """Hold a host lease; direct launches also exclude an official supervisor."""
     directory = execution_lock_root(repo_root)
-    official = (os.environ.get("CLI_BRIDGE_UPDATE_PROTOCOL") == "1"
-                and os.environ.get("CLI_BRIDGE_UPDATE_SUPERVISOR_PID") == str(os.getppid()))
+    official = _is_official_host(directory)
     stack = ExitStack()
     try:
         if not official:
