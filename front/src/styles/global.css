@@ -213,6 +213,30 @@ select:disabled {
   line-height: var(--chat-body-line-height);
 }
 
+@keyframes endlessLetterBounce {
+  0%,
+  68%,
+  100% {
+    opacity: 0.62;
+    transform: translateY(0);
+  }
+
+  34% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.endless-typing-letter {
+  animation: endlessLetterBounce 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .endless-typing-letter {
+    animation: none;
+  }
+}
+
 [data-layout="mobile"] .chat-message-bubble-delight {
   padding-inline: 8px;
   box-shadow: none;

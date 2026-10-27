@@ -34,6 +34,24 @@ type Props = {
   mobileLayout?: boolean;
 };
 
+export function EndlessTypingLabel() {
+  return (
+    <span aria-label="ENDLESS..." className="inline-flex items-baseline font-semibold tracking-[0.18em]">
+      {"ENDLESS".split("").map((letter, index) => (
+        <span
+          key={`${letter}-${index}`}
+          aria-hidden="true"
+          className="endless-typing-letter inline-block"
+          style={{ animationDelay: `${index * 100}ms` }}
+        >
+          {letter}
+        </span>
+      ))}
+      <span aria-hidden="true" className="ml-0.5 tracking-normal">...</span>
+    </span>
+  );
+}
+
 function compact(value: string, fallback: string) {
   const text = value.trim();
   return text || fallback;
@@ -604,6 +622,7 @@ export function NativeAgentTranscript({
   const hasEndlessDetails = entries.some((entry) => (
     entry.kind === "endless_error" || entry.kind === "endless_continue"
   ));
+  const endlessStreaming = state === "streaming" && hasEndlessDetails;
   const shouldShowTraceDisclosure = shouldLazyLoadTrace
     || hasEndlessDetails
     || (collapseProcess && traceDetailRenderItems.length > 0);
@@ -668,11 +687,15 @@ export function NativeAgentTranscript({
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
       {mobileLayout && state === "streaming" ? (
         <div data-testid="native-agent-streaming-status" role="status" className="flex min-w-0 items-start gap-1.5 py-1 text-xs text-[var(--muted)]">
-          <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--accent)]" />
-          <div className="min-w-0">
-            <div className="truncate font-medium">{progressStatus}</div>
-            {!traceExpanded && progressPreview ? <p className="line-clamp-2 break-words">{progressPreview}</p> : null}
-          </div>
+          {endlessStreaming ? <EndlessTypingLabel /> : (
+            <>
+              <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--accent)]" />
+              <div className="min-w-0">
+                <div className="truncate font-medium">{progressStatus}</div>
+                {!traceExpanded && progressPreview ? <p className="line-clamp-2 break-words">{progressPreview}</p> : null}
+              </div>
+            </>
+          )}
         </div>
       ) : null}
       {shouldShowTraceDisclosure ? (
@@ -742,10 +765,15 @@ export function NativeAgentTranscript({
       {!mobileLayout && state === "streaming" ? (
         <div
           data-testid="native-agent-streaming-status"
+          role="status"
           className="flex items-center gap-2 border-t border-[var(--workbench-hairline)] py-2 text-sm text-[var(--muted)]"
         >
-          <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
-          <span>正在输出...</span>
+          {endlessStreaming ? <EndlessTypingLabel /> : (
+            <>
+              <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
+              <span>正在输出...</span>
+            </>
+          )}
         </div>
       ) : null}
     </div>

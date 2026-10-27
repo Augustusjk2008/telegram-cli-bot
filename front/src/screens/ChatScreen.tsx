@@ -33,7 +33,7 @@ import { ClusterTeamPanel } from "../components/ClusterTeamPanel";
 import { ConversationHistoryPanel, type ConversationHistoryPanelTab } from "../components/ConversationHistoryPanel";
 import { BotChatTranslationSettings } from "../components/BotChatTranslationSettings";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
-import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
+import { EndlessTypingLabel, NativeAgentTranscript } from "../components/NativeAgentTranscript";
 import { ImmersiveToggleButton } from "../components/ImmersiveToggleButton";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -1530,6 +1530,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasTrace = allowTrace && isAssistant && traceCount > 0;
   const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
   const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript || Boolean(endlessEvents?.length));
+  const isEndlessStreamingAssistant = isStreamingAssistant && Boolean(endlessEvents?.length);
   const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
@@ -1676,8 +1677,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
               </div>
             ) : isStreamingAssistant ? (
               <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
-                <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
-                <span>正在输出...</span>
+                {isEndlessStreamingAssistant ? <EndlessTypingLabel /> : (
+                  <>
+                    <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
+                    <span>正在输出...</span>
+                  </>
+                )}
               </div>
             ) : (
               <ChatPlainTextMessage
@@ -5296,7 +5301,6 @@ export function ChatScreen({
     ? "等待权限处理"
     : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || (!isStreaming && !endlessModeActive) || actionLoading === "kill";
-  const endlessModeAttempt = Math.max(0, botOverview?.endlessAttempt || 0);
   const voiceEnabled = botOverview?.alias === botAlias
     && botOverview?.cliType === "codex_server"
     && effectiveExecutionMode === "cli"
@@ -5775,36 +5779,6 @@ export function ChatScreen({
       {chatDisabledReason && !childAgentReadOnly ? (
         <section className="border-b border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm font-medium text-[var(--status-warning)] shadow-[var(--shadow-surface)]">
           {chatDisabledReason}
-        </section>
-      ) : null}
-      {endlessModeActive ? (
-        <section
-          data-testid="endless-mode-status"
-          role="status"
-          aria-live="polite"
-          className="shrink-0 border-y-2 border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2.5 text-[var(--status-warning)] shadow-[var(--shadow-surface)]"
-        >
-          <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--status-warning)]/15">
-              <LoaderCircle className="h-5 w-5 animate-spin" aria-hidden="true" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold">无尽模式执行中</p>
-              <p className="mt-0.5 text-xs">
-                正在自动继续回答，任务完成前会保持运行。
-                {endlessModeAttempt > 0 ? ` 已自动继续 ${endlessModeAttempt} 次。` : ""}
-              </p>
-            </div>
-            <button
-              type="button"
-              aria-label="终止无尽模式"
-              onClick={() => void handleKillTask()}
-              disabled={killTaskDisabled}
-              className="shrink-0 rounded-md border border-[var(--status-warning-border)] px-2.5 py-1.5 text-xs font-semibold transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {actionLoading === "kill" ? "终止中" : "终止无尽模式"}
-            </button>
-          </div>
         </section>
       ) : null}
       <section

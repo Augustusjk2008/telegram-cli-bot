@@ -130,7 +130,7 @@ test("keeps backend endless mode errors visible until the final answer", async (
   expect(sendMessage).toHaveBeenCalledTimes(1);
   expect(sendMessage.mock.calls[0][1]).toBe("Continue");
   expect(sendMessage.mock.calls[0][5]?.endlessMode).toBe(true);
-  expect(await screen.findByTestId("endless-mode-status")).toHaveTextContent("无尽模式执行中");
+  expect(await screen.findByLabelText("ENDLESS...")).toBeInTheDocument();
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
   expect(screen.getAllByTestId("chat-message-row")[0]).toHaveTextContent("原始问题");
   const processDisclosure = screen.getByRole("button", { name: "展开过程详情" });
@@ -193,7 +193,6 @@ test("restores backend endless mode after the chat screen is rebuilt", async () 
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  expect(await screen.findByTestId("endless-mode-status")).toHaveTextContent("已自动继续 3 次");
   expect((await screen.findAllByRole("button", { name: "View context details: Continue ×3" })).length).toBeGreaterThan(0);
 });
 
@@ -223,7 +222,6 @@ test("stopping endless mode terminates the active continuation", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "终止任务" }));
   await waitFor(() => expect(killTask).toHaveBeenCalledTimes(1));
-  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
 
   activeAttempt.resolve({
     id: "assistant-endless-stopped",
