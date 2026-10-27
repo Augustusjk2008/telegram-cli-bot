@@ -730,6 +730,7 @@ class NativeAgentService:
         prompt_text: str,
         fresh_session_prompt_text: str = "",
         history_service: ChatHistoryService,
+        endless_group_id: str | None = None,
         actor: dict[str, Any] | None = None,
         protocol: str = "",
         cluster_run_id: str = "",
@@ -813,6 +814,7 @@ class NativeAgentService:
                 session=session,
                 user_text=user_text,
                 native_provider=NATIVE_AGENT_PROVIDER,
+                endless_group_id=endless_group_id,
                 actor=actor,
             )
             with session._lock:

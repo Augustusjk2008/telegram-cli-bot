@@ -107,6 +107,7 @@ export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo): ChatMes
     trace: retainedTrace && retainedTrace.length > 0 ? retainedTrace : undefined,
     endlessEvents: meta.endlessEvents,
     endlessContinueCount: meta.endlessContinueCount,
+    endlessGroupId: meta.endlessGroupId,
   };
   return Object.values(compactMeta).some((value) => typeof value !== "undefined") ? compactMeta : undefined;
 }
@@ -171,6 +172,7 @@ export function mergeMessageMeta(
     contextUsage: incoming?.contextUsage || base?.contextUsage,
     endlessEvents,
     endlessContinueCount: hasEndlessMeta ? endlessContinueCount : undefined,
+    endlessGroupId: incoming?.endlessGroupId || base?.endlessGroupId,
     agUiRunState,
     tracePresentation,
     trace,

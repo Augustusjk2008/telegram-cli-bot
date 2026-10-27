@@ -511,6 +511,7 @@ class ChatHistoryService:
         session: UserSession,
         user_text: str,
         native_provider: str,
+        endless_group_id: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
         active_conversation_id = _active_conversation_id(session)
@@ -545,6 +546,7 @@ class ChatHistoryService:
             native_provider=native_provider,
             conversation_id=active_conversation_id or None,
             agent_prompt_hash=getattr(session, "agent_prompt_hash_seen", None),
+            endless_group_id=endless_group_id,
             actor=actor,
         )
         if not had_active_conversation:
@@ -643,6 +645,47 @@ class ChatHistoryService:
 
     def update_context_usage(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
         return self.store.update_context_usage(handle.turn_id, context_usage)
+
+    def ensure_endless_group(self, session: UserSession, message_id: str, group_id: str) -> str:
+        target = self.get_scoped_message(session, message_id)
+        if target is None or str(target.get("role") or "") != "assistant":
+            raise KeyError(message_id)
+        return self.store.ensure_endless_group(message_id, group_id)
+
+    async def ensure_endless_group_async(self, session: UserSession, message_id: str, group_id: str) -> str:
+        return await self.async_store.run_write(
+            self.ensure_endless_group,
+            session,
+            message_id,
+            group_id,
+        )
+
+    def append_endless_event(
+        self,
+        *,
+        event: dict[str, Any],
+        turn_id: str = "",
+        assistant_message_id: str = "",
+    ) -> bool:
+        return self.store.append_endless_event(
+            event=event,
+            turn_id=turn_id,
+            assistant_message_id=assistant_message_id,
+        )
+
+    async def append_endless_event_async(
+        self,
+        *,
+        event: dict[str, Any],
+        turn_id: str = "",
+        assistant_message_id: str = "",
+    ) -> bool:
+        return await self.async_store.run_write(
+            self.append_endless_event,
+            event=event,
+            turn_id=turn_id,
+            assistant_message_id=assistant_message_id,
+        )
 
     async def update_context_usage_async(self, handle: ChatTurnHandle, context_usage: dict[str, Any] | None) -> bool:
         return await asyncio.to_thread(self.update_context_usage, handle, context_usage)

@@ -1224,6 +1224,7 @@ export type ChatMessageMetaInfo = {
   contextUsage?: ChatMessageContextUsage;
   endlessEvents?: ChatEndlessEvent[];
   endlessContinueCount?: number;
+  endlessGroupId?: string;
   agUiRunState?: unknown;
   tracePresentation?: "native_agent_flat" | "generic";
   workspaceHistoryHead?: string;
@@ -1487,6 +1488,8 @@ export type ChatSendOptions = {
   executionMode?: ChatExecutionMode;
   soloMode?: boolean;
   endlessMode?: boolean;
+  endlessGroupId?: string;
+  endlessParentMessageId?: string;
   signal?: AbortSignal;
   conversationId?: string;
   sessionEpoch?: number;

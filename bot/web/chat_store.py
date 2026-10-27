@@ -461,6 +461,8 @@ class ChatStore:
                 trace_recovery_attempted_at TEXT,
                 trace_recovery_status TEXT,
                 context_usage_json TEXT,
+                endless_group_id TEXT,
+                endless_events_json TEXT,
                 workspace_history_head TEXT,
                 workspace_history_index INTEGER,
                 workspace_history_discarded_at TEXT,
@@ -614,6 +616,8 @@ class ChatStore:
         self._ensure_column(conn, "turns", "trace_recovery_attempted_at", "TEXT")
         self._ensure_column(conn, "turns", "trace_recovery_status", "TEXT")
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
+        self._ensure_column(conn, "turns", "endless_group_id", "TEXT")
+        self._ensure_column(conn, "turns", "endless_events_json", "TEXT")
         self._ensure_column(conn, "turns", "workspace_history_head", "TEXT")
         self._ensure_column(conn, "turns", "workspace_history_index", "INTEGER")
         self._ensure_column(conn, "turns", "workspace_history_discarded_at", "TEXT")
@@ -2090,6 +2094,7 @@ class ChatStore:
         native_provider: str,
         conversation_id: str | None = None,
         agent_prompt_hash: str | None = None,
+        endless_group_id: str | None = None,
         actor: dict[str, Any] | None = None,
     ) -> ChatTurnHandle:
         started_at = time.perf_counter()
@@ -2105,6 +2110,7 @@ class ChatStore:
             normalized_author_user_id = None
         author_account_id = str(actor_data.get("account_id") or "").strip() or None
         author_username = str(actor_data.get("username") or "").strip() or None
+        normalized_endless_group_id = str(endless_group_id or "").strip() or None
         with self._connect_for_write() as conn:
             normalized_conversation_id = str(conversation_id or "").strip()
             if normalized_conversation_id:
@@ -2146,9 +2152,10 @@ class ChatStore:
                     completion_state,
                     native_provider,
                     native_session_id,
+                    endless_group_id,
                     started_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_id,
@@ -2160,6 +2167,7 @@ class ChatStore:
                     "streaming",
                     native_provider,
                     None,
+                    normalized_endless_group_id,
                     now,
                     now,
                 ),
@@ -2477,6 +2485,143 @@ class ChatStore:
                 op="update_context_usage",
                 turn_id=turn_id,
             )
+
+    def ensure_endless_group(self, message_id: str, group_id: str) -> str:
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_group_id:
+            raise ValueError("无尽模式缺少 group_id")
+        now = _utc_now()
+        with self._connect_for_write() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    m.id,
+                    m.turn_id,
+                    m.role,
+                    m.content,
+                    m.state,
+                    t.conversation_id,
+                    t.endless_group_id,
+                    t.endless_events_json,
+                    t.assistant_message_id
+                FROM messages AS m
+                JOIN turns AS t ON t.id = m.turn_id
+                WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
+                """,
+                (str(message_id or "").strip(),),
+            ).fetchone()
+            if row is None or str(row["role"] or "") != "assistant":
+                raise KeyError(message_id)
+            existing_group_id = str(row["endless_group_id"] or "").strip()
+            effective_group_id = existing_group_id or normalized_group_id
+            try:
+                parsed_events = _parse_json(row["endless_events_json"])
+            except (TypeError, json.JSONDecodeError):
+                parsed_events = None
+            events = [dict(event) for event in (parsed_events if isinstance(parsed_events, list) else []) if isinstance(event, dict)]
+            if not events and str(row["state"] or "") == "error" and str(row["content"] or "").strip():
+                events.append({
+                    "kind": "error",
+                    "sequence": 1,
+                    "attempt": 0,
+                    "text": str(row["content"] or "").strip(),
+                })
+            if effective_group_id != existing_group_id or events != (parsed_events if isinstance(parsed_events, list) else []):
+                conn.execute(
+                    """
+                    UPDATE turns
+                    SET endless_group_id = ?, endless_events_json = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        effective_group_id,
+                        json.dumps(events, ensure_ascii=False) if events else None,
+                        now,
+                        str(row["turn_id"]),
+                    ),
+                )
+                self._record_message_changes(
+                    conn,
+                    str(row["conversation_id"]),
+                    [str(row["assistant_message_id"])],
+                    operation="upsert",
+                    now=now,
+                )
+            return effective_group_id
+
+    def append_endless_event(
+        self,
+        *,
+        event: dict[str, Any],
+        turn_id: str = "",
+        assistant_message_id: str = "",
+    ) -> bool:
+        kind = str(event.get("kind") or "").strip().lower()
+        text = str(event.get("text") or "").strip()
+        if kind not in {"error", "continue"} or not text:
+            return False
+        now = _utc_now()
+        normalized_turn_id = str(turn_id or "").strip()
+        normalized_message_id = str(assistant_message_id or "").strip()
+        with self._connect_for_write() as conn:
+            if normalized_turn_id:
+                row = conn.execute(
+                    """
+                    SELECT id, conversation_id, assistant_message_id, endless_events_json
+                    FROM turns
+                    WHERE id = ?
+                    """,
+                    (normalized_turn_id,),
+                ).fetchone()
+            elif normalized_message_id:
+                row = conn.execute(
+                    """
+                    SELECT t.id, t.conversation_id, t.assistant_message_id, t.endless_events_json
+                    FROM turns AS t
+                    JOIN messages AS m ON m.turn_id = t.id
+                    WHERE m.id = ?
+                    """,
+                    (normalized_message_id,),
+                ).fetchone()
+            else:
+                return False
+            if row is None:
+                return False
+            try:
+                parsed_events = _parse_json(row["endless_events_json"])
+            except (TypeError, json.JSONDecodeError):
+                parsed_events = None
+            events = [dict(item) for item in (parsed_events if isinstance(parsed_events, list) else []) if isinstance(item, dict)]
+            duplicate = any(
+                str(item.get("kind") or "").strip().lower() == kind
+                and int(item.get("attempt") or 0) == max(0, int(event.get("attempt") or 0))
+                and str(item.get("text") or "").strip() == text
+                and str(item.get("code") or "") == str(event.get("code") or "")
+                for item in events
+            )
+            if duplicate:
+                return False
+            next_event = {
+                "kind": kind,
+                "sequence": max((int(item.get("sequence") or 0) for item in events), default=0) + 1,
+                "attempt": max(0, int(event.get("attempt") or 0)),
+                "text": text,
+            }
+            if event.get("code"):
+                next_event["code"] = str(event["code"])
+            events.append(next_event)
+            conn.execute(
+                "UPDATE turns SET endless_events_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(events, ensure_ascii=False), now, str(row["id"])),
+            )
+            self._record_message_changes(
+                conn,
+                str(row["conversation_id"]),
+                [str(row["assistant_message_id"])],
+                operation="upsert",
+                now=now,
+            )
+            return True
 
     def get_latest_native_session_context_usage(
         self,
@@ -3529,6 +3674,29 @@ class ChatStore:
             "native_session_id": row["native_session_id"],
         }
         is_assistant = str(row["role"] or "") == "assistant"
+        try:
+            endless_group_id = str(row["endless_group_id"] or "").strip()
+        except (KeyError, IndexError):
+            endless_group_id = ""
+        if endless_group_id:
+            meta["endless_group_id"] = endless_group_id
+        if is_assistant:
+            try:
+                parsed_endless_events = _parse_json(row["endless_events_json"])
+            except (KeyError, TypeError, json.JSONDecodeError):
+                parsed_endless_events = None
+            endless_events = [
+                dict(event)
+                for event in (parsed_endless_events if isinstance(parsed_endless_events, list) else [])
+                if isinstance(event, dict)
+                and str(event.get("kind") or "").strip() in {"error", "continue"}
+                and str(event.get("text") or "").strip()
+            ]
+            if endless_events:
+                meta["endless_events"] = endless_events
+                meta["endless_continue_count"] = sum(
+                    1 for event in endless_events if str(event.get("kind") or "").strip() == "continue"
+                )
         voice_row = conn.execute(
             "SELECT * FROM voice_turns WHERE turn_id = ?",
             (turn_id,),
@@ -3647,6 +3815,8 @@ class ChatStore:
                     t.native_provider,
                     t.native_session_id,
                     t.context_usage_json,
+                    t.endless_group_id,
+                    t.endless_events_json,
                     t.workspace_history_head,
                     t.workspace_history_index
                 FROM messages AS m
@@ -3686,6 +3856,8 @@ class ChatStore:
                 recent.native_provider,
                 recent.native_session_id,
                 recent.context_usage_json,
+                recent.endless_group_id,
+                recent.endless_events_json,
                 recent.workspace_history_head,
                 recent.workspace_history_index,
                 recent.message_rowid,
@@ -3711,6 +3883,8 @@ class ChatStore:
                     t.native_provider,
                     t.native_session_id,
                     t.context_usage_json,
+                    t.endless_group_id,
+                    t.endless_events_json,
                     t.workspace_history_head,
                     t.workspace_history_index,
                     m.rowid AS message_rowid,
@@ -3770,6 +3944,8 @@ class ChatStore:
                         t.native_provider,
                         t.native_session_id,
                         t.context_usage_json,
+                        t.endless_group_id,
+                        t.endless_events_json,
                         t.workspace_history_head,
                         t.workspace_history_index
                     FROM messages AS m
@@ -3851,6 +4027,8 @@ class ChatStore:
                 t.native_provider,
                 t.native_session_id,
                 t.context_usage_json,
+                t.endless_group_id,
+                t.endless_events_json,
                 t.workspace_history_head,
                 t.workspace_history_index
             FROM messages AS m

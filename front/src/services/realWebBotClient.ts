@@ -783,6 +783,8 @@ type RawChatMessageMeta = {
   endlessEvents?: RawChatEndlessEvent[];
   endless_continue_count?: number;
   endlessContinueCount?: number;
+  endless_group_id?: string;
+  endlessGroupId?: string;
   workspace_history_head?: string;
   workspaceHistoryHead?: string;
   linear_index?: number;
@@ -2718,6 +2720,10 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   }
   if (Number.isFinite(endlessContinueCount) && endlessContinueCount >= 0) {
     meta.endlessContinueCount = Math.floor(endlessContinueCount);
+  }
+  const endlessGroupId = String(raw.endless_group_id ?? raw.endlessGroupId ?? "").trim();
+  if (endlessGroupId) {
+    meta.endlessGroupId = endlessGroupId;
   }
   if (typeof rawWorkspaceHistoryHead === "string") {
     meta.workspaceHistoryHead = rawWorkspaceHistoryHead;
@@ -5761,6 +5767,8 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
         ...(options?.soloMode ? { solo_mode: true } : {}),
         ...(options?.endlessMode ? { endless_mode: true } : {}),
+        ...(options?.endlessGroupId ? { endless_group_id: options.endlessGroupId } : {}),
+        ...(options?.endlessParentMessageId ? { endless_parent_message_id: options.endlessParentMessageId } : {}),
         ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
       }),
     });

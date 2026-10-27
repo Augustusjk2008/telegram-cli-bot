@@ -2543,6 +2543,21 @@ class WebApiServer:
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
         endless_mode = bool(body.get("endless_mode") or body.get("endlessMode"))
+        raw_endless_group_id = body.get("endless_group_id", body.get("endlessGroupId", ""))
+        raw_endless_parent_message_id = body.get(
+            "endless_parent_message_id",
+            body.get("endlessParentMessageId", ""),
+        )
+        if raw_endless_group_id is None:
+            raw_endless_group_id = ""
+        if raw_endless_parent_message_id is None:
+            raw_endless_parent_message_id = ""
+        if not isinstance(raw_endless_group_id, str) or not isinstance(raw_endless_parent_message_id, str):
+            raise WebApiError(400, "invalid_endless_binding", "无尽模式绑定字段必须是字符串")
+        endless_group_id = raw_endless_group_id.strip()
+        endless_parent_message_id = raw_endless_parent_message_id.strip()
+        if len(endless_group_id) > 128 or len(endless_parent_message_id) > 128:
+            raise WebApiError(400, "invalid_endless_binding", "无尽模式绑定字段过长")
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
@@ -2622,6 +2637,10 @@ class WebApiServer:
             })
         if endless_mode:
             stream_kwargs["endless_mode"] = True
+            if endless_group_id:
+                stream_kwargs["endless_group_id"] = endless_group_id
+            if endless_parent_message_id:
+                stream_kwargs["endless_parent_message_id"] = endless_parent_message_id
         event_stream = stream_chat(
             self.manager,
             alias,

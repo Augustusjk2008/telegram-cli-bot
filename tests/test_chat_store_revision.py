@@ -60,6 +60,44 @@ def test_history_revision_delta_tracks_add_stream_update_and_finalize(tmp_path: 
     assert finalized["deleted_ids"] == []
 
 
+def test_endless_group_and_events_survive_history_reload(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    first = _begin(store, text="原始问题")
+    store.complete_turn(first, content="第一次失败", completion_state="error")
+    group_id = store.ensure_endless_group(first.assistant_message_id, "endless_group_1")
+
+    # The continuation turn receives the same durable group at creation time.
+    retry = store.begin_turn(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2,
+        agent_id="main",
+        cli_type="codex",
+        working_dir=str(store.workspace_dir),
+        session_epoch=0,
+        user_text="Continue",
+        native_provider="codex",
+        conversation_id=first.conversation_id,
+        endless_group_id=group_id,
+    )
+    store.complete_turn(retry, content="第二次失败", completion_state="error")
+    store.append_endless_event(
+        turn_id=retry.turn_id,
+        event={"kind": "error", "attempt": 1, "text": "第二次失败"},
+    )
+    store.append_endless_event(
+        turn_id=retry.turn_id,
+        event={"kind": "continue", "attempt": 1, "text": "Continue"},
+    )
+
+    history = store.list_messages(first.conversation_id)
+    assistants = [item for item in history if item["role"] == "assistant"]
+    assert assistants[0]["meta"]["endless_group_id"] == group_id
+    assert [event["kind"] for event in assistants[0]["meta"]["endless_events"]] == ["error"]
+    assert assistants[1]["meta"]["endless_group_id"] == group_id
+    assert [event["kind"] for event in assistants[1]["meta"]["endless_events"]] == ["error", "continue"]
+
+
 def test_append_user_message_to_active_turn_keeps_scope_and_revision(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     handle = _begin(store, text="first")

@@ -306,6 +306,8 @@ class _ChatRunRequest:
     task_mode: str = "standard"
     task_payload: dict[str, Any] | None = None
     endless_mode: bool = False
+    endless_group_id: str = ""
+    endless_parent_message_id: str = ""
     actor_user_id: int | None = None
     actor_account_id: str | None = None
     actor_username: str | None = None
@@ -350,6 +352,8 @@ def _build_chat_run_request(
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
     endless_mode: bool = False,
+    endless_group_id: str = "",
+    endless_parent_message_id: str = "",
     visible_text: str | None = None,
     actor: dict[str, Any] | None = None,
 ) -> _ChatRunRequest:
@@ -366,6 +370,8 @@ def _build_chat_run_request(
         task_mode=normalized_task_mode,
         task_payload=task_payload,
         endless_mode=bool(endless_mode),
+        endless_group_id=str(endless_group_id or "").strip(),
+        endless_parent_message_id=str(endless_parent_message_id or "").strip(),
         actor_user_id=_optional_int(actor_data.get("user_id")),
         actor_account_id=str(actor_data.get("account_id") or "").strip() or None,
         actor_username=str(actor_data.get("username") or "").strip() or None,
@@ -6690,6 +6696,7 @@ async def _stream_cli_chat(
             session=session,
             user_text=text,
             native_provider=cli_data_provider(cli_type),
+            endless_group_id=request.endless_group_id if request is not None else None,
             actor=_actor_from_request(request),
         )
         with session._lock:
@@ -8246,6 +8253,15 @@ async def _wait_for_endless_retry(session: UserSession) -> None:
         await asyncio.sleep(min(0.1, remaining))
 
 
+def _normalize_endless_group_id(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or len(normalized) > 128:
+        return ""
+    if not all(char.isalnum() or char in {"_", "-"} for char in normalized):
+        return ""
+    return normalized
+
+
 async def _stream_endless_attempts(
     *,
     session: UserSession,
@@ -8254,7 +8270,45 @@ async def _stream_endless_attempts(
     initial_text: str,
     initial_request: _ChatRunRequest,
     attempt_factory: Callable[[str, _ChatRunRequest], AsyncIterator[dict[str, Any]]],
+    history_service: ChatHistoryService | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
+    endless_group_id = _normalize_endless_group_id(initial_request.endless_group_id)
+    if not endless_group_id:
+        endless_group_id = f"endless_{uuid.uuid4().hex}"
+    parent_message_id = str(initial_request.endless_parent_message_id or "").strip()
+    if parent_message_id and history_service is not None:
+        try:
+            endless_group_id = await history_service.ensure_endless_group_async(
+                session,
+                parent_message_id,
+                endless_group_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "无尽模式父消息无法绑定 group alias=%s message_id=%s error=%s",
+                alias,
+                parent_message_id,
+                type(exc).__name__,
+            )
+    initial_request.endless_group_id = endless_group_id
+
+    async def persist_endless_event(event: dict[str, Any], *, turn_id: str, assistant_message_id: str) -> None:
+        if history_service is None:
+            return
+        try:
+            await history_service.append_endless_event_async(
+                event=event,
+                turn_id=turn_id,
+                assistant_message_id=assistant_message_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "无尽模式事件持久化失败 alias=%s kind=%s error=%s",
+                alias,
+                str(event.get("kind") or ""),
+                type(exc).__name__,
+            )
+
     _set_endless_session_state(session, active=True, attempt=0)
     current_text = initial_text
     current_request = initial_request
@@ -8314,6 +8368,20 @@ async def _stream_endless_attempts(
                 "state": "error",
                 "meta": {"completion_state": "error"},
             }
+        retry_turn_id = str(retry_event.get("turn_id") or message.get("turn_id") or "").strip()
+        retry_assistant_message_id = str(
+            retry_event.get("assistant_message_id") or message.get("id") or ""
+        ).strip()
+        await persist_endless_event(
+            {
+                "kind": "error",
+                "attempt": attempt,
+                "text": str(retry_event.get("output") or message.get("content") or "Continue 执行失败"),
+                **({"code": str(retry_event.get("code"))} if retry_event.get("code") else {}),
+            },
+            turn_id=retry_turn_id,
+            assistant_message_id=retry_assistant_message_id,
+        )
         yield {
             "type": "endless_error",
             "turn_id": str(retry_event.get("turn_id") or message.get("turn_id") or ""),
@@ -8334,6 +8402,11 @@ async def _stream_endless_attempts(
         except WebApiError as exc:
             yield {"type": "error", "code": exc.code, "message": exc.message}
             return
+        await persist_endless_event(
+            {"kind": "continue", "attempt": attempt, "text": "Continue"},
+            turn_id=retry_turn_id,
+            assistant_message_id=retry_assistant_message_id,
+        )
         yield {
             "type": "endless_continue",
             "attempt": attempt,
@@ -8347,6 +8420,7 @@ async def _stream_endless_attempts(
             task_mode="standard",
             visible_text=current_text,
             endless_mode=True,
+            endless_group_id=endless_group_id,
             actor=_actor_from_request(initial_request),
         )
 
@@ -8466,6 +8540,7 @@ async def _stream_native_agent_chat(
                     prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
                     translate_chat=translate_chat,
                     history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
+                    endless_group_id=request_obj.endless_group_id,
                     actor=_actor_from_request(request_obj),
                     protocol=protocol,
                     cluster_run_id=effective_cluster_run_id,
@@ -8632,6 +8707,8 @@ async def stream_chat(
     stream_protocol_version: int = 1,
     telegram_origin_chat_id: int | None = None,
     endless_mode: bool = False,
+    endless_group_id: str = "",
+    endless_parent_message_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     endless_requested = bool(endless_mode and not str(resume_stream_id or "").strip())
     session: UserSession | None = None
@@ -8663,6 +8740,8 @@ async def stream_chat(
                     task_mode=task_mode,
                     task_payload=task_payload,
                     endless_mode=endless_mode,
+                    endless_group_id=endless_group_id,
+                    endless_parent_message_id=endless_parent_message_id,
                     visible_text=visible_text,
                     actor=actor,
                 )
@@ -8700,6 +8779,7 @@ async def stream_chat(
                         shared_user_id=shared_user_id,
                         initial_text=user_text,
                         initial_request=request,
+                        history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                         attempt_factory=native_attempt,
                     )
                     if endless_mode and not resume_stream_id
@@ -8745,6 +8825,8 @@ async def stream_chat(
                 task_mode=task_mode,
                 task_payload=task_payload,
                 endless_mode=endless_mode,
+                endless_group_id=endless_group_id,
+                endless_parent_message_id=endless_parent_message_id,
                 visible_text=visible_text,
                 actor=actor,
             )
@@ -8771,6 +8853,7 @@ async def stream_chat(
                         shared_user_id=shared_user_id,
                         initial_text=user_text,
                         initial_request=request,
+                        history_service=_history_service_for_execution_mode(session, EXECUTION_MODE_CLI),
                         attempt_factory=cli_attempt,
                     )
                     if endless_mode
