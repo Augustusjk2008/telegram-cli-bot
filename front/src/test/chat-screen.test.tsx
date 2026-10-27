@@ -130,7 +130,7 @@ test("keeps backend endless mode errors visible until the final answer", async (
   expect(sendMessage).toHaveBeenCalledTimes(1);
   expect(sendMessage.mock.calls[0][1]).toBe("Continue");
   expect(sendMessage.mock.calls[0][5]?.endlessMode).toBe(true);
-  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+  expect(await screen.findByTestId("endless-mode-status")).toHaveTextContent("无尽模式执行中");
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
   expect(screen.getAllByTestId("chat-message-row")[0]).toHaveTextContent("原始问题");
   const processDisclosure = screen.getByRole("button", { name: "展开过程详情" });
@@ -193,7 +193,7 @@ test("restores backend endless mode after the chat screen is rebuilt", async () 
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+  expect(await screen.findByTestId("endless-mode-status")).toHaveTextContent("已自动继续 3 次");
   expect((await screen.findAllByRole("button", { name: "View context details: Continue ×3" })).length).toBeGreaterThan(0);
 });
 
