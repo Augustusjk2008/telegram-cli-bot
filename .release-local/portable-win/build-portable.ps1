@@ -922,12 +922,29 @@ function Test-PortableBundle {
 
     Invoke-CheckedCommand -FilePath $gitExe -Arguments @("--version") -FailureMessage "包内 Git 校验失败" -WorkingDirectory $PackageRoot
 
-    Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
-        "-m", "pytest",
-        "tests",
-        "examples/plugins",
-        "-q"
-    ) -FailureMessage "包内插件测试失败" -WorkingDirectory $PackageRoot
+    $previousReleaseCommit = [Environment]::GetEnvironmentVariable("TCB_RELEASE_SOURCE_COMMIT", "Process")
+    $previousReleaseFingerprint = [Environment]::GetEnvironmentVariable("TCB_RELEASE_SOURCE_FINGERPRINT", "Process")
+    try {
+        Remove-Item Env:TCB_RELEASE_SOURCE_COMMIT -ErrorAction SilentlyContinue
+        Remove-Item Env:TCB_RELEASE_SOURCE_FINGERPRINT -ErrorAction SilentlyContinue
+        Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
+            "-m", "pytest",
+            "tests",
+            "examples/plugins",
+            "-q"
+        ) -FailureMessage "包内插件测试失败" -WorkingDirectory $PackageRoot
+    } finally {
+        if ($null -eq $previousReleaseCommit) {
+            Remove-Item Env:TCB_RELEASE_SOURCE_COMMIT -ErrorAction SilentlyContinue
+        } else {
+            $env:TCB_RELEASE_SOURCE_COMMIT = $previousReleaseCommit
+        }
+        if ($null -eq $previousReleaseFingerprint) {
+            Remove-Item Env:TCB_RELEASE_SOURCE_FINGERPRINT -ErrorAction SilentlyContinue
+        } else {
+            $env:TCB_RELEASE_SOURCE_FINGERPRINT = $previousReleaseFingerprint
+        }
+    }
 }
 
 function New-ZipArchive {
