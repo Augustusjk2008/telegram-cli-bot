@@ -1113,6 +1113,8 @@ export type BotOverview = {
   messageCount?: number;
   historyCount?: number;
   isProcessing?: boolean;
+  endlessMode?: boolean;
+  endlessAttempt?: number;
   runningReply?: RunningReply | null;
   agents?: AgentSummary[];
   cluster?: BotClusterConfig;
@@ -1474,6 +1476,7 @@ export type ChatSendOptions = {
   agentId?: string;
   executionMode?: ChatExecutionMode;
   soloMode?: boolean;
+  endlessMode?: boolean;
   signal?: AbortSignal;
   conversationId?: string;
   sessionEpoch?: number;

@@ -836,6 +836,21 @@ def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
     return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
 
 
+async def _drain_chat_event_stream(event_stream: Any, *, alias: str, user_id: int) -> None:
+    """Finish a detached endless chat stream after its HTTP client is gone."""
+    try:
+        async for _event in event_stream:
+            pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("后台收尾聊天流失败: alias=%s user_id=%s", alias, user_id)
+    finally:
+        close_event_stream = getattr(event_stream, "aclose", None)
+        if callable(close_event_stream):
+            await close_event_stream()
+
+
 def _sse_headers() -> dict[str, str]:
     return {
         "Content-Type": "text/event-stream",
@@ -1112,6 +1127,7 @@ class WebApiServer:
         self._debug_sockets: set[web.WebSocketResponse] = set()
         self._debug_tasks: set[asyncio.Task[Any]] = set()
         self._notification_tasks: set[asyncio.Task[Any]] = set()
+        self._chat_stream_tasks: set[asyncio.Task[Any]] = set()
         self._notification_service = ChatNotificationService(
             pushplus=PushPlusClient(
                 enabled=PUSHPLUS_ENABLED,
@@ -2351,6 +2367,24 @@ class WebApiServer:
 
         task.add_done_callback(discard_task)
 
+    def _detach_chat_event_stream(self, event_stream: Any, *, alias: str, user_id: int) -> None:
+        task = asyncio.create_task(
+            _drain_chat_event_stream(event_stream, alias=alias, user_id=user_id),
+            name=f"chat-endless-{alias}-{user_id}",
+        )
+        self._chat_stream_tasks.add(task)
+
+        def discard_task(done_task: asyncio.Task[Any]) -> None:
+            self._chat_stream_tasks.discard(done_task)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("后台收尾聊天流任务失败 alias=%s user_id=%s error=%s", alias, user_id, exc)
+
+        task.add_done_callback(discard_task)
+
     async def get_agents_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
@@ -2508,6 +2542,7 @@ class WebApiServer:
         task_mode = str(body.get("task_mode") or "").strip()
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
+        endless_mode = bool(body.get("endless_mode") or body.get("endlessMode"))
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
@@ -2585,6 +2620,8 @@ class WebApiServer:
                 "task_payload": dict(task_payload) if isinstance(task_payload, dict) else None,
                 "visible_text": str(visible_text) if visible_text is not None else None,
             })
+        if endless_mode:
+            stream_kwargs["endless_mode"] = True
         event_stream = stream_chat(
             self.manager,
             alias,
@@ -2594,9 +2631,26 @@ class WebApiServer:
             actor=actor,
         )
         resumable_stream = False
+        stream_detached = False
         try:
             async for event in event_stream:
                 resumable_stream = resumable_stream or bool(event.get("stream_id"))
+                if wants_ag_ui and str(event.get("type") or "") == "endless_error":
+                    if client_disconnected:
+                        continue
+                    try:
+                        await response.write(_format_sse("endless_error", self._decorate_chat_authors(event, auth)))
+                    except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+                        client_disconnected = True
+                        logger.debug(
+                            "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
+                            alias,
+                            auth.user_id,
+                        )
+                        self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
+                        stream_detached = True
+                        break
+                    continue
                 if wants_ag_ui and str(event.get("type") or "") == "ag_ui":
                     if client_disconnected:
                         continue
@@ -2612,6 +2666,10 @@ class WebApiServer:
                             alias,
                             auth.user_id,
                         )
+                        if endless_mode:
+                            self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
+                            stream_detached = True
+                            break
                         if resumable_stream:
                             break
                     continue
@@ -2647,12 +2705,17 @@ class WebApiServer:
                         alias,
                         auth.user_id,
                     )
+                    if endless_mode:
+                        self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
+                        stream_detached = True
+                        break
                     if resumable_stream:
                         break
         finally:
-            close_event_stream = getattr(event_stream, "aclose", None)
-            if callable(close_event_stream):
-                await close_event_stream()
+            if not stream_detached:
+                close_event_stream = getattr(event_stream, "aclose", None)
+                if callable(close_event_stream):
+                    await close_event_stream()
         if not client_disconnected:
             try:
                 await response.write_eof()
@@ -5802,6 +5865,12 @@ class WebApiServer:
             task.cancel()
         if notification_tasks:
             await asyncio.gather(*notification_tasks, return_exceptions=True)
+        chat_stream_tasks = list(self._chat_stream_tasks)
+        self._chat_stream_tasks.clear()
+        for task in chat_stream_tasks:
+            task.cancel()
+        if chat_stream_tasks:
+            await asyncio.gather(*chat_stream_tasks, return_exceptions=True)
         await self._notification_service.close()
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:

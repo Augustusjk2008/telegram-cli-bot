@@ -144,6 +144,47 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_forwards_endless_mode_to_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path)
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", BotPermissionStore(tmp_path / "permissions.json"))
+    server = WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
+
+    async def chat_send_only(_request, capability: str) -> AuthContext:
+        assert capability == CAP_CHAT_SEND
+        return AuthContext(user_id=123, token_used=True, capabilities={CAP_CHAT_SEND})
+
+    async def event_source():
+        yield {"type": "done", "output": "ok", "elapsed_seconds": 0}
+
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_stream_chat(*_args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return event_source()
+
+    monkeypatch.setattr(server, "_with_capability", chat_send_only)
+    monkeypatch.setattr(server, "_schedule_chat_terminal_event", lambda **_kwargs: None)
+    monkeypatch.setattr("bot.web.server.stream_chat", fake_stream_chat)
+
+    app = server._build_app()
+    async with TestServer(app) as test_server:
+        async with TestClient(test_server) as client:
+            response = await client.post(
+                "/api/bots/main/chat/stream",
+                json={"message": "Continue", "endless_mode": True},
+            )
+            await response.text()
+
+    assert response.status == 200
+    assert captured_kwargs["endless_mode"] is True
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_rejects_invalid_resume_before_sse_prepare(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

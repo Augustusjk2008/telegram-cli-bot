@@ -1613,6 +1613,14 @@ type StreamEventPayload =
       message?: RawHistoryItem;
       status?: RawAppUpdateStatus;
     }
+  | {
+      type: "endless_error";
+      output?: string;
+      attempt?: number;
+      next_delay_ms?: number;
+      user_message_id?: string;
+      message?: RawHistoryItem;
+    }
   | { type: "error"; message?: string; code?: string };
 
 type StreamEvent = StreamEventPayload & {
@@ -5224,6 +5232,10 @@ export class RealWebBotClient implements WebBotClient {
         message_count: number;
         history_count: number;
         is_processing: boolean;
+        endless_mode?: boolean;
+        endless_attempt?: number;
+        endlessMode?: boolean;
+        endlessAttempt?: number;
         running_reply?: RawRunningReply | null;
         active_conversation_id?: string;
         activeConversationId?: string;
@@ -5248,6 +5260,8 @@ export class RealWebBotClient implements WebBotClient {
       messageCount: data.session.message_count,
       historyCount: data.session.history_count,
       isProcessing: data.session.is_processing,
+      endlessMode: Boolean(data.session.endless_mode ?? data.session.endlessMode ?? false),
+      endlessAttempt: Number(data.session.endless_attempt ?? data.session.endlessAttempt ?? 0),
       runningReply: mapRunningReply(data.session.running_reply),
       activeConversationId: String(data.session.active_conversation_id ?? data.session.activeConversationId ?? ""),
       ...(Number.isFinite(Number(data.session.session_epoch ?? data.session.sessionEpoch))
@@ -5680,6 +5694,7 @@ export class RealWebBotClient implements WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
+    onEndlessError?: (message: ChatMessage, attempt: number) => void,
   ): Promise<ChatMessage> {
     const useAgUiProtocol = options?.executionMode === "native_agent";
     const streamUrl = `/api/bots/${encodeURIComponent(botAlias)}/chat/stream${useAgUiProtocol ? "?protocol=ag-ui" : ""}`;
@@ -5699,6 +5714,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
         ...(options?.soloMode ? { solo_mode: true } : {}),
+        ...(options?.endlessMode ? { endless_mode: true } : {}),
         ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
       }),
     });
@@ -5798,6 +5814,16 @@ export class RealWebBotClient implements WebBotClient {
         }
 
         const { turnId, assistantMessageId } = captureStreamBinding(event);
+        if (event.type === "endless_error") {
+          const message = normalizeResolvedFinalMessage({
+            ...mapChatMessage(event.message as RawHistoryItem, 0, "error"),
+            text: event.output || event.message?.content || "",
+            state: "error",
+          });
+          onEndlessError?.(message, Number(event.attempt || 0));
+          separator = findSseSeparator(buffer);
+          continue;
+        }
         const shouldAdaptAgUiEvent = useAgUiProtocol || isAgUiEventType(event.type);
         const agUiEvents = shouldAdaptAgUiEvent ? agUiAdapter.adapt(event) : [];
         if (agUiEvents.length > 0) {

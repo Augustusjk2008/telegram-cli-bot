@@ -935,6 +935,8 @@ class ChatHistoryService:
                 native_provider_exclude=self.native_provider_exclude,
             ),
             "is_processing": is_processing,
+            "endless_mode": bool(getattr(session, "endless_mode", False)),
+            "endless_attempt": max(0, int(getattr(session, "endless_attempt", 0) or 0)),
             "running_reply": running_reply,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,

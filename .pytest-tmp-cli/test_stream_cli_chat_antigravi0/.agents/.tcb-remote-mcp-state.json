@@ -1,0 +1,17 @@
+{
+  "config_path": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp-cli\\test_stream_cli_chat_antigravi0\\.agents\\mcp_config.json",
+  "managed_by": "orbit-safe-claw",
+  "managed_entry": {
+    "args": [
+      "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\bot\\remote_workspace\\mcp_stdio.py",
+      "--config",
+      "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp-cli\\test_stream_cli_chat_antigravi0\\app\\remote-chat\\53341c0b911295ef703808ade91cc9060b7f590e18137532d574bc00eacf3770\\config.json"
+    ],
+    "command": "D:\\ProgramData\\anaconda3\\python.exe",
+    "cwd": "C:\\Users\\JiangKai\\telegram_cli_bridge\\refactoring\\.pytest-tmp-cli\\test_stream_cli_chat_antigravi0"
+  },
+  "owner_key": "main",
+  "previous_entry": null,
+  "server_name": "tcb-remote",
+  "version": 1
+}

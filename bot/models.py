@@ -643,6 +643,8 @@ class UserSession:
     running_started_at: Optional[str] = None
     running_updated_at: Optional[str] = None
     stop_requested: bool = False
+    endless_mode: bool = False
+    endless_attempt: int = 0
     web_turn_overlays: List[dict] = field(default_factory=list)
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0

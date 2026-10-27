@@ -287,6 +287,8 @@ CODEX_TERMINATE_GRACE_SECONDS = 1.0
 CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS = 0.25
 CLI_STATUS_MIN_INTERVAL_SECONDS = 0.25
 CLI_LIVE_TRACE_MAX_EVENTS = 2000
+ENDLESS_CONTINUE_DELAY_MS = 2000
+ENDLESS_CONTINUE_DELAY_SECONDS = ENDLESS_CONTINUE_DELAY_MS / 1000
 _CLI_CONTEXT_USAGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cli-context-usage")
 @dataclass
 class CliAttemptState:
@@ -305,6 +307,7 @@ class _ChatRunRequest:
     visible_text: str | None = None
     task_mode: str = "standard"
     task_payload: dict[str, Any] | None = None
+    endless_mode: bool = False
     actor_user_id: int | None = None
     actor_account_id: str | None = None
     actor_username: str | None = None
@@ -348,6 +351,7 @@ def _build_chat_run_request(
     *,
     task_mode: str = "standard",
     task_payload: dict[str, Any] | None = None,
+    endless_mode: bool = False,
     visible_text: str | None = None,
     actor: dict[str, Any] | None = None,
 ) -> _ChatRunRequest:
@@ -363,6 +367,7 @@ def _build_chat_run_request(
         visible_text=visible_text if visible_text is not None else user_text,
         task_mode=normalized_task_mode,
         task_payload=task_payload,
+        endless_mode=bool(endless_mode),
         actor_user_id=_optional_int(actor_data.get("user_id")),
         actor_account_id=str(actor_data.get("account_id") or "").strip() or None,
         actor_username=str(actor_data.get("username") or "").strip() or None,
@@ -554,6 +559,18 @@ def _session_lifecycle_scope(
                 session._lifecycle_token = ""
                 if not conversation_change:
                     _finish_control_execution(session, f"exec_{token}")
+
+
+def _set_endless_session_state(
+    session: UserSession,
+    *,
+    active: bool,
+    attempt: int = 0,
+) -> None:
+    """Keep endless-mode ownership on the server session while a run is alive."""
+    with session._lock:
+        session.endless_mode = bool(active)
+        session.endless_attempt = max(0, int(attempt or 0)) if active else 0
 
 
 def _pi_store() -> PiSessionStore:
@@ -7507,6 +7524,7 @@ async def _stream_cli_chat(
             done_event = {
                 "type": "done",
                 **turn_event_ids,
+                "user_message_id": turn_handle.user_message_id,
                 "output": str(done_message.get("content") or response),
                 "message": done_message,
                 "elapsed_seconds": elapsed_seconds,
@@ -7557,6 +7575,7 @@ async def _stream_cli_chat(
                 session.is_processing = False
             normal_return_for_diag = True
             yield {"type": "done", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
+                   "user_message_id": turn_handle.user_message_id,
                    "output": "", "message": done_message, "returncode": -1, "elapsed_seconds": 0,
                    "session": build_session_snapshot(profile, session)}
     except Exception as exc:
@@ -7605,6 +7624,7 @@ async def _stream_cli_chat(
             session.is_processing = False
         normal_return_for_diag = True
         yield {"type": "done", "turn_id": turn_handle.turn_id,
+               "user_message_id": turn_handle.user_message_id,
                "assistant_message_id": turn_handle.assistant_message_id,
                "output": failure_output, "message": done_message, "returncode": -1,
                "elapsed_seconds": _calculate_elapsed_seconds(loop, started_at),
@@ -8090,6 +8110,244 @@ async def _stream_with_telegram_completion_notifications(
         yield event
 
 
+def _endless_retryable_done_event(event: dict[str, Any]) -> bool:
+    if str(event.get("type") or "") != "done":
+        return False
+    message = event.get("message") if isinstance(event.get("message"), dict) else {}
+    state = str(message.get("state") or "").strip().lower()
+    meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+    completion_state = str(
+        meta.get("completion_state")
+        or message.get("completion_state")
+        or event.get("completion_state")
+        or ""
+    ).strip().lower()
+    if state in {"cancelled", "canceled"} or completion_state in {"cancelled", "canceled"}:
+        return False
+    return state in {"error", "failed"} or completion_state in {"error", "failed", "incomplete"}
+
+
+_ENDLESS_TERMINAL_ERROR_CODES = {
+    "cancelled",
+    "canceled",
+    "conversation_changed",
+    "execution_changed",
+    "session_busy",
+    "invalid_execution_mode",
+    "native_agent_unavailable",
+    "update_restarting",
+    "deepseek_execution_mode_unsupported",
+    "deepseek_remote_unsupported",
+    "remote_workspace_cluster_unsupported",
+}
+
+
+def _endless_retryable_error_event(event: dict[str, Any]) -> bool:
+    if str(event.get("type") or "") != "error":
+        return False
+    code = str(event.get("code") or "").strip().lower()
+    return code not in _ENDLESS_TERMINAL_ERROR_CODES
+
+
+def _endless_retry_event_from_error(event: dict[str, Any]) -> dict[str, Any]:
+    content = str(event.get("message") or event.get("error") or "Continue 执行失败")
+    assistant_message_id = str(event.get("assistant_message_id") or "")
+    turn_id = str(event.get("turn_id") or "")
+    message_id = assistant_message_id or f"assistant-endless-error-{uuid.uuid4().hex}"
+    return {
+        "type": "done",
+        "turn_id": turn_id,
+        "assistant_message_id": assistant_message_id,
+        "user_message_id": str(event.get("user_message_id") or ""),
+        "output": content,
+        "message": {
+            "id": message_id,
+            "turn_id": turn_id,
+            "role": "assistant",
+            "content": content,
+            "state": "error",
+            "meta": {
+                "completion_state": "error",
+                "error_code": str(event.get("code") or "endless_attempt_error"),
+            },
+        },
+    }
+
+
+def _ag_ui_event_type(event: dict[str, Any]) -> str:
+    payload = event.get("event")
+    event_type = payload.get("type") if isinstance(payload, dict) else getattr(payload, "type", None)
+    if hasattr(event_type, "value"):
+        event_type = event_type.value
+    return str(event_type or "").strip().upper().split(".")[-1]
+
+
+def _endless_retry_event_from_ag_ui(event: dict[str, Any]) -> dict[str, Any] | None:
+    event_type = _ag_ui_event_type(event)
+    payload = event.get("event")
+    result = payload.get("result") if isinstance(payload, dict) else getattr(payload, "result", None)
+    result = result if isinstance(result, dict) else {}
+    if event_type == "RUN_ERROR":
+        return _endless_retry_event_from_error({
+            "type": "error",
+            "code": "native_agent_error",
+            "message": str(
+                payload.get("message") if isinstance(payload, dict) else getattr(payload, "message", "")
+            ) or "原生 agent 执行失败",
+            "turn_id": str(event.get("turn_id") or ""),
+            "assistant_message_id": str(event.get("assistant_message_id") or ""),
+        })
+    if event_type != "RUN_FINISHED":
+        return None
+    completion_state = str(result.get("completion_state") or "").strip().lower()
+    if completion_state not in {"error", "failed", "incomplete"}:
+        return None
+    message = result.get("message") if isinstance(result.get("message"), dict) else None
+    if message is not None:
+        message = dict(message)
+        message["state"] = "error"
+        meta = dict(message.get("meta") or {}) if isinstance(message.get("meta"), dict) else {}
+        meta["completion_state"] = completion_state
+        message["meta"] = meta
+    turn_id = str(result.get("turn_id") or event.get("turn_id") or "")
+    assistant_message_id = str(result.get("assistant_message_id") or event.get("assistant_message_id") or "")
+    output = str(result.get("content") or (message or {}).get("content") or "原生 agent 执行失败")
+    return {
+        "type": "done",
+        "turn_id": turn_id,
+        "assistant_message_id": assistant_message_id,
+        "output": output,
+        "message": message or {
+            "id": assistant_message_id or f"assistant-endless-error-{uuid.uuid4().hex}",
+            "turn_id": turn_id,
+            "role": "assistant",
+            "content": output,
+            "state": "error",
+            "meta": {"completion_state": completion_state},
+        },
+    }
+
+
+def _native_terminal_ag_ui_event(event: dict[str, Any]) -> bool:
+    if str(event.get("type") or "") != "ag_ui":
+        return False
+    return _ag_ui_event_type(event) in {"RUN_FINISHED", "RUN_ERROR"}
+
+
+async def _wait_for_endless_retry(session: UserSession) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + ENDLESS_CONTINUE_DELAY_SECONDS
+    while True:
+        with session._lock:
+            if getattr(session, "_persist_enabled", True) is False:
+                raise WebApiError(409, "conversation_changed", "当前会话已失效")
+        check_chat_stopped(session)
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(0.1, remaining))
+
+
+async def _stream_endless_attempts(
+    *,
+    session: UserSession,
+    alias: str,
+    shared_user_id: int,
+    initial_text: str,
+    initial_request: _ChatRunRequest,
+    attempt_factory: Callable[[str, _ChatRunRequest], AsyncIterator[dict[str, Any]]],
+) -> AsyncIterator[dict[str, Any]]:
+    _set_endless_session_state(session, active=True, attempt=0)
+    current_text = initial_text
+    current_request = initial_request
+    attempt = 0
+    while True:
+        retry_event: dict[str, Any] | None = None
+        native_retry_pending: dict[str, Any] | None = None
+        events = attempt_factory(current_text, current_request)
+        try:
+            async with aclosing(events):
+                async for event in events:
+                    if _native_terminal_ag_ui_event(event):
+                        event_type = _ag_ui_event_type(event)
+                        if event_type == "RUN_ERROR":
+                            native_retry_pending = _endless_retry_event_from_ag_ui(event)
+                            continue
+                        retry_event = _endless_retry_event_from_ag_ui(event)
+                        if retry_event is not None:
+                            break
+                        yield event
+                        continue
+                    if _endless_retryable_done_event(event):
+                        retry_event = event
+                        break
+                    if _endless_retryable_error_event(event):
+                        if native_retry_pending is not None:
+                            retry_event = native_retry_pending
+                            break
+                        retry_event = _endless_retry_event_from_error(event)
+                        break
+                    yield event
+                    if str(event.get("type") or "") in {"done", "error"}:
+                        return
+        except WebApiError as exc:
+            error_event = {"type": "error", "code": exc.code, "message": exc.message}
+            if not _endless_retryable_error_event(error_event):
+                yield error_event
+                return
+            retry_event = _endless_retry_event_from_error(error_event)
+        except Exception as exc:
+            retry_event = _endless_retry_event_from_error(
+                {"type": "error", "code": "endless_attempt_error", "message": str(exc)},
+            )
+
+        if retry_event is None:
+            return
+
+        attempt += 1
+        _set_endless_session_state(session, active=True, attempt=attempt)
+        message = retry_event.get("message") if isinstance(retry_event.get("message"), dict) else {}
+        if not message:
+            message = {
+                "id": str(retry_event.get("assistant_message_id") or f"assistant-endless-error-{uuid.uuid4().hex}"),
+                "turn_id": str(retry_event.get("turn_id") or ""),
+                "role": "assistant",
+                "content": str(retry_event.get("output") or "Continue 执行失败"),
+                "state": "error",
+                "meta": {"completion_state": "error"},
+            }
+        yield {
+            "type": "endless_error",
+            "turn_id": str(retry_event.get("turn_id") or message.get("turn_id") or ""),
+            "assistant_message_id": str(
+                retry_event.get("assistant_message_id") or message.get("id") or ""
+            ),
+            "user_message_id": str(retry_event.get("user_message_id") or ""),
+            "attempt": attempt,
+            "message": message,
+            "output": str(retry_event.get("output") or message.get("content") or ""),
+            "next_delay_ms": ENDLESS_CONTINUE_DELAY_MS,
+        }
+        try:
+            await _wait_for_endless_retry(session)
+        except ChatInputCancelled:
+            yield {"type": "error", "code": "cancelled", "message": "用户终止输出"}
+            return
+        except WebApiError as exc:
+            yield {"type": "error", "code": exc.code, "message": exc.message}
+            return
+        current_text = "Continue"
+        current_request = _build_chat_run_request(
+            alias,
+            shared_user_id,
+            current_text,
+            task_mode="standard",
+            visible_text=current_text,
+            endless_mode=True,
+            actor=_actor_from_request(initial_request),
+        )
+
+
 async def _stream_native_agent_chat(
     manager: MultiBotManager,
     alias: str,
@@ -8117,6 +8375,7 @@ async def _stream_native_agent_chat(
     stream_protocol_version: int = 1,
     suppress_agent_prompt: bool = False,
     translate_chat: bool = True,
+    endless_mode: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -8369,11 +8628,16 @@ async def stream_chat(
     include_trace: bool = True,
     stream_protocol_version: int = 1,
     telegram_origin_chat_id: int | None = None,
+    endless_mode: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
+    endless_requested = bool(endless_mode and not str(resume_stream_id or "").strip())
+    session: UserSession | None = None
     try:
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
         _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
+        if endless_requested:
+            _set_endless_session_state(session, active=True, attempt=0)
         resuming = False
         if str(resume_stream_id or "").strip():
             with session._lock:
@@ -8389,27 +8653,54 @@ async def stream_chat(
                 if not resuming:
                     session._execution_mode = resolved_execution_mode
             if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-                events = _stream_native_agent_chat(
-                    manager,
-                    alias=alias,
-                    user_id=shared_user_id,
-                    user_text=user_text,
+                request = _build_chat_run_request(
+                    alias,
+                    shared_user_id,
+                    user_text,
                     task_mode=task_mode,
                     task_payload=task_payload,
+                    endless_mode=endless_mode,
                     visible_text=visible_text,
-                    agent_id=agent_id,
-                    cluster=cluster,
-                    mentions=mentions,
-                    solo_mode=solo_mode,
                     actor=actor,
-                    protocol=protocol,
-                    allow_unsafe_cli=allow_unsafe_cli,
-                    resume_stream_id=resume_stream_id,
-                    resume_turn_id=resume_turn_id,
-                    after_sequence=after_sequence,
-                    enable_reconnect=enable_reconnect,
-                    include_trace=include_trace,
-                    stream_protocol_version=normalized_stream_protocol_version,
+                )
+
+                def native_attempt(text: str, attempt_request: _ChatRunRequest) -> AsyncIterator[dict[str, Any]]:
+                    return _stream_native_agent_chat(
+                        manager,
+                        alias=alias,
+                        user_id=shared_user_id,
+                        user_text=text,
+                        request=attempt_request,
+                        task_mode=attempt_request.task_mode,
+                        task_payload=attempt_request.task_payload,
+                        visible_text=attempt_request.visible_text,
+                        agent_id=agent_id,
+                        cluster=cluster,
+                        mentions=mentions,
+                        solo_mode=solo_mode,
+                        actor=actor,
+                        protocol=protocol,
+                        allow_unsafe_cli=allow_unsafe_cli,
+                        resume_stream_id=resume_stream_id,
+                        resume_turn_id=resume_turn_id,
+                        after_sequence=after_sequence,
+                        enable_reconnect=enable_reconnect,
+                        include_trace=include_trace,
+                        stream_protocol_version=normalized_stream_protocol_version,
+                        endless_mode=endless_mode,
+                    )
+
+                events = (
+                    _stream_endless_attempts(
+                        session=session,
+                        alias=alias,
+                        shared_user_id=shared_user_id,
+                        initial_text=user_text,
+                        initial_request=request,
+                        attempt_factory=native_attempt,
+                    )
+                    if endless_mode and not resume_stream_id
+                    else native_attempt(user_text, request)
                 )
                 async with aclosing(events):
                     async for event in _stream_with_telegram_completion_notifications(
@@ -8450,22 +8741,37 @@ async def stream_chat(
                 user_text,
                 task_mode=task_mode,
                 task_payload=task_payload,
+                endless_mode=endless_mode,
                 visible_text=visible_text,
                 actor=actor,
             )
             try:
-                events = _stream_cli_chat(
-                    manager,
-                    alias,
-                    shared_user_id,
-                    user_text,
-                    request=request,
-                    agent_id=agent_id,
-                    cluster_run_id=cluster_run.run_id if cluster_run else "",
-                    cluster_mentions=list(mentions or []),
-                    allow_unsafe_cli=allow_unsafe_cli,
-                    include_trace=include_trace,
-                    stream_protocol_version=normalized_stream_protocol_version,
+                def cli_attempt(text: str, attempt_request: _ChatRunRequest) -> AsyncIterator[dict[str, Any]]:
+                    return _stream_cli_chat(
+                        manager,
+                        alias,
+                        shared_user_id,
+                        text,
+                        request=attempt_request,
+                        agent_id=agent_id,
+                        cluster_run_id=cluster_run.run_id if cluster_run else "",
+                        cluster_mentions=list(mentions or []),
+                        allow_unsafe_cli=allow_unsafe_cli,
+                        include_trace=include_trace,
+                        stream_protocol_version=normalized_stream_protocol_version,
+                    )
+
+                events = (
+                    _stream_endless_attempts(
+                        session=session,
+                        alias=alias,
+                        shared_user_id=shared_user_id,
+                        initial_text=user_text,
+                        initial_request=request,
+                        attempt_factory=cli_attempt,
+                    )
+                    if endless_mode
+                    else cli_attempt(user_text, request)
                 )
                 async with aclosing(events):
                     async for event in _stream_with_telegram_completion_notifications(
@@ -8482,6 +8788,9 @@ async def stream_chat(
         yield {"type": "error", "code": exc.code, "message": exc.message}
     except Exception as exc:  # pragma: no cover - defensive
         yield {"type": "error", "code": "internal_error", "message": str(exc)}
+    finally:
+        if endless_requested and session is not None:
+            _set_endless_session_state(session, active=False)
 
 
 async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: int, command: str) -> dict[str, Any]:

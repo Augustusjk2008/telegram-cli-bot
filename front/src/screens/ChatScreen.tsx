@@ -214,7 +214,6 @@ const INITIAL_IDLE_CHAT_POLL_DELAY_MS = 5000;
 const IDLE_CHAT_POLL_INTERVAL_MS = 10_000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
-const ENDLESS_CONTINUE_DELAY_MS = 2000;
 const CHAT_ATTACHMENT_LINE_RE = /^(?:Attachment path:|附件路径为[:：])\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
@@ -1991,10 +1990,7 @@ export function ChatScreen({
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
-  const endlessContinueTimerRef = useRef<number | null>(null);
   const endlessModeRef = useRef(false);
-  const endlessAttemptRef = useRef(false);
-  const endlessContinueSenderRef = useRef<(() => void) | null>(null);
   const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean; forceHistory?: boolean }) => Promise<boolean>) | null>(null);
   const voiceTaskBindingRef = useRef<VoiceTaskBinding | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
@@ -2100,41 +2096,10 @@ export function ChatScreen({
     }
   }, [botAlias, storageScope]);
 
-  const clearEndlessContinueTimer = useCallback(() => {
-    if (endlessContinueTimerRef.current !== null) {
-      window.clearTimeout(endlessContinueTimerRef.current);
-      endlessContinueTimerRef.current = null;
-    }
-  }, []);
-
   const stopEndlessMode = useCallback(() => {
     endlessModeRef.current = false;
-    endlessAttemptRef.current = false;
-    clearEndlessContinueTimer();
     setEndlessModeActive(false);
     setEndlessModeConfirmOpen(false);
-  }, [clearEndlessContinueTimer]);
-
-  const scheduleEndlessContinue = useCallback(() => {
-    if (!endlessModeRef.current || endlessContinueTimerRef.current !== null) {
-      return;
-    }
-    endlessContinueTimerRef.current = window.setTimeout(() => {
-      endlessContinueTimerRef.current = null;
-      if (!endlessModeRef.current) {
-        return;
-      }
-      if (loadingRef.current || isStreamingRef.current) {
-        scheduleEndlessContinue();
-        return;
-      }
-      const sender = endlessContinueSenderRef.current;
-      if (!sender) {
-        return;
-      }
-      setEndlessAutoContinueCount((current) => current + 1);
-      sender();
-    }, ENDLESS_CONTINUE_DELAY_MS);
   }, []);
 
   const stopAssistantPoll = useCallback(() => {
@@ -2306,6 +2271,21 @@ export function ChatScreen({
   useEffect(() => {
     botOverviewRef.current = botOverview;
   }, [botOverview]);
+
+  useEffect(() => {
+    if (botOverview?.endlessMode === true && botOverview.isProcessing) {
+      endlessModeRef.current = true;
+      setEndlessModeActive(true);
+      setEndlessAutoContinueCount((current) => Math.max(current, botOverview.endlessAttempt || 0));
+      return;
+    }
+    if (botOverview?.endlessMode === false && !botOverview.isProcessing) {
+      endlessModeRef.current = false;
+      setEndlessModeActive(false);
+      setEndlessModeConfirmOpen(false);
+      setEndlessAutoContinueCount(0);
+    }
+  }, [botOverview?.endlessAttempt, botOverview?.endlessMode, botOverview?.isProcessing]);
 
 
   useEffect(() => {
@@ -4155,9 +4135,9 @@ export function ChatScreen({
       attachments?: PendingChatAttachment[];
       clearPendingAttachments?: boolean;
       sendOptions?: ChatSendOptions;
-      suppressError?: boolean;
       onSuccess?: (message: ChatMessage) => void;
       onError?: (message: string) => void;
+      onEndlessError?: (message: ChatMessage, attempt: number) => void;
     } = {},
   ) => {
     const sendBotAlias = botAlias;
@@ -4186,7 +4166,7 @@ export function ChatScreen({
       createdAt: new Date().toISOString(),
       state: "done",
     };
-    const assistantId = `assistant-${Date.now()}`;
+    let assistantId = `assistant-${Date.now()}`;
     const assistantMessage: ChatMessage = {
       id: assistantId,
       role: "assistant",
@@ -4254,13 +4234,57 @@ export function ChatScreen({
       turnId: message?.turnId || streamTurnId || undefined,
       streamStartedAtMs: localStartedAtMs,
     });
-    const removeLocalAttempt = () => {
-      setItems((current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
-    };
-
     let recoverIncompleteStream = false;
     try {
       let usingPreviewReplace = false;
+      const handleEndlessError = (message: ChatMessage, attempt: number) => {
+        if (sendVersion !== assistantSendVersionRef.current) {
+          return;
+        }
+        const previousTarget = activeAssistantTarget();
+        streamBatcher.flush();
+        releaseAgUiBatchState();
+        streamTurnId = "";
+        streamAssistantMessageId = "";
+        usingPreviewReplace = false;
+        const nextAssistantId = `assistant-${Date.now()}-endless-${attempt || "next"}`;
+        const visibleError: ChatMessage = {
+          ...message,
+          state: "error",
+        };
+        const nextAssistantMessage: ChatMessage = {
+          id: nextAssistantId,
+          role: "assistant",
+          text: "",
+          createdAt: new Date().toISOString(),
+          state: "streaming",
+          meta: nativeStreaming
+            ? { tracePresentation: "native_agent_flat", renderKey: nextAssistantId }
+            : { renderKey: nextAssistantId },
+        };
+        assistantId = nextAssistantId;
+        activeTurnBindingRef.current = {
+          localAssistantId: nextAssistantId,
+          turnId: "",
+          assistantMessageId: "",
+          codexServer: botOverviewRef.current?.cliType === "codex_server" && !nativeStreaming,
+          streamStartedAtMs: localStartedAtMs,
+        };
+        setItems((current) => {
+          const index = findActiveAssistantIndex(current, previousTarget);
+          if (index < 0) {
+            return [...current, visibleError, nextAssistantMessage];
+          }
+          return [
+            ...current.slice(0, index),
+            visibleError,
+            nextAssistantMessage,
+            ...current.slice(index + 1),
+          ];
+        });
+        setEndlessAutoContinueCount((current) => Math.max(current, attempt || current + 1));
+        options.onEndlessError?.(visibleError, attempt);
+      };
       const requestSendOptions: ChatSendOptions | undefined = (() => {
         const baseOptions = options.sendOptions
           ? (
@@ -4380,6 +4404,7 @@ export function ChatScreen({
         onTrace,
         requestSendOptions,
         onAgUiEvent,
+        handleEndlessError,
       );
 
       streamBatcher.flush();
@@ -4403,28 +4428,24 @@ export function ChatScreen({
         ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta) }
         : finalizedMessage;
 
-      if (options.suppressError && finalizedMessage.state === "error") {
-        removeLocalAttempt();
-      } else {
-        setItems((prev) => upsertActiveAssistantMessage(
-          prev,
-          activeAssistantTarget(finalizedMessage),
-          finalizedMessage,
-          (item, final) => {
-            const mergedMeta = mergeMessageMeta(
-              item.meta,
-              final.meta,
-              undefined,
-              { traceMode: "replace" },
-            );
-            return {
-              ...final,
-              ...mergeMessageTranslation(item, final),
-              meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
-            };
-          },
-        ));
-      }
+      setItems((prev) => upsertActiveAssistantMessage(
+        prev,
+        activeAssistantTarget(finalizedMessage),
+        finalizedMessage,
+        (item, final) => {
+          const mergedMeta = mergeMessageMeta(
+            item.meta,
+            final.meta,
+            undefined,
+            { traceMode: "replace" },
+          );
+          return {
+            ...final,
+            ...mergeMessageTranslation(item, final),
+            meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
+          };
+        },
+      ));
       options.onSuccess?.(callbackMessage);
       if (finalizedMessage.state !== "error" && !isCancelledChatCompletion(finalizedMessage)) {
         onUnreadResult?.(
@@ -4464,9 +4485,7 @@ export function ChatScreen({
         ));
       } else {
         const message = err instanceof Error ? err.message : "发送失败";
-        if (options.suppressError) {
-          removeLocalAttempt();
-        } else if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
+        if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
           setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
             ...item,
             text: message,
@@ -4749,9 +4768,6 @@ export function ChatScreen({
       return;
     }
     const endlessMode = endlessModeRef.current;
-    if (endlessMode) {
-      endlessAttemptRef.current = true;
-    }
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     void sendMessageInternal("Continue", {
@@ -4759,16 +4775,13 @@ export function ChatScreen({
         taskMode: "standard",
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
         ...(soloMode && nativeSend ? { soloMode: true } : {}),
+        ...(endlessMode ? { endlessMode: true } : {}),
       },
-      suppressError: endlessMode,
       onSuccess: endlessMode ? (message) => {
         if (!endlessModeRef.current) {
           return;
         }
-        endlessAttemptRef.current = false;
-        if (message.state === "error") {
-          scheduleEndlessContinue();
-        } else {
+        if (message.state !== "error") {
           stopEndlessMode();
         }
       } : undefined,
@@ -4776,13 +4789,10 @@ export function ChatScreen({
         if (!endlessModeRef.current) {
           return;
         }
-        endlessAttemptRef.current = false;
-        scheduleEndlessContinue();
+        stopEndlessMode();
       } : undefined,
     });
-  }, [scheduleEndlessContinue, sendMessageInternal, soloMode, stopEndlessMode]);
-
-  endlessContinueSenderRef.current = handleContinueFinalAnswer;
+  }, [sendMessageInternal, soloMode, stopEndlessMode]);
 
   const handleOpenEndlessMode = useCallback(() => {
     if (endlessModeRef.current || loadingRef.current || isStreamingRef.current) {
@@ -4797,27 +4807,10 @@ export function ChatScreen({
     }
     setEndlessModeConfirmOpen(false);
     endlessModeRef.current = true;
-    endlessAttemptRef.current = true;
     setEndlessAutoContinueCount(0);
     setEndlessModeActive(true);
     handleContinueFinalAnswer();
   }, [handleContinueFinalAnswer]);
-
-  useEffect(() => {
-    if (!endlessModeRef.current || !endlessAttemptRef.current || loading || isStreaming) {
-      return;
-    }
-    const latestAssistant = [...items].reverse().find((item) => item.role === "assistant" && item.state !== "streaming");
-    if (!latestAssistant) {
-      return;
-    }
-    endlessAttemptRef.current = false;
-    if (latestAssistant.state === "error") {
-      scheduleEndlessContinue();
-    } else {
-      stopEndlessMode();
-    }
-  }, [isStreaming, items, loading, scheduleEndlessContinue, stopEndlessMode]);
 
 
   async function handleKillTask() {

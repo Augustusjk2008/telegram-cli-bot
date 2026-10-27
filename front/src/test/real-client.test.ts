@@ -844,6 +844,61 @@ describe("RealWebBotClient", () => {
     },
   );
 
+  test("keeps the endless stream open after an intermediate error", async () => {
+    const errorMessage = {
+      id: "assistant-endless-error",
+      turn_id: "turn-endless-error",
+      role: "assistant",
+      content: "Continue 失败",
+      created_at: "2026-10-26T00:00:00Z",
+      state: "error",
+      meta: { completion_state: "error" },
+    };
+    fetchMock.mockResolvedValue(streamOk(
+      'event: endless_error\ndata: ' + JSON.stringify({
+        type: "endless_error",
+        turn_id: "turn-endless-error",
+        assistant_message_id: "assistant-endless-error",
+        attempt: 1,
+        message: errorMessage,
+        output: "Continue 失败",
+        next_delay_ms: 2000,
+      }) + "\n\n",
+      'event: done\ndata: ' + JSON.stringify({
+        type: "done",
+        turn_id: "turn-endless-success",
+        assistant_message_id: "assistant-endless-success",
+        output: "最终成功",
+        message: {
+          id: "assistant-endless-success",
+          turn_id: "turn-endless-success",
+          role: "assistant",
+          content: "最终成功",
+          state: "done",
+        },
+      }) + "\n\n",
+    ));
+
+    const errors: Array<{ text: string; attempt: number }> = [];
+    const message = await new RealWebBotClient().sendMessage(
+      "main",
+      "Continue",
+      () => undefined,
+      undefined,
+      undefined,
+      { endlessMode: true },
+      undefined,
+      (error, attempt) => errors.push({ text: error.text, attempt }),
+    );
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({
+      message: "Continue",
+      endless_mode: true,
+    });
+    expect(errors).toEqual([{ text: "Continue 失败", attempt: 1 }]);
+    expect(message).toMatchObject({ id: "assistant-endless-success", text: "最终成功", state: "done" });
+  });
+
   test("maps compact CLI v1 and v2 terminal frames to identical final messages", async () => {
     const persistedMessage = {
       id: "assistant-compact-cli",
