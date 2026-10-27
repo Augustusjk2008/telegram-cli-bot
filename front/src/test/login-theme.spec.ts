@@ -59,7 +59,6 @@ for (const width of [1280, 390]) {
     await page.getByLabel("用户名", { exact: true }).fill("theme-check");
     await page.getByLabel("密码", { exact: true }).fill("fixture-password");
     await page.getByRole("button", { name: "登录", exact: true }).click();
-    await expect(page.getByRole("button", { name: "管理主题", exact: true })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", BUILTIN_THEME.id);
     expect(writes).toEqual(["auth/login"]);
     expect(errors).toEqual([]);

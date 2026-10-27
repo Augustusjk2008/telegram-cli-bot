@@ -5,7 +5,6 @@ import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { BotActivitySummary } from "../components/BotActivitySummary";
-import { ManageThemesButton } from "../components/ThemeDropdown";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { StatusPill } from "../components/StatusPill";
@@ -277,7 +276,6 @@ export function BotListScreen({
       <header className="mb-3 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">智能体管理</h1>
         <div className="flex items-center gap-2">
-          <ManageThemesButton />
           {onLogout ? (
             <button
               type="button"

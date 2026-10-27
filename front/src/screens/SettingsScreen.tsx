@@ -7,7 +7,6 @@ import { Save } from "lucide-react";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotClusterSettingsPanel } from "../components/BotClusterSettingsPanel";
 import { BotPromptPresetsPanel } from "../components/BotPromptPresetsPanel";
-import { ManageThemesButton } from "../components/ThemeDropdown";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { toolbarButtonClass } from "../components/ToolbarButton";
@@ -352,9 +351,6 @@ export function SettingsScreen({
       )}
 
       <section className={clsx("flex-1 space-y-3 overflow-y-auto", embedded ? "bg-[var(--workbench-titlebar-bg)] p-3" : "p-4")}>
-        <div className="flex justify-end">
-          <ManageThemesButton />
-        </div>
         {loading ? (
           <div className="text-center text-[var(--muted)]">加载中...</div>
         ) : null}

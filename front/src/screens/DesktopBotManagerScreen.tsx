@@ -1,5 +1,4 @@
 import { cliTypeLabel } from "../utils/cliType";
-import { ManageThemesButton } from "../components/ThemeDropdown";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -1551,7 +1550,6 @@ export function DesktopBotManagerScreen({
                 新增智能体
               </button>
             ) : null}
-            <ManageThemesButton />
             {onLogout ? (
               <button
                 type="button"
