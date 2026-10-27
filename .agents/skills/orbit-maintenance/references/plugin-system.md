@@ -26,7 +26,6 @@
 
 ## 验证
 
-- 安装、同步和目录导入：`tests/test_plugin_install.py`；runtime/service/cache：`tests/test_plugin_runtime.py`、`tests/test_plugin_service_cache.py`。
-- Host API、runtime installer 和 runtime API：`tests/test_plugins_host_api.py`、`tests/test_plugin_runtime_installers.py`、`tests/test_plugin_runtime_api.py`。
-- Bundled plugin、artifact、waveform 和文件视图：`tests/test_bundled_plugins.py`、`tests/test_plugin_runtime.py`、`tests/test_vivado_waveform.py` 及对应前端测试。
-- 涉及 file view 或 waveform UI 时运行对应前端测试和 build。
+- Plugin runtime 和 Host API：`tests/test_plugin_runtime.py`、`tests/test_plugins_host_api.py`。
+- 外部 runtime 安装器：`tests/test_plugin_runtime_installers.py`。
+- 涉及插件文件视图或 waveform UI 时运行 `npm run test:gate`、`npm run lint` 和 `npm run build`，并在人工启动的应用中完成交互验收。

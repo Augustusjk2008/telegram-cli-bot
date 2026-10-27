@@ -73,8 +73,6 @@ Overview、Diff、状态截断、提交结果和错误响应保持相同字段�
 
 - [`tests/test_remote_git_service.py`](</C:/Users/JiangKai/telegram_cli_bridge/refactoring/tests/test_remote_git_service.py>)：远程 Git 命令、路径、输出截断、Windows 参数、锁、错误诊断和 mutation 不重试。
 - [`tests/test_remote_workspace_api.py`](</C:/Users/JiangKai/telegram_cli_bridge/refactoring/tests/test_remote_workspace_api.py>)：认证、能力、远程路由和 profile 绑定。
-- [`tests/test_git_service.py`](</C:/Users/JiangKai/telegram_cli_bridge/refactoring/tests/test_git_service.py>)：本地和共享响应语义。
-- [`tests/test_git_backend.py`](</C:/Users/JiangKai/telegram_cli_bridge/refactoring/tests/test_git_backend.py>)：本地和远程 backend 委托及提交辅助。
 
 前端回归覆盖：
 
@@ -85,13 +83,13 @@ Overview、Diff、状态截断、提交结果和错误响应保持相同字段�
 相关最小检查：
 
 ```powershell
-python -m pytest tests/test_remote_git_service.py tests/test_remote_workspace_api.py tests/test_git_service.py tests/test_git_backend.py -q
+python -m pytest tests/test_remote_git_service.py tests/test_remote_workspace_api.py -q
 cd front
 npm run test:gate
 npm run build
 ```
 
-当前分支最近一次相关验证结果为后端 188 项通过、前端 498 项通过，生产构建和构建预算检查通过。真实远程 SSH 主机和 Playwright 场景需要在用户启动服务后单独执行。
+真实远程 SSH 主机和 Playwright 场景需要在用户启动服务后单独执行。
 
 ## 后续增强
 

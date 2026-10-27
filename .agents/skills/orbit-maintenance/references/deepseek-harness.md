@@ -39,7 +39,7 @@
 协议、流式执行、会话恢复和 trace 变更运行：
 
 ```bash
-python -m pytest tests/test_deepseek_exec.py tests/test_deepseek_history_adapter.py tests/test_cli_streaming.py tests/test_cli_context_usage.py tests/test_model_pricing.py -k deepseek -q
+python -m pytest tests/test_deepseek_exec.py tests/test_deepseek_history_adapter.py tests/test_cli_streaming.py tests/test_cli_context_usage.py -k deepseek -q
 ```
 
 集群接入、配置或持久化变更按需运行：

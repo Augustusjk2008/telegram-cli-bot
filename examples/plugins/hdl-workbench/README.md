@@ -176,26 +176,11 @@ include 循环不会反复读取，也不会将头文件文本内联到包含模
 
 ## 验证
 
-从仓库根目录使用独立 Python 环境运行：
+从仓库根目录运行插件 runtime 和 Host API 检查：
 
 ```powershell
-python -m venv .tmp/hdl-parser-venv
-& .tmp/hdl-parser-venv/Scripts/python.exe -m pip install --only-binary=:all: -r examples/plugins/hdl-workbench/requirements.txt
-& .tmp/hdl-parser-venv/Scripts/python.exe -m pip install pytest==8.3.4 pytest-asyncio==1.3.0
-& .tmp/hdl-parser-venv/Scripts/python.exe -m pytest --noconftest tests/test_hdl_parser.py tests/test_hdl_project.py tests/test_hdl_views.py -q
+python -m pytest tests/test_plugin_runtime.py tests/test_plugins_host_api.py tests/test_plugin_runtime_installers.py -q
 ```
 
-`--noconftest` 用于隔离 Host 的自动 session fixture；解析和项目单元测试不需要 Host 依赖。
-未安装解析依赖的普通 Host 测试环境会跳过实际解析用例，依赖错误和初始化诊断用例仍会运行。
-
-复制目录、真实 Host API 和 runtime 的集成检查可在装有 Host 依赖的环境运行；
-如解析依赖位于独立测试环境，显式指定子进程解释器（只影响测试）：
-
-```powershell
-$env:HDL_PLUGIN_TEST_PYTHON = (Resolve-Path .tmp/hdl-parser-venv/Scripts/python.exe).Path
-python -m pytest tests/test_hdl_plugin_runtime.py tests/test_plugin_runtime.py tests/test_plugin_service_cache.py tests/test_plugins_host_api.py tests/test_bundled_plugins.py -q
-```
-
-在 `front/` 目录运行前端检查，使用现有组件和 mock：`npm run test:gate -- src/test/plugin-hdl-view.test.tsx src/test/plugin-table-view.test.tsx src/test/editor-tabs-scope.test.tsx`、`npm run lint`、`npm run build`。
-浏览器验收同样在 `front/` 目录连接人工已启动的应用：设置 `PLAYWRIGHT_BASE_URL` 后运行 `npm run e2e -- src/test/plugin-hdl-workbench.spec.ts`。
-浏览器测试拦截 API，不修改运行中的用户配置或项目；检查窄窗口、刷新后的独立详情和实际编辑器中的源码位置。
+在 `front/` 目录运行前端检查：`npm run test:gate`、`npm run lint`、`npm run build`。
+浏览器验收在 `front/` 目录连接人工已启动的应用；测试过程拦截 API，不修改运行中的用户配置或项目，并检查窄窗口、刷新后的独立详情和实际编辑器中的源码位置。

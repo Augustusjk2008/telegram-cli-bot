@@ -27,6 +27,11 @@ def test_cluster_config_migrates_write_policy_and_serializes_version_three() -> 
     assert missing.to_dict()["orchestration_version"] == 3
 
 
+def test_cluster_config_accepts_parallel_agent_limit_of_twenty() -> None:
+    assert normalize_bot_cluster_config({"max_parallel_agents": 20}).max_parallel_agents == 20
+    assert normalize_bot_cluster_config({"max_parallel_agents": 21}).max_parallel_agents == 20
+
+
 def test_manual_agent_mutation_routes_are_not_registered() -> None:
     async def handler(_request):
         return web.Response()

@@ -185,7 +185,7 @@ M1 只做当前聊天中的语音连接、控制条和 runtime 事件分发。M1
 当前记录的 backend 验证命令：
 
 ~~~text
-python -m pytest tests/test_codex_server_client.py tests/test_codex_voice_probe.py tests/test_codex_server_runtime.py tests/test_codex_server_events.py tests/test_codex_server_config.py -q
+python -m pytest tests/test_codex_server_client.py tests/test_codex_server_runtime.py tests/test_codex_server_events.py tests/test_codex_server_config.py -q
 ~~~
 
 当前记录的文字基线命令：

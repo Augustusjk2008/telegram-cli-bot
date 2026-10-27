@@ -179,7 +179,7 @@ def normalize_bot_cluster_config(value: Any) -> BotClusterConfig:
             if raw_write_policy is None
             else _choice(raw_write_policy, BOT_WRITE_POLICIES, "main_only")
         ),
-        max_parallel_agents=_as_int(value.get("max_parallel_agents"), 3, minimum=1, maximum=8),
+        max_parallel_agents=_as_int(value.get("max_parallel_agents"), 3, minimum=1, maximum=20),
         default_timeout_seconds=_as_int(value.get("default_timeout_seconds"), 1800, minimum=60, maximum=3600),
         model_tiers=model_tiers,
         reasoning_efforts=reasoning_efforts,

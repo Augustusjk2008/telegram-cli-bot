@@ -927,7 +927,7 @@ function EditPanel({
                     onChange={(event) => void saveCluster({ maxParallelAgents: Number(event.target.value) })}
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   >
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                    {Array.from({ length: 20 }, (_, index) => index + 1).map((count) => (
                       <option key={count} value={count}>{count}</option>
                     ))}
                   </select>
