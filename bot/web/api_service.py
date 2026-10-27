@@ -287,8 +287,6 @@ CODEX_TERMINATE_GRACE_SECONDS = 1.0
 CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS = 0.25
 CLI_STATUS_MIN_INTERVAL_SECONDS = 0.25
 CLI_LIVE_TRACE_MAX_EVENTS = 2000
-ENDLESS_CONTINUE_DELAY_MS = 2000
-ENDLESS_CONTINUE_DELAY_SECONDS = ENDLESS_CONTINUE_DELAY_MS / 1000
 _CLI_CONTEXT_USAGE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cli-context-usage")
 @dataclass
 class CliAttemptState:
@@ -8236,7 +8234,7 @@ def _native_terminal_ag_ui_event(event: dict[str, Any]) -> bool:
 
 async def _wait_for_endless_retry(session: UserSession) -> None:
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + ENDLESS_CONTINUE_DELAY_SECONDS
+    deadline = loop.time() + max(0.0, float(config.ENDLESS_CONTINUE_DELAY_SECONDS))
     while True:
         with session._lock:
             if getattr(session, "_persist_enabled", True) is False:
@@ -8326,7 +8324,7 @@ async def _stream_endless_attempts(
             "attempt": attempt,
             "message": message,
             "output": str(retry_event.get("output") or message.get("content") or ""),
-            "next_delay_ms": ENDLESS_CONTINUE_DELAY_MS,
+            "next_delay_ms": max(0, int(round(float(config.ENDLESS_CONTINUE_DELAY_SECONDS) * 1000))),
         }
         try:
             await _wait_for_endless_retry(session)
@@ -8336,6 +8334,11 @@ async def _stream_endless_attempts(
         except WebApiError as exc:
             yield {"type": "error", "code": exc.code, "message": exc.message}
             return
+        yield {
+            "type": "endless_continue",
+            "attempt": attempt,
+            "text": "Continue",
+        }
         current_text = "Continue"
         current_request = _build_chat_run_request(
             alias,

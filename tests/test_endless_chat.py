@@ -34,6 +34,7 @@ def _session() -> SimpleNamespace:
 async def test_endless_attempts_emit_intermediate_errors_and_continue(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _session()
     prompts: list[str] = []
+    monkeypatch.setattr(api.config, "ENDLESS_CONTINUE_DELAY_SECONDS", 7.5)
 
     async def no_delay(_session: object) -> None:
         return None
@@ -62,9 +63,11 @@ async def test_endless_attempts_emit_intermediate_errors_and_continue(monkeypatc
     ]
 
     assert prompts == ["initial", "Continue"]
-    assert [event["type"] for event in events] == ["meta", "endless_error", "meta", "done"]
+    assert [event["type"] for event in events] == ["meta", "endless_error", "endless_continue", "meta", "done"]
     assert events[1]["message"]["content"] == "temporary failure"
     assert events[1]["attempt"] == 1
+    assert events[1]["next_delay_ms"] == 7500
+    assert events[2] == {"type": "endless_continue", "attempt": 1, "text": "Continue"}
 
 
 @pytest.mark.asyncio
@@ -134,7 +137,7 @@ async def test_endless_attempts_retry_native_error_events(monkeypatch: pytest.Mo
     ]
 
     assert prompts == ["initial", "Continue"]
-    assert [event["type"] for event in events] == ["endless_error", "done"]
+    assert [event["type"] for event in events] == ["endless_error", "endless_continue", "done"]
     assert events[0]["output"] == "Pi 暂时失败"
 
 
@@ -218,5 +221,5 @@ async def test_endless_attempts_keep_ag_ui_success_terminal_event(monkeypatch: p
     ]
 
     assert prompts == ["initial", "Continue"]
-    assert [event["type"] for event in events] == ["endless_error", "ag_ui", "done"]
-    assert events[1]["event"]["result"]["completion_state"] == "completed"
+    assert [event["type"] for event in events] == ["endless_error", "endless_continue", "ag_ui", "done"]
+    assert events[2]["event"]["result"]["completion_state"] == "completed"

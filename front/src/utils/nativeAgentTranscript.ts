@@ -1,4 +1,4 @@
-import type { ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
+import type { ChatEndlessEvent, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
 import type { AgUiPermissionRequest, AgUiRunState, NativeAgentTranscriptEntry } from "./agUiRunReducer";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -521,6 +521,18 @@ function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(tra
   };
 }
 
+function endlessEventToEntry(event: ChatEndlessEvent): NativeAgentTranscriptEntry {
+  const kind = event.kind === "error" ? "endless_error" : "endless_continue";
+  return {
+    id: `endless-${event.sequence}-${kind}`,
+    seq: event.sequence,
+    kind,
+    label: event.kind === "error" ? "错误" : "Continue",
+    summary: event.text,
+    collapsedByDefault: true,
+  };
+}
+
 export function isNativeAgentMessage(meta?: ChatMessageMetaInfo): boolean {
   const provider = String(meta?.nativeSource?.provider || "").trim().toLowerCase();
   return (
@@ -532,6 +544,7 @@ export function isNativeAgentMessage(meta?: ChatMessageMetaInfo): boolean {
 
 export function buildNativeAgentTranscriptEntries(input: {
   trace?: ChatTraceEvent[];
+  endlessEvents?: ChatEndlessEvent[];
   agUiState?: AgUiRunState | null;
   mode?: "native" | "cli";
 }): NativeAgentTranscriptEntry[] {
@@ -545,13 +558,11 @@ export function buildNativeAgentTranscriptEntries(input: {
     autoNativeFlat: nativeMode,
   });
 
-  if (normalizedTrace?.length) {
-    return normalizedTrace.map((trace, index) => traceToEntry(trace, index, index + 1));
-  }
-
-  if (input.agUiState?.entries?.length) {
-    return [...input.agUiState.entries].sort((left, right) => left.seq - right.seq);
-  }
-
-  return [];
+  const processEntries = normalizedTrace?.length
+    ? normalizedTrace.map((trace, index) => traceToEntry(trace, index, index + 1))
+    : input.agUiState?.entries?.length
+      ? [...input.agUiState.entries].sort((left, right) => left.seq - right.seq)
+      : [];
+  const endlessEntries = (input.endlessEvents || []).map(endlessEventToEntry);
+  return [...processEntries, ...endlessEntries];
 }

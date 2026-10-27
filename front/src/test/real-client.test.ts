@@ -864,6 +864,11 @@ describe("RealWebBotClient", () => {
         output: "Continue 失败",
         next_delay_ms: 2000,
       }) + "\n\n",
+      'event: endless_continue\ndata: ' + JSON.stringify({
+        type: "endless_continue",
+        attempt: 1,
+        text: "Continue",
+      }) + "\n\n",
       'event: done\ndata: ' + JSON.stringify({
         type: "done",
         turn_id: "turn-endless-success",
@@ -880,6 +885,7 @@ describe("RealWebBotClient", () => {
     ));
 
     const errors: Array<{ text: string; attempt: number }> = [];
+    const continues: Array<{ text: string; attempt: number }> = [];
     const message = await new RealWebBotClient().sendMessage(
       "main",
       "Continue",
@@ -889,6 +895,7 @@ describe("RealWebBotClient", () => {
       { endlessMode: true },
       undefined,
       (error, attempt) => errors.push({ text: error.text, attempt }),
+      (attempt) => continues.push({ text: "Continue", attempt }),
     );
 
     expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({
@@ -896,6 +903,7 @@ describe("RealWebBotClient", () => {
       endless_mode: true,
     });
     expect(errors).toEqual([{ text: "Continue 失败", attempt: 1 }]);
+    expect(continues).toEqual([{ text: "Continue", attempt: 1 }]);
     expect(message).toMatchObject({ id: "assistant-endless-success", text: "最终成功", state: "done" });
   });
 

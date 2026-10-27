@@ -207,6 +207,24 @@ test("completed message compaction releases full trace payloads but preserves su
   });
 });
 
+test("message metadata keeps endless events and Continue count across streaming merges", () => {
+  const merged = mergeMessageMeta(
+    {
+      endlessEvents: [{ kind: "error", sequence: 1, attempt: 1, text: "临时失败" }],
+      endlessContinueCount: 0,
+    },
+    {
+      endlessEvents: [{ kind: "continue", sequence: 2, attempt: 1, text: "Continue" }],
+      endlessContinueCount: 1,
+    },
+  );
+
+  expect(merged?.endlessEvents?.map((event) => event.kind)).toEqual(["error", "continue"]);
+  expect(merged?.endlessContinueCount).toBe(1);
+  expect(compactCompletedMessageMeta(merged)?.endlessEvents).toEqual(merged?.endlessEvents);
+  expect(compactCompletedMessageMeta(merged)?.endlessContinueCount).toBe(1);
+});
+
 test("anonymous native trace replay dedupe is opt-in and preserves stable events", () => {
   const anonymous = [
     { kind: "commentary", summary: "同一过程", source: "native" },

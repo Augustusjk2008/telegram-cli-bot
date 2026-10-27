@@ -74,6 +74,7 @@ import type {
   ChatSendOptions,
   ChatMessage,
   ChatMessageContextUsage,
+  ChatEndlessEvent,
   ChatTraceDetails,
   ChatMessageMetaInfo,
   ChatStatusUpdate,
@@ -778,6 +779,10 @@ type RawChatMessageMeta = {
   };
   context_usage?: RawChatMessageContextUsage | null;
   contextUsage?: RawChatMessageContextUsage | null;
+  endless_events?: RawChatEndlessEvent[];
+  endlessEvents?: RawChatEndlessEvent[];
+  endless_continue_count?: number;
+  endlessContinueCount?: number;
   workspace_history_head?: string;
   workspaceHistoryHead?: string;
   linear_index?: number;
@@ -788,6 +793,17 @@ type RawChatMessageMeta = {
   degraded_reason?: string;
   degradedReason?: string;
   voice?: RawVoiceTaskBinding | null;
+};
+
+type RawChatEndlessEvent = {
+  kind?: string;
+  type?: string;
+  sequence?: number;
+  order?: number;
+  attempt?: number;
+  text?: string;
+  message?: string;
+  code?: string;
 };
 
 type RawChatMessageContextUsage = {
@@ -1620,6 +1636,11 @@ type StreamEventPayload =
       next_delay_ms?: number;
       user_message_id?: string;
       message?: RawHistoryItem;
+    }
+  | {
+      type: "endless_continue";
+      attempt?: number;
+      text?: string;
     }
   | { type: "error"; message?: string; code?: string };
 
@@ -2621,6 +2642,7 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   const rawRollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
   const rawDegraded = raw.degraded;
   const rawDegradedReason = raw.degraded_reason ?? raw.degradedReason;
+  const rawEndlessEvents = raw.endless_events || raw.endlessEvents || [];
   const voice = mapVoiceTaskBinding(raw.voice);
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
@@ -2673,6 +2695,29 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   const contextUsage = mapContextUsage(rawContextUsage);
   if (contextUsage) {
     meta.contextUsage = contextUsage;
+  }
+  const endlessEvents: ChatEndlessEvent[] = rawEndlessEvents
+    .map((event, index) => {
+      const kind = String(event.kind || event.type || "").trim().toLowerCase();
+      const text = String(event.text || event.message || "").trim();
+      if ((kind !== "error" && kind !== "continue") || !text) {
+        return null;
+      }
+      return {
+        kind: kind as ChatEndlessEvent["kind"],
+        sequence: Math.max(1, Math.floor(Number(event.sequence ?? event.order ?? index + 1) || index + 1)),
+        attempt: Math.max(0, Math.floor(Number(event.attempt) || 0)),
+        text,
+        ...(event.code ? { code: String(event.code) } : {}),
+      } satisfies ChatEndlessEvent;
+    })
+    .filter((event): event is ChatEndlessEvent => Boolean(event));
+  const endlessContinueCount = Number(raw.endless_continue_count ?? raw.endlessContinueCount);
+  if (endlessEvents.length > 0) {
+    meta.endlessEvents = endlessEvents;
+  }
+  if (Number.isFinite(endlessContinueCount) && endlessContinueCount >= 0) {
+    meta.endlessContinueCount = Math.floor(endlessContinueCount);
   }
   if (typeof rawWorkspaceHistoryHead === "string") {
     meta.workspaceHistoryHead = rawWorkspaceHistoryHead;
@@ -5695,6 +5740,7 @@ export class RealWebBotClient implements WebBotClient {
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
     onEndlessError?: (message: ChatMessage, attempt: number) => void,
+    onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
     const useAgUiProtocol = options?.executionMode === "native_agent";
     const streamUrl = `/api/bots/${encodeURIComponent(botAlias)}/chat/stream${useAgUiProtocol ? "?protocol=ag-ui" : ""}`;
@@ -5821,6 +5867,11 @@ export class RealWebBotClient implements WebBotClient {
             state: "error",
           });
           onEndlessError?.(message, Number(event.attempt || 0));
+          separator = findSseSeparator(buffer);
+          continue;
+        }
+        if (event.type === "endless_continue") {
+          onEndlessContinue?.(Number(event.attempt || 0));
           separator = findSseSeparator(buffer);
           continue;
         }

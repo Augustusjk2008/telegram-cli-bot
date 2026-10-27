@@ -1,4 +1,4 @@
-import type { ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
+import type { ChatEndlessEvent, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
 import { isNativeAgentMessage, mergeChatTraceEvents } from "./nativeAgentTranscript";
 
 function pickTraceCount(incomingValue?: number, baseValue?: number, summaryValue?: number) {
@@ -15,6 +15,57 @@ function pickLoadedTraceCount(incomingValue?: number, baseValue?: number) {
   const values = [incomingValue, baseValue]
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return values.length > 0 ? Math.max(...values) : undefined;
+}
+
+function pickEndlessContinueCount(
+  incomingValue: number | undefined,
+  baseValue: number | undefined,
+  events?: ChatEndlessEvent[],
+) {
+  const eventCount = (events || []).filter((event) => event.kind === "continue").length;
+  return Math.max(
+    typeof incomingValue === "number" && Number.isFinite(incomingValue) ? Math.max(0, Math.floor(incomingValue)) : 0,
+    typeof baseValue === "number" && Number.isFinite(baseValue) ? Math.max(0, Math.floor(baseValue)) : 0,
+    eventCount,
+  );
+}
+
+function mergeEndlessEvents(
+  sources: Array<ChatEndlessEvent[] | undefined>,
+) {
+  const merged: ChatEndlessEvent[] = [];
+  const seen = new Set<string>();
+  sources.forEach((source) => {
+    (source || []).forEach((event, index) => {
+      if (!event || (event.kind !== "error" && event.kind !== "continue")) {
+        return;
+      }
+      const sequence = typeof event.sequence === "number" && Number.isFinite(event.sequence)
+        ? Math.max(1, Math.floor(event.sequence))
+        : merged.length + index + 1;
+      const text = String(event.text || "").trim();
+      if (!text) {
+        return;
+      }
+      const normalized: ChatEndlessEvent = {
+        kind: event.kind,
+        sequence,
+        attempt: typeof event.attempt === "number" && Number.isFinite(event.attempt)
+          ? Math.max(0, Math.floor(event.attempt))
+          : 0,
+        text,
+        ...(event.code ? { code: String(event.code) } : {}),
+      };
+      const key = `${normalized.sequence}:${normalized.kind}:${normalized.attempt}:${normalized.code || ""}:${normalized.text}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      merged.push(normalized);
+    });
+  });
+  merged.sort((left, right) => left.sequence - right.sequence);
+  return merged.length > 0 ? merged : undefined;
 }
 
 function isTerminalCompletionState(value?: string) {
@@ -54,6 +105,8 @@ export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo): ChatMes
     toolCallCount: pickTraceCount(meta.toolCallCount, undefined, traceSummary?.toolCallCount),
     processCount: pickTraceCount(meta.processCount, undefined, traceSummary?.processCount),
     trace: retainedTrace && retainedTrace.length > 0 ? retainedTrace : undefined,
+    endlessEvents: meta.endlessEvents,
+    endlessContinueCount: meta.endlessContinueCount,
   };
   return Object.values(compactMeta).some((value) => typeof value !== "undefined") ? compactMeta : undefined;
 }
@@ -83,6 +136,15 @@ export function mergeMessageMeta(
     && [incoming?.traceCount, incoming?.toolCallCount, incoming?.processCount]
       .every((value) => typeof value === "number" && Number.isFinite(value));
   const traceSummary = trace && !hasIncomingTraceSummary ? summarizeTrace(trace) : undefined;
+  const endlessEvents = mergeEndlessEvents([base?.endlessEvents, incoming?.endlessEvents]);
+  const endlessContinueCount = pickEndlessContinueCount(
+    incoming?.endlessContinueCount,
+    base?.endlessContinueCount,
+    endlessEvents,
+  );
+  const hasEndlessMeta = Boolean(endlessEvents)
+    || typeof incoming?.endlessContinueCount === "number"
+    || typeof base?.endlessContinueCount === "number";
   const incomingRunState = incoming?.agUiRunState && typeof incoming.agUiRunState === "object"
     ? incoming.agUiRunState as { completed?: boolean }
     : undefined;
@@ -107,6 +169,8 @@ export function mergeMessageMeta(
     processCount: pickTraceCount(incoming?.processCount, base?.processCount, traceSummary?.processCount),
     nativeSource: incoming?.nativeSource || base?.nativeSource,
     contextUsage: incoming?.contextUsage || base?.contextUsage,
+    endlessEvents,
+    endlessContinueCount: hasEndlessMeta ? endlessContinueCount : undefined,
     agUiRunState,
     tracePresentation,
     trace,

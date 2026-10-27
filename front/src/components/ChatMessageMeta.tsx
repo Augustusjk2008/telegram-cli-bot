@@ -6,6 +6,7 @@ type Props = {
   createdAt: string;
   align?: "left" | "right";
   contextUsage?: ChatMessageContextUsage;
+  endlessContinueCount?: number;
   mobileLayout?: boolean;
 };
 
@@ -35,7 +36,7 @@ function formatTime(createdAt: string) {
   return `${dateText} ${timeText}`;
 }
 
-export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage, mobileLayout = false }: Props) {
+export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage, endlessContinueCount, mobileLayout = false }: Props) {
   return (
     <div
       className={align === "right"
@@ -50,7 +51,11 @@ export function ChatMessageMeta({ name, createdAt, align = "left", contextUsage,
         {name}
       </span>
       <span className="shrink-0 text-[var(--muted)]">{formatTime(createdAt)}</span>
-      <ChatContextUsageBadge contextUsage={contextUsage} testId="chat-message-context-usage-text" />
+      <ChatContextUsageBadge
+        contextUsage={contextUsage}
+        endlessContinueCount={endlessContinueCount}
+        testId="chat-message-context-usage-text"
+      />
     </div>
   );
 }

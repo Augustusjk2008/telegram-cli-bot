@@ -1,2 +1,0 @@
-model,currency,input_per_million,cache_read_per_million,cache_write_per_million,output_per_million
-test-model,USD,2,0.2,2.5,10

@@ -2635,11 +2635,12 @@ class WebApiServer:
         try:
             async for event in event_stream:
                 resumable_stream = resumable_stream or bool(event.get("stream_id"))
-                if wants_ag_ui and str(event.get("type") or "") == "endless_error":
+                if wants_ag_ui and str(event.get("type") or "") in {"endless_error", "endless_continue"}:
                     if client_disconnected:
                         continue
                     try:
-                        await response.write(_format_sse("endless_error", self._decorate_chat_authors(event, auth)))
+                        event_type = str(event.get("type") or "")
+                        await response.write(_format_sse(event_type, self._decorate_chat_authors(event, auth)))
                     except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                         client_disconnected = True
                         logger.debug(

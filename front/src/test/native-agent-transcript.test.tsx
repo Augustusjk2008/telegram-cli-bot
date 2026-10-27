@@ -195,4 +195,44 @@ describe("NativeAgentTranscript", () => {
     expect(within(transcript).getAllByText("过程 1")).toHaveLength(1);
     expect(within(transcript).getAllByText("过程 2")).toHaveLength(1);
   });
+
+  it("keeps endless errors and Continue records collapsed with distinct colors", () => {
+    const entries: NativeAgentTranscriptEntry[] = [
+      {
+        id: "endless-error-1",
+        seq: 1,
+        kind: "endless_error",
+        label: "错误",
+        summary: "临时失败",
+        collapsedByDefault: true,
+      },
+      {
+        id: "endless-continue-1",
+        seq: 2,
+        kind: "endless_continue",
+        label: "Continue",
+        summary: "Continue",
+        collapsedByDefault: true,
+      },
+    ];
+
+    render(
+      <NativeAgentTranscript
+        entries={entries}
+        resultText="最终回答"
+        state="done"
+        mode="cli"
+      />,
+    );
+
+    const transcript = screen.getByTestId("native-agent-transcript");
+    expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toHaveAttribute("aria-expanded", "false");
+    expect(within(transcript).queryByText("临时失败")).not.toBeInTheDocument();
+
+    fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+    const error = within(transcript).getByText("临时失败");
+    const continuation = within(transcript).getByText("Continue", { exact: true });
+    expect(error).toHaveClass("text-[var(--feedback-error-text-deep)]");
+    expect(continuation).toHaveClass("text-[var(--status-success)]");
+  });
 });

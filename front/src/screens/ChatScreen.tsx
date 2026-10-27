@@ -20,7 +20,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { CheckCheck, Copy, FastForward, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
@@ -50,6 +50,7 @@ import type {
   ClusterTaskStatus,
   ChatMessage,
   ChatMessageContextUsage,
+  ChatEndlessEvent,
   ChatMessageMetaInfo,
   ChatExecutionMode,
   ChatSendOptions,
@@ -1088,6 +1089,29 @@ function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tra
   };
 }
 
+function appendEndlessEventToMessage(item: ChatMessage, event: Omit<ChatEndlessEvent, "sequence">): ChatMessage {
+  const currentEvents = item.meta?.endlessEvents || [];
+  const duplicate = currentEvents.some((candidate) => (
+    candidate.kind === event.kind
+    && candidate.attempt === event.attempt
+    && candidate.text === event.text
+    && candidate.code === event.code
+  ));
+  if (duplicate) {
+    return { ...item, state: "streaming", text: "" };
+  }
+  const sequence = currentEvents.reduce((max, candidate) => Math.max(max, candidate.sequence || 0), 0) + 1;
+  const meta = mergeMessageMeta(item.meta, {
+    endlessEvents: [{ ...event, sequence }],
+  });
+  return {
+    ...item,
+    text: "",
+    state: "streaming",
+    ...(meta ? { meta } : {}),
+  };
+}
+
 function updateMessageById(
   items: ChatMessage[],
   messageId: string,
@@ -1406,7 +1430,7 @@ type ChatMessageRowProps = {
   onRetryAnswerTranslation: (id: string) => Promise<void>;
   onCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   onContinueFinalAnswer?: () => void;
-  onFastForward?: () => void;
+  onFastForward?: (message: ChatMessage) => void;
   onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
   onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   messageClientStateKey: string;
@@ -1493,6 +1517,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
   const isAssistant = item.role === "assistant";
   const isNativeAgentAssistant = isAssistant && isNativeAgentMessage(item.meta);
+  const endlessEvents = item.meta?.endlessEvents;
+  const endlessContinueCount = item.meta?.endlessContinueCount;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
   const messageTraceLoadState = traceLoadState[messageClientStateKey];
   const traceLoadedCount = typeof item.meta?.traceLoadedCount === "number"
@@ -1501,7 +1527,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const traceLoaded = traceCount <= 0 || traceLoadedCount >= traceCount;
   const hasTrace = allowTrace && isAssistant && traceCount > 0;
   const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
-  const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript);
+  const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript || Boolean(endlessEvents?.length));
   const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
@@ -1509,6 +1535,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const canStartEndlessMode = canContinue && item.state === "error";
   const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
     trace,
+    endlessEvents,
     agUiState: agUiRunState,
     mode: transcriptMode,
   });
@@ -1527,6 +1554,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           createdAt={chatMessageDisplayTime(item)}
           align={messageAlign}
           contextUsage={isStreamingAssistant ? displayContextUsage : undefined}
+          endlessContinueCount={endlessContinueCount}
           mobileLayout={mobileLayout}
         />
         <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
@@ -1576,11 +1604,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
-                onFastForward={canStartEndlessMode ? onFastForward : undefined}
+                onFastForward={canStartEndlessMode ? () => onFastForward?.(item) : undefined}
                 onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
                 favorite={favorite}
                 canContinue={canContinue}
                 contextUsage={displayContextUsage}
+                endlessContinueCount={endlessContinueCount}
                 mobileLayout={mobileLayout}
               />
             ) : item.role === "assistant" && item.state !== "streaming" ? (
@@ -1680,7 +1709,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
             favorite={favorite}
             fullAnswerText={displayText}
             onContinue={canContinue ? onContinueFinalAnswer : undefined}
-            onFastForward={canStartEndlessMode ? onFastForward : undefined}
+            onFastForward={canStartEndlessMode ? () => onFastForward?.(item) : undefined}
+            endlessContinueCount={endlessContinueCount}
             onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
             onToggleFavorite={canFavoriteFinalAnswer ? () => onToggleFavoriteAnswer?.(messageClientStateKey, item) : undefined}
           />
@@ -1707,7 +1737,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleRetryAnswerTranslation: (id: string) => Promise<void>;
   handleCopyFinalAnswer: (text: string) => boolean | void | Promise<boolean | void>;
   handleContinueFinalAnswer: () => void;
-  handleFastForward: () => void;
+  handleFastForward: (message: ChatMessage) => void;
   handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
   handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
   handleRequestSoloRollback?: (target: SoloRollbackTarget) => void;
@@ -1883,7 +1913,6 @@ export function ChatScreen({
   const [selectionNotice, setSelectionNotice] = useState("");
   const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
   const [endlessModeActive, setEndlessModeActive] = useState(false);
-  const [endlessAutoContinueCount, setEndlessAutoContinueCount] = useState(0);
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
@@ -1991,6 +2020,7 @@ export function ChatScreen({
   const sseLastActivityAtRef = useRef<number | null>(null);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
   const endlessModeRef = useRef(false);
+  const endlessModeTargetRef = useRef<ChatMessage | null>(null);
   const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean; forceHistory?: boolean }) => Promise<boolean>) | null>(null);
   const voiceTaskBindingRef = useRef<VoiceTaskBinding | null>(null);
   const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
@@ -2098,6 +2128,7 @@ export function ChatScreen({
 
   const stopEndlessMode = useCallback(() => {
     endlessModeRef.current = false;
+    endlessModeTargetRef.current = null;
     setEndlessModeActive(false);
     setEndlessModeConfirmOpen(false);
   }, []);
@@ -2276,14 +2307,36 @@ export function ChatScreen({
     if (botOverview?.endlessMode === true && botOverview.isProcessing) {
       endlessModeRef.current = true;
       setEndlessModeActive(true);
-      setEndlessAutoContinueCount((current) => Math.max(current, botOverview.endlessAttempt || 0));
+      const endlessAttempt = Math.max(0, botOverview.endlessAttempt || 0);
+      if (endlessAttempt > 0) {
+        setItems((current) => {
+          const index = [...current].reverse().findIndex((item) => item.role === "assistant");
+          if (index < 0) {
+            return current;
+          }
+          const targetIndex = current.length - 1 - index;
+          const item = current[targetIndex];
+          const next = {
+            ...item,
+            meta: {
+              ...(item.meta || {}),
+              endlessContinueCount: Math.max(item.meta?.endlessContinueCount || 0, endlessAttempt),
+            },
+          };
+          if (next.meta.endlessContinueCount === item.meta?.endlessContinueCount) {
+            return current;
+          }
+          const nextItems = current.slice();
+          nextItems[targetIndex] = next;
+          return nextItems;
+        });
+      }
       return;
     }
     if (botOverview?.endlessMode === false && !botOverview.isProcessing) {
       endlessModeRef.current = false;
       setEndlessModeActive(false);
       setEndlessModeConfirmOpen(false);
-      setEndlessAutoContinueCount(0);
     }
   }, [botOverview?.endlessAttempt, botOverview?.endlessMode, botOverview?.isProcessing]);
 
@@ -4134,6 +4187,8 @@ export function ChatScreen({
     options: {
       attachments?: PendingChatAttachment[];
       clearPendingAttachments?: boolean;
+      background?: boolean;
+      reuseAssistant?: ChatMessage;
       sendOptions?: ChatSendOptions;
       onSuccess?: (message: ChatMessage) => void;
       onError?: (message: string) => void;
@@ -4159,28 +4214,34 @@ export function ChatScreen({
     const sendVersion = assistantSendVersionRef.current;
     const displayUserText = options.sendOptions?.visibleText || composedText;
     const nativeStreaming = options.sendOptions?.executionMode === "native_agent" || executionModeRef.current === "native_agent";
-    const userMessage: ChatMessage = {
+    const backgroundSend = options.background === true;
+    const reuseAssistant = options.reuseAssistant;
+    const userMessage: ChatMessage | null = backgroundSend ? null : {
       id: `user-${Date.now()}`,
       role: "user",
       text: displayUserText,
       createdAt: new Date().toISOString(),
       state: "done",
     };
-    let assistantId = `assistant-${Date.now()}`;
+    const assistantId = reuseAssistant?.meta?.renderKey || `assistant-${Date.now()}`;
     const assistantMessage: ChatMessage = {
-      id: assistantId,
+      id: reuseAssistant?.id || assistantId,
       role: "assistant",
       text: "",
-      createdAt: new Date().toISOString(),
+      createdAt: reuseAssistant?.createdAt || new Date().toISOString(),
       state: "streaming",
-      meta: nativeStreaming
-        ? { tracePresentation: "native_agent_flat", renderKey: assistantId }
-        : { renderKey: assistantId },
+      ...(reuseAssistant
+        ? {}
+        : {
+            meta: nativeStreaming
+              ? { tracePresentation: "native_agent_flat", renderKey: assistantId }
+              : { renderKey: assistantId },
+          }),
     };
     activeTurnBindingRef.current = {
       localAssistantId: assistantId,
-      turnId: "",
-      assistantMessageId: "",
+      turnId: reuseAssistant?.turnId || "",
+      assistantMessageId: reuseAssistant?.id || "",
       codexServer: botOverviewRef.current?.cliType === "codex_server" && !nativeStreaming,
       streamStartedAtMs: localStartedAtMs,
     };
@@ -4201,7 +4262,34 @@ export function ChatScreen({
     traceInspectionAutoScrollPausedRef.current = false;
     streamBatcher.cancel();
     releaseAgUiBatchState();
-    setItems((prev) => [...prev, userMessage, assistantMessage]);
+    setItems((prev) => {
+      if (reuseAssistant) {
+        const target: ActiveAssistantTarget = {
+          localAssistantId: assistantId,
+          assistantMessageId: reuseAssistant.id,
+          turnId: reuseAssistant.turnId,
+          streamStartedAtMs: localStartedAtMs,
+        };
+        return updateActiveAssistantMessage(prev, target, (item) => {
+          let nextItem: ChatMessage = {
+            ...item,
+            ...assistantMessage,
+            meta: mergeMessageMeta(item.meta, assistantMessage.meta),
+          };
+          if (item.state === "error" && item.text.trim()) {
+            nextItem = appendEndlessEventToMessage(nextItem, {
+              kind: "error",
+              attempt: 0,
+              text: item.text.trim(),
+            });
+          }
+          return nextItem;
+        });
+      }
+      return backgroundSend
+        ? [...prev, assistantMessage]
+        : [...prev, userMessage as ChatMessage, assistantMessage];
+    });
     isStreamingRef.current = true;
     streamModeRef.current = "sse";
     setIsStreaming(true);
@@ -4211,7 +4299,7 @@ export function ChatScreen({
     emitBotActivityForActiveAgent("busy");
     let streamTurnId = "";
     let streamAssistantMessageId = "";
-    let streamUserMessageId = userMessage.id;
+    let streamUserMessageId = userMessage?.id || "";
     const captureStreamStatus = (status: ChatStatusUpdate) => {
       if (status.turnId) streamTurnId = status.turnId;
       if (status.assistantMessageId) streamAssistantMessageId = status.assistantMessageId;
@@ -4247,43 +4335,41 @@ export function ChatScreen({
         streamTurnId = "";
         streamAssistantMessageId = "";
         usingPreviewReplace = false;
-        const nextAssistantId = `assistant-${Date.now()}-endless-${attempt || "next"}`;
         const visibleError: ChatMessage = {
           ...message,
           state: "error",
         };
-        const nextAssistantMessage: ChatMessage = {
-          id: nextAssistantId,
-          role: "assistant",
-          text: "",
-          createdAt: new Date().toISOString(),
-          state: "streaming",
-          meta: nativeStreaming
-            ? { tracePresentation: "native_agent_flat", renderKey: nextAssistantId }
-            : { renderKey: nextAssistantId },
-        };
-        assistantId = nextAssistantId;
-        activeTurnBindingRef.current = {
-          localAssistantId: nextAssistantId,
-          turnId: "",
-          assistantMessageId: "",
-          codexServer: botOverviewRef.current?.cliType === "codex_server" && !nativeStreaming,
-          streamStartedAtMs: localStartedAtMs,
-        };
-        setItems((current) => {
-          const index = findActiveAssistantIndex(current, previousTarget);
-          if (index < 0) {
-            return [...current, visibleError, nextAssistantMessage];
-          }
-          return [
-            ...current.slice(0, index),
-            visibleError,
-            nextAssistantMessage,
-            ...current.slice(index + 1),
-          ];
-        });
-        setEndlessAutoContinueCount((current) => Math.max(current, attempt || current + 1));
+        markSseActivity();
+        setItems((current) => updateActiveAssistantMessage(
+          current,
+          previousTarget,
+          (item) => appendEndlessEventToMessage(item, {
+            kind: "error",
+            attempt: Math.max(0, attempt || 0),
+            text: visibleError.text.trim() || "Continue 执行失败",
+          }),
+        ));
+        const activeBinding = activeTurnBindingRef.current;
+        if (activeBinding?.localAssistantId === assistantId) {
+          activeBinding.turnId = "";
+          activeBinding.assistantMessageId = "";
+        }
         options.onEndlessError?.(visibleError, attempt);
+      };
+      const handleEndlessContinue = (attempt: number) => {
+        if (sendVersion !== assistantSendVersionRef.current) {
+          return;
+        }
+        markSseActivity();
+        setItems((current) => updateActiveAssistantMessage(
+          current,
+          activeAssistantTarget(),
+          (item) => appendEndlessEventToMessage(item, {
+            kind: "continue",
+            attempt: Math.max(0, attempt || 0),
+            text: "Continue",
+          }),
+        ));
       };
       const requestSendOptions: ChatSendOptions | undefined = (() => {
         const baseOptions = options.sendOptions
@@ -4405,6 +4491,7 @@ export function ChatScreen({
         requestSendOptions,
         onAgUiEvent,
         handleEndlessError,
+        handleEndlessContinue,
       );
 
       streamBatcher.flush();
@@ -4428,24 +4515,34 @@ export function ChatScreen({
         ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta) }
         : finalizedMessage;
 
-      setItems((prev) => upsertActiveAssistantMessage(
-        prev,
-        activeAssistantTarget(finalizedMessage),
-        finalizedMessage,
-        (item, final) => {
-          const mergedMeta = mergeMessageMeta(
-            item.meta,
-            final.meta,
-            undefined,
-            { traceMode: "replace" },
+      const mergeFinalMessage = (item: ChatMessage, final: ChatMessage) => {
+        const mergedMeta = mergeMessageMeta(
+          item.meta,
+          final.meta,
+          undefined,
+          { traceMode: "replace" },
+        );
+        return {
+          ...final,
+          ...mergeMessageTranslation(item, final),
+          meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
+        };
+      };
+      setItems((prev) => {
+        if (reuseAssistant) {
+          return updateActiveAssistantMessage(
+            prev,
+            { localAssistantId: assistantId, streamStartedAtMs: localStartedAtMs },
+            (item) => mergeFinalMessage(item, finalizedMessage),
           );
-          return {
-            ...final,
-            ...mergeMessageTranslation(item, final),
-            meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
-          };
-        },
-      ));
+        }
+        return upsertActiveAssistantMessage(
+          prev,
+          activeAssistantTarget(finalizedMessage),
+          finalizedMessage,
+          mergeFinalMessage,
+        );
+      });
       options.onSuccess?.(callbackMessage);
       if (finalizedMessage.state !== "error" && !isCancelledChatCompletion(finalizedMessage)) {
         onUnreadResult?.(
@@ -4470,19 +4567,29 @@ export function ChatScreen({
           ...err.partialMessage,
           state: "streaming",
         };
-        setItems((prev) => upsertActiveAssistantMessage(
-          prev,
-          activeAssistantTarget(partialMessage),
-          partialMessage,
-          (item, partial) => {
-            const meta = mergeMessageMeta(item.meta, partial.meta);
+        setItems((prev) => {
+          const mergePartialMessage = (item: ChatMessage) => {
+            const meta = mergeMessageMeta(item.meta, partialMessage.meta);
             return {
-              ...partial,
-              text: partial.text || item.text,
+              ...partialMessage,
+              text: partialMessage.text || item.text,
               ...(meta ? { meta } : {}),
             };
-          },
-        ));
+          };
+          if (reuseAssistant) {
+            return updateActiveAssistantMessage(
+              prev,
+              { localAssistantId: assistantId, streamStartedAtMs: localStartedAtMs },
+              mergePartialMessage,
+            );
+          }
+          return upsertActiveAssistantMessage(
+            prev,
+            activeAssistantTarget(partialMessage),
+            partialMessage,
+            (item) => mergePartialMessage(item),
+          );
+        });
       } else {
         const message = err instanceof Error ? err.message : "发送失败";
         if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
@@ -4763,7 +4870,7 @@ export function ChatScreen({
     });
   }, [botAlias, setQueuedMessageState]);
 
-  const handleContinueFinalAnswer = useCallback(() => {
+  const handleContinueFinalAnswer = useCallback((options: { background?: boolean; reuseAssistant?: ChatMessage } = {}) => {
     if (activeAgentIdRef.current !== "main") {
       return;
     }
@@ -4771,6 +4878,8 @@ export function ChatScreen({
     const currentExecutionMode = executionModeRef.current;
     const nativeSend = currentExecutionMode === "native_agent";
     void sendMessageInternal("Continue", {
+      background: options.background ?? endlessMode,
+      reuseAssistant: options.reuseAssistant,
       sendOptions: {
         taskMode: "standard",
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
@@ -4794,10 +4903,11 @@ export function ChatScreen({
     });
   }, [sendMessageInternal, soloMode, stopEndlessMode]);
 
-  const handleOpenEndlessMode = useCallback(() => {
+  const handleOpenEndlessMode = useCallback((message: ChatMessage) => {
     if (endlessModeRef.current || loadingRef.current || isStreamingRef.current) {
       return;
     }
+    endlessModeTargetRef.current = message;
     setEndlessModeConfirmOpen(true);
   }, []);
 
@@ -4807,9 +4917,13 @@ export function ChatScreen({
     }
     setEndlessModeConfirmOpen(false);
     endlessModeRef.current = true;
-    setEndlessAutoContinueCount(0);
     setEndlessModeActive(true);
-    handleContinueFinalAnswer();
+    const target = endlessModeTargetRef.current;
+    endlessModeTargetRef.current = null;
+    handleContinueFinalAnswer({
+      background: true,
+      ...(target ? { reuseAssistant: target } : {}),
+    });
   }, [handleContinueFinalAnswer]);
 
 
@@ -5528,11 +5642,14 @@ export function ChatScreen({
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
       <div role="dialog" aria-modal="true" aria-label="确认开启无尽模式" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
         <h2 className="text-sm font-semibold text-[var(--text)]">开启无尽模式</h2>
-        <p className="mt-2 text-sm text-[var(--muted)]">将自动发送“Continue”。如果回答出错，会等待 2 秒后继续，直到获得正常回答。</p>
+        <p className="mt-2 text-sm text-[var(--muted)]">将自动发送“Continue”。如果回答出错，会按环境配置的等待间隔后继续，直到获得正常回答。</p>
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => setEndlessModeConfirmOpen(false)}
+            onClick={() => {
+              endlessModeTargetRef.current = null;
+              setEndlessModeConfirmOpen(false);
+            }}
             className="inline-flex h-8 items-center rounded-md border border-[var(--workbench-hairline)] px-3 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)]"
           >
             取消
@@ -5669,22 +5786,6 @@ export function ChatScreen({
           ? `relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
           : `relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
       >
-        {endlessModeActive ? (
-          <div className="pointer-events-none absolute right-3 top-2 z-20">
-            <button
-              type="button"
-              data-testid="endless-mode-status"
-              aria-live="polite"
-              aria-label={`无尽模式运行中，回答出错后已自动继续 ${endlessAutoContinueCount} 次，点击停止`}
-              title={`无尽模式运行中 · 回答出错后已自动继续 ${endlessAutoContinueCount} 次 · 点击停止`}
-              onClick={() => void handleKillTask()}
-              className="pointer-events-auto inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] bg-[var(--accent-soft)] px-1.5 text-[11px] font-medium text-[var(--accent)] shadow-[var(--shadow-surface)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
-            >
-              <FastForward aria-hidden="true" className="h-3.5 w-3.5 animate-pulse" />
-              <span aria-hidden="true">×{endlessAutoContinueCount}</span>
-            </button>
-          </div>
-        ) : null}
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>

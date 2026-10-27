@@ -100,4 +100,13 @@ describe("ChatFinalAnswerActions", () => {
     fireEvent.pointerLeave(badge, { pointerType: "mouse" });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
+
+  it("shows endless Continue count in context details", () => {
+    render(<ChatFinalAnswerActions endlessContinueCount={2} />);
+
+    const badge = screen.getByTestId("chat-message-context-usage-bottom");
+    expect(badge).toHaveAccessibleName("View context details: Continue ×2");
+    fireEvent.click(badge);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("endless Continue: 2");
+  });
 });

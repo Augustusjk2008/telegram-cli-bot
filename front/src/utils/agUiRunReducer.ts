@@ -51,7 +51,7 @@ export type AgUiReasoningItem = {
 export type NativeAgentTranscriptEntry = {
   id: string;
   seq: number;
-  kind: "process" | "tool" | "event" | "permission" | "error" | "cancelled";
+  kind: "process" | "tool" | "event" | "permission" | "error" | "cancelled" | "endless_error" | "endless_continue";
   label: string;
   summary: string;
   body?: string;

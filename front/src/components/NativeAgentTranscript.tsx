@@ -30,6 +30,7 @@ type Props = {
   favorite?: boolean;
   canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
+  endlessContinueCount?: number;
   mobileLayout?: boolean;
 };
 
@@ -210,7 +211,7 @@ type TranscriptRenderItem =
 function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
   return (
     entry.kind === "process"
-    || ["permission", "error", "cancelled"].includes(entry.kind)
+    || ["permission", "error", "cancelled", "endless_error", "endless_continue"].includes(entry.kind)
   );
 }
 
@@ -267,6 +268,8 @@ function entryCopyLabel(entry: NativeAgentTranscriptEntry) {
   if (entry.kind === "permission") return "权限";
   if (entry.kind === "error") return "错误";
   if (entry.kind === "cancelled") return "已取消";
+  if (entry.kind === "endless_error") return "无尽错误";
+  if (entry.kind === "endless_continue") return "Continue";
   return entry.label || "事件";
 }
 
@@ -403,7 +406,13 @@ const TranscriptEntryRow = memo(function TranscriptEntryRow({
   onFileLinkClick?: (href: string) => void;
 }) {
   const rowClassName = nested ? "py-1" : "border-t border-[var(--workbench-hairline)] py-1";
-  if (entry.kind === "process" || entry.kind === "error" || entry.kind === "cancelled") {
+  if (
+    entry.kind === "process"
+    || entry.kind === "error"
+    || entry.kind === "cancelled"
+    || entry.kind === "endless_error"
+    || entry.kind === "endless_continue"
+  ) {
     const summary = stripThinkingBlocks(compact(entry.summary, entry.label));
     if (!summary) {
       return null;
@@ -413,7 +422,11 @@ const TranscriptEntryRow = memo(function TranscriptEntryRow({
         {shouldRenderEntrySummaryAsMarkdown(entry) ? (
           <ChatMarkdownMessage content={summary} onFileLinkClick={onFileLinkClick} />
         ) : (
-          <div className={entry.kind === "error" ? "whitespace-pre-wrap break-words text-[var(--feedback-error-text-deep)]" : "whitespace-pre-wrap break-words text-[var(--text)]"}>
+          <div className={entry.kind === "error" || entry.kind === "endless_error"
+            ? "whitespace-pre-wrap break-words text-[var(--feedback-error-text-deep)]"
+            : entry.kind === "endless_continue"
+              ? "whitespace-pre-wrap break-words text-[var(--status-success)]"
+              : "whitespace-pre-wrap break-words text-[var(--text)]"}>
             {summary}
           </div>
         )}
@@ -530,6 +543,7 @@ export function NativeAgentTranscript({
   favorite = false,
   canContinue = false,
   contextUsage,
+  endlessContinueCount,
   mobileLayout = false,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
@@ -540,11 +554,22 @@ export function NativeAgentTranscript({
     || traceLoaded === true
     || (typeof traceLoaded === "undefined" && entries.length >= totalTraceCount);
   const shouldLazyLoadTrace = totalTraceCount > 0 && !hasCompleteTrace;
+  const processEntryCount = entries.filter((entry) => (
+    entry.kind !== "endless_error" && entry.kind !== "endless_continue"
+  )).length;
   const traceSummaryProcessCount = typeof processCount === "number"
     ? processCount
-    : Math.max(totalTraceCount, entries.length);
+    : Math.max(totalTraceCount, processEntryCount);
   const traceToolCount = toolCallCount ?? entries.filter((entry) => entry.kind === "tool").length;
-  const traceSummaryLabel = `${traceSummaryProcessCount} 条过程${traceToolCount > 0 ? ` · ${traceToolCount} 次工具` : ""}`;
+  const endlessEventCount = entries.filter((entry) => (
+    entry.kind === "endless_error" || entry.kind === "endless_continue"
+  )).length;
+  const traceSummaryLabel = [
+    traceSummaryProcessCount > 0
+      ? `${traceSummaryProcessCount} 条过程${traceToolCount > 0 ? ` · ${traceToolCount} 次工具` : ""}`
+      : "",
+    endlessEventCount > 0 ? `${endlessEventCount} 条无尽记录` : "",
+  ].filter(Boolean).join(" · ");
 
   useEffect(() => {
     if (!shouldLazyLoadTrace || !traceExpanded || isTraceLoading || traceLoadError || !onLoadTrace) {
@@ -576,7 +601,11 @@ export function NativeAgentTranscript({
         ))
       : displayRenderItems
   ), [displayRenderItems, collapseProcess]);
+  const hasEndlessDetails = entries.some((entry) => (
+    entry.kind === "endless_error" || entry.kind === "endless_continue"
+  ));
   const shouldShowTraceDisclosure = shouldLazyLoadTrace
+    || hasEndlessDetails
     || (collapseProcess && traceDetailRenderItems.length > 0);
   const allowPermissionReply = mode === "native";
 
@@ -628,7 +657,12 @@ export function NativeAgentTranscript({
     : latestProgress?.kind === "tool" ? `执行工具：${latestProgress.label}` : "执行中";
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
-  const showFinalActions = state !== "streaming" && (showCopyFinalAnswer || Boolean(contextUsage) || (canContinue && Boolean(onContinue || onFastForward)));
+  const showFinalActions = state !== "streaming" && (
+    showCopyFinalAnswer
+    || Boolean(contextUsage)
+    || typeof endlessContinueCount === "number"
+    || (canContinue && Boolean(onContinue || onFastForward))
+  );
 
   return (
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
@@ -694,6 +728,7 @@ export function NativeAgentTranscript({
               translationControl={translationControl}
               canContinue={canContinue}
               contextUsage={contextUsage}
+              endlessContinueCount={endlessContinueCount}
               favorite={favorite}
               buildFullAnswerText={showCopyFinalAnswer ? () => formatTranscriptFullAnswer(renderItems, resultText, originalResultText) : undefined}
               onContinue={onContinue}

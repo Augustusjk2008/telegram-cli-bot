@@ -275,6 +275,7 @@ export interface WebBotClient {
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
     onEndlessError?: (message: ChatMessage, attempt: number) => void,
+    onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage>;
   steerMessage(
     botAlias: string,

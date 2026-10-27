@@ -22,6 +22,11 @@ function formatCompactionCount(count?: number) {
   return `compacted ${value} times`;
 }
 
+function normalizedEndlessContinueCount(count?: number) {
+  const value = Math.floor(Number(count || 0));
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 function formatTokenNumber(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "";
@@ -78,35 +83,40 @@ export function contextLeftPercent(contextUsage?: ChatMessageContextUsage) {
   return undefined;
 }
 
-export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage) {
-  if (!contextUsage) {
+export function formatContextUsageDetails(
+  contextUsage?: ChatMessageContextUsage,
+  options: { endlessContinueCount?: number } = {},
+) {
+  const endlessContinueCount = normalizedEndlessContinueCount(options.endlessContinueCount);
+  if (!contextUsage && endlessContinueCount <= 0) {
     return "";
   }
-  const contextUsed = typeof contextUsage.contextUsed === "number"
+  const contextUsed = typeof contextUsage?.contextUsed === "number"
     ? contextUsage.contextUsed
-    : contextUsage.usedTokens;
+    : contextUsage?.usedTokens;
   const leftPercent = contextLeftPercent(contextUsage);
-  const cost = mapEstimatedCost(contextUsage.estimatedCost);
-  const model = contextUsage.model || cost?.model;
+  const cost = mapEstimatedCost(contextUsage?.estimatedCost);
+  const model = contextUsage?.model || cost?.model;
   const rows = [
     typeof leftPercent === "number" ? `context left: ${formatPercent(leftPercent)}%` : "",
-    typeof contextUsage.contextWindow === "number" ? `context window: ${formatTokenNumber(contextUsage.contextWindow)}` : "",
+    typeof contextUsage?.contextWindow === "number" ? `context window: ${formatTokenNumber(contextUsage.contextWindow)}` : "",
     typeof contextUsed === "number" ? `context used: ${formatTokenNumber(contextUsed)}` : "",
-    typeof contextUsage.inputTokens === "number" ? `input: ${formatTokenNumber(contextUsage.inputTokens)}` : "",
-    typeof contextUsage.cacheReadTokens === "number" ? `cache read: ${formatTokenNumber(contextUsage.cacheReadTokens)}` : "",
-    typeof contextUsage.cacheWriteTokens === "number" ? `cache write: ${formatTokenNumber(contextUsage.cacheWriteTokens)}` : "",
-    typeof contextUsage.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
-    typeof contextUsage.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
-    typeof contextUsage.totalTokens === "number" ? `total: ${formatTokenNumber(contextUsage.totalTokens)}` : "",
-    contextUsage.usedDisplay && contextUsage.windowDisplay ? `display: ${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}` : "",
-    contextUsage.usageScope ? `usage scope: ${contextUsage.usageScope}` : "",
-    contextUsage.source ? `source: ${contextUsage.source}` : "",
-    formatTokenUsage(contextUsage.currentUsage) ? `current usage: ${formatTokenUsage(contextUsage.currentUsage)}` : "",
-    formatTokenUsage(contextUsage.turnUsage) ? `turn usage: ${formatTokenUsage(contextUsage.turnUsage)}` : "",
+    typeof contextUsage?.inputTokens === "number" ? `input: ${formatTokenNumber(contextUsage.inputTokens)}` : "",
+    typeof contextUsage?.cacheReadTokens === "number" ? `cache read: ${formatTokenNumber(contextUsage.cacheReadTokens)}` : "",
+    typeof contextUsage?.cacheWriteTokens === "number" ? `cache write: ${formatTokenNumber(contextUsage.cacheWriteTokens)}` : "",
+    typeof contextUsage?.outputTokens === "number" ? `output: ${formatTokenNumber(contextUsage.outputTokens)}` : "",
+    typeof contextUsage?.reasoningTokens === "number" ? `reasoning: ${formatTokenNumber(contextUsage.reasoningTokens)}` : "",
+    typeof contextUsage?.totalTokens === "number" ? `total: ${formatTokenNumber(contextUsage.totalTokens)}` : "",
+    contextUsage?.usedDisplay && contextUsage.windowDisplay ? `display: ${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}` : "",
+    contextUsage?.usageScope ? `usage scope: ${contextUsage.usageScope}` : "",
+    contextUsage?.source ? `source: ${contextUsage.source}` : "",
+    formatTokenUsage(contextUsage?.currentUsage) ? `current usage: ${formatTokenUsage(contextUsage.currentUsage)}` : "",
+    formatTokenUsage(contextUsage?.turnUsage) ? `turn usage: ${formatTokenUsage(contextUsage.turnUsage)}` : "",
     model ? `model: ${model}` : "",
-    contextUsage.provider ? `provider: ${contextUsage.provider.replace(/原生 (?:agent|智能体)/gi, "native agent")}` : "",
-    contextUsage.sessionId ? `session: ${contextUsage.sessionId}` : "",
-    formatCompactionCount(contextUsage.compactionCount),
+    contextUsage?.provider ? `provider: ${contextUsage.provider.replace(/原生 (?:agent|智能体)/gi, "native agent")}` : "",
+    contextUsage?.sessionId ? `session: ${contextUsage.sessionId}` : "",
+    formatCompactionCount(contextUsage?.compactionCount),
+    endlessContinueCount > 0 ? `endless Continue: ${endlessContinueCount}` : "",
   ].filter(Boolean);
   if (cost) {
     const amount = cost.total.toLocaleString("en-US", {
@@ -120,45 +130,47 @@ export function formatContextUsageDetails(contextUsage?: ChatMessageContextUsage
 
 export function formatTextContextUsage(
   contextUsage?: ChatMessageContextUsage,
-  options: { compact?: boolean; preferLeft?: boolean } = {},
+  options: { compact?: boolean; preferLeft?: boolean; endlessContinueCount?: number } = {},
 ) {
-  if (!contextUsage) {
+  const endlessContinueCount = normalizedEndlessContinueCount(options.endlessContinueCount);
+  if (!contextUsage && endlessContinueCount <= 0) {
     return null;
   }
   const leftPercent = contextLeftPercent(contextUsage);
   const percent = typeof leftPercent === "number"
     ? options.compact ? `ctx ${formatPercent(leftPercent)}%` : `${formatPercent(leftPercent)}% left`
     : "";
-  const cost = mapEstimatedCost(contextUsage.estimatedCost);
+  const cost = mapEstimatedCost(contextUsage?.estimatedCost);
   const costText = cost ? cost.isPartial ? "estimated cost" : "cost" : "";
-  const statusText = (contextUsage.statusText || "").replace(/\bcontext left\b/gi, "left");
+  const statusText = (contextUsage?.statusText || "").replace(/\bcontext left\b/gi, "left");
+  const endlessText = endlessContinueCount > 0 ? `Continue ×${endlessContinueCount}` : "";
   if (options.compact) {
-    const baseText = percent || statusText || costText;
+    const baseText = percent || statusText || costText || endlessText;
     if (!baseText) {
       return null;
     }
-    const details = formatContextUsageDetails(contextUsage);
+    const details = formatContextUsageDetails(contextUsage, { endlessContinueCount });
     return {
       text: baseText,
       title: details || baseText,
       isLow: typeof leftPercent === "number" && leftPercent < 25,
     };
   }
-  const usage = contextUsage.usedDisplay && contextUsage.windowDisplay
+  const usage = contextUsage?.usedDisplay && contextUsage.windowDisplay
     ? `${contextUsage.usedDisplay} / ${contextUsage.windowDisplay}`
     : "";
   const baseText = options.preferLeft
-    ? [percent, usage].filter(Boolean).join(" · ") || statusText || costText
-    : statusText || [percent, usage].filter(Boolean).join(" · ") || costText;
+    ? [percent, usage].filter(Boolean).join(" · ") || statusText || costText || endlessText
+    : statusText || [percent, usage].filter(Boolean).join(" · ") || costText || endlessText;
   if (!baseText) {
     return null;
   }
-  const compactionText = formatCompactionCount(contextUsage.compactionCount);
+  const compactionText = formatCompactionCount(contextUsage?.compactionCount);
   const text = [baseText, compactionText ? `(${compactionText})` : ""].filter(Boolean).join(" ");
   if (!text) {
     return null;
   }
-  const details = formatContextUsageDetails(contextUsage);
+  const details = formatContextUsageDetails(contextUsage, { endlessContinueCount });
   const title = details || baseText;
   return {
     text,
@@ -169,14 +181,15 @@ export function formatTextContextUsage(
 
 type Props = {
   contextUsage?: ChatMessageContextUsage;
+  endlessContinueCount?: number;
   className?: string;
   compact?: boolean;
   testId?: string;
   preferLeft?: boolean;
 };
 
-export function ChatContextUsageBadge({ contextUsage, className = "", compact = false, testId, preferLeft = false }: Props) {
-  const textContext = formatTextContextUsage(contextUsage, { compact, preferLeft });
+export function ChatContextUsageBadge({ contextUsage, endlessContinueCount, className = "", compact = false, testId, preferLeft = false }: Props) {
+  const textContext = formatTextContextUsage(contextUsage, { compact, preferLeft, endlessContinueCount });
   if (!textContext) {
     return null;
   }

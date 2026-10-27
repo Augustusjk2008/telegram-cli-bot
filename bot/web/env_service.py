@@ -118,6 +118,16 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("TELEGRAM_BROADCAST_COMPLETIONS", "Telegram 最终回复广播", "开启后将 Web 或 Telegram 的最终回复发送给 TELEGRAM_ALLOWED_USER_IDS 中的所有私聊用户；保存后需重启应用。", "boolean", "false", "telegram"),
     EnvField("WEB_ENABLED", "启用 Web", "Web 运行入口开关。", "boolean", "true", "web"),
     EnvField(
+        "ENDLESS_CONTINUE_DELAY_SECONDS",
+        "无尽模式错误等待",
+        "无尽模式每次执行出错后自动发送 Continue 前的等待时间，单位为秒；0 表示立即继续。",
+        "number",
+        "120",
+        "web",
+        restart_required=False,
+        min_value=0,
+    ),
+    EnvField(
         "TCB_CODEX_SERVER_VOICE_ENABLED",
         "Codex server 语音",
         "启用 codex_server 语音入口；默认关闭，保存后需重启 Web 服务。",

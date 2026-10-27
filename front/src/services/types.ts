@@ -1202,6 +1202,14 @@ export type ChatMessageContextUsage = {
   estimatedCost?: ChatMessageEstimatedCost;
 };
 
+export type ChatEndlessEvent = {
+  kind: "error" | "continue";
+  sequence: number;
+  attempt: number;
+  text: string;
+  code?: string;
+};
+
 export type ChatMessageMetaInfo = {
   completionState?: string;
   summaryKind?: string;
@@ -1214,6 +1222,8 @@ export type ChatMessageMetaInfo = {
   trace?: ChatTraceEvent[];
   nativeSource?: ChatMessageNativeSource;
   contextUsage?: ChatMessageContextUsage;
+  endlessEvents?: ChatEndlessEvent[];
+  endlessContinueCount?: number;
   agUiRunState?: unknown;
   tracePresentation?: "native_agent_flat" | "generic";
   workspaceHistoryHead?: string;

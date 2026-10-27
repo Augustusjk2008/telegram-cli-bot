@@ -8,6 +8,7 @@ type Props = {
   translationControl?: ReactNode;
   canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
+  endlessContinueCount?: number;
   favorite?: boolean;
   fullAnswerText?: string;
   buildFullAnswerText?: () => string;
@@ -21,6 +22,7 @@ export function ChatFinalAnswerActions({
   translationControl,
   canContinue = false,
   contextUsage,
+  endlessContinueCount,
   favorite = false,
   fullAnswerText,
   buildFullAnswerText,
@@ -35,7 +37,7 @@ export function ChatFinalAnswerActions({
   const copyFeedbackTimerRef = useRef<number | null>(null);
   const contextCopyFeedbackTimerRef = useRef<number | null>(null);
   const fullAnswerCopyFeedbackTimerRef = useRef<number | null>(null);
-  const contextDetails = formatContextUsageDetails(contextUsage);
+  const contextDetails = formatContextUsageDetails(contextUsage, { endlessContinueCount });
   const fullAnswer = (fullAnswerText || "").trim();
   const canBuildFullAnswer = typeof buildFullAnswerText === "function";
 
@@ -117,6 +119,7 @@ export function ChatFinalAnswerActions({
     <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
       <ChatContextUsageBadge
         contextUsage={contextUsage}
+        endlessContinueCount={endlessContinueCount}
         compact
         preferLeft
         testId="chat-message-context-usage-bottom"

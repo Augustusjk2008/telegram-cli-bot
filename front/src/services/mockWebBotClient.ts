@@ -4928,6 +4928,7 @@ export class MockWebBotClient implements WebBotClient {
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
     _onEndlessError?: (message: ChatMessage, attempt: number) => void,
+    _onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
     const agentId = options?.agentId || "main";
     const createdAt = new Date().toISOString();

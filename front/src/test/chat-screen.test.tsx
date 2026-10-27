@@ -85,6 +85,7 @@ test("keeps backend endless mode errors visible until the final answer", async (
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>()
     .mockImplementationOnce(async (...args) => {
       const onEndlessError = args[7];
+      const onEndlessContinue = args[8];
       onEndlessError?.({
         id: "assistant-endless-error",
         role: "assistant",
@@ -92,16 +93,26 @@ test("keeps backend endless mode errors visible until the final answer", async (
         createdAt: "2026-10-23T00:00:01Z",
         state: "error",
       }, 1);
+      onEndlessContinue?.(1);
       return secondAttempt.promise;
     });
   const client = createClient({
-    listMessages: async () => ({ items: [{
-      id: "assistant-existing",
-      role: "assistant",
-      text: "上一轮回答",
-      createdAt: "2026-10-22T00:00:00Z",
-      state: "error",
-    }] }),
+    listMessages: async () => ({ items: [
+      {
+        id: "user-existing",
+        role: "user",
+        text: "原始问题",
+        createdAt: "2026-10-22T00:00:00Z",
+        state: "done",
+      },
+      {
+        id: "assistant-existing",
+        role: "assistant",
+        text: "上一轮回答",
+        createdAt: "2026-10-22T00:00:01Z",
+        state: "error",
+      },
+    ] }),
     sendMessage,
   });
 
@@ -119,9 +130,15 @@ test("keeps backend endless mode errors visible until the final answer", async (
   expect(sendMessage).toHaveBeenCalledTimes(1);
   expect(sendMessage.mock.calls[0][1]).toBe("Continue");
   expect(sendMessage.mock.calls[0][5]?.endlessMode).toBe(true);
-  expect(screen.getByTestId("endless-mode-status")).toBeInTheDocument();
+  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
+  expect(screen.getAllByTestId("chat-message-row")[0]).toHaveTextContent("原始问题");
+  const processDisclosure = screen.getByRole("button", { name: "展开过程详情" });
+  expect(screen.queryByText("temporary failure")).not.toBeInTheDocument();
+  fireEvent.click(processDisclosure);
   expect(await screen.findByText("temporary failure")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /自动继续 1 次/ })).toBeInTheDocument();
+  expect(screen.getAllByText("Continue", { exact: true }).length).toBeGreaterThan(0);
+  expect(screen.getAllByTestId("chat-message-row")[0]).not.toHaveTextContent("Continue");
 
   await act(async () => {
     secondAttempt.resolve({
@@ -134,7 +151,7 @@ test("keeps backend endless mode errors visible until the final answer", async (
     await Promise.resolve();
   });
   expect(await screen.findByText("完成")).toBeInTheDocument();
-  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
 });
 
 test("does not show endless mode after a normal answer", async () => {
@@ -176,8 +193,8 @@ test("restores backend endless mode after the chat screen is rebuilt", async () 
 
   render(<ChatScreen botAlias="main" client={client} />);
 
-  expect(await screen.findByTestId("endless-mode-status")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /自动继续 3 次/ })).toBeInTheDocument();
+  expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
+  expect((await screen.findAllByRole("button", { name: "View context details: Continue ×3" })).length).toBeGreaterThan(0);
 });
 
 test("stopping endless mode terminates the active continuation", async () => {
@@ -204,7 +221,7 @@ test("stopping endless mode terminates the active continuation", async () => {
   fireEvent.click(screen.getByRole("button", { name: "确认开启" }));
   await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
 
-  fireEvent.click(screen.getByTestId("endless-mode-status"));
+  fireEvent.click(screen.getByRole("button", { name: "终止任务" }));
   await waitFor(() => expect(killTask).toHaveBeenCalledTimes(1));
   expect(screen.queryByTestId("endless-mode-status")).not.toBeInTheDocument();
 

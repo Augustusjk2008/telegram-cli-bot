@@ -206,6 +206,28 @@ def test_env_service_exposes_codex_server_voice_toggle(tmp_path: Path) -> None:
     assert "TCB_CODEX_SERVER_VOICE_ENABLED=true" in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
+def test_env_service_exposes_endless_retry_delay(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+
+    item = next(item for item in service.snapshot()["items"] if item["key"] == "ENDLESS_CONTINUE_DELAY_SECONDS")
+    assert item["category"] == "web"
+    assert item["type"] == "number"
+    assert item["default"] == "120"
+    assert item["validation"]["min"] == 0
+    assert item["restartRequired"] is False
+
+    preview = service.reload_preview({"values": {"ENDLESS_CONTINUE_DELAY_SECONDS": 15.5}})
+    assert preview["changedKeys"] == ["ENDLESS_CONTINUE_DELAY_SECONDS"]
+    assert preview["restartRequiredKeys"] == []
+
+    service.patch({"values": {"ENDLESS_CONTINUE_DELAY_SECONDS": 15.5}})
+    assert "ENDLESS_CONTINUE_DELAY_SECONDS=15.5" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+    with pytest.raises(EnvValidationError):
+        service.reload_preview({"values": {"ENDLESS_CONTINUE_DELAY_SECONDS": -1}})
+
+
 def test_env_service_reload_runtime_reports_reload_and_restart_impact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
