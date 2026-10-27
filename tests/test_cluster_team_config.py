@@ -14,7 +14,7 @@ from bot.models import BotProfile
 from bot.web.routes.cluster_routes import register as register_cluster_routes
 
 
-def test_cluster_config_migrates_write_policy_and_serializes_version_two() -> None:
+def test_cluster_config_migrates_write_policy_and_serializes_version_three() -> None:
     missing = normalize_bot_cluster_config({})
     selected = normalize_bot_cluster_config({"write_policy": "selected_agents"})
     writable = normalize_bot_cluster_config({"write_policy": "all_agents"})
@@ -24,7 +24,7 @@ def test_cluster_config_migrates_write_policy_and_serializes_version_two() -> No
     assert missing.default_timeout_seconds == 1800
     assert selected.write_policy == "main_only"
     assert writable.write_policy == "all_agents"
-    assert missing.to_dict()["orchestration_version"] == 2
+    assert missing.to_dict()["orchestration_version"] == 3
 
 
 def test_manual_agent_mutation_routes_are_not_registered() -> None:

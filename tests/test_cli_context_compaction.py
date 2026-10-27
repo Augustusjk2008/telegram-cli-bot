@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import time
+from unittest.mock import AsyncMock
 
 from pathlib import Path
 
@@ -15,6 +16,11 @@ from bot.models import BotProfile
 from bot.web import api_service
 
 from bot.web.chat_store import ChatStore, ChatTurnHandle
+
+
+@pytest.fixture(autouse=True)
+def disable_unrelated_codex_quota_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
 
 @pytest.fixture
 def web_manager(tmp_path: Path) -> MultiBotManager:
