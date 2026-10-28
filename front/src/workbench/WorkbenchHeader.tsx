@@ -19,6 +19,7 @@ import {
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { AppLogo } from "../components/AppLogo";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import type { WorkbenchProductMode } from "./workbenchTypes";
 
 type LayoutControlId = "sidebar" | "editor" | "terminal" | "chat";
@@ -120,8 +121,9 @@ export function WorkbenchHeader({
   return (
     <header
       data-testid="desktop-workbench-titlebar"
-      className="workbench-topbar flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
+      className="workbench-topbar theme-illustration-host flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
     >
+      <ThemeIllustrationLayer surface="topbar" />
       <div className="workbench-topbar-context flex min-w-0 items-center gap-2">
         <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)]">
           <AppLogo size={21} decorative />

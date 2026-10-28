@@ -40,6 +40,7 @@ import type {
 } from "../theme";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 const CodexUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
   default: module.CodexUsagePanel,
@@ -1440,9 +1441,11 @@ export function AdminCenterScreen({
   };
 
   return (
-    <main data-ui-density="compact" className="min-h-[100dvh] bg-[var(--bg)]">
+    <main data-ui-density="compact" className="theme-illustration-host relative min-h-[100dvh] bg-[var(--bg)]">
+      <ThemeIllustrationLayer surface="management" />
       <div className="mx-auto flex min-h-[100dvh] max-w-6xl flex-col p-4">
-        <header className="mb-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
+        <header className="theme-illustration-host mb-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
+          <ThemeIllustrationLayer surface="topbar" />
           <div className="space-y-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">管理中心</h1>
           </div>

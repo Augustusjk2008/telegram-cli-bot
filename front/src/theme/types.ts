@@ -12,12 +12,33 @@ export type ChatTypography = {
   chatBodyParagraphSpacing: ChatBodyParagraphSpacingName;
 };
 
+export type ThemeIllustrationSurface =
+  | "workbench"
+  | "chat"
+  | "topbar"
+  | "management";
+
+export type ThemeIllustrationSetId =
+  | "none"
+  | "forest-grove"
+  | "tidal-grove"
+  | "desert-dusk"
+  | "alpine-fog"
+  | "moonlit-garden";
+
+export type ThemeIllustrations = {
+  setId: ThemeIllustrationSetId;
+  opacity: number;
+  surfaces: Record<ThemeIllustrationSurface, boolean>;
+};
+
 export const PAPER_STYLE = { fileTreeRowHeight: 26 } as const;
 export const PAPER_MOTION = { profile: "paper" } as const;
 
 export type ThemeAppearance = {
   colors: { scheme: ColorScheme; overrides: Record<string, string> };
   typography?: ChatTypography;
+  illustrations?: ThemeIllustrations;
 };
 
 export type UiTheme = {
@@ -85,5 +106,13 @@ export type ResolvedAppearance = {
   motionProfile: "paper";
   style: typeof PAPER_STYLE;
   motion: typeof PAPER_MOTION;
+  illustrations: ThemeIllustrations & {
+    resources: Record<ThemeIllustrationSurface, string>;
+    colors: {
+      primary: string;
+      secondary: string;
+      soft: string;
+    };
+  };
   revision: string;
 };

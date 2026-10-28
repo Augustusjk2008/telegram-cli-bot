@@ -1,4 +1,5 @@
 import { normalizeChatTypography } from "./chatTypography";
+import { normalizeIllustrations } from "./resolveAppearance";
 import type { PortableTheme, ThemeDocument, UiTheme } from "./types";
 
 export function portableTheme(theme: UiTheme): PortableTheme {
@@ -9,15 +10,38 @@ export function portableTheme(theme: UiTheme): PortableTheme {
     appearance: {
       colors: { ...theme.appearance.colors, overrides: { ...theme.appearance.colors.overrides } },
       typography: normalizeChatTypography(theme.appearance.typography),
+      illustrations: normalizeIllustrations(theme.appearance.illustrations),
     },
   };
+}
+
+function normalizeImportedTheme(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const theme = value as Record<string, unknown>;
+  const appearance = theme.appearance;
+  if (!appearance || typeof appearance !== "object" || Array.isArray(appearance)) return value;
+  const source = appearance as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {
+    ...source,
+    illustrations: normalizeIllustrations(source.illustrations),
+  };
+  return { ...theme, appearance: normalized };
+}
+
+export function normalizeThemeDocument(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const document = value as Record<string, unknown>;
+  if (Array.isArray(document.themes)) {
+    return { ...document, themes: document.themes.map(normalizeImportedTheme) };
+  }
+  return normalizeImportedTheme(value);
 }
 
 export async function readThemeFile(file: File): Promise<unknown> {
   let text: string;
   try { text = await file.text(); }
   catch { throw new Error("无法读取主题文件，请重新选择文件。"); }
-  try { return JSON.parse(text.replace(/^\uFEFF/, "")); }
+  try { return normalizeThemeDocument(JSON.parse(text.replace(/^\uFEFF/, ""))); }
   catch { throw new Error("JSON 文件格式无效，请检查后重试。"); }
 }
 

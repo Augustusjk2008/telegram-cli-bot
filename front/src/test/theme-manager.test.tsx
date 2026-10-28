@@ -331,6 +331,16 @@ describe("全局主题管理", () => {
           chatBodyLineHeight: "normal",
           chatBodyParagraphSpacing: "normal",
         },
+        illustrations: {
+          setId: "none",
+          opacity: 0,
+          surfaces: {
+            workbench: false,
+            chat: false,
+            topbar: false,
+            management: false,
+          },
+        },
       },
       activate: true,
     });
@@ -364,6 +374,34 @@ describe("全局主题管理", () => {
             chatBodyFontSize: "large",
             chatBodyLineHeight: "relaxed",
             chatBodyParagraphSpacing: "tight",
+          },
+        }),
+      }),
+    );
+  });
+
+  it("saves an illustration template, opacity, and surface toggles", async () => {
+    render(<ThemeManagerScreen />);
+    fireEvent.click(screen.getByRole("button", { name: "使用森林绿模板" }));
+    fireEvent.change(screen.getByRole("slider", { name: "插画透明度" }), {
+      target: { value: "0.18" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: "管理界面" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("主题已保存。");
+    expect(api.updateTheme).toHaveBeenLastCalledWith(
+      "theme_personal",
+      expect.objectContaining({
+        appearance: expect.objectContaining({
+          illustrations: {
+            setId: "forest-grove",
+            opacity: 0.18,
+            surfaces: {
+              workbench: true,
+              chat: true,
+              topbar: true,
+              management: false,
+            },
           },
         }),
       }),

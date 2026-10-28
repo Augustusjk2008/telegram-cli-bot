@@ -1,5 +1,12 @@
 import catalog from "../../../bot/web/theme_catalog.json";
-import type { ColorToken, UiTheme, ResolvedAppearance, ThemeLibrary } from "./types";
+import type {
+  ColorToken,
+  ThemeIllustrations,
+  ThemeIllustrationSurface,
+  UiTheme,
+  ResolvedAppearance,
+  ThemeLibrary,
+} from "./types";
 import {
   chatTypographyCssVariables,
   DEFAULT_CHAT_TYPOGRAPHY,
@@ -7,6 +14,12 @@ import {
   normalizeChatTypography,
 } from "./chatTypography";
 import { PAPER_MOTION, PAPER_STYLE } from "./types";
+import {
+  defaultIllustrations,
+  illustrationResourcePath,
+  THEME_ILLUSTRATION_SET_IDS,
+  THEME_ILLUSTRATION_SURFACES,
+} from "./illustrationPresets";
 
 export const THEME_TOKENS = catalog.tokens as ColorToken[];
 export const BUILTIN_THEME: UiTheme = {
@@ -14,7 +27,11 @@ export const BUILTIN_THEME: UiTheme = {
   id: "paper-daylight",
   name: "纸感日间",
   baseId: "paper-daylight",
-  appearance: { colors: { scheme: "light", overrides: {} }, typography: DEFAULT_CHAT_TYPOGRAPHY },
+  appearance: {
+    colors: { scheme: "light", overrides: {} },
+    typography: DEFAULT_CHAT_TYPOGRAPHY,
+    illustrations: defaultIllustrations(),
+  },
   readonly: true,
   updatedAt: "",
   version: 1,
@@ -32,17 +49,53 @@ export function normalizeColor(value: string, allowAlpha = true): string | null 
   return allowAlpha || hex.endsWith("FF") ? hex : null;
 }
 
+export function normalizeIllustrations(value: unknown): ThemeIllustrations {
+  if (value === undefined) return defaultIllustrations();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("主题插画配置无效");
+  }
+  const candidate = value as Record<string, unknown>;
+  if (Object.keys(candidate).some((key) => !["setId", "opacity", "surfaces"].includes(key))) {
+    throw new Error("主题插画配置包含不支持的字段");
+  }
+  if (!THEME_ILLUSTRATION_SET_IDS.includes(candidate.setId as typeof THEME_ILLUSTRATION_SET_IDS[number])) {
+    throw new Error("主题插画资源无效");
+  }
+  if (typeof candidate.opacity !== "number" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 0.25) {
+    throw new Error("主题插画透明度必须在 0 到 0.25 之间");
+  }
+  const surfaces = candidate.surfaces;
+  if (!surfaces || typeof surfaces !== "object" || Array.isArray(surfaces)) {
+    throw new Error("主题插画区域配置无效");
+  }
+  const surfaceRecord = surfaces as Record<string, unknown>;
+  if (Object.keys(surfaceRecord).some((key) => !THEME_ILLUSTRATION_SURFACES.includes(key as ThemeIllustrationSurface))) {
+    throw new Error("主题插画区域配置包含不支持的字段");
+  }
+  for (const surface of THEME_ILLUSTRATION_SURFACES) {
+    if (typeof surfaceRecord[surface] !== "boolean") throw new Error("主题插画区域配置无效");
+  }
+  return {
+    setId: candidate.setId as ThemeIllustrations["setId"],
+    opacity: candidate.opacity,
+    surfaces: Object.fromEntries(
+      THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, surfaceRecord[surface] as boolean]),
+    ) as ThemeIllustrations["surfaces"],
+  };
+}
+
 export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   if (theme.schemaVersion !== 1) throw new Error("此主题使用了尚不支持的数据版本");
   const colors: Record<string, string> = {};
   const cssVariables: Record<string, string> = {};
   const tokens = new Map(THEME_TOKENS.map((token) => [token.key, token]));
-  if (!theme.appearance || Object.keys(theme.appearance).some((key) => key !== "colors" && key !== "typography")
+  if (!theme.appearance || Object.keys(theme.appearance).some((key) => key !== "colors" && key !== "typography" && key !== "illustrations")
     || !theme.appearance.colors || !["light", "dark"].includes(theme.appearance.colors.scheme)
     || Object.keys(theme.appearance.colors).some((key) => key !== "scheme" && key !== "overrides")
     || !theme.appearance.colors.overrides || typeof theme.appearance.colors.overrides !== "object"
     || Array.isArray(theme.appearance.colors.overrides)
     || (theme.appearance.typography !== undefined && !isChatTypography(theme.appearance.typography))) throw new Error("此主题包含尚不支持的外观配置");
+  const illustrations = normalizeIllustrations(theme.appearance.illustrations);
   for (const [key, value] of Object.entries(theme.appearance.colors.overrides)) {
     const token = tokens.get(key);
     if (!token || typeof value !== "string" || !normalizeColor(value, token.allowAlpha)) throw new Error(`主题颜色无效：${key}`);
@@ -70,9 +123,21 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   }
   const typography = normalizeChatTypography(theme.appearance.typography);
   Object.assign(cssVariables, chatTypographyCssVariables(typography));
+  const resources = Object.fromEntries(
+    THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, illustrationResourcePath(illustrations.setId, surface)]),
+  ) as Record<ThemeIllustrationSurface, string>;
+  const resolvedIllustrations = {
+    ...illustrations,
+    resources,
+    colors: {
+      primary: colors["accent.strong"] || colors.accent,
+      secondary: colors.accent,
+      soft: colors["accent.soft"] || colors.accent,
+    },
+  };
   // Identity alone cannot detect editing the selected theme in place.
-  const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography]);
-  return { themeId: theme.id, scheme: theme.appearance.colors.scheme, typography, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, revision };
+  const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography, resolvedIllustrations]);
+  return { themeId: theme.id, scheme: theme.appearance.colors.scheme, typography, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, illustrations: resolvedIllustrations, revision };
 }
 
 function channels(color: string) {

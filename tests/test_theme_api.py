@@ -58,6 +58,20 @@ def import_input(**changes):
     }, **changes}
 
 
+def illustration_input(**changes):
+    return {
+        "setId": "forest-grove",
+        "opacity": 0.18,
+        "surfaces": {
+            "workbench": True,
+            "chat": True,
+            "topbar": False,
+            "management": True,
+        },
+        **changes,
+    }
+
+
 @pytest.mark.asyncio
 async def test_member_imports_single_and_bundle_through_registered_routes(api):
     status, imported = await request(api, "POST", "/node/theme-test/api/ui/themes/import", body=import_input())
@@ -127,6 +141,90 @@ async def test_authenticated_member_crud_works_without_bot_or_admin_permissions(
     status, payload = await request(api, "DELETE", f"/api/ui/themes/{theme_id}", token="bob", body={"expectedRevision": 4})
     assert status == 200 and payload["data"]["selectedThemeId"] == "paper-daylight"
     assert payload["data"]["revision"] == 5 and len(payload["data"]["themes"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_illustrations_are_saved_updated_and_preserved_by_import_export(api):
+    appearance = {
+        "colors": {"scheme": "light", "overrides": {}},
+        "illustrations": illustration_input(),
+    }
+    status, created = await request(api, "POST", body=create_input(appearance=appearance, activate=True))
+    assert status == 200
+    theme = created["data"]["themes"][1]
+    assert theme["appearance"]["illustrations"] == illustration_input()
+
+    status, updated = await request(api, "PATCH", f"/api/ui/themes/{theme['id']}", body={
+        "schemaVersion": 1,
+        "expectedRevision": 1,
+        "appearance": {
+            "colors": {"scheme": "dark", "overrides": {}},
+            "illustrations": illustration_input(setId="moonlit-garden", opacity=0.25),
+        },
+    })
+    assert status == 200
+    saved = updated["data"]["themes"][1]["appearance"]["illustrations"]
+    assert saved["setId"] == "moonlit-garden" and saved["opacity"] == 0.25
+
+    document = updated["data"]["themes"][1]
+    status, imported = await request(api, "POST", "/api/ui/themes/import", body={
+        "expectedRevision": 2,
+        "document": {
+            "schemaVersion": 1,
+            "name": "导出再导入",
+            "baseId": "paper-daylight",
+            "appearance": document["appearance"],
+        },
+    })
+    assert status == 200
+    assert imported["data"]["themes"][-1]["appearance"]["illustrations"] == saved
+
+
+@pytest.mark.asyncio
+async def test_legacy_theme_appearance_gets_default_illustrations(api):
+    path = api.server.theme_store.library_path
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "schemaVersion": 1,
+        "scope": "global",
+        "revision": 4,
+        "selectedThemeId": "theme_0123456789abcdef0123456789abcdef",
+        "themes": [{
+            "schemaVersion": 1,
+            "id": "theme_0123456789abcdef0123456789abcdef",
+            "name": "旧主题",
+            "baseId": "paper-daylight",
+            "appearance": {"colors": {"scheme": "light", "overrides": {}}},
+            "readonly": False,
+            "updatedAt": "2026-10-22T00:00:00Z",
+            "version": 1,
+        }],
+    }), encoding="utf-8")
+
+    status, payload = await request(api, "GET")
+    assert status == 200
+    assert payload["data"]["themes"][1]["appearance"]["illustrations"] == {
+        "setId": "none",
+        "opacity": 0,
+        "surfaces": {"workbench": False, "chat": False, "topbar": False, "management": False},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("illustrations", [
+    illustration_input(setId="unknown-set"),
+    illustration_input(opacity=-0.01),
+    illustration_input(opacity=0.26),
+    {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "extra": True}},
+    {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "chat": "yes"}},
+])
+async def test_invalid_illustrations_are_rejected_without_writing(api, illustrations):
+    status, payload = await request(api, "POST", body=create_input(appearance={
+        "colors": {"scheme": "light", "overrides": {}},
+        "illustrations": illustrations,
+    }))
+    assert status == 400 and payload["error"]["code"] == "invalid_theme"
+    assert not api.server.theme_store.library_path.exists()
 
 
 @pytest.mark.asyncio

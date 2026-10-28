@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 import tempfile
@@ -31,6 +32,18 @@ _CHAT_TYPOGRAPHY_VALUES = {
     "chatBodyLineHeight": {"tight", "normal", "relaxed"},
     "chatBodyParagraphSpacing": {"tight", "normal", "relaxed"},
 }
+_ILLUSTRATION_SURFACES = ("workbench", "chat", "topbar", "management")
+_ILLUSTRATION_SET_IDS = (
+    "none",
+    "forest-grove",
+    "tidal-grove",
+    "desert-dusk",
+    "alpine-fog",
+    "moonlit-garden",
+)
+_ILLUSTRATION_RESOURCE = re.compile(
+    r"/assets/theme-illustrations/[a-z0-9]+(?:-[a-z0-9]+)*-(?:workbench|chat|topbar|management)\.svg\Z"
+)
 # All store instances in the host share the read/modify/replace boundary.
 _STORE_LOCK = threading.RLock()
 
@@ -77,6 +90,14 @@ def _name(value: Any) -> str:
     return value.strip()
 
 
+def _default_illustrations() -> dict[str, Any]:
+    return {
+        "setId": "none",
+        "opacity": 0,
+        "surfaces": {surface: False for surface in _ILLUSTRATION_SURFACES},
+    }
+
+
 def builtin_library() -> dict[str, Any]:
     return {
         "schemaVersion": 1,
@@ -91,6 +112,7 @@ def builtin_library() -> dict[str, Any]:
             "appearance": {
                 "colors": {"scheme": "light", "overrides": {}},
                 "typography": dict(_CHAT_TYPOGRAPHY_DEFAULTS),
+                "illustrations": _default_illustrations(),
             },
             "readonly": True,
             "updatedAt": "1970-01-01T00:00:00Z",
@@ -106,6 +128,7 @@ class ThemeStore:
         self.legacy_accounts_dir = (Path(legacy_accounts_dir) if legacy_accounts_dir is not None
                                     else self.library_path.parent / "accounts")
         self.catalog_path = catalog_path or Path(__file__).with_name("theme_catalog.json")
+        self.illustration_catalog_path = Path(__file__).with_name("theme_illustrations.json")
 
     def _tokens(self) -> dict[str, dict[str, Any]]:
         try:
@@ -126,8 +149,39 @@ class ThemeStore:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise ThemeStoreError(500, "theme_catalog_unavailable", "主题颜色目录无法读取，请检查应用安装文件") from exc
 
+    def _illustrations(self) -> dict[str, dict[str, str]]:
+        try:
+            catalog = json.loads(self.illustration_catalog_path.read_text(encoding="utf-8"))
+            if not isinstance(catalog, dict) or set(catalog) != {"schemaVersion", "sets"}:
+                raise ValueError("invalid illustration catalog")
+            if type(catalog["schemaVersion"]) is not int or catalog["schemaVersion"] != 1:
+                raise ValueError("unsupported illustration catalog")
+            sets = catalog["sets"]
+            if not isinstance(sets, dict) or set(sets) != set(_ILLUSTRATION_SET_IDS):
+                raise ValueError("invalid illustration set IDs")
+            result: dict[str, dict[str, str]] = {}
+            for set_id in _ILLUSTRATION_SET_IDS:
+                resources = sets[set_id]
+                if not isinstance(resources, dict) or set(resources) != set(_ILLUSTRATION_SURFACES):
+                    raise ValueError("invalid illustration surfaces")
+                normalized: dict[str, str] = {}
+                for surface in _ILLUSTRATION_SURFACES:
+                    resource = resources[surface]
+                    expected = f"/assets/theme-illustrations/{set_id}-{surface}.svg"
+                    if not isinstance(resource, str) or resource != expected or not _ILLUSTRATION_RESOURCE.fullmatch(resource):
+                        raise ValueError("invalid illustration resource")
+                    normalized[surface] = resource
+                result[set_id] = normalized
+            return result
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
+            raise ThemeStoreError(
+                500,
+                "theme_illustrations_unavailable",
+                "主题插画目录无法读取，请检查应用安装文件",
+            ) from exc
+
     def _appearance(self, value: Any) -> dict[str, Any]:
-        appearance = _object(value, {"colors", "typography"}, {"colors"}, "appearance")
+        appearance = _object(value, {"colors", "typography", "illustrations"}, {"colors"}, "appearance")
         colors = _object(appearance["colors"], {"scheme", "overrides"}, {"scheme", "overrides"}, "colors")
         if colors["scheme"] not in ("light", "dark"):
             _invalid("配色模式必须是 light 或 dark")
@@ -162,6 +216,38 @@ class ThemeStore:
                 if not isinstance(typography[key], str) or typography[key] not in choices:
                     _invalid(f"{key} 包含不支持的值")
             result["typography"] = {key: typography[key] for key in _CHAT_TYPOGRAPHY_DEFAULTS}
+        illustration_sets = self._illustrations()
+        illustrations = appearance.get("illustrations", _default_illustrations())
+        illustrations = _object(
+            illustrations,
+            {"setId", "opacity", "surfaces"},
+            {"setId", "opacity", "surfaces"},
+            "illustrations",
+        )
+        set_id = illustrations["setId"]
+        if not isinstance(set_id, str) or set_id not in illustration_sets:
+            _invalid("illustrations.setId 不是受支持的插画主题")
+        opacity = illustrations["opacity"]
+        if (
+            isinstance(opacity, bool)
+            or not isinstance(opacity, (int, float))
+            or not math.isfinite(opacity)
+            or not 0 <= opacity <= 0.25
+        ):
+            _invalid("illustrations.opacity 必须是 0 到 0.25 之间的数字")
+        surfaces = _object(
+            illustrations["surfaces"],
+            set(_ILLUSTRATION_SURFACES),
+            set(_ILLUSTRATION_SURFACES),
+            "illustrations.surfaces",
+        )
+        if any(type(surfaces[surface]) is not bool for surface in _ILLUSTRATION_SURFACES):
+            _invalid("illustrations.surfaces 的值必须是布尔值")
+        result["illustrations"] = {
+            "setId": set_id,
+            "opacity": opacity,
+            "surfaces": {surface: surfaces[surface] for surface in _ILLUSTRATION_SURFACES},
+        }
         return result
 
     def _read_file(self, path: Path, *, legacy: bool = False) -> dict[str, Any] | None:
@@ -200,7 +286,7 @@ class ThemeStore:
                     _invalid("主题更新时间无效")
                 if datetime.fromisoformat(theme["updatedAt"].replace("Z", "+00:00")).tzinfo is None:
                     _invalid("主题更新时间缺少时区")
-                self._appearance(theme["appearance"])
+                theme["appearance"] = self._appearance(theme["appearance"])
             if data["selectedThemeId"] not in ids:
                 data["selectedThemeId"] = BUILTIN_THEME_ID
             return data

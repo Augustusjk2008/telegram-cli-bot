@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { builtinLibrary } from "../theme/resolveAppearance";
-import { portableTheme } from "../theme/themeTransfer";
+import { portableTheme, readThemeFile } from "../theme/themeTransfer";
 
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
@@ -45,6 +45,22 @@ test("exported single themes and packs can be imported as editable copies", asyn
   expect(result.themes[2].appearance).toEqual(document.appearance);
   await expect(client.importUiThemes({ expectedRevision: 2, document: { ...pack, themes: [...pack.themes, { ...document, baseId: "unknown" }] } })).rejects.toMatchObject({ status: 400 });
   expect(await client.listUiThemes()).toEqual(result);
+});
+
+test("legacy imported themes receive the default illustration configuration", async () => {
+  const document = await readThemeFile({
+    text: async () => JSON.stringify({
+      schemaVersion: 1,
+      name: "旧主题",
+      baseId: "paper-daylight",
+      appearance: { colors: { scheme: "light", overrides: {} } },
+    }),
+  } as File);
+  expect((document as { appearance: { illustrations: unknown } }).appearance.illustrations).toEqual({
+    setId: "none",
+    opacity: 0,
+    surfaces: { workbench: false, chat: false, topbar: false, management: false },
+  });
 });
 
 

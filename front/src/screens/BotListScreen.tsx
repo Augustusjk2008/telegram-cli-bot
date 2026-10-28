@@ -19,6 +19,7 @@ import {
   type CreateDraft,
 } from "./useBotManager";
 import { DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
 
@@ -272,8 +273,10 @@ export function BotListScreen({
   const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || createDraft.runtimeBackend === "native_agent";
 
   return (
-    <main data-ui-density="compact" className="flex-1 overflow-y-auto bg-[var(--bg)] p-4">
-      <header className="mb-3 flex items-center justify-between gap-3">
+    <main data-ui-density="compact" className="theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--bg)] p-4">
+      <ThemeIllustrationLayer surface="management" />
+      <header className="theme-illustration-host mb-3 flex items-center justify-between gap-3">
+        <ThemeIllustrationLayer surface="topbar" />
         <h1 className="text-2xl font-bold">智能体管理</h1>
         <div className="flex items-center gap-2">
           {onLogout ? (

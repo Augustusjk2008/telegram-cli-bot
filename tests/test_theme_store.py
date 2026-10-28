@@ -347,6 +347,21 @@ def legacy_theme(index, **changes):
     }
 
 
+def normalized_legacy_theme(theme):
+    normalized = copy.deepcopy(theme)
+    normalized["appearance"]["illustrations"] = {
+        "setId": "none",
+        "opacity": 0,
+        "surfaces": {
+            "workbench": False,
+            "chat": False,
+            "topbar": False,
+            "management": False,
+        },
+    }
+    return normalized
+
+
 def write_legacy(store, filename, themes, **changes):
     store.legacy_accounts_dir.mkdir(parents=True, exist_ok=True)
     path = store.legacy_accounts_dir / filename
@@ -367,7 +382,7 @@ def test_migration_preserves_four_local_themes_and_other_accounts_once(store):
 
     library = store.list_library()
     assert library["scope"] == "global" and "accountId" not in library
-    assert library["themes"][1:] == [*local, other]
+    assert library["themes"][1:] == [normalized_legacy_theme(theme) for theme in [*local, other]]
     assert library["selectedThemeId"] == BUILTIN_THEME_ID and library["revision"] == 0
     before = store.library_path.read_bytes()
     assert store.list_library() == ThemeStore(store.library_path).list_library() == library
@@ -392,10 +407,12 @@ def test_id_conflicts_preserve_distinct_versions_and_deduplicate_each_variant(st
     )]
     originals = {path: path.read_bytes() for path in paths}
     library = store.list_library()
-    assert len(library["themes"]) == 3 and library["themes"][1] == original
+    normalized_original = normalized_legacy_theme(original)
+    normalized_conflict = normalized_legacy_theme(conflict)
+    assert len(library["themes"]) == 3 and library["themes"][1] == normalized_original
     duplicate = library["themes"][2]
-    assert duplicate["id"] != original["id"]
-    assert {**duplicate, "id": original["id"]} == conflict
+    assert duplicate["id"] != normalized_original["id"]
+    assert {**duplicate, "id": normalized_original["id"]} == normalized_conflict
     assert all(path.read_bytes() == raw for path, raw in originals.items())
 
     isolated = ThemeStore(tmp_path / "another-root" / "library.json", legacy_accounts_dir=store.legacy_accounts_dir)
@@ -415,8 +432,8 @@ def test_first_access_migrates_all_sources_before_use(store, operation):
         library = store.create(create_input(sourceId=theme["id"], activate=True))
         assert library["revision"] == 1
         assert library["selectedThemeId"] == library["themes"][2]["id"]
-        assert library["themes"][2]["appearance"] == theme["appearance"]
-    assert library["themes"][1] == theme and source.read_bytes() == before
+        assert library["themes"][2]["appearance"] == normalized_legacy_theme(theme)["appearance"]
+    assert library["themes"][1] == normalized_legacy_theme(theme) and source.read_bytes() == before
 
 
 @pytest.mark.parametrize("damage", ["json", "encoding", "schema", "theme_schema", "token", "duplicate_id"])
@@ -470,7 +487,10 @@ def test_failed_atomic_migration_publishes_nothing_and_can_retry(store, monkeypa
     assert all(path.read_bytes() == raw for path, raw in originals.items())
     monkeypatch.setattr(theme_store.os, "replace", replace)
     library = store.list_library()
-    assert library["themes"][1:] == [legacy_theme(1), legacy_theme(2)]
+    assert library["themes"][1:] == [
+        normalized_legacy_theme(legacy_theme(1)),
+        normalized_legacy_theme(legacy_theme(2)),
+    ]
     assert ThemeStore(store.library_path).list_library() == library
 
 

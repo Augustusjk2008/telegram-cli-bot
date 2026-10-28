@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "sets": {
+    "none": {
+      "workbench": "/assets/theme-illustrations/none-workbench.svg",
+      "chat": "/assets/theme-illustrations/none-chat.svg",
+      "topbar": "/assets/theme-illustrations/none-topbar.svg",
+      "management": "/assets/theme-illustrations/none-management.svg"
+    },
+    "forest-grove": {
+      "workbench": "/assets/theme-illustrations/forest-grove-workbench.svg",
+      "chat": "/assets/theme-illustrations/forest-grove-chat.svg",
+      "topbar": "/assets/theme-illustrations/forest-grove-topbar.svg",
+      "management": "/assets/theme-illustrations/forest-grove-management.svg"
+    },
+    "tidal-grove": {
+      "workbench": "/assets/theme-illustrations/tidal-grove-workbench.svg",
+      "chat": "/assets/theme-illustrations/tidal-grove-chat.svg",
+      "topbar": "/assets/theme-illustrations/tidal-grove-topbar.svg",
+      "management": "/assets/theme-illustrations/tidal-grove-management.svg"
+    },
+    "desert-dusk": {
+      "workbench": "/assets/theme-illustrations/desert-dusk-workbench.svg",
+      "chat": "/assets/theme-illustrations/desert-dusk-chat.svg",
+      "topbar": "/assets/theme-illustrations/desert-dusk-topbar.svg",
+      "management": "/assets/theme-illustrations/desert-dusk-management.svg"
+    },
+    "alpine-fog": {
+      "workbench": "/assets/theme-illustrations/alpine-fog-workbench.svg",
+      "chat": "/assets/theme-illustrations/alpine-fog-chat.svg",
+      "topbar": "/assets/theme-illustrations/alpine-fog-topbar.svg",
+      "management": "/assets/theme-illustrations/alpine-fog-management.svg"
+    },
+    "moonlit-garden": {
+      "workbench": "/assets/theme-illustrations/moonlit-garden-workbench.svg",
+      "chat": "/assets/theme-illustrations/moonlit-garden-chat.svg",
+      "topbar": "/assets/theme-illustrations/moonlit-garden-topbar.svg",
+      "management": "/assets/theme-illustrations/moonlit-garden-management.svg"
+    }
+  }
+}

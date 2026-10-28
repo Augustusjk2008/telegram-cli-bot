@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { withPublicBase } from "../utils/publicBase";
 import { BUILTIN_THEME, resolveAppearance, THEME_TOKENS } from "./resolveAppearance";
-import type { ResolvedAppearance } from "./types";
+import { THEME_ILLUSTRATION_SURFACES } from "./illustrationPresets";
+import type { ResolvedAppearance, ThemeIllustrationSurface } from "./types";
 
 const paperAppearance = resolveAppearance(BUILTIN_THEME);
 let currentAppearance = paperAppearance;
@@ -16,11 +17,35 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
     root.dataset.colorScheme = appearance.scheme;
     root.dataset.styleProfile = appearance.styleProfile;
     root.dataset.motionProfile = appearance.motionProfile;
+    root.dataset.illustrationSet = appearance.illustrations.setId;
     root.style.colorScheme = appearance.scheme;
     for (const name of Object.keys(currentAppearance.cssVariables)) {
       if (!(name in appearance.cssVariables)) root.style.removeProperty(name);
     }
     for (const [name, value] of Object.entries(appearance.cssVariables)) root.style.setProperty(name, value);
+    const illustrationVariables: Record<string, string> = {
+      "--theme-illustration-opacity": String(appearance.illustrations.opacity),
+      "--theme-illustration-primary": appearance.illustrations.colors.primary,
+      "--theme-illustration-secondary": appearance.illustrations.colors.secondary,
+      "--theme-illustration-soft": appearance.illustrations.colors.soft,
+    };
+    for (const surface of THEME_ILLUSTRATION_SURFACES) {
+      illustrationVariables[`--theme-illustration-${surface}-image`] = `url("${withPublicBase(appearance.illustrations.resources[surface])}")`;
+      illustrationVariables[`--theme-illustration-${surface}-enabled`] = appearance.illustrations.surfaces[surface] ? "1" : "0";
+    }
+    for (const name of Object.keys(currentAppearance.illustrations ? {
+      "--theme-illustration-opacity": "",
+      "--theme-illustration-primary": "",
+      "--theme-illustration-secondary": "",
+      "--theme-illustration-soft": "",
+      ...Object.fromEntries(THEME_ILLUSTRATION_SURFACES.flatMap((surface) => [
+        [`--theme-illustration-${surface}-image`, ""],
+        [`--theme-illustration-${surface}-enabled`, ""],
+      ])),
+    } : {})) {
+      if (!(name in illustrationVariables)) root.style.removeProperty(name);
+    }
+    for (const [name, value] of Object.entries(illustrationVariables)) root.style.setProperty(name, value);
     document.querySelector<HTMLLinkElement>("link[data-theme-favicon]")?.setAttribute("href", withPublicBase("/assets/app-logo-classic.svg"));
   }
   if (currentAppearance.revision === appearance.revision) return;

@@ -40,6 +40,7 @@ import { PaneResizer } from "./PaneResizer";
 import { SearchPane } from "./SearchPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import {
   LazyDebugPane as DebugPane,
@@ -1418,9 +1419,10 @@ export function DesktopWorkbench({
       data-has-focus={focusedPane ? "true" : "false"}
       data-focused-pane={focusedPane || "none"}
       data-resizing={isResizingPane ? "true" : "false"}
-      className="desktop-workbench-root grid h-[100dvh] min-h-0 w-full grid-cols-[minmax(0,1fr)]"
+      className="desktop-workbench-root theme-illustration-host grid h-[100dvh] min-h-0 w-full grid-cols-[minmax(0,1fr)]"
       style={{ gridTemplateRows: "auto minmax(0,1fr) auto" }}
     >
+      <ThemeIllustrationLayer surface="workbench" />
       {focusedPane ? (
         <button
           type="button"
@@ -1683,10 +1685,11 @@ export function DesktopWorkbench({
             data-collapsed={layoutState.chatCollapsed ? "true" : "false"}
             data-focused={focusedPane === "chat" ? "true" : "false"}
             className={clsx(
-              "desktop-workbench-pane min-h-0 overflow-hidden",
+              "desktop-workbench-pane theme-illustration-host min-h-0 overflow-hidden",
               !showChatPane && "hidden",
             )}
           >
+            <ThemeIllustrationLayer surface="chat" />
             {resolvedChatPaneContent || (
               <ChatPane
                 botAlias={botAlias}

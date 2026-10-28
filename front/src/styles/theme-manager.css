@@ -291,6 +291,51 @@
 .theme-manager-typography select {
   min-width: 0;
 }
+.theme-manager-illustrations {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.theme-manager-illustration-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.theme-manager-illustration-heading small {
+  text-align: right;
+}
+.theme-manager-surface-toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.theme-manager-surface-toggles label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+}
+.theme-manager-surface-toggles input {
+  accent-color: var(--accent);
+}
+.theme-manager-illustration-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.theme-manager-illustration-templates button {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
 .theme-manager-name-row {
   display: flex;
   gap: 7px;
@@ -460,6 +505,8 @@
 }
 
 .theme-preview {
+  position: relative;
+  isolation: isolate;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 6px;

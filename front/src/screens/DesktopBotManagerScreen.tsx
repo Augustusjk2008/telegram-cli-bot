@@ -31,6 +31,7 @@ import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import type {
   BotClusterConfig,
   BotSummary,
@@ -1468,9 +1469,11 @@ export function DesktopBotManagerScreen({
     <main
       data-testid="desktop-bot-manager-screen"
       data-ui-density="compact"
-      className="flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
+      className="theme-illustration-host flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
     >
-      <header className="border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+      <ThemeIllustrationLayer surface="management" />
+      <header className="theme-illustration-host border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+        <ThemeIllustrationLayer surface="topbar" />
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">智能体管理</h1>
           <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
@@ -1601,8 +1604,9 @@ export function DesktopBotManagerScreen({
           data-testid="desktop-bot-manager-list"
           tabIndex={0}
           onKeyDown={handleTableKeyDown}
-          className="min-h-0 overflow-auto bg-[var(--surface)] focus:outline-none"
+          className="theme-illustration-host min-h-0 overflow-auto bg-[var(--surface)] focus:outline-none"
         >
+          <ThemeIllustrationLayer surface="management" />
           {manager.loading ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载中...</div>
           ) : visibleBots.length === 0 ? (
@@ -1762,7 +1766,8 @@ export function DesktopBotManagerScreen({
           <span className="my-2 w-px bg-[var(--border)] group-hover:bg-[var(--accent)]" />
         </div>
 
-        <aside className="min-h-0 overflow-y-auto bg-[var(--bg)] p-4">
+        <aside className="theme-illustration-host min-h-0 overflow-y-auto bg-[var(--bg)] p-4">
+          <ThemeIllustrationLayer surface="management" />
           {mode === "create" ? (
             <CreatePanel
               manager={manager}

@@ -13,6 +13,11 @@ import {
   UI_THEME_STORAGE_KEY,
 } from "../theme";
 import { withPublicBase } from "../utils/publicBase";
+import {
+  BUILTIN_THEME,
+  normalizeIllustrations,
+  resolveAppearance,
+} from "../theme/resolveAppearance";
 
 function relativeLuminance(color: string) {
   const [red, green, blue] = [1, 3, 5].map((offset) => {
@@ -89,5 +94,44 @@ describe("UI themes", () => {
     expect(contrastRatio(theme.foreground, theme.background)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(theme.cursor, theme.background)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(theme.selectionForeground, theme.selectionBackground)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("normalizes legacy illustration data and includes illustration edits in the revision", () => {
+    expect(normalizeIllustrations(undefined)).toEqual({
+      setId: "none",
+      opacity: 0,
+      surfaces: {
+        workbench: false,
+        chat: false,
+        topbar: false,
+        management: false,
+      },
+    });
+    const forest = resolveAppearance({
+      ...BUILTIN_THEME,
+      appearance: {
+        ...BUILTIN_THEME.appearance,
+        illustrations: {
+          setId: "forest-grove",
+          opacity: 0.12,
+          surfaces: { workbench: true, chat: true, topbar: false, management: false },
+        },
+      },
+    });
+    const changed = resolveAppearance({
+      ...BUILTIN_THEME,
+      appearance: {
+        ...BUILTIN_THEME.appearance,
+        illustrations: {
+          setId: "forest-grove",
+          opacity: 0.18,
+          surfaces: { workbench: true, chat: true, topbar: false, management: false },
+        },
+      },
+    });
+    expect(forest.illustrations.resources.workbench).toBe(
+      "/assets/theme-illustrations/forest-grove-workbench.svg",
+    );
+    expect(changed.revision).not.toBe(forest.revision);
   });
 });

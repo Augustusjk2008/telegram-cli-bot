@@ -13,6 +13,7 @@ import {
   THEME_TOKENS,
   contrastRatio,
   normalizeColor,
+  normalizeIllustrations,
   resolveAppearance,
 } from "../theme/resolveAppearance";
 import {
@@ -22,8 +23,10 @@ import {
   CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
   normalizeChatTypography,
 } from "../theme/chatTypography";
-import type { ChatTypography, UiTheme, ThemeLibrary } from "../theme/types";
+import type { ChatTypography, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
 import { downloadThemeDocument, portableTheme, readThemeFile } from "../theme/themeTransfer";
+import { ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS } from "../theme/illustrationPresets";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import "../styles/theme-manager.css";
 
 type Draft = {
@@ -32,6 +35,9 @@ type Draft = {
   theme: UiTheme;
   sourceId?: string;
   inputs: Record<string, string>;
+};
+type IllustrationPatch = Omit<Partial<ThemeIllustrations>, "surfaces"> & {
+  surfaces?: Partial<ThemeIllustrations["surfaces"]>;
 };
 type Pane = "themes" | "editor" | "preview";
 type LeaveAction =
@@ -47,20 +53,23 @@ type Confirmation =
   | { kind: "reload" };
 
 function draftFrom(theme: UiTheme, revision: number): Draft {
+  const illustrations = normalizeIllustrations(theme.appearance.illustrations);
+  const copy = {
+    ...theme,
+    appearance: {
+      ...theme.appearance,
+      colors: {
+        ...theme.appearance.colors,
+        overrides: { ...theme.appearance.colors.overrides },
+      },
+      typography: normalizeChatTypography(theme.appearance.typography),
+      illustrations: { ...illustrations, surfaces: { ...illustrations.surfaces } },
+    },
+  };
   return {
     revision,
-    original: theme,
-    theme: {
-      ...theme,
-      appearance: {
-        ...theme.appearance,
-        colors: {
-          ...theme.appearance.colors,
-          overrides: { ...theme.appearance.colors.overrides },
-        },
-        typography: normalizeChatTypography(theme.appearance.typography),
-      },
-    },
+    original: copy,
+    theme: { ...copy, appearance: { ...copy.appearance, colors: { ...copy.appearance.colors, overrides: { ...copy.appearance.colors.overrides } }, illustrations: { ...illustrations, surfaces: { ...illustrations.surfaces } } } },
     inputs: {},
   };
 }
@@ -73,6 +82,7 @@ function editableValue(theme: UiTheme) {
       a.localeCompare(b),
     ),
     normalizeChatTypography(theme.appearance.typography),
+    normalizeIllustrations(theme.appearance.illustrations),
   ]);
 }
 
@@ -203,7 +213,7 @@ function ThemePreview({
   );
   return (
     <div
-      className="theme-preview"
+      className="theme-preview theme-illustration-host"
       data-testid="theme-local-preview"
       data-style-profile="paper"
       data-motion-profile="paper"
@@ -232,7 +242,9 @@ function ThemePreview({
         } as CSSProperties
       }
     >
-      <div className="theme-preview-titlebar">
+      <ThemeIllustrationLayer surface="workbench" appearance={appearance} />
+      <div className="theme-preview-titlebar theme-illustration-host">
+        <ThemeIllustrationLayer surface="topbar" appearance={appearance} />
         <span>工作台</span>
         <span>示例项目 · 已就绪</span>
       </div>
@@ -264,7 +276,8 @@ function ThemePreview({
           <span>忽略</span>
         </div>
       </div>
-      <div className="theme-preview-chat">
+      <div className="theme-preview-chat theme-illustration-host">
+        <ThemeIllustrationLayer surface="chat" appearance={appearance} />
         <div className="theme-preview-user">
           <small>你 · 现在</small>
           <p>请为我的工作台调一套配色。</p>
@@ -380,6 +393,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
   const editable = canManage && !draft.theme.readonly;
   const valid = Boolean(draft.theme.name.trim()) && invalidTokens.length === 0;
   const typography = normalizeChatTypography(draft.theme.appearance.typography);
+  const illustrations = normalizeIllustrations(draft.theme.appearance.illustrations);
   const visibleTokens = THEME_TOKENS.filter(
     (token) =>
       (!group || token.group === group) &&
@@ -427,11 +441,12 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         initialTheme(library)
       : initialTheme(library);
     initialized.current = true;
+    const next = draftFrom(current, library.revision);
     if (
-      JSON.stringify(current) !== JSON.stringify(draft.original) ||
+      JSON.stringify(next.theme) !== JSON.stringify(draft.original) ||
       draft.revision !== library.revision
     )
-      setDraft(draftFrom(current, library.revision));
+      setDraft(next);
   }, [library, loading, dirty, draft.original, draft.revision]);
 
   useEffect(() => {
@@ -591,6 +606,66 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           typography: {
             ...normalizeChatTypography(current.theme.appearance.typography),
             [key]: value,
+          },
+        },
+      },
+    }));
+  }
+
+  function changeIllustrations(patch: IllustrationPatch) {
+    if (!editable || busy) return;
+    setNotice("");
+    setDraft((current) => {
+      const currentIllustrations = normalizeIllustrations(current.theme.appearance.illustrations);
+      return {
+        ...current,
+        theme: {
+          ...current.theme,
+          appearance: {
+            ...current.theme.appearance,
+            illustrations: {
+              ...currentIllustrations,
+              ...patch,
+              surfaces: {
+                ...currentIllustrations.surfaces,
+                ...(patch.surfaces || {}),
+              },
+            },
+          },
+        },
+      };
+    });
+  }
+
+  function applyIllustrationTemplate(template: (typeof ILLUSTRATION_TEMPLATES)[number]) {
+    if (!editable || busy) return;
+    setNotice("");
+    setDraft((current) => ({
+      ...current,
+      inputs: {
+        ...current.inputs,
+        ...template.colors,
+      },
+      theme: {
+        ...current.theme,
+        appearance: {
+          ...current.theme.appearance,
+          colors: {
+            ...current.theme.appearance.colors,
+            overrides: {
+              ...current.theme.appearance.colors.overrides,
+              ...template.colors,
+            },
+          },
+          illustrations: {
+            setId: template.id,
+            opacity: 0.12,
+            surfaces: {
+              workbench: true,
+              chat: true,
+              topbar: true,
+              management: true,
+            },
           },
         },
       },
@@ -1061,6 +1136,66 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                   {CHAT_BODY_PARAGRAPH_SPACING_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </div>
+              <div className="theme-manager-illustrations">
+                <div className="theme-manager-illustration-heading">
+                  <strong>界面插画</strong>
+                  <small>低透明度装饰层，不参与布局和交互。</small>
+                </div>
+                <label htmlFor={`${inputId}-illustration-set`}>插画主题</label>
+                <select
+                  id={`${inputId}-illustration-set`}
+                  aria-label="插画主题"
+                  value={illustrations.setId}
+                  onChange={(event) => changeIllustrations({ setId: event.target.value as typeof illustrations.setId })}
+                >
+                  {THEME_ILLUSTRATION_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+                <label className="theme-manager-alpha">
+                  插画透明度
+                  <input
+                    type="range"
+                    aria-label="插画透明度"
+                    min="0"
+                    max="0.25"
+                    step="0.01"
+                    value={illustrations.opacity}
+                    onChange={(event) => changeIllustrations({ opacity: Number(event.target.value) })}
+                  />
+                  <output>{Math.round(illustrations.opacity * 100)}%</output>
+                </label>
+                <div className="theme-manager-surface-toggles">
+                  {([
+                    ["workbench", "工作区"],
+                    ["chat", "聊天区"],
+                    ["topbar", "顶部栏"],
+                    ["management", "管理界面"],
+                  ] as const).map(([surface, label]) => (
+                    <label key={surface}>
+                      <input
+                        type="checkbox"
+                        aria-label={label}
+                        checked={illustrations.surfaces[surface]}
+                        onChange={(event) => changeIllustrations({ surfaces: { [surface]: event.target.checked } })}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="theme-manager-illustration-templates" aria-label="插画模板">
+                  {ILLUSTRATION_TEMPLATES.map((template) => (
+                    <button
+                      type="button"
+                      key={template.id}
+                      aria-label={`使用${template.label}模板`}
+                      onClick={() => applyIllustrationTemplate(template)}
+                    >
+                      {template.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </fieldset>
           <div className="theme-manager-filters">
@@ -1104,6 +1239,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                         scheme: BUILTIN_THEME.appearance.colors.scheme,
                         overrides: {},
                       },
+                      illustrations: normalizeIllustrations(draft.theme.appearance.illustrations),
                     },
                   },
                 });
