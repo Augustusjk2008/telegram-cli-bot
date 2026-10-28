@@ -138,6 +138,12 @@ bash install.sh
 - Codex（exec / app-server）、Claude、Antigravity 和 DeepSeek Harness 的 CLI 会话保留流式正文、状态、trace 和完成态；模型列表及参数按 CLI 类型独立保存。
 - Pi 原生 Agent 保留 session、工具调用、权限请求、上下文用量和过程详情。
 
+### 无尽模式
+
+在可继续的回答操作中选择「无尽模式」后，Orbit 会在可重试的未完成或错误结果后按配置间隔自动发送 `Continue`。遇到不可重试错误或用户终止后，自动续接会结束。
+
+每次续接的错误和 `Continue` 事件都会写入会话历史；重新加载历史时，同一无尽运行会合并为一条回答并保留继续次数。运行期间会显示执行状态和当前次数，也可以使用「终止无尽模式」停止任务。默认续接间隔为 120 秒，可通过 `ENDLESS_CONTINUE_DELAY_SECONDS`（单位：秒）调整。
+
 ### SSH 远程工作区
 
 创建智能体时选择「远程 SSH」，在连接表单选择远程系统（Linux / POSIX 或 Windows），填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写、文件上传和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，AI CLI 或 Pi 在 Orbit 宿主机运行。DeepSeek Harness 当前只支持本地工作区。
@@ -181,7 +187,7 @@ HTML 文件上限为 1 MiB，其他单个资源上限为 16 MiB；只提供允�
 
 - 普通聊天可按显式 `agent_id` 进入隔离的 Agent 会话；集群模板用于准备 Bot 级并行槽位和模型档位。
 - 集群工具覆盖动态编组、状态查询、子 Agent 新会话、异步任务创建、轮询和消息等待。
-- CLI（含 DeepSeek Harness）与 Pi 使用相同的集群配置入口，可设置规模、默认超时、写入策略，以及低、中、高三档模型和思考深度。各档留空时继承主 Agent 配置；模型选项来自当前执行后端，Pi 的思考深度选项随所选模型变化。档位覆盖只作用于子任务，已入队任务保留入队时的配置。
+- CLI（含 DeepSeek Harness）与 Pi 使用相同的集群配置入口，可设置 1–20 个并发槽位、默认超时、写入策略，以及低、中、高三档模型和思考深度。各档留空时继承主 Agent 配置；模型选项来自当前执行后端，Pi 的思考深度选项随所选模型变化。档位覆盖只作用于子任务，已入队任务保留入队时的配置。
 - 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务。Codex（exec / app-server）和 Claude 自动注入 stdio MCP；Antigravity 自动配置工作区 MCP；DeepSeek Harness 在集群轮次通过 `--patch` 加载 MCP；Pi 使用扩展适配同一 bridge。
 - 上述入口均支持本地集群。远程 Antigravity 暂不支持集群；DeepSeek Harness 限于本地 CLI 模式。Antigravity 工作区已有用户管理的同名 `tcb-cluster` 配置时会提示冲突，需要先处理该配置。
 - 同一主会话的普通轮次沿用当前编组和 `run_id`；实际调整编组时切换到返回的新 ID。集群任务和进度保存在内存中，宿主重启后不会恢复正在执行的子任务。
@@ -226,7 +232,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 
 ### 管理与扩展
 
-- Admin Center 管理用户权限、邀请码、公告、更新和运行状态。
+- Admin Center 管理用户权限、邀请码、公告、更新和运行状态，也可以请求重启后端。
 - 主题管理提供所有账户共享的主题库和应用选择；正式账户可复制、编辑、应用和删除自定义主题，访客只读。支持 JSON 导入单个主题或多主题包，导出当前已保存主题或整个主题库；导入统一新增为可编辑主题，同名自动编号，整包校验通过后一次写入，保留当前应用选择。登录页可选择现有主题，选择保存在当前浏览器；登录后使用共享的应用主题。内置「纸感日间」主题可复制后定制，配色可预览并保存。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
@@ -270,6 +276,7 @@ CLI_TYPE=codex
 CLI_PATH=codex
 WORKING_DIR=C:\Users\YourName\project
 WEB_ENABLED=true
+ENDLESS_CONTINUE_DELAY_SECONDS=120
 WEB_HOST=0.0.0.0
 WEB_PORT=8765
 WEB_API_TOKEN=<高强度随机口令>
