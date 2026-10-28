@@ -89,7 +89,7 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         {
             "name": "ask_agent",
             "annotations": _tool_annotations(read_only=False, idempotent=False),
-            "description": "Start an asynchronous TCB child agent task and immediately return task_id. Always pass run_id. The Bot's low/medium/high tier configuration selects the actual CLI, CLI path, provider, model, and reasoning effort; the child agent chooses only model_tier. The main agent may continue calling poll_agent_tasks to wait for and summarize results, or end its turn while the task runs in the background. timeout_seconds is a soft deadline and defaults to the Bot setting when omitted; exceeding it does not forcibly interrupt the child agent, and poll_agent_tasks reports deadline_exceeded.",
+            "description": "Start an asynchronous TCB child agent task and immediately return task_id. Always pass run_id. The Bot's low/medium/high tier configuration selects the actual CLI, CLI path, provider, model, and reasoning effort; the child agent chooses only model_tier. The main agent may continue calling poll_agent_tasks to wait for and summarize results, or end its turn while the task runs in the background; completion will automatically notify the main session. When the cluster completion prompt arrives, call poll_agent_tasks for the result or error details. timeout_seconds is a soft deadline and defaults to the Bot setting when omitted; exceeding it does not forcibly interrupt the child agent, and poll_agent_tasks reports deadline_exceeded. Do not call wait_agent_messages just to wait for a child agent.",
             "inputSchema": {
                 "type": "object",
                 "required": ["run_id", "agent_id", "message"],

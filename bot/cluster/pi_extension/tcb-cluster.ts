@@ -154,7 +154,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(clusterTool(
 		"ask_agent",
 		"Ask Agent",
-		"Start an asynchronous TCB child agent task and immediately return task_id; for tasks that are not running in the background, then wait for and summarize the results.",
+		"Start an asynchronous TCB child agent task and immediately return task_id. The main agent may end the current turn while it runs; tell the user that completion will automatically notify the main session, then call poll_agent_tasks when the cluster completion prompt arrives. Do not call wait_agent_messages just to wait for a child agent.",
 		Type.Object({
 			run_id: runIdParam,
 			agent_id: Type.String(),

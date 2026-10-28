@@ -72,6 +72,10 @@ class ClusterAgentTask:
     error: str = ""
     messages: list[ClusterAgentTaskMessage] = field(default_factory=list)
     execution: ClusterExecutionSnapshot | None = None
+    parent_conversation_id: str = ""
+    parent_turn_id: str = ""
+    wakeup_pending: bool = False
+    wakeup_sent: bool = False
 
     @property
     def execution_snapshot(self) -> ClusterExecutionSnapshot | None:
@@ -98,6 +102,8 @@ class ClusterRun:
     _next_message_sequence: int = 1
     _agent_message_read_sequence: int = 0
     message_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    pending_parent_wakeup_task_ids: set[str] = field(default_factory=set)
+    parent_wakeup_task: asyncio.Task | None = None
 
 
 class ClusterToolError(RuntimeError):
@@ -307,7 +313,14 @@ class ClusterRuntime:
         for run in finished[keep_latest:]:
             self._runs.pop(run.run_id, None)
 
-    def create_agent_task(self, run_id: str, request: AskAgentRequest) -> ClusterAgentTask:
+    def create_agent_task(
+        self,
+        run_id: str,
+        request: AskAgentRequest,
+        *,
+        parent_conversation_id: str = "",
+        parent_turn_id: str = "",
+    ) -> ClusterAgentTask:
         run = self._runs[str(run_id)]
         now = self._now_iso()
         execution = request.execution or resolve_cluster_execution(
@@ -332,6 +345,8 @@ class ClusterRuntime:
             status="queued",
             created_at=now,
             execution=copy.deepcopy(execution),
+            parent_conversation_id=str(parent_conversation_id or "").strip(),
+            parent_turn_id=str(parent_turn_id or "").strip(),
         )
         run.tasks[task.task_id] = task
         run.events.append({

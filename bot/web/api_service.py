@@ -1412,6 +1412,23 @@ def _active_main_conversation_for_cluster_run(manager: MultiBotManager, run: Any
     return str(session.active_conversation_id or "").strip()
 
 
+def _cluster_parent_turn_snapshot(manager: MultiBotManager, run: Any) -> tuple[str, str]:
+    parent_conversation_id = str(run.main_conversation_id or "").strip()
+    if not parent_conversation_id:
+        return "", ""
+    try:
+        _profile, _agent, session = get_chat_session_for_alias(
+            manager,
+            run.bot_alias,
+            run.user_id,
+            "main",
+        )
+    except Exception:
+        return parent_conversation_id, ""
+    with session._lock:
+        return parent_conversation_id, str(session._execution_turn_id or "").strip()
+
+
 def _require_current_cluster_team(manager: MultiBotManager, run: Any) -> None:
     parent_conversation_id = str(run.main_conversation_id or "").strip()
     if not parent_conversation_id:
@@ -1544,13 +1561,25 @@ async def handle_cluster_mcp_tool(
                 _require_cluster_run_control_ready(run_id)
                 _require_current_cluster_team(manager, run)
                 request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
-                task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
+                parent_conversation_id, parent_turn_id = _cluster_parent_turn_snapshot(manager, run)
+                task = _CLUSTER_RUNTIME.create_agent_task(
+                    run_id,
+                    request,
+                    parent_conversation_id=parent_conversation_id,
+                    parent_turn_id=parent_turn_id,
+                )
         else:
             _require_update_admission()
             _require_cluster_run_control_ready(run_id)
             _require_current_cluster_team(manager, run)
             request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
-            task = _CLUSTER_RUNTIME.create_agent_task(run_id, request)
+            parent_conversation_id, parent_turn_id = _cluster_parent_turn_snapshot(manager, run)
+            task = _CLUSTER_RUNTIME.create_agent_task(
+                run_id,
+                request,
+                parent_conversation_id=parent_conversation_id,
+                parent_turn_id=parent_turn_id,
+            )
         control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
         background_task = asyncio.create_task(_run_cluster_agent_task(manager, run_id, task.task_id))
         control.tasks.add(background_task)
@@ -4012,7 +4041,15 @@ async def kill_user_process(
             else:
                 cluster_run = _find_active_cluster_run_for_session(alias, user_id, session) if normalized_agent_id == "main" else None
             if cluster_run is not None and not processing and not any(task.status in {"queued", "running"} for task in cluster_run.tasks.values()):
-                cluster_run = None
+                parent_wakeup_active = bool(
+                    cluster_run.pending_parent_wakeup_task_ids
+                    or (
+                        cluster_run.parent_wakeup_task is not None
+                        and not cluster_run.parent_wakeup_task.done()
+                    )
+                )
+                if not parent_wakeup_active:
+                    cluster_run = None
             cluster_control = None
             if cluster_run is not None:
                 cluster_control = _cluster_run_control(cluster_run.run_id, profile.cluster.max_parallel_agents)
@@ -4349,6 +4386,11 @@ def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
         return
     if any(not task.done() for task in control.tasks):
         return
+    if run is not None and (
+        run.pending_parent_wakeup_task_ids
+        or (run.parent_wakeup_task is not None and not run.parent_wakeup_task.done())
+    ):
+        return
     if run is not None and any(task.status in {"queued", "running"} for task in run.tasks.values()):
         return
     _CLUSTER_RUN_CONTROLS.pop(run_id, None)
@@ -4362,6 +4404,215 @@ def _cluster_task_is_cancelled(run_id: str, task_id: str, control: _ClusterRunCo
         return True
     task = run.tasks.get(task_id)
     return task is None or task.status == "cancelled"
+
+
+def _clear_cluster_parent_wakeup_pending(run: Any) -> None:
+    for task_id in list(getattr(run, "pending_parent_wakeup_task_ids", set())):
+        task = run.tasks.get(task_id)
+        if task is not None:
+            task.wakeup_pending = False
+    run.pending_parent_wakeup_task_ids.clear()
+
+
+def _cluster_parent_wakeup_tasks(run: Any) -> list[Any]:
+    pending_ids = getattr(run, "pending_parent_wakeup_task_ids", set())
+    tasks: list[Any] = []
+    for task_id in list(pending_ids):
+        task = run.tasks.get(task_id)
+        if (
+            task is None
+            or task.wakeup_sent
+            or task.status not in {"completed", "failed"}
+            or not str(task.parent_conversation_id or "").strip()
+            or str(task.parent_conversation_id or "").strip() != str(run.main_conversation_id or "").strip()
+        ):
+            pending_ids.discard(task_id)
+            if task is not None:
+                task.wakeup_pending = False
+            continue
+        task.wakeup_pending = True
+        tasks.append(task)
+    tasks.sort(key=lambda task: (str(task.completed_at or ""), str(task.created_at or ""), str(task.task_id)))
+    return tasks
+
+
+def _queue_cluster_parent_wakeup(run: Any, task_id: str) -> bool:
+    task = run.tasks.get(str(task_id or ""))
+    if (
+        task is None
+        or task.wakeup_sent
+        or task.status not in {"completed", "failed"}
+        or not str(task.parent_conversation_id or "").strip()
+        or str(task.parent_conversation_id or "").strip() != str(run.main_conversation_id or "").strip()
+    ):
+        return False
+    task.wakeup_pending = True
+    run.pending_parent_wakeup_task_ids.add(task.task_id)
+    return True
+
+
+def _cluster_parent_wakeup_message(tasks: list[Any]) -> str:
+    if len(tasks) == 1:
+        task = tasks[0]
+        role_name = str(task.role_name or task.agent_id or "子 Agent").strip()
+        state = "正常结束" if task.status == "completed" else "异常结束"
+        return (
+            "【集群提示】\n"
+            f"子 Agent「{role_name}」会话已{state}，task_id={task.task_id}。\n"
+            "请调用 poll_agent_tasks 查询结果并继续处理。"
+        )
+    lines = ["【集群提示】", "以下子 Agent 会话已结束："]
+    for task in tasks:
+        role_name = str(task.role_name or task.agent_id or "子 Agent").strip()
+        state = "正常结束" if task.status == "completed" else "异常结束"
+        lines.append(f"- {role_name}：{state}，task_id={task.task_id}")
+    lines.append("")
+    lines.append("请调用 poll_agent_tasks 查询详情并继续处理。")
+    return "\n".join(lines)
+
+
+async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> bool:
+    run = _CLUSTER_RUNTIME.get_run(run_id)
+    if run is None:
+        return False
+    parent_conversation_id = str(run.main_conversation_id or "").strip()
+    if not parent_conversation_id:
+        _clear_cluster_parent_wakeup_pending(run)
+        return False
+
+    claimed_tasks: list[Any] = []
+    async with _cluster_parent_lock_scope(run.bot_alias, run.user_id, parent_conversation_id):
+        live_run = _CLUSTER_RUNTIME.get_run(run_id)
+        if live_run is None or live_run is not run or live_run.status != "running":
+            if live_run is not None:
+                _clear_cluster_parent_wakeup_pending(live_run)
+            return False
+        control = _CLUSTER_RUN_CONTROLS.get(run_id)
+        if control is not None and control.cancel_requested:
+            _clear_cluster_parent_wakeup_pending(live_run)
+            return False
+        try:
+            profile = get_profile_or_raise(manager, live_run.bot_alias)
+        except Exception:
+            _clear_cluster_parent_wakeup_pending(live_run)
+            return False
+        if not profile.cluster.enabled:
+            _clear_cluster_parent_wakeup_pending(live_run)
+            return False
+        try:
+            _require_current_cluster_team(manager, live_run)
+        except (WebApiError, ClusterToolError):
+            _clear_cluster_parent_wakeup_pending(live_run)
+            return False
+
+        _profile, _agent, session = get_chat_session_for_alias(
+            manager,
+            live_run.bot_alias,
+            live_run.user_id,
+            "main",
+        )
+        with session._lock:
+            session_busy = bool(
+                session.active_conversation_id != parent_conversation_id
+                or session.is_processing
+                or session._lifecycle_operation
+                or session._execution_id
+                or session.stop_requested
+                or session._control_stop_task is not None
+                or session._native_abort_task is not None
+            )
+        if session_busy:
+            return False
+
+        claimed_tasks = _cluster_parent_wakeup_tasks(live_run)
+        if not claimed_tasks:
+            return False
+        message = _cluster_parent_wakeup_message(claimed_tasks)
+        for task in claimed_tasks:
+            task.wakeup_pending = False
+            task.wakeup_sent = True
+        live_run.pending_parent_wakeup_task_ids.difference_update(task.task_id for task in claimed_tasks)
+
+    try:
+        await run_chat(
+            manager,
+            run.bot_alias,
+            run.user_id,
+            message,
+            agent_id="main",
+            cluster=False,
+            mentions=list(run.mentions or []),
+            execution_mode=run.execution_mode,
+            internal_continuation=True,
+            expected_conversation_id=parent_conversation_id,
+            cluster_run_id=run_id,
+            allow_unsafe_cli=run.allow_unsafe_cli,
+        )
+    except WebApiError as exc:
+        if exc.code in {"session_busy", "conversation_changed", "execution_changed", "conversation_switch_blocked"}:
+            live_run = _CLUSTER_RUNTIME.get_run(run_id)
+            if live_run is not None:
+                for task in claimed_tasks:
+                    if task.wakeup_sent:
+                        task.wakeup_sent = False
+                        task.wakeup_pending = True
+                        live_run.pending_parent_wakeup_task_ids.add(task.task_id)
+        logger.debug("集群父会话唤醒未启动 run_id=%s code=%s", run_id, exc.code)
+        return False
+    except Exception:
+        live_run = _CLUSTER_RUNTIME.get_run(run_id)
+        if live_run is not None:
+            for task in claimed_tasks:
+                if task.wakeup_sent:
+                    task.wakeup_sent = False
+                    task.wakeup_pending = True
+                    live_run.pending_parent_wakeup_task_ids.add(task.task_id)
+        logger.exception("集群父会话唤醒失败 run_id=%s", run_id)
+        return False
+    return True
+
+
+def _schedule_cluster_parent_wakeup(
+    manager: MultiBotManager,
+    run_id: str,
+    task_id: str | None = None,
+) -> None:
+    run = _CLUSTER_RUNTIME.get_run(str(run_id or "").strip())
+    if run is None:
+        return
+    if task_id:
+        _queue_cluster_parent_wakeup(run, task_id)
+    if not run.pending_parent_wakeup_task_ids:
+        return
+    existing = run.parent_wakeup_task
+    if existing is not None and not existing.done():
+        return
+    try:
+        wakeup_task = asyncio.create_task(
+            _run_cluster_parent_wakeup(manager, run.run_id),
+            name=f"cluster-parent-wakeup-{run.run_id}",
+        )
+    except RuntimeError:
+        return
+    run.parent_wakeup_task = wakeup_task
+
+    def finish_wakeup(completed_task: asyncio.Task[Any]) -> None:
+        live_run = _CLUSTER_RUNTIME.get_run(run.run_id)
+        started = False
+        try:
+            started = bool(completed_task.result())
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("集群父会话唤醒任务异常 run_id=%s", run.run_id)
+        if live_run is None or live_run.parent_wakeup_task is not completed_task:
+            return
+        live_run.parent_wakeup_task = None
+        _cleanup_cluster_run_control_if_idle(run.run_id)
+        if started and live_run.pending_parent_wakeup_task_ids:
+            _schedule_cluster_parent_wakeup(manager, run.run_id)
+
+    wakeup_task.add_done_callback(finish_wakeup)
 
 
 async def _cancel_cluster_run(
@@ -4380,12 +4631,19 @@ async def _cancel_cluster_run(
     control = captured_control or _CLUSTER_RUN_CONTROLS.get(normalized_run_id)
     if control is not None:
         control.cancel_requested = True
+    parent_wakeup_task = run.parent_wakeup_task
+    _clear_cluster_parent_wakeup_pending(run)
+    run.parent_wakeup_task = None
     _CLUSTER_RUNTIME.cancel_run_tasks(normalized_run_id, message)
     running_tasks = [
         task
         for task in list(control.tasks if control is not None else [])
         if not task.done()
     ]
+    current_task = asyncio.current_task()
+    if parent_wakeup_task is not None and not parent_wakeup_task.done() and parent_wakeup_task is not current_task:
+        parent_wakeup_task.cancel()
+        running_tasks.append(parent_wakeup_task)
     for task in running_tasks:
         task.cancel()
     await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
@@ -4722,14 +4980,17 @@ async def _run_cluster_agent_task(
                 else:
                     _CLUSTER_RUNTIME.complete_agent_task(run_id, task_id, final_output)
                 await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
+                _schedule_cluster_parent_wakeup(manager, run_id, task_id)
     except asyncio.TimeoutError:
         if not _cluster_task_is_cancelled(run_id, task_id, control):
             _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, "子 agent 执行超时")
             await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
+            _schedule_cluster_parent_wakeup(manager, run_id, task_id)
     except Exception as exc:
         if not _cluster_task_is_cancelled(run_id, task_id, control):
             _CLUSTER_RUNTIME.fail_agent_task(run_id, task_id, str(exc))
             await _CLUSTER_RUNTIME.notify_agent_task_message(run_id)
+            _schedule_cluster_parent_wakeup(manager, run_id, task_id)
 
 
 def _build_cluster_prompt(
@@ -7894,14 +8155,18 @@ def _native_chat_prompt_factory(
     is_plan_mode: bool,
     cluster_run: Any,
     mentions: list[dict[str, Any]] | None,
+    cluster_run_id: str = "",
 ) -> Callable[[str], tuple[str, str]]:
     def prepare(execution_text: str) -> tuple[str, str]:
-        base = build_plan_mode_prompt(execution_text, cluster_active=bool(cluster_run)) if is_plan_mode else execution_text
+        effective_cluster_run_id = str(
+            cluster_run_id or (cluster_run.run_id if cluster_run is not None else "")
+        ).strip()
+        base = build_plan_mode_prompt(execution_text, cluster_active=bool(effective_cluster_run_id)) if is_plan_mode else execution_text
         kwargs = dict(
             session=session,
             context_kind=NATIVE_AGENT_PROVIDER,
             context_id=_cluster_prompt_context_id(session, NATIVE_AGENT_PROVIDER),
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_run_id=effective_cluster_run_id,
             cluster_mentions=list(mentions or []),
         )
         return (
@@ -7927,6 +8192,8 @@ async def _run_native_agent_chat(
     solo_mode: bool = False,
     actor: dict[str, Any] | None = None,
     allow_unsafe_cli: bool = False,
+    cluster_run_id: str = "",
+    internal_continuation: bool = False,
 ) -> dict[str, Any]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -7951,7 +8218,12 @@ async def _run_native_agent_chat(
     is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
     main_conversation_id = ""
     cluster_team_state: dict[str, Any] | None = None
-    if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+    if (
+        profile.cluster.enabled
+        and str(agent_id or "main").strip().lower() == "main"
+        and not solo_mode
+        and not internal_continuation
+    ):
         main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
             manager,
             profile,
@@ -7969,26 +8241,37 @@ async def _run_native_agent_chat(
         allow_unsafe_cli=allow_unsafe_cli,
         agent_id=agent_id,
         solo_mode=solo_mode,
+        internal_continuation=internal_continuation,
         main_conversation_id=main_conversation_id,
         team_state=cluster_team_state,
     )
+    effective_cluster_run_id = str(cluster_run_id or (cluster_run.run_id if cluster_run else "")).strip()
     try:
         result = await get_native_agent_service().run_chat(
             profile=profile,
             session=session,
             user_text=text,
             prompt_text=text,
-            prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
+            prompt_factory=_native_chat_prompt_factory(
+                profile,
+                session,
+                is_plan_mode=is_plan_mode,
+                cluster_run=cluster_run,
+                mentions=mentions,
+                cluster_run_id=effective_cluster_run_id,
+            ),
             translate_chat=True,
             history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
             actor=_actor_from_request(request_obj),
-            cluster_run_id=cluster_run.run_id if cluster_run else "",
+            cluster_run_id=effective_cluster_run_id,
             solo_mode=solo_mode,
         )
         return result
     finally:
         if cluster_run:
             _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+        if str(agent_id or "main").strip().lower() == "main" and effective_cluster_run_id:
+            _schedule_cluster_parent_wakeup(manager, effective_cluster_run_id)
 
 
 def _chat_stream_event_is_visible(event: dict[str, Any], *, include_trace: bool) -> bool:
@@ -8453,6 +8736,7 @@ async def _stream_native_agent_chat(
     suppress_agent_prompt: bool = False,
     translate_chat: bool = True,
     endless_mode: bool = False,
+    internal_continuation: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     shared_user_id = chat_session_user_id(user_id)
     profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
@@ -8503,7 +8787,12 @@ async def _stream_native_agent_chat(
         is_plan_mode = effective_task_mode == PLAN_MODE_TASK_MODE
         main_conversation_id = ""
         cluster_team_state: dict[str, Any] | None = None
-        if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+        if (
+            profile.cluster.enabled
+            and str(agent_id or "main").strip().lower() == "main"
+            and not solo_mode
+            and not internal_continuation
+        ):
             main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
                 manager,
                 profile,
@@ -8521,7 +8810,7 @@ async def _stream_native_agent_chat(
             allow_unsafe_cli=allow_unsafe_cli,
             agent_id=agent_id,
             solo_mode=solo_mode,
-            internal_continuation=bool(normalized_resume_stream_id),
+            internal_continuation=internal_continuation or bool(normalized_resume_stream_id),
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
         )
@@ -8537,7 +8826,14 @@ async def _stream_native_agent_chat(
                     session=session,
                     user_text=text,
                     prompt_text=text,
-                    prompt_factory=_native_chat_prompt_factory(profile, session, is_plan_mode=is_plan_mode, cluster_run=cluster_run, mentions=mentions),
+                    prompt_factory=_native_chat_prompt_factory(
+                        profile,
+                        session,
+                        is_plan_mode=is_plan_mode,
+                        cluster_run=cluster_run,
+                        mentions=mentions,
+                        cluster_run_id=effective_cluster_run_id,
+                    ),
                     translate_chat=translate_chat,
                     history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                     endless_group_id=request_obj.endless_group_id,
@@ -8608,15 +8904,19 @@ async def run_chat(
     solo_mode: bool = False,
     actor: dict[str, Any] | None = None,
     allow_unsafe_cli: bool = False,
+    internal_continuation: bool = False,
+    expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
+    cluster_run_id: str = "",
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
     _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
-    with _session_lifecycle_scope(session):
+    cluster_run = None
+    with _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id):
         resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode)
         session._execution_mode = resolved_execution_mode
         if resolved_execution_mode == NATIVE_AGENT_PROVIDER:
-            return await _run_native_agent_chat(
+            result = await _run_native_agent_chat(
                 manager,
                 alias,
                 shared_user_id,
@@ -8630,10 +8930,20 @@ async def run_chat(
                 solo_mode=solo_mode,
                 actor=actor,
                 allow_unsafe_cli=allow_unsafe_cli,
+                cluster_run_id=cluster_run_id,
+                internal_continuation=internal_continuation,
             )
+            if str(agent_id or "main").strip().lower() == "main" and cluster_run_id:
+                _schedule_cluster_parent_wakeup(manager, cluster_run_id)
+            return result
         main_conversation_id = ""
         cluster_team_state: dict[str, Any] | None = None
-        if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode:
+        if (
+            profile.cluster.enabled
+            and str(agent_id or "main").strip().lower() == "main"
+            and not solo_mode
+            and not internal_continuation
+        ):
             main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
                 manager,
                 profile,
@@ -8651,6 +8961,7 @@ async def run_chat(
             allow_unsafe_cli=allow_unsafe_cli,
             agent_id=agent_id,
             solo_mode=solo_mode,
+            internal_continuation=internal_continuation,
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
         )
@@ -8671,13 +8982,17 @@ async def run_chat(
                 user_text,
                 request=request,
                 agent_id=agent_id,
-                cluster_run_id=cluster_run.run_id if cluster_run else "",
+                cluster_run_id=cluster_run.run_id if cluster_run else cluster_run_id,
                 cluster_mentions=list(mentions or []),
                 allow_unsafe_cli=allow_unsafe_cli,
             )
         finally:
             if cluster_run:
                 _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+            if str(agent_id or "main").strip().lower() == "main":
+                wakeup_run_id = cluster_run.run_id if cluster_run is not None else str(cluster_run_id or "").strip()
+                if wakeup_run_id:
+                    _schedule_cluster_parent_wakeup(manager, wakeup_run_id)
 
 
 async def stream_chat(
@@ -8693,6 +9008,7 @@ async def stream_chat(
     cluster: bool = False,
     mentions: list[dict[str, Any]] | None = None,
     execution_mode: str = "",
+    cluster_run_id: str = "",
     follow_current_conversation: bool = False,
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
     solo_mode: bool = False,
@@ -8709,9 +9025,11 @@ async def stream_chat(
     endless_mode: bool = False,
     endless_group_id: str = "",
     endless_parent_message_id: str = "",
+    internal_continuation: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     endless_requested = bool(endless_mode and not str(resume_stream_id or "").strip())
     session: UserSession | None = None
+    cluster_run = None
     try:
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
@@ -8770,6 +9088,7 @@ async def stream_chat(
                         include_trace=include_trace,
                         stream_protocol_version=normalized_stream_protocol_version,
                         endless_mode=endless_mode,
+                        internal_continuation=internal_continuation,
                     )
 
                 events = (
@@ -8796,7 +9115,13 @@ async def stream_chat(
                 return
             main_conversation_id = ""
             cluster_team_state: dict[str, Any] | None = None
-            if profile.cluster.enabled and str(agent_id or "main").strip().lower() == "main" and not solo_mode and not resume_stream_id:
+            if (
+                profile.cluster.enabled
+                and str(agent_id or "main").strip().lower() == "main"
+                and not solo_mode
+                and not resume_stream_id
+                and not internal_continuation
+            ):
                 main_conversation_id, cluster_team_state = await _ensure_cluster_main_conversation(
                     manager,
                     profile,
@@ -8814,7 +9139,7 @@ async def stream_chat(
                 allow_unsafe_cli=allow_unsafe_cli,
                 agent_id=agent_id,
                 solo_mode=solo_mode,
-                internal_continuation=bool(resume_stream_id),
+                internal_continuation=internal_continuation or bool(resume_stream_id),
                 main_conversation_id=main_conversation_id,
                 team_state=cluster_team_state,
             )
@@ -8839,7 +9164,7 @@ async def stream_chat(
                         text,
                         request=attempt_request,
                         agent_id=agent_id,
-                        cluster_run_id=cluster_run.run_id if cluster_run else "",
+                        cluster_run_id=cluster_run.run_id if cluster_run else str(cluster_run_id or "").strip(),
                         cluster_mentions=list(mentions or []),
                         allow_unsafe_cli=allow_unsafe_cli,
                         include_trace=include_trace,
@@ -8875,6 +9200,16 @@ async def stream_chat(
     except Exception as exc:  # pragma: no cover - defensive
         yield {"type": "error", "code": "internal_error", "message": str(exc)}
     finally:
+        if str(agent_id or "main").strip().lower() == "main":
+            wakeup_run_id = cluster_run.run_id if cluster_run is not None else str(cluster_run_id or "").strip()
+            if not wakeup_run_id and session is not None:
+                try:
+                    active_run = _find_active_cluster_run_for_session(alias, user_id, session)
+                    wakeup_run_id = str(active_run.run_id if active_run is not None else "").strip()
+                except Exception:
+                    wakeup_run_id = ""
+            if wakeup_run_id:
+                _schedule_cluster_parent_wakeup(manager, wakeup_run_id)
         if endless_requested and session is not None:
             _set_endless_session_state(session, active=False)
 
