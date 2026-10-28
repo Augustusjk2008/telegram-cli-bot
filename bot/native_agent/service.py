@@ -819,7 +819,8 @@ class NativeAgentService:
             )
             with session._lock:
                 session._execution_turn_id = turn_handle.turn_id
-            pending_translation = input_translation_pending(user_text, translation_config)
+            persist_input = not bool(getattr(turn_handle, "reused", False))
+            pending_translation = input_translation_pending(user_text, translation_config) if persist_input else None
             if pending_translation is not None:
                 fields = {"turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
                           "user_message_id": turn_handle.user_message_id, "user_translation": pending_translation}
@@ -828,8 +829,15 @@ class NativeAgentService:
                 else:
                     yield {"type": "status", **fields, "status": "正在翻译提问"}
             execution_text, user_translation = await prepare_chat_input(
-                text=user_text, session=session, history=history_service, turn=turn_handle, config=translation_config,
+                text=user_text,
+                session=session,
+                history=history_service,
+                turn=turn_handle,
+                config=translation_config,
+                persist_input=persist_input,
             )
+            if not persist_input:
+                user_translation = None
             if prompt_factory is not None:
                 prompt_text, fresh_session_prompt_text = prompt_factory(execution_text)
             elif translate_chat:

@@ -137,6 +137,7 @@ bash install.sh
 - Web sessions are isolated by bot, shared user domain, and agent; web accounts authorized for the same bot share the corresponding agent conversation.
 - Codex (exec / app-server), Claude, Antigravity, and DeepSeek Harness CLI sessions retain streaming text, status events, traces, and completion events. Model lists and parameters are saved separately for each CLI type.
 - The native Pi agent retains sessions, tool calls, permission requests, context usage, and execution details.
+- Endless mode stores retryable errors and `Continue` events in one durable turn. Legacy grouped turns are consolidated in the database when history storage is opened, so reloading history returns the turn directly with its continue count.
 
 ### SSH remote workspaces
 

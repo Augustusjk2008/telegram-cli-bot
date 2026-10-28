@@ -6970,13 +6970,21 @@ async def _stream_cli_chat(
                 session.deepseek_session_id = binding
             if binding_changed:
                 session.persist()
-        pending_translation = input_translation_pending(text, translation_config)
+        persist_input = not bool(getattr(turn_handle, "reused", False))
+        pending_translation = input_translation_pending(text, translation_config) if persist_input else None
         if pending_translation is not None:
             yield {"type": "status", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
                    "user_message_id": turn_handle.user_message_id, "user_translation": pending_translation, "status": "正在翻译提问"}
         execution_text, user_translation = await prepare_chat_input(
-            text=text, session=session, history=service, turn=turn_handle, config=translation_config,
+            text=text,
+            session=session,
+            history=service,
+            turn=turn_handle,
+            config=translation_config,
+            persist_input=persist_input,
         )
+        if not persist_input:
+            user_translation = None
         base_prompt_text = build_plan_mode_prompt(execution_text, cluster_active=bool(cluster_run_id)) if is_plan_mode else execution_text
         prompt_text, done_session = prepare_prompt()
         stage_durations["db_ms"] += max(

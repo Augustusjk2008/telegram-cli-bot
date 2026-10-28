@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
-from bot.web.chat_store import ChatStore
+from bot.web.chat_store import ChatStore, clear_chat_store_prepare_cache
 from bot.web import api_service
 
 
@@ -66,7 +67,8 @@ def test_endless_group_and_events_survive_history_reload(tmp_path: Path) -> None
     store.complete_turn(first, content="第一次失败", completion_state="error")
     group_id = store.ensure_endless_group(first.assistant_message_id, "endless_group_1")
 
-    # The continuation turn receives the same durable group at creation time.
+    # The continuation reopens the original durable turn instead of creating
+    # another user/assistant pair.
     retry = store.begin_turn(
         bot_id=1,
         bot_alias="main",
@@ -80,6 +82,7 @@ def test_endless_group_and_events_survive_history_reload(tmp_path: Path) -> None
         conversation_id=first.conversation_id,
         endless_group_id=group_id,
     )
+    assert retry == first
     store.complete_turn(retry, content="第二次失败", completion_state="error")
     store.append_endless_event(
         turn_id=retry.turn_id,
@@ -92,10 +95,71 @@ def test_endless_group_and_events_survive_history_reload(tmp_path: Path) -> None
 
     history = store.list_messages(first.conversation_id)
     assistants = [item for item in history if item["role"] == "assistant"]
+    users = [item for item in history if item["role"] == "user"]
+    assert len(users) == 1
+    assert len(assistants) == 1
     assert assistants[0]["meta"]["endless_group_id"] == group_id
-    assert [event["kind"] for event in assistants[0]["meta"]["endless_events"]] == ["error"]
-    assert assistants[1]["meta"]["endless_group_id"] == group_id
-    assert [event["kind"] for event in assistants[1]["meta"]["endless_events"]] == ["error", "continue"]
+    assert [event["kind"] for event in assistants[0]["meta"]["endless_events"]] == [
+        "error", "error", "continue",
+    ]
+    assert assistants[0]["meta"]["endless_continue_count"] == 1
+
+
+def test_legacy_endless_group_is_consolidated_in_database(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    first = _begin(store, text="原始问题")
+    store.complete_turn(first, content="第一次失败", completion_state="error")
+    retry = _begin(store, conversation_id=first.conversation_id, text="Continue")
+    store.complete_turn(retry, content="第二次失败", completion_state="error")
+    group_id = "legacy_endless_group"
+    with store._connect_for_write() as conn:
+        conn.execute(
+            """
+            UPDATE turns
+            SET endless_group_id = ?, endless_events_json = ?
+            WHERE id = ?
+            """,
+            (
+                group_id,
+                json.dumps([{"kind": "error", "attempt": 0, "text": "第一次失败"}], ensure_ascii=False),
+                first.turn_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE turns
+            SET endless_group_id = ?, endless_events_json = ?
+            WHERE id = ?
+            """,
+            (
+                group_id,
+                json.dumps([
+                    {"kind": "error", "attempt": 1, "text": "第二次失败"},
+                    {"kind": "continue", "attempt": 1, "text": "Continue"},
+                ], ensure_ascii=False),
+                retry.turn_id,
+            ),
+        )
+    store.append_trace_event(first.turn_id, kind="event", summary="first process")
+    store.append_trace_event(retry.turn_id, kind="event", summary="retry process")
+
+    clear_chat_store_prepare_cache()
+    migrated = ChatStore(tmp_path)
+    history = migrated.list_messages(first.conversation_id)
+    assistants = [item for item in history if item["role"] == "assistant"]
+    assert len([item for item in history if item["role"] == "user"]) == 1
+    assert len(assistants) == 1
+    assert assistants[0]["content"] == "第二次失败"
+    assert [event["kind"] for event in assistants[0]["meta"]["endless_events"]] == [
+        "error", "error", "continue",
+    ]
+    assert assistants[0]["meta"]["trace_count"] == 2
+    with migrated._connect(create=False) as conn:
+        assert conn is not None
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM turns WHERE conversation_id = ?",
+            (first.conversation_id,),
+        ).fetchone()["count"] == 1
 
 
 def test_append_user_message_to_active_turn_keeps_scope_and_revision(tmp_path: Path) -> None:

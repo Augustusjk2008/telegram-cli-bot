@@ -44,23 +44,30 @@ def input_translation_pending(text: str, config: TranslationConfig | None) -> di
 
 
 async def prepare_chat_input(
-    *, text: str, session: Any, history: Any, turn: Any, config: TranslationConfig | None,
+    *,
+    text: str,
+    session: Any,
+    history: Any,
+    turn: Any,
+    config: TranslationConfig | None,
+    persist_input: bool = True,
 ) -> tuple[str, dict[str, Any] | None]:
     execution_text, translated = await translate_chat_input(
         text=text,
         session=session,
         config=config,
-        history=history,
-        message_id=turn.user_message_id,
+        history=history if persist_input else None,
+        message_id=turn.user_message_id if persist_input else "",
     )
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    await asyncio.to_thread(
-        history.update_message_translation,
-        turn.user_message_id,
-        source_digest=digest,
-        translation=translated,
-        agent_input_text=execution_text,
-    )
+    if persist_input:
+        await asyncio.to_thread(
+            history.update_message_translation,
+            turn.user_message_id,
+            source_digest=digest,
+            translation=translated,
+            agent_input_text=execution_text,
+        )
     check_chat_stopped(session)
     return execution_text, translated
 

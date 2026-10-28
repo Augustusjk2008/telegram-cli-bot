@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -42,6 +42,7 @@ class ChatTurnHandle:
     turn_id: str
     user_message_id: str
     assistant_message_id: str
+    reused: bool = field(default=False, compare=False)
 
 
 def _utc_now() -> str:
@@ -680,6 +681,314 @@ class ChatStore:
             ON conversations(cluster_parent_conversation_id, agent_id, cluster_assignment_revision, archived_at)
             """
         )
+        self._consolidate_all_endless_groups(conn)
+
+    @staticmethod
+    def _normalize_endless_event(event: Any, sequence: int) -> dict[str, Any] | None:
+        if not isinstance(event, dict):
+            return None
+        kind = str(event.get("kind") or "").strip().lower()
+        text = str(event.get("text") or "").strip()
+        if kind not in {"error", "continue"} or not text:
+            return None
+        try:
+            attempt = max(0, int(event.get("attempt") or 0))
+        except (TypeError, ValueError):
+            attempt = 0
+        normalized: dict[str, Any] = {
+            "kind": kind,
+            "sequence": max(1, int(sequence)),
+            "attempt": attempt,
+            "text": text,
+        }
+        code = str(event.get("code") or "").strip()
+        if code:
+            normalized["code"] = code
+        return normalized
+
+    @classmethod
+    def _merge_endless_events(cls, *event_lists: Any) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[str, int, str, str]] = set()
+        for event_list in event_lists:
+            if not isinstance(event_list, list):
+                continue
+            for raw_event in event_list:
+                event = cls._normalize_endless_event(raw_event, len(merged) + 1)
+                if event is None:
+                    continue
+                key = (
+                    str(event["kind"]),
+                    int(event["attempt"]),
+                    str(event.get("code") or ""),
+                    str(event["text"]),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                event["sequence"] = len(merged) + 1
+                merged.append(event)
+        return merged
+
+    def _consolidate_endless_group_conn(
+        self,
+        conn: sqlite3.Connection,
+        conversation_id: str,
+        group_id: str,
+    ) -> bool:
+        normalized_conversation_id = str(conversation_id or "").strip()
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_conversation_id or not normalized_group_id:
+            return False
+        rows = conn.execute(
+            """
+            SELECT
+                t.id,
+                t.seq,
+                t.user_message_id,
+                t.assistant_message_id,
+                t.assistant_state,
+                t.completion_state,
+                t.native_provider,
+                t.native_session_id,
+                t.started_at,
+                t.updated_at,
+                t.completed_at,
+                t.error_code,
+                t.error_message,
+                t.context_usage_json,
+                t.endless_events_json,
+                t.workspace_history_head,
+                t.workspace_history_index,
+                a.content AS assistant_content,
+                a.translation_json AS assistant_translation_json,
+                a.agent_input_text AS assistant_agent_input_text,
+                a.state AS assistant_message_state,
+                a.updated_at AS assistant_updated_at
+            FROM turns AS t
+            JOIN messages AS a ON a.id = t.assistant_message_id
+            WHERE t.conversation_id = ?
+              AND t.endless_group_id = ?
+              AND t.workspace_history_discarded_at IS NULL
+            ORDER BY t.seq ASC, t.id ASC
+            """,
+            (normalized_conversation_id, normalized_group_id),
+        ).fetchall()
+        if len(rows) <= 1:
+            return False
+
+        root = rows[0]
+        children = rows[1:]
+        now = _utc_now()
+
+        event_lists: list[Any] = []
+        try:
+            root_events = _parse_json(root["endless_events_json"])
+        except (TypeError, json.JSONDecodeError):
+            root_events = None
+        if isinstance(root_events, list) and root_events:
+            event_lists.append(root_events)
+        if not event_lists and str(root["assistant_message_state"] or "") == "error":
+            event_lists.append([{
+                "kind": "error",
+                "attempt": 0,
+                "text": str(root["assistant_content"] or "").strip(),
+            }])
+        for child in children:
+            try:
+                child_events = _parse_json(child["endless_events_json"])
+            except (TypeError, json.JSONDecodeError):
+                child_events = None
+            if isinstance(child_events, list) and child_events:
+                event_lists.append(child_events)
+            elif str(child["assistant_message_state"] or "") == "error":
+                event_lists.append([{
+                    "kind": "error",
+                    "attempt": max(0, int(child["seq"] or 0) - int(root["seq"] or 0)),
+                    "text": str(child["assistant_content"] or "").strip(),
+                }])
+        merged_events = self._merge_endless_events(*event_lists)
+
+        latest = rows[-1]
+        latest_content = ""
+        latest_translation_json = None
+        latest_agent_input_text = None
+        for item in reversed(rows):
+            if str(item["assistant_content"] or "").strip():
+                latest_content = str(item["assistant_content"] or "")
+                latest_translation_json = item["assistant_translation_json"]
+                latest_agent_input_text = item["assistant_agent_input_text"]
+                break
+        if not latest_content:
+            latest_content = str(root["assistant_content"] or "")
+            latest_translation_json = root["assistant_translation_json"]
+            latest_agent_input_text = root["assistant_agent_input_text"]
+
+        latest_message_state = str(latest["assistant_message_state"] or latest["assistant_state"] or "streaming")
+        latest_completion_state = str(latest["completion_state"] or "streaming")
+        native_provider = str(latest["native_provider"] or root["native_provider"] or "").strip() or None
+        native_session_id = str(latest["native_session_id"] or root["native_session_id"] or "").strip() or None
+        context_usage_json = latest["context_usage_json"] or root["context_usage_json"]
+        workspace_history_head = latest["workspace_history_head"] or root["workspace_history_head"]
+        workspace_history_index = (
+            latest["workspace_history_index"]
+            if latest["workspace_history_index"] is not None
+            else root["workspace_history_index"]
+        )
+        completed_at = latest["completed_at"]
+        if not completed_at and latest_completion_state == "completed":
+            completed_at = latest["updated_at"]
+
+        conn.execute(
+            """
+            UPDATE turns
+            SET assistant_state = ?,
+                completion_state = ?,
+                native_provider = ?,
+                native_session_id = ?,
+                updated_at = ?,
+                completed_at = ?,
+                error_code = ?,
+                error_message = ?,
+                context_usage_json = ?,
+                endless_events_json = ?,
+                workspace_history_head = ?,
+                workspace_history_index = ?
+            WHERE id = ?
+            """,
+            (
+                latest_message_state,
+                latest_completion_state,
+                native_provider,
+                native_session_id,
+                str(latest["updated_at"] or now),
+                completed_at,
+                latest["error_code"],
+                latest["error_message"],
+                context_usage_json,
+                json.dumps(merged_events, ensure_ascii=False) if merged_events else None,
+                workspace_history_head,
+                workspace_history_index,
+                str(root["id"]),
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE messages
+            SET translation_json = ?,
+                agent_input_text = ?,
+                content = ?,
+                state = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                latest_translation_json,
+                latest_agent_input_text,
+                latest_content,
+                latest_message_state,
+                str(latest["assistant_updated_at"] or latest["updated_at"] or now),
+                str(root["assistant_message_id"]),
+            ),
+        )
+
+        next_ordinal_row = conn.execute(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
+            (str(root["id"]),),
+        ).fetchone()
+        next_ordinal = int(next_ordinal_row["next_ordinal"] or 1)
+        for child in children:
+            trace_rows = conn.execute(
+                """
+                SELECT kind, raw_type, title, tool_name, call_id, summary, payload_json, created_at
+                FROM trace_events
+                WHERE turn_id = ?
+                ORDER BY ordinal ASC, created_at ASC, id ASC
+                """,
+                (str(child["id"]),),
+            ).fetchall()
+            for trace_row in trace_rows:
+                conn.execute(
+                    """
+                    INSERT INTO trace_events (
+                        id, turn_id, ordinal, kind, raw_type, title, tool_name,
+                        call_id, summary, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"trace_{uuid.uuid4().hex}",
+                        str(root["id"]),
+                        next_ordinal,
+                        trace_row["kind"],
+                        trace_row["raw_type"],
+                        trace_row["title"],
+                        trace_row["tool_name"],
+                        trace_row["call_id"],
+                        trace_row["summary"],
+                        trace_row["payload_json"],
+                        trace_row["created_at"],
+                    ),
+                )
+                next_ordinal += 1
+
+        child_message_ids = [
+            str(message_id)
+            for child in children
+            for message_id in (child["user_message_id"], child["assistant_message_id"])
+            if str(message_id or "").strip()
+        ]
+        child_turn_ids = [str(child["id"]) for child in children]
+        placeholders = ", ".join("?" for _ in child_turn_ids)
+        conn.execute(f"DELETE FROM turns WHERE id IN ({placeholders})", child_turn_ids)
+
+        self._record_message_changes(
+            conn,
+            normalized_conversation_id,
+            [str(root["assistant_message_id"])],
+            operation="upsert",
+            now=now,
+        )
+        self._record_message_changes(
+            conn,
+            normalized_conversation_id,
+            child_message_ids,
+            operation="delete",
+            now=now,
+        )
+        conn.execute(
+            """
+            UPDATE conversations
+            SET last_message_preview = ?,
+                message_count = (SELECT COUNT(*) FROM messages WHERE conversation_id = ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                self._summarize_preview(latest_content),
+                normalized_conversation_id,
+                now,
+                normalized_conversation_id,
+            ),
+        )
+        return True
+
+    def _consolidate_all_endless_groups(self, conn: sqlite3.Connection) -> None:
+        groups = conn.execute(
+            """
+            SELECT conversation_id, endless_group_id
+            FROM turns
+            WHERE COALESCE(TRIM(endless_group_id), '') != ''
+              AND workspace_history_discarded_at IS NULL
+            GROUP BY conversation_id, endless_group_id
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        for row in groups:
+            self._consolidate_endless_group_conn(
+                conn,
+                str(row["conversation_id"]),
+                str(row["endless_group_id"]),
+            )
 
     def _fail_interrupted_translations(self, conn: sqlite3.Connection) -> None:
         # Runs once per database per process, before any new translation can be saved.
@@ -2139,6 +2448,90 @@ class ChatStore:
                     native_provider=native_provider,
                     agent_prompt_hash=agent_prompt_hash,
                 )
+
+            if normalized_endless_group_id:
+                self._consolidate_endless_group_conn(
+                    conn,
+                    resolved_conversation_id,
+                    normalized_endless_group_id,
+                )
+                existing_endless_turn = conn.execute(
+                    """
+                    SELECT id, user_message_id, assistant_message_id
+                    FROM turns
+                    WHERE conversation_id = ?
+                      AND endless_group_id = ?
+                      AND workspace_history_discarded_at IS NULL
+                    ORDER BY seq ASC, id ASC
+                    LIMIT 1
+                    """,
+                    (resolved_conversation_id, normalized_endless_group_id),
+                ).fetchone()
+                if existing_endless_turn is not None:
+                    reused_turn_id = str(existing_endless_turn["id"])
+                    reused_assistant_message_id = str(existing_endless_turn["assistant_message_id"])
+                    revision = self._next_conversation_revision(conn, resolved_conversation_id)
+                    conn.execute(
+                        """
+                        UPDATE turns
+                        SET assistant_state = 'streaming',
+                            completion_state = 'streaming',
+                            native_session_id = NULL,
+                            updated_at = ?,
+                            completed_at = NULL,
+                            error_code = NULL,
+                            error_message = NULL,
+                            context_usage_json = NULL
+                        WHERE id = ?
+                        """,
+                        (now, reused_turn_id),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE messages
+                        SET translation_json = NULL,
+                            agent_input_text = NULL,
+                            content = '',
+                            state = 'streaming',
+                            updated_revision = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (revision, now, reused_assistant_message_id),
+                    )
+                    self._record_message_changes(
+                        conn,
+                        resolved_conversation_id,
+                        [reused_assistant_message_id],
+                        operation="upsert",
+                        revision=revision,
+                        now=now,
+                    )
+                    conn.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                        (now, resolved_conversation_id),
+                    )
+                    handle = ChatTurnHandle(
+                        conversation_id=resolved_conversation_id,
+                        turn_id=reused_turn_id,
+                        user_message_id=str(existing_endless_turn["user_message_id"]),
+                        assistant_message_id=reused_assistant_message_id,
+                        reused=True,
+                    )
+                    elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
+                    diag_log_slow(
+                        logger,
+                        "chat_store",
+                        elapsed_ms,
+                        op="begin_endless_turn",
+                        bot_id=bot_id,
+                        alias=bot_alias,
+                        agent=agent_id,
+                        turn_id=reused_turn_id,
+                        conversation_id=resolved_conversation_id,
+                    )
+                    return handle
+
             revision = self._next_conversation_revision(conn, resolved_conversation_id)
             conn.execute(
                 """
@@ -2547,6 +2940,11 @@ class ChatStore:
                     operation="upsert",
                     now=now,
                 )
+            self._consolidate_endless_group_conn(
+                conn,
+                str(row["conversation_id"]),
+                effective_group_id,
+            )
             return effective_group_id
 
     def append_endless_event(

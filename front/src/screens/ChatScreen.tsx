@@ -107,7 +107,6 @@ import {
   type ChatStreamRenderEvent,
 } from "../stream/chatStreamBatch";
 import { HistoryRevisionState } from "../chat/historyDeltaState";
-import { mergeEndlessHistoryMessages } from "../chat/endlessHistory";
 import { resolveMessageVirtualKey } from "../chat/messageVirtualKey";
 import {
   findActiveAssistantIndex,
@@ -1348,7 +1347,6 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
       && !incomingIds.has(item.id) && !(item.turnId && incomingTurns.has(getMessageTurnRoleKey(item)))
     ))];
   }
-  nextItems = mergeEndlessHistoryMessages(nextItems);
   if (previousItems.length === 0 || nextItems.length === 0) {
     return nextItems;
   }
