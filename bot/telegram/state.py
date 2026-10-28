@@ -169,8 +169,7 @@ class TelegramState:
                     last_error TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (bot_id, notification_key),
-                    UNIQUE (bot_id, turn_id, chat_id)
+                    PRIMARY KEY (bot_id, notification_key)
                 )
             """)
             self._db.execute("""
@@ -202,6 +201,106 @@ class TelegramState:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN parse_mode TEXT NOT NULL DEFAULT ''")
                 if table == "completion_notifications" and "full_parts_json" not in columns:
                     self._db.execute("ALTER TABLE completion_notifications ADD COLUMN full_parts_json TEXT")
+            self._migrate_completion_notification_schema()
+
+    def _migrate_completion_notification_schema(self) -> None:
+        """Allow multiple completion generations for one persisted turn."""
+        legacy_unique = False
+        for row in self._db.execute("PRAGMA index_list(completion_notifications)").fetchall():
+            if not bool(row[2]):
+                continue
+            index_name = str(row[1]).replace('"', '""')
+            columns = [
+                str(index_row[2])
+                for index_row in self._db.execute(f'PRAGMA index_info("{index_name}")').fetchall()
+            ]
+            if columns == ["bot_id", "turn_id", "chat_id"]:
+                legacy_unique = True
+                break
+        if not legacy_unique:
+            return
+
+        self._db.execute("DROP INDEX IF EXISTS completion_notifications_recovery")
+        self._db.execute(
+            "ALTER TABLE completion_notification_parts RENAME TO completion_notification_parts_legacy"
+        )
+        self._db.execute(
+            "ALTER TABLE completion_notifications RENAME TO completion_notifications_legacy"
+        )
+        self._db.execute("""
+            CREATE TABLE completion_notifications (
+                bot_id TEXT NOT NULL,
+                notification_key TEXT NOT NULL,
+                chat_id INTEGER NOT NULL,
+                telegram_user_id INTEGER NOT NULL DEFAULT 0,
+                shared_user_id INTEGER NOT NULL DEFAULT 0,
+                alias TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT 'main',
+                conversation_id TEXT NOT NULL DEFAULT '',
+                turn_id TEXT NOT NULL DEFAULT '',
+                assistant_message_id TEXT NOT NULL DEFAULT '',
+                parts_json TEXT NOT NULL,
+                reply_markup_json TEXT,
+                parse_mode TEXT NOT NULL DEFAULT '',
+                full_parts_json TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                retry_at REAL NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (bot_id, notification_key)
+            )
+        """)
+        self._db.execute("""
+            CREATE TABLE completion_notification_parts (
+                bot_id TEXT NOT NULL,
+                notification_key TEXT NOT NULL,
+                part_index INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                message_id INTEGER,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                retry_at REAL NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (bot_id, notification_key, part_index),
+                FOREIGN KEY (bot_id, notification_key)
+                    REFERENCES completion_notifications (bot_id, notification_key)
+                    ON DELETE CASCADE
+            )
+        """)
+        self._db.execute("""
+            INSERT INTO completion_notifications (
+                bot_id, notification_key, chat_id, telegram_user_id, shared_user_id,
+                alias, agent_id, conversation_id, turn_id, assistant_message_id,
+                parts_json, reply_markup_json, parse_mode, full_parts_json, status,
+                retry_at, attempts, last_error, created_at, updated_at
+            )
+            SELECT
+                bot_id, notification_key, chat_id, telegram_user_id, shared_user_id,
+                alias, agent_id, conversation_id, turn_id, assistant_message_id,
+                parts_json, reply_markup_json, parse_mode, full_parts_json, status,
+                retry_at, attempts, last_error, created_at, updated_at
+            FROM completion_notifications_legacy
+        """)
+        self._db.execute("""
+            INSERT INTO completion_notification_parts (
+                bot_id, notification_key, part_index, text, status, message_id,
+                attempts, retry_at, last_error, created_at, updated_at
+            )
+            SELECT
+                bot_id, notification_key, part_index, text, status, message_id,
+                attempts, retry_at, last_error, created_at, updated_at
+            FROM completion_notification_parts_legacy
+        """)
+        self._db.execute("DROP TABLE completion_notification_parts_legacy")
+        self._db.execute("DROP TABLE completion_notifications_legacy")
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS completion_notifications_recovery "
+            "ON completion_notifications (bot_id, status, retry_at, created_at)"
+        )
 
     def next_offset(self) -> int:
         row = self._db.execute(
@@ -689,12 +788,6 @@ class TelegramState:
                 "WHERE bot_id = ? AND notification_key = ?",
                 (self.bot_id, key),
             ).fetchone()
-            if existing is None and normalized_turn:
-                existing = self._db.execute(
-                    "SELECT notification_key FROM completion_notifications "
-                    "WHERE bot_id = ? AND turn_id = ? AND chat_id = ?",
-                    (self.bot_id, normalized_turn, int(chat_id)),
-                ).fetchone()
             if existing is None:
                 raise
             return str(existing[0])

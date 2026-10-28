@@ -31,6 +31,9 @@ class TelegramCompletionNotification:
     completion_state: str = "completed"
     context_usage: dict[str, Any] | None = None
     source_chat_id: int | None = None
+    endless_group_id: str = ""
+    terminal_at: str = ""
+    endless_completion_token: str = ""
 
 
 CompletionNotification = TelegramCompletionNotification
@@ -291,6 +294,17 @@ class TelegramCompletionNotifier:
             ], [web_button]],
         }
 
+    @staticmethod
+    def _notification_key(completion: TelegramCompletionNotification, chat_id: int) -> str:
+        group_id = str(completion.endless_group_id or "").strip()
+        if group_id:
+            completion_identity = str(
+                completion.terminal_at or completion.endless_completion_token or group_id
+            ).strip()
+            if completion_identity:
+                return f"{completion.turn_id}:{chat_id}:{completion_identity}"
+        return f"{completion.turn_id}:{chat_id}"
+
     async def notify_completion(
         self,
         completion: TelegramCompletionNotification | None = None,
@@ -313,7 +327,7 @@ class TelegramCompletionNotifier:
         notification_ids: list[str] = []
         for chat_id, telegram_user_id, bound, record in self._recipients(completion):
             shared_user_id = int(record.get("shared_user_id") or telegram_user_id) if record else telegram_user_id
-            key = f"{completion.turn_id}:{chat_id}"
+            key = self._notification_key(completion, chat_id)
             existing = self.state.get_completion_notification(key)
             if existing is not None:
                 notification_ids.append(key)

@@ -232,7 +232,8 @@ class ChatNotificationService:
     ) -> dict[str, Any] | None:
         if not self.enabled:
             return None
-        key = dedupe_key or ":".join(
+        normalized_dedupe_key = str(dedupe_key or "").strip()
+        key = normalized_dedupe_key or ":".join(
             [
                 str(account_id or ""),
                 str(bot_alias or ""),

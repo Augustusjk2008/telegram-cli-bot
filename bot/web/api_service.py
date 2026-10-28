@@ -8332,6 +8332,27 @@ async def _notify_telegram_completion(
             return
         message = event.get("message") if isinstance(event.get("message"), dict) else {}
         message_meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+        endless_group_id = str(
+            message_meta.get("endless_group_id")
+            or message.get("endless_group_id")
+            or event.get("endless_group_id")
+            or event.get("endlessGroupId")
+            or ""
+        ).strip()
+        terminal_at = str(
+            message.get("updated_at")
+            or message.get("updatedAt")
+            or message_meta.get("terminal_at")
+            or event.get("terminal_at")
+            or event.get("terminalAt")
+            or ""
+        ).strip()
+        endless_completion_token = str(
+            event.get("endless_completion_token")
+            or message_meta.get("endless_completion_token")
+            or event.get("completion_token")
+            or ""
+        ).strip()
         session = event.get("session") if isinstance(event.get("session"), dict) else {}
         conversation_id = str(
             event.get("conversation_id")
@@ -8376,6 +8397,9 @@ async def _notify_telegram_completion(
                 completion_state=completion_state,
                 context_usage=context_usage,
                 source_chat_id=source_chat_id,
+                endless_group_id=endless_group_id,
+                terminal_at=terminal_at,
+                endless_completion_token=endless_completion_token,
             )
         )
     except asyncio.CancelledError:
@@ -8553,6 +8577,30 @@ def _normalize_endless_group_id(value: Any) -> str:
     return normalized
 
 
+def _with_endless_completion_identity(
+    event: dict[str, Any],
+    *,
+    endless_group_id: str,
+    completion_token: str,
+) -> dict[str, Any]:
+    if str(event.get("type") or "") != "done":
+        return event
+    prepared = dict(event)
+    prepared["endless_group_id"] = endless_group_id
+    prepared["endless_completion_token"] = str(
+        event.get("endless_completion_token") or completion_token
+    )
+    message = event.get("message") if isinstance(event.get("message"), dict) else None
+    if message is not None:
+        prepared_message = dict(message)
+        meta = dict(message.get("meta") or {}) if isinstance(message.get("meta"), dict) else {}
+        meta.setdefault("endless_group_id", endless_group_id)
+        meta.setdefault("endless_completion_token", prepared["endless_completion_token"])
+        prepared_message["meta"] = meta
+        prepared["message"] = prepared_message
+    return prepared
+
+
 async def _stream_endless_attempts(
     *,
     session: UserSession,
@@ -8607,6 +8655,7 @@ async def _stream_endless_attempts(
     while True:
         retry_event: dict[str, Any] | None = None
         native_retry_pending: dict[str, Any] | None = None
+        completion_token = f"endless_completion_{uuid.uuid4().hex}"
         events = attempt_factory(current_text, current_request)
         try:
             async with aclosing(events):
@@ -8630,6 +8679,12 @@ async def _stream_endless_attempts(
                             break
                         retry_event = _endless_retry_event_from_error(event)
                         break
+                    if str(event.get("type") or "") == "done":
+                        event = _with_endless_completion_identity(
+                            event,
+                            endless_group_id=endless_group_id,
+                            completion_token=completion_token,
+                        )
                     yield event
                     if str(event.get("type") or "") in {"done", "error"}:
                         return

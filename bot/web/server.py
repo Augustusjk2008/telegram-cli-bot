@@ -2262,6 +2262,7 @@ class WebApiServer:
         alias: str,
         agent_id: str,
         data: dict[str, Any],
+        account_id: str = "",
         fallback_status: str = "success",
     ) -> dict[str, Any]:
         message = data.get("message") if isinstance(data.get("message"), dict) else {}
@@ -2292,13 +2293,28 @@ class WebApiServer:
         terminal_at = str(
             message.get("updated_at")
             or message.get("updatedAt")
+            or meta.get("terminal_at")
             or data.get("terminal_at")
             or data.get("terminalAt")
             or data.get("completed_at")
             or data.get("completedAt")
             or ""
         ).strip()
-        return {
+        endless_group_id = str(
+            meta.get("endless_group_id")
+            or message.get("endless_group_id")
+            or data.get("endless_group_id")
+            or data.get("endlessGroupId")
+            or ""
+        ).strip()
+        endless_completion_token = str(
+            meta.get("endless_completion_token")
+            or message.get("endless_completion_token")
+            or data.get("endless_completion_token")
+            or data.get("completion_token")
+            or ""
+        ).strip()
+        payload = {
             "bot_alias": alias,
             "agent_id": agent_id,
             "conversation_id": conversation_id,
@@ -2309,6 +2325,21 @@ class WebApiServer:
             "url": self._chat_notification_url(alias, conversation_id),
             "terminal_at": terminal_at,
         }
+        if endless_group_id:
+            completion_identity = terminal_at or endless_completion_token
+            if completion_identity:
+                payload["dedupe_key"] = ":".join(
+                    [
+                        "endless",
+                        str(account_id or ""),
+                        str(alias or ""),
+                        str(agent_id or "main"),
+                        conversation_id,
+                        endless_group_id,
+                        completion_identity,
+                    ]
+                )
+        return payload
 
     async def _safe_notify_chat_terminal_event(
         self,
@@ -2324,6 +2355,7 @@ class WebApiServer:
                 alias=alias,
                 agent_id=agent_id,
                 data=data,
+                account_id=auth.account_id,
                 fallback_status=fallback_status,
             )
             if payload.get("status") == "cancelled":
