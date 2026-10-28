@@ -212,6 +212,47 @@ def test_supervisor_follows_authenticated_state_handoff_after_storage_move(insta
     assert not pointer.exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows venv launcher behavior")
+def test_supervisor_accepts_windows_venv_launcher_pid_handoff(installation, monkeypatch, tmp_path):
+    from bot.update_state import write_host_handoff
+
+    root, store = installation
+    pointer = tmp_path / "handoff.json"
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF", str(pointer))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", "venv-nonce")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_SUPERVISOR_PID", str(os.getpid()))
+    write_host_handoff(store.state_path)
+
+    child = Child()
+    child.pid = 99999998
+    child.update_handoff_path = pointer
+    child.update_handoff_token = "venv-nonce"
+    current = runner._store_after_host_exit(root, store, child, runner.RESTART_EXIT_CODE)
+
+    assert current.state_path == store.state_path
+    assert not pointer.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows venv launcher behavior")
+def test_supervisor_rejects_windows_venv_handoff_from_another_supervisor(installation, monkeypatch, tmp_path):
+    from bot.update_state import write_host_handoff
+
+    root, store = installation
+    pointer = tmp_path / "handoff.json"
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF", str(pointer))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", "venv-nonce")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_SUPERVISOR_PID", str(os.getpid() + 1))
+    write_host_handoff(store.state_path)
+
+    child = Child()
+    child.pid = 99999998
+    child.update_handoff_path = pointer
+    child.update_handoff_token = "venv-nonce"
+    with pytest.raises(RuntimeError, match="handoff identity mismatch"):
+        runner._store_after_host_exit(root, store, child, runner.RESTART_EXIT_CODE)
+    assert pointer.exists()
+
+
 def test_official_child_registers_current_storage_location(installation, monkeypatch, tmp_path):
     from bot.update_state import begin_host_execution, FileLock, UpdateConflict
     root, old_store = installation

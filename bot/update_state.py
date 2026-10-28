@@ -41,8 +41,13 @@ def write_host_handoff(state_file, job_id=""):
         return
     path = Path(path_text)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"state_file": str(Path(state_file).resolve()), "job_id": job_id,
-               "host_pid": os.getpid(), "token": os.environ.get("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", "")}
+    payload = {
+        "state_file": str(Path(state_file).resolve()),
+        "job_id": job_id,
+        "host_pid": os.getpid(),
+        "supervisor_pid": os.environ.get("CLI_BRIDGE_UPDATE_SUPERVISOR_PID", ""),
+        "token": os.environ.get("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", ""),
+    }
     fd, name = tempfile.mkstemp(prefix="handoff-", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

@@ -207,7 +207,19 @@ def _store_after_host_exit(repo_root: Path, store, child, code: int):
     if pointer is None or not Path(pointer).is_file():
         return store
     payload = json.loads(Path(pointer).read_text(encoding="utf-8"))
-    if payload.get("host_pid") != child.pid or not secrets.compare_digest(
+    try:
+        host_pid = int(payload.get("host_pid"))
+    except (TypeError, ValueError):
+        host_pid = 0
+    host_pid_matches = host_pid == child.pid
+    if not host_pid_matches and host_pid > 0 and os.name == "nt":
+        # Windows venv\Scripts\python.exe can be a redirector. Popen tracks
+        # that launcher while the handoff is written by the final interpreter.
+        supervisor_pid = str(payload.get("supervisor_pid", "")).strip()
+        # Older hosts do not emit supervisor_pid; their per-child token still
+        # authenticates this handoff.
+        host_pid_matches = not supervisor_pid or supervisor_pid == str(os.getpid())
+    if not host_pid_matches or not secrets.compare_digest(
             str(payload.get("token", "")), child.update_handoff_token):
         raise RuntimeError("Host state handoff identity mismatch")
     current = open_store(repo_root, payload["state_file"])
