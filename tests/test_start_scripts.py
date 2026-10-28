@@ -73,6 +73,14 @@ raise SystemExit(code)
     return root, store, env
 
 
+def test_source_launchers_do_not_build_frontend_on_startup():
+    for name in ("start.ps1", "start.sh"):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        assert "npm run build" not in source
+        assert "Sync-FrontendAssets" not in source
+        assert "sync_frontend_assets" not in source
+
+
 @pytest.mark.parametrize("codes", [[0], [75, 0], [76]])
 @pytest.mark.parametrize("shell", ["powershell", "bash"])
 def test_official_source_entry_runs_simulated_host_and_handoffs(simulated_install, codes, shell, tmp_path):

@@ -320,82 +320,6 @@ run_python_startup_step() {
   return "$last_python_exit_code"
 }
 
-sync_frontend_assets() {
-  if is_truthy "${TCB_STARTUP_SKIP_DEP_SYNC:-}" || is_truthy "${TCB_STARTUP_SKIP_FRONTEND_BUILD:-}"; then
-    return 0
-  fi
-  if [[ ! -f "$SCRIPT_DIR/front/package.json" ]]; then
-    return 0
-  fi
-
-  if [[ -f "$SCRIPT_DIR/.update-manifest.json" ]] && ! is_truthy "${TCB_STARTUP_FORCE_FRONTEND_BUILD:-}"; then
-    if "$PYTHON_BIN" -c 'import sys; from bot.update_preparation import frontend_is_current; sys.exit(0 if frontend_is_current(sys.argv[1]) else 1)' "$SCRIPT_DIR"; then
-      return 0
-    fi
-  fi
-
-  local frontend_hash stamp_path build_script dist_index build_log
-  frontend_hash="$(
-    hash_startup_paths \
-      front/package.json \
-      front/package-lock.json \
-      front/index.html \
-      front/vite.config.ts \
-      front/scripts/precompress-assets.mjs \
-      front/tsconfig.json \
-      front/src \
-      front/public \
-      scripts/build_web_frontend.sh
-  )"
-  stamp_path="$STARTUP_STATE_DIR/frontend-build.sha256"
-  dist_index="$SCRIPT_DIR/front/dist/index.html"
-
-  if stamp_matches "$stamp_path" "$frontend_hash" && [[ -f "$dist_index" ]] && ! is_truthy "${TCB_STARTUP_FORCE_FRONTEND_BUILD:-}"; then
-    return 0
-  fi
-
-  if ! command -v npm >/dev/null 2>&1; then
-    fail "检测到前端资源需要重建，但未找到 npm。请先运行 bash install.sh 安装 Node.js 依赖。"
-    exit 1
-  fi
-
-  info "检测到前端源码变化，正在构建前端..."
-  build_script="$SCRIPT_DIR/scripts/build_web_frontend.sh"
-  build_log="$(mktemp "${TMPDIR:-/tmp}/tcb-frontend-build.XXXXXX")"
-  if [[ -f "$build_script" ]]; then
-    if ! bash "$build_script" >"$build_log" 2>&1; then
-      cat "$build_log" >&2
-      rm -f "$build_log"
-      return 1
-    fi
-  else
-    if ! (cd "$SCRIPT_DIR/front" && npm run build) >"$build_log" 2>&1; then
-      cat "$build_log" >&2
-      warn "前端构建失败，正在安装依赖后重试一次..."
-      if ! (cd "$SCRIPT_DIR/front" && npm install && npm run build) >"$build_log" 2>&1; then
-        cat "$build_log" >&2
-        rm -f "$build_log"
-        return 1
-      fi
-    fi
-  fi
-  rm -f "$build_log"
-  info "前端构建完成。"
-  frontend_hash="$(
-    hash_startup_paths \
-      front/package.json \
-      front/package-lock.json \
-      front/index.html \
-      front/vite.config.ts \
-      front/scripts/precompress-assets.mjs \
-      front/tsconfig.json \
-      front/src \
-      front/public \
-      scripts/build_web_frontend.sh
-  )"
-  write_stamp "$stamp_path" "$frontend_hash"
-}
-
 launcher_info="$("$PYTHON_BIN" "$SCRIPT_DIR/scripts/update_runner.py" launcher-info --repo-root "$SCRIPT_DIR")"
 CONTROL_PYTHON="$(printf '%s' "$launcher_info" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["control_python_executable"])')"
 UPDATE_RUNNER="$(printf '%s' "$launcher_info" | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["runner_path"])')"
@@ -415,7 +339,6 @@ if ! run_python_startup_step -m bot.env_migration --env-path "$SCRIPT_DIR/.env";
   exit "$last_python_exit_code"
 fi
 
-sync_frontend_assets
 if ! run_python_startup_step -m bot.migrations run --repo-root "$SCRIPT_DIR"; then
   echo "[错误] 运行数据迁移失败。" >&2
   exit "$last_python_exit_code"

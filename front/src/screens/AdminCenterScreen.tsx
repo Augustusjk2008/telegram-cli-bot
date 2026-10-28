@@ -461,6 +461,7 @@ export function AdminCenterScreen({
   const [envReloading, setEnvReloading] = useState(false);
   const [envSystemReloading, setEnvSystemReloading] = useState(false);
   const [envRestarting, setEnvRestarting] = useState(false);
+  const [serviceRestarting, setServiceRestarting] = useState(false);
   const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
     users: false,
@@ -1349,6 +1350,20 @@ export function AdminCenterScreen({
     }
   };
 
+  const requestServiceRestart = async () => {
+    setServiceRestarting(true);
+    setError("");
+    setNotice("");
+    try {
+      await client.restartService();
+      setNotice("已请求重启后端");
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "请求重启后端失败"));
+    } finally {
+      setServiceRestarting(false);
+    }
+  };
+
   const previewStorageMigration = async () => {
     const target = storageTargetRoot.trim();
     if (!target) {
@@ -1431,14 +1446,25 @@ export function AdminCenterScreen({
           <div className="space-y-1">
             <h1 className="text-2xl font-bold text-[var(--text)]">管理中心</h1>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void requestServiceRestart()}
+              disabled={serviceRestarting}
+              className="inline-flex items-center gap-2 rounded-lg border border-transparent bg-[var(--button-warning-background-strong)] px-3 py-2 text-sm text-[var(--button-filled-foreground)] hover:bg-[var(--button-warning-background-deep)] disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4${serviceRestarting ? " animate-spin" : ""}`} />
+              {serviceRestarting ? "请求中..." : "重启后端"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              返回
+            </button>
+          </div>
         </header>
 
         <div role="tablist" aria-label="管理中心功能" className="mb-3 flex flex-wrap items-center gap-1.5">

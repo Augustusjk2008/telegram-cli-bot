@@ -17,6 +17,19 @@ function createAdminClient() {
   });
 }
 
+test("管理中心可以直接请求重启后端", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const restart = vi.spyOn(client, "restartService");
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("button", { name: "重启后端" }));
+
+  expect(restart).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText("已请求重启后端")).toBeInTheDocument();
+});
+
 async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdateStatus> {
   const client = createAdminClient();
   const status = await client.downloadUpdate();

@@ -103,6 +103,8 @@ bash start.sh
 
 Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+；Pi 原生 Agent 还需要 bash。安装器会检查这些运行时版本。
 
+源码版 `start.bat`、`start.ps1` 和 `start.sh` 启动时直接使用现有的前端产物，不会自动重建前端。修改前端后请在 `front` 目录手动运行 `npm run build`，再重启服务。
+
 <details>
 <summary><strong>从源码快照安装</strong></summary>
 

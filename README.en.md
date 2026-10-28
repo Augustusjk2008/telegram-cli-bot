@@ -103,6 +103,8 @@ bash start.sh
 
 Linux and macOS require Python 3.10+, Git, and Node.js 22.13+. The native Pi agent also needs bash. Installers check these runtime versions.
 
+The source launchers `start.bat`, `start.ps1`, and `start.sh` use the existing frontend assets and do not rebuild them during startup. After changing the frontend, run `npm run build` manually in `front`, then restart the service.
+
 <details>
 <summary><strong>Install from a source snapshot</strong></summary>
 

@@ -275,20 +275,6 @@ function Write-StartupStamp {
     Set-Content -LiteralPath $StampPath -Value $Value -Encoding UTF8
 }
 
-function Get-NpmCommand {
-    foreach ($name in @("npm.cmd", "npm")) {
-        $command = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($command) {
-            if ($command.Path) {
-                return $command.Path
-            }
-            return $command.Source
-        }
-    }
-
-    return $null
-}
-
 function Sync-PythonDependencies {
     param(
         [pscustomobject]$PythonRuntime,
@@ -377,92 +363,6 @@ function Invoke-PythonStartupStep {
     if (-not $script:pythonDependencyRepairAttempted -and (Repair-PythonDependencies -ForceInstall)) {
         Invoke-CurrentPython -Arguments $Arguments
     }
-}
-
-function Sync-FrontendAssets {
-    param(
-        [pscustomobject]$PythonRuntime,
-        [string]$RootDir
-    )
-
-    if ((Test-Truthy $env:TCB_STARTUP_SKIP_DEP_SYNC) -or (Test-Truthy $env:TCB_STARTUP_SKIP_FRONTEND_BUILD)) {
-        return
-    }
-
-    $frontPackagePath = Join-Path $RootDir "front\package.json"
-    if (-not (Test-Path -LiteralPath $frontPackagePath)) {
-        return
-    }
-
-    if ((Test-Path -LiteralPath (Join-Path $RootDir ".update-manifest.json")) -and -not (Test-Truthy $env:TCB_STARTUP_FORCE_FRONTEND_BUILD)) {
-        & $PythonRuntime.Command @($PythonRuntime.Arguments + @("-c", "import sys; from bot.update_preparation import frontend_is_current; sys.exit(0 if frontend_is_current(sys.argv[1]) else 1)", $RootDir))
-        if ($LASTEXITCODE -eq 0) { return }
-    }
-
-    $frontendInputs = @(
-        "front\package.json",
-        "front\package-lock.json",
-        "front\index.html",
-        "front\vite.config.ts",
-        "front\scripts\precompress-assets.mjs",
-        "front\tsconfig.json",
-        "front\src",
-        "front\public",
-        "scripts\build_web_frontend.bat"
-    )
-    $frontendHash = Get-StartupPathsHash -PythonRuntime $PythonRuntime -RootDir $RootDir -RelativePaths $frontendInputs
-    $stampPath = Join-Path $startupStateDir "frontend-build-windows.sha256"
-    $distIndex = Join-Path $RootDir "front\dist\index.html"
-
-    if (
-        (Test-StartupStampMatches -StampPath $stampPath -ExpectedHash $frontendHash) -and
-        (Test-Path -LiteralPath $distIndex) -and
-        -not (Test-Truthy $env:TCB_STARTUP_FORCE_FRONTEND_BUILD)
-    ) {
-        return
-    }
-
-    $npmCommand = Get-NpmCommand
-    if (-not $npmCommand) {
-        throw "检测到前端资源需要重建，但未找到 npm。请先运行 install.ps1 安装 Node.js 依赖。"
-    }
-
-    Write-Info "检测到前端源码变化，正在构建前端..."
-    $buildScript = Join-Path $RootDir "scripts\build_web_frontend.bat"
-    if (($env:OS -eq "Windows_NT") -and (Test-Path -LiteralPath $buildScript)) {
-        $buildOutput = @(& $buildScript 2>&1)
-        $buildExitCode = $LASTEXITCODE
-        if ($buildExitCode -ne 0) {
-            $buildOutput | Out-Host
-            throw "前端构建失败。"
-        }
-    } else {
-        Push-Location (Join-Path $RootDir "front")
-        try {
-            $buildOutput = @(& $npmCommand run build 2>&1)
-            $buildExitCode = $LASTEXITCODE
-            if ($buildExitCode -ne 0) {
-                $buildOutput | Out-Host
-                Write-Warn "前端构建失败，正在安装依赖后重试一次..."
-                & $npmCommand install
-                if ($LASTEXITCODE -ne 0) {
-                    throw "安装前端依赖失败。"
-                }
-                $buildOutput = @(& $npmCommand run build 2>&1)
-                $buildExitCode = $LASTEXITCODE
-                if ($buildExitCode -ne 0) {
-                    $buildOutput | Out-Host
-                    throw "前端构建失败。"
-                }
-            }
-        } finally {
-            Pop-Location
-        }
-    }
-    Write-Info "前端构建完成。"
-
-    $frontendHash = Get-StartupPathsHash -PythonRuntime $PythonRuntime -RootDir $RootDir -RelativePaths $frontendInputs
-    Write-StartupStamp -StampPath $stampPath -Value $frontendHash
 }
 
 function Show-TunnelHint {
@@ -856,8 +756,6 @@ try {
         Write-Fail "迁移旧版 .env 配置失败。"
         exit $script:lastPythonExitCode
     }
-
-    Sync-FrontendAssets -PythonRuntime $script:pythonRuntime -RootDir $scriptDir
 
     Invoke-PythonStartupStep -Arguments @("-m", "bot.migrations", "run", "--repo-root", $scriptDir)
     if ($script:lastPythonExitCode -ne 0) {

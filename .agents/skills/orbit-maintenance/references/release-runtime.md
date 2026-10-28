@@ -6,7 +6,7 @@
 - Linux/macOS 安装：`install.sh`；启动：`start.sh`。
 - 安装器检查 Python 3.10+、Node.js 22.13+ 和 Git；Node 检查与下载回退须满足前端锁文件要求。Windows 安装器可选下载固定 Codex `0.121.0`、cloudflared `2026.3.0`；Linux/macOS 安装器提示用户准备 Codex/Claude。示例插件默认跳过，可用安装器的 `InstallExamplePlugins` / `--install-example-plugins` 选项启用。
 - `install.ps1` 使用检测到的 Python 安装依赖；`install.sh` 创建 `.venv`。源码启动脚本优先使用项目 `.venv`，否则查找系统 Python；启动步骤失败时最多安装依赖并重试一次，`TCB_STARTUP_FORCE_DEP_INSTALL` 可强制同步，创建 venv 时遵守 `TCB_STARTUP_USE_SYSTEM_PYTHON`。
-- 源码启动器先创建安装目录外的执行器快照；有中断事务时先恢复。正常启动完成 `.env`、前端、迁移与导入检查后，将宿主交给独立 supervisor。前端指纹缓存位于仓库 `.tcb/startup`；`TCB_STARTUP_SKIP_DEP_SYNC` 跳过依赖同步及前端重建，`TCB_STARTUP_SKIP_FRONTEND_BUILD` 只跳过前端重建。
+- 源码启动器先创建安装目录外的执行器快照；有中断事务时先恢复。正常启动完成 `.env`、迁移与导入检查后，将宿主交给独立 supervisor。启动时直接使用已有的 `front/dist`，不会自动重建前端；修改前端后由用户手动运行 `npm run build`。
 - `python -m bot` 经 `bot/__main__.py` 先完成存储迁移收尾和运行数据迁移，再调用 `bot/main.py:main()`；源码启动脚本预先迁移并传 `--tcb-migrations-checked`。`main()` 在 restart loop 中执行 `asyncio.run(run_all_bots())`，启动 Web 服务及按配置启用的 Telegram gateway。
 - 普通重启设置 `RESTART_REQUESTED` / `RESTART_EVENT`，官方 supervisor 处理退出码 `75`；更新使用独立请求及退出码 `76`，且只消费 `waiting_restart` 任务。`CLI_BRIDGE_UPDATE_PROTOCOL=1` 表示官方启动器能力；直接 `python -m bot` 仅检查和准备。当前宿主的操作仍受根 `AGENTS.md` 约束。
 
