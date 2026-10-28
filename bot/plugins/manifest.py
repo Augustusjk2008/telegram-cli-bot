@@ -46,6 +46,7 @@ def _parse_permissions(value: Any) -> PluginPermissions:
     allowed = {
         "workspaceRead": "workspace_read",
         "workspaceList": "workspace_list",
+        "workspaceWrite": "workspace_write",
         "tempArtifacts": "temp_artifacts",
     }
     unknown = sorted(key for key in current.keys() if key not in allowed)
@@ -54,6 +55,7 @@ def _parse_permissions(value: Any) -> PluginPermissions:
     return PluginPermissions(
         workspace_read=bool(current.get("workspaceRead", False)),
         workspace_list=bool(current.get("workspaceList", False)),
+        workspace_write=bool(current.get("workspaceWrite", False)),
         temp_artifacts=bool(current.get("tempArtifacts", False)),
     )
 
@@ -75,6 +77,7 @@ def _parse_limits(value: Any) -> PluginHostLimits:
     current = _expect_mapping(value, "runtime.limits")
     allowed = {
         "readBytes": "read_bytes",
+        "writeBytes": "write_bytes",
         "directoryEntries": "directory_entries",
         "artifactBytes": "artifact_bytes",
         "artifactCount": "artifact_count",
@@ -89,6 +92,12 @@ def _parse_limits(value: Any) -> PluginHostLimits:
             hard_cap.read_bytes,
             MAX_PLUGIN_READ_BYTES,
             "runtime.limits.readBytes",
+        ),
+        write_bytes=_parse_limit_value(
+            current.get("writeBytes"),
+            hard_cap.write_bytes,
+            MAX_PLUGIN_READ_BYTES,
+            "runtime.limits.writeBytes",
         ),
         directory_entries=_parse_limit_value(
             current.get("directoryEntries"),

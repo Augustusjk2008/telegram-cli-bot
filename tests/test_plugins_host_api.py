@@ -27,7 +27,13 @@ def _limits(**kwargs):
     return limits_cls(**kwargs)
 
 
-def _manifest(root: Path, *, limits, workspace_read: bool = True) -> PluginManifest:
+def _manifest(
+    root: Path,
+    *,
+    limits,
+    workspace_read: bool = True,
+    workspace_write: bool = False,
+) -> PluginManifest:
     return PluginManifest(
         root=root,
         plugin_id="limited",
@@ -44,6 +50,7 @@ def _manifest(root: Path, *, limits, workspace_read: bool = True) -> PluginManif
             permissions=PluginPermissions(
                 workspace_read=workspace_read,
                 workspace_list=True,
+                workspace_write=workspace_write,
                 temp_artifacts=True,
             ),
             limits=limits,
@@ -303,6 +310,44 @@ async def test_host_read_range_rejects_directories(tmp_path: Path) -> None:
             manifest,
             "host.workspace.read_range",
             {"path": "directory", "offset": 0, "length": 0},
+        )
+
+
+@pytest.mark.asyncio
+async def test_host_write_bytes_requires_permission_and_creates_parents(tmp_path: Path) -> None:
+    api = PluginHostApi(ArtifactStore(tmp_path))
+    params = {
+        "path": "nested/output.txt",
+        "contentBase64": base64.b64encode(b"hello").decode("ascii"),
+        "overwrite": True,
+    }
+
+    with pytest.raises(PluginHostPermissionError, match="permission_denied:workspaceWrite"):
+        await api.dispatch(
+            _context(tmp_path),
+            _manifest(tmp_path, limits=_limits(write_bytes=16)),
+            "host.workspace.write_bytes",
+            params,
+        )
+
+    manifest = _manifest(tmp_path, limits=_limits(write_bytes=16), workspace_write=True)
+    result = await api.dispatch(_context(tmp_path), manifest, "host.workspace.write_bytes", params)
+
+    assert result["size"] == 5
+    assert (tmp_path / "nested/output.txt").read_bytes() == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_host_write_bytes_enforces_write_limit(tmp_path: Path) -> None:
+    api = PluginHostApi(ArtifactStore(tmp_path))
+    manifest = _manifest(tmp_path, limits=_limits(write_bytes=4), workspace_write=True)
+
+    with pytest.raises(ValueError, match="写入文件超过插件限额"):
+        await api.dispatch(
+            _context(tmp_path),
+            manifest,
+            "host.workspace.write_bytes",
+            {"path": "output.txt", "contentBase64": base64.b64encode(b"12345").decode("ascii")},
         )
 
 

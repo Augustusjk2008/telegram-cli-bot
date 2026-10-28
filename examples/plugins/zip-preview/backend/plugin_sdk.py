@@ -87,6 +87,32 @@ class PluginServer:
             raise RuntimeError(str(response["error"].get("message") or error_message))
         return str((response.get("result") or {}).get("content") or "")
 
+    def write_bytes(
+        self,
+        path: str,
+        content: bytes,
+        *,
+        overwrite: bool = False,
+        error_message: str,
+    ) -> dict[str, Any]:
+        response = self.host_call(
+            "host.workspace.write_bytes",
+            {
+                "path": path,
+                "contentBase64": base64.b64encode(content).decode("ascii"),
+                "overwrite": overwrite,
+            },
+        )
+        if response.get("error"):
+            raise RuntimeError(str(response["error"].get("message") or error_message))
+        return dict(response.get("result") or {})
+
+    def make_directory(self, path: str, *, error_message: str) -> dict[str, Any]:
+        response = self.host_call("host.workspace.mkdir", {"path": path})
+        if response.get("error"):
+            raise RuntimeError(str(response["error"].get("message") or error_message))
+        return dict(response.get("result") or {})
+
     def write_artifact(
         self,
         filename: str,

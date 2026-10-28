@@ -86,10 +86,12 @@ class PluginRuntime:
                 "permissions": {
                     "workspaceRead": manifest.runtime.permissions.workspace_read,
                     "workspaceList": manifest.runtime.permissions.workspace_list,
+                    "workspaceWrite": manifest.runtime.permissions.workspace_write,
                     "tempArtifacts": manifest.runtime.permissions.temp_artifacts,
                 },
                 "limits": {
                     "readBytes": limits.read_bytes,
+                    "writeBytes": limits.write_bytes,
                     "directoryEntries": limits.directory_entries,
                     "artifactBytes": limits.artifact_bytes,
                     "artifactCount": limits.artifact_count,

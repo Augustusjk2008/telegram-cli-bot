@@ -18,7 +18,7 @@
 
 - 当前 `plugin.json` 只接受 schema v2；`views[].viewMode`、`views[].dataProfile`、`runtime.permissions`、`runtime.limits`、`configSchema`、`catalogActions` 和 `fileHandlers` 都属于当前 v2 契约。
 - Runtime 当前只支持 `type=python`、`protocol=jsonrpc-stdio`，使用宿主 Python，进程按 `(bot_alias, plugin_id)` 复用，cwd 为插件目录。Host API 的 permission/limits 约束宿主接口；插件进程仍继承宿主环境和操作系统权限。
-- Host API 必须按 manifest permission 和 limits 放行 workspace 读取、目录枚举和 artifact 写入；workspace 路径必须留在 root 内，artifact 按单个、数量和总大小限额保存。
+- Host API 必须按 manifest permission 和 limits 放行 workspace 读取、目录枚举、受控 workspace 写入和 artifact 写入；workspace 路径必须留在 root 内，workspace 文件按单文件大小限制原子写入，artifact 按单个、数量和总大小限额保存。
 - 外部 plugin runtime 只允许 allowlist 中的固定下载项，当前为 `mermaid-visio/graphviz` 的 Windows x64 Graphviz `16.1.0`。下载使用 HTTPS、校验 SHA-256、限制压缩包大小，拒绝越界路径、符号链接、设备名和不安全文件类型，并以可恢复的目录替换完成安装；插件不得自带下载 URL/校验和等安装参数。
 - Plugin service 的失效路径清理 view sessions、artifacts、snapshot cache 及关联 in-flight 状态并停止 plugin process；运行时和 Host API 事件写入 audit。snapshot cache 有条目和字节双重 LRU 上限。
 - Vivado backend 使用 Python JSON-RPC stdio，按 source fingerprint 建 VCD index，按需返回可见 time/signal window。

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -128,6 +130,50 @@ class PluginHostApi:
             return data
         raise ValueError("artifact 内容不能为空")
 
+    def _coerce_workspace_bytes(self, params: dict[str, Any], limits: PluginHostLimits) -> bytes:
+        if "contentBase64" not in params:
+            raise ValueError("文件内容不能为空")
+        content = str(params.get("contentBase64") or "")
+        estimated_size = self._estimate_base64_size(content)
+        if estimated_size > limits.write_bytes:
+            raise ValueError(f"写入文件超过插件限额: {estimated_size} > {limits.write_bytes}")
+        try:
+            data = base64.b64decode(content.encode("ascii"), validate=True)
+        except (binascii.Error, UnicodeEncodeError) as exc:
+            raise ValueError("文件 base64 内容无效") from exc
+        if len(data) > limits.write_bytes:
+            raise ValueError(f"写入文件超过插件限额: {len(data)} > {limits.write_bytes}")
+        return data
+
+    def _write_workspace_bytes(
+        self,
+        path: Path,
+        content: bytes,
+        *,
+        overwrite: bool,
+    ) -> dict[str, Any]:
+        if path.exists() and path.is_dir():
+            raise ValueError(f"目标路径是目录: {path}")
+        if path.exists() and not overwrite:
+            raise ValueError(f"目标文件已存在: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_name = ""
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(prefix=".orbit-plugin-", suffix=".tmp", dir=path.parent)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, path)
+            temporary_name = ""
+        finally:
+            if temporary_name:
+                try:
+                    os.unlink(temporary_name)
+                except OSError:
+                    pass
+        return {"path": str(path), "size": len(content), "file_size_bytes": len(content)}
+
     async def dispatch(
         self,
         context: PluginHostContext,
@@ -156,6 +202,23 @@ class PluginHostApi:
             self._require(permissions.workspace_read, "workspaceRead")
             path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))
             return self._read_file_range(path, params.get("offset"), params.get("length"), limits)
+        if method == "host.workspace.write_bytes":
+            self._require(permissions.workspace_write, "workspaceWrite")
+            path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))
+            return self._write_workspace_bytes(
+                path,
+                self._coerce_workspace_bytes(params, limits),
+                overwrite=bool(params.get("overwrite", False)),
+            )
+        if method == "host.workspace.mkdir":
+            self._require(permissions.workspace_write, "workspaceWrite")
+            path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))
+            if path.exists():
+                if not path.is_dir():
+                    raise ValueError(f"目标路径不是目录: {path}")
+                return {"path": str(path), "created": False}
+            path.mkdir(parents=True, exist_ok=True)
+            return {"path": str(path), "created": True}
         if method == "host.workspace.stat":
             self._require(permissions.workspace_read, "workspaceRead")
             path = resolve_workspace_path(context.workspace_root, str(params.get("path") or ""))

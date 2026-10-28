@@ -1783,6 +1783,7 @@ export type PluginConfigSchema = {
 export type PluginRuntimePermissions = {
   workspaceRead: boolean;
   workspaceList: boolean;
+  workspaceWrite: boolean;
   tempArtifacts: boolean;
 };
 

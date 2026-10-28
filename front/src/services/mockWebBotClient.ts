@@ -1173,6 +1173,7 @@ function buildPluginPermissions(
   return {
     workspaceRead: false,
     workspaceList: false,
+    workspaceWrite: false,
     tempArtifacts: false,
     ...permissions,
   };
@@ -5102,7 +5103,8 @@ export class MockWebBotClient implements WebBotClient {
         input: { path },
       };
     }
-    if (lower.endsWith(".zip")) {
+    if ([".zip", ".rar", ".7z", ".gz", ".tgz", ".tar", ".bz2", ".tbz", ".tbz2", ".xz", ".txz"]
+      .some((extension) => lower.endsWith(extension))) {
       return {
         kind: "plugin_view",
         pluginId: "zip-preview",
@@ -5415,6 +5417,14 @@ export class MockWebBotClient implements WebBotClient {
         statsText: `5 文件 · 3 文件夹 · ${sourcePath.split(/[\\/]/).pop() || "sample.zip"}`,
         searchable: false,
         emptySearchText: "压缩包为空",
+        actions: [{
+          id: "extract-here",
+          label: "解压到所在文件夹",
+          target: "plugin" as const,
+          location: "toolbar" as const,
+          variant: "primary" as const,
+          confirm: { title: "解压压缩包", message: "将内容解压到当前文件所在文件夹。" },
+        }],
       };
       const initialWindow: TreeWindowPayload = {
         op: "children",
@@ -5812,6 +5822,18 @@ export class MockWebBotClient implements WebBotClient {
         message: "已导出",
         refresh: "session",
         hostEffects: [{ type: "download_artifact", artifactId, filename: "timing.csv" }],
+      };
+    }
+    if (pluginId === "zip-preview") {
+      if (input.actionId !== "extract-here") {
+        throw new Error("压缩包操作不存在");
+      }
+      const sourcePath = "docs/sample.zip";
+      const parent = sourcePath.includes("/") ? sourcePath.slice(0, sourcePath.lastIndexOf("/")) : ".";
+      return {
+        message: "已解压 5 个文件到所在文件夹",
+        refresh: "session",
+        hostEffects: [{ type: "reveal_in_files", path: parent }],
       };
     }
     if (pluginId === "rtl-hierarchy") {

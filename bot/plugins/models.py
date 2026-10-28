@@ -9,12 +9,14 @@ from typing import Any
 class PluginPermissions:
     workspace_read: bool = False
     workspace_list: bool = False
+    workspace_write: bool = False
     temp_artifacts: bool = False
 
 
 @dataclass(frozen=True)
 class PluginHostLimits:
     read_bytes: int = 32 * 1024 * 1024
+    write_bytes: int = 32 * 1024 * 1024
     directory_entries: int = 2000
     artifact_bytes: int = 32 * 1024 * 1024
     artifact_count: int = 128

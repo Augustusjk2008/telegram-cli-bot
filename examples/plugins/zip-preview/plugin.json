@@ -1,19 +1,26 @@
 {
   "schemaVersion": 2,
   "id": "zip-preview",
-  "name": "ZIP Preview",
-  "version": "0.1.0",
-  "description": "不解压快速浏览 ZIP 压缩包目录结构。",
+  "name": "Archive Preview",
+  "version": "0.2.0",
+  "description": "预览常见压缩格式，并将内容解压到压缩包所在文件夹。",
   "enabled": true,
   "config": {
-    "maxEntries": 2000
+    "maxEntries": 2000,
+    "maxExtractBytes": 268435456,
+    "overwriteExisting": true
   },
   "runtime": {
     "type": "python",
     "entry": "backend/main.py",
     "protocol": "jsonrpc-stdio",
     "permissions": {
-      "workspaceRead": true
+      "workspaceRead": true,
+      "workspaceWrite": true
+    },
+    "limits": {
+      "readBytes": 268435456,
+      "writeBytes": 268435456
     }
   },
   "views": [
@@ -27,16 +34,29 @@
   ],
   "fileHandlers": [
     {
-      "id": "zip-file",
-      "label": "ZIP 结构预览",
+        "id": "archive-file",
+        "label": "压缩包预览",
       "extensions": [
-        ".zip"
+        ".zip",
+        ".rar",
+        ".7z",
+        ".gz",
+        ".tgz",
+        ".tar",
+        ".bz2",
+        ".tbz",
+        ".tbz2",
+        ".xz",
+        ".txz",
+        ".tar.gz",
+        ".tar.bz2",
+        ".tar.xz"
       ],
       "viewId": "archive-tree"
     }
   ],
   "configSchema": {
-    "title": "ZIP 预览设置",
+    "title": "压缩包预览设置",
     "sections": [
       {
         "id": "limits",
@@ -50,6 +70,21 @@
             "minimum": 100,
             "maximum": 10000,
             "step": 1
+          },
+          {
+            "key": "maxExtractBytes",
+            "label": "最大解压大小（字节）",
+            "type": "integer",
+            "default": 268435456,
+            "minimum": 1,
+            "maximum": 268435456,
+            "step": 1
+          },
+          {
+            "key": "overwriteExisting",
+            "label": "覆盖同名文件",
+            "type": "boolean",
+            "default": true
           }
         ]
       }
