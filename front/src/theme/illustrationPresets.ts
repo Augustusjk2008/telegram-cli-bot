@@ -1,14 +1,15 @@
 import type {
+  ThemeIllustrationAsset,
   ThemeIllustrationSetId,
   ThemeIllustrationSurface,
   ThemeIllustrations,
 } from "./types";
+import catalog from "../../../bot/web/theme_illustrations.json";
 
 export const THEME_ILLUSTRATION_SURFACES = [
   "workbench",
-  "chat",
-  "topbar",
-  "management",
+  "adminCenter",
+  "agentManager",
 ] as const satisfies readonly ThemeIllustrationSurface[];
 
 export const THEME_ILLUSTRATION_SET_IDS = [
@@ -20,25 +21,42 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "moonlit-garden",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
+type CatalogAsset = {
+  assetId: string;
+  mimeType: "image/webp" | "image/png";
+  width: number;
+  height: number;
+  sha256: string;
+  path: string;
+};
+type Catalog = {
+  schemaVersion: 2;
+  sets: Record<string, Record<ThemeIllustrationSurface, CatalogAsset>>;
+};
+
+export const THEME_ILLUSTRATION_CATALOG = catalog as unknown as Catalog;
+
 export const DEFAULT_THEME_ILLUSTRATIONS: ThemeIllustrations = {
-  setId: "none",
   opacity: 0,
   surfaces: {
     workbench: false,
-    chat: false,
-    topbar: false,
-    management: false,
+    adminCenter: false,
+    agentManager: false,
+  },
+  scenes: {
+    workbench: {} as ThemeIllustrationAsset,
+    adminCenter: {} as ThemeIllustrationAsset,
+    agentManager: {} as ThemeIllustrationAsset,
   },
 };
 
 export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "none", label: "无插画" },
-  { id: "forest-grove", label: "森林绿" },
-  { id: "tidal-grove", label: "潮汐蓝" },
-  { id: "desert-dusk", label: "沙漠黄昏" },
-  { id: "alpine-fog", label: "高山薄雾" },
-  { id: "moonlit-garden", label: "月夜花园" },
-  { id: "upload", label: "自定义上传" },
+  { id: "forest-grove", label: "森林绿插画组" },
+  { id: "tidal-grove", label: "潮汐蓝插画组" },
+  { id: "desert-dusk", label: "沙漠黄昏插画组" },
+  { id: "alpine-fog", label: "高山薄雾插画组" },
+  { id: "moonlit-garden", label: "月夜花园插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -75,16 +93,46 @@ export const ILLUSTRATION_TEMPLATES = [
 ] as const;
 
 export function illustrationResourcePath(
-  setId: Exclude<ThemeIllustrationSetId, "upload">,
+  setId: ThemeIllustrationSetId,
   surface: ThemeIllustrationSurface,
 ) {
-  return `/assets/theme-illustrations/${setId}-${surface}.svg`;
+  return THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.path || "";
+}
+
+export function builtinIllustrationAsset(
+  setId: ThemeIllustrationSetId,
+  surface: ThemeIllustrationSurface,
+): ThemeIllustrationAsset {
+  const asset = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface];
+  if (!asset) throw new Error(`缺少内置插画资源：${setId}/${surface}`);
+  const { path: _path, ...metadata } = asset;
+  return { kind: "builtin", ...metadata };
+}
+
+export function illustrationAssetResourcePath(asset: ThemeIllustrationAsset) {
+  if (asset.kind === "uploaded") {
+    return `/api/ui/theme-assets/${encodeURIComponent(asset.assetId)}`;
+  }
+  for (const setId of THEME_ILLUSTRATION_SET_IDS) {
+    for (const surface of THEME_ILLUSTRATION_SURFACES) {
+      const candidate = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface];
+      if (candidate?.assetId === asset.assetId) return candidate.path;
+    }
+  }
+  return "";
+}
+
+export function illustrationSetIdForAsset(asset: ThemeIllustrationAsset, surface: ThemeIllustrationSurface) {
+  if (asset.kind !== "builtin") return "";
+  return THEME_ILLUSTRATION_SET_IDS.find((setId) => THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.assetId === asset.assetId) || "";
 }
 
 export function defaultIllustrations(): ThemeIllustrations {
   return {
-    setId: DEFAULT_THEME_ILLUSTRATIONS.setId,
     opacity: DEFAULT_THEME_ILLUSTRATIONS.opacity,
     surfaces: { ...DEFAULT_THEME_ILLUSTRATIONS.surfaces },
+    scenes: Object.fromEntries(
+      THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, builtinIllustrationAsset("none", surface)]),
+    ) as ThemeIllustrations["scenes"],
   };
 }

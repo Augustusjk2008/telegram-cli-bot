@@ -1,41 +1,161 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sets": {
     "none": {
-      "workbench": "/assets/theme-illustrations/none-workbench.svg",
-      "chat": "/assets/theme-illustrations/none-chat.svg",
-      "topbar": "/assets/theme-illustrations/none-topbar.svg",
-      "management": "/assets/theme-illustrations/none-management.svg"
+      "workbench": {
+        "assetId": "none-workbench",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
+        "path": "/assets/theme-illustrations/none/workbench.webp"
+      },
+      "adminCenter": {
+        "assetId": "none-admin-center",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
+        "path": "/assets/theme-illustrations/none/admin-center.webp"
+      },
+      "agentManager": {
+        "assetId": "none-agent-manager",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
+        "path": "/assets/theme-illustrations/none/agent-manager.webp"
+      }
     },
     "forest-grove": {
-      "workbench": "/assets/theme-illustrations/forest-grove-workbench.svg",
-      "chat": "/assets/theme-illustrations/forest-grove-chat.svg",
-      "topbar": "/assets/theme-illustrations/forest-grove-topbar.svg",
-      "management": "/assets/theme-illustrations/forest-grove-management.svg"
+      "workbench": {
+        "assetId": "forest-grove-workbench",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "e89ff4c523568b398bb28cdb13c55be8f0ab8801e24d01343180ba5b89efb1c6",
+        "path": "/assets/theme-illustrations/forest-grove/workbench.webp"
+      },
+      "adminCenter": {
+        "assetId": "forest-grove-admin-center",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "c6a980f8c95c219ef437a58dad68d3e4b9a73b016ec12527ffea100c4fd9c09a",
+        "path": "/assets/theme-illustrations/forest-grove/admin-center.webp"
+      },
+      "agentManager": {
+        "assetId": "forest-grove-agent-manager",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "e89cf48d6aa15b145af8213436029c2a1838b8e1891a8e712118b58adad0ffe5",
+        "path": "/assets/theme-illustrations/forest-grove/agent-manager.webp"
+      }
     },
     "tidal-grove": {
-      "workbench": "/assets/theme-illustrations/tidal-grove-workbench.svg",
-      "chat": "/assets/theme-illustrations/tidal-grove-chat.svg",
-      "topbar": "/assets/theme-illustrations/tidal-grove-topbar.svg",
-      "management": "/assets/theme-illustrations/tidal-grove-management.svg"
+      "workbench": {
+        "assetId": "tidal-grove-workbench",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "db77dce4457a4bb9df705372a6b4489ae516d8145361148f7ffb89075fd7146c",
+        "path": "/assets/theme-illustrations/tidal-grove/workbench.webp"
+      },
+      "adminCenter": {
+        "assetId": "tidal-grove-admin-center",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "c3f3a04a7cc48ac35d904845235ecca970e81e768a9e90a9113aab3b06a0f6b3",
+        "path": "/assets/theme-illustrations/tidal-grove/admin-center.webp"
+      },
+      "agentManager": {
+        "assetId": "tidal-grove-agent-manager",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "ab5f6e3186c0a216f297ea0d14c4f33869ce654f473d990a80e46eb471804cda",
+        "path": "/assets/theme-illustrations/tidal-grove/agent-manager.webp"
+      }
     },
     "desert-dusk": {
-      "workbench": "/assets/theme-illustrations/desert-dusk-workbench.svg",
-      "chat": "/assets/theme-illustrations/desert-dusk-chat.svg",
-      "topbar": "/assets/theme-illustrations/desert-dusk-topbar.svg",
-      "management": "/assets/theme-illustrations/desert-dusk-management.svg"
+      "workbench": {
+        "assetId": "desert-dusk-workbench",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "794eb11bf4870941465cb284fd3a1095e8ef027ea78ed2cac88d1782e5684f4c",
+        "path": "/assets/theme-illustrations/desert-dusk/workbench.webp"
+      },
+      "adminCenter": {
+        "assetId": "desert-dusk-admin-center",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "3032c77ad7e8ef8d5249a03401a146319e20b60cf6226ad77b7f8fbe019340b1",
+        "path": "/assets/theme-illustrations/desert-dusk/admin-center.webp"
+      },
+      "agentManager": {
+        "assetId": "desert-dusk-agent-manager",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "8521e559b0e5d95251aa74a6e052a1b7f4dcb0460419c78106db76de140e8ccb",
+        "path": "/assets/theme-illustrations/desert-dusk/agent-manager.webp"
+      }
     },
     "alpine-fog": {
-      "workbench": "/assets/theme-illustrations/alpine-fog-workbench.svg",
-      "chat": "/assets/theme-illustrations/alpine-fog-chat.svg",
-      "topbar": "/assets/theme-illustrations/alpine-fog-topbar.svg",
-      "management": "/assets/theme-illustrations/alpine-fog-management.svg"
+      "workbench": {
+        "assetId": "alpine-fog-workbench",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "3dd36538cb4c5c0282f7ebc1836c3076cc807da5f4cdaad32367b3d5e38cedef",
+        "path": "/assets/theme-illustrations/alpine-fog/workbench.webp"
+      },
+      "adminCenter": {
+        "assetId": "alpine-fog-admin-center",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "274a60a7e02f646d268e7896da14f1e7012dd2b4e7f472ad706376567cf51a6b",
+        "path": "/assets/theme-illustrations/alpine-fog/admin-center.webp"
+      },
+      "agentManager": {
+        "assetId": "alpine-fog-agent-manager",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "ecd70743202dd61b02875d4a9755ef49170074d194c61eccf0f7f75e53aad494",
+        "path": "/assets/theme-illustrations/alpine-fog/agent-manager.webp"
+      }
     },
     "moonlit-garden": {
-      "workbench": "/assets/theme-illustrations/moonlit-garden-workbench.svg",
-      "chat": "/assets/theme-illustrations/moonlit-garden-chat.svg",
-      "topbar": "/assets/theme-illustrations/moonlit-garden-topbar.svg",
-      "management": "/assets/theme-illustrations/moonlit-garden-management.svg"
+      "workbench": {
+        "assetId": "moonlit-garden-workbench",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "70e7f39029ea2fa2b38952606067e4a57f306da0992797752d3ce63c8a800764",
+        "path": "/assets/theme-illustrations/moonlit-garden/workbench.webp"
+      },
+      "adminCenter": {
+        "assetId": "moonlit-garden-admin-center",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "a6763857216071467c4be1a7335b108e1467f32519b9ab241acc5e763aedf7a8",
+        "path": "/assets/theme-illustrations/moonlit-garden/admin-center.webp"
+      },
+      "agentManager": {
+        "assetId": "moonlit-garden-agent-manager",
+        "mimeType": "image/webp",
+        "width": 1600,
+        "height": 900,
+        "sha256": "31f684c8a38c319ac0182333f0869f50b44b8340e50d4d8cd1101194d2a67f66",
+        "path": "/assets/theme-illustrations/moonlit-garden/agent-manager.webp"
+      }
     }
   }
 }

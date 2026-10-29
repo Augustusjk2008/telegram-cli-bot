@@ -508,8 +508,9 @@ def supervise(repo_root: Path, store, python: str, *, action="supervise", job_id
     next_job = None
     with supervisor_lock(store):
         state = store.read()
-        if _pid_alive(int(state.get("host_pid") or 0)):
-            raise RuntimeError("A previously launched host is still running; exit it before starting another launcher")
+        # supervisor_lock already verifies the installation's host.lock. The
+        # persisted host_pid is diagnostic state and can be reused by an
+        # unrelated process after the old host exits.
         job = state.get("job") or {}
         if action == "apply":
             child, python = apply_job(repo_root, store, job_id)

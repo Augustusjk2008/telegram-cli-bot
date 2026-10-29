@@ -14,6 +14,11 @@ export type ChatTypography = {
 
 export type ThemeIllustrationSurface =
   | "workbench"
+  | "adminCenter"
+  | "agentManager";
+
+export type ThemeIllustrationLegacySurface =
+  | "workbench"
   | "chat"
   | "topbar"
   | "management";
@@ -24,22 +29,57 @@ export type ThemeIllustrationSetId =
   | "tidal-grove"
   | "desert-dusk"
   | "alpine-fog"
-  | "moonlit-garden"
-  | "upload";
+  | "moonlit-garden";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
+
+export type ThemeIllustrationBuiltinAsset = {
+  kind: "builtin";
+  assetId: string;
+  mimeType: "image/webp" | "image/png";
+  width: number;
+  height: number;
+  sha256: string;
+};
+
+export type ThemeIllustrationUploadedAsset = {
+  kind: "uploaded";
+  assetId: string;
+  mimeType: ThemeIllustrationUploadMime;
+  width: number;
+  height: number;
+  sha256: string;
+};
+
+export type ThemeIllustrationAsset =
+  | ThemeIllustrationBuiltinAsset
+  | ThemeIllustrationUploadedAsset;
 
 export type ThemeIllustrationUpload = {
   mimeType: ThemeIllustrationUploadMime;
   data: string;
 };
 
-export type ThemeIllustrations = {
-  setId: ThemeIllustrationSetId;
+export type LegacyThemeIllustrations = {
+  setId: ThemeIllustrationSetId | "upload";
   upload?: ThemeIllustrationUpload;
   opacity: number;
-  surfaces: Record<ThemeIllustrationSurface, boolean>;
+  surfaces: Record<ThemeIllustrationLegacySurface, boolean>;
 };
+
+export type ThemeIllustrationAssetImport = {
+  assetId: string;
+  mimeType: ThemeIllustrationUploadMime;
+  data: string;
+};
+
+export type ThemeIllustrations = {
+  opacity: number;
+  surfaces: Record<ThemeIllustrationSurface, boolean>;
+  scenes: Record<ThemeIllustrationSurface, ThemeIllustrationAsset>;
+};
+
+export type ThemeIllustrationsValue = ThemeIllustrations | LegacyThemeIllustrations;
 
 export const PAPER_STYLE = { fileTreeRowHeight: 26 } as const;
 export const PAPER_MOTION = { profile: "paper" } as const;
@@ -47,7 +87,7 @@ export const PAPER_MOTION = { profile: "paper" } as const;
 export type ThemeAppearance = {
   colors: { scheme: ColorScheme; overrides: Record<string, string> };
   typography?: ChatTypography;
-  illustrations?: ThemeIllustrations;
+  illustrations?: ThemeIllustrationsValue;
 };
 
 export type UiTheme = {
@@ -89,7 +129,11 @@ export type ThemeUpdateInput = {
 
 export type PortableTheme = Pick<UiTheme, "schemaVersion" | "name" | "baseId" | "appearance">;
 export type ThemeDocument = PortableTheme | { schemaVersion: 1; themes: PortableTheme[] };
-export type ThemeImportInput = { expectedRevision: number; document: unknown };
+export type ThemeImportInput = {
+  expectedRevision: number;
+  document: unknown;
+  assets?: ThemeIllustrationAssetImport[];
+};
 
 export type ColorToken = {
   key: string;
@@ -117,11 +161,8 @@ export type ResolvedAppearance = {
   motion: typeof PAPER_MOTION;
   illustrations: ThemeIllustrations & {
     resources: Record<ThemeIllustrationSurface, string>;
-    colors: {
-      primary: string;
-      secondary: string;
-      soft: string;
-    };
+    /** @deprecated Only exposed while reading legacy themes. */
+    setId?: ThemeIllustrationSetId | "upload";
   };
   revision: string;
 };

@@ -28,6 +28,7 @@ const api = vi.hoisted(() => ({
   canManage: true,
   createTheme: vi.fn(),
   importThemes: vi.fn(),
+  uploadThemeAsset: vi.fn(),
   updateTheme: vi.fn(),
   deleteTheme: vi.fn(),
   selectTheme: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock("../theme/AppearanceProvider", () => ({
         update(() => api.createTheme(input)),
       importThemes: (document: unknown, revision: number) =>
         update(() => api.importThemes(document, revision)),
+      uploadThemeAsset: (file: File) => api.uploadThemeAsset(file),
       updateTheme: (
         id: string,
         input: Omit<ThemeUpdateInput, "expectedRevision">,
@@ -91,6 +93,14 @@ const derivedToken = THEME_TOKENS.find((token) => token.derive)!;
 const alphaToken = THEME_TOKENS.find(
   (token) => token.allowAlpha && token.key !== derivedToken.key,
 )!;
+const uploadedAsset = {
+  kind: "uploaded" as const,
+  assetId: "asset_431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+  mimeType: "image/png" as const,
+  width: 1,
+  height: 1,
+  sha256: "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+};
 const customTheme = (): UiTheme => ({
   ...BUILTIN_THEME,
   id: "theme_personal",
@@ -114,6 +124,7 @@ beforeEach(() => {
   api.library = libraryWith();
   api.canManage = true;
   api.reload.mockResolvedValue(undefined);
+  api.uploadThemeAsset.mockResolvedValue(uploadedAsset);
   api.updateTheme.mockImplementation(
     async (id: string, input: Omit<ThemeUpdateInput, "expectedRevision">) => ({
       ...api.library!,
@@ -330,16 +341,7 @@ describe("全局主题管理", () => {
           chatBodyLineHeight: "normal",
           chatBodyParagraphSpacing: "normal",
         },
-        illustrations: {
-          setId: "none",
-          opacity: 0,
-          surfaces: {
-            workbench: false,
-            chat: false,
-            topbar: false,
-            management: false,
-          },
-        },
+        illustrations: BUILTIN_THEME.appearance.illustrations,
       },
       activate: true,
     });
@@ -385,38 +387,7 @@ describe("全局主题管理", () => {
     fireEvent.change(screen.getByRole("slider", { name: "插画透明度" }), {
       target: { value: "0.18" },
     });
-    fireEvent.click(screen.getByRole("checkbox", { name: "管理界面" }));
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("主题已保存。");
-    expect(api.updateTheme).toHaveBeenLastCalledWith(
-      "theme_personal",
-      expect.objectContaining({
-        appearance: expect.objectContaining({
-          illustrations: {
-            setId: "forest-grove",
-            opacity: 0.18,
-            surfaces: {
-              workbench: true,
-              chat: true,
-              topbar: true,
-              management: false,
-            },
-          },
-        }),
-      }),
-    );
-  });
-
-  it("loads an uploaded image into the theme draft and saves it", async () => {
-    render(<ThemeManagerScreen />);
-    const file = new File(
-      [Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0])],
-      "art.png",
-      { type: "image/png" },
-    );
-    fireEvent.change(screen.getByLabelText("上传插画"), { target: { files: [file] } });
-    await screen.findByText(/已载入自定义图片/);
-    expect(screen.getByRole("combobox", { name: "插画主题" })).toHaveValue("upload");
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用管理中心插画" }));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("主题已保存。");
     expect(api.updateTheme).toHaveBeenLastCalledWith(
@@ -424,8 +395,38 @@ describe("全局主题管理", () => {
       expect.objectContaining({
         appearance: expect.objectContaining({
           illustrations: expect.objectContaining({
-            setId: "upload",
-            upload: expect.objectContaining({ mimeType: "image/png", data: expect.stringContaining("data:image/png;base64,") }),
+            opacity: 0.18,
+            surfaces: { workbench: true, adminCenter: false, agentManager: true },
+            scenes: {
+              workbench: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-workbench" }),
+              adminCenter: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-admin-center" }),
+              agentManager: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-agent-manager" }),
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("loads an uploaded image into the theme draft and saves it", async () => {
+    render(<ThemeManagerScreen />);
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const file = new File(
+      [Uint8Array.from(atob(png), (char) => char.charCodeAt(0))],
+      "art.png",
+      { type: "image/png" },
+    );
+    fireEvent.change(screen.getByLabelText("上传主工作台插画"), { target: { files: [file] } });
+    await screen.findByText(/已上传场景插画/);
+    expect(screen.getByRole("combobox", { name: "主工作台插画内置插画组" })).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("主题已保存。");
+    expect(api.updateTheme).toHaveBeenLastCalledWith(
+      "theme_personal",
+      expect.objectContaining({
+        appearance: expect.objectContaining({
+          illustrations: expect.objectContaining({
+            scenes: expect.objectContaining({ workbench: uploadedAsset }),
           }),
         }),
       }),

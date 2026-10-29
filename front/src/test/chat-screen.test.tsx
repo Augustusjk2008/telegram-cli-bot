@@ -2,6 +2,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
+import { applyResolvedAppearance } from "../theme/appearanceRuntime";
+import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
+import { builtinIllustrationAsset } from "../theme/illustrationPresets";
 import * as mermaidRenderer from "../markdown/mermaidRenderer";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
@@ -42,6 +45,33 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+test("renders the workbench illustration inside the standalone chat area", async () => {
+  const appearance = resolveAppearance({
+    ...BUILTIN_THEME,
+    appearance: {
+      ...BUILTIN_THEME.appearance,
+      illustrations: {
+        opacity: 0.12,
+        surfaces: { workbench: true, adminCenter: true, agentManager: true },
+        scenes: {
+          workbench: builtinIllustrationAsset("forest-grove", "workbench"),
+          adminCenter: builtinIllustrationAsset("forest-grove", "adminCenter"),
+          agentManager: builtinIllustrationAsset("forest-grove", "agentManager"),
+        },
+      },
+    },
+  });
+  applyResolvedAppearance(appearance);
+  try {
+    render(<ChatScreen botAlias="main" client={createClient()} />);
+    const layer = await screen.findByTestId("theme-illustration-layer-workbench");
+    expect(layer).toHaveAttribute("data-theme-illustration-region", "chat");
+    expect(layer.closest('[data-testid="chat-scroll-container"]')).not.toBeNull();
+  } finally {
+    applyResolvedAppearance(resolveAppearance(BUILTIN_THEME));
+  }
+});
+
 test.each([true, false])("renders user Markdown, math and diagrams (current user: %s)", async (isCurrentUser) => {
   vi.spyOn(mermaidRenderer, "renderMermaidSingleFlight").mockResolvedValue({
     svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Start to End</text></svg>',
@@ -80,8 +110,9 @@ test.each([true, false])("renders user Markdown, math and diagrams (current user
   expect(await within(message).findByLabelText("Mermaid 图表")).toContainHTML("<text>Start to End</text>");
 });
 
-test("keeps backend endless mode errors visible until the final answer", async () => {
+test("keeps endless mode running and shows the retry countdown without the failed result", async () => {
   const secondAttempt = deferred<ChatMessage>();
+  const continueCallbacks: Array<(attempt: number) => void> = [];
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>()
     .mockImplementationOnce(async (...args) => {
       const onEndlessError = args[7];
@@ -92,8 +123,10 @@ test("keeps backend endless mode errors visible until the final answer", async (
         text: "temporary failure",
         createdAt: "2026-10-23T00:00:01Z",
         state: "error",
-      }, 1);
-      onEndlessContinue?.(1);
+      }, 1, 2000);
+      if (onEndlessContinue) {
+        continueCallbacks.push(onEndlessContinue);
+      }
       return secondAttempt.promise;
     });
   const client = createClient({
@@ -133,12 +166,11 @@ test("keeps backend endless mode errors visible until the final answer", async (
   expect(await screen.findByLabelText("ENDLESS...")).toBeInTheDocument();
   expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
   expect(screen.getAllByTestId("chat-message-row")[0]).toHaveTextContent("原始问题");
-  const processDisclosure = screen.getByRole("button", { name: "展开过程详情" });
   expect(screen.queryByText("temporary failure")).not.toBeInTheDocument();
-  fireEvent.click(processDisclosure);
-  expect(await screen.findByText("temporary failure")).toBeInTheDocument();
-  expect(screen.getAllByText("Continue", { exact: true }).length).toBeGreaterThan(0);
-  expect(screen.getAllByTestId("chat-message-row")[0]).not.toHaveTextContent("Continue");
+  expect(await screen.findByText("（2秒后重试）")).toBeInTheDocument();
+
+  act(() => continueCallbacks[0]?.(1));
+  expect(screen.queryByText("（2秒后重试）")).not.toBeInTheDocument();
 
   await act(async () => {
     secondAttempt.resolve({

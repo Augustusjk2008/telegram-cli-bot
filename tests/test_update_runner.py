@@ -376,6 +376,18 @@ def test_unconfirmed_interrupted_handoff_returns_to_ready(installation, monkeypa
     assert (root / "VERSION").read_text() == "1.0.0"
 
 
+def test_supervisor_ignores_reused_persisted_host_pid(installation, monkeypatch):
+    root, store = installation
+    store.mutate(lambda state: state.update(host_pid=12345))
+    monkeypatch.setattr(runner, "_pid_alive", lambda pid: True)
+    started = []
+    monkeypatch.setattr(runner, "_start_host", lambda *args: started.append(args) or Child())
+
+    assert runner.supervise(root, store, sys.executable) == 0
+    assert started
+    assert store.read()["host_pid"] == 0
+
+
 @pytest.mark.parametrize("fail_new", [False, True])
 def test_portable_handoff_with_real_non_listening_host_processes(installation, monkeypatch, fail_new):
     root, store = installation

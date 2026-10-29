@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import base64
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -59,15 +61,22 @@ def import_input(**changes):
 
 
 def illustration_input(**changes):
+    set_id = changes.pop("setId", "forest-grove")
+    catalog = json.loads((Path(__file__).parents[1] / "bot" / "web" / "theme_illustrations.json").read_text(encoding="utf-8"))
+    if set_id not in catalog["sets"]:
+        return {
+            "setId": set_id,
+            "opacity": 0.18,
+            "surfaces": {"workbench": True, "chat": True, "topbar": False, "management": True},
+            **changes,
+        }
+    scenes = {}
+    for surface, resource in catalog["sets"][set_id].items():
+        scenes[surface] = {"kind": "builtin", **{key: value for key, value in resource.items() if key != "path"}}
     return {
-        "setId": "forest-grove",
         "opacity": 0.18,
-        "surfaces": {
-            "workbench": True,
-            "chat": True,
-            "topbar": False,
-            "management": True,
-        },
+        "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
+        "scenes": scenes,
         **changes,
     }
 
@@ -76,9 +85,18 @@ UPLOAD_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC
 
 
 def uploaded_illustration_input(**changes):
-    value = illustration_input(setId="upload", upload={"mimeType": "image/png", "data": UPLOAD_PNG})
-    value.update(changes)
-    return value
+    asset = changes.pop("asset")
+    return {
+        "opacity": 0.18,
+        "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
+        "scenes": {surface: dict(asset) for surface in ("workbench", "adminCenter", "agentManager")},
+        **changes,
+    }
+
+
+def stored_upload(api):
+    raw = base64.b64decode(UPLOAD_PNG.split(",", 1)[1])
+    return api.server.theme_store.asset_store.store(raw, "image/png")
 
 
 @pytest.mark.asyncio
@@ -173,7 +191,8 @@ async def test_illustrations_are_saved_updated_and_preserved_by_import_export(ap
     })
     assert status == 200
     saved = updated["data"]["themes"][1]["appearance"]["illustrations"]
-    assert saved["setId"] == "moonlit-garden" and saved["opacity"] == 0.25
+    assert saved["opacity"] == 0.25
+    assert saved["scenes"]["workbench"]["assetId"] == "moonlit-garden-workbench"
 
     document = updated["data"]["themes"][1]
     status, imported = await request(api, "POST", "/api/ui/themes/import", body={
@@ -190,15 +209,34 @@ async def test_illustrations_are_saved_updated_and_preserved_by_import_export(ap
 
 
 @pytest.mark.asyncio
+async def test_legacy_illustrations_migrate_to_scene_assets_on_save(api):
+    legacy = {
+        "setId": "upload",
+        "upload": {"mimeType": "image/png", "data": UPLOAD_PNG},
+        "opacity": 0.12,
+        "surfaces": {"workbench": True, "chat": False, "topbar": False, "management": False},
+    }
+    status, created = await request(api, "POST", body=create_input(appearance={
+        "colors": {"scheme": "light", "overrides": {}}, "illustrations": legacy,
+    }))
+    assert status == 200
+    saved = created["data"]["themes"][1]["appearance"]["illustrations"]
+    assert saved["scenes"]["workbench"]["kind"] == "uploaded"
+    assert saved["scenes"]["workbench"]["width"] == 1
+    assert saved["scenes"]["adminCenter"] == saved["scenes"]["workbench"]
+
+
+@pytest.mark.asyncio
 async def test_uploaded_illustrations_are_part_of_the_theme_and_survive_roundtrip(api):
+    asset = stored_upload(api)
     appearance = {
         "colors": {"scheme": "light", "overrides": {}},
-        "illustrations": uploaded_illustration_input(),
+        "illustrations": uploaded_illustration_input(asset=asset),
     }
     status, created = await request(api, "POST", body=create_input(appearance=appearance))
     assert status == 200
     saved = created["data"]["themes"][1]["appearance"]["illustrations"]
-    assert saved == uploaded_illustration_input()
+    assert saved == uploaded_illustration_input(asset=asset)
 
     status, imported = await request(api, "POST", "/api/ui/themes/import", body={
         "expectedRevision": 1,
@@ -211,6 +249,79 @@ async def test_uploaded_illustrations_are_part_of_the_theme_and_survive_roundtri
     })
     assert status == 200
     assert imported["data"]["themes"][-1]["appearance"]["illustrations"] == saved
+
+
+@pytest.mark.asyncio
+async def test_theme_asset_upload_route_validates_content_and_rejects_guests(api):
+    status, payload = await request(
+        api,
+        "POST",
+        "/api/ui/theme-assets",
+        body={"mimeType": "image/png", "data": UPLOAD_PNG},
+        headers={"Content-Type": "application/json"},
+    )
+    assert status == 200
+    asset = payload["data"]
+    assert asset["kind"] == "uploaded" and asset["width"] == 1 and asset["height"] == 1
+    assert api.server.theme_store.asset_store._path(asset["assetId"], asset["mimeType"]).exists()
+
+    status, payload = await request(
+        api,
+        "POST",
+        "/api/ui/theme-assets",
+        token="guest",
+        body={"mimeType": "image/png", "data": UPLOAD_PNG},
+        headers={"Content-Type": "application/json"},
+    )
+    assert status == 403 and payload["error"]["code"] == "theme_readonly"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("mime_type", "data", "status_code"), [
+    ("image/jpeg", UPLOAD_PNG, 400),
+    ("image/png", "data:image/png;base64,AAAA", 400),
+    ("image/png", "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode(), 400),
+    ("image/png", "too-large", 413),
+])
+async def test_theme_asset_upload_route_rejects_invalid_content(api, mime_type, data, status_code):
+    if data == "too-large":
+        data = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * (4 * 1024 * 1024)).decode()
+    status, payload = await request(
+        api,
+        "POST",
+        "/api/ui/theme-assets",
+        body={"mimeType": mime_type, "data": data},
+        headers={"Content-Type": "application/json"},
+    )
+    assert status == status_code and payload["ok"] is False
+    assert not api.server.theme_store.asset_store.root.exists()
+
+
+@pytest.mark.asyncio
+async def test_theme_package_import_stages_assets_before_publishing(api):
+    raw = base64.b64decode(UPLOAD_PNG.split(",", 1)[1])
+    descriptor = api.server.theme_store.asset_store.describe(raw, "image/png")
+    document = {
+        "schemaVersion": 1,
+        "name": "资源包主题",
+        "baseId": "paper-daylight",
+        "appearance": {"colors": {"scheme": "light", "overrides": {}}, "illustrations": uploaded_illustration_input(asset=descriptor)},
+    }
+    status, payload = await request(api, "POST", "/api/ui/themes/import", body={
+        "expectedRevision": 0,
+        "document": document,
+        "assets": [{"assetId": descriptor["assetId"], "mimeType": descriptor["mimeType"], "data": UPLOAD_PNG}],
+    })
+    assert status == 200
+    assert payload["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]["workbench"] == descriptor
+    assert api.server.theme_store.asset_store._path(descriptor["assetId"], descriptor["mimeType"]).exists()
+
+    invalid = {"expectedRevision": 1, "document": {"schemaVersion": 1, "name": "缺少基准", "appearance": document["appearance"]},
+               "assets": [{"assetId": descriptor["assetId"], "mimeType": descriptor["mimeType"], "data": UPLOAD_PNG}]}
+    before = api.server.theme_store.library_path.read_bytes()
+    status, payload = await request(api, "POST", "/api/ui/themes/import", body=invalid)
+    assert status == 400 and payload["ok"] is False
+    assert api.server.theme_store.library_path.read_bytes() == before
 
 
 @pytest.mark.asyncio
@@ -236,10 +347,9 @@ async def test_legacy_theme_appearance_gets_default_illustrations(api):
 
     status, payload = await request(api, "GET")
     assert status == 200
-    assert payload["data"]["themes"][1]["appearance"]["illustrations"] == {
-        "setId": "none",
-        "opacity": 0,
-        "surfaces": {"workbench": False, "chat": False, "topbar": False, "management": False},
+    assert payload["data"]["themes"][1]["appearance"]["illustrations"]["opacity"] == 0
+    assert set(payload["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]) == {
+        "workbench", "adminCenter", "agentManager",
     }
 
 
@@ -249,10 +359,12 @@ async def test_legacy_theme_appearance_gets_default_illustrations(api):
     illustration_input(opacity=-0.01),
     illustration_input(opacity=0.26),
     {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "extra": True}},
-    {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "chat": "yes"}},
-    uploaded_illustration_input(upload={"mimeType": "image/png", "data": "data:image/png;base64,AAAA"}),
-    uploaded_illustration_input(upload={"mimeType": "image/svg+xml", "data": "data:image/svg+xml;base64,PHN2Zy8+"}),
-    illustration_input(setId="upload"),
+    {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "adminCenter": "yes"}},
+    {**illustration_input(), "scenes": {**illustration_input()["scenes"], "workbench": {"kind": "uploaded"}}},
+    {**illustration_input(), "scenes": {**illustration_input()["scenes"], "adminCenter": {
+        **illustration_input()["scenes"]["adminCenter"], "mimeType": "image/jpeg",
+    }}},
+    {"setId": "upload", "opacity": 0.1, "surfaces": {"workbench": True, "chat": False, "topbar": False, "management": False}},
 ])
 async def test_invalid_illustrations_are_rejected_without_writing(api, illustrations):
     status, payload = await request(api, "POST", body=create_input(appearance={

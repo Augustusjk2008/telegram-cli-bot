@@ -50,7 +50,6 @@ import type {
   ClusterTaskStatus,
   ChatMessage,
   ChatMessageContextUsage,
-  ChatEndlessEvent,
   ChatMessageMetaInfo,
   ChatExecutionMode,
   ChatSendOptions,
@@ -108,6 +107,7 @@ import {
 } from "../stream/chatStreamBatch";
 import { HistoryRevisionState } from "../chat/historyDeltaState";
 import { resolveMessageVirtualKey } from "../chat/messageVirtualKey";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import {
   findActiveAssistantIndex,
   upsertActiveAssistantMessage,
@@ -1089,29 +1089,6 @@ function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tra
   };
 }
 
-function appendEndlessEventToMessage(item: ChatMessage, event: Omit<ChatEndlessEvent, "sequence">): ChatMessage {
-  const currentEvents = item.meta?.endlessEvents || [];
-  const duplicate = currentEvents.some((candidate) => (
-    candidate.kind === event.kind
-    && candidate.attempt === event.attempt
-    && candidate.text === event.text
-    && candidate.code === event.code
-  ));
-  if (duplicate) {
-    return { ...item, state: "streaming", text: "" };
-  }
-  const sequence = currentEvents.reduce((max, candidate) => Math.max(max, candidate.sequence || 0), 0) + 1;
-  const meta = mergeMessageMeta(item.meta, {
-    endlessEvents: [{ ...event, sequence }],
-  });
-  return {
-    ...item,
-    text: "",
-    state: "streaming",
-    ...(meta ? { meta } : {}),
-  };
-}
-
 function updateMessageById(
   items: ChatMessage[],
   messageId: string,
@@ -1418,6 +1395,8 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
 type ChatMessageRowProps = {
   item: ChatMessage;
   displayContextUsage?: ChatMessageContextUsage;
+  endlessModeActive: boolean;
+  endlessRetryAtMs: number | null;
   assistantName: string;
   allowTrace: boolean;
   traceLoadState: Record<string, { loading: boolean; error?: string }>;
@@ -1445,6 +1424,8 @@ type ChatMessageRowProps = {
 const ChatMessageRow = memo(function ChatMessageRow({
   item,
   displayContextUsage,
+  endlessModeActive,
+  endlessRetryAtMs,
   assistantName,
   allowTrace,
   traceLoadState,
@@ -1527,8 +1508,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const traceLoaded = traceCount <= 0 || traceLoadedCount >= traceCount;
   const hasTrace = allowTrace && isAssistant && traceCount > 0;
   const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
-  const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript || Boolean(endlessEvents?.length));
-  const isEndlessStreamingAssistant = isStreamingAssistant && Boolean(endlessEvents?.length);
+  const isEndlessStreamingAssistant = isStreamingAssistant && (endlessModeActive || Boolean(endlessEvents?.length));
+  const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript || Boolean(endlessEvents?.length) || isEndlessStreamingAssistant);
   const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
@@ -1611,6 +1592,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 canContinue={canContinue}
                 contextUsage={displayContextUsage}
                 endlessContinueCount={endlessContinueCount}
+                endlessActive={isEndlessStreamingAssistant}
+                endlessRetryAtMs={isEndlessStreamingAssistant ? endlessRetryAtMs : null}
                 mobileLayout={mobileLayout}
               />
             ) : item.role === "assistant" && item.state !== "streaming" ? (
@@ -1675,7 +1658,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
               </div>
             ) : isStreamingAssistant ? (
               <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
-                {isEndlessStreamingAssistant ? <EndlessTypingLabel /> : (
+                {isEndlessStreamingAssistant ? <EndlessTypingLabel retryAtMs={endlessRetryAtMs} /> : (
                   <>
                     <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
                     <span>正在输出...</span>
@@ -1732,6 +1715,8 @@ type ChatMessageListHandle = {
 const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   rows: ChatMessageRowModel[];
   scrollContainerRef: RefObject<HTMLElement | null>;
+  endlessModeActive: boolean;
+  endlessRetryAtMs: number | null;
   assistantName: string;
   allowTrace: boolean;
   traceLoadState: Record<string, { loading: boolean; error?: string }>;
@@ -1754,6 +1739,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
 }>(function ChatMessageList({
   rows,
   scrollContainerRef,
+  endlessModeActive,
+  endlessRetryAtMs,
   assistantName,
   allowTrace,
   traceLoadState,
@@ -1780,6 +1767,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
       <ChatMessageRow
         item={row.item}
         displayContextUsage={row.displayContextUsage}
+        endlessModeActive={endlessModeActive}
+        endlessRetryAtMs={endlessRetryAtMs}
         assistantName={assistantName}
         allowTrace={allowTrace}
         traceLoadState={traceLoadState}
@@ -1819,6 +1808,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   ), [
     allowTrace,
     assistantName,
+    endlessModeActive,
+    endlessRetryAtMs,
     executingPlanMessageId,
     handleContinueFinalAnswer,
     handleFastForward,
@@ -1918,6 +1909,7 @@ export function ChatScreen({
   const [selectionNotice, setSelectionNotice] = useState("");
   const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
   const [endlessModeActive, setEndlessModeActive] = useState(false);
+  const [endlessRetryDeadlineMs, setEndlessRetryDeadlineMs] = useState<number | null>(null);
   const [workingDir, setWorkingDir] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
@@ -2135,6 +2127,7 @@ export function ChatScreen({
     endlessModeRef.current = false;
     endlessModeTargetRef.current = null;
     setEndlessModeActive(false);
+    setEndlessRetryDeadlineMs(null);
     setEndlessModeConfirmOpen(false);
   }, []);
 
@@ -2312,6 +2305,9 @@ export function ChatScreen({
     if (botOverview?.endlessMode === true && botOverview.isProcessing) {
       endlessModeRef.current = true;
       setEndlessModeActive(true);
+      if (Number(botOverview.endlessRetryAtMs || 0) > Date.now()) {
+        setEndlessRetryDeadlineMs(Number(botOverview.endlessRetryAtMs));
+      }
       const endlessAttempt = Math.max(0, botOverview.endlessAttempt || 0);
       if (endlessAttempt > 0) {
         setItems((current) => {
@@ -2341,9 +2337,10 @@ export function ChatScreen({
     if (botOverview?.endlessMode === false && !botOverview.isProcessing) {
       endlessModeRef.current = false;
       setEndlessModeActive(false);
+      setEndlessRetryDeadlineMs(null);
       setEndlessModeConfirmOpen(false);
     }
-  }, [botOverview?.endlessAttempt, botOverview?.endlessMode, botOverview?.isProcessing]);
+  }, [botOverview?.endlessAttempt, botOverview?.endlessMode, botOverview?.endlessRetryAtMs, botOverview?.isProcessing]);
 
 
   useEffect(() => {
@@ -4197,7 +4194,7 @@ export function ChatScreen({
       sendOptions?: ChatSendOptions;
       onSuccess?: (message: ChatMessage) => void;
       onError?: (message: string) => void;
-      onEndlessError?: (message: ChatMessage, attempt: number) => void;
+      onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void;
     } = {},
   ) => {
     const sendBotAlias = botAlias;
@@ -4252,6 +4249,7 @@ export function ChatScreen({
     };
 
     setError("");
+    setEndlessRetryDeadlineMs(null);
     if (options.clearPendingAttachments) {
       setPendingAttachments([]);
     }
@@ -4281,12 +4279,12 @@ export function ChatScreen({
             ...assistantMessage,
             meta: mergeMessageMeta(item.meta, assistantMessage.meta),
           };
-          if (item.state === "error" && item.text.trim()) {
-            nextItem = appendEndlessEventToMessage(nextItem, {
-              kind: "error",
-              attempt: 0,
-              text: item.text.trim(),
-            });
+          if (item.state === "error") {
+            nextItem = {
+              ...nextItem,
+              text: "",
+              state: "streaming",
+            };
           }
           return nextItem;
         });
@@ -4330,7 +4328,7 @@ export function ChatScreen({
     let recoverIncompleteStream = false;
     try {
       let usingPreviewReplace = false;
-      const handleEndlessError = (message: ChatMessage, attempt: number) => {
+      const handleEndlessError = (message: ChatMessage, attempt: number, nextDelayMs = 0, retryAtMs?: number) => {
         if (sendVersion !== assistantSendVersionRef.current) {
           return;
         }
@@ -4340,40 +4338,31 @@ export function ChatScreen({
         streamTurnId = "";
         streamAssistantMessageId = "";
         usingPreviewReplace = false;
-        const visibleError: ChatMessage = {
-          ...message,
-          state: "error",
-        };
+        const visibleError: ChatMessage = { ...message, state: "error" };
         markSseActivity();
         setItems((current) => updateActiveAssistantMessage(
           current,
           previousTarget,
-          (item) => appendEndlessEventToMessage(item, {
-            kind: "error",
-            attempt: Math.max(0, attempt || 0),
-            text: visibleError.text.trim() || "Continue 执行失败",
-          }),
+          (item) => ({ ...item, text: "", state: "streaming" }),
         ));
+        setEndlessRetryDeadlineMs(retryAtMs && retryAtMs > 0 ? retryAtMs : Date.now() + Math.max(0, nextDelayMs));
         const activeBinding = activeTurnBindingRef.current;
         if (activeBinding?.localAssistantId === assistantId) {
           activeBinding.turnId = "";
           activeBinding.assistantMessageId = "";
         }
-        options.onEndlessError?.(visibleError, attempt);
+        options.onEndlessError?.(visibleError, attempt, nextDelayMs, retryAtMs);
       };
-      const handleEndlessContinue = (attempt: number) => {
+      const handleEndlessContinue = (_attempt: number) => {
         if (sendVersion !== assistantSendVersionRef.current) {
           return;
         }
         markSseActivity();
+        setEndlessRetryDeadlineMs(null);
         setItems((current) => updateActiveAssistantMessage(
           current,
           activeAssistantTarget(),
-          (item) => appendEndlessEventToMessage(item, {
-            kind: "continue",
-            attempt: Math.max(0, attempt || 0),
-            text: "Continue",
-          }),
+          (item) => ({ ...item, text: "", state: "streaming" }),
         ));
       };
       const requestSendOptions: ChatSendOptions | undefined = (() => {
@@ -4511,6 +4500,7 @@ export function ChatScreen({
         ...finalMessage,
         elapsedSeconds,
       });
+      setEndlessRetryDeadlineMs(null);
       const activeBinding = activeTurnBindingRef.current;
       if (activeBinding?.localAssistantId === assistantId) {
         activeBinding.turnId = finalizedMessage.turnId || streamTurnId;
@@ -5794,9 +5784,10 @@ export function ChatScreen({
         onTouchCancel={clearUserScrollIntent}
         onKeyDown={handleScrollKeyDown}
         className={isImmersive
-          ? `relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
-          : `relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
+          ? `theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
+          : `theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
       >
+        <ThemeIllustrationLayer surface="workbench" region="chat" />
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
@@ -5820,6 +5811,8 @@ export function ChatScreen({
             ref={messageListRef}
             rows={messageRowModels}
             scrollContainerRef={scrollContainerRef}
+            endlessModeActive={endlessModeActive}
+            endlessRetryAtMs={endlessRetryDeadlineMs}
             assistantName={assistantName}
             allowTrace={allowTrace}
             traceLoadState={traceLoadState}

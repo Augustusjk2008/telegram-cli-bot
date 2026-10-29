@@ -242,7 +242,6 @@ export function SoloWorkbench({
           style={{ gridTemplateColumns: columnTemplate }}
         >
           <section data-testid="solo-chat-pane" className="desktop-workbench-pane theme-illustration-host min-h-0 overflow-hidden">
-            <ThemeIllustrationLayer surface="chat" />
             {resolvedChatPaneContent}
           </section>
 

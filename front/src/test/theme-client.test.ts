@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { builtinLibrary } from "../theme/resolveAppearance";
+import { defaultIllustrations } from "../theme/illustrationPresets";
 import { portableTheme, readThemeFile } from "../theme/themeTransfer";
 
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
@@ -57,25 +58,48 @@ test("legacy imported themes receive the default illustration configuration", as
     }),
   } as File);
   expect((document as { appearance: { illustrations: unknown } }).appearance.illustrations).toEqual({
-    setId: "none",
-    opacity: 0,
-    surfaces: { workbench: false, chat: false, topbar: false, management: false },
+    ...defaultIllustrations(),
   });
 });
 
+test("legacy uploaded illustrations keep their inline data until the server migrates them", async () => {
+  const legacy = {
+    setId: "upload",
+    upload: {
+      mimeType: "image/png",
+      data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    },
+    opacity: 0.12,
+    surfaces: { workbench: true, chat: false, topbar: false, management: false },
+  };
+  const document = await readThemeFile({
+    text: async () => JSON.stringify({
+      schemaVersion: 1,
+      name: "旧上传主题",
+      baseId: "paper-daylight",
+      appearance: { colors: { scheme: "light", overrides: {} }, illustrations: legacy },
+    }),
+  } as File);
+  expect((document as { appearance: { illustrations: unknown } }).appearance.illustrations).toEqual(legacy);
+});
+
 test("theme export keeps a theme-owned uploaded illustration", () => {
+  const uploaded = {
+    kind: "uploaded" as const,
+    assetId: "asset_431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+    mimeType: "image/png" as const,
+    width: 1,
+    height: 1,
+    sha256: "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+  };
   const theme = {
     ...builtinLibrary().themes[0],
     appearance: {
       ...builtinLibrary().themes[0].appearance,
       illustrations: {
-        setId: "upload" as const,
-        upload: {
-          mimeType: "image/png" as const,
-          data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        },
         opacity: 0.12,
-        surfaces: { workbench: true, chat: false, topbar: false, management: false },
+        surfaces: { workbench: true, adminCenter: false, agentManager: false },
+        scenes: { workbench: uploaded, adminCenter: uploaded, agentManager: uploaded },
       },
     },
   };

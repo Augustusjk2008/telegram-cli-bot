@@ -12,6 +12,7 @@ import type {
   ThemeCreateInput,
   ThemeUpdateInput,
   ThemeImportInput,
+  ThemeIllustrationAsset,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -1636,6 +1637,7 @@ type StreamEventPayload =
       output?: string;
       attempt?: number;
       next_delay_ms?: number;
+      retry_at_ms?: number;
       user_message_id?: string;
       message?: RawHistoryItem;
     }
@@ -4814,6 +4816,15 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
+  async uploadThemeAsset(file: File): Promise<ThemeIllustrationAsset> {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return this.requestJson<ThemeIllustrationAsset>("/api/ui/theme-assets", {
+      method: "POST",
+      body: form,
+    });
+  }
+
   async updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary> {
     return this.requestJson<ThemeLibrary>(`/api/ui/themes/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -5285,6 +5296,8 @@ export class RealWebBotClient implements WebBotClient {
         is_processing: boolean;
         endless_mode?: boolean;
         endless_attempt?: number;
+        endless_group_id?: string;
+        endless_retry_at_ms?: number;
         endlessMode?: boolean;
         endlessAttempt?: number;
         running_reply?: RawRunningReply | null;
@@ -5313,6 +5326,8 @@ export class RealWebBotClient implements WebBotClient {
       isProcessing: data.session.is_processing,
       endlessMode: Boolean(data.session.endless_mode ?? data.session.endlessMode ?? false),
       endlessAttempt: Number(data.session.endless_attempt ?? data.session.endlessAttempt ?? 0),
+      endlessGroupId: data.session.endless_group_id || "",
+      endlessRetryAtMs: Number(data.session.endless_retry_at_ms || 0),
       runningReply: mapRunningReply(data.session.running_reply),
       activeConversationId: String(data.session.active_conversation_id ?? data.session.activeConversationId ?? ""),
       ...(Number.isFinite(Number(data.session.session_epoch ?? data.session.sessionEpoch))
@@ -5745,7 +5760,7 @@ export class RealWebBotClient implements WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
-    onEndlessError?: (message: ChatMessage, attempt: number) => void,
+    onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
     const useAgUiProtocol = options?.executionMode === "native_agent";
@@ -5874,7 +5889,15 @@ export class RealWebBotClient implements WebBotClient {
             text: event.output || event.message?.content || "",
             state: "error",
           });
-          onEndlessError?.(message, Number(event.attempt || 0));
+          const nextDelayMs = typeof event.retry_at_ms === "number" && Number.isFinite(event.retry_at_ms)
+            ? Math.max(0, event.retry_at_ms - Date.now())
+            : typeof event.next_delay_ms === "number" && Number.isFinite(event.next_delay_ms)
+            ? Math.max(0, event.next_delay_ms)
+            : 0;
+          const retryAtMs = typeof event.retry_at_ms === "number" && Number.isFinite(event.retry_at_ms)
+            ? Math.max(0, event.retry_at_ms)
+            : undefined;
+          onEndlessError?.(message, Number(event.attempt || 0), nextDelayMs, retryAtMs);
           separator = findSseSeparator(buffer);
           continue;
         }

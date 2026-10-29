@@ -18,6 +18,7 @@ import {
   normalizeIllustrations,
   resolveAppearance,
 } from "../theme/resolveAppearance";
+import { defaultIllustrations } from "../theme/illustrationPresets";
 
 function relativeLuminance(color: string) {
   const [red, green, blue] = [1, 3, 5].map((offset) => {
@@ -97,16 +98,7 @@ describe("UI themes", () => {
   });
 
   it("normalizes legacy illustration data and includes illustration edits in the revision", () => {
-    expect(normalizeIllustrations(undefined)).toEqual({
-      setId: "none",
-      opacity: 0,
-      surfaces: {
-        workbench: false,
-        chat: false,
-        topbar: false,
-        management: false,
-      },
-    });
+    expect(normalizeIllustrations(undefined)).toEqual(defaultIllustrations());
     const forest = resolveAppearance({
       ...BUILTIN_THEME,
       appearance: {
@@ -130,7 +122,7 @@ describe("UI themes", () => {
       },
     });
     expect(forest.illustrations.resources.workbench).toBe(
-      "/assets/theme-illustrations/forest-grove-workbench.svg",
+      "/assets/theme-illustrations/forest-grove/workbench.webp",
     );
     expect(changed.revision).not.toBe(forest.revision);
   });

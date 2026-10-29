@@ -884,7 +884,7 @@ describe("RealWebBotClient", () => {
       }) + "\n\n",
     ));
 
-    const errors: Array<{ text: string; attempt: number }> = [];
+    const errors: Array<{ text: string; attempt: number; nextDelayMs?: number }> = [];
     const continues: Array<{ text: string; attempt: number }> = [];
     const message = await new RealWebBotClient().sendMessage(
       "main",
@@ -894,7 +894,7 @@ describe("RealWebBotClient", () => {
       undefined,
       { endlessMode: true },
       undefined,
-      (error, attempt) => errors.push({ text: error.text, attempt }),
+      (error, attempt, nextDelayMs) => errors.push({ text: error.text, attempt, nextDelayMs }),
       (attempt) => continues.push({ text: "Continue", attempt }),
     );
 
@@ -902,7 +902,7 @@ describe("RealWebBotClient", () => {
       message: "Continue",
       endless_mode: true,
     });
-    expect(errors).toEqual([{ text: "Continue 失败", attempt: 1 }]);
+    expect(errors).toEqual([{ text: "Continue 失败", attempt: 1, nextDelayMs: 2000 }]);
     expect(continues).toEqual([{ text: "Continue", attempt: 1 }]);
     expect(message).toMatchObject({ id: "assistant-endless-success", text: "最终成功", state: "done" });
   });

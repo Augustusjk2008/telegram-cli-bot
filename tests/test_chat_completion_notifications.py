@@ -230,9 +230,11 @@ async def test_endless_retry_stream_notifies_only_final_done_with_fallback_ident
         },
     ]
     attempt_index = 0
+    attempt_processing_states: list[bool] = []
 
     def attempt_factory(_text, _request):
         nonlocal attempt_index
+        attempt_processing_states.append(session.is_processing)
         event = attempts[attempt_index]
         attempt_index += 1
 
@@ -241,24 +243,32 @@ async def test_endless_retry_stream_notifies_only_final_done_with_fallback_ident
 
         return events()
 
+    endless_stream = api_service._stream_endless_attempts(
+        session=session,
+        alias="dev",
+        shared_user_id=42,
+        initial_text="question",
+        initial_request=request,
+        attempt_factory=attempt_factory,
+    )
+    first_event = await anext(endless_stream)
+    assert first_event["type"] == "endless_error"
+    assert session.is_processing is True
     events = [
-        event
-        async for event in api_service._stream_with_telegram_completion_notifications(
-            api_service._stream_endless_attempts(
-                session=session,
+        first_event,
+        *[
+            event
+            async for event in api_service._stream_with_telegram_completion_notifications(
+                endless_stream,
                 alias="dev",
-                shared_user_id=42,
-                initial_text="question",
-                initial_request=request,
-                attempt_factory=attempt_factory,
-            ),
-            alias="dev",
-            agent_id="main",
-            source_chat_id=None,
-        )
+                agent_id="main",
+                source_chat_id=None,
+            )
+        ],
     ]
 
     assert [event["type"] for event in events] == ["endless_error", "endless_continue", "done"]
+    assert attempt_processing_states == [False, False]
     assert len(captured) == 1
     assert captured[0].content == "final answer"
     assert captured[0].endless_group_id == "endless-1"

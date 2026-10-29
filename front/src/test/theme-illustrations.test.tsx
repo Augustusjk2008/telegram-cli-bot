@@ -2,22 +2,25 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
+import { builtinIllustrationAsset } from "../theme/illustrationPresets";
 
-function appearanceFor(
-  setId: "forest-grove" | "none" = "forest-grove",
-) {
+function appearanceFor(setId: "forest-grove" | "none" = "forest-grove") {
+  const asset = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationAsset(setId, surface);
   return resolveAppearance({
     ...BUILTIN_THEME,
     appearance: {
       ...BUILTIN_THEME.appearance,
       illustrations: {
-        setId,
         opacity: setId === "none" ? 0 : 0.12,
         surfaces: {
           workbench: setId !== "none",
-          chat: setId !== "none",
-          topbar: false,
-          management: false,
+          adminCenter: false,
+          agentManager: false,
+        },
+        scenes: {
+          workbench: asset("workbench"),
+          adminCenter: asset("adminCenter"),
+          agentManager: asset("agentManager"),
         },
       },
     },
@@ -36,7 +39,7 @@ describe("ThemeIllustrationLayer", () => {
     expect(layer).toHaveAttribute("aria-hidden", "true");
     expect(layer).toHaveStyle({ pointerEvents: "none" });
     expect(layer.style.getPropertyValue("--theme-illustration-image")).toContain(
-      "/assets/theme-illustrations/forest-grove-workbench.svg",
+      "/assets/theme-illustrations/forest-grove/workbench.webp",
     );
     expect(layer.querySelector(".theme-illustration-art")).toBeInTheDocument();
   });

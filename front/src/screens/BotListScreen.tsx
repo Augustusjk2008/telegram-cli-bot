@@ -274,9 +274,9 @@ export function BotListScreen({
 
   return (
     <main data-ui-density="compact" className="theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--bg)] p-4">
-      <ThemeIllustrationLayer surface="management" />
+      <ThemeIllustrationLayer surface="agentManager" />
       <header className="theme-illustration-host mb-3 flex items-center justify-between gap-3">
-        <ThemeIllustrationLayer surface="topbar" />
+      <ThemeIllustrationLayer surface="agentManager" region="topbar" />
         <h1 className="text-2xl font-bold">智能体管理</h1>
         <div className="flex items-center gap-2">
           {onLogout ? (

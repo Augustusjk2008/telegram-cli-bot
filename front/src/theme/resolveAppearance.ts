@@ -1,10 +1,13 @@
 import catalog from "../../../bot/web/theme_catalog.json";
 import type {
   ColorToken,
+  LegacyThemeIllustrations,
+  ThemeIllustrationAsset,
+  ThemeIllustrationSurface,
   ThemeIllustrationUpload,
   ThemeIllustrationUploadMime,
   ThemeIllustrations,
-  ThemeIllustrationSurface,
+  ThemeIllustrationsValue,
   UiTheme,
   ResolvedAppearance,
   ThemeLibrary,
@@ -17,16 +20,22 @@ import {
 } from "./chatTypography";
 import { PAPER_MOTION, PAPER_STYLE } from "./types";
 import {
+  builtinIllustrationAsset,
   defaultIllustrations,
-  illustrationResourcePath,
+  illustrationAssetResourcePath,
   THEME_ILLUSTRATION_SET_IDS,
   THEME_ILLUSTRATION_SURFACES,
+  THEME_ILLUSTRATION_CATALOG,
 } from "./illustrationPresets";
 
 export const THEME_TOKENS = catalog.tokens as ColorToken[];
-export const MAX_THEME_ILLUSTRATION_UPLOAD_BYTES = 512 * 1024;
+export const MAX_THEME_ILLUSTRATION_UPLOAD_BYTES = 4 * 1024 * 1024;
+export const MAX_THEME_ILLUSTRATION_TOTAL_BYTES = 12 * 1024 * 1024;
 const THEME_ILLUSTRATION_UPLOAD_MIMES = ["image/png", "image/jpeg", "image/webp"] as const satisfies readonly ThemeIllustrationUploadMime[];
 const THEME_ILLUSTRATION_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
+const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
+const SHA256 = /^[a-f0-9]{64}$/i;
+
 export const BUILTIN_THEME: UiTheme = {
   schemaVersion: 1,
   id: "paper-daylight",
@@ -45,7 +54,6 @@ export const BUILTIN_THEME: UiTheme = {
 export function builtinLibrary(): ThemeLibrary {
   return { schemaVersion: 1, scope: "global", revision: 0, selectedThemeId: BUILTIN_THEME.id, themes: [BUILTIN_THEME] };
 }
-
 export function normalizeColor(value: string, allowAlpha = true): string | null {
   let hex = value.trim().toUpperCase();
   if (!/^#(?:[0-9A-F]{3}|[0-9A-F]{4}|[0-9A-F]{6}|[0-9A-F]{8})$/.test(hex)) return null;
@@ -60,15 +68,12 @@ function uploadBytes(upload: ThemeIllustrationUpload) {
   const payload = match[2];
   const estimatedBytes = Math.floor(payload.length * 3 / 4) - (payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0);
   if (estimatedBytes <= 0 || estimatedBytes > MAX_THEME_ILLUSTRATION_UPLOAD_BYTES) {
-    throw new Error("上传插画不能超过 512 KiB");
+    throw new Error("上传插画不能超过 4 MiB");
   }
   if (typeof atob !== "function") return null;
   let binary: string;
-  try {
-    binary = atob(payload);
-  } catch {
-    throw new Error("上传插画数据无效");
-  }
+  try { binary = atob(payload); }
+  catch { throw new Error("上传插画数据无效"); }
   const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
   const validSignature = upload.mimeType === "image/png"
     ? bytes.length >= 8 && bytes.slice(0, 8).every((value, index) => value === [137, 80, 78, 71, 13, 10, 26, 10][index])
@@ -95,45 +100,140 @@ export function normalizeIllustrationUpload(value: unknown): ThemeIllustrationUp
   return upload;
 }
 
-export function normalizeIllustrations(value: unknown): ThemeIllustrations {
-  if (value === undefined) return defaultIllustrations();
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("主题插画配置无效");
+function shortHash(value: string) {
+  let first = 0x811c9dc5;
+  let second = 0x01000193;
+  for (const char of value) {
+    first = Math.imul(first ^ char.charCodeAt(0), 16777619);
+    second = Math.imul(second ^ char.charCodeAt(0), 2246822519);
   }
+  return `${(first >>> 0).toString(16).padStart(8, "0")}${(second >>> 0).toString(16).padStart(8, "0")}`.repeat(4).slice(0, 64);
+}
+
+function legacyAsset(upload: ThemeIllustrationUpload): ThemeIllustrationAsset {
+  const hash = shortHash(upload.data);
+  return {
+    kind: "uploaded",
+    assetId: `legacy-${hash}`,
+    mimeType: upload.mimeType,
+    width: 0,
+    height: 0,
+    sha256: hash,
+  };
+}
+
+function normalizeAsset(value: unknown): ThemeIllustrationAsset {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("场景插画资源无效");
   const candidate = value as Record<string, unknown>;
+  if (Object.keys(candidate).some((key) => !["kind", "assetId", "mimeType", "width", "height", "sha256"].includes(key))) {
+    throw new Error("场景插画资源包含不支持的字段");
+  }
+  if (candidate.kind !== "builtin" && candidate.kind !== "uploaded") throw new Error("场景插画资源类型无效");
+  if (typeof candidate.assetId !== "string" || !ASSET_ID.test(candidate.assetId)) throw new Error("场景插画资源 ID 无效");
+  const mimeTypeIsValid = candidate.kind === "builtin"
+    ? candidate.mimeType === "image/png" || candidate.mimeType === "image/webp"
+    : THEME_ILLUSTRATION_UPLOAD_MIMES.includes(candidate.mimeType as ThemeIllustrationUploadMime);
+  if (!mimeTypeIsValid) throw new Error("场景插画 MIME 无效");
+  if (!Number.isInteger(candidate.width) || !Number.isInteger(candidate.height)
+    || Number(candidate.width) < 1 || Number(candidate.height) < 1) throw new Error("场景插画尺寸无效");
+  if (typeof candidate.sha256 !== "string" || !SHA256.test(candidate.sha256)) throw new Error("场景插画哈希无效");
+  const asset = {
+    kind: candidate.kind,
+    assetId: candidate.assetId,
+    mimeType: candidate.mimeType,
+    width: candidate.width,
+    height: candidate.height,
+    sha256: candidate.sha256.toLowerCase(),
+  } as ThemeIllustrationAsset;
+  if (asset.kind === "builtin") {
+    const catalogAsset = Object.values(THEME_ILLUSTRATION_CATALOG.sets)
+      .flatMap((set) => Object.values(set))
+      .find((item) => item.assetId === asset.assetId);
+    if (!catalogAsset || catalogAsset.mimeType !== asset.mimeType || catalogAsset.width !== asset.width
+      || catalogAsset.height !== asset.height || catalogAsset.sha256 !== asset.sha256) {
+      throw new Error("内置场景插画元数据无效");
+    }
+  }
+  return asset;
+}
+
+function isLegacy(value: unknown): value is LegacyThemeIllustrations {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && "setId" in value);
+}
+
+function canonicalFromLegacy(value: LegacyThemeIllustrations): ThemeIllustrations {
+  const candidate = value as unknown as Record<string, unknown>;
   if (Object.keys(candidate).some((key) => !["setId", "upload", "opacity", "surfaces"].includes(key))) {
     throw new Error("主题插画配置包含不支持的字段");
   }
-  const setId = candidate.setId as ThemeIllustrations["setId"];
-  if (setId !== "upload" && !THEME_ILLUSTRATION_SET_IDS.includes(setId as typeof THEME_ILLUSTRATION_SET_IDS[number])) {
+  if (!THEME_ILLUSTRATION_SET_IDS.includes(value.setId as typeof THEME_ILLUSTRATION_SET_IDS[number]) && value.setId !== "upload") {
     throw new Error("主题插画资源无效");
   }
-  const upload = candidate.upload === undefined ? undefined : normalizeIllustrationUpload(candidate.upload);
-  if ((setId === "upload") !== Boolean(upload)) {
-    throw new Error("上传插画配置与资源类型不匹配");
+  const upload = value.upload === undefined ? undefined : normalizeIllustrationUpload(value.upload);
+  if ((value.setId === "upload") !== Boolean(upload)) throw new Error("上传插画配置与资源类型不匹配");
+  const surfaces = value.surfaces as Record<string, unknown>;
+  if (!surfaces || typeof surfaces !== "object" || Array.isArray(surfaces)
+    || Object.keys(surfaces).some((key) => !["workbench", "chat", "topbar", "management"].includes(key))
+    || ["workbench", "chat", "topbar", "management"].some((surface) => typeof surfaces[surface] !== "boolean")) {
+    throw new Error("主题插画区域配置无效");
+  }
+  const asset = upload ? legacyAsset(upload) : null;
+  const setId = value.setId === "upload" ? "none" : value.setId;
+  return {
+    opacity: value.opacity,
+    surfaces: {
+      workbench: Boolean(surfaces.workbench || surfaces.chat || surfaces.topbar),
+      adminCenter: Boolean(surfaces.management),
+      agentManager: Boolean(surfaces.management),
+    },
+    scenes: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [
+      surface,
+      asset || builtinIllustrationAsset(setId as typeof THEME_ILLUSTRATION_SET_IDS[number], surface),
+    ])) as ThemeIllustrations["scenes"],
+  };
+}
+
+export function normalizeIllustrations(value: unknown): ThemeIllustrations {
+  if (value === undefined) return defaultIllustrations();
+  if (isLegacy(value)) {
+    const normalized = canonicalFromLegacy(value);
+    if (typeof normalized.opacity !== "number" || !Number.isFinite(normalized.opacity)
+      || normalized.opacity < 0 || normalized.opacity > 0.25) throw new Error("主题插画透明度必须在 0 到 0.25 之间");
+    return normalized;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("主题插画配置无效");
+  const candidate = value as Record<string, unknown>;
+  if (Object.keys(candidate).some((key) => !["opacity", "surfaces", "scenes"].includes(key))) {
+    throw new Error("主题插画配置包含不支持的字段");
   }
   if (typeof candidate.opacity !== "number" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 0.25) {
     throw new Error("主题插画透明度必须在 0 到 0.25 之间");
   }
   const surfaces = candidate.surfaces;
-  if (!surfaces || typeof surfaces !== "object" || Array.isArray(surfaces)) {
+  if (!surfaces || typeof surfaces !== "object" || Array.isArray(surfaces)) throw new Error("主题插画区域配置无效");
+  const surfaceRecord = surfaces as Record<string, unknown>;
+  if (Object.keys(surfaceRecord).some((key) => !THEME_ILLUSTRATION_SURFACES.includes(key as ThemeIllustrationSurface))
+    || THEME_ILLUSTRATION_SURFACES.some((surface) => typeof surfaceRecord[surface] !== "boolean")) {
     throw new Error("主题插画区域配置无效");
   }
-  const surfaceRecord = surfaces as Record<string, unknown>;
-  if (Object.keys(surfaceRecord).some((key) => !THEME_ILLUSTRATION_SURFACES.includes(key as ThemeIllustrationSurface))) {
-    throw new Error("主题插画区域配置包含不支持的字段");
-  }
-  for (const surface of THEME_ILLUSTRATION_SURFACES) {
-    if (typeof surfaceRecord[surface] !== "boolean") throw new Error("主题插画区域配置无效");
+  const scenes = candidate.scenes;
+  if (!scenes || typeof scenes !== "object" || Array.isArray(scenes)) throw new Error("主题插画场景配置无效");
+  const sceneRecord = scenes as Record<string, unknown>;
+  if (Object.keys(sceneRecord).some((key) => !THEME_ILLUSTRATION_SURFACES.includes(key as ThemeIllustrationSurface))
+    || THEME_ILLUSTRATION_SURFACES.some((surface) => sceneRecord[surface] === undefined)) {
+    throw new Error("主题插画场景配置无效");
   }
   return {
-    setId,
-    ...(upload ? { upload } : {}),
     opacity: candidate.opacity,
-    surfaces: Object.fromEntries(
-      THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, surfaceRecord[surface] as boolean]),
-    ) as ThemeIllustrations["surfaces"],
+    surfaces: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, surfaceRecord[surface] as boolean])) as ThemeIllustrations["surfaces"],
+    scenes: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, normalizeAsset(sceneRecord[surface])])) as ThemeIllustrations["scenes"],
   };
+}
+
+function legacyUploadData(value: ThemeIllustrationsValue) {
+  return isLegacy(value) && value.setId === "upload" && value.upload
+    ? normalizeIllustrationUpload(value.upload).data
+    : "";
 }
 
 export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
@@ -147,7 +247,8 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
     || !theme.appearance.colors.overrides || typeof theme.appearance.colors.overrides !== "object"
     || Array.isArray(theme.appearance.colors.overrides)
     || (theme.appearance.typography !== undefined && !isChatTypography(theme.appearance.typography))) throw new Error("此主题包含尚不支持的外观配置");
-  const illustrations = normalizeIllustrations(theme.appearance.illustrations);
+  const rawIllustrations = theme.appearance.illustrations;
+  const illustrations = normalizeIllustrations(rawIllustrations);
   for (const [key, value] of Object.entries(theme.appearance.colors.overrides)) {
     const token = tokens.get(key);
     if (!token || typeof value !== "string" || !normalizeColor(value, token.allowAlpha)) throw new Error(`主题颜色无效：${key}`);
@@ -175,24 +276,19 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   }
   const typography = normalizeChatTypography(theme.appearance.typography);
   Object.assign(cssVariables, chatTypographyCssVariables(typography));
+  const legacyData = legacyUploadData(rawIllustrations as ThemeIllustrationsValue);
   const resources = Object.fromEntries(
     THEME_ILLUSTRATION_SURFACES.map((surface) => [
       surface,
-      illustrations.setId === "upload"
-        ? illustrations.upload!.data
-        : illustrationResourcePath(illustrations.setId, surface),
+      legacyData || illustrationAssetResourcePath(illustrations.scenes[surface]),
     ]),
   ) as Record<ThemeIllustrationSurface, string>;
+  const legacySetId = isLegacy(rawIllustrations) ? rawIllustrations.setId : undefined;
   const resolvedIllustrations = {
     ...illustrations,
     resources,
-    colors: {
-      primary: colors["accent.strong"] || colors.accent,
-      secondary: colors.accent,
-      soft: colors["accent.soft"] || colors.accent,
-    },
-  };
-  // Identity alone cannot detect editing the selected theme in place.
+    ...(legacySetId ? { setId: legacySetId } : {}),
+  } as ResolvedAppearance["illustrations"];
   const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography, resolvedIllustrations]);
   return { themeId: theme.id, scheme: theme.appearance.colors.scheme, typography, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, illustrations: resolvedIllustrations, revision };
 }

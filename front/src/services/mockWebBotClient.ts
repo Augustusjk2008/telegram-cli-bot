@@ -10,6 +10,7 @@ import type {
   ThemeCreateInput,
   ThemeUpdateInput,
   ThemeImportInput,
+  ThemeIllustrationAsset,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -192,6 +193,72 @@ import type {
   WaveformViewSummary,
   WaveformWindowPayload,
 } from "./types";
+
+const THEME_ASSET_MIMES = ["image/png", "image/jpeg", "image/webp"] as const;
+
+function themeAssetBytes(data: string, mimeType: string) {
+  const match = new RegExp(`^data:${mimeType.replace("/", "\\/")};base64,([A-Za-z0-9+/]+={0,2})$`).exec(data);
+  if (!match) throw new WebApiClientError("主题包资源数据无效", { status: 400, code: "invalid_theme" });
+  try {
+    const binary = atob(match[1]);
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  } catch {
+    throw new WebApiClientError("主题包资源数据无效", { status: 400, code: "invalid_theme" });
+  }
+}
+
+function themeAssetDimensions(bytes: Uint8Array, mimeType: string): [number, number] {
+  if (mimeType === "image/png" && bytes.length >= 24
+    && bytes.slice(0, 8).every((value, index) => value === [137, 80, 78, 71, 13, 10, 26, 10][index])
+    && bytes.slice(12, 16).every((value, index) => value === [73, 72, 68, 82][index])) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return [view.getUint32(16), view.getUint32(20)];
+  }
+  if (mimeType === "image/jpeg" && bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    let offset = 2;
+    while (offset + 3 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+      const marker = bytes[offset++];
+      if (marker === undefined) break;
+      if (marker === 0xd8 || marker === 0xd9) continue;
+      if (offset + 2 > bytes.length) break;
+      const length = new DataView(bytes.buffer, bytes.byteOffset + offset, 2).getUint16(0);
+      if (length < 2 || offset + length > bytes.length) break;
+      if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+        if (length < 7) break;
+        const view = new DataView(bytes.buffer, bytes.byteOffset + offset, bytes.byteLength - offset);
+        return [view.getUint16(5), view.getUint16(3)];
+      }
+      offset += length;
+    }
+  }
+  if (mimeType === "image/webp" && bytes.length >= 30
+    && bytes.slice(0, 4).every((value, index) => value === [82, 73, 70, 70][index])
+    && bytes.slice(8, 12).every((value, index) => value === [87, 69, 66, 80][index])) {
+    const chunk = String.fromCharCode(...bytes.slice(12, 16));
+    if (chunk === "VP8X") {
+      const width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16);
+      const height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16);
+      return [width, height];
+    }
+  }
+  throw new WebApiClientError("无法读取插画尺寸", { status: 400, code: "theme_asset_dimensions_invalid" });
+}
+
+async function themeAssetDescriptor(file: File): Promise<ThemeIllustrationAsset> {
+  if (!THEME_ASSET_MIMES.includes(file.type as typeof THEME_ASSET_MIMES[number])) {
+    throw new WebApiClientError("上传插画格式只支持 PNG、JPEG 或 WebP", { status: 400, code: "theme_asset_mime_mismatch" });
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    throw new WebApiClientError("单张插画不能超过 4 MiB", { status: 413, code: "theme_asset_too_large" });
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const [width, height] = themeAssetDimensions(bytes, file.type);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+  return { kind: "uploaded", assetId: `asset_${hash}`, mimeType: file.type as ThemeIllustrationAsset["mimeType"], width, height, sha256: hash };
+}
 import { WebBotClient } from "./webBotClient";
 import { EventType, type AgUiEvent } from "./agUiProtocol";
 import { mockBots } from "../mocks/bots";
@@ -1715,6 +1782,7 @@ function buildMockHdlWindow(rows: TableRow[], request: PluginViewWindowRequest):
 
 export class MockWebBotClient implements WebBotClient {
   private static uiThemeMemory: ThemeLibrary | null = null;
+  private static uiThemeAssets = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
 
   private bots = new Map<string, BotSummary>(
     mockBots.map((item) => [
@@ -3504,6 +3572,15 @@ export class MockWebBotClient implements WebBotClient {
     return this.uiThemeLibrary();
   }
 
+  async uploadThemeAsset(file: File): Promise<ThemeIllustrationAsset> {
+    if (this.session.role === "guest" || this.currentAccountId() === "guest") {
+      throw new WebApiClientError("请登录正式账户后管理全局主题", { status: 403, code: "theme_readonly" });
+    }
+    const descriptor = await themeAssetDescriptor(file);
+    MockWebBotClient.uiThemeAssets.set(descriptor.assetId, { bytes: await file.arrayBuffer(), mimeType: file.type });
+    return descriptor;
+  }
+
   async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
     this.uiThemeInput(input, true);
     return this.mutateUiThemes(input.expectedRevision, (library) => {
@@ -3520,6 +3597,24 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary> {
+    if (input.assets !== undefined) {
+      if (!Array.isArray(input.assets) || input.assets.length > 100) {
+        throw new WebApiClientError("主题包资源数量无效", { status: 400, code: "invalid_theme" });
+      }
+      for (const asset of input.assets) {
+        if (!THEME_ASSET_MIMES.includes(asset.mimeType as typeof THEME_ASSET_MIMES[number])) {
+          throw new WebApiClientError("主题包资源格式无效", { status: 400, code: "invalid_theme" });
+        }
+        const bytes = themeAssetBytes(asset.data, asset.mimeType);
+        themeAssetDimensions(bytes, asset.mimeType);
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+        if (asset.assetId !== `asset_${hash}`) {
+          throw new WebApiClientError("主题包资源哈希与 ID 不匹配", { status: 400, code: "theme_asset_integrity_invalid" });
+        }
+        MockWebBotClient.uiThemeAssets.set(asset.assetId, { bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), mimeType: asset.mimeType });
+      }
+    }
     return this.mutateUiThemes(input.expectedRevision, (library) => {
       const object = (value: unknown, fields: string[]): Record<string, unknown> => {
         if (!value || typeof value !== "object" || Array.isArray(value)
@@ -3532,7 +3627,10 @@ export class MockWebBotClient implements WebBotClient {
       const schema = (value: Record<string, unknown>) => {
         if (value.schemaVersion !== 1) throw new WebApiClientError("不支持此主题数据版本，请更新应用后重试", { status: 400, code: "unsupported_theme_schema" });
       };
-      object(input, ["expectedRevision", "document"]);
+      if (Object.keys(input).some((key) => !["expectedRevision", "document", "assets"].includes(key))
+        || !Object.hasOwn(input, "expectedRevision") || !Object.hasOwn(input, "document")) {
+        throw new WebApiClientError("主题导入请求包含不支持的字段或缺少必要字段", { status: 400, code: "invalid_theme" });
+      }
       let items: unknown[];
       if (input.document && typeof input.document === "object" && "themes" in input.document) {
         const pack = object(input.document, ["schemaVersion", "themes"]);
@@ -4937,7 +5035,7 @@ export class MockWebBotClient implements WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
-    _onEndlessError?: (message: ChatMessage, attempt: number) => void,
+    _onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     _onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
     const agentId = options?.agentId || "main";

@@ -2,7 +2,7 @@ import { createContext, lazy, Suspense, useCallback, useContext, useLayoutEffect
 import type { WebBotClient } from "../services/webBotClient";
 import { applyResolvedAppearance } from "./appearanceRuntime";
 import { BUILTIN_THEME, builtinLibrary, resolveAppearance } from "./resolveAppearance";
-import type { ThemeCreateInput, ThemeLibrary, ThemeUpdateInput } from "./types";
+import type { ThemeCreateInput, ThemeIllustrationAssetImport, ThemeLibrary, ThemeUpdateInput } from "./types";
 import "./appearance.css";
 
 const ThemeManagerScreen = lazy(() => import("../screens/ThemeManagerScreen").then((module) => ({ default: module.ThemeManagerScreen })));
@@ -168,7 +168,12 @@ function useAppearanceState() {
   }, [accept]);
 
   const createTheme = useCallback((input: CreateInput) => mutate((client, revision) => client.createUiTheme({ ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
-  const importThemes = useCallback((document: unknown, expectedRevision: number) => mutate((client) => client.importUiThemes({ document, expectedRevision })), [mutate]);
+  const importThemes = useCallback((document: unknown, expectedRevision: number, assets: ThemeIllustrationAssetImport[] = []) => mutate((client) => client.importUiThemes({ document, expectedRevision, ...(assets.length ? { assets } : {}) })), [mutate]);
+  const uploadThemeAsset = useCallback(async (file: File) => {
+    const activeSession = sessionRef.current;
+    if (!activeSession || activeSession.previewOnly || activeSession.canManage === false) throw new Error("请登录正式账户后管理全局主题");
+    return activeSession.client.uploadThemeAsset(file);
+  }, []);
   const updateTheme = useCallback((id: string, input: UpdateInput) => mutate((client, revision) => client.updateUiTheme(id, { ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
   const deleteTheme = useCallback((id: string) => mutate((client, revision) => client.deleteUiTheme(id, revision)), [mutate]);
   const selectTheme = useCallback(async (id: string) => {
@@ -183,7 +188,7 @@ function useAppearanceState() {
   const openManager = useCallback(() => { if (sessionRef.current && !sessionRef.current.previewOnly && sessionRef.current.canManage !== false) setManagerOpen(true); }, []);
   const closeManager = useCallback(() => setManagerOpen(false), []);
   const canManage = Boolean(session && !session.previewOnly && session.canManage !== false);
-  return { library, appearance, loading, error, canManage, canSelect: Boolean(session?.previewOnly || canManage), bindSession, reload, createTheme, importThemes, updateTheme, deleteTheme, selectTheme, managerOpen, openManager, closeManager };
+  return { library, appearance, loading, error, canManage, canSelect: Boolean(session?.previewOnly || canManage), bindSession, reload, createTheme, importThemes, uploadThemeAsset, updateTheme, deleteTheme, selectTheme, managerOpen, openManager, closeManager };
 }
 
 type AppearanceContextValue = ReturnType<typeof useAppearanceState>;

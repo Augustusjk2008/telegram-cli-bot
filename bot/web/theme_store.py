@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from bot.runtime_paths import get_theme_library_path
+from bot.runtime_paths import get_theme_assets_dir, get_theme_library_path
+from bot.web.theme_asset_store import MAX_THEME_ASSET_TOTAL_BYTES, ThemeAssetStore, ThemeAssetStoreError
 
 BUILTIN_THEME_ID = "paper-daylight"
 _THEME_ID = re.compile(r"theme_[0-9a-f]{32}\Z")
@@ -34,7 +35,8 @@ _CHAT_TYPOGRAPHY_VALUES = {
     "chatBodyLineHeight": {"tight", "normal", "relaxed"},
     "chatBodyParagraphSpacing": {"tight", "normal", "relaxed"},
 }
-_ILLUSTRATION_SURFACES = ("workbench", "chat", "topbar", "management")
+_ILLUSTRATION_SURFACES = ("workbench", "adminCenter", "agentManager")
+_LEGACY_ILLUSTRATION_SURFACES = ("workbench", "chat", "topbar", "management")
 _ILLUSTRATION_SET_IDS = (
     "none",
     "forest-grove",
@@ -44,12 +46,12 @@ _ILLUSTRATION_SET_IDS = (
     "moonlit-garden",
 )
 _ILLUSTRATION_UPLOAD_MIMES = {"image/png", "image/jpeg", "image/webp"}
-_ILLUSTRATION_UPLOAD_MAX_BYTES = 512 * 1024
+_ILLUSTRATION_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
 _ILLUSTRATION_UPLOAD_DATA = re.compile(
     r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})\Z"
 )
 _ILLUSTRATION_RESOURCE = re.compile(
-    r"/assets/theme-illustrations/[a-z0-9]+(?:-[a-z0-9]+)*-(?:workbench|chat|topbar|management)\.svg\Z"
+    r"/assets/theme-illustrations/[a-z0-9-]+/(?:workbench|admin-center|agent-manager)\.webp\Z"
 )
 # All store instances in the host share the read/modify/replace boundary.
 _STORE_LOCK = threading.RLock()
@@ -64,8 +66,8 @@ class ThemeStoreError(Exception):
         self.data = data or {}
 
 
-def _invalid(message: str) -> None:
-    raise ThemeStoreError(400, "invalid_theme", message)
+def _invalid(message: str, code: str = "invalid_theme") -> None:
+    raise ThemeStoreError(400, code, message)
 
 
 def _object(value: Any, allowed: set[str], required: set[str], label: str) -> dict[str, Any]:
@@ -98,11 +100,49 @@ def _name(value: Any) -> str:
 
 
 def _default_illustrations() -> dict[str, Any]:
+    catalog = _read_illustration_catalog_file(Path(__file__).with_name("theme_illustrations.json"))
     return {
-        "setId": "none",
         "opacity": 0,
         "surfaces": {surface: False for surface in _ILLUSTRATION_SURFACES},
+        "scenes": {
+            surface: {"kind": "builtin", **catalog["none"][surface]}
+            for surface in _ILLUSTRATION_SURFACES
+        },
     }
+
+
+def _read_illustration_catalog_file(path: Path) -> dict[str, dict[str, dict[str, Any]]]:
+    try:
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(catalog, dict) or catalog.get("schemaVersion") != 2 or not isinstance(catalog.get("sets"), dict):
+            raise ValueError("invalid illustration catalog")
+        sets = catalog["sets"]
+        if set(sets) != set(_ILLUSTRATION_SET_IDS):
+            raise ValueError("invalid illustration set IDs")
+        result: dict[str, dict[str, dict[str, Any]]] = {}
+        for set_id in _ILLUSTRATION_SET_IDS:
+            resources = sets[set_id]
+            if not isinstance(resources, dict) or set(resources) != set(_ILLUSTRATION_SURFACES):
+                raise ValueError("invalid illustration surfaces")
+            result[set_id] = {}
+            for surface in _ILLUSTRATION_SURFACES:
+                resource = resources[surface]
+                if not isinstance(resource, dict) or set(resource) != {"assetId", "mimeType", "width", "height", "sha256", "path"}:
+                    raise ValueError("invalid illustration metadata")
+                filename = {"workbench": "workbench", "adminCenter": "admin-center", "agentManager": "agent-manager"}[surface]
+                expected = f"/assets/theme-illustrations/{set_id}/{filename}.webp"
+                if resource["path"] != expected or not _ILLUSTRATION_RESOURCE.fullmatch(resource["path"]):
+                    raise ValueError("invalid illustration resource")
+                if resource["mimeType"] not in {"image/webp", "image/png"} or type(resource["width"]) is not int or type(resource["height"]) is not int or resource["width"] < 1 or resource["height"] < 1:
+                    raise ValueError("invalid illustration dimensions")
+                if not isinstance(resource["assetId"], str) or not re.fullmatch(r"[A-Za-z0-9-]+", resource["assetId"]):
+                    raise ValueError("invalid illustration asset ID")
+                if not isinstance(resource["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", resource["sha256"], re.I):
+                    raise ValueError("invalid illustration hash")
+                result[set_id][surface] = {key: resource[key] for key in ("assetId", "mimeType", "width", "height", "sha256")}
+        return result
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
+        raise ThemeStoreError(500, "theme_illustrations_unavailable", "主题插画目录无法读取，请检查应用安装文件") from exc
 
 
 def _illustration_upload(value: Any) -> dict[str, str]:
@@ -119,7 +159,7 @@ def _illustration_upload(value: Any) -> dict[str, str]:
     except (ValueError, binascii.Error):
         _invalid("上传插画数据无效")
     if not raw or len(raw) > _ILLUSTRATION_UPLOAD_MAX_BYTES:
-        _invalid("上传插画不能超过 512 KiB")
+        _invalid("上传插画不能超过 4 MiB")
     valid_signature = (
         mime_type == "image/png" and raw.startswith(b"\x89PNG\r\n\x1a\n")
     ) or (
@@ -165,12 +205,15 @@ def builtin_library(builtin_override: dict[str, Any] | None = None) -> dict[str,
 
 class ThemeStore:
     def __init__(self, library_path: Path | None = None, *, legacy_accounts_dir: Path | None = None,
-                 catalog_path: Path | None = None):
+                 catalog_path: Path | None = None, asset_root: Path | None = None):
         self.library_path = Path(library_path) if library_path is not None else get_theme_library_path()
         self.legacy_accounts_dir = (Path(legacy_accounts_dir) if legacy_accounts_dir is not None
                                     else self.library_path.parent / "accounts")
         self.catalog_path = catalog_path or Path(__file__).with_name("theme_catalog.json")
         self.illustration_catalog_path = Path(__file__).with_name("theme_illustrations.json")
+        self.asset_store = ThemeAssetStore(asset_root if asset_root is not None else (
+            get_theme_assets_dir() if library_path is None else self.library_path.parent / "assets"
+        ))
 
     def _tokens(self) -> dict[str, dict[str, Any]]:
         try:
@@ -191,38 +234,108 @@ class ThemeStore:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise ThemeStoreError(500, "theme_catalog_unavailable", "主题颜色目录无法读取，请检查应用安装文件") from exc
 
-    def _illustrations(self) -> dict[str, dict[str, str]]:
-        try:
-            catalog = json.loads(self.illustration_catalog_path.read_text(encoding="utf-8"))
-            if not isinstance(catalog, dict) or set(catalog) != {"schemaVersion", "sets"}:
-                raise ValueError("invalid illustration catalog")
-            if type(catalog["schemaVersion"]) is not int or catalog["schemaVersion"] != 1:
-                raise ValueError("unsupported illustration catalog")
-            sets = catalog["sets"]
-            if not isinstance(sets, dict) or set(sets) != set(_ILLUSTRATION_SET_IDS):
-                raise ValueError("invalid illustration set IDs")
-            result: dict[str, dict[str, str]] = {}
-            for set_id in _ILLUSTRATION_SET_IDS:
-                resources = sets[set_id]
-                if not isinstance(resources, dict) or set(resources) != set(_ILLUSTRATION_SURFACES):
-                    raise ValueError("invalid illustration surfaces")
-                normalized: dict[str, str] = {}
-                for surface in _ILLUSTRATION_SURFACES:
-                    resource = resources[surface]
-                    expected = f"/assets/theme-illustrations/{set_id}-{surface}.svg"
-                    if not isinstance(resource, str) or resource != expected or not _ILLUSTRATION_RESOURCE.fullmatch(resource):
-                        raise ValueError("invalid illustration resource")
-                    normalized[surface] = resource
-                result[set_id] = normalized
-            return result
-        except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
-            raise ThemeStoreError(
-                500,
-                "theme_illustrations_unavailable",
-                "主题插画目录无法读取，请检查应用安装文件",
-            ) from exc
+    def _illustrations(self) -> dict[str, dict[str, dict[str, Any]]]:
+        return _read_illustration_catalog_file(self.illustration_catalog_path)
 
-    def _appearance(self, value: Any) -> dict[str, Any]:
+    def _uploaded_asset_from_legacy(self, value: Any) -> dict[str, Any]:
+        upload = _illustration_upload(value)
+        match = _ILLUSTRATION_UPLOAD_DATA.fullmatch(upload["data"])
+        if not match:
+            _invalid("上传插画数据无效")
+        try:
+            raw = base64.b64decode(match.group(2), validate=True)
+            return self.asset_store.store(raw, upload["mimeType"])
+        except (ValueError, binascii.Error):
+            _invalid("上传插画数据无效")
+        except ThemeAssetStoreError as exc:
+            raise ThemeStoreError(exc.status, exc.code, exc.message, exc.data) from exc
+
+    def _illustrations_value(
+        self,
+        value: Any,
+        *,
+        asset_overrides: dict[str, tuple[dict[str, Any], bytes]] | None = None,
+    ) -> dict[str, Any]:
+        if value is None:
+            return _default_illustrations()
+        if not isinstance(value, dict):
+            _invalid("主题插画配置必须是对象")
+        catalog = self._illustrations()
+        if "scenes" in value:
+            illustrations = _object(value, {"opacity", "surfaces", "scenes"}, {"opacity", "surfaces", "scenes"}, "illustrations")
+            set_id = None
+        else:
+            # First-read migration for the previous single-set format.
+            illustrations = _object(value, {"setId", "upload", "opacity", "surfaces"}, {"setId", "opacity", "surfaces"}, "illustrations")
+            set_id = illustrations["setId"]
+            if not isinstance(set_id, str) or (set_id != "upload" and set_id not in catalog):
+                _invalid("illustrations.setId 不是受支持的插画主题")
+            upload_asset = self._uploaded_asset_from_legacy(illustrations["upload"]) if "upload" in illustrations else None
+            if (set_id == "upload") != (upload_asset is not None):
+                _invalid("上传插画配置与资源类型不匹配")
+            legacy_surfaces = _object(illustrations["surfaces"], set(_LEGACY_ILLUSTRATION_SURFACES), set(_LEGACY_ILLUSTRATION_SURFACES), "illustrations.surfaces")
+            if any(type(legacy_surfaces[surface]) is not bool for surface in _LEGACY_ILLUSTRATION_SURFACES):
+                _invalid("illustrations.surfaces 的值必须是布尔值")
+            base_set = "none" if set_id == "upload" else set_id
+            illustrations = {
+                "opacity": illustrations["opacity"],
+                "surfaces": {
+                    "workbench": bool(legacy_surfaces["workbench"] or legacy_surfaces["chat"] or legacy_surfaces["topbar"]),
+                    "adminCenter": bool(legacy_surfaces["management"]),
+                    "agentManager": bool(legacy_surfaces["management"]),
+                },
+                "scenes": {
+                    surface: upload_asset or {"kind": "builtin", **catalog[base_set][surface]}
+                    for surface in _ILLUSTRATION_SURFACES
+                },
+            }
+        opacity = illustrations["opacity"]
+        if isinstance(opacity, bool) or not isinstance(opacity, (int, float)) or not math.isfinite(opacity) or not 0 <= opacity <= 0.25:
+            _invalid("illustrations.opacity 必须是 0 到 0.25 之间的数字")
+        surfaces = _object(illustrations["surfaces"], set(_ILLUSTRATION_SURFACES), set(_ILLUSTRATION_SURFACES), "illustrations.surfaces")
+        if any(type(surfaces[surface]) is not bool for surface in _ILLUSTRATION_SURFACES):
+            _invalid("illustrations.surfaces 的值必须是布尔值")
+        scenes = _object(illustrations["scenes"], set(_ILLUSTRATION_SURFACES), set(_ILLUSTRATION_SURFACES), "illustrations.scenes")
+        normalized_scenes: dict[str, Any] = {}
+        uploaded_sizes: dict[str, int] = {}
+        for surface in _ILLUSTRATION_SURFACES:
+            scene = _object(scenes[surface], {"kind", "assetId", "mimeType", "width", "height", "sha256"}, {"kind", "assetId", "mimeType", "width", "height", "sha256"}, f"illustrations.scenes.{surface}")
+            if scene["kind"] == "builtin":
+                match = next((item for resources in catalog.values() for item in resources.values() if item["assetId"] == scene["assetId"]), None)
+                if match is None or any(scene[key] != match[key] for key in ("mimeType", "width", "height", "sha256")):
+                    _invalid("内置场景插画元数据无效")
+                normalized_scenes[surface] = {"kind": "builtin", **match}
+            elif scene["kind"] == "uploaded":
+                try:
+                    staged = asset_overrides.get(scene["assetId"]) if asset_overrides else None
+                    if staged is not None:
+                        normalized, raw = staged
+                        actual = self.asset_store.describe(raw, scene["mimeType"])
+                        if any(scene[key] != actual[key] for key in ("assetId", "mimeType", "width", "height", "sha256")):
+                            _invalid("主题引用的插画哈希或尺寸不匹配", "theme_asset_integrity_invalid")
+                        size = len(raw)
+                    else:
+                        normalized, size = self.asset_store.validate(scene)
+                except ThemeAssetStoreError as exc:
+                    raise ThemeStoreError(exc.status, exc.code, exc.message, exc.data) from exc
+                normalized_scenes[surface] = normalized
+                uploaded_sizes[normalized["assetId"]] = size
+            else:
+                _invalid("场景插画资源类型无效")
+        if sum(uploaded_sizes.values()) > MAX_THEME_ASSET_TOTAL_BYTES:
+            _invalid("单个主题的插画资源总量不能超过 12 MiB", "theme_asset_total_too_large")
+        return {
+            "opacity": opacity,
+            "surfaces": {surface: surfaces[surface] for surface in _ILLUSTRATION_SURFACES},
+            "scenes": normalized_scenes,
+        }
+
+    def _appearance(
+        self,
+        value: Any,
+        *,
+        asset_overrides: dict[str, tuple[dict[str, Any], bytes]] | None = None,
+    ) -> dict[str, Any]:
         appearance = _object(value, {"colors", "typography", "illustrations"}, {"colors"}, "appearance")
         colors = _object(appearance["colors"], {"scheme", "overrides"}, {"scheme", "overrides"}, "colors")
         if colors["scheme"] not in ("light", "dark"):
@@ -258,43 +371,9 @@ class ThemeStore:
                 if not isinstance(typography[key], str) or typography[key] not in choices:
                     _invalid(f"{key} 包含不支持的值")
             result["typography"] = {key: typography[key] for key in _CHAT_TYPOGRAPHY_DEFAULTS}
-        illustration_sets = self._illustrations()
-        illustrations = appearance.get("illustrations", _default_illustrations())
-        illustrations = _object(
-            illustrations,
-            {"setId", "upload", "opacity", "surfaces"},
-            {"setId", "opacity", "surfaces"},
-            "illustrations",
+        result["illustrations"] = self._illustrations_value(
+            appearance.get("illustrations"), asset_overrides=asset_overrides,
         )
-        set_id = illustrations["setId"]
-        if not isinstance(set_id, str) or (set_id != "upload" and set_id not in illustration_sets):
-            _invalid("illustrations.setId 不是受支持的插画主题")
-        upload = _illustration_upload(illustrations["upload"]) if "upload" in illustrations else None
-        if (set_id == "upload") != (upload is not None):
-            _invalid("上传插画配置与资源类型不匹配")
-        opacity = illustrations["opacity"]
-        if (
-            isinstance(opacity, bool)
-            or not isinstance(opacity, (int, float))
-            or not math.isfinite(opacity)
-            or not 0 <= opacity <= 0.25
-        ):
-            _invalid("illustrations.opacity 必须是 0 到 0.25 之间的数字")
-        surfaces = _object(
-            illustrations["surfaces"],
-            set(_ILLUSTRATION_SURFACES),
-            set(_ILLUSTRATION_SURFACES),
-            "illustrations.surfaces",
-        )
-        if any(type(surfaces[surface]) is not bool for surface in _ILLUSTRATION_SURFACES):
-            _invalid("illustrations.surfaces 的值必须是布尔值")
-        result["illustrations"] = {
-            "setId": set_id,
-            "opacity": opacity,
-            "surfaces": {surface: surfaces[surface] for surface in _ILLUSTRATION_SURFACES},
-        }
-        if upload is not None:
-            result["illustrations"]["upload"] = upload
         return result
 
     def _read_file(self, path: Path, *, legacy: bool = False) -> dict[str, Any] | None:
@@ -489,8 +568,35 @@ class ThemeStore:
         return self._mutate(value["expectedRevision"], change)
 
     def import_themes(self, payload: Any) -> dict[str, Any]:
-        fields = {"expectedRevision", "document"}
-        value = _object(payload, fields, fields, "导入主题请求")
+        fields = {"expectedRevision", "document", "assets"}
+        value = _object(payload, fields, {"expectedRevision", "document"}, "导入主题请求")
+        imported_assets: dict[str, tuple[dict[str, Any], bytes]] = {}
+        imported_asset_bytes = 0
+        if "assets" in value:
+            if not isinstance(value["assets"], list) or len(value["assets"]) > 100:
+                _invalid("主题包资源数量无效")
+            for item in value["assets"]:
+                asset = _object(item, {"assetId", "mimeType", "data"}, {"assetId", "mimeType", "data"}, "主题包资源")
+                if not isinstance(asset["assetId"], str) or not isinstance(asset["mimeType"], str) or not isinstance(asset["data"], str):
+                    _invalid("主题包资源格式无效")
+                match = _ILLUSTRATION_UPLOAD_DATA.fullmatch(asset["data"])
+                if not match or match.group(1) != asset["mimeType"]:
+                    _invalid("主题包资源数据无效")
+                try:
+                    raw = base64.b64decode(match.group(2), validate=True)
+                except (ValueError, binascii.Error):
+                    _invalid("主题包资源数据无效")
+                try:
+                    described = self.asset_store.describe(raw, asset["mimeType"])
+                except ThemeAssetStoreError as exc:
+                    raise ThemeStoreError(exc.status, exc.code, exc.message, exc.data) from exc
+                if described["assetId"] != asset["assetId"]:
+                    _invalid("主题包资源哈希与 ID 不匹配", "theme_asset_integrity_invalid")
+                if described["assetId"] not in imported_assets:
+                    imported_asset_bytes += len(raw)
+                    if imported_asset_bytes > MAX_THEME_ASSET_TOTAL_BYTES:
+                        _invalid("主题包资源总量不能超过 12 MiB", "theme_asset_total_too_large")
+                    imported_assets[described["assetId"]] = (described, raw)
         theme_fields = {"schemaVersion", "name", "baseId", "appearance"}
         document = _object(value["document"], theme_fields | {"themes"}, {"schemaVersion"}, "主题文档")
         _schema(document["schemaVersion"])
@@ -510,10 +616,17 @@ class ThemeStore:
                 _invalid("主题 baseId 必须为 paper-daylight")
             imported.append({
                 "schemaVersion": 1, "name": _name(theme["name"]), "baseId": BUILTIN_THEME_ID,
-                "appearance": self._appearance(theme["appearance"]),
+                "appearance": self._appearance(theme["appearance"], asset_overrides=imported_assets),
             })
 
         def change(data):
+            for descriptor, raw in imported_assets.values():
+                try:
+                    stored = self.asset_store.store(raw, descriptor["mimeType"])
+                except ThemeAssetStoreError as exc:
+                    raise ThemeStoreError(exc.status, exc.code, exc.message, exc.data) from exc
+                if stored != descriptor:
+                    raise ThemeStoreError(400, "theme_asset_integrity_invalid", "主题包资源哈希或尺寸不匹配")
             names = {theme["name"] for theme in data["themes"]}
             names.add(self._find(data, BUILTIN_THEME_ID)["name"])
             updated_at = datetime.now(timezone.utc).isoformat()

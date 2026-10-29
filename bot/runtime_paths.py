@@ -259,6 +259,11 @@ def get_theme_library_path() -> Path:
     return get_app_data_root() / "themes" / "library.json"
 
 
+def get_theme_assets_dir() -> Path:
+    """Content-addressed UI theme image resources."""
+    return get_app_data_root() / "themes" / "assets"
+
+
 def get_auth_username_index_path() -> Path:
     return get_app_data_root() / "auth" / "username_index.json"
 

@@ -3,6 +3,7 @@ import type {
   ThemeCreateInput,
   ThemeUpdateInput,
   ThemeImportInput,
+  ThemeIllustrationAsset,
   BotChatTranslationConfig,
   ChatTranslationConfig,
   ChatTranslationConfigInput,
@@ -175,6 +176,7 @@ export interface WebBotClient {
   listUiThemes(): Promise<ThemeLibrary>;
   createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary>;
   importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary>;
+  uploadThemeAsset(file: File): Promise<ThemeIllustrationAsset>;
   updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary>;
   deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
   selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
@@ -274,7 +276,7 @@ export interface WebBotClient {
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
     onAgUiEvent?: (event: AgUiEvent) => void,
-    onEndlessError?: (message: ChatMessage, attempt: number) => void,
+    onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage>;
   steerMessage(

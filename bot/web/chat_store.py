@@ -2025,7 +2025,9 @@ class ChatStore:
             if str(row["id"] or "").strip()
         ]
 
-    def get_latest_answer_times(self, *, bot_id: int, user_id: int | None = None) -> tuple[str, str]:
+    def get_latest_answer_times(
+        self, *, bot_id: int, user_id: int | None = None, exclude_endless_group_id: str = "",
+    ) -> tuple[str, str]:
         """Return the main agent's latest successful and non-cancelled terminal answer times."""
         conn = self._connect(create=False)
         if conn is None:
@@ -2040,6 +2042,10 @@ class ChatStore:
         if user_id is not None:
             clauses.append("conversations.user_id = ?")
             params.append(user_id)
+
+        if exclude_endless_group_id:
+            clauses.append("COALESCE(turns.endless_group_id, '') != ?")
+            params.append(exclude_endless_group_id)
 
         with closing(conn):
             row = conn.execute(

@@ -1689,7 +1689,6 @@ export function DesktopWorkbench({
               !showChatPane && "hidden",
             )}
           >
-            <ThemeIllustrationLayer surface="chat" />
             {resolvedChatPaneContent || (
               <ChatPane
                 botAlias={botAlias}

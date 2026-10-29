@@ -21,7 +21,7 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
     root.dataset.colorScheme = appearance.scheme;
     root.dataset.styleProfile = appearance.styleProfile;
     root.dataset.motionProfile = appearance.motionProfile;
-    root.dataset.illustrationSet = appearance.illustrations.setId;
+    root.dataset.illustrationScenes = "workbench,adminCenter,agentManager";
     root.style.colorScheme = appearance.scheme;
     for (const name of Object.keys(currentAppearance.cssVariables)) {
       if (!(name in appearance.cssVariables)) root.style.removeProperty(name);
@@ -29,9 +29,6 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
     for (const [name, value] of Object.entries(appearance.cssVariables)) root.style.setProperty(name, value);
     const illustrationVariables: Record<string, string> = {
       "--theme-illustration-opacity": String(appearance.illustrations.opacity),
-      "--theme-illustration-primary": appearance.illustrations.colors.primary,
-      "--theme-illustration-secondary": appearance.illustrations.colors.secondary,
-      "--theme-illustration-soft": appearance.illustrations.colors.soft,
     };
     for (const surface of THEME_ILLUSTRATION_SURFACES) {
       illustrationVariables[`--theme-illustration-${surface}-image`] = illustrationCssImage(appearance.illustrations.resources[surface]);
@@ -39,9 +36,6 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
     }
     for (const name of Object.keys(currentAppearance.illustrations ? {
       "--theme-illustration-opacity": "",
-      "--theme-illustration-primary": "",
-      "--theme-illustration-secondary": "",
-      "--theme-illustration-soft": "",
       ...Object.fromEntries(THEME_ILLUSTRATION_SURFACES.flatMap((surface) => [
         [`--theme-illustration-${surface}-image`, ""],
         [`--theme-illustration-${surface}-enabled`, ""],

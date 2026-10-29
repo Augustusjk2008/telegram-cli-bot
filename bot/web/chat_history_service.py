@@ -206,7 +206,7 @@ class ChatHistoryService:
 
     def reconcile_idle_streaming_turns(self, session: UserSession) -> int:
         with session._lock:
-            is_processing = bool(session.is_processing)
+            is_processing = bool(session.is_processing or session.endless_mode)
         if is_processing:
             return 0
         return self.store.mark_stale_streaming_turns(
@@ -948,7 +948,13 @@ class ChatHistoryService:
     def build_session_snapshot(self, profile: BotProfile, session: UserSession) -> dict[str, Any]:
         self.reconcile_idle_streaming_turns(session)
         with session._lock:
-            is_processing = bool(session.is_processing)
+            is_processing = bool(session.is_processing or session.endless_mode)
+            endless_state = {
+                "endless_mode": session.endless_mode,
+                "endless_attempt": session.endless_attempt,
+                "endless_group_id": session.endless_group_id,
+                "endless_retry_at_ms": session.endless_retry_at_ms,
+            }
         running_reply = self.store.get_running_reply(
             bot_id=session.bot_id,
             user_id=session.user_id,
@@ -978,8 +984,7 @@ class ChatHistoryService:
                 native_provider_exclude=self.native_provider_exclude,
             ),
             "is_processing": is_processing,
-            "endless_mode": bool(getattr(session, "endless_mode", False)),
-            "endless_attempt": max(0, int(getattr(session, "endless_attempt", 0) or 0)),
+            **endless_state,
             "running_reply": running_reply,
             "session_ids": {
                 "codex_session_id": session.codex_session_id,

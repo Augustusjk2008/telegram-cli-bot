@@ -570,11 +570,18 @@ def _set_endless_session_state(
     *,
     active: bool,
     attempt: int = 0,
+    group_id: str = "",
+    retry_at_ms: int = 0,
+    processing: bool | None = None,
 ) -> None:
     """Keep endless-mode ownership on the server session while a run is alive."""
     with session._lock:
         session.endless_mode = bool(active)
         session.endless_attempt = max(0, int(attempt or 0)) if active else 0
+        session.endless_group_id = group_id if active else ""
+        session.endless_retry_at_ms = retry_at_ms if active else 0
+        if processing is not None:
+            session.is_processing = processing
 
 
 def _pi_store() -> PiSessionStore:
@@ -640,7 +647,8 @@ def _build_agent_runtime_map(bot_id: int, user_id: int | None) -> dict[str, dict
                 continue
             with session._lock:
                 result[session_agent_id] = {
-                    "is_processing": bool(session.is_processing),
+                    "is_processing": bool(session.is_processing or session.endless_mode),
+                    "endless_group_id": session.endless_group_id if session.endless_mode else "",
                     "message_count": max(0, int(session.message_count or 0)),
                     "active_conversation_id": session.active_conversation_id or "",
                 }
@@ -740,7 +748,8 @@ def build_bot_summary(
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
-    agent_items = _build_agent_status_items(profile, {} if profile.archived else _build_agent_runtime_map(bot_id, user_id))
+    runtime_map = {} if profile.archived else _build_agent_runtime_map(bot_id, user_id)
+    agent_items = _build_agent_status_items(profile, runtime_map)
     active_cluster_run = None
     if user_id is not None and current_session is not None and profile.cluster.enabled:
         try:
@@ -759,6 +768,7 @@ def build_bot_summary(
         latest_answer_completed_at, latest_answer_terminal_at = latest_answer_store.get_latest_answer_times(
             bot_id=bot_id,
             user_id=latest_answer_user_id,
+            exclude_endless_group_id=str(runtime_map.get("main", {}).get("endless_group_id") or ""),
         )
 
     return {
@@ -8556,7 +8566,7 @@ def _native_terminal_ag_ui_event(event: dict[str, Any]) -> bool:
 
 async def _wait_for_endless_retry(session: UserSession) -> None:
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, float(config.ENDLESS_CONTINUE_DELAY_SECONDS))
+    deadline = loop.time() + max(0.0, (session.endless_retry_at_ms - time.time() * 1000) / 1000)
     while True:
         with session._lock:
             if getattr(session, "_persist_enabled", True) is False:
@@ -8648,11 +8658,13 @@ async def _stream_endless_attempts(
                 type(exc).__name__,
             )
 
-    _set_endless_session_state(session, active=True, attempt=0)
     current_text = initial_text
     current_request = initial_request
     attempt = 0
     while True:
+        _set_endless_session_state(
+            session, active=True, attempt=attempt, group_id=endless_group_id, processing=False,
+        )
         retry_event: dict[str, Any] | None = None
         native_retry_pending: dict[str, Any] | None = None
         completion_token = f"endless_completion_{uuid.uuid4().hex}"
@@ -8703,7 +8715,15 @@ async def _stream_endless_attempts(
             return
 
         attempt += 1
-        _set_endless_session_state(session, active=True, attempt=attempt)
+        retry_at_ms = int(time.time() * 1000) + max(0, int(round(float(config.ENDLESS_CONTINUE_DELAY_SECONDS) * 1000)))
+        _set_endless_session_state(
+            session,
+            active=True,
+            attempt=attempt,
+            group_id=endless_group_id,
+            retry_at_ms=retry_at_ms,
+            processing=True,
+        )
         message = retry_event.get("message") if isinstance(retry_event.get("message"), dict) else {}
         if not message:
             message = {
@@ -8739,6 +8759,7 @@ async def _stream_endless_attempts(
             "message": message,
             "output": str(retry_event.get("output") or message.get("content") or ""),
             "next_delay_ms": max(0, int(round(float(config.ENDLESS_CONTINUE_DELAY_SECONDS) * 1000))),
+            "retry_at_ms": retry_at_ms,
         }
         try:
             await _wait_for_endless_retry(session)
@@ -8748,6 +8769,9 @@ async def _stream_endless_attempts(
         except WebApiError as exc:
             yield {"type": "error", "code": exc.code, "message": exc.message}
             return
+        _set_endless_session_state(
+            session, active=True, attempt=attempt, group_id=endless_group_id, processing=True,
+        )
         await persist_endless_event(
             {"kind": "continue", "attempt": attempt, "text": "Continue"},
             turn_id=retry_turn_id,
@@ -8758,6 +8782,9 @@ async def _stream_endless_attempts(
             "attempt": attempt,
             "text": "Continue",
         }
+        _set_endless_session_state(
+            session, active=True, attempt=attempt, group_id=endless_group_id, processing=False,
+        )
         current_text = "Continue"
         current_request = _build_chat_run_request(
             alias,
@@ -8912,10 +8939,10 @@ async def _stream_native_agent_chat(
             finally:
                 if cluster_run:
                     _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
-                if execution_id is not None:
+                if execution_id is not None and not endless_mode:
                     _finish_control_execution(session, execution_id)
 
-        if enable_reconnect or pi_turn_reconnect_enabled():
+        if not endless_mode and (enable_reconnect or pi_turn_reconnect_enabled()):
             with session._lock:
                 session._execution_detached = execution_id is not None
             try:
@@ -9091,14 +9118,13 @@ async def stream_chat(
     internal_continuation: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     endless_requested = bool(endless_mode and not str(resume_stream_id or "").strip())
+    endless_started = False
     session: UserSession | None = None
     cluster_run = None
     try:
         profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
         _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
-        if endless_requested:
-            _set_endless_session_state(session, active=True, attempt=0)
         resuming = False
         if str(resume_stream_id or "").strip():
             with session._lock:
@@ -9106,6 +9132,9 @@ async def stream_chat(
                 requested_mode = _current_conversation_execution_mode(profile, session) if follow_current_conversation else execution_mode
                 resuming = _resolve_chat_execution_mode(profile, requested_mode) == NATIVE_AGENT_PROVIDER
         with nullcontext() if resuming else _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id):
+            if endless_requested:
+                _set_endless_session_state(session, active=True, attempt=0)
+                endless_started = True
             normalized_stream_protocol_version = normalize_stream_protocol_version(stream_protocol_version)
             with session._lock:
                 _check_expected_conversation(session, expected_conversation_id)
@@ -9273,8 +9302,8 @@ async def stream_chat(
                     wakeup_run_id = ""
             if wakeup_run_id:
                 _schedule_cluster_parent_wakeup(manager, wakeup_run_id)
-        if endless_requested and session is not None:
-            _set_endless_session_state(session, active=False)
+        if endless_started and session is not None:
+            _set_endless_session_state(session, active=False, processing=False)
 
 
 async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: int, command: str) -> dict[str, Any]:

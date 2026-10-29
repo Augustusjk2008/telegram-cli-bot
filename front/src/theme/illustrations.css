@@ -12,48 +12,26 @@
   user-select: none;
   contain: paint;
   opacity: var(--theme-illustration-opacity, 0);
-  mix-blend-mode: multiply;
+  mix-blend-mode: normal;
 }
 
 .theme-illustration-art {
   position: absolute;
-  inset: auto -8% 0;
-  width: 116%;
-  height: min(34%, 220px);
-  min-height: 92px;
-  background: var(--theme-illustration-primary);
-  -webkit-mask-image: var(--theme-illustration-image);
-  mask-image: var(--theme-illustration-image);
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-size: 100% 100%;
-  mask-size: 100% 100%;
-  color: var(--theme-illustration-primary);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: var(--theme-illustration-object-position, 50% 50%);
+  opacity: .92;
   pointer-events: none;
 }
 
-.theme-illustration-layer[data-theme-illustration-surface="chat"] .theme-illustration-art {
-  inset: 0 -10% auto;
-  height: min(28%, 180px);
+.theme-illustration-layer[data-theme-illustration-region="chat"] .theme-illustration-art {
+  object-position: 50% 72%;
 }
 
-.theme-illustration-layer[data-theme-illustration-surface="topbar"] .theme-illustration-art {
-  inset: 0 -4% auto;
-  height: 100%;
-  min-height: 0;
-}
-
-.theme-illustration-layer[data-theme-illustration-surface="management"] .theme-illustration-art {
-  inset: auto -5% 0;
-  height: min(30%, 260px);
-}
-
-.theme-illustration-layer[data-theme-illustration-set="upload"] .theme-illustration-art {
-  background: var(--theme-illustration-image) center / cover no-repeat;
-  -webkit-mask-image: none;
-  mask-image: none;
+.theme-illustration-layer[data-theme-illustration-region="topbar"] .theme-illustration-art {
+  object-position: 50% 0%;
 }
 
 .theme-illustration-layer ~ * {
@@ -67,11 +45,10 @@
   }
 
   .theme-illustration-art {
-    height: 120px;
-    min-height: 0;
+    opacity: .65;
   }
 
-  .theme-illustration-layer[data-theme-illustration-surface="topbar"] .theme-illustration-art {
+  .theme-illustration-layer[data-theme-illustration-region="topbar"] .theme-illustration-art {
     opacity: .55;
   }
 }

@@ -882,6 +882,12 @@ class StorageMigrationService:
                 if journal and journal.get("state") in {"preparing", "stopping", "copying", "rewriting", "verifying", "failed"}:
                     return self._public_job(journal)
                 raise StorageMigrationError("没有已提交的 TCB 迁移可完成")
+            if (
+                str(locator.get("state") or "").strip().lower() == "completed"
+                and journal
+                and str(journal.get("state") or "").strip().lower() == "completed"
+            ):
+                return self._public_job(journal)
             try:
                 target = _canonical(str(locator["targetRoot"]))
                 manifest_value = locator.get("manifestPath")

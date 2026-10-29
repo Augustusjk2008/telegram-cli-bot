@@ -1,4 +1,13 @@
-export type { UiTheme, ThemeAppearance, ThemeLibrary, ThemeCreateInput, ThemeUpdateInput, ThemeImportInput } from "../theme/types";
+export type {
+  UiTheme,
+  ThemeAppearance,
+  ThemeLibrary,
+  ThemeCreateInput,
+  ThemeUpdateInput,
+  ThemeImportInput,
+  ThemeIllustrationAsset,
+  ThemeIllustrationAssetImport,
+} from "../theme/types";
 
 export type CliType = "claude" | "codex" | "codex_server" | "antigravity" | "deepseek";
 export type ChatExecutionMode = "cli" | "native_agent";
@@ -1115,6 +1124,8 @@ export type BotOverview = {
   isProcessing?: boolean;
   endlessMode?: boolean;
   endlessAttempt?: number;
+  endlessGroupId?: string;
+  endlessRetryAtMs?: number;
   runningReply?: RunningReply | null;
   agents?: AgentSummary[];
   cluster?: BotClusterConfig;

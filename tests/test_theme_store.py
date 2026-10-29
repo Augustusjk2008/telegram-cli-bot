@@ -11,7 +11,7 @@ import pytest
 
 from bot import runtime_paths
 from bot.web import theme_store
-from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
+from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError, _default_illustrations
 
 
 def create_input(**changes):
@@ -348,16 +348,7 @@ def legacy_theme(index, **changes):
 
 def normalized_legacy_theme(theme):
     normalized = copy.deepcopy(theme)
-    normalized["appearance"]["illustrations"] = {
-        "setId": "none",
-        "opacity": 0,
-        "surfaces": {
-            "workbench": False,
-            "chat": False,
-            "topbar": False,
-            "management": False,
-        },
-    }
+    normalized["appearance"]["illustrations"] = _default_illustrations()
     return normalized
 
 

@@ -31,11 +31,22 @@ type Props = {
   canContinue?: boolean;
   contextUsage?: ChatMessageContextUsage;
   endlessContinueCount?: number;
+  endlessActive?: boolean;
+  endlessRetryAtMs?: number | null;
   mobileLayout?: boolean;
 };
 
-export function EndlessTypingLabel() {
+export function EndlessTypingLabel({ retryAtMs }: { retryAtMs?: number | null } = {}) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!retryAtMs) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAtMs]);
+  const retryRemainingSeconds = retryAtMs ? Math.max(0, Math.ceil((retryAtMs - now) / 1000)) : null;
   return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1">
     <span aria-label="ENDLESS..." className="inline-flex items-baseline font-semibold tracking-[0.18em]">
       {"ENDLESS".split("").map((letter, index) => (
         <span
@@ -48,6 +59,12 @@ export function EndlessTypingLabel() {
         </span>
       ))}
       <span aria-hidden="true" className="ml-0.5 tracking-normal">...</span>
+    </span>
+      {typeof retryRemainingSeconds === "number" ? (
+        <span className="text-xs font-normal tabular-nums">
+          （{retryRemainingSeconds}秒后重试）
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -562,11 +579,13 @@ export function NativeAgentTranscript({
   canContinue = false,
   contextUsage,
   endlessContinueCount,
+  endlessActive = false,
+  endlessRetryAtMs,
   mobileLayout = false,
 }: Props) {
   const [replyingPermissionId, setReplyingPermissionId] = useState("");
   const [traceExpanded, setTraceExpanded] = useState(false);
-  const collapseProcess = mode === "native" || mobileLayout;
+  const collapseProcess = mode === "native" || mobileLayout || endlessActive;
   const totalTraceCount = typeof traceCount === "number" ? traceCount : entries.length;
   const hasCompleteTrace = totalTraceCount <= 0
     || traceLoaded === true
@@ -607,22 +626,22 @@ export function NativeAgentTranscript({
     collapseProcess
       ? displayRenderItems.filter((item) => (
           item.kind === "entry"
-          && ["permission", "error", "cancelled"].includes(item.entry.kind)
+          && (endlessActive ? ["permission"] : ["permission", "error", "cancelled"]).includes(item.entry.kind)
         ))
       : []
-  ), [displayRenderItems, collapseProcess]);
+  ), [displayRenderItems, collapseProcess, endlessActive]);
   const traceDetailRenderItems = useMemo(() => (
     collapseProcess
       ? displayRenderItems.filter((item) => !(
           item.kind === "entry"
-          && ["permission", "error", "cancelled"].includes(item.entry.kind)
+          && (endlessActive ? ["permission"] : ["permission", "error", "cancelled"]).includes(item.entry.kind)
         ))
       : displayRenderItems
-  ), [displayRenderItems, collapseProcess]);
+  ), [displayRenderItems, collapseProcess, endlessActive]);
   const hasEndlessDetails = entries.some((entry) => (
     entry.kind === "endless_error" || entry.kind === "endless_continue"
   ));
-  const endlessStreaming = state === "streaming" && hasEndlessDetails;
+  const endlessStreaming = state === "streaming" && (endlessActive || hasEndlessDetails);
   const shouldShowTraceDisclosure = shouldLazyLoadTrace
     || hasEndlessDetails
     || (collapseProcess && traceDetailRenderItems.length > 0);
@@ -687,7 +706,7 @@ export function NativeAgentTranscript({
     <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
       {mobileLayout && state === "streaming" ? (
         <div data-testid="native-agent-streaming-status" role="status" className="flex min-w-0 items-start gap-1.5 py-1 text-xs text-[var(--muted)]">
-          {endlessStreaming ? <EndlessTypingLabel /> : (
+          {endlessStreaming ? <EndlessTypingLabel retryAtMs={endlessRetryAtMs} /> : (
             <>
               <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--accent)]" />
               <div className="min-w-0">
@@ -768,7 +787,7 @@ export function NativeAgentTranscript({
           role="status"
           className="flex items-center gap-2 border-t border-[var(--workbench-hairline)] py-2 text-sm text-[var(--muted)]"
         >
-          {endlessStreaming ? <EndlessTypingLabel /> : (
+          {endlessStreaming ? <EndlessTypingLabel retryAtMs={endlessRetryAtMs} /> : (
             <>
               <LoaderCircle className="h-4 w-4 animate-spin text-[var(--accent)]" />
               <span>正在输出...</span>

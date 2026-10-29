@@ -411,6 +411,24 @@ def test_success_copies_sqlite_and_deletes_sources_after_startup(
     assert copied_config["text"] == str(app / "attachments")
 
 
+def test_completed_migration_does_not_reverify_after_target_writes(
+    migration_context: tuple[Path, Path, Path],
+) -> None:
+    home, repo, target = migration_context
+    app, _history = _make_sources(home, with_sqlite=False)
+    _execute(StorageMigrationService(repo), target)
+
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    restarted = StorageMigrationService(repo)
+    assert restarted.finalize_startup()["state"] == "completed"
+
+    copied_config = target / "orbit-safe-claw" / "config.json"
+    copied_config.write_text(copied_config.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    assert StorageMigrationService(repo).finalize_startup()["state"] == "completed"
+
+
 def test_disk_space_block_preserves_sources(
     migration_context: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,

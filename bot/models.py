@@ -645,6 +645,8 @@ class UserSession:
     stop_requested: bool = False
     endless_mode: bool = False
     endless_attempt: int = 0
+    endless_group_id: str = ""
+    endless_retry_at_ms: int = 0
     web_turn_overlays: List[dict] = field(default_factory=list)
     last_activity: datetime = field(default_factory=datetime.now)
     message_count: int = 0

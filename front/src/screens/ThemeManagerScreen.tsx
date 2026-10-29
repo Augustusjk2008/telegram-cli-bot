@@ -25,10 +25,11 @@ import {
   CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
   normalizeChatTypography,
 } from "../theme/chatTypography";
-import type { ChatTypography, ThemeIllustrationUploadMime, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
+import type { ChatTypography, ThemeIllustrationSurface, ThemeIllustrationUploadMime, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
 import { downloadThemeDocument, portableTheme, readThemeFile } from "../theme/themeTransfer";
-import { ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS } from "../theme/illustrationPresets";
+import { builtinIllustrationAsset, illustrationSetIdForAsset, ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS, THEME_ILLUSTRATION_SURFACES } from "../theme/illustrationPresets";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
+import { withPublicBase } from "../utils/publicBase";
 import "../styles/theme-manager.css";
 
 type Draft = {
@@ -38,16 +39,17 @@ type Draft = {
   sourceId?: string;
   inputs: Record<string, string>;
 };
-type IllustrationPatch = Omit<Partial<ThemeIllustrations>, "surfaces"> & {
+type IllustrationPatch = Omit<Partial<ThemeIllustrations>, "surfaces" | "scenes"> & {
   surfaces?: Partial<ThemeIllustrations["surfaces"]>;
+  scenes?: Partial<ThemeIllustrations["scenes"]>;
 };
 
 function cloneIllustrations(value: unknown): ThemeIllustrations {
   const normalized = normalizeIllustrations(value);
   return {
     ...normalized,
-    ...(normalized.upload ? { upload: { ...normalized.upload } } : {}),
     surfaces: { ...normalized.surfaces },
+    scenes: { ...normalized.scenes },
   };
 }
 type Pane = "themes" | "editor" | "preview";
@@ -255,7 +257,7 @@ function ThemePreview({
     >
       <ThemeIllustrationLayer surface="workbench" appearance={appearance} />
       <div className="theme-preview-titlebar theme-illustration-host">
-        <ThemeIllustrationLayer surface="topbar" appearance={appearance} />
+        <ThemeIllustrationLayer surface="workbench" region="topbar" appearance={appearance} />
         <span>工作台</span>
         <span>示例项目 · 已就绪</span>
       </div>
@@ -288,7 +290,7 @@ function ThemePreview({
         </div>
       </div>
       <div className="theme-preview-chat theme-illustration-host">
-        <ThemeIllustrationLayer surface="chat" appearance={appearance} />
+        <ThemeIllustrationLayer surface="workbench" region="chat" appearance={appearance} />
         <div className="theme-preview-user">
           <small>你 · 现在</small>
           <p>请为我的工作台调一套配色。</p>
@@ -366,6 +368,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     reload,
     createTheme,
     importThemes,
+    uploadThemeAsset,
     updateTheme,
     deleteTheme,
     selectTheme,
@@ -635,8 +638,11 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           ...currentIllustrations.surfaces,
           ...(patch.surfaces || {}),
         },
+        scenes: {
+          ...currentIllustrations.scenes,
+          ...(patch.scenes || {}),
+        },
       };
-      if (patch.setId && patch.setId !== "upload") delete nextIllustrations.upload;
       return {
         ...current,
         theme: {
@@ -671,21 +677,22 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             },
           },
           illustrations: {
-            setId: template.id,
             opacity: 0.12,
             surfaces: {
               workbench: true,
-              chat: true,
-              topbar: true,
-              management: true,
+              adminCenter: true,
+              agentManager: true,
             },
+            scenes: Object.fromEntries(
+              THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, builtinIllustrationAsset(template.id, surface)]),
+            ) as ThemeIllustrations["scenes"],
           },
         },
       },
     }));
   }
 
-  function uploadIllustration(file: File | undefined) {
+  async function uploadIllustration(surface: ThemeIllustrationSurface, file: File | undefined) {
     if (!editable || busy || !file) return;
     const mimeType = file.type as ThemeIllustrationUploadMime;
     if (!(["image/png", "image/jpeg", "image/webp"] as const).includes(mimeType)) {
@@ -693,26 +700,17 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       return;
     }
     if (file.size > MAX_THEME_ILLUSTRATION_UPLOAD_BYTES) {
-      setError("上传插画不能超过 512 KiB。");
+      setError("上传插画不能超过 4 MiB。");
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== "string") {
-        setError("无法读取上传插画。");
-        return;
-      }
-      try {
-        const upload = normalizeIllustrationUpload({ mimeType, data: reader.result });
-        changeIllustrations({ setId: "upload", upload });
-        setError("");
-        setNotice("已载入自定义插画，保存主题后生效。");
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "上传插画无效。");
-      }
-    };
-    reader.onerror = () => setError("无法读取上传插画。");
-    reader.readAsDataURL(file);
+    try {
+      const asset = await uploadThemeAsset(file);
+      changeIllustrations({ scenes: { [surface]: asset } });
+      setError("");
+      setNotice("已上传场景插画，保存主题后生效。");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "上传插画无效。");
+    }
   }
 
   async function save(activate: boolean) {
@@ -764,8 +762,11 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     setError("");
     setNotice("");
     try {
-      const document = await readThemeFile(file);
-      const result = await importThemes(document, currentLibrary.revision);
+      const importedFile = await readThemeFile(file);
+      const isPackage = Boolean(importedFile && typeof importedFile === "object" && "document" in importedFile && "assets" in importedFile);
+      const document = isPackage ? (importedFile as { document: unknown }).document : importedFile;
+      const assets = isPackage ? (importedFile as { assets: Parameters<typeof importThemes>[2] }).assets : undefined;
+      const result = await importThemes(document, currentLibrary.revision, assets);
       const previousIds = new Set(currentLibrary.themes.map((theme) => theme.id));
       const imported = result.themes.filter((theme) => !previousIds.has(theme.id));
       if (!imported.length) throw new Error("未收到导入后的主题，请重新加载主题库确认。");
@@ -780,13 +781,25 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     }
   }
 
-  function exportThemes(pack: boolean) {
+  async function exportThemes(pack: boolean) {
     if (busy || loading || library.error || (!pack && dirty)) return;
     setError("");
     try {
-      downloadThemeDocument(
-        pack ? { schemaVersion: 1, themes: library.themes.map(portableTheme) } : portableTheme(draft.original),
+      const themes = pack ? library.themes : [draft.original];
+      const assets = new Map<string, { assetId: string; mimeType: string; data: ArrayBuffer }>();
+      for (const theme of themes) {
+        const illustrations = normalizeIllustrations(theme.appearance.illustrations);
+        for (const asset of Object.values(illustrations.scenes)) {
+          if (asset.kind !== "uploaded" || assets.has(asset.assetId)) continue;
+          const response = await fetch(withPublicBase(`/api/ui/theme-assets/${encodeURIComponent(asset.assetId)}`), { credentials: "same-origin" });
+          if (!response.ok) throw new Error("无法读取主题插画资源，请刷新主题库后重试。");
+          assets.set(asset.assetId, { assetId: asset.assetId, mimeType: asset.mimeType, data: await response.arrayBuffer() });
+        }
+      }
+      await downloadThemeDocument(
+        pack ? { schemaVersion: 1, themes: themes.map(portableTheme) } : portableTheme(draft.original),
         pack ? "pack" : draft.original.name,
+        [...assets.values()],
       );
       setNotice(pack ? `已导出主题包，包含 ${library.themes.length} 个已保存主题。` : "已导出当前主题。");
     } catch (cause) {
@@ -982,7 +995,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             <button type="button" disabled={!canManage || busy || loading} onClick={() => importInput.current?.click()}>
               导入 JSON
             </button>
-            <button type="button" disabled={busy || loading || Boolean(library.error)} onClick={() => exportThemes(true)}>
+              <button type="button" disabled={busy || loading || Boolean(library.error)} onClick={() => void exportThemes(true)}>
               导出主题包
             </button>
             <p className="theme-manager-hint">支持单个主题与多主题包。同名主题自动编号；主题包导出全部已保存主题。</p>
@@ -1062,7 +1075,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             <span>{dirty ? "有未保存的更改" : "已保存"}</span>
           </div>
           <div className="theme-manager-export">
-            <button type="button" disabled={dirty || busy || loading || Boolean(library.error)} onClick={() => exportThemes(false)}>
+            <button type="button" disabled={dirty || busy || loading || Boolean(library.error)} onClick={() => void exportThemes(false)}>
               导出当前主题
             </button>
             {dirty && <small>保存草稿后可导出当前主题。</small>}
@@ -1187,37 +1200,8 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               <div className="theme-manager-illustrations">
                 <div className="theme-manager-illustration-heading">
                   <strong>界面插画</strong>
-                  <small>低透明度装饰层，不参与布局和交互。</small>
+                  <small>三个场景分别使用独立资源，装饰层不参与布局和交互。</small>
                 </div>
-                <label htmlFor={`${inputId}-illustration-set`}>插画主题</label>
-                <select
-                  id={`${inputId}-illustration-set`}
-                  aria-label="插画主题"
-                  value={illustrations.setId}
-                  onChange={(event) => {
-                    if (event.target.value !== "upload") {
-                      changeIllustrations({ setId: event.target.value as typeof illustrations.setId });
-                    }
-                  }}
-                >
-                  {THEME_ILLUSTRATION_OPTIONS.map((option) => (
-                    <option key={option.id} value={option.id}>{option.label}</option>
-                  ))}
-                </select>
-                <label htmlFor={`${inputId}-illustration-upload`}>上传插画</label>
-                <input
-                  id={`${inputId}-illustration-upload`}
-                  aria-label="上传插画"
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={(event) => {
-                    uploadIllustration(event.target.files?.[0]);
-                    event.currentTarget.value = "";
-                  }}
-                />
-                {illustrations.setId === "upload" && illustrations.upload && (
-                  <small>已载入自定义图片（PNG、JPEG 或 WebP，最大 512 KiB）。</small>
-                )}
                 <label className="theme-manager-alpha">
                   插画透明度
                   <input
@@ -1231,23 +1215,68 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                   />
                   <output>{Math.round(illustrations.opacity * 100)}%</output>
                 </label>
-                <div className="theme-manager-surface-toggles">
+                <div className="theme-manager-scene-grid">
                   {([
-                    ["workbench", "工作区"],
-                    ["chat", "聊天区"],
-                    ["topbar", "顶部栏"],
-                    ["management", "管理界面"],
-                  ] as const).map(([surface, label]) => (
-                    <label key={surface}>
-                      <input
-                        type="checkbox"
-                        aria-label={label}
-                        checked={illustrations.surfaces[surface]}
-                        onChange={(event) => changeIllustrations({ surfaces: { [surface]: event.target.checked } })}
-                      />
-                      <span>{label}</span>
-                    </label>
-                  ))}
+                    ["workbench", "主工作台插画", "编辑器、聊天区、终端和工作区留白"],
+                    ["adminCenter", "管理中心插画", "管理页背景和顶部构图"],
+                    ["agentManager", "智能体管理插画", "智能体列表、顶部横幅和详情区域"],
+                  ] as const).map(([surface, label, description]) => {
+                    const asset = illustrations.scenes[surface];
+                    const selectedGroup = illustrationSetIdForAsset(asset, surface);
+                    const resource = preview.illustrations.resources[surface];
+                    return (
+                      <article className="theme-manager-scene-card" key={surface}>
+                        <div className="theme-manager-scene-card-header">
+                          <div>
+                            <strong>{label}</strong>
+                            <small>{description}</small>
+                          </div>
+                          <label>
+                            <input
+                              type="checkbox"
+                              aria-label={`启用${label}`}
+                              checked={illustrations.surfaces[surface]}
+                              onChange={(event) => changeIllustrations({ surfaces: { [surface]: event.target.checked } })}
+                            />
+                            启用
+                          </label>
+                        </div>
+                        <div className="theme-manager-scene-preview" style={{ objectPosition: surface === "workbench" ? "50% 50%" : "50% 35%" }}>
+                          <img src={resource} alt="" aria-hidden="true" />
+                        </div>
+                        <div className="theme-manager-scene-meta">
+                          <span>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : "等待资源信息"}</span>
+                          <span>{asset.kind === "builtin" ? "内置资源" : "已上传资源"}</span>
+                        </div>
+                        <label htmlFor={`${inputId}-${surface}-set`}>内置插画组</label>
+                        <select
+                          id={`${inputId}-${surface}-set`}
+                          aria-label={`${label}内置插画组`}
+                          value={selectedGroup}
+                          onChange={(event) => changeIllustrations({ scenes: { [surface]: builtinIllustrationAsset(event.target.value as typeof ILLUSTRATION_TEMPLATES[number]["id"], surface) } })}
+                        >
+                          {selectedGroup === "" && <option value="" disabled>当前上传资源</option>}
+                          {THEME_ILLUSTRATION_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                        </select>
+                        <div className="theme-manager-scene-actions">
+                          <label className="theme-manager-upload-button">
+                            上传图片
+                            <input
+                              type="file"
+                              aria-label={`上传${label}`}
+                              accept="image/png,image/jpeg,image/webp"
+                              onChange={(event) => {
+                                void uploadIllustration(surface, event.target.files?.[0]);
+                                event.currentTarget.value = "";
+                              }}
+                            />
+                          </label>
+                          <button type="button" onClick={() => changeIllustrations({ scenes: { [surface]: builtinIllustrationAsset("none", surface) } })}>恢复默认资源</button>
+                        </div>
+                        <small>推荐 1600 × 900；预览会按场景裁剪 object-position。</small>
+                      </article>
+                    );
+                  })}
                 </div>
                 <div className="theme-manager-illustration-templates" aria-label="插画模板">
                   {ILLUSTRATION_TEMPLATES.map((template) => (
