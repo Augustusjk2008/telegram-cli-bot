@@ -40,7 +40,6 @@ import { PaneResizer } from "./PaneResizer";
 import { SearchPane } from "./SearchPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
-import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import {
   LazyDebugPane as DebugPane,
@@ -1422,7 +1421,6 @@ export function DesktopWorkbench({
       className="desktop-workbench-root theme-illustration-host grid h-[100dvh] min-h-0 w-full grid-cols-[minmax(0,1fr)]"
       style={{ gridTemplateRows: "auto minmax(0,1fr) auto" }}
     >
-      <ThemeIllustrationLayer surface="workbench" />
       {focusedPane ? (
         <button
           type="button"

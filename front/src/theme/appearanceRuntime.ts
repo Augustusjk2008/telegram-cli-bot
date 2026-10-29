@@ -32,12 +32,18 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
     };
     for (const surface of THEME_ILLUSTRATION_SURFACES) {
       illustrationVariables[`--theme-illustration-${surface}-image`] = illustrationCssImage(appearance.illustrations.resources[surface]);
+      illustrationVariables[`--theme-illustration-${surface}-images`] = appearance.illustrations.sceneResources[surface]
+        .map(illustrationCssImage)
+        .join(", ");
+      illustrationVariables[`--theme-illustration-${surface}-layer-count`] = String(appearance.illustrations.scenes[surface].layers.length);
       illustrationVariables[`--theme-illustration-${surface}-enabled`] = appearance.illustrations.surfaces[surface] ? "1" : "0";
     }
     for (const name of Object.keys(currentAppearance.illustrations ? {
       "--theme-illustration-opacity": "",
       ...Object.fromEntries(THEME_ILLUSTRATION_SURFACES.flatMap((surface) => [
         [`--theme-illustration-${surface}-image`, ""],
+        [`--theme-illustration-${surface}-images`, ""],
+        [`--theme-illustration-${surface}-layer-count`, ""],
         [`--theme-illustration-${surface}-enabled`, ""],
       ])),
     } : {})) {

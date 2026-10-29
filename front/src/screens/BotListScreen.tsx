@@ -277,8 +277,8 @@ export function BotListScreen({
       <ThemeIllustrationLayer surface="agentManager" />
       <header className="theme-illustration-host mb-3 flex items-center justify-between gap-3">
       <ThemeIllustrationLayer surface="agentManager" region="topbar" />
-        <h1 className="text-2xl font-bold">智能体管理</h1>
-        <div className="flex items-center gap-2">
+        <h1 className="theme-illustration-content text-2xl font-bold">智能体管理</h1>
+        <div className="theme-illustration-content flex items-center gap-2">
           {onLogout ? (
             <button
               type="button"

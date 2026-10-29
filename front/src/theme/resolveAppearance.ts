@@ -3,6 +3,9 @@ import type {
   ColorToken,
   LegacyThemeIllustrations,
   ThemeIllustrationAsset,
+  ThemeIllustrationAnchor,
+  ThemeIllustrationLayerSpec,
+  ThemeIllustrationScene,
   ThemeIllustrationSurface,
   ThemeIllustrationUpload,
   ThemeIllustrationUploadMime,
@@ -20,7 +23,7 @@ import {
 } from "./chatTypography";
 import { PAPER_MOTION, PAPER_STYLE } from "./types";
 import {
-  builtinIllustrationAsset,
+  builtinIllustrationScene,
   defaultIllustrations,
   illustrationAssetResourcePath,
   THEME_ILLUSTRATION_SET_IDS,
@@ -147,7 +150,7 @@ function normalizeAsset(value: unknown): ThemeIllustrationAsset {
   } as ThemeIllustrationAsset;
   if (asset.kind === "builtin") {
     const catalogAsset = Object.values(THEME_ILLUSTRATION_CATALOG.sets)
-      .flatMap((set) => Object.values(set))
+      .flatMap((set) => Object.values(set).flatMap((scene) => scene.layers.map((layer) => layer.asset)))
       .find((item) => item.assetId === asset.assetId);
     if (!catalogAsset || catalogAsset.mimeType !== asset.mimeType || catalogAsset.width !== asset.width
       || catalogAsset.height !== asset.height || catalogAsset.sha256 !== asset.sha256) {
@@ -155,6 +158,76 @@ function normalizeAsset(value: unknown): ThemeIllustrationAsset {
     }
   }
   return asset;
+}
+
+const ILLUSTRATION_ANCHORS = ["top", "left", "right", "bottom", "bottom-left", "bottom-right", "center"] as const satisfies readonly ThemeIllustrationAnchor[];
+const LAYER_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
+
+function normalizeLayer(value: unknown, surface: ThemeIllustrationSurface, index: number): ThemeIllustrationLayerSpec {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`主题插画图层无效：${surface}/${index}`);
+  const candidate = value as Record<string, unknown>;
+  const allowed = ["id", "asset", "anchor", "x", "y", "width", "height", "objectPosition", "opacity", "enabled"];
+  if (Object.keys(candidate).some((key) => !allowed.includes(key))) throw new Error(`主题插画图层包含不支持的字段：${surface}/${index}`);
+  if (typeof candidate.id !== "string" || !LAYER_ID.test(candidate.id)) throw new Error(`主题插画图层 ID 无效：${surface}/${index}`);
+  if (!ILLUSTRATION_ANCHORS.includes(candidate.anchor as ThemeIllustrationAnchor)) throw new Error(`主题插画图层锚点无效：${surface}/${index}`);
+  if (typeof candidate.enabled !== "boolean") throw new Error(`主题插画图层启用状态无效：${surface}/${index}`);
+  const finitePercent = (key: string, min: number, max: number) => {
+    if (candidate[key] === undefined) return undefined;
+    if (typeof candidate[key] !== "number" || !Number.isFinite(candidate[key]) || candidate[key] < min || candidate[key] > max) {
+      throw new Error(`主题插画图层${key}无效：${surface}/${index}`);
+    }
+    return candidate[key];
+  };
+  const x = finitePercent("x", -100, 100);
+  const y = finitePercent("y", -100, 100);
+  const width = finitePercent("width", 0.01, 300);
+  const height = finitePercent("height", 0.01, 300);
+  const opacity = finitePercent("opacity", 0, 1);
+  const objectPosition = candidate.objectPosition;
+  if (objectPosition !== undefined && (typeof objectPosition !== "string" || objectPosition.length > 120)) {
+    throw new Error(`主题插画图层 objectPosition 无效：${surface}/${index}`);
+  }
+  return {
+    id: candidate.id,
+    asset: normalizeAsset(candidate.asset),
+    anchor: candidate.anchor as ThemeIllustrationAnchor,
+    ...(x === undefined ? {} : { x }),
+    ...(y === undefined ? {} : { y }),
+    ...(width === undefined ? {} : { width }),
+    ...(height === undefined ? {} : { height }),
+    ...(objectPosition === undefined ? {} : { objectPosition: objectPosition as string }),
+    ...(opacity === undefined ? {} : { opacity }),
+    enabled: candidate.enabled,
+  };
+}
+
+function sceneFromAsset(asset: ThemeIllustrationAsset, id: string): ThemeIllustrationScene {
+  return {
+    layers: [{
+      id,
+      asset,
+      anchor: "center",
+      width: 100,
+      height: 100,
+      objectPosition: "50% 50%",
+      enabled: true,
+    }],
+  };
+}
+
+function normalizeScene(value: unknown, surface: ThemeIllustrationSurface): ThemeIllustrationScene {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`主题插画场景无效：${surface}`);
+  const candidate = value as Record<string, unknown>;
+  if (!Object.hasOwn(candidate, "layers")) {
+    return sceneFromAsset(normalizeAsset(value), `${surface}-layer`);
+  }
+  if (Object.keys(candidate).some((key) => key !== "layers") || !Array.isArray(candidate.layers) || candidate.layers.length < 1 || candidate.layers.length > 32) {
+    throw new Error(`主题插画图层列表无效：${surface}`);
+  }
+  const layers = candidate.layers.map((layer, index) => normalizeLayer(layer, surface, index));
+  const ids = new Set<string>();
+  if (layers.some((layer) => ids.has(layer.id) || !ids.add(layer.id))) throw new Error(`主题插画图层 ID 重复：${surface}`);
+  return { layers };
 }
 
 function isLegacy(value: unknown): value is LegacyThemeIllustrations {
@@ -188,7 +261,9 @@ function canonicalFromLegacy(value: LegacyThemeIllustrations): ThemeIllustration
     },
     scenes: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [
       surface,
-      asset || builtinIllustrationAsset(setId as typeof THEME_ILLUSTRATION_SET_IDS[number], surface),
+      asset
+        ? sceneFromAsset(asset, `${surface}-legacy`)
+        : builtinIllustrationScene(setId as typeof THEME_ILLUSTRATION_SET_IDS[number], surface),
     ])) as ThemeIllustrations["scenes"],
   };
 }
@@ -226,7 +301,7 @@ export function normalizeIllustrations(value: unknown): ThemeIllustrations {
   return {
     opacity: candidate.opacity,
     surfaces: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, surfaceRecord[surface] as boolean])) as ThemeIllustrations["surfaces"],
-    scenes: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, normalizeAsset(sceneRecord[surface])])) as ThemeIllustrations["scenes"],
+    scenes: Object.fromEntries(THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, normalizeScene(sceneRecord[surface], surface)])) as ThemeIllustrations["scenes"],
   };
 }
 
@@ -277,16 +352,22 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   const typography = normalizeChatTypography(theme.appearance.typography);
   Object.assign(cssVariables, chatTypographyCssVariables(typography));
   const legacyData = legacyUploadData(rawIllustrations as ThemeIllustrationsValue);
-  const resources = Object.fromEntries(
+  const sceneResources = Object.fromEntries(
     THEME_ILLUSTRATION_SURFACES.map((surface) => [
       surface,
-      legacyData || illustrationAssetResourcePath(illustrations.scenes[surface]),
+      illustrations.scenes[surface].layers.map((layer) => (
+        legacyData || illustrationAssetResourcePath(layer.asset)
+      )),
     ]),
+  ) as Record<ThemeIllustrationSurface, string[]>;
+  const resources = Object.fromEntries(
+    THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, sceneResources[surface][0] || ""]),
   ) as Record<ThemeIllustrationSurface, string>;
   const legacySetId = isLegacy(rawIllustrations) ? rawIllustrations.setId : undefined;
   const resolvedIllustrations = {
     ...illustrations,
     resources,
+    sceneResources,
     ...(legacySetId ? { setId: legacySetId } : {}),
   } as ResolvedAppearance["illustrations"];
   const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography, resolvedIllustrations]);

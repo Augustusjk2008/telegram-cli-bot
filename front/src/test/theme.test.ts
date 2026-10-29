@@ -122,7 +122,7 @@ describe("UI themes", () => {
       },
     });
     expect(forest.illustrations.resources.workbench).toBe(
-      "/assets/theme-illustrations/forest-grove/workbench.webp",
+      "/assets/theme-illustrations/forest-grove/workbench/top-canopy.webp",
     );
     expect(changed.revision).not.toBe(forest.revision);
   });

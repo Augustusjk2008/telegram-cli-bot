@@ -5769,25 +5769,29 @@ export function ChatScreen({
           {chatDisabledReason}
         </section>
       ) : null}
-      <section
-        ref={scrollContainerRef}
-        data-testid="chat-scroll-container"
-        onClickCapture={handleChatClickCapture}
-        onScroll={handleChatScroll}
-        onPointerDown={markUserScrollIntent}
-        onPointerUp={clearUserScrollIntent}
-        onPointerCancel={clearUserScrollIntent}
-        onWheel={handleChatWheel}
-        onTouchStart={handleChatTouchStart}
-        onTouchMove={handleChatTouchMove}
-        onTouchEnd={clearUserScrollIntent}
-        onTouchCancel={clearUserScrollIntent}
-        onKeyDown={handleScrollKeyDown}
-        className={isImmersive
-          ? `theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
-          : `theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--workbench-panel-bg)] ${mobileLayout ? "p-2" : "p-3"}`}
+      <div
+        data-testid="chat-illustration-viewport"
+        className="theme-illustration-host relative min-h-0 flex-1"
       >
         <ThemeIllustrationLayer surface="workbench" region="chat" />
+        <section
+          ref={scrollContainerRef}
+          data-testid="chat-scroll-container"
+          onClickCapture={handleChatClickCapture}
+          onScroll={handleChatScroll}
+          onPointerDown={markUserScrollIntent}
+          onPointerUp={clearUserScrollIntent}
+          onPointerCancel={clearUserScrollIntent}
+          onWheel={handleChatWheel}
+          onTouchStart={handleChatTouchStart}
+          onTouchMove={handleChatTouchMove}
+          onTouchEnd={clearUserScrollIntent}
+          onTouchCancel={clearUserScrollIntent}
+          onKeyDown={handleScrollKeyDown}
+          className={isImmersive
+            ? `theme-illustration-content chat-illustration-scroll relative h-full overflow-y-auto ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
+            : `theme-illustration-content chat-illustration-scroll relative h-full overflow-y-auto ${mobileLayout ? "p-2" : "p-3"}`}
+        >
         <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
           {loading ? (
             <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
@@ -5840,7 +5844,8 @@ export function ChatScreen({
           ) : null}
           <div ref={bottomAnchorRef} aria-hidden="true" />
         </div>
-      </section>
+        </section>
+      </div>
       {clusterMode && clusterTeamView ? (
         <div
           data-testid="cluster-team-dock"

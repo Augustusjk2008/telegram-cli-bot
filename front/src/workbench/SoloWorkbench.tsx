@@ -19,7 +19,6 @@ import { SoloSessionInfoTab } from "./SoloSessionInfoTab";
 import type { SoloSessionSnapshot, SoloTab } from "./soloTypes";
 import { PANE_RESIZER_SIZE_PX, type ChatWorkbenchStatus, type WorkbenchProductMode } from "./workbenchTypes";
 import { WorkbenchHeader } from "./WorkbenchHeader";
-import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 type Props = {
   botAlias: string;
@@ -210,7 +209,6 @@ export function SoloWorkbench({
       data-resizing={isResizing ? "true" : "false"}
       className="desktop-workbench-root solo-workbench-root theme-illustration-host grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto]"
     >
-      <ThemeIllustrationLayer surface="workbench" />
       <WorkbenchHeader
         currentBot={botAlias}
         workspaceName={workspaceName}

@@ -1,8 +1,14 @@
 import { useMemo, type CSSProperties } from "react";
-import { useResolvedAppearance } from "./appearanceRuntime";
-import type { ResolvedAppearance, ThemeIllustrationLegacySurface, ThemeIllustrationSurface } from "./types";
 import { clsx } from "clsx";
 import { withPublicBase } from "../utils/publicBase";
+import { useResolvedAppearance } from "./appearanceRuntime";
+import { illustrationAssetResourcePath } from "./illustrationPresets";
+import type {
+  ResolvedAppearance,
+  ThemeIllustrationLayerSpec,
+  ThemeIllustrationLegacySurface,
+  ThemeIllustrationSurface,
+} from "./types";
 
 type Props = {
   surface: ThemeIllustrationSurface | ThemeIllustrationLegacySurface;
@@ -11,14 +17,45 @@ type Props = {
   region?: "canvas" | "chat" | "topbar";
 };
 
-function illustrationCssImage(resource: string) {
-  return `url("${resource.startsWith("data:") ? resource : withPublicBase(resource)}")`;
-}
-
 function canonicalSurface(surface: Props["surface"]): ThemeIllustrationSurface {
   if (surface === "chat" || surface === "topbar") return "workbench";
   if (surface === "management") return "agentManager";
   return surface;
+}
+
+function resourceUrl(resource: string) {
+  return resource.startsWith("data:") ? resource : withPublicBase(resource);
+}
+
+function positionStyle(layer: ThemeIllustrationLayerSpec, region: Props["region"]): CSSProperties {
+  const x = layer.x ?? 0;
+  const y = layer.y ?? 0;
+  const width = `${layer.width ?? 100}%`;
+  const height = `${layer.height ?? 100}%`;
+  const objectPosition = layer.objectPosition
+    || (region === "topbar" ? "50% 0%" : region === "chat" ? "50% 72%" : "50% 50%");
+  const base: CSSProperties = {
+    inset: "auto",
+    width,
+    height,
+    objectPosition,
+    opacity: layer.opacity ?? 1,
+  };
+  if (layer.anchor === "center") {
+    return {
+      ...base,
+      left: `calc(50% + ${x}%)`,
+      top: `calc(50% + ${y}%)`,
+      transform: "translate(-50%, -50%)",
+    };
+  }
+  const horizontal = layer.anchor === "right" || layer.anchor === "bottom-right";
+  const vertical = layer.anchor === "bottom" || layer.anchor === "bottom-left" || layer.anchor === "bottom-right";
+  return {
+    ...base,
+    ...(horizontal ? { right: `${x}%` } : { left: `${x}%` }),
+    ...(vertical ? { bottom: `${y}%` } : { top: `${y}%` }),
+  };
 }
 
 export function ThemeIllustrationLayer({ surface, appearance: previewAppearance, className, region = "canvas" }: Props) {
@@ -26,25 +63,41 @@ export function ThemeIllustrationLayer({ surface, appearance: previewAppearance,
   const appearance = previewAppearance || currentAppearance;
   const illustration = appearance.illustrations;
   const resolvedSurface = canonicalSurface(surface);
-  const resource = illustration.resources[resolvedSurface];
-  const visible = illustration.opacity > 0 && illustration.surfaces[resolvedSurface] && Boolean(resource);
-  const style = useMemo(() => ({
-    "--theme-illustration-opacity": String(illustration.opacity),
-    "--theme-illustration-image": illustrationCssImage(resource),
-    "--theme-illustration-object-position": region === "topbar" ? "50% 0%" : region === "chat" ? "50% 72%" : "50% 50%",
-  }) as CSSProperties, [illustration, resource, region]);
-  if (!visible) return null;
+  const scene = illustration.scenes[resolvedSurface];
+  const resources = illustration.sceneResources[resolvedSurface] || [];
+  const layers = useMemo(
+    () => scene.layers.map((layer, index) => ({
+      layer,
+      index,
+      resource: resources[index] || illustrationAssetResourcePath(layer.asset),
+    })).filter((item) => item.layer.enabled && Boolean(item.resource)),
+    [resources, scene],
+  );
+  if (illustration.opacity <= 0 || !illustration.surfaces[resolvedSurface] || layers.length === 0) return null;
+
   return (
     <div
       aria-hidden="true"
       data-testid={`theme-illustration-layer-${resolvedSurface}`}
       data-theme-illustration-surface={resolvedSurface}
       data-theme-illustration-region={region}
-      data-theme-illustration-asset={illustration.scenes[resolvedSurface].assetId}
+      data-theme-illustration-count={layers.length}
       className={clsx("theme-illustration-layer", className)}
-      style={{ ...style, pointerEvents: "none" }}
+      style={{ "--theme-illustration-opacity": String(illustration.opacity), pointerEvents: "none" } as CSSProperties}
     >
-      <img className="theme-illustration-art" src={resource.startsWith("data:") ? resource : withPublicBase(resource)} alt="" draggable={false} />
+      {layers.map(({ layer, index, resource }) => (
+        <img
+          key={layer.id}
+          className="theme-illustration-art"
+          data-theme-illustration-layer-id={layer.id}
+          data-theme-illustration-index={index}
+          data-theme-illustration-asset={layer.asset.assetId}
+          src={resourceUrl(resource)}
+          alt=""
+          draggable={false}
+          style={positionStyle(layer, region)}
+        />
+      ))}
     </div>
   );
 }

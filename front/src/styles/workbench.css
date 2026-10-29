@@ -26,6 +26,7 @@
 
 .desktop-workbench-pane {
   position: relative;
+  z-index: 1;
   border-radius: var(--desktop-workbench-pane-radius);
   border: 1px solid var(--workbench-hairline);
   background: var(--workbench-panel-bg);
@@ -34,6 +35,12 @@
     border-color 160ms ease,
     opacity 160ms ease,
     background-color 160ms ease;
+}
+
+.terminal-tabs-screen,
+.terminal-tabs-toolbar {
+  position: relative;
+  z-index: 20;
 }
 
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
@@ -174,7 +181,14 @@
 }
 
 .workbench-topbar {
+  position: relative;
+  z-index: 20;
   box-shadow: none;
+}
+
+.workbench-topbar > :not(.theme-illustration-layer) {
+  position: relative;
+  z-index: 1;
 }
 
 .workbench-topbar-logo,

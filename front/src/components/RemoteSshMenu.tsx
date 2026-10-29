@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Server } from "lucide-react";
 import type { RemoteWorkspace } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -17,7 +18,9 @@ export function RemoteSshMenu({ client, botAlias, remote, compact = false, disab
   const [disconnected, setDisconnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -30,7 +33,8 @@ export function RemoteSshMenu({ client, botAlias, remote, compact = false, disab
   useEffect(() => {
     if (!open) return;
     const closeOnPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -46,6 +50,29 @@ export function RemoteSshMenu({ client, botAlias, remote, compact = false, disab
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      setMenuPosition(null);
+      return;
+    }
+    const updatePosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(320, Math.max(240, window.innerWidth - 16));
+      const preferredLeft = compact ? rect.right - width : rect.left;
+      const left = Math.max(8, Math.min(preferredLeft, window.innerWidth - width - 8));
+      const maxTop = Math.max(8, window.innerHeight - 420);
+      setMenuPosition({ top: Math.min(rect.bottom + 6, maxTop), left });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [compact, open]);
+
   async function disconnect() {
     setBusy(true);
     setError("");
@@ -60,6 +87,27 @@ export function RemoteSshMenu({ client, botAlias, remote, compact = false, disab
   }
 
   const pathLabel = `${remote.username}@${remote.host}:${remote.port} ${remote.root}`;
+  const menu = open && menuPosition ? (
+    <div
+      ref={menuRef}
+      role="dialog"
+      aria-label="SSH 连接"
+      className="fixed z-[100] w-[min(20rem,calc(100vw-1rem))] rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] p-3 text-sm text-[var(--text)] shadow-[var(--shadow-card)]"
+      style={{ top: menuPosition.top, left: menuPosition.left }}
+    >
+      <p className="text-xs text-[var(--muted)]">远程工作区</p>
+      <p className="mt-1 break-all font-mono text-xs">{remote.username}@{remote.host}:{remote.port}</p>
+      <p className="break-all font-mono text-xs">{remote.root}</p>
+      <p className="mt-2 text-xs text-[var(--muted)]">仅支持聊天、文件和终端</p>
+      {disconnected && <p role="status" className="mt-2 text-xs text-[var(--danger)]">SSH 已断开，请重新登录后继续使用远程工作区。</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-[var(--danger)]">{error}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={remoteButtonClass} disabled={disabled || busy} onClick={() => { setOpen(false); setReconnecting(true); }}>SSH 重新登录</button>
+        <button type="button" className={remoteButtonClass} disabled={disabled || busy || disconnected} onClick={() => void disconnect()}>{busy ? "正在断开…" : "断开 SSH"}</button>
+      </div>
+    </div>
+  ) : null;
+
   return <>
     <div ref={rootRef} className={compact ? "relative shrink-0" : "relative min-w-0 max-w-[22rem]"}>
       <button
@@ -78,19 +126,8 @@ export function RemoteSshMenu({ client, botAlias, remote, compact = false, disab
         <span className={compact ? "" : "min-w-0 truncate"}>{compact ? "SSH" : `SSH ${remote.host}:${remote.root}`}</span>
         <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
       </button>
-      {open && <div role="dialog" aria-label="SSH 连接" className={`absolute top-full z-40 mt-1 w-[min(20rem,calc(100vw-1rem))] rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] p-3 text-sm text-[var(--text)] shadow-[var(--shadow-card)] ${compact ? "right-0" : "left-0"}`}>
-        <p className="text-xs text-[var(--muted)]">远程工作区</p>
-        <p className="mt-1 break-all font-mono text-xs">{remote.username}@{remote.host}:{remote.port}</p>
-        <p className="break-all font-mono text-xs">{remote.root}</p>
-        <p className="mt-2 text-xs text-[var(--muted)]">仅支持聊天、文件和终端</p>
-        {disconnected && <p role="status" className="mt-2 text-xs text-[var(--danger)]">SSH 已断开，请重新登录后继续使用远程工作区。</p>}
-        {error && <p role="alert" className="mt-2 text-xs text-[var(--danger)]">{error}</p>}
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" className={remoteButtonClass} disabled={disabled || busy} onClick={() => { setOpen(false); setReconnecting(true); }}>SSH 重新登录</button>
-          <button type="button" className={remoteButtonClass} disabled={disabled || busy || disconnected} onClick={() => void disconnect()}>{busy ? "正在断开…" : "断开 SSH"}</button>
-        </div>
-      </div>}
     </div>
+    {menu && typeof document !== "undefined" ? createPortal(menu, document.body) : null}
     {reconnecting && <RemoteReconnectDialog client={client} botAlias={botAlias} remote={remote} onClose={() => { setReconnecting(false); triggerRef.current?.focus(); }} onConnected={() => { setReconnecting(false); setDisconnected(false); setError(""); onConnected?.(); triggerRef.current?.focus(); }} />}
   </>;
 }

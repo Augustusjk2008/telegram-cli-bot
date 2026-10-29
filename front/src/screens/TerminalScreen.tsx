@@ -1,21 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { Maximize2, Minimize2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
-import type {
-  TerminalAction,
-  TerminalActionsConfig,
-  TerminalActionsEditableConfig,
-  TerminalRuntimePlatform,
-} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { ImmersiveToggleButton } from "../components/ImmersiveToggleButton";
-import { TerminalActionsBar } from "../terminal/TerminalActionsBar";
-import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDialog";
-import { isTerminalActionVisible, resolveTerminalActionCommand } from "../terminal/terminalActionPlatform";
 import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
 import type { UiThemeName } from "../theme";
 import { getCurrentAppearance, resolvedTerminalTheme, useResolvedAppearance } from "../theme/appearanceRuntime";
@@ -32,9 +21,6 @@ type Props = {
   isImmersive?: boolean;
   disabledReason?: string;
   embedded?: boolean;
-  focused?: boolean;
-  toolbarHost?: HTMLElement | null;
-  onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onAcceptPendingWorkingDir?: () => void;
   onCancelPendingWorkingDir?: () => void;
@@ -111,9 +97,6 @@ export function TerminalScreen({
   isImmersive = false,
   disabledReason = "",
   embedded = false,
-  focused = false,
-  toolbarHost = null,
-  onToggleFocus,
   onToggleImmersive,
   onAcceptPendingWorkingDir,
   onCancelPendingWorkingDir,
@@ -143,16 +126,8 @@ export function TerminalScreen({
   const [isFollowing, setIsFollowing] = useState(true);
   const [ptyMode, setPtyMode] = useState<boolean | null>(null);
   const [error, setError] = useState("");
-  const [actionsConfig, setActionsConfig] = useState<TerminalActionsConfig | null>(null);
-  const [actionsError, setActionsError] = useState("");
-  const [runningActionId, setRunningActionId] = useState("");
-  const [showActionsConfig, setShowActionsConfig] = useState(false);
-  const [savingActionsConfig, setSavingActionsConfig] = useState(false);
-  const [actionsConfigError, setActionsConfigError] = useState("");
   const terminalFontSize = getTerminalFontSize();
   const terminalDisabled = Boolean(disabledReason);
-  const runtimePlatform: TerminalRuntimePlatform = actionsConfig?.runtimePlatform ?? "windows";
-  const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
   const runningWorkingDir = terminal.snapshot.cwd.trim();
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
   const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
@@ -161,25 +136,6 @@ export function TerminalScreen({
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (remote) { setActionsConfig(null); setActionsError(""); return; }
-    client.getTerminalActionsConfig(botAlias)
-      .then((next) => {
-        if (cancelled) return;
-        setActionsConfig(next);
-        setActionsError(next.errors[0] || "");
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setActionsConfig(null);
-        setActionsError(err instanceof Error ? err.message : "加载快捷命令失败");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [botAlias, client, remote]);
 
   function setFollowing(nextValue: boolean) {
     isFollowingRef.current = nextValue;
@@ -310,66 +266,6 @@ export function TerminalScreen({
     session?.dispose();
     setIsConnected(false);
     setPtyMode(null);
-  }
-
-  async function runTerminalAction(action: TerminalAction) {
-    if (terminalDisabled) {
-      return;
-    }
-    const command = resolveTerminalActionCommand(action, runtimePlatform);
-    if (!command) {
-      setActionsError("当前平台未配置命令");
-      return;
-    }
-    if (action.confirm && !window.confirm(`执行命令？\n\n${command}`)) {
-      return;
-    }
-    setRunningActionId(action.id);
-    setActionsError("");
-    try {
-      let tab = terminal.tabs.find((item) => (
-        item.terminalActionBotAlias === botAlias
-        && item.terminalActionId === action.id
-      ));
-      if (!tab) {
-        tab = await terminal.createTab({
-          title: action.label,
-          start: false,
-          activate: false,
-          terminalActionBotAlias: botAlias,
-          terminalActionId: action.id,
-        });
-      }
-      await client.runTerminalAction(botAlias, action.id, {
-        ownerId: tab.ownerId,
-        confirmed: true,
-      });
-      await terminal.refreshSnapshot(tab.ownerId);
-      terminal.selectTab(tab.id);
-      setFollowing(true);
-    } catch (err) {
-      setActionsError(err instanceof Error ? err.message : "执行快捷命令失败");
-    } finally {
-      setRunningActionId("");
-    }
-  }
-
-  async function saveTerminalActionsConfig(nextConfig: TerminalActionsEditableConfig) {
-    if (!actionsConfig || terminalDisabled) {
-      return;
-    }
-    setSavingActionsConfig(true);
-    setActionsConfigError("");
-    try {
-      const saved = await client.saveTerminalActionsConfig(botAlias, nextConfig, actionsConfig.mtimeNs);
-      setActionsConfig(saved);
-      setActionsError(saved.errors[0] || "");
-      setShowActionsConfig(false);
-    } catch (err) {
-      setActionsConfigError(err instanceof Error ? err.message : "保存快捷命令失败");
-    } finally {
-      setSavingActionsConfig(false);
-    }
   }
 
   useEffect(() => {
@@ -526,7 +422,7 @@ export function TerminalScreen({
     };
   }, []);
 
-  const effectiveError = disabledReason || error || terminal.error || actionsError;
+  const effectiveError = disabledReason || error || terminal.error;
   const connectionText = effectiveError
     ? terminalDisabled
       ? "无权限"
@@ -544,11 +440,6 @@ export function TerminalScreen({
       nextTerminalCwd: stagedWorkingDir,
     });
   }, [connectionText, onWorkbenchStatusChange, runningWorkingDir, stagedWorkingDir, terminal.snapshot.closed, terminal.snapshot.started]);
-
-  function openActionsConfig() {
-    setActionsConfigError("");
-    setShowActionsConfig(true);
-  }
 
   const stagedWorkingDirControls = stagedWorkingDir ? (
     <div className={embedded
@@ -576,35 +467,8 @@ export function TerminalScreen({
     </div>
   ) : null;
 
-  const embeddedToolbar = embedded && toolbarHost ? createPortal(
-    <>
-      <TerminalActionsBar
-        actions={[]}
-        runtimePlatform={runtimePlatform}
-        canEdit={Boolean(actionsConfig?.editable) && !terminalDisabled}
-        disabled={terminalDisabled}
-        runningActionId=""
-        onRunAction={() => {}}
-        onOpenConfig={openActionsConfig}
-      />
-      {onToggleFocus ? (
-        <button
-          type="button"
-          aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
-          title={focused ? "退出聚焦终端" : "聚焦终端"}
-          onClick={onToggleFocus}
-          className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
-        >
-          {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
-      ) : null}
-    </>,
-    toolbarHost,
-  ) : null;
-
   return (
     <main ref={terminalRootRef} data-testid="terminal-screen-root" className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
-      {embeddedToolbar}
       {!embedded ? (
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
         <div className="flex items-center justify-between gap-3">
@@ -625,17 +489,6 @@ export function TerminalScreen({
             {effectiveError ? (
               <p className="mt-0.5 text-xs text-[var(--status-danger)]">{effectiveError}</p>
             ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <TerminalActionsBar
-              actions={[]}
-              runtimePlatform={runtimePlatform}
-              canEdit={Boolean(actionsConfig?.editable) && !terminalDisabled}
-              disabled={terminalDisabled}
-              runningActionId=""
-              onRunAction={() => {}}
-              onOpenConfig={openActionsConfig}
-            />
           </div>
         </div>
         {stagedWorkingDirControls}
@@ -687,23 +540,6 @@ export function TerminalScreen({
         ) : null}
       </section>
 
-      {visibleActions.length > 0 ? (
-        <div
-          data-testid="terminal-actions-panel"
-          className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2"
-        >
-          <TerminalActionsBar
-            actions={visibleActions}
-            runtimePlatform={runtimePlatform}
-            canEdit={false}
-            disabled={terminalDisabled}
-            runningActionId={runningActionId}
-            onRunAction={(action) => void runTerminalAction(action)}
-            onOpenConfig={() => {}}
-          />
-        </div>
-      ) : null}
-
       {!embedded && isVisible && onToggleImmersive ? (
         <ImmersiveToggleButton
           containerRef={terminalRootRef}
@@ -742,15 +578,6 @@ export function TerminalScreen({
             </button>
           ))}
         </div>
-      ) : null}
-      {showActionsConfig && actionsConfig && !terminalDisabled ? (
-        <TerminalActionsConfigDialog
-          config={actionsConfig}
-          saving={savingActionsConfig}
-          error={actionsConfigError}
-          onSave={(nextConfig) => void saveTerminalActionsConfig(nextConfig)}
-          onClose={() => setShowActionsConfig(false)}
-        />
       ) : null}
     </main>
   );

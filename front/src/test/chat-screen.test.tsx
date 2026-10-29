@@ -4,7 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import { applyResolvedAppearance } from "../theme/appearanceRuntime";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
-import { builtinIllustrationAsset } from "../theme/illustrationPresets";
+import { builtinIllustrationScene } from "../theme/illustrationPresets";
 import * as mermaidRenderer from "../markdown/mermaidRenderer";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
@@ -54,9 +54,9 @@ test("renders the workbench illustration inside the standalone chat area", async
         opacity: 0.12,
         surfaces: { workbench: true, adminCenter: true, agentManager: true },
         scenes: {
-          workbench: builtinIllustrationAsset("forest-grove", "workbench"),
-          adminCenter: builtinIllustrationAsset("forest-grove", "adminCenter"),
-          agentManager: builtinIllustrationAsset("forest-grove", "agentManager"),
+          workbench: builtinIllustrationScene("forest-grove", "workbench"),
+          adminCenter: builtinIllustrationScene("forest-grove", "adminCenter"),
+          agentManager: builtinIllustrationScene("forest-grove", "agentManager"),
         },
       },
     },
@@ -66,7 +66,8 @@ test("renders the workbench illustration inside the standalone chat area", async
     render(<ChatScreen botAlias="main" client={createClient()} />);
     const layer = await screen.findByTestId("theme-illustration-layer-workbench");
     expect(layer).toHaveAttribute("data-theme-illustration-region", "chat");
-    expect(layer.closest('[data-testid="chat-scroll-container"]')).not.toBeNull();
+    expect(layer.closest('[data-testid="chat-illustration-viewport"]')).not.toBeNull();
+    expect(layer.closest('[data-testid="chat-scroll-container"]')).toBeNull();
   } finally {
     applyResolvedAppearance(resolveAppearance(BUILTIN_THEME));
   }

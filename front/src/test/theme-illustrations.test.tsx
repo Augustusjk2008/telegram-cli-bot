@@ -2,10 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
-import { builtinIllustrationAsset } from "../theme/illustrationPresets";
+import { builtinIllustrationScene } from "../theme/illustrationPresets";
 
 function appearanceFor(setId: "forest-grove" | "none" = "forest-grove") {
-  const asset = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationAsset(setId, surface);
+  const scene = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationScene(setId, surface);
   return resolveAppearance({
     ...BUILTIN_THEME,
     appearance: {
@@ -14,13 +14,13 @@ function appearanceFor(setId: "forest-grove" | "none" = "forest-grove") {
         opacity: setId === "none" ? 0 : 0.12,
         surfaces: {
           workbench: setId !== "none",
-          adminCenter: false,
-          agentManager: false,
+          adminCenter: setId !== "none",
+          agentManager: setId !== "none",
         },
         scenes: {
-          workbench: asset("workbench"),
-          adminCenter: asset("adminCenter"),
-          agentManager: asset("agentManager"),
+          workbench: scene("workbench"),
+          adminCenter: scene("adminCenter"),
+          agentManager: scene("agentManager"),
         },
       },
     },
@@ -38,9 +38,22 @@ describe("ThemeIllustrationLayer", () => {
     const layer = screen.getByTestId("theme-illustration-layer-workbench");
     expect(layer).toHaveAttribute("aria-hidden", "true");
     expect(layer).toHaveStyle({ pointerEvents: "none" });
-    expect(layer.style.getPropertyValue("--theme-illustration-image")).toContain(
-      "/assets/theme-illustrations/forest-grove/workbench.webp",
+    expect(layer).toHaveAttribute("data-theme-illustration-count", "5");
+    expect(layer.querySelectorAll(".theme-illustration-art")).toHaveLength(5);
+    expect(layer.querySelector("[data-theme-illustration-layer-id=top-canopy]")).toHaveStyle({ width: "100%", height: "45%" });
+  });
+
+  it("renders the independent admin and agent layer groups in manifest order", () => {
+    const appearance = appearanceFor();
+    render(
+      <>
+        <ThemeIllustrationLayer surface="adminCenter" appearance={appearance} />
+        <ThemeIllustrationLayer surface="agentManager" appearance={appearance} />
+      </>,
     );
-    expect(layer.querySelector(".theme-illustration-art")).toBeInTheDocument();
+    expect(screen.getByTestId("theme-illustration-layer-adminCenter")).toHaveAttribute("data-theme-illustration-count", "3");
+    expect(screen.getByTestId("theme-illustration-layer-agentManager")).toHaveAttribute("data-theme-illustration-count", "3");
+    expect(screen.getByTestId("theme-illustration-layer-adminCenter").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("top-banner");
+    expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("top-banner");
   });
 });

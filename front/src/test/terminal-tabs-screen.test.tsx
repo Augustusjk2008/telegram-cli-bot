@@ -77,6 +77,35 @@ test("没有打开终端时仍显示可新建终端的预设命令", async () =>
   expect(await screen.findByRole("button", { name: "新开终端" })).toBeInTheDocument();
 });
 
+test("没有活动终端时保留配置入口并禁用依赖会话的控制", async () => {
+  const onToggleFocus = vi.fn();
+  const client = {
+    getTerminalSession: vi.fn(async () => snapshot()),
+    getTerminalActionsConfig: vi.fn(async () => ({ ...actionsConfig, editable: true })),
+    createTerminalSession: vi.fn(async () => snapshot()),
+    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
+  } as unknown as WebBotClient;
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <TerminalTabsScreen
+        authToken="token"
+        botAlias="repo"
+        client={client}
+        isVisible
+        preferredWorkingDir="C:/workspace"
+        onToggleFocus={onToggleFocus}
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "关闭终端 1" }));
+  await waitFor(() => expect(screen.queryByRole("tab")).not.toBeInTheDocument());
+  expect(await screen.findByRole("button", { name: "编辑快捷命令" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "新开终端" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "聚焦终端" })).toBeDisabled();
+});
+
 test("重复执行同一快捷命令会复用原终端", async () => {
   const runTerminalAction = vi.fn(async (_botAlias: string, actionId: string, input: { ownerId: string }) => ({
     actionId,

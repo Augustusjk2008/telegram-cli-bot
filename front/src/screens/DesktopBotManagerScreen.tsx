@@ -1474,7 +1474,7 @@ export function DesktopBotManagerScreen({
       <ThemeIllustrationLayer surface="agentManager" />
       <header className="theme-illustration-host border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">
         <ThemeIllustrationLayer surface="agentManager" region="topbar" />
-        <div className="flex items-center gap-3">
+        <div className="theme-illustration-content flex items-center gap-3">
           <h1 className="text-lg font-semibold">智能体管理</h1>
           <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
             <span>总数 {stats.total}</span>

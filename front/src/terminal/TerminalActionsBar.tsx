@@ -9,6 +9,8 @@ type Props = {
   runtimePlatform: TerminalRuntimePlatform;
   canEdit: boolean;
   disabled?: boolean;
+  disabledReason?: string;
+  disableEdit?: boolean;
   runningActionId: string;
   onRunAction: (action: TerminalAction) => void;
   onOpenConfig: () => void;
@@ -19,6 +21,8 @@ export function TerminalActionsBar({
   runtimePlatform,
   canEdit,
   disabled = false,
+  disabledReason = "",
+  disableEdit = disabled,
   runningActionId,
   onRunAction,
   onOpenConfig,
@@ -39,7 +43,9 @@ export function TerminalActionsBar({
             key={action.id}
             type="button"
             aria-label={action.label}
-            title={command}
+            title={disabledReason || command}
+            aria-disabled={disabled || undefined}
+            data-disabled-reason={disabledReason || undefined}
             onClick={() => onRunAction(action)}
             disabled={disabled || running}
             className={toolbarButtonClass("plain", "sm", "h-8 max-w-36")}
@@ -55,7 +61,7 @@ export function TerminalActionsBar({
           aria-label="编辑快捷命令"
           title="编辑快捷命令"
           onClick={onOpenConfig}
-          disabled={disabled}
+          disabled={disableEdit}
           className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
         >
           <Settings className="h-3.5 w-3.5" />

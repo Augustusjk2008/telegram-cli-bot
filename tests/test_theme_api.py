@@ -72,7 +72,10 @@ def illustration_input(**changes):
         }
     scenes = {}
     for surface, resource in catalog["sets"][set_id].items():
-        scenes[surface] = {"kind": "builtin", **{key: value for key, value in resource.items() if key != "path"}}
+        scenes[surface] = {"layers": [{
+            **{key: value for key, value in layer.items() if key != "asset"},
+            "asset": {"kind": "builtin", **{key: value for key, value in layer["asset"].items() if key != "path"}},
+        } for layer in resource["layers"]]}
     return {
         "opacity": 0.18,
         "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
@@ -89,7 +92,15 @@ def uploaded_illustration_input(**changes):
     return {
         "opacity": 0.18,
         "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
-        "scenes": {surface: dict(asset) for surface in ("workbench", "adminCenter", "agentManager")},
+        "scenes": {surface: {"layers": [{
+            "id": f"{surface}-uploaded",
+            "asset": dict(asset),
+            "anchor": "center",
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%",
+            "enabled": True,
+        }]} for surface in ("workbench", "adminCenter", "agentManager")},
         **changes,
     }
 
@@ -192,7 +203,7 @@ async def test_illustrations_are_saved_updated_and_preserved_by_import_export(ap
     assert status == 200
     saved = updated["data"]["themes"][1]["appearance"]["illustrations"]
     assert saved["opacity"] == 0.25
-    assert saved["scenes"]["workbench"]["assetId"] == "moonlit-garden-workbench"
+    assert saved["scenes"]["workbench"]["layers"][0]["asset"]["assetId"] == "moonlit-garden-workbench"
 
     document = updated["data"]["themes"][1]
     status, imported = await request(api, "POST", "/api/ui/themes/import", body={
@@ -221,9 +232,9 @@ async def test_legacy_illustrations_migrate_to_scene_assets_on_save(api):
     }))
     assert status == 200
     saved = created["data"]["themes"][1]["appearance"]["illustrations"]
-    assert saved["scenes"]["workbench"]["kind"] == "uploaded"
-    assert saved["scenes"]["workbench"]["width"] == 1
-    assert saved["scenes"]["adminCenter"] == saved["scenes"]["workbench"]
+    assert saved["scenes"]["workbench"]["layers"][0]["asset"]["kind"] == "uploaded"
+    assert saved["scenes"]["workbench"]["layers"][0]["asset"]["width"] == 1
+    assert saved["scenes"]["adminCenter"]["layers"][0]["asset"] == saved["scenes"]["workbench"]["layers"][0]["asset"]
 
 
 @pytest.mark.asyncio
@@ -313,7 +324,7 @@ async def test_theme_package_import_stages_assets_before_publishing(api):
         "assets": [{"assetId": descriptor["assetId"], "mimeType": descriptor["mimeType"], "data": UPLOAD_PNG}],
     })
     assert status == 200
-    assert payload["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]["workbench"] == descriptor
+    assert payload["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]["workbench"]["layers"][0]["asset"] == descriptor
     assert api.server.theme_store.asset_store._path(descriptor["assetId"], descriptor["mimeType"]).exists()
 
     invalid = {"expectedRevision": 1, "document": {"schemaVersion": 1, "name": "缺少基准", "appearance": document["appearance"]},

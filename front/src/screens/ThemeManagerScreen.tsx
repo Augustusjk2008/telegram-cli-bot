@@ -27,7 +27,7 @@ import {
 } from "../theme/chatTypography";
 import type { ChatTypography, ThemeIllustrationSurface, ThemeIllustrationUploadMime, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
 import { downloadThemeDocument, portableTheme, readThemeFile } from "../theme/themeTransfer";
-import { builtinIllustrationAsset, illustrationSetIdForAsset, ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS, THEME_ILLUSTRATION_SURFACES } from "../theme/illustrationPresets";
+import { builtinIllustrationScene, illustrationSetIdForScene, ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS, THEME_ILLUSTRATION_SURFACES } from "../theme/illustrationPresets";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { withPublicBase } from "../utils/publicBase";
 import "../styles/theme-manager.css";
@@ -49,7 +49,11 @@ function cloneIllustrations(value: unknown): ThemeIllustrations {
   return {
     ...normalized,
     surfaces: { ...normalized.surfaces },
-    scenes: { ...normalized.scenes },
+    scenes: Object.fromEntries(
+      THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, {
+        layers: normalized.scenes[surface].layers.map((layer) => ({ ...layer, asset: { ...layer.asset } })),
+      }]),
+    ) as ThemeIllustrations["scenes"],
   };
 }
 type Pane = "themes" | "editor" | "preview";
@@ -256,12 +260,12 @@ function ThemePreview({
       }
     >
       <ThemeIllustrationLayer surface="workbench" appearance={appearance} />
-      <div className="theme-preview-titlebar theme-illustration-host">
+      <div className="theme-preview-titlebar theme-illustration-host theme-illustration-content">
         <ThemeIllustrationLayer surface="workbench" region="topbar" appearance={appearance} />
         <span>工作台</span>
         <span>示例项目 · 已就绪</span>
       </div>
-      <div className="theme-preview-controls">
+      <div className="theme-preview-controls theme-illustration-content">
         <button type="button" className="theme-preview-primary">
           主要按钮
         </button>
@@ -274,7 +278,7 @@ function ThemePreview({
           焦点
         </button>
       </div>
-      <div className="theme-preview-files" aria-label="文件树示例">
+      <div className="theme-preview-files theme-illustration-content" aria-label="文件树示例">
         <div>⌄ 示例项目</div>
         <div className="theme-preview-file-added">
           <span>＋ 新建说明.md</span>
@@ -289,7 +293,7 @@ function ThemePreview({
           <span>忽略</span>
         </div>
       </div>
-      <div className="theme-preview-chat theme-illustration-host">
+      <div className="theme-preview-chat theme-illustration-host theme-illustration-content">
         <ThemeIllustrationLayer surface="workbench" region="chat" appearance={appearance} />
         <div className="theme-preview-user">
           <small>你 · 现在</small>
@@ -313,7 +317,7 @@ function ThemePreview({
           </button>
         </div>
       </div>
-      <div className="theme-preview-bottom">
+      <div className="theme-preview-bottom theme-illustration-content">
         <div className="theme-preview-menu" aria-label="菜单示例">
           <strong>文件操作</strong>
           <span>打开文件</span>
@@ -684,7 +688,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               agentManager: true,
             },
             scenes: Object.fromEntries(
-              THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, builtinIllustrationAsset(template.id, surface)]),
+              THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, builtinIllustrationScene(template.id, surface)]),
             ) as ThemeIllustrations["scenes"],
           },
         },
@@ -705,7 +709,17 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     }
     try {
       const asset = await uploadThemeAsset(file);
-      changeIllustrations({ scenes: { [surface]: asset } });
+      changeIllustrations({ scenes: { [surface]: {
+        layers: [{
+          id: `${surface}-uploaded`,
+          asset,
+          anchor: "center",
+          width: 100,
+          height: 100,
+          objectPosition: "50% 50%",
+          enabled: true,
+        }],
+      } } });
       setError("");
       setNotice("已上传场景插画，保存主题后生效。");
     } catch (cause) {
@@ -789,11 +803,14 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       const assets = new Map<string, { assetId: string; mimeType: string; data: ArrayBuffer }>();
       for (const theme of themes) {
         const illustrations = normalizeIllustrations(theme.appearance.illustrations);
-        for (const asset of Object.values(illustrations.scenes)) {
-          if (asset.kind !== "uploaded" || assets.has(asset.assetId)) continue;
-          const response = await fetch(withPublicBase(`/api/ui/theme-assets/${encodeURIComponent(asset.assetId)}`), { credentials: "same-origin" });
-          if (!response.ok) throw new Error("无法读取主题插画资源，请刷新主题库后重试。");
-          assets.set(asset.assetId, { assetId: asset.assetId, mimeType: asset.mimeType, data: await response.arrayBuffer() });
+        for (const scene of Object.values(illustrations.scenes)) {
+          for (const layer of scene.layers) {
+            const asset = layer.asset;
+            if (asset.kind !== "uploaded" || assets.has(asset.assetId)) continue;
+            const response = await fetch(withPublicBase(`/api/ui/theme-assets/${encodeURIComponent(asset.assetId)}`), { credentials: "same-origin" });
+            if (!response.ok) throw new Error("无法读取主题插画资源，请刷新主题库后重试。");
+            assets.set(asset.assetId, { assetId: asset.assetId, mimeType: asset.mimeType, data: await response.arrayBuffer() });
+          }
         }
       }
       await downloadThemeDocument(
@@ -1221,8 +1238,9 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                     ["adminCenter", "管理中心插画", "管理页背景和顶部构图"],
                     ["agentManager", "智能体管理插画", "智能体列表、顶部横幅和详情区域"],
                   ] as const).map(([surface, label, description]) => {
-                    const asset = illustrations.scenes[surface];
-                    const selectedGroup = illustrationSetIdForAsset(asset, surface);
+                    const scene = illustrations.scenes[surface];
+                    const asset = scene.layers[0]?.asset;
+                    const selectedGroup = illustrationSetIdForScene(scene, surface);
                     const resource = preview.illustrations.resources[surface];
                     return (
                       <article className="theme-manager-scene-card" key={surface}>
@@ -1245,15 +1263,15 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                           <img src={resource} alt="" aria-hidden="true" />
                         </div>
                         <div className="theme-manager-scene-meta">
-                          <span>{asset.width && asset.height ? `${asset.width} × ${asset.height}` : "等待资源信息"}</span>
-                          <span>{asset.kind === "builtin" ? "内置资源" : "已上传资源"}</span>
+                          <span>{asset?.width && asset.height ? `${asset.width} × ${asset.height}` : "等待资源信息"}</span>
+                          <span>{scene.layers.length} 个图层 · {asset?.kind === "builtin" ? "内置资源" : "已上传资源"}</span>
                         </div>
                         <label htmlFor={`${inputId}-${surface}-set`}>内置插画组</label>
                         <select
                           id={`${inputId}-${surface}-set`}
                           aria-label={`${label}内置插画组`}
                           value={selectedGroup}
-                          onChange={(event) => changeIllustrations({ scenes: { [surface]: builtinIllustrationAsset(event.target.value as typeof ILLUSTRATION_TEMPLATES[number]["id"], surface) } })}
+                          onChange={(event) => changeIllustrations({ scenes: { [surface]: builtinIllustrationScene(event.target.value as typeof ILLUSTRATION_TEMPLATES[number]["id"], surface) } })}
                         >
                           {selectedGroup === "" && <option value="" disabled>当前上传资源</option>}
                           {THEME_ILLUSTRATION_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
@@ -1271,7 +1289,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                               }}
                             />
                           </label>
-                          <button type="button" onClick={() => changeIllustrations({ scenes: { [surface]: builtinIllustrationAsset("none", surface) } })}>恢复默认资源</button>
+                          <button type="button" onClick={() => changeIllustrations({ scenes: { [surface]: builtinIllustrationScene("none", surface) } })}>恢复默认资源</button>
                         </div>
                         <small>推荐 1600 × 900；预览会按场景裁剪 object-position。</small>
                       </article>

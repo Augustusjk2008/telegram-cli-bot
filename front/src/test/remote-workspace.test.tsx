@@ -177,6 +177,7 @@ test("compact SSH control shows the remote path and disconnects until re-login",
   fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
   expect(screen.getByText("dev@linux.test:22")).toBeInTheDocument();
   expect(screen.getByText("/home/dev")).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "SSH 连接" }).parentElement).toBe(document.body);
   fireEvent.click(screen.getByRole("button", { name: "断开 SSH" }));
   await waitFor(() => expect(disconnect).toHaveBeenCalledWith("remote"));
   expect(screen.getByRole("status")).toHaveTextContent("SSH 已断开");

@@ -99,7 +99,11 @@ test("theme export keeps a theme-owned uploaded illustration", () => {
       illustrations: {
         opacity: 0.12,
         surfaces: { workbench: true, adminCenter: false, agentManager: false },
-        scenes: { workbench: uploaded, adminCenter: uploaded, agentManager: uploaded },
+        scenes: {
+          workbench: { layers: [{ id: "workbench-upload", asset: uploaded, anchor: "center" as const, width: 100, height: 100, enabled: true }] },
+          adminCenter: { layers: [{ id: "admin-upload", asset: uploaded, anchor: "center" as const, width: 100, height: 100, enabled: true }] },
+          agentManager: { layers: [{ id: "agent-upload", asset: uploaded, anchor: "center" as const, width: 100, height: 100, enabled: true }] },
+        },
       },
     },
   };

@@ -121,7 +121,7 @@ export function WorkbenchHeader({
   return (
     <header
       data-testid="desktop-workbench-titlebar"
-      className="workbench-topbar theme-illustration-host flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
+      className="workbench-topbar theme-illustration-host relative z-20 flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
     >
       <ThemeIllustrationLayer surface="workbench" region="topbar" />
       <div className="workbench-topbar-context flex min-w-0 items-center gap-2">

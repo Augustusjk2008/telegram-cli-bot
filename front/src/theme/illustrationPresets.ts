@@ -1,6 +1,8 @@
 import type {
   ThemeIllustrationAsset,
+  ThemeIllustrationLayerSpec,
   ThemeIllustrationSetId,
+  ThemeIllustrationScene,
   ThemeIllustrationSurface,
   ThemeIllustrations,
 } from "./types";
@@ -29,9 +31,15 @@ type CatalogAsset = {
   sha256: string;
   path: string;
 };
+type CatalogLayer = Omit<ThemeIllustrationLayerSpec, "asset"> & {
+  asset: CatalogAsset;
+};
+type CatalogScene = {
+  layers: CatalogLayer[];
+};
 type Catalog = {
-  schemaVersion: 2;
-  sets: Record<string, Record<ThemeIllustrationSurface, CatalogAsset>>;
+  schemaVersion: 3;
+  sets: Record<string, Record<ThemeIllustrationSurface, CatalogScene>>;
 };
 
 export const THEME_ILLUSTRATION_CATALOG = catalog as unknown as Catalog;
@@ -44,9 +52,9 @@ export const DEFAULT_THEME_ILLUSTRATIONS: ThemeIllustrations = {
     agentManager: false,
   },
   scenes: {
-    workbench: {} as ThemeIllustrationAsset,
-    adminCenter: {} as ThemeIllustrationAsset,
-    agentManager: {} as ThemeIllustrationAsset,
+    workbench: {} as ThemeIllustrationScene,
+    adminCenter: {} as ThemeIllustrationScene,
+    agentManager: {} as ThemeIllustrationScene,
   },
 };
 
@@ -96,17 +104,33 @@ export function illustrationResourcePath(
   setId: ThemeIllustrationSetId,
   surface: ThemeIllustrationSurface,
 ) {
-  return THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.path || "";
+  return THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.layers[0]?.asset.path || "";
+}
+
+function catalogLayerToAsset(layer: CatalogLayer): ThemeIllustrationAsset {
+  const { path: _path, ...metadata } = layer.asset;
+  return { kind: "builtin", ...metadata };
+}
+
+export function builtinIllustrationScene(
+  setId: ThemeIllustrationSetId,
+  surface: ThemeIllustrationSurface,
+): ThemeIllustrationScene {
+  const scene = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface];
+  if (!scene) throw new Error(`缺少内置插画资源：${setId}/${surface}`);
+  return {
+    layers: scene.layers.map((layer) => ({
+      ...layer,
+      asset: catalogLayerToAsset(layer),
+    })),
+  };
 }
 
 export function builtinIllustrationAsset(
   setId: ThemeIllustrationSetId,
   surface: ThemeIllustrationSurface,
 ): ThemeIllustrationAsset {
-  const asset = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface];
-  if (!asset) throw new Error(`缺少内置插画资源：${setId}/${surface}`);
-  const { path: _path, ...metadata } = asset;
-  return { kind: "builtin", ...metadata };
+  return builtinIllustrationScene(setId, surface).layers[0].asset;
 }
 
 export function illustrationAssetResourcePath(asset: ThemeIllustrationAsset) {
@@ -115,8 +139,9 @@ export function illustrationAssetResourcePath(asset: ThemeIllustrationAsset) {
   }
   for (const setId of THEME_ILLUSTRATION_SET_IDS) {
     for (const surface of THEME_ILLUSTRATION_SURFACES) {
-      const candidate = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface];
-      if (candidate?.assetId === asset.assetId) return candidate.path;
+      const candidate = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.layers
+        .find((layer) => layer.asset.assetId === asset.assetId);
+      if (candidate) return candidate.asset.path;
     }
   }
   return "";
@@ -124,7 +149,18 @@ export function illustrationAssetResourcePath(asset: ThemeIllustrationAsset) {
 
 export function illustrationSetIdForAsset(asset: ThemeIllustrationAsset, surface: ThemeIllustrationSurface) {
   if (asset.kind !== "builtin") return "";
-  return THEME_ILLUSTRATION_SET_IDS.find((setId) => THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.assetId === asset.assetId) || "";
+  return THEME_ILLUSTRATION_SET_IDS.find((setId) => THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.layers
+    .some((layer) => layer.asset.assetId === asset.assetId)) || "";
+}
+
+export function illustrationSetIdForScene(scene: ThemeIllustrationScene, surface: ThemeIllustrationSurface) {
+  if (!scene.layers.length) return "";
+  return THEME_ILLUSTRATION_SET_IDS.find((setId) => {
+    const candidate = THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.layers;
+    return Boolean(candidate)
+      && candidate.length === scene.layers.length
+      && candidate.every((layer, index) => layer.asset.assetId === scene.layers[index]?.asset.assetId);
+  }) || "";
 }
 
 export function defaultIllustrations(): ThemeIllustrations {
@@ -132,7 +168,7 @@ export function defaultIllustrations(): ThemeIllustrations {
     opacity: DEFAULT_THEME_ILLUSTRATIONS.opacity,
     surfaces: { ...DEFAULT_THEME_ILLUSTRATIONS.surfaces },
     scenes: Object.fromEntries(
-      THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, builtinIllustrationAsset("none", surface)]),
+      THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, builtinIllustrationScene("none", surface)]),
     ) as ThemeIllustrations["scenes"],
   };
 }

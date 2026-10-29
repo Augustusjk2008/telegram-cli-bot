@@ -1,160 +1,537 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "sets": {
     "none": {
       "workbench": {
-        "assetId": "none-workbench",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
-        "path": "/assets/theme-illustrations/none/workbench.webp"
+        "layers": [
+          {
+            "id": "none-workbench",
+            "asset": {
+              "assetId": "none-workbench",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
+              "path": "/assets/theme-illustrations/none/workbench.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "adminCenter": {
-        "assetId": "none-admin-center",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
-        "path": "/assets/theme-illustrations/none/admin-center.webp"
+        "layers": [
+          {
+            "id": "none-adminCenter",
+            "asset": {
+              "assetId": "none-admin-center",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
+              "path": "/assets/theme-illustrations/none/admin-center.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "agentManager": {
-        "assetId": "none-agent-manager",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
-        "path": "/assets/theme-illustrations/none/agent-manager.webp"
+        "layers": [
+          {
+            "id": "none-agentManager",
+            "asset": {
+              "assetId": "none-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "4e3147a7bf20d80333ef9c911ac94ce3a62f4bbaa7289cbd138a4b1d9c71a3df",
+              "path": "/assets/theme-illustrations/none/agent-manager.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       }
     },
     "forest-grove": {
       "workbench": {
-        "assetId": "forest-grove-workbench",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "e89ff4c523568b398bb28cdb13c55be8f0ab8801e24d01343180ba5b89efb1c6",
-        "path": "/assets/theme-illustrations/forest-grove/workbench.webp"
+        "layers": [
+          {
+            "id": "top-canopy",
+            "asset": {
+              "assetId": "forest-grove-workbench-top-canopy",
+              "mimeType": "image/webp",
+              "width": 2172,
+              "height": 724,
+              "sha256": "59d33714e05098ea26dd840643c5f7621953a0e4dde3d3b356e9b1001760c888",
+              "path": "/assets/theme-illustrations/forest-grove/workbench/top-canopy.webp"
+            },
+            "anchor": "top",
+            "enabled": true,
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 45,
+            "objectPosition": "50% 0%",
+            "opacity": 0.9
+          },
+          {
+            "id": "left-edge-foliage",
+            "asset": {
+              "assetId": "forest-grove-workbench-left-edge-foliage",
+              "mimeType": "image/webp",
+              "width": 1024,
+              "height": 1536,
+              "sha256": "0747d94ed47a4692dd566ced56782b2316c4d4b8d448d302176f6fc89e2fc888",
+              "path": "/assets/theme-illustrations/forest-grove/workbench/left-edge-foliage.webp"
+            },
+            "anchor": "left",
+            "enabled": true,
+            "x": 0,
+            "y": 4,
+            "width": 27,
+            "height": 92,
+            "objectPosition": "0% 50%",
+            "opacity": 0.86
+          },
+          {
+            "id": "editor-bottom-grass",
+            "asset": {
+              "assetId": "forest-grove-workbench-editor-bottom-grass",
+              "mimeType": "image/webp",
+              "width": 2172,
+              "height": 724,
+              "sha256": "543496f8273930e3ea8ed35014db88aa04366557b6f914664c52cacd084f1625",
+              "path": "/assets/theme-illustrations/forest-grove/workbench/editor-bottom-grass.webp"
+            },
+            "anchor": "bottom",
+            "enabled": true,
+            "x": 12,
+            "y": 0,
+            "width": 76,
+            "height": 36,
+            "objectPosition": "50% 100%",
+            "opacity": 0.9
+          },
+          {
+            "id": "chat-right-garden",
+            "asset": {
+              "assetId": "forest-grove-workbench-chat-right-garden",
+              "mimeType": "image/webp",
+              "width": 1536,
+              "height": 1024,
+              "sha256": "fa82444dcd6c541c6e94b4cc105de0653ade97039d782e298f6faab80b8315f7",
+              "path": "/assets/theme-illustrations/forest-grove/workbench/chat-right-garden.webp"
+            },
+            "anchor": "right",
+            "enabled": true,
+            "x": 0,
+            "y": 8,
+            "width": 38,
+            "height": 88,
+            "objectPosition": "100% 70%",
+            "opacity": 0.88
+          },
+          {
+            "id": "terminal-corner",
+            "asset": {
+              "assetId": "forest-grove-workbench-terminal-corner",
+              "mimeType": "image/webp",
+              "width": 1962,
+              "height": 802,
+              "sha256": "a9e815c0b0aa180cb8189062b39996a7ee6999dd1745d8038afaf32743a2caed",
+              "path": "/assets/theme-illustrations/forest-grove/workbench/terminal-corner.webp"
+            },
+            "anchor": "bottom-right",
+            "enabled": true,
+            "x": 0,
+            "y": 0,
+            "width": 48,
+            "height": 34,
+            "objectPosition": "100% 100%",
+            "opacity": 0.84
+          }
+        ]
       },
       "adminCenter": {
-        "assetId": "forest-grove-admin-center",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "c6a980f8c95c219ef437a58dad68d3e4b9a73b016ec12527ffea100c4fd9c09a",
-        "path": "/assets/theme-illustrations/forest-grove/admin-center.webp"
+        "layers": [
+          {
+            "id": "top-banner",
+            "asset": {
+              "assetId": "forest-grove-admin-top-banner",
+              "mimeType": "image/webp",
+              "width": 2172,
+              "height": 724,
+              "sha256": "fe2b64d833fdb3f3a31050055695252a4b48bd3611c8c956d1ef6220926ca44c",
+              "path": "/assets/theme-illustrations/forest-grove/admin-center/top-banner.webp"
+            },
+            "anchor": "top",
+            "enabled": true,
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 38,
+            "objectPosition": "50% 0%",
+            "opacity": 0.86
+          },
+          {
+            "id": "side-bottom",
+            "asset": {
+              "assetId": "forest-grove-admin-side-bottom",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "e716df6e239804f22f8ec900673354e3aaff0a54f918ed4b44c587b1a1671c4f",
+              "path": "/assets/theme-illustrations/forest-grove/admin-center/side-bottom.webp"
+            },
+            "anchor": "bottom",
+            "enabled": true,
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 72,
+            "objectPosition": "50% 100%",
+            "opacity": 0.8
+          },
+          {
+            "id": "right-plant",
+            "asset": {
+              "assetId": "forest-grove-admin-right-plant",
+              "mimeType": "image/webp",
+              "width": 1536,
+              "height": 1024,
+              "sha256": "16dbee394e3e43703bde1f424c05b4b8c74c1145deb88379f9b5691a37e4fdfd",
+              "path": "/assets/theme-illustrations/forest-grove/admin-center/right-plant.webp"
+            },
+            "anchor": "right",
+            "enabled": true,
+            "x": 0,
+            "y": 10,
+            "width": 38,
+            "height": 84,
+            "objectPosition": "100% 50%",
+            "opacity": 0.82
+          }
+        ]
       },
       "agentManager": {
-        "assetId": "forest-grove-agent-manager",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "e89cf48d6aa15b145af8213436029c2a1838b8e1891a8e712118b58adad0ffe5",
-        "path": "/assets/theme-illustrations/forest-grove/agent-manager.webp"
+        "layers": [
+          {
+            "id": "top-banner",
+            "asset": {
+              "assetId": "forest-grove-agent-top-banner",
+              "mimeType": "image/webp",
+              "width": 2172,
+              "height": 724,
+              "sha256": "185aa53043d51b431f01c4627bd5033ff4637fe53b662354c8e0e812d056e707",
+              "path": "/assets/theme-illustrations/forest-grove/agent-manager/top-banner.webp"
+            },
+            "anchor": "top",
+            "enabled": true,
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 34,
+            "objectPosition": "50% 0%",
+            "opacity": 0.88
+          },
+          {
+            "id": "list-edge",
+            "asset": {
+              "assetId": "forest-grove-agent-list-edge",
+              "mimeType": "image/webp",
+              "width": 941,
+              "height": 1672,
+              "sha256": "e8235541dce9b81f8bd678ac10e57dd878df6692b14b284e3fd04bf2feb2312f",
+              "path": "/assets/theme-illustrations/forest-grove/agent-manager/list-edge.webp"
+            },
+            "anchor": "left",
+            "enabled": true,
+            "x": 0,
+            "y": 6,
+            "width": 22,
+            "height": 90,
+            "objectPosition": "100% 50%",
+            "opacity": 0.78
+          },
+          {
+            "id": "detail-plant",
+            "asset": {
+              "assetId": "forest-grove-agent-detail-plant",
+              "mimeType": "image/webp",
+              "width": 1536,
+              "height": 1024,
+              "sha256": "dc7d5433599304d82ceb9d1600f89a00bbb79470f30e991b2feffd16cb8fe99d",
+              "path": "/assets/theme-illustrations/forest-grove/agent-manager/detail-plant.webp"
+            },
+            "anchor": "right",
+            "enabled": true,
+            "x": 0,
+            "y": 8,
+            "width": 38,
+            "height": 88,
+            "objectPosition": "100% 70%",
+            "opacity": 0.84
+          }
+        ]
       }
     },
     "tidal-grove": {
       "workbench": {
-        "assetId": "tidal-grove-workbench",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "db77dce4457a4bb9df705372a6b4489ae516d8145361148f7ffb89075fd7146c",
-        "path": "/assets/theme-illustrations/tidal-grove/workbench.webp"
+        "layers": [
+          {
+            "id": "tidal-grove-workbench",
+            "asset": {
+              "assetId": "tidal-grove-workbench",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "db77dce4457a4bb9df705372a6b4489ae516d8145361148f7ffb89075fd7146c",
+              "path": "/assets/theme-illustrations/tidal-grove/workbench.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "adminCenter": {
-        "assetId": "tidal-grove-admin-center",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "c3f3a04a7cc48ac35d904845235ecca970e81e768a9e90a9113aab3b06a0f6b3",
-        "path": "/assets/theme-illustrations/tidal-grove/admin-center.webp"
+        "layers": [
+          {
+            "id": "tidal-grove-adminCenter",
+            "asset": {
+              "assetId": "tidal-grove-admin-center",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "c3f3a04a7cc48ac35d904845235ecca970e81e768a9e90a9113aab3b06a0f6b3",
+              "path": "/assets/theme-illustrations/tidal-grove/admin-center.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "agentManager": {
-        "assetId": "tidal-grove-agent-manager",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "ab5f6e3186c0a216f297ea0d14c4f33869ce654f473d990a80e46eb471804cda",
-        "path": "/assets/theme-illustrations/tidal-grove/agent-manager.webp"
+        "layers": [
+          {
+            "id": "tidal-grove-agentManager",
+            "asset": {
+              "assetId": "tidal-grove-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "ab5f6e3186c0a216f297ea0d14c4f33869ce654f473d990a80e46eb471804cda",
+              "path": "/assets/theme-illustrations/tidal-grove/agent-manager.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       }
     },
     "desert-dusk": {
       "workbench": {
-        "assetId": "desert-dusk-workbench",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "794eb11bf4870941465cb284fd3a1095e8ef027ea78ed2cac88d1782e5684f4c",
-        "path": "/assets/theme-illustrations/desert-dusk/workbench.webp"
+        "layers": [
+          {
+            "id": "desert-dusk-workbench",
+            "asset": {
+              "assetId": "desert-dusk-workbench",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "794eb11bf4870941465cb284fd3a1095e8ef027ea78ed2cac88d1782e5684f4c",
+              "path": "/assets/theme-illustrations/desert-dusk/workbench.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "adminCenter": {
-        "assetId": "desert-dusk-admin-center",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "3032c77ad7e8ef8d5249a03401a146319e20b60cf6226ad77b7f8fbe019340b1",
-        "path": "/assets/theme-illustrations/desert-dusk/admin-center.webp"
+        "layers": [
+          {
+            "id": "desert-dusk-adminCenter",
+            "asset": {
+              "assetId": "desert-dusk-admin-center",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "3032c77ad7e8ef8d5249a03401a146319e20b60cf6226ad77b7f8fbe019340b1",
+              "path": "/assets/theme-illustrations/desert-dusk/admin-center.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "agentManager": {
-        "assetId": "desert-dusk-agent-manager",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "8521e559b0e5d95251aa74a6e052a1b7f4dcb0460419c78106db76de140e8ccb",
-        "path": "/assets/theme-illustrations/desert-dusk/agent-manager.webp"
+        "layers": [
+          {
+            "id": "desert-dusk-agentManager",
+            "asset": {
+              "assetId": "desert-dusk-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "8521e559b0e5d95251aa74a6e052a1b7f4dcb0460419c78106db76de140e8ccb",
+              "path": "/assets/theme-illustrations/desert-dusk/agent-manager.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       }
     },
     "alpine-fog": {
       "workbench": {
-        "assetId": "alpine-fog-workbench",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "3dd36538cb4c5c0282f7ebc1836c3076cc807da5f4cdaad32367b3d5e38cedef",
-        "path": "/assets/theme-illustrations/alpine-fog/workbench.webp"
+        "layers": [
+          {
+            "id": "alpine-fog-workbench",
+            "asset": {
+              "assetId": "alpine-fog-workbench",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "3dd36538cb4c5c0282f7ebc1836c3076cc807da5f4cdaad32367b3d5e38cedef",
+              "path": "/assets/theme-illustrations/alpine-fog/workbench.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "adminCenter": {
-        "assetId": "alpine-fog-admin-center",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "274a60a7e02f646d268e7896da14f1e7012dd2b4e7f472ad706376567cf51a6b",
-        "path": "/assets/theme-illustrations/alpine-fog/admin-center.webp"
+        "layers": [
+          {
+            "id": "alpine-fog-adminCenter",
+            "asset": {
+              "assetId": "alpine-fog-admin-center",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "274a60a7e02f646d268e7896da14f1e7012dd2b4e7f472ad706376567cf51a6b",
+              "path": "/assets/theme-illustrations/alpine-fog/admin-center.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "agentManager": {
-        "assetId": "alpine-fog-agent-manager",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "ecd70743202dd61b02875d4a9755ef49170074d194c61eccf0f7f75e53aad494",
-        "path": "/assets/theme-illustrations/alpine-fog/agent-manager.webp"
+        "layers": [
+          {
+            "id": "alpine-fog-agentManager",
+            "asset": {
+              "assetId": "alpine-fog-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "ecd70743202dd61b02875d4a9755ef49170074d194c61eccf0f7f75e53aad494",
+              "path": "/assets/theme-illustrations/alpine-fog/agent-manager.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       }
     },
     "moonlit-garden": {
       "workbench": {
-        "assetId": "moonlit-garden-workbench",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "70e7f39029ea2fa2b38952606067e4a57f306da0992797752d3ce63c8a800764",
-        "path": "/assets/theme-illustrations/moonlit-garden/workbench.webp"
+        "layers": [
+          {
+            "id": "moonlit-garden-workbench",
+            "asset": {
+              "assetId": "moonlit-garden-workbench",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "70e7f39029ea2fa2b38952606067e4a57f306da0992797752d3ce63c8a800764",
+              "path": "/assets/theme-illustrations/moonlit-garden/workbench.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "adminCenter": {
-        "assetId": "moonlit-garden-admin-center",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "a6763857216071467c4be1a7335b108e1467f32519b9ab241acc5e763aedf7a8",
-        "path": "/assets/theme-illustrations/moonlit-garden/admin-center.webp"
+        "layers": [
+          {
+            "id": "moonlit-garden-adminCenter",
+            "asset": {
+              "assetId": "moonlit-garden-admin-center",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "a6763857216071467c4be1a7335b108e1467f32519b9ab241acc5e763aedf7a8",
+              "path": "/assets/theme-illustrations/moonlit-garden/admin-center.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       },
       "agentManager": {
-        "assetId": "moonlit-garden-agent-manager",
-        "mimeType": "image/webp",
-        "width": 1600,
-        "height": 900,
-        "sha256": "31f684c8a38c319ac0182333f0869f50b44b8340e50d4d8cd1101194d2a67f66",
-        "path": "/assets/theme-illustrations/moonlit-garden/agent-manager.webp"
+        "layers": [
+          {
+            "id": "moonlit-garden-agentManager",
+            "asset": {
+              "assetId": "moonlit-garden-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1600,
+              "height": 900,
+              "sha256": "31f684c8a38c319ac0182333f0869f50b44b8340e50d4d8cd1101194d2a67f66",
+              "path": "/assets/theme-illustrations/moonlit-garden/agent-manager.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
       }
     }
   }

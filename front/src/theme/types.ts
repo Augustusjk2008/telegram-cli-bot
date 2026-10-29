@@ -55,6 +55,32 @@ export type ThemeIllustrationAsset =
   | ThemeIllustrationBuiltinAsset
   | ThemeIllustrationUploadedAsset;
 
+export type ThemeIllustrationAnchor =
+  | "top"
+  | "left"
+  | "right"
+  | "bottom"
+  | "bottom-left"
+  | "bottom-right"
+  | "center";
+
+export type ThemeIllustrationLayerSpec = {
+  id: string;
+  asset: ThemeIllustrationAsset;
+  anchor: ThemeIllustrationAnchor;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  objectPosition?: string;
+  opacity?: number;
+  enabled: boolean;
+};
+
+export type ThemeIllustrationScene = {
+  layers: ThemeIllustrationLayerSpec[];
+};
+
 export type ThemeIllustrationUpload = {
   mimeType: ThemeIllustrationUploadMime;
   data: string;
@@ -76,7 +102,7 @@ export type ThemeIllustrationAssetImport = {
 export type ThemeIllustrations = {
   opacity: number;
   surfaces: Record<ThemeIllustrationSurface, boolean>;
-  scenes: Record<ThemeIllustrationSurface, ThemeIllustrationAsset>;
+  scenes: Record<ThemeIllustrationSurface, ThemeIllustrationScene>;
 };
 
 export type ThemeIllustrationsValue = ThemeIllustrations | LegacyThemeIllustrations;
@@ -161,6 +187,7 @@ export type ResolvedAppearance = {
   motion: typeof PAPER_MOTION;
   illustrations: ThemeIllustrations & {
     resources: Record<ThemeIllustrationSurface, string>;
+    sceneResources: Record<ThemeIllustrationSurface, string[]>;
     /** @deprecated Only exposed while reading legacy themes. */
     setId?: ThemeIllustrationSetId | "upload";
   };

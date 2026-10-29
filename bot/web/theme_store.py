@@ -50,9 +50,8 @@ _ILLUSTRATION_UPLOAD_MAX_BYTES = 4 * 1024 * 1024
 _ILLUSTRATION_UPLOAD_DATA = re.compile(
     r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})\Z"
 )
-_ILLUSTRATION_RESOURCE = re.compile(
-    r"/assets/theme-illustrations/[a-z0-9-]+/(?:workbench|admin-center|agent-manager)\.webp\Z"
-)
+_ILLUSTRATION_ANCHORS = {"top", "left", "right", "bottom", "bottom-left", "bottom-right", "center"}
+_ILLUSTRATION_LAYER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}\Z")
 # All store instances in the host share the read/modify/replace boundary.
 _STORE_LOCK = threading.RLock()
 
@@ -105,7 +104,12 @@ def _default_illustrations() -> dict[str, Any]:
         "opacity": 0,
         "surfaces": {surface: False for surface in _ILLUSTRATION_SURFACES},
         "scenes": {
-            surface: {"kind": "builtin", **catalog["none"][surface]}
+            surface: {
+                "layers": [
+                    {**layer, "asset": {"kind": "builtin", **layer["asset"]}}
+                    for layer in catalog["none"][surface]["layers"]
+                ],
+            }
             for surface in _ILLUSTRATION_SURFACES
         },
     }
@@ -114,7 +118,7 @@ def _default_illustrations() -> dict[str, Any]:
 def _read_illustration_catalog_file(path: Path) -> dict[str, dict[str, dict[str, Any]]]:
     try:
         catalog = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(catalog, dict) or catalog.get("schemaVersion") != 2 or not isinstance(catalog.get("sets"), dict):
+        if not isinstance(catalog, dict) or catalog.get("schemaVersion") != 3 or not isinstance(catalog.get("sets"), dict):
             raise ValueError("invalid illustration catalog")
         sets = catalog["sets"]
         if set(sets) != set(_ILLUSTRATION_SET_IDS):
@@ -126,20 +130,40 @@ def _read_illustration_catalog_file(path: Path) -> dict[str, dict[str, dict[str,
                 raise ValueError("invalid illustration surfaces")
             result[set_id] = {}
             for surface in _ILLUSTRATION_SURFACES:
-                resource = resources[surface]
-                if not isinstance(resource, dict) or set(resource) != {"assetId", "mimeType", "width", "height", "sha256", "path"}:
-                    raise ValueError("invalid illustration metadata")
-                filename = {"workbench": "workbench", "adminCenter": "admin-center", "agentManager": "agent-manager"}[surface]
-                expected = f"/assets/theme-illustrations/{set_id}/{filename}.webp"
-                if resource["path"] != expected or not _ILLUSTRATION_RESOURCE.fullmatch(resource["path"]):
-                    raise ValueError("invalid illustration resource")
-                if resource["mimeType"] not in {"image/webp", "image/png"} or type(resource["width"]) is not int or type(resource["height"]) is not int or resource["width"] < 1 or resource["height"] < 1:
-                    raise ValueError("invalid illustration dimensions")
-                if not isinstance(resource["assetId"], str) or not re.fullmatch(r"[A-Za-z0-9-]+", resource["assetId"]):
-                    raise ValueError("invalid illustration asset ID")
-                if not isinstance(resource["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", resource["sha256"], re.I):
-                    raise ValueError("invalid illustration hash")
-                result[set_id][surface] = {key: resource[key] for key in ("assetId", "mimeType", "width", "height", "sha256")}
+                scene = resources[surface]
+                if not isinstance(scene, dict) or set(scene) != {"layers"} or not isinstance(scene["layers"], list) or not scene["layers"] or len(scene["layers"]) > 32:
+                    raise ValueError("invalid illustration layers")
+                normalized_layers = []
+                layer_ids: set[str] = set()
+                for layer in scene["layers"]:
+                    if not isinstance(layer, dict) or set(layer) - {"id", "asset", "anchor", "x", "y", "width", "height", "objectPosition", "opacity", "enabled"}:
+                        raise ValueError("invalid illustration layer")
+                    if not isinstance(layer.get("id"), str) or not _ILLUSTRATION_LAYER_ID.fullmatch(layer["id"]) or layer["id"] in layer_ids:
+                        raise ValueError("invalid illustration layer ID")
+                    layer_ids.add(layer["id"])
+                    if layer.get("anchor") not in _ILLUSTRATION_ANCHORS or type(layer.get("enabled")) is not bool:
+                        raise ValueError("invalid illustration layer placement")
+                    for key, minimum, maximum in (("x", -100, 100), ("y", -100, 100), ("width", 0.01, 300), ("height", 0.01, 300), ("opacity", 0, 1)):
+                        if key in layer and (isinstance(layer[key], bool) or not isinstance(layer[key], (int, float)) or not math.isfinite(layer[key]) or not minimum <= layer[key] <= maximum):
+                            raise ValueError("invalid illustration layer placement")
+                    if "objectPosition" in layer and (not isinstance(layer["objectPosition"], str) or len(layer["objectPosition"]) > 120):
+                        raise ValueError("invalid illustration object position")
+                    resource = layer.get("asset")
+                    if not isinstance(resource, dict) or set(resource) != {"assetId", "mimeType", "width", "height", "sha256", "path"}:
+                        raise ValueError("invalid illustration metadata")
+                    expected_prefix = f"/assets/theme-illustrations/{set_id}/"
+                    if not isinstance(resource["path"], str) or not resource["path"].startswith(expected_prefix) or not resource["path"].endswith(".webp"):
+                        raise ValueError("invalid illustration resource")
+                    if resource["mimeType"] not in {"image/webp", "image/png"} or type(resource["width"]) is not int or type(resource["height"]) is not int or resource["width"] < 1 or resource["height"] < 1:
+                        raise ValueError("invalid illustration dimensions")
+                    if not isinstance(resource["assetId"], str) or not re.fullmatch(r"[A-Za-z0-9-]+", resource["assetId"]):
+                        raise ValueError("invalid illustration asset ID")
+                    if not isinstance(resource["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", resource["sha256"], re.I):
+                        raise ValueError("invalid illustration hash")
+                    normalized_layers.append({
+                        key: layer[key] for key in ("id", "anchor", "x", "y", "width", "height", "objectPosition", "opacity", "enabled") if key in layer
+                    } | {"asset": {key: resource[key] for key in ("assetId", "mimeType", "width", "height", "sha256")}})
+                result[set_id][surface] = {"layers": normalized_layers}
         return result
     except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
         raise ThemeStoreError(500, "theme_illustrations_unavailable", "主题插画目录无法读取，请检查应用安装文件") from exc
@@ -285,7 +309,20 @@ class ThemeStore:
                     "agentManager": bool(legacy_surfaces["management"]),
                 },
                 "scenes": {
-                    surface: upload_asset or {"kind": "builtin", **catalog[base_set][surface]}
+                    surface: {
+                        "layers": ([{
+                            "id": f"{surface}-legacy",
+                            "asset": upload_asset,
+                            "anchor": "center",
+                            "width": 100,
+                            "height": 100,
+                            "objectPosition": "50% 50%",
+                            "enabled": True,
+                        }] if upload_asset else [
+                            {**layer, "asset": {"kind": "builtin", **layer["asset"]}}
+                            for layer in catalog[base_set][surface]["layers"]
+                        ]),
+                    }
                     for surface in _ILLUSTRATION_SURFACES
                 },
             }
@@ -299,29 +336,74 @@ class ThemeStore:
         normalized_scenes: dict[str, Any] = {}
         uploaded_sizes: dict[str, int] = {}
         for surface in _ILLUSTRATION_SURFACES:
-            scene = _object(scenes[surface], {"kind", "assetId", "mimeType", "width", "height", "sha256"}, {"kind", "assetId", "mimeType", "width", "height", "sha256"}, f"illustrations.scenes.{surface}")
-            if scene["kind"] == "builtin":
-                match = next((item for resources in catalog.values() for item in resources.values() if item["assetId"] == scene["assetId"]), None)
-                if match is None or any(scene[key] != match[key] for key in ("mimeType", "width", "height", "sha256")):
-                    _invalid("内置场景插画元数据无效")
-                normalized_scenes[surface] = {"kind": "builtin", **match}
-            elif scene["kind"] == "uploaded":
-                try:
-                    staged = asset_overrides.get(scene["assetId"]) if asset_overrides else None
-                    if staged is not None:
-                        normalized, raw = staged
-                        actual = self.asset_store.describe(raw, scene["mimeType"])
-                        if any(scene[key] != actual[key] for key in ("assetId", "mimeType", "width", "height", "sha256")):
-                            _invalid("主题引用的插画哈希或尺寸不匹配", "theme_asset_integrity_invalid")
-                        size = len(raw)
-                    else:
-                        normalized, size = self.asset_store.validate(scene)
-                except ThemeAssetStoreError as exc:
-                    raise ThemeStoreError(exc.status, exc.code, exc.message, exc.data) from exc
-                normalized_scenes[surface] = normalized
-                uploaded_sizes[normalized["assetId"]] = size
-            else:
-                _invalid("场景插画资源类型无效")
+            raw_scene = scenes[surface]
+            if isinstance(raw_scene, dict) and "layers" not in raw_scene and "kind" in raw_scene:
+                raw_scene = {
+                    "layers": [{
+                        "id": f"{surface}-legacy",
+                        "asset": raw_scene,
+                        "anchor": "center",
+                        "width": 100,
+                        "height": 100,
+                        "objectPosition": "50% 50%",
+                        "enabled": True,
+                    }],
+                }
+            scene = _object(raw_scene, {"layers"}, {"layers"}, f"illustrations.scenes.{surface}")
+            layers = scene["layers"]
+            if not isinstance(layers, list) or not layers or len(layers) > 32:
+                _invalid(f"illustrations.scenes.{surface}.layers 必须包含 1 到 32 个图层")
+            normalized_layers = []
+            layer_ids: set[str] = set()
+            for index, raw_layer in enumerate(layers):
+                layer = _object(
+                    raw_layer,
+                    {"id", "asset", "anchor", "x", "y", "width", "height", "objectPosition", "opacity", "enabled"},
+                    {"id", "asset", "anchor", "enabled"},
+                    f"illustrations.scenes.{surface}.layers[{index}]",
+                )
+                if not isinstance(layer["id"], str) or not _ILLUSTRATION_LAYER_ID.fullmatch(layer["id"]) or layer["id"] in layer_ids:
+                    _invalid("主题插画图层 ID 无效")
+                layer_ids.add(layer["id"])
+                if layer["anchor"] not in _ILLUSTRATION_ANCHORS or type(layer["enabled"]) is not bool:
+                    _invalid("主题插画图层定位无效")
+                for key, minimum, maximum in (("x", -100, 100), ("y", -100, 100), ("width", 0.01, 300), ("height", 0.01, 300), ("opacity", 0, 1)):
+                    if key in layer and (isinstance(layer[key], bool) or not isinstance(layer[key], (int, float)) or not math.isfinite(layer[key]) or not minimum <= layer[key] <= maximum):
+                        _invalid("主题插画图层定位无效")
+                if "objectPosition" in layer and (not isinstance(layer["objectPosition"], str) or len(layer["objectPosition"]) > 120):
+                    _invalid("主题插画图层 objectPosition 无效")
+
+                asset = _object(
+                    layer["asset"],
+                    {"kind", "assetId", "mimeType", "width", "height", "sha256"},
+                    {"kind", "assetId", "mimeType", "width", "height", "sha256"},
+                    f"illustrations.scenes.{surface}.layers[{index}].asset",
+                )
+                if asset["kind"] == "builtin":
+                    match = next((item["asset"] for resources in catalog.values() for scene_data in resources.values() for item in scene_data["layers"] if item["asset"]["assetId"] == asset["assetId"]), None)
+                    if match is None or any(asset[key] != match[key] for key in ("mimeType", "width", "height", "sha256")):
+                        _invalid("内置场景插画元数据无效")
+                    normalized_asset = {"kind": "builtin", **match}
+                elif asset["kind"] == "uploaded":
+                    try:
+                        staged = asset_overrides.get(asset["assetId"]) if asset_overrides else None
+                        if staged is not None:
+                            normalized_asset, raw = staged
+                            actual = self.asset_store.describe(raw, asset["mimeType"])
+                            if any(asset[key] != actual[key] for key in ("assetId", "mimeType", "width", "height", "sha256")):
+                                _invalid("主题引用的插画哈希或尺寸不匹配", "theme_asset_integrity_invalid")
+                            size = len(raw)
+                        else:
+                            normalized_asset, size = self.asset_store.validate(asset)
+                    except ThemeAssetStoreError as exc:
+                        raise ThemeStoreError(exc.status, exc.code, exc.message, exc.data) from exc
+                    uploaded_sizes[normalized_asset["assetId"]] = size
+                else:
+                    _invalid("场景插画资源类型无效")
+                normalized_layers.append({
+                    key: layer[key] for key in ("id", "anchor", "x", "y", "width", "height", "objectPosition", "opacity", "enabled") if key in layer
+                } | {"asset": normalized_asset})
+            normalized_scenes[surface] = {"layers": normalized_layers}
         if sum(uploaded_sizes.values()) > MAX_THEME_ASSET_TOTAL_BYTES:
             _invalid("单个主题的插画资源总量不能超过 12 MiB", "theme_asset_total_too_large")
         return {
