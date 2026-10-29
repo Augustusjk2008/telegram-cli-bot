@@ -58,9 +58,7 @@ function positionStyle(layer: ThemeIllustrationLayerSpec, region: Props["region"
   };
 }
 
-export function ThemeIllustrationLayer({ surface, appearance: previewAppearance, className, region = "canvas" }: Props) {
-  const currentAppearance = useResolvedAppearance();
-  const appearance = previewAppearance || currentAppearance;
+function ThemeIllustrationLayerView({ surface, appearance, className, region = "canvas" }: Props & { appearance: ResolvedAppearance }) {
   const illustration = appearance.illustrations;
   const resolvedSurface = canonicalSurface(surface);
   const scene = illustration.scenes[resolvedSurface];
@@ -100,4 +98,15 @@ export function ThemeIllustrationLayer({ surface, appearance: previewAppearance,
       ))}
     </div>
   );
+}
+
+function ConnectedThemeIllustrationLayer(props: Props) {
+  const appearance = useResolvedAppearance();
+  return <ThemeIllustrationLayerView {...props} appearance={appearance} />;
+}
+
+export function ThemeIllustrationLayer({ appearance: previewAppearance, ...props }: Props) {
+  return previewAppearance
+    ? <ThemeIllustrationLayerView {...props} appearance={previewAppearance} />
+    : <ConnectedThemeIllustrationLayer {...props} />;
 }

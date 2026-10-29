@@ -398,9 +398,15 @@ describe("全局主题管理", () => {
             opacity: 0.18,
             surfaces: { workbench: true, adminCenter: false, agentManager: true },
             scenes: {
-              workbench: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-workbench" }),
-              adminCenter: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-admin-center" }),
-              agentManager: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-agent-manager" }),
+              workbench: expect.objectContaining({ layers: expect.arrayContaining([
+                expect.objectContaining({ asset: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-workbench-top-canopy" }) }),
+              ]) }),
+              adminCenter: expect.objectContaining({ layers: expect.arrayContaining([
+                expect.objectContaining({ asset: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-admin-top-banner" }) }),
+              ]) }),
+              agentManager: expect.objectContaining({ layers: expect.arrayContaining([
+                expect.objectContaining({ asset: expect.objectContaining({ kind: "builtin", assetId: "forest-grove-agent-top-banner" }) }),
+              ]) }),
             },
           }),
         }),
@@ -426,7 +432,9 @@ describe("全局主题管理", () => {
       expect.objectContaining({
         appearance: expect.objectContaining({
           illustrations: expect.objectContaining({
-            scenes: expect.objectContaining({ workbench: uploadedAsset }),
+            scenes: expect.objectContaining({
+              workbench: expect.objectContaining({ layers: [expect.objectContaining({ asset: uploadedAsset })] }),
+            }),
           }),
         }),
       }),

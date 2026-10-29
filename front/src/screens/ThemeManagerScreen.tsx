@@ -461,7 +461,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     initialized.current = true;
     const next = draftFrom(current, library.revision);
     if (
-      JSON.stringify(next.theme) !== JSON.stringify(draft.original) ||
+      editableValue(next.theme) !== editableValue(draft.original) ||
       draft.revision !== library.revision
     )
       setDraft(next);
