@@ -134,4 +134,24 @@ describe("UI themes", () => {
     );
     expect(changed.revision).not.toBe(forest.revision);
   });
+
+  it("resolves a theme-owned uploaded image as the illustration resource", () => {
+    const uploaded = resolveAppearance({
+      ...BUILTIN_THEME,
+      appearance: {
+        ...BUILTIN_THEME.appearance,
+        illustrations: {
+          setId: "upload",
+          upload: {
+            mimeType: "image/png",
+            data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          },
+          opacity: 0.12,
+          surfaces: { workbench: true, chat: false, topbar: false, management: false },
+        },
+      },
+    });
+    expect(uploaded.illustrations.resources.workbench).toMatch(/^data:image\/png;base64,/);
+    expect(uploaded.illustrations.setId).toBe("upload");
+  });
 });

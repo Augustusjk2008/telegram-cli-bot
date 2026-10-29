@@ -8,6 +8,10 @@ const paperAppearance = resolveAppearance(BUILTIN_THEME);
 let currentAppearance = paperAppearance;
 const listeners = new Set<() => void>();
 
+function illustrationCssImage(resource: string) {
+  return `url("${resource.startsWith("data:") ? resource : withPublicBase(resource)}")`;
+}
+
 export function getCurrentAppearance() { return currentAppearance; }
 
 export function applyResolvedAppearance(appearance: ResolvedAppearance) {
@@ -30,7 +34,7 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
       "--theme-illustration-soft": appearance.illustrations.colors.soft,
     };
     for (const surface of THEME_ILLUSTRATION_SURFACES) {
-      illustrationVariables[`--theme-illustration-${surface}-image`] = `url("${withPublicBase(appearance.illustrations.resources[surface])}")`;
+      illustrationVariables[`--theme-illustration-${surface}-image`] = illustrationCssImage(appearance.illustrations.resources[surface]);
       illustrationVariables[`--theme-illustration-${surface}-enabled`] = appearance.illustrations.surfaces[surface] ? "1" : "0";
     }
     for (const name of Object.keys(currentAppearance.illustrations ? {

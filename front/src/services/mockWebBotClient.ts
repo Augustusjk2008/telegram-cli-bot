@@ -3392,7 +3392,7 @@ export class MockWebBotClient implements WebBotClient {
       selectedThemeId: "paper-daylight",
       themes: [{
         schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight",
-        appearance: { colors: { scheme: "light", overrides: {} }, typography: DEFAULT_CHAT_TYPOGRAPHY, illustrations: normalizeIllustrations(undefined) }, readonly: true,
+        appearance: { colors: { scheme: "light", overrides: {} }, typography: DEFAULT_CHAT_TYPOGRAPHY, illustrations: normalizeIllustrations(undefined) }, readonly: false,
         updatedAt: "1970-01-01T00:00:00Z", version: 1,
       }],
     };
@@ -3416,6 +3416,7 @@ export class MockWebBotClient implements WebBotClient {
       ...library,
       themes: library.themes.map((theme) => ({
         ...theme,
+        readonly: theme.id === "paper-daylight" ? false : theme.readonly,
         appearance: this.uiThemeAppearance(theme.appearance),
       })),
     });
@@ -3445,7 +3446,7 @@ export class MockWebBotClient implements WebBotClient {
     const theme = library.themes.find((item) => item.id === id);
     if (!theme) throw new WebApiClientError("主题不存在", { status: 404, code: "theme_not_found" });
     if (writable && theme.readonly) {
-      throw new WebApiClientError("内置纸感日间是只读主题，请复制后编辑", { status: 403, code: "theme_readonly" });
+      throw new WebApiClientError("该主题是只读主题，请复制后编辑", { status: 403, code: "theme_readonly" });
     }
     return theme;
   }
@@ -3575,6 +3576,9 @@ export class MockWebBotClient implements WebBotClient {
 
   async deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
     return this.mutateUiThemes(expectedRevision, (library) => {
+      if (id === "paper-daylight") {
+        throw new WebApiClientError("默认主题不可删除", { status: 403, code: "theme_readonly" });
+      }
       this.findUiTheme(library, id, true);
       library.themes = library.themes.filter((theme) => theme.id !== id);
       if (library.selectedThemeId === id) library.selectedThemeId = "paper-daylight";

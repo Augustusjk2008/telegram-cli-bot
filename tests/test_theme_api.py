@@ -72,6 +72,15 @@ def illustration_input(**changes):
     }
 
 
+UPLOAD_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+
+def uploaded_illustration_input(**changes):
+    value = illustration_input(setId="upload", upload={"mimeType": "image/png", "data": UPLOAD_PNG})
+    value.update(changes)
+    return value
+
+
 @pytest.mark.asyncio
 async def test_member_imports_single_and_bundle_through_registered_routes(api):
     status, imported = await request(api, "POST", "/node/theme-test/api/ui/themes/import", body=import_input())
@@ -181,6 +190,30 @@ async def test_illustrations_are_saved_updated_and_preserved_by_import_export(ap
 
 
 @pytest.mark.asyncio
+async def test_uploaded_illustrations_are_part_of_the_theme_and_survive_roundtrip(api):
+    appearance = {
+        "colors": {"scheme": "light", "overrides": {}},
+        "illustrations": uploaded_illustration_input(),
+    }
+    status, created = await request(api, "POST", body=create_input(appearance=appearance))
+    assert status == 200
+    saved = created["data"]["themes"][1]["appearance"]["illustrations"]
+    assert saved == uploaded_illustration_input()
+
+    status, imported = await request(api, "POST", "/api/ui/themes/import", body={
+        "expectedRevision": 1,
+        "document": {
+            "schemaVersion": 1,
+            "name": "上传插画副本",
+            "baseId": "paper-daylight",
+            "appearance": {"colors": {"scheme": "light", "overrides": {}}, "illustrations": saved},
+        },
+    })
+    assert status == 200
+    assert imported["data"]["themes"][-1]["appearance"]["illustrations"] == saved
+
+
+@pytest.mark.asyncio
 async def test_legacy_theme_appearance_gets_default_illustrations(api):
     path = api.server.theme_store.library_path
     path.parent.mkdir(parents=True)
@@ -217,6 +250,9 @@ async def test_legacy_theme_appearance_gets_default_illustrations(api):
     illustration_input(opacity=0.26),
     {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "extra": True}},
     {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "chat": "yes"}},
+    uploaded_illustration_input(upload={"mimeType": "image/png", "data": "data:image/png;base64,AAAA"}),
+    uploaded_illustration_input(upload={"mimeType": "image/svg+xml", "data": "data:image/svg+xml;base64,PHN2Zy8+"}),
+    illustration_input(setId="upload"),
 ])
 async def test_invalid_illustrations_are_rejected_without_writing(api, illustrations):
     status, payload = await request(api, "POST", body=create_input(appearance={
@@ -311,17 +347,30 @@ async def test_bad_payloads_and_builtin_mutations_are_rejected(api):
                  create_input(appearance={"colors": {"scheme": "light", "overrides": {"unknown": "#FFFFFF"}}})):
         status, payload = await request(api, "POST", body=body)
         assert status == 400 and payload["ok"] is False
-    for method, body in (
-        ("PATCH", {"schemaVersion": 1, "expectedRevision": 0, "name": "覆盖"}),
-        ("DELETE", {"expectedRevision": 0}),
-    ):
-        status, payload = await request(api, method, "/api/ui/themes/paper-daylight", body=body)
-        assert status == 403 and payload["error"]["code"] == "theme_readonly"
+    status, payload = await request(api, "DELETE", "/api/ui/themes/paper-daylight", body={"expectedRevision": 0})
+    assert status == 403 and payload["error"]["code"] == "theme_readonly"
     status, _ = await request(api, "PATCH", "/api/ui/theme-selection", body={
         "themeId": "paper-daylight", "expectedRevision": 0, "accountId": "bob"})
     assert status == 400
     status, _ = await request(api, "DELETE", "/api/ui/themes/paper-daylight", body={"expectedRevision": 0, "force": True})
     assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_default_theme_can_be_edited_in_place_but_not_deleted(api):
+    status, payload = await request(api, "PATCH", "/api/ui/themes/paper-daylight", body={
+        "schemaVersion": 1,
+        "expectedRevision": 0,
+        "name": "我的纸感日间",
+        "appearance": {"colors": {"scheme": "dark", "overrides": {}}},
+        "activate": True,
+    })
+    assert status == 200
+    assert payload["data"]["themes"][0]["name"] == "我的纸感日间"
+    assert payload["data"]["themes"][0]["appearance"]["colors"]["scheme"] == "dark"
+    assert payload["data"]["selectedThemeId"] == "paper-daylight"
+    status, deleted = await request(api, "DELETE", "/api/ui/themes/paper-daylight", body={"expectedRevision": 1})
+    assert status == 403 and deleted["error"]["code"] == "theme_readonly"
 
 
 @pytest.mark.asyncio

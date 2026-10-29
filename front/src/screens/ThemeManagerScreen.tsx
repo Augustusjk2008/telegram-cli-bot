@@ -12,7 +12,9 @@ import {
   BUILTIN_THEME,
   THEME_TOKENS,
   contrastRatio,
+  MAX_THEME_ILLUSTRATION_UPLOAD_BYTES,
   normalizeColor,
+  normalizeIllustrationUpload,
   normalizeIllustrations,
   resolveAppearance,
 } from "../theme/resolveAppearance";
@@ -23,7 +25,7 @@ import {
   CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
   normalizeChatTypography,
 } from "../theme/chatTypography";
-import type { ChatTypography, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
+import type { ChatTypography, ThemeIllustrationUploadMime, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
 import { downloadThemeDocument, portableTheme, readThemeFile } from "../theme/themeTransfer";
 import { ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS } from "../theme/illustrationPresets";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
@@ -39,6 +41,15 @@ type Draft = {
 type IllustrationPatch = Omit<Partial<ThemeIllustrations>, "surfaces"> & {
   surfaces?: Partial<ThemeIllustrations["surfaces"]>;
 };
+
+function cloneIllustrations(value: unknown): ThemeIllustrations {
+  const normalized = normalizeIllustrations(value);
+  return {
+    ...normalized,
+    ...(normalized.upload ? { upload: { ...normalized.upload } } : {}),
+    surfaces: { ...normalized.surfaces },
+  };
+}
 type Pane = "themes" | "editor" | "preview";
 type LeaveAction =
   | { kind: "select"; id: string }
@@ -53,7 +64,7 @@ type Confirmation =
   | { kind: "reload" };
 
 function draftFrom(theme: UiTheme, revision: number): Draft {
-  const illustrations = normalizeIllustrations(theme.appearance.illustrations);
+  const illustrations = cloneIllustrations(theme.appearance.illustrations);
   const copy = {
     ...theme,
     appearance: {
@@ -63,13 +74,13 @@ function draftFrom(theme: UiTheme, revision: number): Draft {
         overrides: { ...theme.appearance.colors.overrides },
       },
       typography: normalizeChatTypography(theme.appearance.typography),
-      illustrations: { ...illustrations, surfaces: { ...illustrations.surfaces } },
+      illustrations,
     },
   };
   return {
     revision,
     original: copy,
-    theme: { ...copy, appearance: { ...copy.appearance, colors: { ...copy.appearance.colors, overrides: { ...copy.appearance.colors.overrides } }, illustrations: { ...illustrations, surfaces: { ...illustrations.surfaces } } } },
+    theme: { ...copy, appearance: { ...copy.appearance, colors: { ...copy.appearance.colors, overrides: { ...copy.appearance.colors.overrides } }, illustrations: cloneIllustrations(illustrations) } },
     inputs: {},
   };
 }
@@ -617,20 +628,22 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     setNotice("");
     setDraft((current) => {
       const currentIllustrations = normalizeIllustrations(current.theme.appearance.illustrations);
+      const nextIllustrations: ThemeIllustrations = {
+        ...currentIllustrations,
+        ...patch,
+        surfaces: {
+          ...currentIllustrations.surfaces,
+          ...(patch.surfaces || {}),
+        },
+      };
+      if (patch.setId && patch.setId !== "upload") delete nextIllustrations.upload;
       return {
         ...current,
         theme: {
           ...current.theme,
           appearance: {
             ...current.theme.appearance,
-            illustrations: {
-              ...currentIllustrations,
-              ...patch,
-              surfaces: {
-                ...currentIllustrations.surfaces,
-                ...(patch.surfaces || {}),
-              },
-            },
+            illustrations: nextIllustrations,
           },
         },
       };
@@ -670,6 +683,36 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         },
       },
     }));
+  }
+
+  function uploadIllustration(file: File | undefined) {
+    if (!editable || busy || !file) return;
+    const mimeType = file.type as ThemeIllustrationUploadMime;
+    if (!(["image/png", "image/jpeg", "image/webp"] as const).includes(mimeType)) {
+      setError("上传插画只支持 PNG、JPEG 或 WebP 文件。");
+      return;
+    }
+    if (file.size > MAX_THEME_ILLUSTRATION_UPLOAD_BYTES) {
+      setError("上传插画不能超过 512 KiB。");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        setError("无法读取上传插画。");
+        return;
+      }
+      try {
+        const upload = normalizeIllustrationUpload({ mimeType, data: reader.result });
+        changeIllustrations({ setId: "upload", upload });
+        setError("");
+        setNotice("已载入自定义插画，保存主题后生效。");
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "上传插画无效。");
+      }
+    };
+    reader.onerror = () => setError("无法读取上传插画。");
+    reader.readAsDataURL(file);
   }
 
   async function save(activate: boolean) {
@@ -904,7 +947,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           <div className="theme-manager-panel-title">
             <h2>全局主题</h2>
             <span>
-              {library.themes.filter((theme) => !theme.readonly).length}{" "}
+              {library.themes.filter((theme) => theme.id !== BUILTIN_THEME.id && !theme.readonly).length}{" "}
               个自定义
             </span>
           </div>
@@ -944,12 +987,17 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             </button>
             <p className="theme-manager-hint">支持单个主题与多主题包。同名主题自动编号；主题包导出全部已保存主题。</p>
           </div>
-          {[true, false].map((readonly) => (
-            <div className="theme-manager-theme-group" key={String(readonly)}>
-              <h3>{readonly ? "内置主题" : "自定义主题"}</h3>
-              {library.themes
-                .filter((theme) => theme.readonly === readonly)
-                .map((theme) => (
+          {(["builtin", "custom"] as const).map((group) => {
+            const builtin = group === "builtin";
+            const themes = library.themes.filter((theme) =>
+              builtin
+                ? theme.id === BUILTIN_THEME.id
+                : theme.id !== BUILTIN_THEME.id && !theme.readonly,
+            );
+            return (
+            <div className="theme-manager-theme-group" key={group}>
+              <h3>{builtin ? "内置主题" : "自定义主题"}</h3>
+              {themes.map((theme) => (
                   <button
                     className="theme-manager-theme"
                     type="button"
@@ -969,21 +1017,21 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                       {theme.appearance.colors.scheme === "dark"
                         ? "深色"
                         : "浅色"}
-                      {theme.readonly ? " · 只读" : ""}
+                      {theme.id === BUILTIN_THEME.id ? " · 默认主题" : theme.readonly ? " · 只读" : ""}
                       {theme.id === library.selectedThemeId
                         ? " · 当前应用"
                         : ""}
                     </span>
                   </button>
                 ))}
-              {!readonly &&
-                !library.themes.some((theme) => !theme.readonly) && (
+              {!builtin && !themes.length && (
                   <p className="theme-manager-hint">
                     从纸感日间开始，创建你的第一套配色。
                   </p>
                 )}
             </div>
-          ))}
+            );
+          })}
           {draft.sourceId && (
             <div className="theme-manager-draft-item">
               <strong>{draft.theme.name || "未命名主题"}</strong>
@@ -1019,9 +1067,9 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             </button>
             {dirty && <small>保存草稿后可导出当前主题。</small>}
           </div>
-          {draft.theme.readonly && (
+          {draft.theme.readonly && draft.theme.id !== BUILTIN_THEME.id && (
             <div className="theme-manager-readonly">
-              <span>内置纸感日间是只读基准。</span>
+              <span>该主题是只读基准。</span>
               <button
                 type="button"
                 disabled={!canManage || busy || loading}
@@ -1146,12 +1194,30 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                   id={`${inputId}-illustration-set`}
                   aria-label="插画主题"
                   value={illustrations.setId}
-                  onChange={(event) => changeIllustrations({ setId: event.target.value as typeof illustrations.setId })}
+                  onChange={(event) => {
+                    if (event.target.value !== "upload") {
+                      changeIllustrations({ setId: event.target.value as typeof illustrations.setId });
+                    }
+                  }}
                 >
                   {THEME_ILLUSTRATION_OPTIONS.map((option) => (
                     <option key={option.id} value={option.id}>{option.label}</option>
                   ))}
                 </select>
+                <label htmlFor={`${inputId}-illustration-upload`}>上传插画</label>
+                <input
+                  id={`${inputId}-illustration-upload`}
+                  aria-label="上传插画"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => {
+                    uploadIllustration(event.target.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                {illustrations.setId === "upload" && illustrations.upload && (
+                  <small>已载入自定义图片（PNG、JPEG 或 WebP，最大 512 KiB）。</small>
+                )}
                 <label className="theme-manager-alpha">
                   插画透明度
                   <input
@@ -1365,7 +1431,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               没有匹配的颜色，请调整搜索词或分组。
             </p>
           )}
-          {!draft.theme.readonly && !draft.sourceId && (
+          {!draft.theme.readonly && !draft.sourceId && draft.theme.id !== BUILTIN_THEME.id && (
             <button
               type="button"
               className="theme-manager-delete"

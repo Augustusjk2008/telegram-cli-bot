@@ -1,6 +1,8 @@
 import catalog from "../../../bot/web/theme_catalog.json";
 import type {
   ColorToken,
+  ThemeIllustrationUpload,
+  ThemeIllustrationUploadMime,
   ThemeIllustrations,
   ThemeIllustrationSurface,
   UiTheme,
@@ -22,6 +24,9 @@ import {
 } from "./illustrationPresets";
 
 export const THEME_TOKENS = catalog.tokens as ColorToken[];
+export const MAX_THEME_ILLUSTRATION_UPLOAD_BYTES = 512 * 1024;
+const THEME_ILLUSTRATION_UPLOAD_MIMES = ["image/png", "image/jpeg", "image/webp"] as const satisfies readonly ThemeIllustrationUploadMime[];
+const THEME_ILLUSTRATION_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
 export const BUILTIN_THEME: UiTheme = {
   schemaVersion: 1,
   id: "paper-daylight",
@@ -32,7 +37,7 @@ export const BUILTIN_THEME: UiTheme = {
     typography: DEFAULT_CHAT_TYPOGRAPHY,
     illustrations: defaultIllustrations(),
   },
-  readonly: true,
+  readonly: false,
   updatedAt: "",
   version: 1,
 };
@@ -49,17 +54,63 @@ export function normalizeColor(value: string, allowAlpha = true): string | null 
   return allowAlpha || hex.endsWith("FF") ? hex : null;
 }
 
+function uploadBytes(upload: ThemeIllustrationUpload) {
+  const match = THEME_ILLUSTRATION_DATA_URL.exec(upload.data);
+  if (!match || match[1] !== upload.mimeType) throw new Error("上传插画数据无效");
+  const payload = match[2];
+  const estimatedBytes = Math.floor(payload.length * 3 / 4) - (payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0);
+  if (estimatedBytes <= 0 || estimatedBytes > MAX_THEME_ILLUSTRATION_UPLOAD_BYTES) {
+    throw new Error("上传插画不能超过 512 KiB");
+  }
+  if (typeof atob !== "function") return null;
+  let binary: string;
+  try {
+    binary = atob(payload);
+  } catch {
+    throw new Error("上传插画数据无效");
+  }
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const validSignature = upload.mimeType === "image/png"
+    ? bytes.length >= 8 && bytes.slice(0, 8).every((value, index) => value === [137, 80, 78, 71, 13, 10, 26, 10][index])
+    : upload.mimeType === "image/jpeg"
+      ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+      : bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+        && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+  if (!validSignature) throw new Error("上传插画文件内容与类型不匹配");
+  return bytes;
+}
+
+export function normalizeIllustrationUpload(value: unknown): ThemeIllustrationUpload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("上传插画配置无效");
+  const candidate = value as Record<string, unknown>;
+  if (Object.keys(candidate).some((key) => !["mimeType", "data"].includes(key))) {
+    throw new Error("上传插画配置包含不支持的字段");
+  }
+  if (!THEME_ILLUSTRATION_UPLOAD_MIMES.includes(candidate.mimeType as ThemeIllustrationUploadMime)) {
+    throw new Error("上传插画格式只支持 PNG、JPEG 或 WebP");
+  }
+  if (typeof candidate.data !== "string") throw new Error("上传插画数据无效");
+  const upload = { mimeType: candidate.mimeType as ThemeIllustrationUploadMime, data: candidate.data };
+  uploadBytes(upload);
+  return upload;
+}
+
 export function normalizeIllustrations(value: unknown): ThemeIllustrations {
   if (value === undefined) return defaultIllustrations();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("主题插画配置无效");
   }
   const candidate = value as Record<string, unknown>;
-  if (Object.keys(candidate).some((key) => !["setId", "opacity", "surfaces"].includes(key))) {
+  if (Object.keys(candidate).some((key) => !["setId", "upload", "opacity", "surfaces"].includes(key))) {
     throw new Error("主题插画配置包含不支持的字段");
   }
-  if (!THEME_ILLUSTRATION_SET_IDS.includes(candidate.setId as typeof THEME_ILLUSTRATION_SET_IDS[number])) {
+  const setId = candidate.setId as ThemeIllustrations["setId"];
+  if (setId !== "upload" && !THEME_ILLUSTRATION_SET_IDS.includes(setId as typeof THEME_ILLUSTRATION_SET_IDS[number])) {
     throw new Error("主题插画资源无效");
+  }
+  const upload = candidate.upload === undefined ? undefined : normalizeIllustrationUpload(candidate.upload);
+  if ((setId === "upload") !== Boolean(upload)) {
+    throw new Error("上传插画配置与资源类型不匹配");
   }
   if (typeof candidate.opacity !== "number" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 0.25) {
     throw new Error("主题插画透明度必须在 0 到 0.25 之间");
@@ -76,7 +127,8 @@ export function normalizeIllustrations(value: unknown): ThemeIllustrations {
     if (typeof surfaceRecord[surface] !== "boolean") throw new Error("主题插画区域配置无效");
   }
   return {
-    setId: candidate.setId as ThemeIllustrations["setId"],
+    setId,
+    ...(upload ? { upload } : {}),
     opacity: candidate.opacity,
     surfaces: Object.fromEntries(
       THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, surfaceRecord[surface] as boolean]),
@@ -124,7 +176,12 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   const typography = normalizeChatTypography(theme.appearance.typography);
   Object.assign(cssVariables, chatTypographyCssVariables(typography));
   const resources = Object.fromEntries(
-    THEME_ILLUSTRATION_SURFACES.map((surface) => [surface, illustrationResourcePath(illustrations.setId, surface)]),
+    THEME_ILLUSTRATION_SURFACES.map((surface) => [
+      surface,
+      illustrations.setId === "upload"
+        ? illustrations.upload!.data
+        : illustrationResourcePath(illustrations.setId, surface),
+    ]),
   ) as Record<ThemeIllustrationSurface, string>;
   const resolvedIllustrations = {
     ...illustrations,

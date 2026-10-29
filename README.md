@@ -233,9 +233,9 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 ### 管理与扩展
 
 - Admin Center 管理用户权限、邀请码、公告、更新和运行状态，也可以请求重启后端。
-- 主题管理提供所有账户共享的主题库和应用选择；正式账户可复制、编辑、应用和删除自定义主题，访客只读。支持 JSON 导入单个主题或多主题包，导出当前已保存主题或整个主题库；导入统一新增为可编辑主题，同名自动编号，整包校验通过后一次写入，保留当前应用选择。登录页可选择现有主题，选择保存在当前浏览器；登录后使用共享的应用主题。内置「纸感日间」主题可复制后定制，配色可预览并保存。
-- 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用内置资源目录中的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog` 和 `moonlit-garden`，透明度范围为 `0` 到 `0.25`；缺少该字段的旧主题按 `none`、透明度 `0` 和全部关闭处理。
-- 主题编辑器提供森林绿、潮汐蓝、沙漠黄昏、高山薄雾和月夜花园五套插画模板。插画通过固定的单色 SVG 资源呈现，导入和导出会保留 `appearance.illustrations`；旧版主题导入后会自动补齐默认配置。
+- 主题管理提供所有账户共享的主题库和应用选择；正式账户可直接编辑、应用和删除自定义主题，默认「纸感日间」主题支持直接编辑和应用，删除默认主题会被拒绝，访客只读。支持 JSON 导入单个主题或多主题包，导出当前已保存主题或整个主题库；导入统一新增为可编辑主题，同名自动编号，整包校验通过后一次写入，保留当前应用选择。登录页可选择现有主题，选择保存在当前浏览器；登录后使用共享的应用主题。
+- 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 可使用内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`，也可使用 `upload` 搭配主题内的图片数据；上传只接受 PNG、JPEG 或 WebP，大小不超过 512 KiB。透明度范围为 `0` 到 `0.25`；缺少该字段的旧主题按 `none`、透明度 `0` 和全部关闭处理。
+- 主题编辑器提供森林绿、潮汐蓝、沙漠黄昏、高山薄雾和月夜花园五套插画模板，也支持上传自定义插画。插画属于主题外观的一部分，导入和导出会保留资源；旧版主题导入后会自动补齐默认配置。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 

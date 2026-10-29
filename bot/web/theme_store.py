@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import base64
+import binascii
 import json
 import math
 import os
@@ -40,6 +42,11 @@ _ILLUSTRATION_SET_IDS = (
     "desert-dusk",
     "alpine-fog",
     "moonlit-garden",
+)
+_ILLUSTRATION_UPLOAD_MIMES = {"image/png", "image/jpeg", "image/webp"}
+_ILLUSTRATION_UPLOAD_MAX_BYTES = 512 * 1024
+_ILLUSTRATION_UPLOAD_DATA = re.compile(
+    r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})\Z"
 )
 _ILLUSTRATION_RESOURCE = re.compile(
     r"/assets/theme-illustrations/[a-z0-9]+(?:-[a-z0-9]+)*-(?:workbench|chat|topbar|management)\.svg\Z"
@@ -98,26 +105,61 @@ def _default_illustrations() -> dict[str, Any]:
     }
 
 
-def builtin_library() -> dict[str, Any]:
+def _illustration_upload(value: Any) -> dict[str, str]:
+    upload = _object(value, {"mimeType", "data"}, {"mimeType", "data"}, "illustrations.upload")
+    mime_type = upload["mimeType"]
+    data = upload["data"]
+    if mime_type not in _ILLUSTRATION_UPLOAD_MIMES or not isinstance(data, str):
+        _invalid("上传插画只支持 PNG、JPEG 或 WebP 文件")
+    match = _ILLUSTRATION_UPLOAD_DATA.fullmatch(data)
+    if not match or match.group(1) != mime_type:
+        _invalid("上传插画数据无效")
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except (ValueError, binascii.Error):
+        _invalid("上传插画数据无效")
+    if not raw or len(raw) > _ILLUSTRATION_UPLOAD_MAX_BYTES:
+        _invalid("上传插画不能超过 512 KiB")
+    valid_signature = (
+        mime_type == "image/png" and raw.startswith(b"\x89PNG\r\n\x1a\n")
+    ) or (
+        mime_type == "image/jpeg" and raw.startswith(b"\xff\xd8\xff")
+    ) or (
+        mime_type == "image/webp" and len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+    )
+    if not valid_signature:
+        _invalid("上传插画文件内容与类型不匹配")
+    return {"mimeType": mime_type, "data": data}
+
+
+def builtin_library(builtin_override: dict[str, Any] | None = None) -> dict[str, Any]:
+    theme = {
+        "schemaVersion": 1,
+        "id": BUILTIN_THEME_ID,
+        "name": "纸感日间",
+        "baseId": BUILTIN_THEME_ID,
+        "appearance": {
+            "colors": {"scheme": "light", "overrides": {}},
+            "typography": dict(_CHAT_TYPOGRAPHY_DEFAULTS),
+            "illustrations": _default_illustrations(),
+        },
+        "readonly": False,
+        "updatedAt": "1970-01-01T00:00:00Z",
+        "version": 1,
+    }
+    if builtin_override is not None:
+        theme.update({
+            "name": builtin_override["name"],
+            "appearance": copy.deepcopy(builtin_override["appearance"]),
+            "updatedAt": builtin_override["updatedAt"],
+            "version": builtin_override["version"],
+        })
     return {
         "schemaVersion": 1,
         "scope": "global",
         "revision": 0,
         "selectedThemeId": BUILTIN_THEME_ID,
-        "themes": [{
-            "schemaVersion": 1,
-            "id": BUILTIN_THEME_ID,
-            "name": "纸感日间",
-            "baseId": BUILTIN_THEME_ID,
-            "appearance": {
-                "colors": {"scheme": "light", "overrides": {}},
-                "typography": dict(_CHAT_TYPOGRAPHY_DEFAULTS),
-                "illustrations": _default_illustrations(),
-            },
-            "readonly": True,
-            "updatedAt": "1970-01-01T00:00:00Z",
-            "version": 1,
-        }],
+        "themes": [theme],
     }
 
 
@@ -220,13 +262,16 @@ class ThemeStore:
         illustrations = appearance.get("illustrations", _default_illustrations())
         illustrations = _object(
             illustrations,
-            {"setId", "opacity", "surfaces"},
+            {"setId", "upload", "opacity", "surfaces"},
             {"setId", "opacity", "surfaces"},
             "illustrations",
         )
         set_id = illustrations["setId"]
-        if not isinstance(set_id, str) or set_id not in illustration_sets:
+        if not isinstance(set_id, str) or (set_id != "upload" and set_id not in illustration_sets):
             _invalid("illustrations.setId 不是受支持的插画主题")
+        upload = _illustration_upload(illustrations["upload"]) if "upload" in illustrations else None
+        if (set_id == "upload") != (upload is not None):
+            _invalid("上传插画配置与资源类型不匹配")
         opacity = illustrations["opacity"]
         if (
             isinstance(opacity, bool)
@@ -248,6 +293,8 @@ class ThemeStore:
             "opacity": opacity,
             "surfaces": {surface: surfaces[surface] for surface in _ILLUSTRATION_SURFACES},
         }
+        if upload is not None:
+            result["illustrations"]["upload"] = upload
         return result
 
     def _read_file(self, path: Path, *, legacy: bool = False) -> dict[str, Any] | None:
@@ -259,15 +306,32 @@ class ThemeStore:
             raise ThemeStoreError(500, "theme_store_unreadable", "主题库文件无法读取，原文件已保留，请修复后重试") from exc
         try:
             fields = {"schemaVersion", "revision", "selectedThemeId", "themes"}
+            required = set(fields)
             if not legacy:
-                fields.add("scope")
-            data = _object(json.loads(raw), fields, fields, "主题库")
+                fields |= {"scope", "builtinTheme"}
+                required.add("scope")
+            data = _object(json.loads(raw), fields, required, "主题库")
             _schema(data["schemaVersion"])
             if not legacy and data["scope"] != "global":
                 _invalid("主题库 scope 必须为 global")
             _revision(data["revision"])
             if not isinstance(data["themes"], list) or not isinstance(data["selectedThemeId"], str):
                 _invalid("主题库结构无效")
+            if "builtinTheme" in data:
+                builtin = _object(
+                    data["builtinTheme"],
+                    {"name", "appearance", "updatedAt", "version"},
+                    {"name", "appearance", "updatedAt", "version"},
+                    "默认主题",
+                )
+                builtin["name"] = _name(builtin["name"])
+                builtin["appearance"] = self._appearance(builtin["appearance"])
+                if _revision(builtin["version"]) < 1:
+                    _invalid("默认主题版本无效")
+                if not isinstance(builtin["updatedAt"], str):
+                    _invalid("默认主题更新时间无效")
+                if datetime.fromisoformat(builtin["updatedAt"].replace("Z", "+00:00")).tzinfo is None:
+                    _invalid("默认主题更新时间缺少时区")
             ids = {BUILTIN_THEME_ID}
             fields = {"schemaVersion", "id", "name", "baseId", "appearance", "readonly", "updatedAt", "version"}
             for theme in data["themes"]:
@@ -338,7 +402,8 @@ class ThemeStore:
     @staticmethod
     def _library(data: dict[str, Any]) -> dict[str, Any]:
         library = copy.deepcopy(data)
-        library["themes"].insert(0, builtin_library()["themes"][0])
+        builtin_override = library.pop("builtinTheme", None)
+        library["themes"].insert(0, builtin_library(builtin_override)["themes"][0])
         return library
 
     def list_library(self) -> dict[str, Any]:
@@ -382,12 +447,9 @@ class ThemeStore:
             self._write(self.library_path, data)
             return self._library(data)
 
-    @staticmethod
-    def _find(data: dict[str, Any], theme_id: Any, *, writable: bool = False) -> dict[str, Any]:
+    def _find(self, data: dict[str, Any], theme_id: Any, *, writable: bool = False) -> dict[str, Any]:
         if theme_id == BUILTIN_THEME_ID:
-            if writable:
-                raise ThemeStoreError(403, "theme_readonly", "内置纸感日间是只读主题，请复制后编辑")
-            return builtin_library()["themes"][0]
+            return builtin_library(data.get("builtinTheme"))["themes"][0]
         for theme in data["themes"]:
             if theme["id"] == theme_id:
                 return theme
@@ -453,7 +515,7 @@ class ThemeStore:
 
         def change(data):
             names = {theme["name"] for theme in data["themes"]}
-            names.add(builtin_library()["themes"][0]["name"])
+            names.add(self._find(data, BUILTIN_THEME_ID)["name"])
             updated_at = datetime.now(timezone.utc).isoformat()
             for theme in imported:
                 name = theme["name"]
@@ -474,6 +536,17 @@ class ThemeStore:
         value = self._input(payload, create=False)
 
         def change(data):
+            if theme_id == BUILTIN_THEME_ID:
+                current = self._find(data, theme_id)
+                data["builtinTheme"] = {
+                    "name": _name(value["name"]) if "name" in value else current["name"],
+                    "appearance": self._appearance(value["appearance"]) if "appearance" in value else current["appearance"],
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    "version": current["version"] + 1,
+                }
+                if value.get("activate", False):
+                    data["selectedThemeId"] = theme_id
+                return
             theme = self._find(data, theme_id, writable=True)
             if "name" in value:
                 theme["name"] = _name(value["name"])
@@ -490,6 +563,8 @@ class ThemeStore:
         value = _object(payload, {"expectedRevision"}, {"expectedRevision"}, "删除主题请求")
 
         def change(data):
+            if theme_id == BUILTIN_THEME_ID:
+                raise ThemeStoreError(403, "theme_readonly", "默认主题不可删除")
             data["themes"].remove(self._find(data, theme_id, writable=True))
             if data["selectedThemeId"] == theme_id:
                 data["selectedThemeId"] = BUILTIN_THEME_ID

@@ -233,15 +233,14 @@ def test_missing_required_create_fields_are_rejected(store, field):
         store.create(payload)
 
 
-def test_builtin_is_immutable(store):
-    for operation in (
-        lambda: store.update(BUILTIN_THEME_ID, {"schemaVersion": 1, "expectedRevision": 0, "name": "覆盖"}),
-        lambda: store.delete(BUILTIN_THEME_ID, {"expectedRevision": 0}),
-    ):
-        with pytest.raises(ThemeStoreError) as exc:
-            operation()
-        assert exc.value.status == 403
-    assert not store.library_path.parent.exists()
+def test_builtin_can_be_updated_but_not_deleted(store):
+    library = store.update(BUILTIN_THEME_ID, {"schemaVersion": 1, "expectedRevision": 0, "name": "覆盖"})
+    assert library["themes"][0]["name"] == "覆盖"
+    assert library["themes"][0]["readonly"] is False
+    assert ThemeStore(store.library_path).list_library()["themes"][0]["name"] == "覆盖"
+    with pytest.raises(ThemeStoreError) as exc:
+        store.delete(BUILTIN_THEME_ID, {"expectedRevision": 1})
+    assert exc.value.status == 403
 
 
 def test_missing_ids_cannot_be_copied_updated_selected_or_deleted(store):

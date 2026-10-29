@@ -63,6 +63,25 @@ test("legacy imported themes receive the default illustration configuration", as
   });
 });
 
+test("theme export keeps a theme-owned uploaded illustration", () => {
+  const theme = {
+    ...builtinLibrary().themes[0],
+    appearance: {
+      ...builtinLibrary().themes[0].appearance,
+      illustrations: {
+        setId: "upload" as const,
+        upload: {
+          mimeType: "image/png" as const,
+          data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        },
+        opacity: 0.12,
+        surfaces: { workbench: true, chat: false, topbar: false, management: false },
+      },
+    },
+  };
+  expect(portableTheme(theme).appearance.illustrations).toEqual(theme.appearance.illustrations);
+});
+
 
 test("mock accounts and guests share the theme library and selected theme", async () => {
   const alice = new MockWebBotClient();

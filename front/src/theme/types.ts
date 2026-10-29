@@ -24,10 +24,19 @@ export type ThemeIllustrationSetId =
   | "tidal-grove"
   | "desert-dusk"
   | "alpine-fog"
-  | "moonlit-garden";
+  | "moonlit-garden"
+  | "upload";
+
+export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
+
+export type ThemeIllustrationUpload = {
+  mimeType: ThemeIllustrationUploadMime;
+  data: string;
+};
 
 export type ThemeIllustrations = {
   setId: ThemeIllustrationSetId;
+  upload?: ThemeIllustrationUpload;
   opacity: number;
   surfaces: Record<ThemeIllustrationSurface, boolean>;
 };

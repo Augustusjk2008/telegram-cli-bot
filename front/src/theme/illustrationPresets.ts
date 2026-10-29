@@ -38,6 +38,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "desert-dusk", label: "沙漠黄昏" },
   { id: "alpine-fog", label: "高山薄雾" },
   { id: "moonlit-garden", label: "月夜花园" },
+  { id: "upload", label: "自定义上传" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -74,7 +75,7 @@ export const ILLUSTRATION_TEMPLATES = [
 ] as const;
 
 export function illustrationResourcePath(
-  setId: ThemeIllustrationSetId,
+  setId: Exclude<ThemeIllustrationSetId, "upload">,
   surface: ThemeIllustrationSurface,
 ) {
   return `/assets/theme-illustrations/${setId}-${surface}.svg`;

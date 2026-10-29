@@ -10,6 +10,10 @@ type Props = {
   className?: string;
 };
 
+function illustrationCssImage(resource: string) {
+  return `url("${resource.startsWith("data:") ? resource : withPublicBase(resource)}")`;
+}
+
 export function ThemeIllustrationLayer({ surface, appearance: previewAppearance, className }: Props) {
   const currentAppearance = useResolvedAppearance();
   const appearance = previewAppearance || currentAppearance;
@@ -20,7 +24,7 @@ export function ThemeIllustrationLayer({ surface, appearance: previewAppearance,
     "--theme-illustration-primary": illustration.colors.primary,
     "--theme-illustration-secondary": illustration.colors.secondary,
     "--theme-illustration-soft": illustration.colors.soft,
-    "--theme-illustration-image": `url("${withPublicBase(illustration.resources[surface])}")`,
+    "--theme-illustration-image": illustrationCssImage(illustration.resources[surface]),
   }) as CSSProperties, [illustration]);
   if (!visible) return null;
   return (

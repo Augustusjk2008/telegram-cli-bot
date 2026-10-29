@@ -50,6 +50,12 @@
   height: min(30%, 260px);
 }
 
+.theme-illustration-layer[data-theme-illustration-set="upload"] .theme-illustration-art {
+  background: var(--theme-illustration-image) center / cover no-repeat;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
 .theme-illustration-layer ~ * {
   position: relative;
   z-index: 1;

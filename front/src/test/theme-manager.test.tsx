@@ -294,7 +294,7 @@ describe("全局主题管理", () => {
     );
   });
 
-  it("copies a builtin into a draft and creates plus activates it in one transaction", async () => {
+  it("edits and activates the builtin theme directly", async () => {
     api.library = {
       schemaVersion: 1,
       scope: "global",
@@ -303,8 +303,8 @@ describe("全局主题管理", () => {
       themes: [BUILTIN_THEME],
     };
     render(<ThemeManagerScreen />);
-    expect(hexInput()).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "复制后编辑" }));
+    expect(hexInput()).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "复制后编辑" })).not.toBeInTheDocument();
     expect(api.createTheme).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("主题名称"), {
       target: { value: "夜读" },
@@ -315,10 +315,9 @@ describe("全局主题管理", () => {
     fireEvent.change(hexInput(), { target: { value: "#223344" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
     expect(await screen.findByText("主题已保存并应用。")).toBeInTheDocument();
-    expect(api.createTheme).toHaveBeenCalledExactlyOnceWith({
+    expect(api.updateTheme).toHaveBeenCalledExactlyOnceWith(BUILTIN_THEME.id, {
       schemaVersion: 1,
       expectedRevision: 1,
-      sourceId: BUILTIN_THEME.id,
       name: "夜读",
       appearance: {
         colors: {
@@ -345,7 +344,7 @@ describe("全局主题管理", () => {
       activate: true,
     });
     expect(api.selectTheme).not.toHaveBeenCalled();
-    expect(api.updateTheme).not.toHaveBeenCalled();
+    expect(api.createTheme).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "已应用" })).toBeDisabled();
   });
 
@@ -403,6 +402,31 @@ describe("全局主题管理", () => {
               management: false,
             },
           },
+        }),
+      }),
+    );
+  });
+
+  it("loads an uploaded image into the theme draft and saves it", async () => {
+    render(<ThemeManagerScreen />);
+    const file = new File(
+      [Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0])],
+      "art.png",
+      { type: "image/png" },
+    );
+    fireEvent.change(screen.getByLabelText("上传插画"), { target: { files: [file] } });
+    await screen.findByText(/已载入自定义图片/);
+    expect(screen.getByRole("combobox", { name: "插画主题" })).toHaveValue("upload");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText("主题已保存。");
+    expect(api.updateTheme).toHaveBeenLastCalledWith(
+      "theme_personal",
+      expect.objectContaining({
+        appearance: expect.objectContaining({
+          illustrations: expect.objectContaining({
+            setId: "upload",
+            upload: expect.objectContaining({ mimeType: "image/png", data: expect.stringContaining("data:image/png;base64,") }),
+          }),
         }),
       }),
     );
@@ -518,9 +542,8 @@ describe("全局主题管理", () => {
     await screen.findByText("主题已删除。");
     expect(api.deleteTheme).toHaveBeenCalledExactlyOnceWith("theme_personal");
     expect(api.library!.selectedThemeId).toBe(BUILTIN_THEME.id);
-    expect(
-      screen.getByRole("button", { name: "复制后编辑" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制后编辑" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("主题名称")).toHaveValue(BUILTIN_THEME.name);
   });
 
   it("guards host navigation with save, discard and continue editing", async () => {
