@@ -1428,7 +1428,7 @@ export function DesktopWorkbench({
           data-testid="workbench-focus-backdrop"
           aria-label="退出聚焦模式"
           onClick={() => setFocusedPane(null)}
-          className="absolute inset-0 z-20 bg-[var(--overlay-backdrop-45)]"
+          className="absolute inset-0 z-20 bg-transparent"
         />
       ) : null}
 
@@ -1458,20 +1458,23 @@ export function DesktopWorkbench({
       />
 
       <div data-testid="desktop-workbench-shell" className="desktop-workbench-shell theme-illustration-host relative min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
-        <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" />
         <div
           data-testid="desktop-workbench-columns"
           ref={columnsRef}
           className="grid h-full min-h-0 p-0.5"
           style={{ gridTemplateColumns: columnTemplate }}
         >
+          <div className="workbench-main-illustration-grid-area" aria-hidden="true">
+            <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" zone="main" />
+          </div>
+
           <section
             data-testid="desktop-pane-files"
             data-collapsed={layoutState.sidebarCollapsed ? "true" : "false"}
             data-focused={focusedPane === "sidebar" ? "true" : "false"}
             className="desktop-workbench-pane grid min-h-0 overflow-hidden"
           >
-            {focusedPane === "sidebar" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
+            <ThemeIllustrationLayer surface="workbench" className="workbench-sidebar-illustration" zone="sidebar" />
             <div
               className={clsx(
                 "theme-illustration-content grid min-h-0",
@@ -1538,7 +1541,6 @@ export function DesktopWorkbench({
                   !showEditorPane && "hidden",
                 )}
               >
-                {focusedPane === "editor" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
                 <div className="theme-illustration-content h-full min-h-0">
                   <Suspense fallback={paneFallback}>
                     <EditorPane
@@ -1639,7 +1641,6 @@ export function DesktopWorkbench({
                   !showTerminalPane && "hidden",
                 )}
               >
-                {focusedPane === "terminal" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
                 <div className="theme-illustration-content h-full min-h-0">
                   <Suspense fallback={paneFallback}>
                     <TerminalPane
@@ -1696,7 +1697,6 @@ export function DesktopWorkbench({
               !showChatPane && "hidden",
             )}
           >
-            {focusedPane === "chat" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
             <div className="theme-illustration-content h-full min-h-0">
               {resolvedChatPaneContent || (
                 <ChatPane

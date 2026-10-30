@@ -15,6 +15,7 @@ type Props = {
   appearance?: ResolvedAppearance;
   className?: string;
   region?: "canvas" | "chat" | "topbar";
+  zone?: "main" | "sidebar";
 };
 
 function canonicalSurface(surface: Props["surface"]): ThemeIllustrationSurface {
@@ -58,15 +59,36 @@ function positionStyle(layer: ThemeIllustrationLayerSpec, region: Props["region"
   };
 }
 
-function ThemeIllustrationLayerView({ surface, appearance, className, region = "canvas" }: Props & { appearance: ResolvedAppearance }) {
+function ThemeIllustrationLayerView({ surface, appearance, className, region = "canvas", zone }: Props & { appearance: ResolvedAppearance }) {
   const illustration = appearance.illustrations;
   const resolvedSurface = canonicalSurface(surface);
   const scene = illustration.scenes[resolvedSurface];
   const resources = illustration.sceneResources[resolvedSurface] || [];
   const layers = useMemo(
-    () => displayIllustrationLayers(scene, resolvedSurface, resources)
-      .filter((item) => item.layer.enabled && Boolean(item.resource)),
-    [resources, resolvedSurface, scene],
+    () => {
+      const displayed = displayIllustrationLayers(scene, resolvedSurface, resources)
+        .filter((item) => item.layer.enabled && Boolean(item.resource));
+      if (resolvedSurface !== "workbench" || !zone) return displayed;
+      const preferredId = zone === "sidebar" ? "left-edge-foliage" : "workbench-background";
+      const preferred = displayed.find((item) => item.layer.id === preferredId);
+      const selected = preferred || displayed[0];
+      if (!selected) return [];
+      if (zone !== "sidebar") return [selected];
+      return [{
+        ...selected,
+        layer: {
+          ...selected.layer,
+          anchor: "center",
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 100,
+          objectPosition: "0% 50%",
+          opacity: 1,
+        },
+      }];
+    },
+    [resources, resolvedSurface, scene, zone],
   );
   if (illustration.opacity <= 0 || !illustration.surfaces[resolvedSurface] || layers.length === 0) return null;
 
@@ -76,6 +98,7 @@ function ThemeIllustrationLayerView({ surface, appearance, className, region = "
       data-testid={`theme-illustration-layer-${resolvedSurface}`}
       data-theme-illustration-surface={resolvedSurface}
       data-theme-illustration-region={region}
+      data-theme-illustration-zone={zone}
       data-theme-illustration-count={layers.length}
       className={clsx("theme-illustration-layer", className)}
       style={{ "--theme-illustration-opacity": String(illustration.opacity), pointerEvents: "none" } as CSSProperties}

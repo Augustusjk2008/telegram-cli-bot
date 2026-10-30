@@ -47,11 +47,27 @@
   z-index: 0;
 }
 
-.workbench-main-illustration [data-theme-illustration-layer-id="left-edge-foliage"] {
-  filter: brightness(.82) saturate(1.35) contrast(1.08);
+.workbench-main-illustration-grid-area {
+  position: absolute;
+  z-index: 0;
+  grid-column: 3 / -1;
+  grid-row: 1;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+
+.workbench-sidebar-illustration {
+  z-index: 0;
+}
+
+.workbench-sidebar-illustration .theme-illustration-art {
+  filter: brightness(.82) saturate(1.65) contrast(1.18);
 }
 
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
+  position: relative;
   transition:
     grid-template-columns 220ms cubic-bezier(0.2, 0, 0, 1),
     gap 180ms ease;

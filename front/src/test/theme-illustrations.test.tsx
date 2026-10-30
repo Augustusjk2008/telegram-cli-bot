@@ -57,4 +57,23 @@ describe("ThemeIllustrationLayer", () => {
     expect(screen.getByTestId("theme-illustration-layer-adminCenter").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("adminCenter-background");
     expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("agentManager-background");
   });
+
+  it("scopes the workbench illustration to the main area and sidebar area", () => {
+    const appearance = appearanceFor();
+    render(
+      <>
+        <ThemeIllustrationLayer surface="workbench" zone="main" appearance={appearance} />
+        <ThemeIllustrationLayer surface="workbench" zone="sidebar" appearance={appearance} />
+      </>,
+    );
+    const layers = screen.getAllByTestId("theme-illustration-layer-workbench");
+    const main = layers.find((layer) => layer.getAttribute("data-theme-illustration-zone") === "main");
+    const sidebar = layers.find((layer) => layer.getAttribute("data-theme-illustration-zone") === "sidebar");
+    expect(main).toHaveAttribute("data-theme-illustration-count", "1");
+    expect(main?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "workbench-background");
+    expect(main?.querySelector("img")).toHaveStyle({ width: "100%", height: "100%" });
+    expect(sidebar).toHaveAttribute("data-theme-illustration-count", "1");
+    expect(sidebar?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "left-edge-foliage");
+    expect(sidebar?.querySelector("img")).toHaveStyle({ width: "100%", height: "100%" });
+  });
 });
