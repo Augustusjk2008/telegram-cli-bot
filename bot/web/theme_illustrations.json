@@ -296,8 +296,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "db77dce4457a4bb9df705372a6b4489ae516d8145361148f7ffb89075fd7146c",
-              "path": "/assets/theme-illustrations/tidal-grove/workbench.webp"
+              "sha256": "36b5b41f781ee7f2fa53c9e6f076981a936b73352566e89b5a038176087504f2",
+              "path": "/assets/theme-illustrations/tidal-grove/workbench/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -316,8 +316,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "c3f3a04a7cc48ac35d904845235ecca970e81e768a9e90a9113aab3b06a0f6b3",
-              "path": "/assets/theme-illustrations/tidal-grove/admin-center.webp"
+              "sha256": "27ed76cd509c7b757f492fee09f0f45c6c4df73a058b044308fe0be86cf6519a",
+              "path": "/assets/theme-illustrations/tidal-grove/admin-center/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -336,8 +336,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "ab5f6e3186c0a216f297ea0d14c4f33869ce654f473d990a80e46eb471804cda",
-              "path": "/assets/theme-illustrations/tidal-grove/agent-manager.webp"
+              "sha256": "ceff41a17b1542d4ff67e19e035bd1bd518bc31a87a47a3e47836c4e3ab41001",
+              "path": "/assets/theme-illustrations/tidal-grove/agent-manager/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -358,8 +358,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "794eb11bf4870941465cb284fd3a1095e8ef027ea78ed2cac88d1782e5684f4c",
-              "path": "/assets/theme-illustrations/desert-dusk/workbench.webp"
+              "sha256": "76cb8ecfeb00a3afb02e2e33e68bed262019cdba78ec403ccf5bf2fea217ade3",
+              "path": "/assets/theme-illustrations/desert-dusk/workbench/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -378,8 +378,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "3032c77ad7e8ef8d5249a03401a146319e20b60cf6226ad77b7f8fbe019340b1",
-              "path": "/assets/theme-illustrations/desert-dusk/admin-center.webp"
+              "sha256": "12885fe4c1146ca27d224445dda23af332d4fe2321b23adbcc06488ab6494cbe",
+              "path": "/assets/theme-illustrations/desert-dusk/admin-center/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -398,8 +398,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "8521e559b0e5d95251aa74a6e052a1b7f4dcb0460419c78106db76de140e8ccb",
-              "path": "/assets/theme-illustrations/desert-dusk/agent-manager.webp"
+              "sha256": "b53a52af5798bb5d10e76154b75934aff12f144d0bac9b203b681a01f0865dbe",
+              "path": "/assets/theme-illustrations/desert-dusk/agent-manager/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -420,8 +420,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "3dd36538cb4c5c0282f7ebc1836c3076cc807da5f4cdaad32367b3d5e38cedef",
-              "path": "/assets/theme-illustrations/alpine-fog/workbench.webp"
+              "sha256": "0744ea8b5b9f661c22843dfffe8e4bf845dadb13aad7e68b1ccc00c4de911f9b",
+              "path": "/assets/theme-illustrations/alpine-fog/workbench/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -440,8 +440,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "274a60a7e02f646d268e7896da14f1e7012dd2b4e7f472ad706376567cf51a6b",
-              "path": "/assets/theme-illustrations/alpine-fog/admin-center.webp"
+              "sha256": "3676ce46a5c04127fcf7a5a64df8e53d3b0413d92fcc3d7675879153d99f14a3",
+              "path": "/assets/theme-illustrations/alpine-fog/admin-center/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -460,8 +460,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "ecd70743202dd61b02875d4a9755ef49170074d194c61eccf0f7f75e53aad494",
-              "path": "/assets/theme-illustrations/alpine-fog/agent-manager.webp"
+              "sha256": "a17cea3713ac98e8d86cdd514e23615d8b5d681b19fed068eed4922d4a638a98",
+              "path": "/assets/theme-illustrations/alpine-fog/agent-manager/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -482,8 +482,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "70e7f39029ea2fa2b38952606067e4a57f306da0992797752d3ce63c8a800764",
-              "path": "/assets/theme-illustrations/moonlit-garden/workbench.webp"
+              "sha256": "f23255bc91886b279c394ac59070ee45c4fda640b026ab397ffeeed4e564a587",
+              "path": "/assets/theme-illustrations/moonlit-garden/workbench/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -502,8 +502,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "a6763857216071467c4be1a7335b108e1467f32519b9ab241acc5e763aedf7a8",
-              "path": "/assets/theme-illustrations/moonlit-garden/admin-center.webp"
+              "sha256": "0851471777e4ca5dc106cd648c89a9fde67ed2a7306af3642031365e8e5828fa",
+              "path": "/assets/theme-illustrations/moonlit-garden/admin-center/background.webp"
             },
             "anchor": "center",
             "enabled": true,
@@ -522,8 +522,8 @@
               "mimeType": "image/webp",
               "width": 1600,
               "height": 900,
-              "sha256": "31f684c8a38c319ac0182333f0869f50b44b8340e50d4d8cd1101194d2a67f66",
-              "path": "/assets/theme-illustrations/moonlit-garden/agent-manager.webp"
+              "sha256": "59a44acc04144fc801ccea81492a58cf69348d8d9de6d49f7249dfacb1a9673f",
+              "path": "/assets/theme-illustrations/moonlit-garden/agent-manager/background.webp"
             },
             "anchor": "center",
             "enabled": true,
