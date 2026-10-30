@@ -174,6 +174,96 @@ export function illustrationSetIdForScene(scene: ThemeIllustrationScene, surface
   }) || "";
 }
 
+type DisplayIllustrationLayer = {
+  layer: ThemeIllustrationLayerSpec;
+  index: number;
+  resource: string;
+};
+
+const FOREST_GROVE_DISPLAY_RESOURCES: Record<ThemeIllustrationSurface, string> = {
+  workbench: "/assets/theme-illustrations/forest-grove/workbench/background.webp",
+  adminCenter: "/assets/theme-illustrations/forest-grove/admin-center/background.webp",
+  agentManager: "/assets/theme-illustrations/forest-grove/agent-manager/background.webp",
+};
+
+function displayLayer(
+  source: ThemeIllustrationLayerSpec,
+  id: string,
+  patch: Partial<ThemeIllustrationLayerSpec>,
+  resource: string,
+  index: number,
+): DisplayIllustrationLayer {
+  return {
+    layer: { ...source, ...patch, id },
+    index,
+    resource,
+  };
+}
+
+export function displayIllustrationLayers(
+  scene: ThemeIllustrationScene,
+  surface: ThemeIllustrationSurface,
+  resources: string[],
+): DisplayIllustrationLayer[] {
+  const setId = illustrationSetIdForScene(scene, surface);
+  if (setId !== "forest-grove") {
+    return scene.layers.map((layer, index) => ({
+      layer,
+      index,
+      resource: resources[index] || illustrationAssetResourcePath(layer.asset),
+    }));
+  }
+
+  const forestResource = FOREST_GROVE_DISPLAY_RESOURCES[surface];
+  if (surface === "workbench") {
+    const backgroundSource = scene.layers.find((layer) => layer.id !== "top-canopy") || scene.layers[0];
+    const leftSource = scene.layers.find((layer) => layer.id === "left-edge-foliage");
+    const layers: DisplayIllustrationLayer[] = [];
+    if (backgroundSource) {
+      layers.push(displayLayer(
+        backgroundSource,
+        "workbench-background",
+        {
+          anchor: "center",
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 100,
+          objectPosition: "50% 50%",
+          opacity: 1,
+          enabled: scene.layers.some((layer) => layer.id !== "top-canopy" && layer.enabled),
+        },
+        forestResource,
+        0,
+      ));
+    }
+    if (leftSource) {
+      layers.push(displayLayer(
+        leftSource,
+        "left-edge-foliage",
+        { opacity: 1 },
+        resources[scene.layers.indexOf(leftSource)] || illustrationAssetResourcePath(leftSource.asset),
+        1,
+      ));
+    }
+    return layers;
+  }
+
+  const source = scene.layers[0];
+  return source
+    ? [displayLayer(source, `${surface}-background`, {
+      anchor: "center",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      objectPosition: "50% 50%",
+      opacity: 1,
+      enabled: scene.layers.some((layer) => layer.enabled),
+    }, forestResource, 0)]
+    : [];
+}
+
 export function defaultIllustrations(): ThemeIllustrations {
   return {
     opacity: DEFAULT_THEME_ILLUSTRATIONS.opacity,

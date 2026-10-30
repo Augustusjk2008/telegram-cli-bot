@@ -1471,9 +1471,8 @@ export function DesktopBotManagerScreen({
       data-ui-density="compact"
       className="theme-illustration-host flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
     >
-      <ThemeIllustrationLayer surface="agentManager" />
+      <ThemeIllustrationLayer surface="agentManager" className="theme-illustration-fixed" />
       <header className="theme-illustration-host border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-        <ThemeIllustrationLayer surface="agentManager" region="topbar" />
         <div className="theme-illustration-content flex items-center gap-3">
           <h1 className="text-lg font-semibold">智能体管理</h1>
           <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
@@ -1606,7 +1605,6 @@ export function DesktopBotManagerScreen({
           onKeyDown={handleTableKeyDown}
           className="theme-illustration-host min-h-0 overflow-auto bg-[var(--surface)] focus:outline-none"
         >
-          <ThemeIllustrationLayer surface="agentManager" />
           {manager.loading ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载中...</div>
           ) : visibleBots.length === 0 ? (
@@ -1767,7 +1765,6 @@ export function DesktopBotManagerScreen({
         </div>
 
         <aside className="theme-illustration-host min-h-0 overflow-y-auto bg-[var(--bg)] p-4">
-          <ThemeIllustrationLayer surface="agentManager" />
           {mode === "create" ? (
             <CreatePanel
               manager={manager}

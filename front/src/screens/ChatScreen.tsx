@@ -20,6 +20,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { clsx } from "clsx";
 import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
@@ -5695,7 +5696,7 @@ export function ChatScreen({
   ) : null;
 
   return (
-    <main ref={chatRootRef} className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
+    <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
       {showActionBar ? (
         <ChatActionBar
           executionMode={effectiveExecutionMode}

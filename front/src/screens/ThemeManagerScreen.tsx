@@ -261,7 +261,6 @@ function ThemePreview({
     >
       <ThemeIllustrationLayer surface="workbench" appearance={appearance} />
       <div className="theme-preview-titlebar theme-illustration-host theme-illustration-content">
-        <ThemeIllustrationLayer surface="workbench" region="topbar" appearance={appearance} />
         <span>工作台</span>
         <span>示例项目 · 已就绪</span>
       </div>
@@ -294,7 +293,6 @@ function ThemePreview({
         </div>
       </div>
       <div className="theme-preview-chat theme-illustration-host theme-illustration-content">
-        <ThemeIllustrationLayer surface="workbench" region="chat" appearance={appearance} />
         <div className="theme-preview-user">
           <small>你 · 现在</small>
           <p>请为我的工作台调一套配色。</p>

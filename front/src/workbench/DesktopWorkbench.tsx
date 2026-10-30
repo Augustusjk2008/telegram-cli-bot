@@ -1471,9 +1471,10 @@ export function DesktopWorkbench({
             data-focused={focusedPane === "sidebar" ? "true" : "false"}
             className="desktop-workbench-pane grid min-h-0 overflow-hidden"
           >
+            {focusedPane === "sidebar" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
             <div
               className={clsx(
-                "grid min-h-0",
+                "theme-illustration-content grid min-h-0",
                 showSidebarContent ? "grid-cols-[48px_minmax(0,1fr)]" : "grid-cols-[48px]",
               )}
             >
@@ -1537,8 +1538,10 @@ export function DesktopWorkbench({
                   !showEditorPane && "hidden",
                 )}
               >
-                <Suspense fallback={paneFallback}>
-                  <EditorPane
+                {focusedPane === "editor" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
+                <div className="theme-illustration-content h-full min-h-0">
+                  <Suspense fallback={paneFallback}>
+                    <EditorPane
                     previewVisible={showEditorPane}
                     remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
                     botAlias={botAlias}
@@ -1604,8 +1607,9 @@ export function DesktopWorkbench({
                     onLoadFullPreview={(path) => void loadPreview(path, "full")}
                     focused={focusedPane === "editor"}
                     onToggleFocus={() => toggleFocusedPane("editor")}
-                  />
-                </Suspense>
+                    />
+                  </Suspense>
+                </div>
               </section>
             ) : null}
 
@@ -1635,31 +1639,34 @@ export function DesktopWorkbench({
                   !showTerminalPane && "hidden",
                 )}
               >
-                <Suspense fallback={paneFallback}>
-                <TerminalPane
-                  authToken={authToken}
-                  botAlias={botAlias}
-                  client={client}
-                  preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
-                  pendingWorkingDir={pendingTerminalOverride?.cwd}
-                  themeName={themeName}
-                  disabledReason={terminalDisabledReason}
-                  remote={Boolean(remoteWorkspace)}
-                  visible={showTerminalPane}
-                  focused={focusedPane === "terminal"}
-                  onToggleFocus={() => toggleFocusedPane("terminal")}
-                  onWorkbenchStatusChange={setTerminalStatus}
-                  onAcceptPendingWorkingDir={() => {
-                    if (pendingTerminalOverride) {
-                      setTerminalOverride(pendingTerminalOverride);
-                    }
-                    setPendingTerminalOverride(null);
-                  }}
-                  onCancelPendingWorkingDir={() => {
-                    setPendingTerminalOverride(null);
-                  }}
-                />
-                </Suspense>
+                {focusedPane === "terminal" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
+                <div className="theme-illustration-content h-full min-h-0">
+                  <Suspense fallback={paneFallback}>
+                    <TerminalPane
+                      authToken={authToken}
+                      botAlias={botAlias}
+                      client={client}
+                      preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
+                      pendingWorkingDir={pendingTerminalOverride?.cwd}
+                      themeName={themeName}
+                      disabledReason={terminalDisabledReason}
+                      remote={Boolean(remoteWorkspace)}
+                      visible={showTerminalPane}
+                      focused={focusedPane === "terminal"}
+                      onToggleFocus={() => toggleFocusedPane("terminal")}
+                      onWorkbenchStatusChange={setTerminalStatus}
+                      onAcceptPendingWorkingDir={() => {
+                        if (pendingTerminalOverride) {
+                          setTerminalOverride(pendingTerminalOverride);
+                        }
+                        setPendingTerminalOverride(null);
+                      }}
+                      onCancelPendingWorkingDir={() => {
+                        setPendingTerminalOverride(null);
+                      }}
+                    />
+                  </Suspense>
+                </div>
               </section>
             ) : null}
           </div>
@@ -1689,23 +1696,26 @@ export function DesktopWorkbench({
               !showChatPane && "hidden",
             )}
           >
-            {resolvedChatPaneContent || (
-              <ChatPane
-                botAlias={botAlias}
-                client={client}
-                readOnly={chatReadOnly}
-                readOnlyReason={chatReadOnlyReason}
-                disabledReason={chatDisabledReason}
-                allowTrace={allowTrace}
-                enterToSend={chatEnterToSend}
-                visible={showChatPane}
-                focused={focusedPane === "chat"}
-                onToggleFocus={() => toggleFocusedPane("chat")}
-                onUnreadResult={onUnreadResult}
-                onWorkbenchStatusChange={setLocalChatStatus}
-                onRequestDesktopPreview={handleRequestPreview}
-              />
-            )}
+            {focusedPane === "chat" ? <ThemeIllustrationLayer surface="workbench" className="workbench-focused-illustration" /> : null}
+            <div className="theme-illustration-content h-full min-h-0">
+              {resolvedChatPaneContent || (
+                <ChatPane
+                  botAlias={botAlias}
+                  client={client}
+                  readOnly={chatReadOnly}
+                  readOnlyReason={chatReadOnlyReason}
+                  disabledReason={chatDisabledReason}
+                  allowTrace={allowTrace}
+                  enterToSend={chatEnterToSend}
+                  visible={showChatPane}
+                  focused={focusedPane === "chat"}
+                  onToggleFocus={() => toggleFocusedPane("chat")}
+                  onUnreadResult={onUnreadResult}
+                  onWorkbenchStatusChange={setLocalChatStatus}
+                  onRequestDesktopPreview={handleRequestPreview}
+                />
+              )}
+            </div>
           </section>
         </div>
       </div>

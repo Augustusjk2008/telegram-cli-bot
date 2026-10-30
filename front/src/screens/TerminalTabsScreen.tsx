@@ -257,7 +257,7 @@ export function TerminalTabsScreen({
 
   return (
     <>
-      <main data-testid="terminal-tabs-screen" data-ui-density="compact" className="terminal-tabs-screen relative z-[20] flex h-full min-h-0 flex-col bg-[var(--workbench-panel-bg)]">
+      <main data-testid="terminal-tabs-screen" data-ui-density="compact" className={`terminal-tabs-screen relative z-[20] flex h-full min-h-0 flex-col ${embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]"}`}>
         <div className="terminal-tab-strip flex min-h-10 shrink-0 items-stretch border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
           <div
             role="tablist"

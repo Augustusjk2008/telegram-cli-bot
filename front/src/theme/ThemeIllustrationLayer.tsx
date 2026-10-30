@@ -2,7 +2,7 @@ import { useMemo, type CSSProperties } from "react";
 import { clsx } from "clsx";
 import { withPublicBase } from "../utils/publicBase";
 import { useResolvedAppearance } from "./appearanceRuntime";
-import { illustrationAssetResourcePath } from "./illustrationPresets";
+import { displayIllustrationLayers } from "./illustrationPresets";
 import type {
   ResolvedAppearance,
   ThemeIllustrationLayerSpec,
@@ -64,12 +64,9 @@ function ThemeIllustrationLayerView({ surface, appearance, className, region = "
   const scene = illustration.scenes[resolvedSurface];
   const resources = illustration.sceneResources[resolvedSurface] || [];
   const layers = useMemo(
-    () => scene.layers.map((layer, index) => ({
-      layer,
-      index,
-      resource: resources[index] || illustrationAssetResourcePath(layer.asset),
-    })).filter((item) => item.layer.enabled && Boolean(item.resource)),
-    [resources, scene],
+    () => displayIllustrationLayers(scene, resolvedSurface, resources)
+      .filter((item) => item.layer.enabled && Boolean(item.resource)),
+    [resources, resolvedSurface, scene],
   );
   if (illustration.opacity <= 0 || !illustration.surfaces[resolvedSurface] || layers.length === 0) return null;
 

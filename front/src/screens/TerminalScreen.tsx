@@ -468,7 +468,7 @@ export function TerminalScreen({
   ) : null;
 
   return (
-    <main ref={terminalRootRef} data-testid="terminal-screen-root" className="relative flex h-full flex-col bg-[var(--workbench-panel-bg)]">
+    <main ref={terminalRootRef} data-testid="terminal-screen-root" className={`relative flex h-full flex-col ${embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]"}`}>
       {!embedded ? (
         <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-2">
         <div className="flex items-center justify-between gap-3">

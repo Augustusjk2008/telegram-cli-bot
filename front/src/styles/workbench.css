@@ -29,7 +29,7 @@
   z-index: 1;
   border-radius: var(--desktop-workbench-pane-radius);
   border: 1px solid var(--workbench-hairline);
-  background: var(--workbench-panel-bg);
+  background: color-mix(in srgb, var(--workbench-panel-bg) 90%, transparent);
   box-shadow: var(--shadow-surface);
   transition:
     border-color 160ms ease,
@@ -44,7 +44,11 @@
 }
 
 .workbench-main-illustration {
-  z-index: 2;
+  z-index: 0;
+}
+
+.workbench-main-illustration [data-theme-illustration-layer-id="left-edge-foliage"] {
+  filter: brightness(.82) saturate(1.35) contrast(1.08);
 }
 
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {

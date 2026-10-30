@@ -14,6 +14,10 @@
   mix-blend-mode: normal;
 }
 
+.theme-illustration-fixed {
+  position: fixed;
+}
+
 .theme-illustration-art {
   position: absolute;
   max-width: none;

@@ -38,9 +38,10 @@ describe("ThemeIllustrationLayer", () => {
     const layer = screen.getByTestId("theme-illustration-layer-workbench");
     expect(layer).toHaveAttribute("aria-hidden", "true");
     expect(layer).toHaveStyle({ pointerEvents: "none" });
-    expect(layer).toHaveAttribute("data-theme-illustration-count", "5");
-    expect(layer.querySelectorAll(".theme-illustration-art")).toHaveLength(5);
-    expect(layer.querySelector("[data-theme-illustration-layer-id=top-canopy]")).toHaveStyle({ width: "100%", height: "45%" });
+    expect(layer).toHaveAttribute("data-theme-illustration-count", "2");
+    expect(layer.querySelectorAll(".theme-illustration-art")).toHaveLength(2);
+    expect(layer.querySelector("[data-theme-illustration-layer-id=workbench-background]")).toHaveStyle({ width: "100%", height: "100%" });
+    expect(layer.querySelector("[data-theme-illustration-layer-id=left-edge-foliage]")).toHaveStyle({ width: "27%", height: "92%" });
   });
 
   it("renders the independent admin and agent layer groups in manifest order", () => {
@@ -51,9 +52,9 @@ describe("ThemeIllustrationLayer", () => {
         <ThemeIllustrationLayer surface="agentManager" appearance={appearance} />
       </>,
     );
-    expect(screen.getByTestId("theme-illustration-layer-adminCenter")).toHaveAttribute("data-theme-illustration-count", "3");
-    expect(screen.getByTestId("theme-illustration-layer-agentManager")).toHaveAttribute("data-theme-illustration-count", "3");
-    expect(screen.getByTestId("theme-illustration-layer-adminCenter").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("top-banner");
-    expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("top-banner");
+    expect(screen.getByTestId("theme-illustration-layer-adminCenter")).toHaveAttribute("data-theme-illustration-count", "1");
+    expect(screen.getByTestId("theme-illustration-layer-agentManager")).toHaveAttribute("data-theme-illustration-count", "1");
+    expect(screen.getByTestId("theme-illustration-layer-adminCenter").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("adminCenter-background");
+    expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("agentManager-background");
   });
 });
