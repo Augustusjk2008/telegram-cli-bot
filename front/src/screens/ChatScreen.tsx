@@ -1561,10 +1561,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
                   isUser && isCurrentUserMessage
                     ? "chat-user-message min-w-0 overflow-hidden rounded-lg bg-[var(--accent)] px-3 py-1.5 text-[var(--accent-foreground)] shadow-[var(--shadow-surface)]"
                     : isStreamingAssistant
-                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]"
+                      ? "min-w-0 overflow-hidden rounded-lg border border-[var(--accent)]/45 bg-transparent px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]"
                     : item.state === "error"
                       ? "rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-[var(--status-danger)] shadow-[var(--shadow-surface)]"
-                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]",
+                      : "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-transparent px-3 py-2 text-[var(--text)] shadow-[var(--shadow-surface)]",
                 ].join(" ")}
           >
             {hasTranscript ? (

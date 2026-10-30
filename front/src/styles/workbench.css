@@ -29,7 +29,7 @@
   z-index: 1;
   border-radius: var(--desktop-workbench-pane-radius);
   border: 1px solid var(--workbench-hairline);
-  background: color-mix(in srgb, var(--workbench-panel-bg) 90%, transparent);
+  background: transparent;
   box-shadow: var(--shadow-surface);
   transition:
     border-color 160ms ease,
@@ -136,7 +136,8 @@
 }
 
 .desktop-workbench-root .file-tree-row[data-selected="true"] {
-  background: var(--workbench-active-bg);
+  background-color: var(--surface-strong);
+  background-image: linear-gradient(var(--workbench-active-bg), var(--workbench-active-bg));
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -163,8 +164,13 @@
   background-size: 12px 100%;
 }
 
+.desktop-workbench-root .terminal-shell .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 .desktop-workbench-root [data-selected="true"] > button {
-  background: var(--workbench-active-bg);
+  background-color: var(--surface-strong);
+  background-image: linear-gradient(var(--workbench-active-bg), var(--workbench-active-bg));
   border-color: var(--workbench-focus-ring);
 }
 
@@ -507,7 +513,7 @@
 
 :root[data-style-profile="paper"] .desktop-workbench-root .workbench-activity-rail {
   border-color: var(--workbench-hairline);
-  background: var(--bg);
+  background: transparent;
 }
 
 :root[data-style-profile="paper"] .desktop-workbench-root .workbench-rail-toggle {
@@ -528,7 +534,7 @@
   --workbench-hover-bg: var(--file-tree-hover);
   --workbench-active-bg: var(--file-tree-selected);
   --workbench-focus-ring: var(--file-tree-focus);
-  background: var(--file-tree-bg);
+  background: transparent;
 }
 
 :root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="folder-open"], [data-icon="folder-closed"]) {
@@ -608,6 +614,7 @@
 :root[data-style-profile="paper"] .desktop-workbench-root .editor-breadcrumb {
   padding-inline: 12px;
   border-color: var(--workbench-hairline);
+  background: transparent;
 }
 
 :root[data-style-profile="paper"] .desktop-workbench-root .chat-action-header {
@@ -631,7 +638,7 @@
 }
 
 :root[data-style-profile="paper"] .desktop-workbench-root .chat-user-message {
-  background: var(--chat-user-bg);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
   box-shadow: none;
 }
 

@@ -306,7 +306,7 @@ export function TerminalScreen({
         ownerId,
         previousRecoveryState: terminal.getClientRecoveryState(ownerId),
         fontSize: terminalFontSize,
-        theme: resolvedTerminalTheme(getCurrentAppearance()),
+        theme: resolvedTerminalTheme(getCurrentAppearance(), embedded),
         onOpen: () => {
           setIsConnected(true);
           setError("");
@@ -350,7 +350,7 @@ export function TerminalScreen({
     } finally {
       launchPendingRef.current = false;
     }
-  }, [authToken, isVisible, terminal.attachNonce, terminal.getClientRecoveryState, terminal.ownerId, terminal.setClientRecoveryState, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize]);
+  }, [authToken, embedded, isVisible, terminal.attachNonce, terminal.getClientRecoveryState, terminal.ownerId, terminal.setClientRecoveryState, terminal.snapshot.closed, terminal.snapshot.started, terminalDisabled, terminalFontSize]);
 
   useEffect(() => {
     const becameVisible = !previousVisibleRef.current && isVisible;
@@ -412,8 +412,8 @@ export function TerminalScreen({
   }, [instanceId]);
 
   useEffect(() => {
-    sessionRef.current?.setTheme(resolvedTerminalTheme(appearance));
-  }, [appearance.revision, instanceId]);
+    sessionRef.current?.setTheme(resolvedTerminalTheme(appearance, embedded));
+  }, [appearance.revision, embedded, instanceId]);
 
   useEffect(() => {
     return () => {
@@ -507,7 +507,7 @@ export function TerminalScreen({
         {instanceId}
       </div>
 
-      <section className="relative flex-1 overflow-hidden border-b border-[var(--workbench-hairline)] bg-[var(--terminal-bg)]">
+      <section className={`relative flex-1 overflow-hidden border-b border-[var(--workbench-hairline)] ${embedded ? "bg-transparent" : "bg-[var(--terminal-bg)]"}`}>
         {!terminal.snapshot.started || terminal.snapshot.closed ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--terminal-muted)]">
             {terminal.snapshot.closed ? "终端已关闭" : "未启动终端"}
@@ -523,7 +523,7 @@ export function TerminalScreen({
             }}
             className="h-full"
           >
-            <div data-testid="terminal-shell-frame" className="h-full w-full bg-[var(--terminal-bg)] px-3 py-2">
+            <div data-testid="terminal-shell-frame" className={`h-full w-full px-3 py-2 ${embedded ? "bg-transparent" : "bg-[var(--terminal-bg)]"}`}>
               {/* Keep padding off the xterm host; FitAddon measures the host size directly. */}
               <div ref={containerRef} className="terminal-shell h-full w-full min-h-full min-w-0" />
             </div>

@@ -65,7 +65,10 @@ export function useResolvedAppearance() {
   );
 }
 
-export function resolvedTerminalTheme(appearance = currentAppearance) {
+export function resolvedTerminalTheme(appearance = currentAppearance, transparentBackground = false) {
   return Object.fromEntries(THEME_TOKENS.filter((token) => token.terminal)
-    .map((token) => [token.terminal!, appearance.colors[token.key]]));
+    .map((token) => [
+      token.terminal!,
+      transparentBackground && token.terminal === "background" ? "transparent" : appearance.colors[token.key],
+    ]));
 }

@@ -267,8 +267,8 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
   const containerClassName = isChat
     ? "chat-body-content chat-markdown-content min-w-0 w-full text-[var(--chat-markdown-text,var(--text))]"
     : isDesktopPreview
-      ? "markdown-preview-scroll h-full overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]"
-      : "max-h-[50vh] overflow-auto rounded-xl bg-[var(--surface-strong)] px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]";
+      ? "markdown-preview-scroll h-full overflow-auto rounded-xl bg-transparent px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]"
+      : "max-h-[50vh] overflow-auto rounded-xl bg-transparent px-5 py-4 text-[15px] leading-7 text-[var(--chat-markdown-text,var(--text))]";
 
   function activateLocalLink(
     event: { preventDefault: () => void; stopPropagation: () => void },
@@ -307,8 +307,8 @@ export function MarkdownContent({ content, variant = "preview", onFileLinkClick,
           li: ({ children }) => <li className="break-words pl-1 [overflow-wrap:anywhere]">{children}</li>,
           blockquote: ({ children }) => (
             <blockquote className={isChat
-              ? "break-words border-l-4 border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-4 py-3 text-[var(--chat-markdown-muted,var(--muted))] [overflow-wrap:anywhere]"
-              : "my-5 break-words border-l-4 border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-accent-soft,var(--accent-soft))] px-4 py-3 text-[var(--chat-markdown-muted,var(--muted))] [overflow-wrap:anywhere]"}
+              ? "break-words border-l-4 border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-card,var(--surface-strong))] px-4 py-3 text-[var(--chat-markdown-muted,var(--muted))] [overflow-wrap:anywhere]"
+              : "my-5 break-words border-l-4 border-[var(--chat-markdown-accent-outline,var(--accent-outline))] bg-[var(--chat-markdown-card,var(--surface-strong))] px-4 py-3 text-[var(--chat-markdown-muted,var(--muted))] [overflow-wrap:anywhere]"}
             >
               {children}
             </blockquote>

@@ -37,8 +37,7 @@
 }
 
 .chat-illustration-scroll {
-  background-color: var(--workbench-panel-bg);
-  background-color: color-mix(in srgb, var(--workbench-panel-bg) 90%, transparent);
+  background-color: transparent;
 }
 
 @media (max-width: 720px) {

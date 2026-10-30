@@ -115,7 +115,7 @@ function createEditorTheme(
 ) {
   return EditorView.theme({
     "&": {
-      backgroundColor: "var(--editor-bg)",
+      backgroundColor: "transparent",
       color: "var(--editor-text)",
       fontFamily: "var(--editor-font-family)",
       fontSize: "var(--editor-font-size)",
@@ -133,7 +133,7 @@ function createEditorTheme(
       lineHeight: "var(--editor-line-height)",
     },
     ".cm-gutters": {
-      backgroundColor: "var(--editor-gutter-bg)",
+      backgroundColor: "transparent",
       color: "var(--editor-gutter-text)",
       borderRight: "1px solid var(--border)",
       fontFamily: "var(--editor-font-family)",
@@ -534,7 +534,7 @@ export function FileEditorSurface({
     };
   }, [canSave, loading, onSave, saving]);
   return (
-    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)]">
+    <section className="file-editor-container flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
       {!hideHeader ? (
         <div className="border-b border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
@@ -569,7 +569,7 @@ export function FileEditorSurface({
           <div
             key={path}
             data-testid="file-editor-host"
-            className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--editor-bg)] text-[var(--editor-text)]"
+            className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-transparent text-[var(--editor-text)]"
             onKeyDown={handleCodeNavigationKeyDown}
             onMouseDown={(event) => {
               if (!onResolveCodeNavigation || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
@@ -636,7 +636,7 @@ export function FileEditorSurface({
               scrollbarGutter: "stable both-edges",
               WebkitOverflowScrolling: "touch",
             }}
-            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-[var(--editor-bg)] p-4 text-[var(--editor-text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            className="block h-full min-h-0 w-full resize-none overflow-auto border-0 bg-transparent p-4 text-[var(--editor-text)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           />
         )}
         {onResolveCodeNavigation ? (

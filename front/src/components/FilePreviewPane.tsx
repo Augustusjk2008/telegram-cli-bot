@@ -33,7 +33,7 @@ export function FilePreviewPane({
   return (
     <div
       data-testid="desktop-inline-file-preview"
-      className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--editor-bg)]"
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-transparent"
     >
       <div className="min-h-0 flex-1 overflow-hidden p-3">
         <FilePreviewSurface
