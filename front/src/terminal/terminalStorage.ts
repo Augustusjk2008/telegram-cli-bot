@@ -84,7 +84,7 @@ export function createStoredTerminalTab(
   const ownerId = createTerminalOwnerId();
   let title = options.title?.trim() || "";
   if (!title) {
-    let index = tabs.length + 1;
+    let index = 1;
     const usedTitles = new Set(tabs.map((tab) => tab.title));
     while (usedTitles.has(`终端 ${index}`)) {
       index += 1;

@@ -5773,7 +5773,7 @@ export function ChatScreen({
         data-testid="chat-illustration-viewport"
         className="theme-illustration-host relative min-h-0 flex-1"
       >
-        <ThemeIllustrationLayer surface="workbench" region="chat" />
+        {!embedded ? <ThemeIllustrationLayer surface="workbench" region="chat" /> : null}
         <section
           ref={scrollContainerRef}
           data-testid="chat-scroll-container"

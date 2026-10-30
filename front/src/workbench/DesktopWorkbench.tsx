@@ -40,6 +40,7 @@ import { PaneResizer } from "./PaneResizer";
 import { SearchPane } from "./SearchPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import {
   LazyDebugPane as DebugPane,
@@ -1456,7 +1457,8 @@ export function DesktopWorkbench({
         onLogout={() => onLogout?.()}
       />
 
-      <div data-testid="desktop-workbench-shell" className="min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
+      <div data-testid="desktop-workbench-shell" className="desktop-workbench-shell theme-illustration-host relative min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
+        <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" />
         <div
           data-testid="desktop-workbench-columns"
           ref={columnsRef}

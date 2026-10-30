@@ -157,7 +157,7 @@ export function TerminalTabsScreen({
   const runtimePlatform: TerminalRuntimePlatform = actionsConfig?.runtimePlatform ?? "windows";
   const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
   const actionDisabledReason = disabledReason;
-  const focusDisabledReason = disabledReason || (!activeTab ? "请先打开终端" : "");
+  const focusDisabledReason = disabledReason;
 
   async function runTerminalAction(action: TerminalAction) {
     if (disabledReason || runningActionId) {
@@ -218,10 +218,23 @@ export function TerminalTabsScreen({
     }
   }
 
+  const focusButton = onToggleFocus ? (
+    <button
+      type="button"
+      aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
+      title={focusDisabledReason || (focused ? "退出聚焦终端" : "聚焦终端")}
+      disabled={Boolean(focusDisabledReason)}
+      onClick={onToggleFocus}
+      className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
+    >
+      {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+    </button>
+  ) : null;
+
   const toolbar = (
     <div
       data-testid="terminal-tabs-toolbar"
-      className={`terminal-tabs-toolbar flex min-w-0 max-w-full shrink-0 items-center gap-1 ${embedded ? "border-l border-[var(--workbench-hairline)] px-1" : "w-full border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"}`}
+      className={`terminal-tabs-toolbar flex min-w-0 max-w-full shrink-0 items-center gap-1 ${embedded ? "w-full border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5" : "w-full border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"}`}
     >
       <TerminalActionsBar
         actions={visibleActions}
@@ -237,18 +250,7 @@ export function TerminalTabsScreen({
           setShowActionsConfig(true);
         }}
       />
-      {onToggleFocus ? (
-        <button
-          type="button"
-          aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
-          title={focusDisabledReason || (focused ? "退出聚焦终端" : "聚焦终端")}
-          disabled={Boolean(focusDisabledReason)}
-          onClick={onToggleFocus}
-          className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
-        >
-          {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-        </button>
-      ) : null}
+      {!embedded ? focusButton : null}
       {actionsError ? <span role="alert" className="max-w-48 truncate px-1 text-[11px] text-[var(--status-danger)]" title={actionsError}>{actionsError}</span> : null}
     </div>
   );
@@ -308,7 +310,7 @@ export function TerminalTabsScreen({
               setReconnectVersions((prev) => ({ ...prev, [activeTab.id]: (prev[activeTab.id] || 0) + 1 }));
             } finally { setReconnecting(false); }
           }}>{reconnecting ? "连接中…" : "重新连接终端"}</button>}
-          {embedded ? toolbar : null}
+          {embedded ? focusButton : null}
         </div>
 
         {!embedded ? toolbar : null}
@@ -334,6 +336,7 @@ export function TerminalTabsScreen({
             /> : <div className="p-4 text-sm text-[var(--muted)]">{remote ? "点击 + 新建 SSH 终端" : "点击 + 新建终端"}</div>}
           </Suspense>
         </div>
+        {embedded ? toolbar : null}
       </main>
       {showActionsConfig && actionsConfig && !disabledReason ? (
         <TerminalActionsConfigDialog

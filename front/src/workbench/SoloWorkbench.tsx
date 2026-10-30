@@ -19,6 +19,7 @@ import { SoloSessionInfoTab } from "./SoloSessionInfoTab";
 import type { SoloSessionSnapshot, SoloTab } from "./soloTypes";
 import { PANE_RESIZER_SIZE_PX, type ChatWorkbenchStatus, type WorkbenchProductMode } from "./workbenchTypes";
 import { WorkbenchHeader } from "./WorkbenchHeader";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 type Props = {
   botAlias: string;
@@ -233,7 +234,8 @@ export function SoloWorkbench({
         onLogout={onLogout}
       />
 
-      <div data-testid="solo-workbench-shell" className="min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
+      <div data-testid="solo-workbench-shell" className="desktop-workbench-shell theme-illustration-host relative min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
+        <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" />
         <div
           ref={columnsRef}
           className="grid h-full min-h-0 p-0.5"

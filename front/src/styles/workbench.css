@@ -43,6 +43,10 @@
   z-index: 20;
 }
 
+.workbench-main-illustration {
+  z-index: 2;
+}
+
 .desktop-workbench-root [data-testid="desktop-workbench-columns"] {
   transition:
     grid-template-columns 220ms cubic-bezier(0.2, 0, 0, 1),

@@ -32,6 +32,12 @@ test("多个 tab 保存独立 owner 和工作目录", () => {
   expect(restored[0].ownerId).not.toBe(restored[1].ownerId);
 });
 
+test("已有非编号 tab 时，新建终端仍从终端 1 开始编号", () => {
+  const otherScopeTab = createStoredTerminalTab([], { title: "SSH other" });
+
+  expect(createStoredTerminalTab([otherScopeTab]).title).toBe("终端 1");
+});
+
 test("快捷命令关联会随 tab 持久化", () => {
   const tab = createStoredTerminalTab([], {
     terminalActionBotAlias: "repo",
