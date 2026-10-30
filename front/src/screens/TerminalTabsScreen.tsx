@@ -19,6 +19,17 @@ const TerminalScreen = lazy(() =>
   import("./TerminalScreen").then((module) => ({ default: module.TerminalScreen })),
 );
 
+const EMPTY_TERMINAL_ACTIONS_CONFIG: TerminalActionsConfig = {
+  schemaVersion: 1,
+  actions: [],
+  configPath: "",
+  exists: false,
+  mtimeNs: "",
+  editable: false,
+  errors: [],
+  runtimePlatform: "windows",
+};
+
 type Props = {
   authToken: string;
   botAlias: string;
@@ -72,7 +83,7 @@ export function TerminalTabsScreen({
   const [reconnecting, setReconnecting] = useState(false);
   const [reconnectVersions, setReconnectVersions] = useState<Record<string, number>>({});
   const [closingTabId, setClosingTabId] = useState("");
-  const [actionsConfig, setActionsConfig] = useState<TerminalActionsConfig | null>(null);
+  const [actionsConfig, setActionsConfig] = useState<TerminalActionsConfig>(EMPTY_TERMINAL_ACTIONS_CONFIG);
   const [actionsError, setActionsError] = useState("");
   const [runningActionId, setRunningActionId] = useState("");
   const [showActionsConfig, setShowActionsConfig] = useState(false);
@@ -115,6 +126,8 @@ export function TerminalTabsScreen({
 
   useEffect(() => {
     let cancelled = false;
+    setActionsConfig(EMPTY_TERMINAL_ACTIONS_CONFIG);
+    setActionsError("");
     client.getTerminalActionsConfig(botAlias)
       .then((next) => {
         if (cancelled) return;
@@ -123,7 +136,6 @@ export function TerminalTabsScreen({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setActionsConfig(null);
         setActionsError(err instanceof Error ? err.message : "加载快捷命令失败");
       });
     return () => {
@@ -144,10 +156,11 @@ export function TerminalTabsScreen({
 
   const runtimePlatform: TerminalRuntimePlatform = actionsConfig?.runtimePlatform ?? "windows";
   const visibleActions = actionsConfig?.actions.filter((action) => isTerminalActionVisible(action, runtimePlatform)) ?? [];
-  const actionDisabledReason = disabledReason || (!activeTab ? "请先打开终端" : "");
+  const actionDisabledReason = disabledReason;
+  const focusDisabledReason = disabledReason || (!activeTab ? "请先打开终端" : "");
 
   async function runTerminalAction(action: TerminalAction) {
-    if (!activeTab || disabledReason || runningActionId) {
+    if (disabledReason || runningActionId) {
       return;
     }
     const command = resolveTerminalActionCommand(action, runtimePlatform);
@@ -188,7 +201,7 @@ export function TerminalTabsScreen({
   }
 
   async function saveTerminalActionsConfig(nextConfig: TerminalActionsEditableConfig) {
-    if (!actionsConfig || disabledReason) {
+    if (disabledReason) {
       return;
     }
     setSavingActionsConfig(true);
@@ -208,15 +221,15 @@ export function TerminalTabsScreen({
   const toolbar = (
     <div
       data-testid="terminal-tabs-toolbar"
-      className={`terminal-tabs-toolbar flex min-w-0 shrink-0 items-center gap-1 border-l border-[var(--workbench-hairline)] px-1 ${embedded ? "" : "ml-auto"}`}
+      className={`terminal-tabs-toolbar flex min-w-0 max-w-full shrink-0 items-center gap-1 ${embedded ? "border-l border-[var(--workbench-hairline)] px-1" : "w-full border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5"}`}
     >
       <TerminalActionsBar
         actions={visibleActions}
         runtimePlatform={runtimePlatform}
-        canEdit={Boolean(actionsConfig?.editable) && !disabledReason}
+        canEdit={Boolean(actionsConfig)}
         disabled={Boolean(actionDisabledReason)}
         disabledReason={actionDisabledReason}
-        disableEdit={Boolean(disabledReason)}
+        disableEdit={!actionsConfig?.editable || Boolean(disabledReason)}
         runningActionId={runningActionId}
         onRunAction={(action) => void runTerminalAction(action)}
         onOpenConfig={() => {
@@ -228,8 +241,8 @@ export function TerminalTabsScreen({
         <button
           type="button"
           aria-label={focused ? "退出聚焦终端" : "聚焦终端"}
-          title={actionDisabledReason || (focused ? "退出聚焦终端" : "聚焦终端")}
-          disabled={Boolean(actionDisabledReason)}
+          title={focusDisabledReason || (focused ? "退出聚焦终端" : "聚焦终端")}
+          disabled={Boolean(focusDisabledReason)}
           onClick={onToggleFocus}
           className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}
         >
@@ -295,8 +308,10 @@ export function TerminalTabsScreen({
               setReconnectVersions((prev) => ({ ...prev, [activeTab.id]: (prev[activeTab.id] || 0) + 1 }));
             } finally { setReconnecting(false); }
           }}>{reconnecting ? "连接中…" : "重新连接终端"}</button>}
-          {toolbar}
+          {embedded ? toolbar : null}
         </div>
+
+        {!embedded ? toolbar : null}
 
         <div id={`terminal-panel-${activeTab?.id || "empty"}`} role="tabpanel" className="min-h-0 flex-1">
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载终端...</div>}>

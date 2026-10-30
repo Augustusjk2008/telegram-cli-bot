@@ -33,7 +33,7 @@ export function TerminalActionsBar({
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto">
+    <div className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto">
       {visibleActions.map((action) => {
         const Icon = getTerminalActionIcon(action.icon);
         const running = runningActionId === action.id;
@@ -59,7 +59,7 @@ export function TerminalActionsBar({
         <button
           type="button"
           aria-label="编辑快捷命令"
-          title="编辑快捷命令"
+          title={disableEdit ? "当前没有配置快捷命令的权限" : "编辑快捷命令"}
           onClick={onOpenConfig}
           disabled={disableEdit}
           className={toolbarButtonClass("ghost", "icon", "h-8 w-8 border-[var(--workbench-hairline)]")}

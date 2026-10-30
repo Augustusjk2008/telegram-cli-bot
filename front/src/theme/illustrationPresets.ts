@@ -23,6 +23,12 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "moonlit-garden",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
+const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
+  workbench: "workbench",
+  adminCenter: "admin-center",
+  agentManager: "agent-manager",
+};
+
 type CatalogAsset = {
   assetId: string;
   mimeType: "image/webp" | "image/png";
@@ -151,6 +157,11 @@ export function illustrationSetIdForAsset(asset: ThemeIllustrationAsset, surface
   if (asset.kind !== "builtin") return "";
   return THEME_ILLUSTRATION_SET_IDS.find((setId) => THEME_ILLUSTRATION_CATALOG.sets[setId]?.[surface]?.layers
     .some((layer) => layer.asset.assetId === asset.assetId)) || "";
+}
+
+export function legacyIllustrationSetIdForAssetId(assetId: string, surface: ThemeIllustrationSurface) {
+  const suffix = `-${LEGACY_SURFACE_FILENAMES[surface]}`;
+  return THEME_ILLUSTRATION_SET_IDS.find((setId) => assetId === `${setId}${suffix}`) || "";
 }
 
 export function illustrationSetIdForScene(scene: ThemeIllustrationScene, surface: ThemeIllustrationSurface) {

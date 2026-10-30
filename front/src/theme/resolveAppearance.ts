@@ -26,6 +26,7 @@ import {
   builtinIllustrationScene,
   defaultIllustrations,
   illustrationAssetResourcePath,
+  legacyIllustrationSetIdForAssetId,
   THEME_ILLUSTRATION_SET_IDS,
   THEME_ILLUSTRATION_SURFACES,
   THEME_ILLUSTRATION_CATALOG,
@@ -219,10 +220,26 @@ function normalizeScene(value: unknown, surface: ThemeIllustrationSurface): Them
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`主题插画场景无效：${surface}`);
   const candidate = value as Record<string, unknown>;
   if (!Object.hasOwn(candidate, "layers")) {
+    const legacySetId = candidate.kind === "builtin" && typeof candidate.assetId === "string"
+      ? legacyIllustrationSetIdForAssetId(candidate.assetId, surface)
+      : "";
+    if (legacySetId) return builtinIllustrationScene(legacySetId as typeof THEME_ILLUSTRATION_SET_IDS[number], surface);
     return sceneFromAsset(normalizeAsset(value), `${surface}-layer`);
   }
   if (Object.keys(candidate).some((key) => key !== "layers") || !Array.isArray(candidate.layers) || candidate.layers.length < 1 || candidate.layers.length > 32) {
     throw new Error(`主题插画图层列表无效：${surface}`);
+  }
+  if (candidate.layers.length === 1) {
+    const firstLayer = candidate.layers[0];
+    const firstAsset = firstLayer && typeof firstLayer === "object" && !Array.isArray(firstLayer)
+      ? (firstLayer as Record<string, unknown>).asset
+      : undefined;
+    const legacySetId = firstAsset && typeof firstAsset === "object" && !Array.isArray(firstAsset)
+      && (firstAsset as Record<string, unknown>).kind === "builtin"
+      && typeof (firstAsset as Record<string, unknown>).assetId === "string"
+      ? legacyIllustrationSetIdForAssetId((firstAsset as Record<string, unknown>).assetId as string, surface)
+      : "";
+    if (legacySetId) return builtinIllustrationScene(legacySetId as typeof THEME_ILLUSTRATION_SET_IDS[number], surface);
   }
   const layers = candidate.layers.map((layer, index) => normalizeLayer(layer, surface, index));
   const ids = new Set<string>();

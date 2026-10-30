@@ -102,7 +102,7 @@ test("没有活动终端时保留配置入口并禁用依赖会话的控制", as
   fireEvent.click(screen.getByRole("button", { name: "关闭终端 1" }));
   await waitFor(() => expect(screen.queryByRole("tab")).not.toBeInTheDocument());
   expect(await screen.findByRole("button", { name: "编辑快捷命令" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "新开终端" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "新开终端" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "聚焦终端" })).toBeDisabled();
 });
 

@@ -238,6 +238,32 @@ async def test_legacy_illustrations_migrate_to_scene_assets_on_save(api):
 
 
 @pytest.mark.asyncio
+async def test_previous_forest_single_assets_migrate_to_current_layer_groups(api):
+    legacy_scenes = {
+        surface: {
+            "kind": "builtin",
+            "assetId": f"forest-grove-{filename}",
+            "mimeType": "image/webp",
+            "width": 1600,
+            "height": 900,
+            "sha256": "0" * 64,
+        }
+        for surface, filename in (("workbench", "workbench"), ("adminCenter", "admin-center"), ("agentManager", "agent-manager"))
+    }
+    status, created = await request(api, "POST", body=create_input(appearance={
+        "colors": {"scheme": "light", "overrides": {}},
+        "illustrations": {
+            "opacity": 0.12,
+            "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
+            "scenes": legacy_scenes,
+        },
+    }))
+    assert status == 200
+    saved = created["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]
+    assert [len(saved[surface]["layers"]) for surface in ("workbench", "adminCenter", "agentManager")] == [5, 3, 3]
+
+
+@pytest.mark.asyncio
 async def test_uploaded_illustrations_are_part_of_the_theme_and_survive_roundtrip(api):
     asset = stored_upload(api)
     appearance = {

@@ -52,6 +52,11 @@ _ILLUSTRATION_UPLOAD_DATA = re.compile(
 )
 _ILLUSTRATION_ANCHORS = {"top", "left", "right", "bottom", "bottom-left", "bottom-right", "center"}
 _ILLUSTRATION_LAYER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}\Z")
+_ILLUSTRATION_SURFACE_FILENAMES = {
+    "workbench": "workbench",
+    "adminCenter": "admin-center",
+    "agentManager": "agent-manager",
+}
 # All store instances in the host share the read/modify/replace boundary.
 _STORE_LOCK = threading.RLock()
 
@@ -113,6 +118,13 @@ def _default_illustrations() -> dict[str, Any]:
             for surface in _ILLUSTRATION_SURFACES
         },
     }
+
+
+def _legacy_illustration_set_id(asset_id: Any, surface: str) -> str:
+    if not isinstance(asset_id, str):
+        return ""
+    suffix = f"-{_ILLUSTRATION_SURFACE_FILENAMES[surface]}"
+    return next((set_id for set_id in _ILLUSTRATION_SET_IDS if asset_id == f"{set_id}{suffix}"), "")
 
 
 def _read_illustration_catalog_file(path: Path) -> dict[str, dict[str, dict[str, Any]]]:
@@ -337,18 +349,41 @@ class ThemeStore:
         uploaded_sizes: dict[str, int] = {}
         for surface in _ILLUSTRATION_SURFACES:
             raw_scene = scenes[surface]
+            legacy_set_id = ""
             if isinstance(raw_scene, dict) and "layers" not in raw_scene and "kind" in raw_scene:
-                raw_scene = {
-                    "layers": [{
-                        "id": f"{surface}-legacy",
-                        "asset": raw_scene,
-                        "anchor": "center",
-                        "width": 100,
-                        "height": 100,
-                        "objectPosition": "50% 50%",
-                        "enabled": True,
-                    }],
-                }
+                if raw_scene.get("kind") == "builtin":
+                    legacy_set_id = _legacy_illustration_set_id(raw_scene.get("assetId"), surface)
+                if legacy_set_id:
+                    raw_scene = {
+                        "layers": [
+                            {**layer, "asset": {"kind": "builtin", **layer["asset"]}}
+                            for layer in catalog[legacy_set_id][surface]["layers"]
+                        ],
+                    }
+                else:
+                    raw_scene = {
+                        "layers": [{
+                            "id": f"{surface}-legacy",
+                            "asset": raw_scene,
+                            "anchor": "center",
+                            "width": 100,
+                            "height": 100,
+                            "objectPosition": "50% 50%",
+                            "enabled": True,
+                        }],
+                    }
+            elif isinstance(raw_scene, dict) and isinstance(raw_scene.get("layers"), list) and len(raw_scene["layers"]) == 1:
+                first_layer = raw_scene["layers"][0]
+                first_asset = first_layer.get("asset") if isinstance(first_layer, dict) else None
+                if isinstance(first_asset, dict) and first_asset.get("kind") == "builtin":
+                    legacy_set_id = _legacy_illustration_set_id(first_asset.get("assetId"), surface)
+                    if legacy_set_id:
+                        raw_scene = {
+                            "layers": [
+                                {**layer, "asset": {"kind": "builtin", **layer["asset"]}}
+                                for layer in catalog[legacy_set_id][surface]["layers"]
+                            ],
+                        }
             scene = _object(raw_scene, {"layers"}, {"layers"}, f"illustrations.scenes.{surface}")
             layers = scene["layers"]
             if not isinstance(layers, list) or not layers or len(layers) > 32:
