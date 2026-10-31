@@ -186,6 +186,17 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
 
 
+def test_release_builders_require_packaged_theme_catalogs() -> None:
+    for relative_path in (
+        ".release-local/publish-release.ps1",
+        ".release-local/portable-win/build-portable.ps1",
+    ):
+        script = Path(relative_path).read_text(encoding="utf-8")
+        assert '"bot/web/theme_presets.json"' in script
+        assert '"bot/web/theme_illustrations.json"' in script
+        assert "Assert-ThemeFilesInStage" in script
+
+
 def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_encodings() -> None:
     portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
 

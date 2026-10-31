@@ -1,4 +1,5 @@
 import catalog from "../../../bot/web/theme_catalog.json";
+import presetCatalog from "../../../bot/web/theme_presets.json";
 import type {
   ColorToken,
   LegacyThemeIllustrations,
@@ -40,7 +41,8 @@ const THEME_ILLUSTRATION_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A
 const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 
-export const BUILTIN_THEME: UiTheme = {
+const PRESET_LIBRARY = presetCatalog as unknown as ThemeLibrary;
+export const BUILTIN_THEME: UiTheme = PRESET_LIBRARY.themes.find((theme) => theme.id === "paper-daylight") || {
   schemaVersion: 1,
   id: "paper-daylight",
   name: "纸感日间",
@@ -50,13 +52,13 @@ export const BUILTIN_THEME: UiTheme = {
     typography: DEFAULT_CHAT_TYPOGRAPHY,
     illustrations: defaultIllustrations(),
   },
-  readonly: false,
+  readonly: true,
   updatedAt: "",
   version: 1,
 };
 
 export function builtinLibrary(): ThemeLibrary {
-  return { schemaVersion: 1, scope: "global", revision: 0, selectedThemeId: BUILTIN_THEME.id, themes: [BUILTIN_THEME] };
+  return JSON.parse(JSON.stringify(PRESET_LIBRARY)) as ThemeLibrary;
 }
 export function normalizeColor(value: string, allowAlpha = true): string | null {
   let hex = value.trim().toUpperCase();

@@ -179,45 +179,19 @@ afterEach(() => {
 });
 
 describe("全局主题管理", () => {
-  it("saves a pending draft before import and submits the new library revision", async () => {
-    const imported = { ...customTheme(), id: "theme_imported", name: "导入配色" };
-    const document = { schemaVersion: 1, themes: [{ name: imported.name }] };
-    const file = Object.assign(new File([], "themes.json"), { text: async () => JSON.stringify(document) });
-    api.importThemes.mockImplementationOnce(async () => ({
-      ...api.library!, revision: 3, themes: [...api.library!.themes, imported],
-    }));
+  it("does not expose theme import or copy controls", () => {
+    api.library = {
+      schemaVersion: 1,
+      scope: "global",
+      revision: 1,
+      selectedThemeId: BUILTIN_THEME.id,
+      themes: [BUILTIN_THEME],
+    };
     render(<ThemeManagerScreen />);
-    fireEvent.change(screen.getByLabelText("主题名称"), { target: { value: "先保存的草稿" } });
-    expect(screen.getByRole("button", { name: "导出当前主题" })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("导入主题 JSON 文件"), { target: { files: [file] } });
-    expect(api.importThemes).not.toHaveBeenCalled();
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存后离开" }));
-    await screen.findByText(/已导入 1 个主题/);
-    expect(api.importThemes).toHaveBeenCalledWith(document, 2);
-    expect(api.updateTheme).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("主题名称")).toHaveValue(imported.name);
-    expect(api.selectTheme).not.toHaveBeenCalled();
-  });
-
-  it("retains the draft when importing invalid JSON and allows the same file to be retried", async () => {
-    const read = vi.fn().mockResolvedValue("invalid json");
-    const file = Object.assign(new File([], "theme.json"), { text: read });
-    render(<ThemeManagerScreen />);
-    fireEvent.change(screen.getByLabelText("主题名称"), { target: { value: "保留草稿" } });
-    const input = screen.getByLabelText("导入主题 JSON 文件");
-    fireEvent.change(input, { target: { files: [file] } });
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "放弃更改" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("JSON 文件格式无效");
-    expect(api.importThemes).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("主题名称")).toHaveValue("保留草稿");
-    read.mockResolvedValueOnce('\uFEFF{"schemaVersion":1}');
-    api.importThemes.mockRejectedValueOnce(Object.assign(new Error("conflict"), { status: 409 }));
-    fireEvent.change(input, { target: { files: [file] } });
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "放弃更改" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("其他页面更新"));
-    expect(api.importThemes).toHaveBeenCalledWith({ schemaVersion: 1 }, 1);
-    expect(screen.getByLabelText("主题名称")).toHaveValue("保留草稿");
-    expect(input).toHaveValue("");
+    expect(screen.queryByLabelText("导入主题 JSON 文件")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建主题" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制主题" })).not.toBeInTheDocument();
+    expect(screen.getByText("预置主题由应用版本统一提供，管理员也不能编辑、导入或删除。")).toBeInTheDocument();
   });
 
   it("keeps edits local, retains the last valid preview for invalid input, and discards without a write", async () => {
@@ -305,7 +279,7 @@ describe("全局主题管理", () => {
     );
   });
 
-  it("edits and activates the builtin theme directly", async () => {
+  it("keeps the builtin theme read-only", async () => {
     api.library = {
       schemaVersion: 1,
       scope: "global",
@@ -314,40 +288,13 @@ describe("全局主题管理", () => {
       themes: [BUILTIN_THEME],
     };
     render(<ThemeManagerScreen />);
-    expect(hexInput()).toBeEnabled();
+    expect(hexInput()).toBeDisabled();
     expect(screen.queryByRole("button", { name: "复制后编辑" })).not.toBeInTheDocument();
     expect(api.createTheme).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("主题名称"), {
-      target: { value: "夜读" },
-    });
-    fireEvent.change(screen.getByLabelText("明暗模式"), {
-      target: { value: "dark" },
-    });
+    expect(screen.getByText("该主题是随应用发布的预置主题，内容由版本固定。")).toBeInTheDocument();
     fireEvent.change(hexInput(), { target: { value: "#223344" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
-    expect(await screen.findByText("主题已保存并应用。")).toBeInTheDocument();
-    expect(api.updateTheme).toHaveBeenCalledExactlyOnceWith(BUILTIN_THEME.id, {
-      schemaVersion: 1,
-      expectedRevision: 1,
-      name: "夜读",
-      appearance: {
-        colors: {
-          scheme: "dark",
-          overrides: { [colorToken.key]: "#223344FF" },
-        },
-        typography: {
-          chatBodyFontFamily: "sans",
-          chatBodyFontSize: "medium",
-          chatBodyLineHeight: "normal",
-          chatBodyParagraphSpacing: "normal",
-        },
-        illustrations: BUILTIN_THEME.appearance.illustrations,
-      },
-      activate: true,
-    });
+    expect(api.updateTheme).not.toHaveBeenCalled();
     expect(api.selectTheme).not.toHaveBeenCalled();
-    expect(api.createTheme).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "已应用" })).toBeDisabled();
   });
 
   it("saves chat reading settings inside the theme appearance", async () => {

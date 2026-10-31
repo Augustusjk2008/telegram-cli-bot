@@ -27,13 +27,11 @@ function validateLibrary(library: ThemeLibrary): ThemeLibrary {
   for (const theme of library.themes) {
     if (!theme || typeof theme.id !== "string" || !theme.id || ids.has(theme.id)
       || typeof theme.name !== "string" || !theme.name.trim() || theme.baseId !== BUILTIN_THEME.id
-      || typeof theme.readonly !== "boolean" || (theme.id !== BUILTIN_THEME.id && theme.readonly)) throw new Error("主题库包含无效的主题信息");
+      || theme.readonly !== true) throw new Error("主题库包含无效的预置主题信息");
     ids.add(theme.id);
     resolveAppearance(theme);
   }
-  const normalizedThemes = library.themes.map((theme) =>
-    theme.id === BUILTIN_THEME.id ? { ...theme, readonly: false } : theme,
-  );
+  const normalizedThemes = library.themes.map((theme) => ({ ...theme, readonly: true as const }));
   const themes = [
     normalizedThemes.find((theme) => theme.id === BUILTIN_THEME.id) || BUILTIN_THEME,
     ...normalizedThemes.filter((theme) => theme.id !== BUILTIN_THEME.id),

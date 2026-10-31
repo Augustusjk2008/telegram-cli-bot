@@ -311,7 +311,7 @@ export default defineConfig(({mode}) => {
       buildSources[relative] = createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
     }
   }
-  for (const relative of ['VERSION', 'bot/web/theme_catalog.json', 'front/src', 'front/public',
+  for (const relative of ['VERSION', 'bot/web/theme_catalog.json', 'bot/web/theme_presets.json', 'front/src', 'front/public',
     'front/scripts', 'front/index.html', 'front/vite.config.ts', 'front/package.json',
     'front/package-lock.json', 'front/tsconfig.json']) recordBuildSource(relative);
   return {

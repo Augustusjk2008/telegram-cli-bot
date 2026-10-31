@@ -31,6 +31,10 @@ $script:RequiredReleaseLegalFiles = @(
     "CONTRIBUTING.md",
     "front/dist/THIRD_PARTY_LICENSES.txt"
 )
+$script:RequiredThemeFiles = @(
+    "bot/web/theme_presets.json",
+    "bot/web/theme_illustrations.json"
+)
 
 function Write-Step {
     param([string]$Message)
@@ -176,6 +180,21 @@ function Assert-ReleaseLegalFilesInStage {
     }
 }
 
+function Assert-ThemeFilesInStage {
+    param([string]$StageDir)
+
+    $missing = @(
+        foreach ($relativePath in $script:RequiredThemeFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $StageDir $relativePath) -PathType Leaf)) {
+                $relativePath
+            }
+        }
+    )
+    if ($missing.Count -gt 0) {
+        throw "绿色包暂存区缺少预置主题文件: $($missing -join ', ')"
+    }
+}
+
 function Assert-PortableRuntimeLicenseFiles {
     param([string]$PackageRoot)
 
@@ -238,6 +257,7 @@ function Copy-WorktreeFiles {
     [void](New-Item -ItemType Directory -Path $frontDistTarget -Force)
     Copy-Item -Path (Join-Path $frontDist "*") -Destination $frontDistTarget -Recurse -Force
 
+    Assert-ThemeFilesInStage -StageDir $DestinationRoot
     Export-ReleaseAnnouncements -DestinationRoot $DestinationRoot
     Assert-ReleaseLegalFilesInStage -StageDir $DestinationRoot
 }

@@ -10,7 +10,7 @@ from bot.web.api_common import WebApiError
 from bot.web.auth_store import ROLE_GUEST
 from bot.web.routes.app_keys import SERVER_APP_KEY
 from bot.web.theme_asset_store import ThemeAssetStoreError
-from bot.web.theme_store import ThemeStoreError
+from bot.web.theme_store import THEME_READONLY_MESSAGE, ThemeStoreError
 
 
 async def _dispatch(request: web.Request, operation: str) -> web.Response:
@@ -22,6 +22,8 @@ async def _dispatch(request: web.Request, operation: str) -> web.Response:
         else:
             if auth.role == ROLE_GUEST or auth.account_id == "guest":
                 raise WebApiError(403, "theme_readonly", "请登录正式账户后管理主题")
+            if operation in {"create", "import_themes", "update", "delete"}:
+                raise WebApiError(403, "theme_readonly", THEME_READONLY_MESSAGE)
             payload = await server._parse_json(request)
             method = getattr(server.theme_store, operation)
             args = []
@@ -66,43 +68,7 @@ async def post_asset(request: web.Request) -> web.Response:
     auth = await server._with_auth(request)
     if auth.role == ROLE_GUEST or auth.account_id == "guest":
         raise WebApiError(403, "theme_readonly", "请登录正式账户后管理主题")
-    try:
-        mime_type = ""
-        data: bytes | None = None
-        if request.content_type.startswith("multipart/"):
-            reader = await request.multipart()
-            field = await reader.next()
-            if field is None or field.name != "file":
-                raise WebApiError(400, "missing_file", "请使用 multipart/form-data 并提供 file 字段")
-            mime_type = str(field.headers.get("Content-Type") or "")
-            chunks: list[bytes] = []
-            total = 0
-            while True:
-                chunk = await field.read_chunk(64 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > 4 * 1024 * 1024:
-                    raise WebApiError(413, "theme_asset_too_large", "单张插画不能超过 4 MiB")
-                chunks.append(chunk)
-            data = b"".join(chunks)
-        else:
-            body = await server._parse_json(request)
-            mime_type = str(body.get("mimeType") or "")
-            encoded = body.get("data")
-            if not isinstance(encoded, str) or not encoded.startswith("data:"):
-                raise WebApiError(400, "invalid_theme_asset", "上传插画数据无效")
-            import base64
-            _, payload = encoded.split(",", 1)
-            data = base64.b64decode(payload, validate=True)
-        descriptor = await asyncio.to_thread(server.theme_store.asset_store.store, data or b"", mime_type or None)
-    except WebApiError:
-        raise
-    except (ValueError, UnicodeError) as exc:
-        raise WebApiError(400, "invalid_theme_asset", "上传插画数据无效") from exc
-    except ThemeAssetStoreError as exc:
-        raise WebApiError(exc.status, exc.code, exc.message, exc.data) from exc
-    return web.json_response({"ok": True, "data": descriptor})
+    raise WebApiError(403, "theme_readonly", THEME_READONLY_MESSAGE)
 
 
 async def get_asset(request: web.Request) -> web.Response:

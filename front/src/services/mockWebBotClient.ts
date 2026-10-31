@@ -1,4 +1,5 @@
 import themeCatalog from "../../../bot/web/theme_catalog.json";
+import themePresets from "../../../bot/web/theme_presets.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { DEFAULT_CHAT_TYPOGRAPHY, isChatTypography, normalizeChatTypography } from "../theme/chatTypography";
 import { normalizeIllustrations } from "../theme/resolveAppearance";
@@ -3453,38 +3454,39 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private builtinUiThemes(): ThemeLibrary {
-    return {
-      schemaVersion: 1,
-      scope: "global",
-      revision: 0,
-      selectedThemeId: "paper-daylight",
-      themes: [{
-        schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight",
-        appearance: { colors: { scheme: "light", overrides: {} }, typography: DEFAULT_CHAT_TYPOGRAPHY, illustrations: normalizeIllustrations(undefined) }, readonly: false,
-        updatedAt: "1970-01-01T00:00:00Z", version: 1,
-      }],
-    };
+    return structuredClone(themePresets as unknown as ThemeLibrary);
   }
 
   private uiThemeLibrary(requireAuth = true): ThemeLibrary {
     if (requireAuth && !this.session.isLoggedIn) {
       throw new WebApiClientError("请先登录", { status: 401, code: "unauthorized" });
     }
-    let library: ThemeLibrary;
+    let state: Partial<ThemeLibrary> = {};
     try {
       const raw = localStorage.getItem("web-mock-ui-themes:global:v1");
-      library = raw ? JSON.parse(raw) : this.builtinUiThemes();
+      const parsed = raw ? JSON.parse(raw) : {};
+      state = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
     } catch {
-      library = MockWebBotClient.uiThemeMemory || this.builtinUiThemes();
+      state = MockWebBotClient.uiThemeMemory || {};
     }
-    if (library.scope !== "global" || library.schemaVersion !== 1) {
+    const library = this.builtinUiThemes();
+    const selectedThemeId = typeof state.selectedThemeId === "string"
+      && library.themes.some((theme) => theme.id === state.selectedThemeId)
+      ? state.selectedThemeId
+      : library.selectedThemeId;
+    const revision = Number.isSafeInteger(state.revision) && (state.revision as number) >= 0
+      ? state.revision as number
+      : library.revision;
+    if ((state.scope !== undefined && state.scope !== "global")
+      || (state.schemaVersion !== undefined && state.schemaVersion !== 1)) {
       throw new WebApiClientError("全局主题库格式不受支持", { status: 400, code: "unsupported_theme_schema" });
     }
     return structuredClone({
       ...library,
+      revision,
+      selectedThemeId,
       themes: library.themes.map((theme) => ({
         ...theme,
-        readonly: theme.id === "paper-daylight" ? false : theme.readonly,
         appearance: this.uiThemeAppearance(theme.appearance),
       })),
     });
@@ -3576,111 +3578,23 @@ export class MockWebBotClient implements WebBotClient {
     if (this.session.role === "guest" || this.currentAccountId() === "guest") {
       throw new WebApiClientError("请登录正式账户后管理全局主题", { status: 403, code: "theme_readonly" });
     }
-    const descriptor = await themeAssetDescriptor(file);
-    MockWebBotClient.uiThemeAssets.set(descriptor.assetId, { bytes: await file.arrayBuffer(), mimeType: file.type });
-    return descriptor;
+    throw new WebApiClientError("预置主题由应用发布，不能修改", { status: 403, code: "theme_readonly" });
   }
 
   async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
-    this.uiThemeInput(input, true);
-    return this.mutateUiThemes(input.expectedRevision, (library) => {
-      const source = this.findUiTheme(library, input.sourceId);
-      const theme: UiTheme = {
-        schemaVersion: 1, id: `theme_${crypto.randomUUID().replaceAll("-", "")}`,
-        name: this.uiThemeName(input.name), baseId: "paper-daylight",
-        appearance: this.uiThemeAppearance(input.appearance === undefined ? source.appearance : input.appearance),
-        readonly: false, updatedAt: new Date().toISOString(), version: 1,
-      };
-      library.themes.push(theme);
-      if (input.activate) library.selectedThemeId = theme.id;
-    });
+    throw new WebApiClientError("预置主题由应用发布，不能修改", { status: 403, code: "theme_readonly" });
   }
 
   async importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary> {
-    if (input.assets !== undefined) {
-      if (!Array.isArray(input.assets) || input.assets.length > 100) {
-        throw new WebApiClientError("主题包资源数量无效", { status: 400, code: "invalid_theme" });
-      }
-      for (const asset of input.assets) {
-        if (!THEME_ASSET_MIMES.includes(asset.mimeType as typeof THEME_ASSET_MIMES[number])) {
-          throw new WebApiClientError("主题包资源格式无效", { status: 400, code: "invalid_theme" });
-        }
-        const bytes = themeAssetBytes(asset.data, asset.mimeType);
-        themeAssetDimensions(bytes, asset.mimeType);
-        const digest = await crypto.subtle.digest("SHA-256", bytes);
-        const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
-        if (asset.assetId !== `asset_${hash}`) {
-          throw new WebApiClientError("主题包资源哈希与 ID 不匹配", { status: 400, code: "theme_asset_integrity_invalid" });
-        }
-        MockWebBotClient.uiThemeAssets.set(asset.assetId, { bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), mimeType: asset.mimeType });
-      }
-    }
-    return this.mutateUiThemes(input.expectedRevision, (library) => {
-      const object = (value: unknown, fields: string[]): Record<string, unknown> => {
-        if (!value || typeof value !== "object" || Array.isArray(value)
-          || Object.keys(value).some((key) => !fields.includes(key))
-          || fields.some((key) => !Object.hasOwn(value, key))) {
-          throw new WebApiClientError("主题 JSON 包含不支持的字段或缺少必要字段", { status: 400, code: "invalid_theme" });
-        }
-        return value as Record<string, unknown>;
-      };
-      const schema = (value: Record<string, unknown>) => {
-        if (value.schemaVersion !== 1) throw new WebApiClientError("不支持此主题数据版本，请更新应用后重试", { status: 400, code: "unsupported_theme_schema" });
-      };
-      if (Object.keys(input).some((key) => !["expectedRevision", "document", "assets"].includes(key))
-        || !Object.hasOwn(input, "expectedRevision") || !Object.hasOwn(input, "document")) {
-        throw new WebApiClientError("主题导入请求包含不支持的字段或缺少必要字段", { status: 400, code: "invalid_theme" });
-      }
-      let items: unknown[];
-      if (input.document && typeof input.document === "object" && "themes" in input.document) {
-        const pack = object(input.document, ["schemaVersion", "themes"]);
-        schema(pack);
-        if (!Array.isArray(pack.themes) || !pack.themes.length) throw new WebApiClientError("主题包须包含至少一个主题", { status: 400, code: "invalid_theme" });
-        items = pack.themes;
-      } else items = [input.document];
-      const names = new Set(library.themes.map((theme) => theme.name));
-      const imported = items.map((item): UiTheme => {
-        const value = object(item, ["schemaVersion", "name", "baseId", "appearance"]);
-        schema(value);
-        if (value.baseId !== "paper-daylight") throw new WebApiClientError("主题基准须为纸感日间", { status: 400, code: "invalid_theme" });
-        const original = this.uiThemeName(value.name as string);
-        let name = original;
-        for (let index = 2; names.has(name); index += 1) {
-          const suffix = ` (${index})`;
-          name = `${Array.from(original).slice(0, 80 - suffix.length).join("")}${suffix}`;
-        }
-        names.add(name);
-        return {
-          schemaVersion: 1, id: `theme_${crypto.randomUUID().replaceAll("-", "")}`,
-          name, baseId: "paper-daylight", appearance: this.uiThemeAppearance(value.appearance as ThemeAppearance),
-          readonly: false, updatedAt: new Date().toISOString(), version: 1,
-        };
-      });
-      library.themes.push(...imported);
-    });
+    throw new WebApiClientError("预置主题由应用发布，不能修改", { status: 403, code: "theme_readonly" });
   }
 
   async updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary> {
-    this.uiThemeInput(input, false);
-    return this.mutateUiThemes(input.expectedRevision, (library) => {
-      const theme = this.findUiTheme(library, id, true);
-      if ("name" in input) theme.name = this.uiThemeName(input.name);
-      if ("appearance" in input) theme.appearance = this.uiThemeAppearance(input.appearance);
-      theme.updatedAt = new Date().toISOString();
-      theme.version += 1;
-      if (input.activate) library.selectedThemeId = id;
-    });
+    throw new WebApiClientError("预置主题由应用发布，不能修改", { status: 403, code: "theme_readonly" });
   }
 
   async deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
-    return this.mutateUiThemes(expectedRevision, (library) => {
-      if (id === "paper-daylight") {
-        throw new WebApiClientError("默认主题不可删除", { status: 403, code: "theme_readonly" });
-      }
-      this.findUiTheme(library, id, true);
-      library.themes = library.themes.filter((theme) => theme.id !== id);
-      if (library.selectedThemeId === id) library.selectedThemeId = "paper-daylight";
-    });
+    throw new WebApiClientError("预置主题由应用发布，不能修改", { status: 403, code: "theme_readonly" });
   }
 
   async selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {

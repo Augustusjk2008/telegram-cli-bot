@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import base64
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,15 +19,27 @@ def api(tmp_path, monkeypatch):
     server.manager = SimpleNamespace(main_profile=SimpleNamespace(alias="main"), managed_profiles={})
     server.theme_store = ThemeStore(tmp_path / "themes" / "library.json")
     sessions = {
-        key: WebAuthSession(token=key, account=WebAccount(account_id=key, username=key,
-            role="guest" if key == "guest" else "member", session_user_id=index),
-            created_at="2026-10-22T00:00:00Z", capabilities=(CAP_ADMIN_OPS,) if key == "admin" else ())
-        for index, key in enumerate(("alice", "bob", "admin", "guest"), start=100)
+        key: WebAuthSession(
+            token=key,
+            account=WebAccount(
+                account_id=key,
+                username=key,
+                role="guest" if key == "guest" else "member",
+                session_user_id=index,
+            ),
+            created_at="2026-10-22T00:00:00Z",
+            capabilities=(CAP_ADMIN_OPS,) if key == "admin" else (),
+        )
+        for index, key in enumerate(("alice", "admin", "guest"), start=100)
     }
-    monkeypatch.setattr(server_module, "_WEB_AUTH_STORE", SimpleNamespace(
-        get_session=lambda token: sessions.get(token), can_bootstrap_without_auth=lambda: False))
+    monkeypatch.setattr(
+        server_module,
+        "_WEB_AUTH_STORE",
+        SimpleNamespace(get_session=lambda token: sessions.get(token), can_bootstrap_without_auth=lambda: False),
+    )
     monkeypatch.setattr(server_module, "_BOT_PERMISSION_STORE", SimpleNamespace(
-        allowed_bots_for_account=lambda account: set(), owned_bot_aliases=lambda account: set()))
+        allowed_bots_for_account=lambda account: set(), owned_bot_aliases=lambda account: set(),
+    ))
     monkeypatch.setattr(server_module, "_is_loopback_auto_auth_allowed", lambda request: False)
     monkeypatch.setattr(server_module, "WEB_API_TOKEN", "")
     monkeypatch.setattr(server_module, "WEB_BASE_PATH", "/node/theme-test")
@@ -49,509 +59,84 @@ async def request(api, method, path="/api/ui/themes", *, token="alice", body=Non
     return response.status, json.loads(response.text)
 
 
-def create_input(**changes):
-    return {"schemaVersion": 1, "expectedRevision": 0, "sourceId": "paper-daylight", "name": "个人主题", **changes}
-
-
-def import_input(**changes):
-    return {"expectedRevision": 0, "document": {
-        "schemaVersion": 1, "name": "导入主题", "baseId": "paper-daylight",
-        "appearance": {"colors": {"scheme": "light", "overrides": {}}},
-    }, **changes}
-
-
-def illustration_input(**changes):
-    set_id = changes.pop("setId", "forest-grove")
-    catalog = json.loads((Path(__file__).parents[1] / "bot" / "web" / "theme_illustrations.json").read_text(encoding="utf-8"))
-    if set_id not in catalog["sets"]:
-        return {
-            "setId": set_id,
-            "opacity": 0.18,
-            "surfaces": {"workbench": True, "chat": True, "topbar": False, "management": True},
-            **changes,
-        }
-    scenes = {}
-    for surface, resource in catalog["sets"][set_id].items():
-        scenes[surface] = {"layers": [{
-            **{key: value for key, value in layer.items() if key != "asset"},
-            "asset": {"kind": "builtin", **{key: value for key, value in layer["asset"].items() if key != "path"}},
-        } for layer in resource["layers"]]}
+def create_input() -> dict:
     return {
-        "opacity": 0.18,
-        "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
-        "scenes": scenes,
-        **changes,
-    }
-
-
-UPLOAD_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-
-
-def uploaded_illustration_input(**changes):
-    asset = changes.pop("asset")
-    return {
-        "opacity": 0.18,
-        "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
-        "scenes": {surface: {"layers": [{
-            "id": f"{surface}-uploaded",
-            "asset": dict(asset),
-            "anchor": "center",
-            "width": 100,
-            "height": 100,
-            "objectPosition": "50% 50%",
-            "enabled": True,
-        }]} for surface in ("workbench", "adminCenter", "agentManager")},
-        **changes,
-    }
-
-
-def stored_upload(api):
-    raw = base64.b64decode(UPLOAD_PNG.split(",", 1)[1])
-    return api.server.theme_store.asset_store.store(raw, "image/png")
-
-
-@pytest.mark.asyncio
-async def test_member_imports_single_and_bundle_through_registered_routes(api):
-    status, imported = await request(api, "POST", "/node/theme-test/api/ui/themes/import", body=import_input())
-    assert status == 200 and imported["ok"] is True
-    status, shared = await request(api, "GET", token="bob")
-    assert status == 200 and shared == imported
-    themes = [import_input()["document"], import_input()["document"]]
-    status, imported = await request(api, "POST", "/api/ui/themes/import", token="bob", body=import_input(
-        expectedRevision=1, document={"schemaVersion": 1, "themes": themes}))
-    assert status == 200 and len(imported["data"]["themes"]) == 4
-    status, shared = await request(api, "GET")
-    assert status == 200 and shared == imported
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("enum_value", [[], {}])
-async def test_import_non_string_typography_returns_400_without_writing(api, enum_value):
-    body = import_input()
-    body["document"]["appearance"]["typography"] = {
-        "chatBodyFontFamily": enum_value, "chatBodyFontSize": "medium",
-        "chatBodyLineHeight": "normal", "chatBodyParagraphSpacing": "normal",
-    }
-    status, payload = await request(api, "POST", "/api/ui/themes/import", body=body)
-    assert status == 400 and payload["error"]["code"] == "invalid_theme"
-    assert not api.server.theme_store.library_path.exists()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("body", [
-    {"document": import_input()["document"]},
-    import_input(expectedRevision=True),
-    import_input(activate=True),
-    import_input(document={"schemaVersion": 2, "themes": [import_input()["document"]]}),
-])
-async def test_import_request_validation_returns_400(api, body):
-    status, payload = await request(api, "POST", "/api/ui/themes/import", body=body)
-    assert status == 400 and payload["ok"] is False
-    assert not api.server.theme_store.library_path.exists()
-
-
-@pytest.mark.asyncio
-async def test_authenticated_member_crud_works_without_bot_or_admin_permissions(api):
-    status, payload = await request(api, "GET", "/node/theme-test/api/ui/themes")
-    assert status == 200 and payload["data"]["revision"] == 0
-    status, payload = await request(api, "POST", body=create_input(activate=True))
-    assert status == 200
-    library = payload["data"]
-    assert library["scope"] == "global" and "accountId" not in library
-    theme_id = library["themes"][1]["id"]
-    assert library["selectedThemeId"] == theme_id
-    for token in ("alice", "bob", "admin", "guest"):
-        status, shared = await request(api, "GET", token=token)
-        assert status == 200 and shared["data"] == library
-    status, payload = await request(api, "PATCH", f"/api/ui/themes/{theme_id}", token="bob", body={
-        "schemaVersion": 1, "expectedRevision": 1, "name": "修改后的名字",
-        "appearance": {"colors": {"scheme": "dark", "overrides": {"surface.base": "#123456"}}},
-    })
-    assert status == 200 and payload["data"]["themes"][1]["appearance"]["colors"]["overrides"] == {"surface.base": "#123456FF"}
-    _, shared = await request(api, "GET", token="alice")
-    assert shared == payload
-    status, payload = await request(api, "PATCH", "/api/ui/theme-selection", body={"themeId": "paper-daylight", "expectedRevision": 2})
-    assert status == 200 and payload["data"]["selectedThemeId"] == "paper-daylight"
-    status, payload = await request(api, "PATCH", "/api/ui/theme-selection", token="bob", body={"themeId": theme_id, "expectedRevision": 3})
-    assert status == 200 and payload["data"]["selectedThemeId"] == theme_id
-    _, shared = await request(api, "GET", token="alice")
-    assert shared == payload
-    status, payload = await request(api, "DELETE", f"/api/ui/themes/{theme_id}", token="bob", body={"expectedRevision": 4})
-    assert status == 200 and payload["data"]["selectedThemeId"] == "paper-daylight"
-    assert payload["data"]["revision"] == 5 and len(payload["data"]["themes"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_illustrations_are_saved_updated_and_preserved_by_import_export(api):
-    appearance = {
-        "colors": {"scheme": "light", "overrides": {}},
-        "illustrations": illustration_input(),
-    }
-    status, created = await request(api, "POST", body=create_input(appearance=appearance, activate=True))
-    assert status == 200
-    theme = created["data"]["themes"][1]
-    assert theme["appearance"]["illustrations"] == illustration_input()
-
-    status, updated = await request(api, "PATCH", f"/api/ui/themes/{theme['id']}", body={
         "schemaVersion": 1,
-        "expectedRevision": 1,
-        "appearance": {
-            "colors": {"scheme": "dark", "overrides": {}},
-            "illustrations": illustration_input(setId="moonlit-garden", opacity=0.25),
-        },
-    })
-    assert status == 200
-    saved = updated["data"]["themes"][1]["appearance"]["illustrations"]
-    assert saved["opacity"] == 0.25
-    assert saved["scenes"]["workbench"]["layers"][0]["asset"]["assetId"] == "moonlit-garden-workbench"
-
-    document = updated["data"]["themes"][1]
-    status, imported = await request(api, "POST", "/api/ui/themes/import", body={
-        "expectedRevision": 2,
-        "document": {
-            "schemaVersion": 1,
-            "name": "导出再导入",
-            "baseId": "paper-daylight",
-            "appearance": document["appearance"],
-        },
-    })
-    assert status == 200
-    assert imported["data"]["themes"][-1]["appearance"]["illustrations"] == saved
-
-
-@pytest.mark.asyncio
-async def test_legacy_illustrations_migrate_to_scene_assets_on_save(api):
-    legacy = {
-        "setId": "upload",
-        "upload": {"mimeType": "image/png", "data": UPLOAD_PNG},
-        "opacity": 0.12,
-        "surfaces": {"workbench": True, "chat": False, "topbar": False, "management": False},
-    }
-    status, created = await request(api, "POST", body=create_input(appearance={
-        "colors": {"scheme": "light", "overrides": {}}, "illustrations": legacy,
-    }))
-    assert status == 200
-    saved = created["data"]["themes"][1]["appearance"]["illustrations"]
-    assert saved["scenes"]["workbench"]["layers"][0]["asset"]["kind"] == "uploaded"
-    assert saved["scenes"]["workbench"]["layers"][0]["asset"]["width"] == 1
-    assert saved["scenes"]["adminCenter"]["layers"][0]["asset"] == saved["scenes"]["workbench"]["layers"][0]["asset"]
-
-
-@pytest.mark.asyncio
-async def test_previous_forest_single_assets_migrate_to_current_layer_groups(api):
-    legacy_scenes = {
-        surface: {
-            "kind": "builtin",
-            "assetId": f"forest-grove-{filename}",
-            "mimeType": "image/webp",
-            "width": 1600,
-            "height": 900,
-            "sha256": "0" * 64,
-        }
-        for surface, filename in (("workbench", "workbench"), ("adminCenter", "admin-center"), ("agentManager", "agent-manager"))
-    }
-    status, created = await request(api, "POST", body=create_input(appearance={
-        "colors": {"scheme": "light", "overrides": {}},
-        "illustrations": {
-            "opacity": 0.12,
-            "surfaces": {"workbench": True, "adminCenter": True, "agentManager": True},
-            "scenes": legacy_scenes,
-        },
-    }))
-    assert status == 200
-    saved = created["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]
-    assert [len(saved[surface]["layers"]) for surface in ("workbench", "adminCenter", "agentManager")] == [5, 3, 3]
-
-
-@pytest.mark.asyncio
-async def test_uploaded_illustrations_are_part_of_the_theme_and_survive_roundtrip(api):
-    asset = stored_upload(api)
-    appearance = {
-        "colors": {"scheme": "light", "overrides": {}},
-        "illustrations": uploaded_illustration_input(asset=asset),
-    }
-    status, created = await request(api, "POST", body=create_input(appearance=appearance))
-    assert status == 200
-    saved = created["data"]["themes"][1]["appearance"]["illustrations"]
-    assert saved == uploaded_illustration_input(asset=asset)
-
-    status, imported = await request(api, "POST", "/api/ui/themes/import", body={
-        "expectedRevision": 1,
-        "document": {
-            "schemaVersion": 1,
-            "name": "上传插画副本",
-            "baseId": "paper-daylight",
-            "appearance": {"colors": {"scheme": "light", "overrides": {}}, "illustrations": saved},
-        },
-    })
-    assert status == 200
-    assert imported["data"]["themes"][-1]["appearance"]["illustrations"] == saved
-
-
-@pytest.mark.asyncio
-async def test_theme_asset_upload_route_validates_content_and_rejects_guests(api):
-    status, payload = await request(
-        api,
-        "POST",
-        "/api/ui/theme-assets",
-        body={"mimeType": "image/png", "data": UPLOAD_PNG},
-        headers={"Content-Type": "application/json"},
-    )
-    assert status == 200
-    asset = payload["data"]
-    assert asset["kind"] == "uploaded" and asset["width"] == 1 and asset["height"] == 1
-    assert api.server.theme_store.asset_store._path(asset["assetId"], asset["mimeType"]).exists()
-
-    status, payload = await request(
-        api,
-        "POST",
-        "/api/ui/theme-assets",
-        token="guest",
-        body={"mimeType": "image/png", "data": UPLOAD_PNG},
-        headers={"Content-Type": "application/json"},
-    )
-    assert status == 403 and payload["error"]["code"] == "theme_readonly"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("mime_type", "data", "status_code"), [
-    ("image/jpeg", UPLOAD_PNG, 400),
-    ("image/png", "data:image/png;base64,AAAA", 400),
-    ("image/png", "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode(), 400),
-    ("image/png", "too-large", 413),
-])
-async def test_theme_asset_upload_route_rejects_invalid_content(api, mime_type, data, status_code):
-    if data == "too-large":
-        data = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * (4 * 1024 * 1024)).decode()
-    status, payload = await request(
-        api,
-        "POST",
-        "/api/ui/theme-assets",
-        body={"mimeType": mime_type, "data": data},
-        headers={"Content-Type": "application/json"},
-    )
-    assert status == status_code and payload["ok"] is False
-    assert not api.server.theme_store.asset_store.root.exists()
-
-
-@pytest.mark.asyncio
-async def test_theme_package_import_stages_assets_before_publishing(api):
-    raw = base64.b64decode(UPLOAD_PNG.split(",", 1)[1])
-    descriptor = api.server.theme_store.asset_store.describe(raw, "image/png")
-    document = {
-        "schemaVersion": 1,
-        "name": "资源包主题",
-        "baseId": "paper-daylight",
-        "appearance": {"colors": {"scheme": "light", "overrides": {}}, "illustrations": uploaded_illustration_input(asset=descriptor)},
-    }
-    status, payload = await request(api, "POST", "/api/ui/themes/import", body={
         "expectedRevision": 0,
-        "document": document,
-        "assets": [{"assetId": descriptor["assetId"], "mimeType": descriptor["mimeType"], "data": UPLOAD_PNG}],
-    })
-    assert status == 200
-    assert payload["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]["workbench"]["layers"][0]["asset"] == descriptor
-    assert api.server.theme_store.asset_store._path(descriptor["assetId"], descriptor["mimeType"]).exists()
-
-    invalid = {"expectedRevision": 1, "document": {"schemaVersion": 1, "name": "缺少基准", "appearance": document["appearance"]},
-               "assets": [{"assetId": descriptor["assetId"], "mimeType": descriptor["mimeType"], "data": UPLOAD_PNG}]}
-    before = api.server.theme_store.library_path.read_bytes()
-    status, payload = await request(api, "POST", "/api/ui/themes/import", body=invalid)
-    assert status == 400 and payload["ok"] is False
-    assert api.server.theme_store.library_path.read_bytes() == before
+        "sourceId": "paper-daylight",
+        "name": "个人主题",
+    }
 
 
-@pytest.mark.asyncio
-async def test_legacy_theme_appearance_gets_default_illustrations(api):
-    path = api.server.theme_store.library_path
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({
-        "schemaVersion": 1,
-        "scope": "global",
-        "revision": 4,
-        "selectedThemeId": "theme_0123456789abcdef0123456789abcdef",
-        "themes": [{
+def import_input() -> dict:
+    return {
+        "expectedRevision": 0,
+        "document": {
             "schemaVersion": 1,
-            "id": "theme_0123456789abcdef0123456789abcdef",
-            "name": "旧主题",
+            "name": "导入主题",
             "baseId": "paper-daylight",
             "appearance": {"colors": {"scheme": "light", "overrides": {}}},
-            "readonly": False,
-            "updatedAt": "2026-10-22T00:00:00Z",
-            "version": 1,
-        }],
-    }), encoding="utf-8")
-
-    status, payload = await request(api, "GET")
-    assert status == 200
-    assert payload["data"]["themes"][1]["appearance"]["illustrations"]["opacity"] == 0
-    assert set(payload["data"]["themes"][1]["appearance"]["illustrations"]["scenes"]) == {
-        "workbench", "adminCenter", "agentManager",
+        },
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("illustrations", [
-    illustration_input(setId="unknown-set"),
-    illustration_input(opacity=-0.01),
-    illustration_input(opacity=0.26),
-    {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "extra": True}},
-    {**illustration_input(), "surfaces": {**illustration_input()["surfaces"], "adminCenter": "yes"}},
-    {**illustration_input(), "scenes": {**illustration_input()["scenes"], "workbench": {"kind": "uploaded"}}},
-    {**illustration_input(), "scenes": {**illustration_input()["scenes"], "adminCenter": {
-        **illustration_input()["scenes"]["adminCenter"], "mimeType": "image/jpeg",
-    }}},
-    {"setId": "upload", "opacity": 0.1, "surfaces": {"workbench": True, "chat": False, "topbar": False, "management": False}},
-])
-async def test_invalid_illustrations_are_rejected_without_writing(api, illustrations):
-    status, payload = await request(api, "POST", body=create_input(appearance={
-        "colors": {"scheme": "light", "overrides": {}},
-        "illustrations": illustrations,
-    }))
-    assert status == 400 and payload["error"]["code"] == "invalid_theme"
-    assert not api.server.theme_store.library_path.exists()
+async def test_public_and_authenticated_reads_return_the_packaged_presets(api):
+    status, public = await request(api, "GET", "/api/public/ui/themes", token="")
+    assert status == 200
+    assert [theme["name"] for theme in public["data"]["themes"]] == [
+        "纸感日间", "雾蓝清晨", "青松纸笺", "暮海深蓝", "紫雾夜航",
+    ]
+    assert all(theme["readonly"] is True for theme in public["data"]["themes"])
+
+    status, authenticated = await request(api, "GET")
+    assert status == 200 and authenticated["data"] == public["data"]
 
 
 @pytest.mark.asyncio
-async def test_account_headers_and_queries_do_not_select_a_library(api):
-    _, created = await request(api, "POST", body=create_input())
-    for account in ("bob", "admin"):
-        status, payload = await request(api, "GET", "/api/ui/themes?accountId=alice&user_id=100", token=account,
-                                        headers={"X-User-Id": "100", "X-Account-Id": "alice", "X-UI-Account-ID": "alice"})
-        assert status == 200 and payload == created
-        status, payload = await request(api, "POST", token=account, body=create_input(accountId="alice"))
-        assert status == 400
-    status, copied = await request(api, "POST", token="bob", body=create_input(
-        expectedRevision=1, sourceId=created["data"]["themes"][1]["id"], name="共享副本"))
-    assert status == 200 and len(copied["data"]["themes"]) == 3
-    _, payload = await request(api, "GET", token="alice")
-    assert payload == copied
+async def test_members_and_admins_can_select_but_cannot_modify_presets(api):
+    _, listed = await request(api, "GET")
+    selected_id = listed["data"]["themes"][-1]["id"]
+    status, selected = await request(api, "PATCH", "/api/ui/theme-selection", body={
+        "themeId": selected_id,
+        "expectedRevision": listed["data"]["revision"],
+    })
+    assert status == 200 and selected["data"]["selectedThemeId"] == selected_id
 
-
-@pytest.mark.asyncio
-async def test_guests_read_global_library_and_unauthenticated_requests_use_host_auth(api):
-    _, created = await request(api, "POST", body=create_input(activate=True))
-    status, payload = await request(api, "GET", token="guest")
-    assert status == 200 and payload == created
-    before = api.server.theme_store.library_path.read_bytes()
-    for method, path, body in (
+    operations = [
         ("POST", "/api/ui/themes", create_input()),
         ("POST", "/api/ui/themes/import", import_input()),
-        ("PATCH", "/api/ui/themes/paper-daylight", {"schemaVersion": 1, "expectedRevision": 0}),
-        ("DELETE", "/api/ui/themes/paper-daylight", {"expectedRevision": 0}),
-        ("PATCH", "/api/ui/theme-selection", {"themeId": "paper-daylight", "expectedRevision": 0}),
-    ):
-        status, payload = await request(api, method, path, token="guest", body=body,
-                                        headers={"X-UI-Account-ID": "alice"})
-        assert status == 403 and payload["error"]["code"] == "theme_readonly"
-    for token in ("", "invalid-token"):
-        status, payload = await request(api, "GET", token=token)
-        assert status == 401 and payload["error"]["code"] == "unauthorized"
-    status, payload = await request(api, "GET", "/api/ui/themes?token=alice", token="")
-    assert status == 401 and payload["error"]["code"] == "query_token_disabled"
-    assert api.server.theme_store.library_path.read_bytes() == before
+        ("PATCH", f"/api/ui/themes/{selected_id}", {"schemaVersion": 1, "expectedRevision": 1, "name": "修改"}),
+        ("DELETE", f"/api/ui/themes/{selected_id}", {"expectedRevision": 1}),
+        ("POST", "/api/ui/theme-assets", None),
+    ]
+    for token in ("alice", "admin"):
+        for method, path, body in operations:
+            status, payload = await request(api, method, path, token=token, body=body)
+            assert status == 403, (token, method, path, payload)
+            assert payload["error"]["code"] == "theme_readonly"
 
 
 @pytest.mark.asyncio
-async def test_login_page_can_read_themes_without_auth_but_cannot_mutate_them(api):
-    _, created = await request(api, "POST", body=create_input(activate=True))
-    theme_id = created["data"]["selectedThemeId"]
-    before = api.server.theme_store.library_path.read_bytes()
-    for path in ("/api/public/ui/themes", "/node/theme-test/api/public/ui/themes"):
-        status, payload = await request(api, "GET", path, token="")
-        assert status == 200 and payload == created
-    for method, path, body in (
-        ("POST", "/api/ui/themes", create_input(expectedRevision=1)),
-        ("POST", "/api/ui/themes/import", import_input(expectedRevision=1)),
-        ("PATCH", f"/api/ui/themes/{theme_id}", {"schemaVersion": 1, "expectedRevision": 1, "name": "修改"}),
-        ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 1}),
-        ("PATCH", "/api/ui/theme-selection", {"themeId": "paper-daylight", "expectedRevision": 1}),
-    ):
-        status, payload = await request(api, method, path, token="", body=body)
-        assert status == 401 and payload["error"]["code"] == "unauthorized"
-    assert api.server.theme_store.library_path.read_bytes() == before
-
-
-@pytest.mark.asyncio
-async def test_revision_conflicts_are_409_and_do_not_apply_stale_mutations(api):
-    _, payload = await request(api, "POST", body=create_input())
-    theme_id = payload["data"]["themes"][1]["id"]
-    for method, path, body in (
-        ("POST", "/api/ui/themes", create_input(activate=True)),
-        ("POST", "/api/ui/themes/import", import_input()),
-        ("PATCH", f"/api/ui/themes/{theme_id}", {"schemaVersion": 1, "expectedRevision": 0, "name": "旧草稿", "activate": True}),
-        ("DELETE", f"/api/ui/themes/{theme_id}", {"expectedRevision": 0}),
-        ("PATCH", "/api/ui/theme-selection", {"themeId": theme_id, "expectedRevision": 0}),
-    ):
-        status, result = await request(api, method, path, token="bob", body=body)
-        assert status == 409 and result["error"]["code"] == "theme_revision_conflict"
-        assert result["error"]["data"]["revision"] == 1
-    _, result = await request(api, "GET")
-    assert result == payload
-
-
-@pytest.mark.asyncio
-async def test_bad_payloads_and_builtin_mutations_are_rejected(api):
-    for body in ([], None, create_input(schemaVersion=2), create_input(expectedRevision=True),
-                 create_input(appearance={"colors": {"scheme": "light", "overrides": {"unknown": "#FFFFFF"}}})):
-        status, payload = await request(api, "POST", body=body)
-        assert status == 400 and payload["ok"] is False
-    status, payload = await request(api, "DELETE", "/api/ui/themes/paper-daylight", body={"expectedRevision": 0})
-    assert status == 403 and payload["error"]["code"] == "theme_readonly"
-    status, _ = await request(api, "PATCH", "/api/ui/theme-selection", body={
-        "themeId": "paper-daylight", "expectedRevision": 0, "accountId": "bob"})
-    assert status == 400
-    status, _ = await request(api, "DELETE", "/api/ui/themes/paper-daylight", body={"expectedRevision": 0, "force": True})
-    assert status == 400
-
-
-@pytest.mark.asyncio
-async def test_default_theme_can_be_edited_in_place_but_not_deleted(api):
-    status, payload = await request(api, "PATCH", "/api/ui/themes/paper-daylight", body={
-        "schemaVersion": 1,
+async def test_guest_can_preview_but_cannot_change_shared_selection(api):
+    status, payload = await request(api, "GET", "/api/public/ui/themes", token="")
+    assert status == 200
+    selected_id = payload["data"]["themes"][-1]["id"]
+    status, payload = await request(api, "PATCH", "/api/ui/theme-selection", token="guest", body={
+        "themeId": selected_id,
         "expectedRevision": 0,
-        "name": "我的纸感日间",
-        "appearance": {"colors": {"scheme": "dark", "overrides": {}}},
-        "activate": True,
     })
-    assert status == 200
-    assert payload["data"]["themes"][0]["name"] == "我的纸感日间"
-    assert payload["data"]["themes"][0]["appearance"]["colors"]["scheme"] == "dark"
-    assert payload["data"]["selectedThemeId"] == "paper-daylight"
-    status, deleted = await request(api, "DELETE", "/api/ui/themes/paper-daylight", body={"expectedRevision": 1})
-    assert status == 403 and deleted["error"]["code"] == "theme_readonly"
+    assert status == 403 and payload["error"]["code"] == "theme_readonly"
 
 
 @pytest.mark.asyncio
-async def test_cookie_writes_keep_existing_origin_protection(api):
-    cookie = {"Cookie": f"{server_module.AUTH_SESSION_COOKIE_NAME}=alice"}
-    status, payload = await request(api, "POST", token="", headers=cookie, body=create_input())
-    assert status == 403 and payload["error"]["code"] == "csrf_origin_rejected"
-    status, _ = await request(api, "POST", token="", headers={**cookie, "Origin": "http://example.test"}, body=create_input())
-    assert status == 200
-
-
-@pytest.mark.asyncio
-async def test_stale_account_header_is_ignored_for_authenticated_reads_and_writes(api):
-    headers = {"Cookie": f"{server_module.AUTH_SESSION_COOKIE_NAME}=bob",
-               "Origin": "http://example.test", "X-UI-Account-ID": "alice"}
-    status, payload = await request(api, "POST", token="", headers=headers, body=create_input())
-    assert status == 200 and payload["data"]["scope"] == "global"
-    status, read = await request(api, "GET", token="", headers=headers)
-    assert status == 200 and read == payload and "accountId" not in read["data"]
-
-
-@pytest.mark.asyncio
-async def test_corrupt_library_falls_back_with_error_and_cannot_be_overwritten(api):
-    await request(api, "POST", body=create_input())
+async def test_corrupt_runtime_selection_is_reported_without_replacing_packaged_presets(api):
     path = api.server.theme_store.library_path
-    path.write_bytes(b'{"schemaVersion":2,"themes":')
-    original = path.read_bytes()
+    path.parent.mkdir(parents=True)
+    path.write_text("{broken", encoding="utf-8")
+
     status, payload = await request(api, "GET")
-    assert status == 200 and "原文件已保留" in payload["data"]["error"]
-    assert len(payload["data"]["themes"]) == 1
-    status, payload = await request(api, "POST", body=create_input())
-    assert status == 500 and payload["error"]["code"] == "theme_store_unreadable"
-    status, payload = await request(api, "POST", "/api/ui/themes/import", body=import_input())
-    assert status == 500 and payload["error"]["code"] == "theme_store_unreadable"
-    assert path.read_bytes() == original
+
+    assert status == 200
+    assert "原文件已保留" in payload["data"]["error"]
+    assert len(payload["data"]["themes"]) == 5

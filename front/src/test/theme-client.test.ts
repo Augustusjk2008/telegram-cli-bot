@@ -30,22 +30,18 @@ test("theme requests use the global API without account-specific headers", async
   }
 });
 
-test("exported single themes and packs can be imported as editable copies", async () => {
+test("mock clients expose packaged presets and reject theme mutations", async () => {
   const client = new MockWebBotClient();
   await client.login({ username: "alice", password: "password" });
-  const document = portableTheme(builtinLibrary().themes[0]);
-  expect(Object.keys(document).sort()).toEqual(["appearance", "baseId", "name", "schemaVersion"]);
-  const single = await client.importUiThemes({ expectedRevision: 0, document });
-  const pack = { schemaVersion: 1, themes: single.themes.map(portableTheme) };
-  const result = await client.importUiThemes({ expectedRevision: 1, document: pack });
-  expect(result.revision).toBe(2);
-  expect(result.themes).toHaveLength(4);
-  expect(new Set(result.themes.map((theme) => theme.id)).size).toBe(4);
-  expect(result.selectedThemeId).toBe("paper-daylight");
-  expect(result.themes.slice(1).every((theme) => !theme.readonly)).toBe(true);
-  expect(result.themes[2].appearance).toEqual(document.appearance);
-  await expect(client.importUiThemes({ expectedRevision: 2, document: { ...pack, themes: [...pack.themes, { ...document, baseId: "unknown" }] } })).rejects.toMatchObject({ status: 400 });
-  expect(await client.listUiThemes()).toEqual(result);
+  const initial = await client.listUiThemes();
+  expect(initial.themes).toHaveLength(5);
+  expect(initial.themes.every((theme) => theme.readonly)).toBe(true);
+  const document = portableTheme(initial.themes[0]);
+  await expect(client.createUiTheme({ schemaVersion: 1, expectedRevision: 0, sourceId: initial.themes[0].id, name: "配色" })).rejects.toMatchObject({ status: 403 });
+  await expect(client.importUiThemes({ expectedRevision: 0, document })).rejects.toMatchObject({ status: 403 });
+  await expect(client.updateUiTheme(initial.themes[0].id, { schemaVersion: 1, expectedRevision: 0, name: "修改" })).rejects.toMatchObject({ status: 403 });
+  await expect(client.deleteUiTheme(initial.themes[0].id, 0)).rejects.toMatchObject({ status: 403 });
+  await expect(client.uploadThemeAsset(new File(["x"], "x.png", { type: "image/png" }))).rejects.toMatchObject({ status: 403 });
 });
 
 test("legacy imported themes receive the default illustration configuration", async () => {
@@ -114,20 +110,20 @@ test("theme export keeps a theme-owned uploaded illustration", () => {
 test("mock accounts and guests share the theme library and selected theme", async () => {
   const alice = new MockWebBotClient();
   await alice.login({ username: "alice", password: "password" });
-  const created = await alice.createUiTheme({ schemaVersion: 1, expectedRevision: 0, sourceId: "paper-daylight", name: "共享主题", activate: true });
-  const id = created.selectedThemeId;
+  const initial = await alice.listUiThemes();
+  const id = initial.themes.at(-1)!.id;
+  const selected = await alice.selectUiTheme(id, initial.revision);
   const anonymous = new MockWebBotClient();
   await anonymous.logout();
-  expect(await anonymous.listPublicUiThemes()).toEqual(created);
+  expect(await anonymous.listPublicUiThemes()).toEqual(selected);
   await expect(anonymous.listUiThemes()).rejects.toMatchObject({ status: 401 });
-  await expect(anonymous.selectUiTheme("paper-daylight", created.revision)).rejects.toMatchObject({ status: 401 });
+  await expect(anonymous.selectUiTheme("paper-daylight", selected.revision)).rejects.toMatchObject({ status: 401 });
   const bob = new MockWebBotClient();
   await bob.login({ username: "bob", password: "password" });
-  expect(await bob.listUiThemes()).toEqual(created);
-  await bob.updateUiTheme(id, { schemaVersion: 1, expectedRevision: created.revision, name: "共同编辑" });
-  expect((await alice.listUiThemes()).themes.find((theme) => theme.id === id)?.name).toBe("共同编辑");
+  expect(await bob.listUiThemes()).toEqual(selected);
+  await expect(bob.updateUiTheme(id, { schemaVersion: 1, expectedRevision: selected.revision, name: "共同编辑" })).rejects.toMatchObject({ status: 403 });
   const guest = new MockWebBotClient();
   await guest.loginGuest();
   expect((await guest.listUiThemes()).selectedThemeId).toBe(id);
-  await expect(guest.deleteUiTheme(id, 2)).rejects.toMatchObject({ status: 403 });
+  await expect(guest.deleteUiTheme(id, selected.revision)).rejects.toMatchObject({ status: 403 });
 });

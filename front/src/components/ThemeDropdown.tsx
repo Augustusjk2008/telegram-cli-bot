@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Moon, Palette, Sun } from "lucide-react";
+import { Check, ChevronDown, Moon, Sun } from "lucide-react";
 import type { UiThemeName } from "../theme";
 import { useOptionalAppearance } from "../theme/AppearanceProvider";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
@@ -14,12 +14,7 @@ type Props = {
 };
 
 export function ManageThemesButton() {
-  const appearance = useOptionalAppearance();
-  if (!appearance?.canManage) return null;
-  return <button type="button" onClick={appearance.openManager}
-    className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]">
-    <Palette className="h-4 w-4" />管理主题
-  </button>;
+  return null;
 }
 
 export function ThemeDropdown({ value, onChange, className, variant = "default", menuAlign = "stretch" }: Props) {
@@ -61,7 +56,6 @@ export function ThemeDropdown({ value, onChange, className, variant = "default",
         })}
       </div>}
     </div>
-    {variant === "default" && <ManageThemesButton />}
     {context?.error && <p role="alert" className="text-xs text-[var(--status-danger)]">{context.error}</p>}
   </div>;
 }

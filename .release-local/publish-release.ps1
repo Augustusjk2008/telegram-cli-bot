@@ -31,6 +31,10 @@ $script:RequiredReleaseLegalFiles = @(
     "CONTRIBUTING.md",
     "front/dist/THIRD_PARTY_LICENSES.txt"
 )
+$script:RequiredThemeFiles = @(
+    "bot/web/theme_presets.json",
+    "bot/web/theme_illustrations.json"
+)
 
 function Write-Step {
     param([string]$Message)
@@ -412,6 +416,21 @@ function Assert-ReleaseLegalFilesInStage {
     }
 }
 
+function Assert-ThemeFilesInStage {
+    param([string]$StageDir)
+
+    $missing = @(
+        foreach ($relativePath in $script:RequiredThemeFiles) {
+            if (-not (Test-Path -LiteralPath (Join-Path $StageDir $relativePath) -PathType Leaf)) {
+                $relativePath
+            }
+        }
+    )
+    if ($missing.Count -gt 0) {
+        throw "发布暂存区缺少预置主题文件: $($missing -join ', ')"
+    }
+}
+
 function Assert-ReleaseArchivesContainLegalFiles {
     param($Archives)
 
@@ -459,6 +478,7 @@ function Copy-TrackedFilesToStage {
     [void](New-Item -ItemType Directory -Path (Split-Path -Parent $frontDistTarget) -Force)
     Copy-Item -LiteralPath $frontDist -Destination $frontDistTarget -Recurse -Force
 
+    Assert-ThemeFilesInStage -StageDir $StageDir
     Export-ReleaseAnnouncements -DestinationRoot $StageDir
     Assert-ReleaseLegalFilesInStage -StageDir $StageDir
 }

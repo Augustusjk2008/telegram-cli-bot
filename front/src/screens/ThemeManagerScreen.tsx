@@ -391,7 +391,6 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
   const reloadRequested = useRef<"keep" | "discard" | null>(null);
   const busy = operationBusy || Boolean(reloadRequested.current);
   const nameInput = useRef<HTMLInputElement>(null);
-  const importInput = useRef<HTMLInputElement>(null);
   const inputId = useId();
   const groups = useMemo(
     () => [...new Set(THEME_TOKENS.map((token) => token.group))],
@@ -406,7 +405,8 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
     Boolean(draft.sourceId) ||
     editableValue(draft.theme) !== editableValue(draft.original) ||
     invalidTokens.length > 0;
-  const editable = canManage && !draft.theme.readonly;
+  const presetsOnly = library.themes.length > 0 && library.themes.every((theme) => theme.readonly);
+  const editable = canManage && !presetsOnly && !draft.theme.readonly;
   const valid = Boolean(draft.theme.name.trim()) && invalidTokens.length === 0;
   const typography = normalizeChatTypography(draft.theme.appearance.typography);
   const illustrations = normalizeIllustrations(draft.theme.appearance.illustrations);
@@ -880,7 +880,6 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
   }
 
   const currentError = error || providerError || library.error;
-  const copySource = draft.original;
   return (
     <section
       className="theme-manager"
@@ -898,7 +897,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       <header className="theme-manager-header">
         <div>
           <h1>主题管理</h1>
-          <p>所有账户共用主题库与应用选择</p>
+          <p>主题随应用版本发布，所有账户只能选择预置主题</p>
         </div>
         <div className="theme-manager-header-actions">
           <span>
@@ -952,7 +951,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
         {(
           [
             ["themes", "主题列表"],
-            ["editor", "主题编辑"],
+            ["editor", "主题详情"],
             ["preview", "局部预览"],
           ] as const
         ).map(([id, label]) => (
@@ -975,56 +974,20 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           <div className="theme-manager-panel-title">
             <h2>全局主题</h2>
             <span>
-              {library.themes.filter((theme) => theme.id !== BUILTIN_THEME.id && !theme.readonly).length}{" "}
-              个自定义
+              {library.themes.length} 个预置
             </span>
           </div>
-          <button
-            className="theme-manager-new"
-            type="button"
-            disabled={!canManage || busy || loading}
-            onClick={() =>
-              requestAction({
-                kind: "create",
-                source: BUILTIN_THEME,
-                name: "新主题",
-              })
-            }
-          >
-            ＋ 新建主题
-          </button>
           <div className="theme-manager-transfer">
-            <input
-              ref={importInput}
-              type="file"
-              accept=".json,application/json"
-              aria-label="导入主题 JSON 文件"
-              hidden
-              disabled={!canManage || busy || loading}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) requestAction({ kind: "import", file });
-              }}
-            />
-            <button type="button" disabled={!canManage || busy || loading} onClick={() => importInput.current?.click()}>
-              导入 JSON
-            </button>
               <button type="button" disabled={busy || loading || Boolean(library.error)} onClick={() => void exportThemes(true)}>
               导出主题包
             </button>
-            <p className="theme-manager-hint">支持单个主题与多主题包。同名主题自动编号；主题包导出全部已保存主题。</p>
+            <p className="theme-manager-hint">预置主题由应用版本统一提供，管理员也不能编辑、导入或删除。</p>
           </div>
-          {(["builtin", "custom"] as const).map((group) => {
-            const builtin = group === "builtin";
-            const themes = library.themes.filter((theme) =>
-              builtin
-                ? theme.id === BUILTIN_THEME.id
-                : theme.id !== BUILTIN_THEME.id && !theme.readonly,
-            );
+          {(["preset"] as const).map((group) => {
+            const themes = library.themes;
             return (
             <div className="theme-manager-theme-group" key={group}>
-              <h3>{builtin ? "内置主题" : "自定义主题"}</h3>
+              <h3>预置主题</h3>
               {themes.map((theme) => (
                   <button
                     className="theme-manager-theme"
@@ -1045,18 +1008,13 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                       {theme.appearance.colors.scheme === "dark"
                         ? "深色"
                         : "浅色"}
-                      {theme.id === BUILTIN_THEME.id ? " · 默认主题" : theme.readonly ? " · 只读" : ""}
+                      {theme.id === BUILTIN_THEME.id ? " · 默认主题" : " · 只读"}
                       {theme.id === library.selectedThemeId
                         ? " · 当前应用"
                         : ""}
                     </span>
                   </button>
                 ))}
-              {!builtin && !themes.length && (
-                  <p className="theme-manager-hint">
-                    从纸感日间开始，创建你的第一套配色。
-                  </p>
-                )}
             </div>
             );
           })}
@@ -1066,28 +1024,15 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               <span>新主题 · 待保存</span>
             </div>
           )}
-          <button
-            type="button"
-            disabled={!canManage || busy || loading}
-            onClick={() =>
-              requestAction({
-                kind: "create",
-                source: copySource,
-                name: `${copySource.name} 副本`,
-              })
-            }
-          >
-            复制主题
-          </button>
         </aside>
         <section
           className="theme-manager-editor"
           data-pane="editor"
-          aria-label="主题编辑"
+          aria-label="主题详情"
         >
           <div className="theme-manager-panel-title">
-            <h2>{draft.sourceId ? "新主题" : "编辑主题"}</h2>
-            <span>{dirty ? "有未保存的更改" : "已保存"}</span>
+            <h2>查看主题</h2>
+            <span>{dirty ? "有未保存的更改" : "预置主题"}</span>
           </div>
           <div className="theme-manager-export">
             <button type="button" disabled={dirty || busy || loading || Boolean(library.error)} onClick={() => void exportThemes(false)}>
@@ -1095,22 +1040,9 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
             </button>
             {dirty && <small>保存草稿后可导出当前主题。</small>}
           </div>
-          {draft.theme.readonly && draft.theme.id !== BUILTIN_THEME.id && (
+          {draft.theme.readonly && (
             <div className="theme-manager-readonly">
-              <span>该主题是只读基准。</span>
-              <button
-                type="button"
-                disabled={!canManage || busy || loading}
-                onClick={() =>
-                  requestAction({
-                    kind: "create",
-                    source: draft.theme,
-                    name: `${draft.theme.name} 副本`,
-                  })
-                }
-              >
-                复制后编辑
-              </button>
+              <span>该主题是随应用发布的预置主题，内容由版本固定。</span>
             </div>
           )}
           <fieldset
