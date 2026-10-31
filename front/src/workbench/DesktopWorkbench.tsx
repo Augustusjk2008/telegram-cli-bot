@@ -1464,7 +1464,7 @@ export function DesktopWorkbench({
           className="grid h-full min-h-0 p-0.5"
           style={{ gridTemplateColumns: columnTemplate }}
         >
-          <div className="workbench-main-illustration-grid-area" aria-hidden="true">
+          <div data-testid="desktop-workbench-main-illustration-area" className="workbench-main-illustration-area" aria-hidden="true">
             <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" zone="main" />
           </div>
 
@@ -1474,20 +1474,25 @@ export function DesktopWorkbench({
             data-focused={focusedPane === "sidebar" ? "true" : "false"}
             className="desktop-workbench-pane grid min-h-0 overflow-hidden"
           >
-            <ThemeIllustrationLayer surface="workbench" className="workbench-sidebar-illustration" zone="sidebar" />
             <div
               className={clsx(
                 "theme-illustration-content grid min-h-0",
                 showSidebarContent ? "grid-cols-[48px_minmax(0,1fr)]" : "grid-cols-[48px]",
               )}
             >
-              <WorkbenchActivityRail
-                activeItem={activeActivityItem}
-                sidebarCollapsed={layoutState.sidebarCollapsed}
-                availableItems={availableActivityItems}
-                onToggleSidebar={toggleSidebar}
-                onSelectItem={selectActivityItem}
-              />
+              <div
+                data-testid="desktop-workbench-activity-rail-illustration-host"
+                className="workbench-activity-rail-illustration-host relative min-h-0 min-w-0 overflow-hidden"
+              >
+                <ThemeIllustrationLayer surface="workbench" className="workbench-sidebar-illustration" zone="sidebar" />
+                <WorkbenchActivityRail
+                  activeItem={activeActivityItem}
+                  sidebarCollapsed={layoutState.sidebarCollapsed}
+                  availableItems={availableActivityItems}
+                  onToggleSidebar={toggleSidebar}
+                  onSelectItem={selectActivityItem}
+                />
+              </div>
 
               {showSidebarContent ? (
                 <AnimatePresence mode="wait" initial={false}>

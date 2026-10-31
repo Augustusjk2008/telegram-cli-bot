@@ -194,6 +194,21 @@ describe("terminal session", () => {
     second.dispose();
   });
 
+  it("uses an xterm-compatible transparent background for embedded terminals", () => {
+    const snapshot = terminalAppearance("terminal-transparent", "#E0E1E2FF");
+    const session = createTerminalSession(document.createElement("div"), {
+      token: "",
+      ownerId: "embedded",
+      theme: appearanceRuntime.resolvedTerminalTheme(snapshot, true),
+    });
+
+    expect(session.term.options).toMatchObject({
+      allowTransparency: true,
+      theme: { background: "rgba(0, 0, 0, 0)" },
+    });
+    session.dispose();
+  });
+
   it("an open screen applies same-ID color revisions without recreating its terminal, socket or output buffer", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     appearanceRuntime.applyResolvedAppearance(terminalAppearance("screen-1", "#E0E1E2FF"));

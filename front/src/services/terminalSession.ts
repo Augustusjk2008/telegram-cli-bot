@@ -49,9 +49,11 @@ export type TerminalSession = {
 
 function buildTerminalAppearance(theme: ITheme | ResolvedAppearance | string = getCurrentAppearance()) {
   const input = typeof theme === "string" ? getCurrentAppearance() : theme;
+  const resolvedTheme = { ...("colors" in input ? resolvedTerminalTheme(input) : input) };
   return {
     minimumContrastRatio: getTerminalMinimumContrastRatio(),
-    theme: { ...("colors" in input ? resolvedTerminalTheme(input) : input) },
+    allowTransparency: resolvedTheme.background === "rgba(0, 0, 0, 0)",
+    theme: resolvedTheme,
   };
 }
 

@@ -310,6 +310,10 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   expect(screen.getByTestId("desktop-workbench-root")).toBeInTheDocument();
   expect(screen.getByText("Remote chat")).toBeInTheDocument();
   expect(screen.getByTestId("desktop-workbench-root")).toHaveStyle({ gridTemplateRows: "auto minmax(0,1fr) auto" });
+  expect(screen.getByTestId("desktop-workbench-main-illustration-area")).toBeInTheDocument();
+  expect(screen.getByTestId("desktop-workbench-activity-rail-illustration-host")).toContainElement(
+    screen.getByTestId("desktop-workbench-activity-rail"),
+  );
   fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
   expect(screen.getByRole("button", { name: "SSH 重新登录" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));

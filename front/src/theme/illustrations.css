@@ -40,12 +40,12 @@
   background-color: transparent;
 }
 
+[data-layout="mobile"] .theme-illustration-layer {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .theme-illustration-layer {
-    opacity: calc(var(--theme-illustration-opacity, 0) * .65);
-  }
-
-  .theme-illustration-art {
-    opacity: .65;
+    display: none;
   }
 }

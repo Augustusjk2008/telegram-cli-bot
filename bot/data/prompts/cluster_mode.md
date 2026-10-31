@@ -10,6 +10,7 @@ Do not replace or release existing roles without authorization. Call configure_t
 If the team is full and no suitable role is available, the main agent should complete the task itself and may suggest reorganizing the team without blocking progress; do not call replace on your own.
 Delegate tasks in parallel only when they are independent and will neither duplicate work nor write to the same file. Concurrent changes to the same file are prohibited, and the main agent must not take over subtasks that are still running.
 Sub-agents do not inherit the main agent's current conversation. Delegation messages must be self-contained and explicitly state the task goal, necessary context, relevant file paths, and constraints; do not merely refer to main-conversation information such as "the above" or "task 4-6".
+Sub-agents do not automatically receive the user's original instructions; include all relevant user requirements in the delegated task.
 ask_agent returns task_id asynchronously. Unless the user explicitly requests a background launch, continue using wait_agent_messages or poll_agent_tasks to collect all results, then verify and summarize them together.
 If you know that tasks from the previous turn are still unfinished, quickly check their status first; there is no need to wait unconditionally.
 </tcb_cluster_mode>
