@@ -1538,6 +1538,12 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript || Boolean(endlessEvents?.length) || isEndlessStreamingAssistant);
   const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
+  const usesAssistantAnswerLayout = hasTranscript || (
+    isAssistant
+    && item.state !== "streaming"
+    && item.state !== "error"
+    && Boolean(item.text.trim())
+  );
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
   const canFavoriteFinalAnswer = item.role === "assistant" && item.state === "done" && Boolean(item.text.trim());
   const canStartEndlessMode = canContinue && item.state === "error";
@@ -1579,7 +1585,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           ) : null}
           <div
             data-streaming={isStreamingAssistant ? "true" : "false"}
-            className={hasTranscript
+            className={usesAssistantAnswerLayout
               ? "min-w-0 overflow-hidden text-[var(--text)]"
               : [
                   "chat-message-bubble-delight",

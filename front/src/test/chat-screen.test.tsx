@@ -201,6 +201,10 @@ test("does not show endless mode after a normal answer", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("正常完成的回答")).toBeInTheDocument();
+  const row = screen.getByTestId("chat-message-row");
+  const messageSurface = row.querySelector('[data-streaming="false"]');
+  expect(messageSurface).not.toBeNull();
+  expect(messageSurface).not.toHaveClass("chat-message-bubble-delight");
   expect(screen.queryByRole("button", { name: "无尽模式" })).not.toBeInTheDocument();
 });
 
