@@ -292,12 +292,6 @@ function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): Transcri
       const attempt = typeof entry.attempt === "number" && entry.attempt > 0 ? entry.attempt : 0;
       const retryEntries = [entry];
       while (index + 1 < entries.length && isEndlessTranscriptEntry(entries[index + 1])) {
-        const nextAttempt = typeof entries[index + 1].attempt === "number" && entries[index + 1].attempt > 0
-          ? entries[index + 1].attempt
-          : 0;
-        if (nextAttempt !== attempt) {
-          break;
-        }
         index += 1;
         retryEntries.push(entries[index]);
       }
@@ -322,10 +316,21 @@ function describeTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
   return `${entries.length} 条事件${toolCount > 0 ? ` · ${toolCount} 次工具` : ""}`;
 }
 
+function retryAttempts(item: Extract<TranscriptRenderItem, { kind: "retry" }>) {
+  return new Set(
+    item.entries
+      .map((entry) => entry.attempt)
+      .filter((attempt): attempt is number => typeof attempt === "number" && attempt > 0),
+  );
+}
+
 function describeRetryGroup(item: Extract<TranscriptRenderItem, { kind: "retry" }>) {
   const errorCount = item.entries.filter((entry) => entry.kind === "endless_error").length;
   const continueCount = item.entries.filter((entry) => entry.kind === "endless_continue").length;
-  const attemptText = item.attempt > 0 ? `第 ${item.attempt} 次` : "本次";
+  const attempts = retryAttempts(item);
+  const attemptText = attempts.size > 1
+    ? `连续 ${attempts.size} 次`
+    : item.attempt > 0 ? `第 ${item.attempt} 次` : "本次";
   return `${attemptText}重试 · ${errorCount} 条错误 · ${continueCount} 次 Continue`;
 }
 
@@ -438,9 +443,15 @@ function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultT
       .filter(Boolean)
       .join("\n\n");
     if (groupEntries) {
-      blocks.push(item.kind === "group"
-        ? `[过程 ${item.groupIndex}]\n${groupEntries}`
-        : `[重试 ${item.attempt > 0 ? item.attempt : item.retryGroupIndex}]\n${groupEntries}`);
+      if (item.kind === "group") {
+        blocks.push(`[过程 ${item.groupIndex}]\n${groupEntries}`);
+      } else {
+        const attempts = retryAttempts(item);
+        const retryLabel = attempts.size > 1
+          ? `连续重试（${attempts.size} 次）`
+          : `重试 ${item.attempt > 0 ? item.attempt : item.retryGroupIndex}`;
+        blocks.push(`[${retryLabel}]\n${groupEntries}`);
+      }
     }
   }
   if (finalText) {
@@ -655,7 +666,9 @@ const RetryGroupRow = memo(function RetryGroupRow({
         }}
       >
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90" aria-hidden="true" />
-        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">重试记录 {item.attempt > 0 ? item.attempt : item.retryGroupIndex}</span>
+        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">
+          {retryAttempts(item).size > 1 ? "连续重试" : `重试记录 ${item.attempt > 0 ? item.attempt : item.retryGroupIndex}`}
+        </span>
         <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{describeRetryGroup(item)}</span>
       </summary>
       {expanded ? (

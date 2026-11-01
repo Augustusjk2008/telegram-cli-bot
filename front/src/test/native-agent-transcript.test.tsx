@@ -240,6 +240,66 @@ describe("NativeAgentTranscript", () => {
     expect(continuation).toHaveClass("text-[var(--status-success)]");
   });
 
+  it("aggregates adjacent endless retries across attempts", () => {
+    const entries: NativeAgentTranscriptEntry[] = [
+      {
+        id: "endless-error-1",
+        seq: 1,
+        kind: "endless_error",
+        label: "错误",
+        summary: "第一次失败",
+        attempt: 1,
+        collapsedByDefault: true,
+      },
+      {
+        id: "endless-continue-1",
+        seq: 2,
+        kind: "endless_continue",
+        label: "Continue",
+        summary: "Continue 1",
+        attempt: 1,
+        collapsedByDefault: true,
+      },
+      {
+        id: "endless-error-2",
+        seq: 3,
+        kind: "endless_error",
+        label: "错误",
+        summary: "第二次失败",
+        attempt: 2,
+        collapsedByDefault: true,
+      },
+      {
+        id: "endless-continue-2",
+        seq: 4,
+        kind: "endless_continue",
+        label: "Continue",
+        summary: "Continue 2",
+        attempt: 2,
+        collapsedByDefault: true,
+      },
+    ];
+
+    render(
+      <NativeAgentTranscript
+        entries={entries}
+        resultText="最终回答"
+        state="done"
+        mode="cli"
+      />,
+    );
+
+    const transcript = screen.getByTestId("native-agent-transcript");
+    fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+    const retryGroups = within(transcript).getAllByTestId("native-agent-retry-group");
+    expect(retryGroups).toHaveLength(1);
+    expect(within(retryGroups[0]).getByText("连续重试")).toBeInTheDocument();
+
+    fireEvent.click(retryGroups[0].querySelector("summary") as HTMLElement);
+    expect(within(retryGroups[0]).getByText("第一次失败")).toBeInTheDocument();
+    expect(within(retryGroups[0]).getByText("第二次失败")).toBeInTheDocument();
+  });
+
   it("counts a duplicate final commentary as one visible process", () => {
     render(
       <NativeAgentTranscript
