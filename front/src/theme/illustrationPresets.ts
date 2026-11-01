@@ -21,6 +21,7 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "desert-dusk",
   "alpine-fog",
   "moonlit-garden",
+  "armor-core-hud",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
 const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
@@ -71,6 +72,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "desert-dusk", label: "沙漠黄昏插画组" },
   { id: "alpine-fog", label: "高山薄雾插画组" },
   { id: "moonlit-garden", label: "月夜花园插画组" },
+  { id: "armor-core-hud", label: "装甲核心 HUD 插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -103,6 +105,12 @@ export const ILLUSTRATION_TEMPLATES = [
     label: "月夜花园",
     description: "靛蓝、炭黑和薰衣草色",
     colors: { accent: "#7C5CFCFF", "accent.strong": "#4C4B8FFF" },
+  },
+  {
+    id: "armor-core-hud",
+    label: "装甲核心 HUD",
+    description: "枪灰装甲、红色操作、青蓝反应堆和金色结构",
+    colors: { accent: "#D22E42FF", "accent.strong": "#51E6FFFF" },
   },
 ] as const;
 

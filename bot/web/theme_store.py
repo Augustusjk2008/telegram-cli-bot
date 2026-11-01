@@ -45,6 +45,7 @@ _ILLUSTRATION_SET_IDS = (
     "desert-dusk",
     "alpine-fog",
     "moonlit-garden",
+    "armor-core-hud",
 )
 _ILLUSTRATION_UPLOAD_MIMES = {"image/png", "image/jpeg", "image/webp"}
 _ILLUSTRATION_UPLOAD_MAX_BYTES = 4 * 1024 * 1024

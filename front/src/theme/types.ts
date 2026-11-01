@@ -29,7 +29,8 @@ export type ThemeIllustrationSetId =
   | "tidal-grove"
   | "desert-dusk"
   | "alpine-fog"
-  | "moonlit-garden";
+  | "moonlit-garden"
+  | "armor-core-hud";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
 

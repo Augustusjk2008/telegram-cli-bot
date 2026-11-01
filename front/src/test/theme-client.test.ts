@@ -34,7 +34,7 @@ test("mock clients expose packaged presets and reject theme mutations", async ()
   const client = new MockWebBotClient();
   await client.login({ username: "alice", password: "password" });
   const initial = await client.listUiThemes();
-  expect(initial.themes).toHaveLength(5);
+  expect(initial.themes).toHaveLength(6);
   expect(initial.themes.every((theme) => theme.readonly)).toBe(true);
   const document = portableTheme(initial.themes[0]);
   await expect(client.createUiTheme({ schemaVersion: 1, expectedRevision: 0, sourceId: initial.themes[0].id, name: "配色" })).rejects.toMatchObject({ status: 403 });

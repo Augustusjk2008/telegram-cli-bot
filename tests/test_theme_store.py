@@ -8,7 +8,7 @@ import pytest
 from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
 
 
-PRESET_NAMES = ["纸感日间", "雾蓝清晨", "青松纸笺", "暮海深蓝", "紫雾夜航"]
+PRESET_NAMES = ["纸感日间", "雾蓝清晨", "青松纸笺", "暮海深蓝", "紫雾夜航", "钢铁侠·装甲核心 HUD"]
 
 
 @pytest.fixture
