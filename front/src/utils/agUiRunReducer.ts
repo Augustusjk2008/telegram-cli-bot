@@ -7,6 +7,7 @@ import type {
 import { isSyntheticLegacyMessageId } from "../services/agUiStreamAdapter";
 import { mapChatMessageContextUsage } from "./contextUsage";
 import { mergeChatTraceEvents } from "./nativeAgentTranscript";
+import { summarizeTrace } from "./chatMessageMeta";
 
 export type AgUiActivityItem = {
   id: string;
@@ -57,6 +58,8 @@ export type NativeAgentTranscriptEntry = {
   body?: string;
   collapsedByDefault: boolean;
   trace?: ChatTraceEvent;
+  attempt?: number;
+  createdAt?: string;
   permissionId?: string;
   pending?: boolean;
   permission?: AgUiPermissionRequest;
@@ -1728,12 +1731,13 @@ export function buildAgUiMessageMeta(state: AgUiRunState, options: { nativeAgent
       ? state.traceEvents
       : undefined;
   const usingLiveProjection = Boolean(projection && entryTrace === projection.trace);
-  const toolCallCount = usingLiveProjection
+  const traceSummary = summarizeTrace(trace, state.completed ? state.assistantText : undefined);
+  const toolCallCount = usingLiveProjection && !state.completed
     ? projection?.toolCallCount
-    : trace?.filter((event) => event.kind === "tool_call").length;
-  const processCount = usingLiveProjection
+    : traceSummary.toolCallCount;
+  const processCount = usingLiveProjection && !state.completed
     ? projection?.processCount
-    : trace?.filter((event) => event.kind !== "tool_call" && event.kind !== "tool_result").length;
+    : traceSummary.processCount;
   const meta: ChatMessageMetaInfo = {
     completionState: state.error ? "error" : state.completionState || (state.completed ? "completed" : state.running ? "streaming" : undefined),
     traceVersion: trace ? 1 : undefined,

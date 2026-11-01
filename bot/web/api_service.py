@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing, asynccontextmanager, contextmanager, nullcontext
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
@@ -8716,6 +8717,7 @@ async def _stream_endless_attempts(
 
         attempt += 1
         retry_at_ms = int(time.time() * 1000) + max(0, int(round(float(config.ENDLESS_CONTINUE_DELAY_SECONDS) * 1000)))
+        error_created_at = datetime.now(timezone.utc).isoformat()
         _set_endless_session_state(
             session,
             active=True,
@@ -8743,6 +8745,7 @@ async def _stream_endless_attempts(
                 "kind": "error",
                 "attempt": attempt,
                 "text": str(retry_event.get("output") or message.get("content") or "Continue 执行失败"),
+                "created_at": error_created_at,
                 **({"code": str(retry_event.get("code"))} if retry_event.get("code") else {}),
             },
             turn_id=retry_turn_id,
@@ -8760,6 +8763,7 @@ async def _stream_endless_attempts(
             "output": str(retry_event.get("output") or message.get("content") or ""),
             "next_delay_ms": max(0, int(round(float(config.ENDLESS_CONTINUE_DELAY_SECONDS) * 1000))),
             "retry_at_ms": retry_at_ms,
+            "created_at": error_created_at,
         }
         try:
             await _wait_for_endless_retry(session)
@@ -8772,8 +8776,14 @@ async def _stream_endless_attempts(
         _set_endless_session_state(
             session, active=True, attempt=attempt, group_id=endless_group_id, processing=True,
         )
+        continue_created_at = datetime.now(timezone.utc).isoformat()
         await persist_endless_event(
-            {"kind": "continue", "attempt": attempt, "text": "Continue"},
+            {
+                "kind": "continue",
+                "attempt": attempt,
+                "text": "Continue",
+                "created_at": continue_created_at,
+            },
             turn_id=retry_turn_id,
             assistant_message_id=retry_assistant_message_id,
         )
@@ -8781,6 +8791,7 @@ async def _stream_endless_attempts(
             "type": "endless_continue",
             "attempt": attempt,
             "text": "Continue",
+            "created_at": continue_created_at,
         }
         _set_endless_session_state(
             session, active=True, attempt=attempt, group_id=endless_group_id, processing=False,

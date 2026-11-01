@@ -807,6 +807,8 @@ type RawChatEndlessEvent = {
   text?: string;
   message?: string;
   code?: string;
+  created_at?: string;
+  createdAt?: string;
 };
 
 type RawChatMessageContextUsage = {
@@ -1638,6 +1640,8 @@ type StreamEventPayload =
       attempt?: number;
       next_delay_ms?: number;
       retry_at_ms?: number;
+      created_at?: string;
+      createdAt?: string;
       user_message_id?: string;
       message?: RawHistoryItem;
     }
@@ -1645,6 +1649,8 @@ type StreamEventPayload =
       type: "endless_continue";
       attempt?: number;
       text?: string;
+      created_at?: string;
+      createdAt?: string;
     }
   | { type: "error"; message?: string; code?: string };
 
@@ -2713,6 +2719,7 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
         attempt: Math.max(0, Math.floor(Number(event.attempt) || 0)),
         text,
         ...(event.code ? { code: String(event.code) } : {}),
+        ...((event.created_at || event.createdAt) ? { createdAt: String(event.created_at || event.createdAt) } : {}),
       } satisfies ChatEndlessEvent;
     })
     .filter((event): event is ChatEndlessEvent => Boolean(event));
@@ -5889,14 +5896,17 @@ export class RealWebBotClient implements WebBotClient {
             text: event.output || event.message?.content || "",
             state: "error",
           });
-          const nextDelayMs = typeof event.retry_at_ms === "number" && Number.isFinite(event.retry_at_ms)
-            ? Math.max(0, event.retry_at_ms - Date.now())
-            : typeof event.next_delay_ms === "number" && Number.isFinite(event.next_delay_ms)
+          const receivedAtMs = Date.now();
+          const declaredDelayMs = typeof event.next_delay_ms === "number" && Number.isFinite(event.next_delay_ms)
             ? Math.max(0, event.next_delay_ms)
             : 0;
-          const retryAtMs = typeof event.retry_at_ms === "number" && Number.isFinite(event.retry_at_ms)
+          const serverRetryAtMs = typeof event.retry_at_ms === "number" && Number.isFinite(event.retry_at_ms)
             ? Math.max(0, event.retry_at_ms)
             : undefined;
+          const nextDelayMs = serverRetryAtMs && serverRetryAtMs > receivedAtMs
+            ? serverRetryAtMs - receivedAtMs
+            : declaredDelayMs;
+          const retryAtMs = serverRetryAtMs;
           onEndlessError?.(message, Number(event.attempt || 0), nextDelayMs, retryAtMs);
           separator = findSseSeparator(buffer);
           continue;

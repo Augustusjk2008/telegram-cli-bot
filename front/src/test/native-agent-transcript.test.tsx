@@ -230,9 +230,34 @@ describe("NativeAgentTranscript", () => {
     expect(within(transcript).queryByText("临时失败")).not.toBeInTheDocument();
 
     fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
+    const retryGroup = within(transcript).getByTestId("native-agent-retry-group");
+    expect(retryGroup.querySelector("summary")).toBeTruthy();
+    expect(within(retryGroup).queryByText("临时失败")).not.toBeInTheDocument();
+    fireEvent.click(retryGroup.querySelector("summary") as HTMLElement);
     const error = within(transcript).getByText("临时失败");
     const continuation = within(transcript).getByText("Continue", { exact: true });
     expect(error).toHaveClass("text-[var(--feedback-error-text-deep)]");
     expect(continuation).toHaveClass("text-[var(--status-success)]");
+  });
+
+  it("counts a duplicate final commentary as one visible process", () => {
+    render(
+      <NativeAgentTranscript
+        entries={[
+          processEntry("analysis", "分析完成", 1),
+          processEntry("final-duplicate", "最终回答", 2),
+        ]}
+        resultText="最终回答"
+        state="done"
+        mode="native"
+        traceCount={2}
+        processCount={2}
+        traceLoaded
+      />,
+    );
+
+    const transcript = screen.getByTestId("native-agent-transcript");
+    expect(within(transcript).getByText("1 条过程")).toBeInTheDocument();
+    expect(within(transcript).queryByText("2 条过程")).not.toBeInTheDocument();
   });
 });

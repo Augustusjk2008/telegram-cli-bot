@@ -1219,6 +1219,8 @@ export type ChatEndlessEvent = {
   attempt: number;
   text: string;
   code?: string;
+  createdAt?: string;
+  created_at?: string;
 };
 
 export type ChatMessageMetaInfo = {

@@ -207,22 +207,40 @@ test("completed message compaction releases full trace payloads but preserves su
   });
 });
 
-test("message metadata keeps endless events and Continue count across streaming merges", () => {
+test("message metadata keeps endless events, timestamps, and Continue count across streaming merges", () => {
   const merged = mergeMessageMeta(
     {
-      endlessEvents: [{ kind: "error", sequence: 1, attempt: 1, text: "临时失败" }],
+      endlessEvents: [{ kind: "error", sequence: 9, attempt: 1, text: "临时失败", createdAt: "2026-10-31T00:00:02Z" }],
       endlessContinueCount: 0,
     },
     {
-      endlessEvents: [{ kind: "continue", sequence: 2, attempt: 1, text: "Continue" }],
+      endlessEvents: [
+        { kind: "continue", sequence: 4, attempt: 1, text: "Continue", createdAt: "2026-10-31T00:00:03Z" },
+        { kind: "error", sequence: 1, attempt: 1, text: "临时失败" },
+      ],
       endlessContinueCount: 1,
     },
   );
 
   expect(merged?.endlessEvents?.map((event) => event.kind)).toEqual(["error", "continue"]);
+  expect(merged?.endlessEvents?.[0]?.sequence).toBe(1);
+  expect(merged?.endlessEvents?.[0]?.createdAt).toBe("2026-10-31T00:00:02Z");
   expect(merged?.endlessContinueCount).toBe(1);
   expect(compactCompletedMessageMeta(merged)?.endlessEvents).toEqual(merged?.endlessEvents);
   expect(compactCompletedMessageMeta(merged)?.endlessContinueCount).toBe(1);
+});
+
+test("completed trace metadata excludes the duplicated final commentary from process count", () => {
+  const compact = compactCompletedMessageMeta({
+    completionState: "completed",
+    trace: [
+      { kind: "commentary", summary: "分析完成" },
+      { kind: "commentary", summary: "最终回答" },
+    ],
+    processCount: 2,
+  }, "最终回答");
+
+  expect(compact?.processCount).toBe(1);
 });
 
 test("anonymous native trace replay dedupe is opt-in and preserves stable events", () => {

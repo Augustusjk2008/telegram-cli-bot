@@ -105,6 +105,56 @@ def test_endless_group_and_events_survive_history_reload(tmp_path: Path) -> None
     assert assistants[0]["meta"]["endless_continue_count"] == 1
 
 
+def test_endless_event_timestamps_survive_reload(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    handle = _begin(store, text="带时间的重试")
+    store.complete_turn(handle, content="失败", completion_state="error")
+    group_id = store.ensure_endless_group(handle.assistant_message_id, "endless_timestamps")
+    store.append_endless_event(
+        turn_id=handle.turn_id,
+        event={
+            "kind": "error",
+            "attempt": 1,
+            "text": "失败",
+            "created_at": "2026-10-31T00:00:02+00:00",
+        },
+    )
+    store.append_endless_event(
+        turn_id=handle.turn_id,
+        event={
+            "kind": "continue",
+            "attempt": 1,
+            "text": "Continue",
+            "created_at": "2026-10-31T00:00:03+00:00",
+        },
+    )
+
+    clear_chat_store_prepare_cache()
+    reloaded = ChatStore(tmp_path)
+    assistant = next(item for item in reloaded.list_messages(handle.conversation_id) if item["role"] == "assistant")
+    assert assistant["meta"]["endless_group_id"] == group_id
+    timestamped_events = [event for event in assistant["meta"]["endless_events"] if event.get("created_at")]
+    assert [event["created_at"] for event in timestamped_events] == [
+        "2026-10-31T00:00:02+00:00",
+        "2026-10-31T00:00:03+00:00",
+    ]
+
+
+def test_trace_stats_exclude_duplicate_final_commentary(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    handle = _begin(store, text="过程统计")
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="分析过程")
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="最终回答")
+    store.complete_turn(handle, content="最终回答", completion_state="completed")
+
+    assistant = next(item for item in store.list_messages(handle.conversation_id) if item["role"] == "assistant")
+    assert assistant["meta"]["trace_count"] == 1
+    assert assistant["meta"]["process_count"] == 1
+    details = store.get_message_trace(handle.assistant_message_id)
+    assert details["trace_count"] == 1
+    assert details["process_count"] == 1
+
+
 def test_legacy_endless_group_is_consolidated_in_database(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     first = _begin(store, text="原始问题")

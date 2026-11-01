@@ -100,6 +100,33 @@ def _trace_summary_key(trace: dict[str, Any]) -> str:
     return "".join(str(trace.get("summary") or "").split())
 
 
+def _final_trace_summary_key(value: Any) -> str:
+    return "".join(str(value or "").split())
+
+
+def _is_redundant_final_trace(event: dict[str, Any], final_text: str) -> bool:
+    kind = str(event.get("kind") or "").strip()
+    if kind not in {"commentary", "reasoning"}:
+        return False
+    normalized_final = _final_trace_summary_key(final_text)
+    normalized_trace = _final_trace_summary_key(event.get("summary"))
+    if not normalized_final or not normalized_trace:
+        return False
+    return normalized_final == normalized_trace or (
+        normalized_final.startswith(normalized_trace)
+        and len(normalized_final) > len(normalized_trace)
+    )
+
+
+def _prune_redundant_final_trace(trace: list[dict[str, Any]], final_text: str) -> list[dict[str, Any]]:
+    if not trace or not str(final_text or "").strip():
+        return trace
+    pruned = [dict(item) for item in trace]
+    while pruned and _is_redundant_final_trace(pruned[-1], final_text):
+        pruned.pop()
+    return pruned
+
+
 def _trace_payload_message_id(trace: dict[str, Any]) -> str:
     payload = trace.get("payload")
     if not isinstance(payload, dict):
@@ -704,6 +731,9 @@ class ChatStore:
         code = str(event.get("code") or "").strip()
         if code:
             normalized["code"] = code
+        created_at = str(event.get("created_at") or event.get("createdAt") or "").strip()
+        if created_at:
+            normalized["created_at"] = created_at
         return normalized
 
     @classmethod
@@ -728,6 +758,17 @@ class ChatStore:
                 seen.add(key)
                 event["sequence"] = len(merged) + 1
                 merged.append(event)
+        if merged and all(str(event.get("created_at") or "").strip() for event in merged):
+            merged = sorted(
+                enumerate(merged),
+                key=lambda item: (
+                    str(item[1].get("created_at") or "") or "\uffff",
+                    item[0],
+                ),
+            )
+            merged = [event for _, event in merged]
+            for sequence, event in enumerate(merged, start=1):
+                event["sequence"] = sequence
         return merged
 
     def _consolidate_endless_group_conn(
@@ -3004,6 +3045,32 @@ class ChatStore:
                 for item in events
             )
             if duplicate:
+                created_at = str(event.get("created_at") or event.get("createdAt") or "").strip()
+                if created_at:
+                    changed = False
+                    for item in events:
+                        if (
+                            str(item.get("kind") or "").strip().lower() == kind
+                            and int(item.get("attempt") or 0) == max(0, int(event.get("attempt") or 0))
+                            and str(item.get("text") or "").strip() == text
+                            and str(item.get("code") or "") == str(event.get("code") or "")
+                            and not str(item.get("created_at") or item.get("createdAt") or "").strip()
+                        ):
+                            item["created_at"] = created_at
+                            changed = True
+                            break
+                    if changed:
+                        conn.execute(
+                            "UPDATE turns SET endless_events_json = ?, updated_at = ? WHERE id = ?",
+                            (json.dumps(events, ensure_ascii=False), now, str(row["id"])),
+                        )
+                        self._record_message_changes(
+                            conn,
+                            str(row["conversation_id"]),
+                            [str(row["assistant_message_id"])],
+                            operation="upsert",
+                            now=now,
+                        )
                 return False
             next_event = {
                 "kind": kind,
@@ -3013,6 +3080,9 @@ class ChatStore:
             }
             if event.get("code"):
                 next_event["code"] = str(event["code"])
+            created_at = str(event.get("created_at") or event.get("createdAt") or "").strip()
+            if created_at:
+                next_event["created_at"] = created_at
             events.append(next_event)
             conn.execute(
                 "UPDATE turns SET endless_events_json = ?, updated_at = ? WHERE id = ?",
@@ -4009,6 +4079,7 @@ class ChatStore:
         self,
         conn: sqlite3.Connection,
         turn_ids: list[str],
+        final_text_by_turn: dict[str, str] | None = None,
     ) -> dict[str, dict[str, int]]:
         normalized_turn_ids = [str(turn_id) for turn_id in turn_ids if turn_id]
         if not normalized_turn_ids:
@@ -4055,6 +4126,10 @@ class ChatStore:
         stats: dict[str, dict[str, int]] = {}
         for turn_id, trace in grouped.items():
             normalized = _normalize_trace_events(trace)
+            normalized = _prune_redundant_final_trace(
+                normalized,
+                (final_text_by_turn or {}).get(turn_id, ""),
+            )
             stats[turn_id] = {
                 "trace_count": len(normalized),
                 "tool_call_count": sum(1 for item in normalized if str(item.get("kind") or "") == "tool_call"),
@@ -4070,7 +4145,11 @@ class ChatStore:
     ) -> dict[str, Any]:
         turn_id = str(row["turn_id"])
         if trace_stats_by_turn is None:
-            trace_stats_by_turn = self._load_trace_stats(conn, [turn_id])
+            trace_stats_by_turn = self._load_trace_stats(
+                conn,
+                [turn_id],
+                {turn_id: str(row["content"] or "")} if str(row["role"] or "") == "assistant" else None,
+            )
         trace_stats = trace_stats_by_turn.get(turn_id, {})
         meta = {
             "completion_state": row["completion_state"],
@@ -4318,7 +4397,16 @@ class ChatStore:
     def _messages_from_rows(self, conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
         if not rows:
             return []
-        trace_stats_by_turn = self._load_trace_stats(conn, [str(row["turn_id"]) for row in rows])
+        final_text_by_turn = {
+            str(row["turn_id"]): str(row["content"] or "")
+            for row in rows
+            if str(row["role"] or "") == "assistant"
+        }
+        trace_stats_by_turn = self._load_trace_stats(
+            conn,
+            [str(row["turn_id"]) for row in rows],
+            final_text_by_turn,
+        )
         return [self._message_from_row(conn, row, trace_stats_by_turn) for row in rows]
 
     def get_message(self, message_id: str) -> dict[str, Any]:
@@ -5312,7 +5400,7 @@ class ChatStore:
             with conn:
                 row = conn.execute(
                     """
-                    SELECT m.turn_id
+                    SELECT m.turn_id, m.content
                     FROM messages AS m
                     JOIN turns AS t ON t.id = m.turn_id
                     WHERE m.id = ?
@@ -5357,7 +5445,10 @@ class ChatStore:
                     }
                     for trace_row in trace_rows
                 ]
-                trace = _normalize_trace_events(trace)
+                trace = _prune_redundant_final_trace(
+                    _normalize_trace_events(trace),
+                    str(row["content"] or ""),
+                )
                 tool_call_count = sum(1 for item in trace if str(item["kind"] or "") == "tool_call")
                 process_count = sum(1 for item in trace if str(item["kind"] or "") not in {"tool_call", "tool_result"})
                 return {
@@ -5402,7 +5493,11 @@ class ChatStore:
                 ).fetchone()
                 if row is None:
                     raise KeyError(message_id)
-                trace_stats = self._load_trace_stats(conn, [str(row["turn_id"])]).get(str(row["turn_id"]), {})
+                trace_stats = self._load_trace_stats(
+                    conn,
+                    [str(row["turn_id"])],
+                    {str(row["turn_id"]): str(row["assistant_text"] or "")},
+                ).get(str(row["turn_id"]), {})
                 return {
                     "message_id": str(row["message_id"]),
                     "turn_id": str(row["turn_id"]),

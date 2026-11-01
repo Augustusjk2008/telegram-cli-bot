@@ -60,7 +60,7 @@ export function EndlessTypingLabel({ retryAtMs }: { retryAtMs?: number | null } 
       ))}
       <span aria-hidden="true" className="ml-0.5 tracking-normal">...</span>
     </span>
-      {typeof retryRemainingSeconds === "number" ? (
+      {typeof retryRemainingSeconds === "number" && retryRemainingSeconds > 0 ? (
         <span className="text-xs font-normal tabular-nums">
           （{retryRemainingSeconds}秒后重试）
         </span>
@@ -241,7 +241,12 @@ function PermissionEntry({
 
 type TranscriptRenderItem =
   | { kind: "entry"; entry: NativeAgentTranscriptEntry }
-  | { kind: "group"; groupIndex: number; entries: NativeAgentTranscriptEntry[] };
+  | { kind: "group"; groupIndex: number; entries: NativeAgentTranscriptEntry[] }
+  | { kind: "retry"; retryGroupIndex: number; attempt: number; entries: NativeAgentTranscriptEntry[] };
+
+function isEndlessTranscriptEntry(entry: NativeAgentTranscriptEntry) {
+  return entry.kind === "endless_error" || entry.kind === "endless_continue";
+}
 
 function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
   return (
@@ -265,6 +270,7 @@ function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): Transcri
   const grouped: TranscriptRenderItem[] = [];
   let current: NativeAgentTranscriptEntry[] = [];
   let groupIndex = 0;
+  let retryGroupIndex = 0;
 
   const flushCurrent = () => {
     if (current.length === 0) {
@@ -279,7 +285,26 @@ function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): Transcri
     current = [];
   };
 
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (isEndlessTranscriptEntry(entry)) {
+      flushCurrent();
+      const attempt = typeof entry.attempt === "number" && entry.attempt > 0 ? entry.attempt : 0;
+      const retryEntries = [entry];
+      while (index + 1 < entries.length && isEndlessTranscriptEntry(entries[index + 1])) {
+        const nextAttempt = typeof entries[index + 1].attempt === "number" && entries[index + 1].attempt > 0
+          ? entries[index + 1].attempt
+          : 0;
+        if (nextAttempt !== attempt) {
+          break;
+        }
+        index += 1;
+        retryEntries.push(entries[index]);
+      }
+      retryGroupIndex += 1;
+      grouped.push({ kind: "retry", retryGroupIndex, attempt, entries: retryEntries });
+      continue;
+    }
     if (cutsTranscriptGroup(entry)) {
       flushCurrent();
       grouped.push({ kind: "entry", entry });
@@ -295,6 +320,43 @@ function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): Transcri
 function describeTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
   const toolCount = entries.filter((entry) => entry.kind === "tool").length;
   return `${entries.length} 条事件${toolCount > 0 ? ` · ${toolCount} 次工具` : ""}`;
+}
+
+function describeRetryGroup(item: Extract<TranscriptRenderItem, { kind: "retry" }>) {
+  const errorCount = item.entries.filter((entry) => entry.kind === "endless_error").length;
+  const continueCount = item.entries.filter((entry) => entry.kind === "endless_continue").length;
+  const attemptText = item.attempt > 0 ? `第 ${item.attempt} 次` : "本次";
+  return `${attemptText}重试 · ${errorCount} 条错误 · ${continueCount} 次 Continue`;
+}
+
+function countEndlessRetries(entries: NativeAgentTranscriptEntry[]) {
+  const attempts = new Set<number>();
+  let unknownErrors = 0;
+  let unknownContinues = 0;
+  for (const entry of entries) {
+    if (!isEndlessTranscriptEntry(entry)) {
+      continue;
+    }
+    if (typeof entry.attempt === "number" && entry.attempt > 0) {
+      attempts.add(entry.attempt);
+    } else if (entry.kind === "endless_error") {
+      unknownErrors += 1;
+    } else {
+      unknownContinues += 1;
+    }
+  }
+  return attempts.size > 0 ? attempts.size : Math.max(unknownErrors, unknownContinues);
+}
+
+function countProcessEntries(items: TranscriptRenderItem[]) {
+  const allEntries = items.flatMap((item) => item.kind === "entry" ? [item.entry] : item.entries);
+  return allEntries.filter((entry) => {
+    if (isEndlessTranscriptEntry(entry)) {
+      return false;
+    }
+    const traceKind = String(entry.trace?.kind || "").trim();
+    return traceKind !== "tool_call" && traceKind !== "tool_result";
+  }).length;
 }
 
 function entryCopyLabel(entry: NativeAgentTranscriptEntry) {
@@ -376,7 +438,9 @@ function formatTranscriptFullAnswer(renderItems: TranscriptRenderItem[], resultT
       .filter(Boolean)
       .join("\n\n");
     if (groupEntries) {
-      blocks.push(`[过程 ${item.groupIndex}]\n${groupEntries}`);
+      blocks.push(item.kind === "group"
+        ? `[过程 ${item.groupIndex}]\n${groupEntries}`
+        : `[重试 ${item.attempt > 0 ? item.attempt : item.retryGroupIndex}]\n${groupEntries}`);
     }
   }
   if (finalText) {
@@ -555,6 +619,58 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
   );
 });
 
+const RetryGroupRow = memo(function RetryGroupRow({
+  item,
+  replyingPermissionId,
+  onReplyPermission,
+  onFileLinkClick,
+}: {
+  item: Extract<TranscriptRenderItem, { kind: "retry" }>;
+  replyingPermissionId: string;
+  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+  onFileLinkClick?: (href: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const renderRetryEntry = useCallback((entry: NativeAgentTranscriptEntry) => (
+    <TranscriptEntryRow
+      entry={entry}
+      nested
+      replyingPermissionId={replyingPermissionId}
+      onReplyPermission={onReplyPermission}
+      onFileLinkClick={onFileLinkClick}
+    />
+  ), [onFileLinkClick, onReplyPermission, replyingPermissionId]);
+  return (
+    <details
+      data-testid="native-agent-retry-group"
+      className="group border-t border-[var(--workbench-hairline)] py-1"
+      open={expanded}
+    >
+      <summary
+        data-chat-scroll-lock-on-expand="true"
+        className="flex cursor-pointer list-none items-center gap-2 py-1 text-[var(--muted)] marker:hidden [&::-webkit-details-marker]:hidden"
+        onClick={(event) => {
+          event.preventDefault();
+          setExpanded((value) => !value);
+        }}
+      >
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-90" aria-hidden="true" />
+        <span className="shrink-0 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--accent)]">重试记录 {item.attempt > 0 ? item.attempt : item.retryGroupIndex}</span>
+        <span className="min-w-0 truncate text-[11px] text-[var(--muted)]">{describeRetryGroup(item)}</span>
+      </summary>
+      {expanded ? (
+        <div className="border-l-2 border-[var(--accent-outline)] pl-3">
+          <div className="divide-y divide-[var(--workbench-hairline)]">
+            {item.entries.map((entry) => (
+              <div key={entry.id}>{renderRetryEntry(entry)}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </details>
+  );
+});
+
 export function NativeAgentTranscript({
   entries,
   resultText,
@@ -591,22 +707,7 @@ export function NativeAgentTranscript({
     || traceLoaded === true
     || (typeof traceLoaded === "undefined" && entries.length >= totalTraceCount);
   const shouldLazyLoadTrace = totalTraceCount > 0 && !hasCompleteTrace;
-  const processEntryCount = entries.filter((entry) => (
-    entry.kind !== "endless_error" && entry.kind !== "endless_continue"
-  )).length;
-  const traceSummaryProcessCount = typeof processCount === "number"
-    ? processCount
-    : Math.max(totalTraceCount, processEntryCount);
   const traceToolCount = toolCallCount ?? entries.filter((entry) => entry.kind === "tool").length;
-  const endlessEventCount = entries.filter((entry) => (
-    entry.kind === "endless_error" || entry.kind === "endless_continue"
-  )).length;
-  const traceSummaryLabel = [
-    traceSummaryProcessCount > 0
-      ? `${traceSummaryProcessCount} 条过程${traceToolCount > 0 ? ` · ${traceToolCount} 次工具` : ""}`
-      : "",
-    endlessEventCount > 0 ? `${endlessEventCount} 条无尽记录` : "",
-  ].filter(Boolean).join(" · ");
 
   useEffect(() => {
     if (!shouldLazyLoadTrace || !traceExpanded || isTraceLoading || traceLoadError || !onLoadTrace) {
@@ -622,6 +723,17 @@ export function NativeAgentTranscript({
       ? filterDuplicateFinalErrorItems(filterDuplicateFinalProcessItems(renderItems, originalResultText), originalResultText)
       : renderItems
   ), [renderItems, originalResultText, shouldFilterDuplicateFinal]);
+  const visibleProcessCount = countProcessEntries(displayRenderItems);
+  const traceSummaryProcessCount = hasCompleteTrace || typeof processCount !== "number"
+    ? visibleProcessCount
+    : processCount;
+  const endlessRetryCount = countEndlessRetries(entries);
+  const traceSummaryLabel = [
+    traceSummaryProcessCount > 0
+      ? `${traceSummaryProcessCount} 条过程${traceToolCount > 0 ? ` · ${traceToolCount} 次工具` : ""}`
+      : "",
+    endlessRetryCount > 0 ? `${endlessRetryCount} 次重试` : "",
+  ].filter(Boolean).join(" · ");
   const alwaysVisibleRenderItems = useMemo(() => (
     collapseProcess
       ? displayRenderItems.filter((item) => (
@@ -667,8 +779,15 @@ export function NativeAgentTranscript({
         onReplyPermission={allowPermissionReply ? replyPermission : undefined}
         onFileLinkClick={onFileLinkClick}
       />
-    ) : (
+    ) : item.kind === "group" ? (
       <TranscriptGroupRow
+        item={item}
+        replyingPermissionId={replyingPermissionId}
+        onReplyPermission={allowPermissionReply ? replyPermission : undefined}
+        onFileLinkClick={onFileLinkClick}
+      />
+    ) : (
+      <RetryGroupRow
         item={item}
         replyingPermissionId={replyingPermissionId}
         onReplyPermission={allowPermissionReply ? replyPermission : undefined}
@@ -679,7 +798,11 @@ export function NativeAgentTranscript({
 
   const renderTranscriptItems = (items: TranscriptRenderItem[]) => (
     items.map((item) => (
-      <div key={item.kind === "entry" ? item.entry.id : `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`}>
+      <div key={item.kind === "entry"
+        ? item.entry.id
+        : item.kind === "group"
+          ? `group-${item.groupIndex}-${item.entries[0]?.id || "empty"}`
+          : `retry-${item.retryGroupIndex}-${item.entries[0]?.id || "empty"}`}>
         {renderTranscriptItem(item)}
       </div>
     ))

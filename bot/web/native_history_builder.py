@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from bot.cli import cli_data_provider
-from bot.web.native_history_adapter import load_native_transcript
+from bot.web.native_history_adapter import _prune_redundant_summary_trace, load_native_transcript
 from bot.web.native_history_locator import (
     locate_claude_transcript,
     locate_codex_transcript,
@@ -112,10 +112,11 @@ def _merge_trace_lists(*sources: list[dict[str, Any]] | None) -> list[dict[str, 
     return merged
 
 
-def _count_process_events(trace: list[dict[str, Any]] | None) -> int:
+def _count_process_events(trace: list[dict[str, Any]] | None, final_text: str = "") -> int:
+    effective_trace = _prune_redundant_summary_trace(trace or [], final_text)
     return sum(
         1
-        for item in trace or []
+        for item in effective_trace
         if str(item.get("kind") or "") not in {"tool_call", "tool_result"}
     )
 
@@ -131,10 +132,12 @@ def _overlay_to_turn(
     include_trace: bool = True,
 ) -> dict[str, Any]:
     trace = _merge_trace_lists(native_trace, overlay.get("trace") or [])
+    content = str(overlay.get("summary_text") or "已终止，未返回可显示内容")
+    trace = _prune_redundant_summary_trace(trace, content)
     return {
         "id": f"overlay-{overlay.get('provider')}-{overlay.get('started_at') or overlay.get('updated_at') or ''}",
         "role": "assistant",
-        "content": str(overlay.get("summary_text") or "已终止，未返回可显示内容"),
+        "content": content,
         "created_at": str(overlay.get("started_at") or overlay.get("updated_at") or ""),
         "updated_at": str(overlay.get("updated_at") or overlay.get("started_at") or ""),
         "user_text": str(overlay.get("user_text") or ""),
@@ -144,7 +147,7 @@ def _overlay_to_turn(
             "trace_version": 1,
             "trace_count": len(trace),
             "tool_call_count": _count_tool_calls(trace),
-            "process_count": _count_process_events(trace),
+            "process_count": _count_process_events(trace, content),
             **({"trace": trace} if include_trace and trace else {}),
             "native_source": {
                 "provider": overlay.get("provider"),
@@ -354,14 +357,16 @@ def resolve_native_trace_for_turn(
 
     meta = dict(matched.get("meta") or {})
     trace = [dict(item) for item in meta.get("trace") or [] if isinstance(item, dict)]
+    content = str(matched.get("content") or "")
+    trace = _prune_redundant_summary_trace(trace, content)
     return {
         "provider": normalized_provider,
         "session_id": ref.session_id,
         "trace": trace,
-        "trace_count": int(meta.get("trace_count") or len(trace)),
+        "trace_count": len(trace),
         "tool_call_count": int(meta.get("tool_call_count") or _count_tool_calls(trace)),
-        "process_count": int(meta.get("process_count") or _count_process_events(trace)),
-        "content": str(matched.get("content") or ""),
+        "process_count": _count_process_events(trace, content),
+        "content": content,
         "user_text": str(matched.get("user_text") or ""),
         "transcript_path": str(ref.path),
     }
@@ -479,11 +484,13 @@ def get_web_chat_trace(profile, session, message_id: str) -> dict[str, Any] | No
             return None
         meta = dict(item.get("meta") or {})
         trace = [dict(event) for event in meta.get("trace") or [] if isinstance(event, dict)]
+        content = str(item.get("content") or "")
+        trace = _prune_redundant_summary_trace(trace, content)
         return {
             "message_id": target_id,
             "trace": trace,
-            "trace_count": int(meta.get("trace_count") or len(trace)),
+            "trace_count": len(trace),
             "tool_call_count": int(meta.get("tool_call_count") or _count_tool_calls(trace)),
-            "process_count": int(meta.get("process_count") or _count_process_events(trace)),
+            "process_count": _count_process_events(trace, content),
         }
     return None

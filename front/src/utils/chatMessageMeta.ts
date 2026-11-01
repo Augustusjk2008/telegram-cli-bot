@@ -1,5 +1,5 @@
 import type { ChatEndlessEvent, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
-import { isNativeAgentMessage, mergeChatTraceEvents } from "./nativeAgentTranscript";
+import { isDuplicateFinalProcessTrace, isNativeAgentMessage, mergeChatTraceEvents } from "./nativeAgentTranscript";
 
 function pickTraceCount(incomingValue?: number, baseValue?: number, summaryValue?: number) {
   if (typeof incomingValue === "number" && Number.isFinite(incomingValue)) {
@@ -34,7 +34,7 @@ function mergeEndlessEvents(
   sources: Array<ChatEndlessEvent[] | undefined>,
 ) {
   const merged: ChatEndlessEvent[] = [];
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   sources.forEach((source) => {
     (source || []).forEach((event, index) => {
       if (!event || (event.kind !== "error" && event.kind !== "continue")) {
@@ -55,16 +55,36 @@ function mergeEndlessEvents(
           : 0,
         text,
         ...(event.code ? { code: String(event.code) } : {}),
+        ...((event.createdAt || event.created_at)
+          ? { createdAt: String(event.createdAt || event.created_at) }
+          : {}),
       };
-      const key = `${normalized.sequence}:${normalized.kind}:${normalized.attempt}:${normalized.code || ""}:${normalized.text}`;
-      if (seen.has(key)) {
+      const key = `${normalized.kind}:${normalized.attempt}:${normalized.code || ""}:${normalized.text}`;
+      const existingIndex = seen.get(key);
+      if (typeof existingIndex === "number") {
+        if (!merged[existingIndex].createdAt && normalized.createdAt) {
+          merged[existingIndex] = { ...merged[existingIndex], createdAt: normalized.createdAt };
+        }
         return;
       }
-      seen.add(key);
+      seen.set(key, merged.length);
       merged.push(normalized);
     });
   });
-  merged.sort((left, right) => left.sequence - right.sequence);
+  if (merged.some((event) => event.createdAt)) {
+    merged.sort((left, right) => {
+      const leftTime = Date.parse(String(left.createdAt || ""));
+      const rightTime = Date.parse(String(right.createdAt || ""));
+      const leftOrder = Number.isNaN(leftTime) ? left.sequence : leftTime;
+      const rightOrder = Number.isNaN(rightTime) ? right.sequence : rightTime;
+      return leftOrder - rightOrder || left.sequence - right.sequence;
+    });
+  } else {
+    merged.sort((left, right) => left.sequence - right.sequence);
+  }
+  merged.forEach((event, index) => {
+    event.sequence = index + 1;
+  });
   return merged.length > 0 ? merged : undefined;
 }
 
@@ -79,19 +99,20 @@ export type MergeMessageMetaOptions = {
   traceMode?: "merge" | "replace";
 };
 
-export function summarizeTrace(trace?: ChatTraceEvent[]) {
+export function summarizeTrace(trace?: ChatTraceEvent[], finalText?: string) {
+  const visibleTrace = (trace || []).filter((item) => !finalText || !isDuplicateFinalProcessTrace(item, finalText));
   return {
     traceCount: trace?.length || 0,
-    toolCallCount: (trace || []).filter((item) => item.kind === "tool_call").length,
-    processCount: (trace || []).filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
+    toolCallCount: visibleTrace.filter((item) => item.kind === "tool_call").length,
+    processCount: visibleTrace.filter((item) => item.kind !== "tool_call" && item.kind !== "tool_result").length,
   };
 }
 
-export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo): ChatMessageMetaInfo | undefined {
+export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo, finalText?: string): ChatMessageMetaInfo | undefined {
   if (!meta) {
     return undefined;
   }
-  const traceSummary = meta.trace ? summarizeTrace(meta.trace) : undefined;
+  const traceSummary = meta.trace ? summarizeTrace(meta.trace, finalText) : undefined;
   const retainedTrace = meta.trace?.filter((event) => ["permission", "error", "cancelled"].includes(event.kind));
   const {
     trace: _trace,
@@ -101,9 +122,9 @@ export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo): ChatMes
   } = meta;
   const compactMeta: ChatMessageMetaInfo = {
     ...persistentMeta,
-    traceCount: pickTraceCount(meta.traceCount, undefined, traceSummary?.traceCount),
-    toolCallCount: pickTraceCount(meta.toolCallCount, undefined, traceSummary?.toolCallCount),
-    processCount: pickTraceCount(meta.processCount, undefined, traceSummary?.processCount),
+    traceCount: traceSummary ? traceSummary.traceCount : pickTraceCount(meta.traceCount),
+    toolCallCount: traceSummary ? traceSummary.toolCallCount : pickTraceCount(meta.toolCallCount),
+    processCount: traceSummary ? traceSummary.processCount : pickTraceCount(meta.processCount),
     trace: retainedTrace && retainedTrace.length > 0 ? retainedTrace : undefined,
     endlessEvents: meta.endlessEvents,
     endlessContinueCount: meta.endlessContinueCount,

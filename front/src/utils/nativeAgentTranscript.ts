@@ -353,6 +353,25 @@ function normalizeNativeAgentTrace(trace: ChatTraceEvent[]) {
     .map((item) => item.event);
 }
 
+function normalizeTranscriptText(value: string) {
+  return value
+    .replace(/<thinking\b[^>]*>[\s\S]*?<\/thinking>/gi, "")
+    .replace(/<thinking\b[^>]*>[\s\S]*$/gi, "")
+    .replace(/<\/thinking>/gi, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
+export function isDuplicateFinalProcessTrace(trace: ChatTraceEvent, finalText: string) {
+  const kind = String(trace.kind || "").trim();
+  const normalizedFinalText = normalizeTranscriptText(finalText);
+  if (!normalizedFinalText || (kind && kind !== "commentary" && kind !== "reasoning")) {
+    return false;
+  }
+  return normalizeTranscriptText(trace.summary || "") === normalizedFinalText;
+}
+
 function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {
   const hasNativeSource = trace.some((event) => {
     const source = asString(event.source).trim().toLowerCase();
@@ -517,6 +536,7 @@ function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(tra
     body,
     collapsedByDefault: !["process", "permission", "error", "cancelled"].includes(kind),
     trace,
+    ...(trace.createdAt ? { createdAt: trace.createdAt } : {}),
     ...(permission ? { permissionId: permission.permissionId, pending: isPermissionPending(trace), permission } : {}),
   };
 }
@@ -530,7 +550,32 @@ function endlessEventToEntry(event: ChatEndlessEvent): NativeAgentTranscriptEntr
     label: event.kind === "error" ? "错误" : "Continue",
     summary: event.text,
     collapsedByDefault: true,
+    attempt: event.attempt,
+    ...((event.createdAt || event.created_at) ? { createdAt: event.createdAt || event.created_at } : {}),
   };
+}
+
+function transcriptEntryTime(entry: NativeAgentTranscriptEntry) {
+  const value = Date.parse(String(entry.createdAt || ""));
+  return Number.isNaN(value) ? undefined : value;
+}
+
+function sortTranscriptEntries(entries: NativeAgentTranscriptEntry[]) {
+  const indexed = entries.map((entry, index) => ({
+    entry,
+    index,
+    time: transcriptEntryTime(entry),
+  }));
+  if (!indexed.some((item) => typeof item.time === "number")) {
+    return entries;
+  }
+  return indexed
+    .sort((left, right) => {
+      const leftOrder = left.time ?? left.entry.seq;
+      const rightOrder = right.time ?? right.entry.seq;
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map((item) => item.entry);
 }
 
 export function isNativeAgentMessage(meta?: ChatMessageMetaInfo): boolean {
@@ -564,5 +609,5 @@ export function buildNativeAgentTranscriptEntries(input: {
       ? [...input.agUiState.entries].sort((left, right) => left.seq - right.seq)
       : [];
   const endlessEntries = (input.endlessEvents || []).map(endlessEventToEntry);
-  return [...processEntries, ...endlessEntries];
+  return sortTranscriptEntries([...processEntries, ...endlessEntries]);
 }

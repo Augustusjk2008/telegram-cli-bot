@@ -907,6 +907,40 @@ describe("RealWebBotClient", () => {
     expect(message).toMatchObject({ id: "assistant-endless-success", text: "最终成功", state: "done" });
   });
 
+  test("falls back to the declared delay when retry_at_ms is already expired", async () => {
+    const now = Date.now();
+    fetchMock.mockResolvedValue(streamOk(
+      `event: endless_error\ndata: ${JSON.stringify({
+        type: "endless_error",
+        attempt: 1,
+        output: "过期时间戳",
+        next_delay_ms: 2500,
+        retry_at_ms: now - 100,
+        message: { id: "assistant-expired-error", role: "assistant", content: "过期时间戳", state: "error" },
+      })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({
+        type: "done",
+        output: "完成",
+        message: { id: "assistant-expired-retry", role: "assistant", content: "完成", state: "done" },
+      })}\n\n`,
+    ));
+
+    const errors: Array<{ nextDelayMs?: number; retryAtMs?: number }> = [];
+    await new RealWebBotClient().sendMessage(
+      "main",
+      "Continue",
+      () => undefined,
+      undefined,
+      undefined,
+      { endlessMode: true },
+      undefined,
+      (_message, _attempt, nextDelayMs, retryAtMs) => errors.push({ nextDelayMs, retryAtMs }),
+    );
+
+    expect(errors[0]?.nextDelayMs).toBe(2500);
+    expect(errors[0]?.retryAtMs).toBe(now - 100);
+  });
+
   test("maps compact CLI v1 and v2 terminal frames to identical final messages", async () => {
     const persistedMessage = {
       id: "assistant-compact-cli",

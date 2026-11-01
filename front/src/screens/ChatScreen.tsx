@@ -545,6 +545,29 @@ function normalizeInactiveStreamingRows(items: ChatMessage[], runtimeActive: boo
     });
 }
 
+function normalizeActiveEndlessRows(items: ChatMessage[]) {
+  const targetIndex = [...items].reverse().findIndex((item) => item.role === "assistant");
+  if (targetIndex < 0) {
+    return items;
+  }
+  const index = items.length - 1 - targetIndex;
+  const item = items[index];
+  const nextItem: ChatMessage = {
+    ...item,
+    text: item.state === "streaming" ? item.text : "",
+    state: "streaming",
+    ...(item.meta
+      ? { meta: { ...item.meta, completionState: "streaming" } }
+      : {}),
+  };
+  if (areMessageValuesEqual(item, nextItem)) {
+    return items;
+  }
+  const nextItems = items.slice();
+  nextItems[index] = nextItem;
+  return nextItems;
+}
+
 function normalizeResolvedFinalMessage(message: ChatMessage): ChatMessage {
   if (message.state === "error") {
     return message;
@@ -1358,7 +1381,9 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
       ...(mergedMeta ? { meta: mergedMeta } : {}),
     };
     if (preserveStreaming && (previousItem.state === "streaming" || item.state === "streaming")) {
-      return { ...mergedItem, text: previousItem.text, state: previousItem.state, meta: previousItem.meta };
+      return previousItem.state === "streaming"
+        ? { ...mergedItem, text: previousItem.text, state: "streaming" as const, ...(mergedMeta ? { meta: mergedMeta } : {}) }
+        : { ...mergedItem, text: item.text, state: "streaming" as const, ...(mergedMeta ? { meta: mergedMeta } : {}) };
     }
     return areMessageValuesEqual(previousItem, mergedItem) ? previousItem : mergedItem;
   });
@@ -2306,9 +2331,8 @@ export function ChatScreen({
     if (botOverview?.endlessMode === true && botOverview.isProcessing) {
       endlessModeRef.current = true;
       setEndlessModeActive(true);
-      if (Number(botOverview.endlessRetryAtMs || 0) > Date.now()) {
-        setEndlessRetryDeadlineMs(Number(botOverview.endlessRetryAtMs));
-      }
+      const retryAtMs = Number(botOverview.endlessRetryAtMs || 0);
+      setEndlessRetryDeadlineMs(retryAtMs > Date.now() ? retryAtMs : null);
       const endlessAttempt = Math.max(0, botOverview.endlessAttempt || 0);
       if (endlessAttempt > 0) {
         setItems((current) => {
@@ -2446,8 +2470,18 @@ export function ChatScreen({
   ) => {
     const wasStreaming = isStreamingRef.current;
     const hasStreamingMessage = hasPersistedStreamingAssistant(messages);
-    const runtimeActive = Boolean(overview.isProcessing || (options.keepStreamingRowsActive && hasStreamingMessage));
-    const nextItems = normalizeInactiveStreamingRows(messages, runtimeActive);
+    const endlessRuntimeActive = Boolean(
+      endlessModeRef.current
+      || (overview.endlessMode === true && overview.isProcessing),
+    );
+    const runtimeActive = Boolean(
+      overview.isProcessing
+      || endlessRuntimeActive
+      || (options.keepStreamingRowsActive && hasStreamingMessage),
+    );
+    const nextItems = endlessRuntimeActive
+      ? normalizeActiveEndlessRows(messages)
+      : normalizeInactiveStreamingRows(messages, runtimeActive);
     const hasStreamingRow = nextItems.some((item) => item.role === "assistant" && item.state === "streaming");
     const shouldPoll = Boolean(overview.isProcessing || hasStreamingRow);
 
@@ -2462,7 +2496,7 @@ export function ChatScreen({
       }
       : null;
 
-    setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems));
+    setItems((prev) => mergeMessagesPreservingClientState(prev, nextItems, endlessRuntimeActive));
     isStreamingRef.current = shouldPoll;
     streamModeRef.current = shouldPoll ? "poll" : "";
     setIsStreaming(shouldPoll);
@@ -2699,6 +2733,7 @@ export function ChatScreen({
         || FRONTEND_FEATURE_FLAGS.historyRevisionSync
         || overview.isProcessing
         || overview.runningReply
+        || endlessModeRef.current
         || hasStreamingAssistant
         || (typeof overview.historyCount === "number" && overview.historyCount !== previousCount),
       );
@@ -2743,8 +2778,14 @@ export function ChatScreen({
       }
 
       if (allowDuringSse && isSseStreaming()) {
-        const activeMessages = normalizeInactiveStreamingRows(messages, true);
-        setItems((prev) => mergeMessagesPreservingClientState(prev, activeMessages));
+        const endlessRuntimeActive = Boolean(
+          endlessModeRef.current
+          || (overview.endlessMode === true && overview.isProcessing),
+        );
+        const activeMessages = endlessRuntimeActive
+          ? normalizeActiveEndlessRows(messages)
+          : normalizeInactiveStreamingRows(messages, true);
+        setItems((prev) => mergeMessagesPreservingClientState(prev, activeMessages, endlessRuntimeActive));
         return true;
       }
 
@@ -4340,13 +4381,36 @@ export function ChatScreen({
         streamAssistantMessageId = "";
         usingPreviewReplace = false;
         const visibleError: ChatMessage = { ...message, state: "error" };
+        const receivedAtMs = Date.now();
+        const receivedAt = new Date(receivedAtMs).toISOString();
         markSseActivity();
         setItems((current) => updateActiveAssistantMessage(
           current,
           previousTarget,
-          (item) => ({ ...item, text: "", state: "streaming" }),
+          (item) => {
+            const sequence = Math.max(
+              0,
+              ...(item.meta?.endlessEvents || []).map((event) => Number(event.sequence) || 0),
+            ) + 1;
+            const meta = mergeMessageMeta(item.meta, {
+              completionState: "streaming",
+              endlessEvents: [{
+                kind: "error",
+                sequence,
+                attempt: Math.max(0, Math.floor(attempt || 0)),
+                text: visibleError.text || "Continue 执行失败",
+                createdAt: receivedAt,
+              }],
+            });
+            return { ...item, text: "", state: "streaming", ...(meta ? { meta } : {}) };
+          },
         ));
-        setEndlessRetryDeadlineMs(retryAtMs && retryAtMs > 0 ? retryAtMs : Date.now() + Math.max(0, nextDelayMs));
+        setEndlessModeActive(true);
+        endlessModeRef.current = true;
+        const serverRetryAtMs = typeof retryAtMs === "number" && Number.isFinite(retryAtMs) && retryAtMs > receivedAtMs
+          ? retryAtMs
+          : null;
+        setEndlessRetryDeadlineMs(serverRetryAtMs || receivedAtMs + Math.max(0, nextDelayMs));
         const activeBinding = activeTurnBindingRef.current;
         if (activeBinding?.localAssistantId === assistantId) {
           activeBinding.turnId = "";
@@ -4354,7 +4418,7 @@ export function ChatScreen({
         }
         options.onEndlessError?.(visibleError, attempt, nextDelayMs, retryAtMs);
       };
-      const handleEndlessContinue = (_attempt: number) => {
+      const handleEndlessContinue = (attempt: number) => {
         if (sendVersion !== assistantSendVersionRef.current) {
           return;
         }
@@ -4363,7 +4427,23 @@ export function ChatScreen({
         setItems((current) => updateActiveAssistantMessage(
           current,
           activeAssistantTarget(),
-          (item) => ({ ...item, text: "", state: "streaming" }),
+          (item) => {
+            const sequence = Math.max(
+              0,
+              ...(item.meta?.endlessEvents || []).map((event) => Number(event.sequence) || 0),
+            ) + 1;
+            const meta = mergeMessageMeta(item.meta, {
+              completionState: "streaming",
+              endlessEvents: [{
+                kind: "continue",
+                sequence,
+                attempt: Math.max(0, Math.floor(attempt || 0)),
+                text: "Continue",
+                createdAt: new Date().toISOString(),
+              }],
+            });
+            return { ...item, text: "", state: "streaming", ...(meta ? { meta } : {}) };
+          },
         ));
       };
       const requestSendOptions: ChatSendOptions | undefined = (() => {
@@ -4508,7 +4588,7 @@ export function ChatScreen({
         activeBinding.assistantMessageId = finalizedMessage.id || streamAssistantMessageId;
       }
       const callbackMessage = finalizedMessage.state === "done"
-        ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta) }
+        ? { ...finalizedMessage, meta: compactCompletedMessageMeta(finalizedMessage.meta, finalizedMessage.text) }
         : finalizedMessage;
 
       const mergeFinalMessage = (item: ChatMessage, final: ChatMessage) => {
@@ -4521,7 +4601,7 @@ export function ChatScreen({
         return {
           ...final,
           ...mergeMessageTranslation(item, final),
-          meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta) : mergedMeta,
+          meta: final.state === "done" ? compactCompletedMessageMeta(mergedMeta, final.text) : mergedMeta,
         };
       };
       setItems((prev) => {

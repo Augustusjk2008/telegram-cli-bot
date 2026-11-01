@@ -484,7 +484,7 @@ def _prune_redundant_summary_trace(trace: list[dict[str, Any]], summary_text: st
     pruned = [dict(item) for item in trace]
     while pruned:
         kind = str(pruned[-1].get("kind") or "")
-        if kind != "commentary":
+        if kind not in {"commentary", "reasoning"}:
             break
         if not _is_trace_summary_redundant(summary_text, pruned[-1].get("summary")):
             break
