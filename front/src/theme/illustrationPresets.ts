@@ -22,6 +22,7 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "alpine-fog",
   "moonlit-garden",
   "armor-core-hud",
+  "apollo-plan",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
 const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
@@ -73,6 +74,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "alpine-fog", label: "高山薄雾插画组" },
   { id: "moonlit-garden", label: "月夜花园插画组" },
   { id: "armor-core-hud", label: "装甲核心 HUD 插画组" },
+  { id: "apollo-plan", label: "阿波罗计划插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -111,6 +113,12 @@ export const ILLUSTRATION_TEMPLATES = [
     label: "装甲核心 HUD",
     description: "枪灰装甲、红色操作、青蓝反应堆和金色结构",
     colors: { accent: "#D22E42FF", "accent.strong": "#51E6FFFF" },
+  },
+  {
+    id: "apollo-plan",
+    label: "阿波罗计划",
+    description: "白色舱体、钴蓝导航和安全橙任务状态",
+    colors: { accent: "#0057B8FF", "accent.strong": "#F26A21FF" },
   },
 ] as const;
 

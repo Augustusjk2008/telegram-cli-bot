@@ -30,7 +30,8 @@ export type ThemeIllustrationSetId =
   | "desert-dusk"
   | "alpine-fog"
   | "moonlit-garden"
-  | "armor-core-hud";
+  | "armor-core-hud"
+  | "apollo-plan";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
 

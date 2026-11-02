@@ -4,7 +4,7 @@ import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
 import { builtinIllustrationScene } from "../theme/illustrationPresets";
 
-function appearanceFor(setId: "forest-grove" | "none" = "forest-grove") {
+function appearanceFor(setId: "forest-grove" | "apollo-plan" | "none" = "forest-grove") {
   const scene = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationScene(setId, surface);
   return resolveAppearance({
     ...BUILTIN_THEME,
@@ -56,6 +56,34 @@ describe("ThemeIllustrationLayer", () => {
     expect(screen.getByTestId("theme-illustration-layer-agentManager")).toHaveAttribute("data-theme-illustration-count", "1");
     expect(screen.getByTestId("theme-illustration-layer-adminCenter").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("adminCenter-background");
     expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img")?.getAttribute("data-theme-illustration-layer-id")).toBe("agentManager-background");
+  });
+
+  it("resolves and renders the Apollo Plan scene assets", () => {
+    const appearance = appearanceFor("apollo-plan");
+    expect(appearance.illustrations.resources.workbench).toBe(
+      "/assets/theme-illustrations/apollo-plan/workbench/background.webp",
+    );
+    expect(appearance.illustrations.resources.adminCenter).toBe(
+      "/assets/theme-illustrations/apollo-plan/admin-center/background.webp",
+    );
+    expect(appearance.illustrations.resources.agentManager).toBe(
+      "/assets/theme-illustrations/apollo-plan/agent-manager/background.webp",
+    );
+    render(
+      <>
+        <ThemeIllustrationLayer surface="workbench" appearance={appearance} />
+        <ThemeIllustrationLayer surface="adminCenter" appearance={appearance} />
+        <ThemeIllustrationLayer surface="agentManager" appearance={appearance} />
+      </>,
+    );
+    expect(screen.getByTestId("theme-illustration-layer-workbench")).toHaveAttribute(
+      "data-theme-illustration-count",
+      "1",
+    );
+    expect(screen.getByTestId("theme-illustration-layer-adminCenter").querySelector("img"))
+      .toHaveAttribute("data-theme-illustration-asset", "apollo-plan-admin-center");
+    expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img"))
+      .toHaveAttribute("data-theme-illustration-asset", "apollo-plan-agent-manager");
   });
 
   it("scopes the workbench illustration to the main area and sidebar area", () => {
