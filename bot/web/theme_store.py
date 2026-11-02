@@ -214,7 +214,7 @@ def builtin_library(builtin_override: dict[str, Any] | None = None) -> dict[str,
     theme = {
         "schemaVersion": 1,
         "id": BUILTIN_THEME_ID,
-        "name": "纸感日间",
+        "name": "钢铁核心",
         "baseId": BUILTIN_THEME_ID,
         "appearance": {
             "colors": {"scheme": "light", "overrides": {}},

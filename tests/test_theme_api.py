@@ -85,7 +85,7 @@ async def test_public_and_authenticated_reads_return_the_packaged_presets(api):
     status, public = await request(api, "GET", "/api/public/ui/themes", token="")
     assert status == 200
     assert [theme["name"] for theme in public["data"]["themes"]] == [
-        "纸感日间", "雾蓝清晨", "青松纸笺", "暮海深蓝", "紫雾夜航", "钢铁侠·装甲核心 HUD",
+        "钢铁核心",
     ]
     assert all(theme["readonly"] is True for theme in public["data"]["themes"])
 
@@ -139,4 +139,4 @@ async def test_corrupt_runtime_selection_is_reported_without_replacing_packaged_
 
     assert status == 200
     assert "原文件已保留" in payload["data"]["error"]
-    assert len(payload["data"]["themes"]) == 6
+    assert len(payload["data"]["themes"]) == 1

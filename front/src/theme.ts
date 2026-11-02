@@ -41,7 +41,7 @@ const paper = resolveAppearance(BUILTIN_THEME);
 export const UI_THEME_OPTIONS = [{
   value: BUILTIN_THEME.id,
   label: BUILTIN_THEME.name,
-  description: "明亮纸白界面搭配陶橙与柔和蓝灰，适合日间阅读。",
+  description: "枪灰装甲、红色操作与青蓝核心，适合深色工作环境。",
   preview: {
     accent: paper.colors.accent,
     surface: paper.colors["surface.base"],

@@ -45,7 +45,7 @@ const PRESET_LIBRARY = presetCatalog as unknown as ThemeLibrary;
 export const BUILTIN_THEME: UiTheme = PRESET_LIBRARY.themes.find((theme) => theme.id === "paper-daylight") || {
   schemaVersion: 1,
   id: "paper-daylight",
-  name: "纸感日间",
+  name: "钢铁核心",
   baseId: "paper-daylight",
   appearance: {
     colors: { scheme: "light", overrides: {} },

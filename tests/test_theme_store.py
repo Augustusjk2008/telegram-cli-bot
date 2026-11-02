@@ -8,7 +8,7 @@ import pytest
 from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
 
 
-PRESET_NAMES = ["纸感日间", "雾蓝清晨", "青松纸笺", "暮海深蓝", "紫雾夜航", "钢铁侠·装甲核心 HUD"]
+PRESET_NAMES = ["钢铁核心"]
 
 
 @pytest.fixture
@@ -25,12 +25,12 @@ def test_packaged_presets_are_loaded_as_readonly_themes(store: ThemeStore) -> No
     assert library["revision"] == 0
     assert not store.library_path.exists()
 
-    library["themes"][1]["name"] = "外部修改"
-    assert store.list_library()["themes"][1]["name"] == "雾蓝清晨"
+    library["themes"][0]["name"] = "外部修改"
+    assert store.list_library()["themes"][0]["name"] == "钢铁核心"
 
 
 def test_runtime_library_only_keeps_selection_and_cannot_override_presets(store: ThemeStore) -> None:
-    preset_id = store.list_library()["themes"][2]["id"]
+    preset_id = store.list_library()["themes"][0]["id"]
     store.library_path.parent.mkdir(parents=True)
     store.library_path.write_text(json.dumps({
         "schemaVersion": 1,
@@ -47,7 +47,7 @@ def test_runtime_library_only_keeps_selection_and_cannot_override_presets(store:
     library = store.list_library()
     assert library["revision"] == 41
     assert library["selectedThemeId"] == preset_id
-    assert library["themes"][2]["name"] == "青松纸笺"
+    assert library["themes"][0]["name"] == "钢铁核心"
     assert all(theme["readonly"] is True for theme in library["themes"])
 
 

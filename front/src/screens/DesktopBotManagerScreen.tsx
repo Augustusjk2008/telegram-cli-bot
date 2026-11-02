@@ -1469,7 +1469,7 @@ export function DesktopBotManagerScreen({
     <main
       data-testid="desktop-bot-manager-screen"
       data-ui-density="compact"
-      className="theme-illustration-host flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
+      className="desktop-bot-manager-screen theme-illustration-host flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
     >
       <ThemeIllustrationLayer surface="agentManager" className="theme-illustration-fixed" />
       <header className="theme-illustration-host border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">

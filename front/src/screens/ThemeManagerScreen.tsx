@@ -903,7 +903,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           <span>
             当前应用：
             {library.themes.find((theme) => theme.id === appearance.themeId)
-              ?.name || "纸感日间"}
+              ?.name || "钢铁核心"}
           </span>
           {onClose && (
             <button
@@ -1534,7 +1534,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               <p>
                 将删除“{draft.theme.name}”。
                 {draft.theme.id === library.selectedThemeId
-                  ? "当前应用会恢复为纸感日间。"
+                  ? "当前应用会恢复为钢铁核心。"
                   : ""}
                 {dirty ? "未保存的更改也会丢弃。" : ""}
               </p>

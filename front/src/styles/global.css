@@ -117,6 +117,28 @@ select:disabled {
   cursor: not-allowed;
 }
 
+:root[data-color-scheme="dark"] .chat-compact-select {
+  color-scheme: dark;
+  background-color: var(--workbench-panel-bg);
+  color: var(--text);
+}
+
+:root[data-color-scheme="dark"] .chat-compact-select option {
+  background-color: var(--workbench-panel-bg);
+  color: var(--text);
+}
+
+.desktop-bot-manager-screen > header,
+.desktop-bot-manager-screen > [data-testid="desktop-bot-manager-list"],
+.desktop-bot-manager-screen > .grid > [role="separator"],
+.desktop-bot-manager-screen > .grid > aside {
+  background-color: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+
+.desktop-bot-manager-screen > .grid > [role="separator"] {
+  background-color: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+
 :where(button, [role="button"], a, input, textarea, select):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;

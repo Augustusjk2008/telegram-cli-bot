@@ -4,7 +4,7 @@ import type { UiTheme, ThemeLibrary } from "../theme/types";
 test.skip(!process.env.PLAYWRIGHT_BASE_URL, "Requires a user-started application");
 
 const BUILTIN_THEME: UiTheme = {
-  schemaVersion: 1, id: "paper-daylight", name: "纸感日间", baseId: "paper-daylight",
+  schemaVersion: 1, id: "paper-daylight", name: "钢铁核心", baseId: "paper-daylight",
   appearance: { colors: { scheme: "light", overrides: {} } }, readonly: false, version: 1, updatedAt: "",
 };
 
