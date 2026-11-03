@@ -4,7 +4,9 @@ import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
 import { builtinIllustrationScene } from "../theme/illustrationPresets";
 
-function appearanceFor(setId: "forest-grove" | "apollo-plan" | "cyberpunk-2077" | "none" = "forest-grove") {
+function appearanceFor(
+  setId: "forest-grove" | "apollo-plan" | "cyberpunk-2077" | "deepseek-big-fish" | "none" = "forest-grove",
+) {
   const scene = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationScene(setId, surface);
   return resolveAppearance({
     ...BUILTIN_THEME,
@@ -119,5 +121,21 @@ describe("ThemeIllustrationLayer", () => {
     render(<ThemeIllustrationLayer surface="workbench" appearance={appearance} />);
     expect(screen.getByTestId("theme-illustration-layer-workbench").querySelector("img"))
       .toHaveAttribute("data-theme-illustration-asset", "cyberpunk-2077-workbench");
+  });
+
+  it("resolves the Deepseek big fish scene assets", () => {
+    const appearance = appearanceFor("deepseek-big-fish");
+    expect(appearance.illustrations.resources.workbench).toBe(
+      "/assets/theme-illustrations/deepseek-big-fish/workbench/background.webp",
+    );
+    expect(appearance.illustrations.resources.adminCenter).toBe(
+      "/assets/theme-illustrations/deepseek-big-fish/admin-center/background.webp",
+    );
+    expect(appearance.illustrations.resources.agentManager).toBe(
+      "/assets/theme-illustrations/deepseek-big-fish/agent-manager/background.webp",
+    );
+    render(<ThemeIllustrationLayer surface="workbench" appearance={appearance} />);
+    expect(screen.getByTestId("theme-illustration-layer-workbench").querySelector("img"))
+      .toHaveAttribute("data-theme-illustration-asset", "deepseek-big-fish-workbench");
   });
 });

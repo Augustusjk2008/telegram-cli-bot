@@ -33,7 +33,8 @@ export type ThemeIllustrationSetId =
   | "armor-core-hud"
   | "apollo-plan"
   | "mint-citrus"
-  | "cyberpunk-2077";
+  | "cyberpunk-2077"
+  | "deepseek-big-fish";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
 

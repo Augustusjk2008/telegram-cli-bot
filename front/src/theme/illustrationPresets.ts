@@ -25,6 +25,7 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "apollo-plan",
   "mint-citrus",
   "cyberpunk-2077",
+  "deepseek-big-fish",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
 const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
@@ -79,6 +80,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "apollo-plan", label: "阿波罗计划插画组" },
   { id: "mint-citrus", label: "薄荷柑橘插画组" },
   { id: "cyberpunk-2077", label: "赛博朋克 2077 插画组" },
+  { id: "deepseek-big-fish", label: "Deepseek 大肥鱼插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -135,6 +137,12 @@ export const ILLUSTRATION_TEMPLATES = [
     label: "赛博朋克 2077",
     description: "安全黄、霓虹青和热粉紫",
     colors: { accent: "#F5E500FF", "accent.strong": "#00E5FFFF" },
+  },
+  {
+    id: "deepseek-big-fish",
+    label: "Deepseek 大肥鱼",
+    description: "深海蓝、青色光和安静的海流",
+    colors: { accent: "#2F8EDBFF", "accent.strong": "#68D9FFFF" },
   },
 ] as const;
 

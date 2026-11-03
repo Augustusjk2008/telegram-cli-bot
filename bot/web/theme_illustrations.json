@@ -781,6 +781,68 @@
           }
         ]
       }
+    },
+    "deepseek-big-fish": {
+      "workbench": {
+        "layers": [
+          {
+            "id": "deepseek-big-fish-workbench",
+            "asset": {
+              "assetId": "deepseek-big-fish-workbench",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "9f31fc70a3672ea14f0981f089f1b407586dbd12892a28ed3059968827d32eac",
+              "path": "/assets/theme-illustrations/deepseek-big-fish/workbench/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      },
+      "adminCenter": {
+        "layers": [
+          {
+            "id": "deepseek-big-fish-adminCenter",
+            "asset": {
+              "assetId": "deepseek-big-fish-admin-center",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "9f31fc70a3672ea14f0981f089f1b407586dbd12892a28ed3059968827d32eac",
+              "path": "/assets/theme-illustrations/deepseek-big-fish/admin-center/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      },
+      "agentManager": {
+        "layers": [
+          {
+            "id": "deepseek-big-fish-agentManager",
+            "asset": {
+              "assetId": "deepseek-big-fish-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "9f31fc70a3672ea14f0981f089f1b407586dbd12892a28ed3059968827d32eac",
+              "path": "/assets/theme-illustrations/deepseek-big-fish/agent-manager/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      }
     }
   }
 }

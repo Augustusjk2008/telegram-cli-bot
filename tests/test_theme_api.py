@@ -89,6 +89,7 @@ async def test_public_and_authenticated_reads_return_the_packaged_presets(api):
         "阿波罗计划",
         "薄荷柑橘",
         "赛博朋克",
+        "Deepseek",
     ]
     assert all(theme["readonly"] is True for theme in public["data"]["themes"])
 
@@ -105,7 +106,7 @@ async def test_members_and_admins_can_select_but_cannot_modify_presets(api):
         "expectedRevision": listed["data"]["revision"],
     })
     assert status == 200 and selected["data"]["selectedThemeId"] == selected_id
-    assert selected_id == "theme_3dc3829743be9c6941e6da88c0f780a1"
+    assert selected_id == "theme_6f7ac1823da81d2e52d1a1549ee69c85"
 
     operations = [
         ("POST", "/api/ui/themes", create_input()),
@@ -143,4 +144,4 @@ async def test_corrupt_runtime_selection_is_reported_without_replacing_packaged_
 
     assert status == 200
     assert "原文件已保留" in payload["data"]["error"]
-    assert len(payload["data"]["themes"]) == 4
+    assert len(payload["data"]["themes"]) == 5
