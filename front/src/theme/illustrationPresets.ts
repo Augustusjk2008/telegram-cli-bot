@@ -23,6 +23,7 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "moonlit-garden",
   "armor-core-hud",
   "apollo-plan",
+  "mint-citrus",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
 const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
@@ -75,6 +76,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "moonlit-garden", label: "月夜花园插画组" },
   { id: "armor-core-hud", label: "装甲核心 HUD 插画组" },
   { id: "apollo-plan", label: "阿波罗计划插画组" },
+  { id: "mint-citrus", label: "薄荷柑橘插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -118,7 +120,13 @@ export const ILLUSTRATION_TEMPLATES = [
     id: "apollo-plan",
     label: "阿波罗计划",
     description: "白色舱体、钴蓝导航和安全橙任务状态",
-    colors: { accent: "#0057B8FF", "accent.strong": "#F26A21FF" },
+    colors: { accent: "#0057B8FF", "accent.strong": "#B84A0EFF" },
+  },
+  {
+    id: "mint-citrus",
+    label: "薄荷柑橘",
+    description: "薄荷绿、青柠黄和珊瑚橙",
+    colors: { accent: "#087F4FFF", "accent.strong": "#B4472EFF" },
   },
 ] as const;
 

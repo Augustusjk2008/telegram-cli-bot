@@ -31,7 +31,8 @@ export type ThemeIllustrationSetId =
   | "alpine-fog"
   | "moonlit-garden"
   | "armor-core-hud"
-  | "apollo-plan";
+  | "apollo-plan"
+  | "mint-citrus";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
 

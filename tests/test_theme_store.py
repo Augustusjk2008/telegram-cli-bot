@@ -8,7 +8,7 @@ import pytest
 from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
 
 
-PRESET_NAMES = ["钢铁核心", "阿波罗计划"]
+PRESET_NAMES = ["钢铁核心", "阿波罗计划", "薄荷柑橘"]
 
 
 @pytest.fixture
@@ -91,3 +91,17 @@ def test_packaged_preset_file_contains_only_builtin_illustration_assets() -> Non
     for theme in data["themes"]:
         for scene in theme["appearance"]["illustrations"]["scenes"].values():
             assert all(layer["asset"]["kind"] == "builtin" for layer in scene["layers"])
+
+
+def test_light_presets_use_the_auxiliary_accent_for_file_tree_folder_semantics() -> None:
+    path = Path(__file__).parents[1] / "bot" / "web" / "theme_presets.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    for theme in data["themes"]:
+        if theme["name"] == "钢铁核心":
+            continue
+        overrides = theme["appearance"]["colors"]["overrides"]
+        assert overrides["fileTree.folder"] == overrides["accent.strong"]
+        assert overrides["fileList.folderIcon"] == overrides["accent.strong"]
+        assert overrides["control.focusRing"] == overrides["accent.strong"]
+        assert overrides["identity.codex"] == overrides["accent.strong"]
