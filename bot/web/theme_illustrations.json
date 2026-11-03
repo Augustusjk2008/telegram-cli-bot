@@ -606,7 +606,7 @@
               "mimeType": "image/webp",
               "width": 1672,
               "height": 941,
-              "sha256": "32997f9951198093d1fc7be0228f5ccae4a7d9351ff7f1b99cecee6aa04779a7",
+              "sha256": "f870fe8a901d1b31b97b33fa6fa3843a32a03474a7ed5f669ecebdf2fb9f8767",
               "path": "/assets/theme-illustrations/apollo-plan/workbench/background.webp"
             },
             "anchor": "center",
@@ -626,7 +626,7 @@
               "mimeType": "image/webp",
               "width": 1672,
               "height": 941,
-              "sha256": "d7e3be3b81c7fc9480cb3fec24e7824164ca7f66a779d9f3fe9a92ea3ff90f2a",
+              "sha256": "05723301756e8d386597d1988bc1af65c1cc5fb22da4ba7e38c78c9dc64245c7",
               "path": "/assets/theme-illustrations/apollo-plan/admin-center/background.webp"
             },
             "anchor": "center",
@@ -646,7 +646,7 @@
               "mimeType": "image/webp",
               "width": 1672,
               "height": 941,
-              "sha256": "d67f4669b29b9e332a2bf4443f493dccde0384c77d6434e29360621ea19b74cb",
+              "sha256": "948b84c115727f6cacbacc2cc73c1b747a1fdb7fe74e92549807b89e3acce235",
               "path": "/assets/theme-illustrations/apollo-plan/agent-manager/background.webp"
             },
             "anchor": "center",
