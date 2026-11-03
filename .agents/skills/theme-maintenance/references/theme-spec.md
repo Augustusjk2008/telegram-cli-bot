@@ -4,13 +4,14 @@
 
 ## 主题系统边界
 
-当前发布包包含三套只读预置主题，顺序和身份如下：
+当前发布包包含四套只读预置主题，顺序和身份如下：
 
 | ID | 名称 | 角色 | 当前插画组 |
 | --- | --- | --- | --- |
 | `paper-daylight` | 钢铁核心 | 默认主题，保留这个 ID | `armor-core-hud` |
 | `theme_0f2e4a8c1d6b4f90a3c7e5b2d8f1046a` | 阿波罗计划 | 发布预置 | `apollo-plan` |
 | `theme_92ba863d3714c089235dfcef47ce3415` | 薄荷柑橘 | 发布预置 | `mint-citrus` |
+| `theme_3dc3829743be9c6941e6da88c0f780a1` | 赛博朋克 | 发布预置 | `cyberpunk-2077` |
 
 每套发布预置都具有 `schemaVersion: 1`、`baseId: "paper-daylight"` 和 `readonly: true`。默认主题应保持在主题列表首位。新增主题时先读取 `bot/web/theme_presets.json`，不要把上表的数量当成永远不变的常量。
 
@@ -94,7 +95,7 @@
 - `chatBodyLineHeight`: `tight`、`normal` 或 `relaxed`
 - `chatBodyParagraphSpacing`: `tight`、`normal` 或 `relaxed`
 
-当前三套发布主题都显式保存默认排版值。编辑主题时保持这四项完整，避免产生依赖隐式默认值的半配置。
+当前四套发布主题都显式保存默认排版值。编辑主题时保持这四项完整，避免产生依赖隐式默认值的半配置。
 
 ## 插画契约
 
@@ -120,6 +121,6 @@
 
 内置资源必须来自 `theme_illustrations.json`，并完整匹配其中的 `assetId`、`mimeType`、`width`、`height` 和 `sha256`。资源路径必须与 `front/public/assets/` 下的实际文件对应。上传资源另有单文件 4 MiB、单主题总量 12 MiB 的限制；发布预置不应把上传资源写入主题文件。
 
-当前插画目录有 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan` 和 `mint-citrus` 九个组。`none` 是无装饰的基线。插画目录和后端允许列表、前端 `ThemeIllustrationSetId` 联合类型及选项数组必须保持同步。
+当前插画目录有 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus` 和 `cyberpunk-2077` 十个组。`none` 是无装饰的基线。插画目录和后端允许列表、前端 `ThemeIllustrationSetId` 联合类型及选项数组必须保持同步。
 
 旧版 `setId`/`upload` 格式仍用于导入和迁移。新发布数据使用 `scenes` 规范，除非任务本身是在维护迁移兼容性，否则不要新增旧格式。

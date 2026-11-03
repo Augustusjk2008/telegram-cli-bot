@@ -32,7 +32,8 @@ export type ThemeIllustrationSetId =
   | "moonlit-garden"
   | "armor-core-hud"
   | "apollo-plan"
-  | "mint-citrus";
+  | "mint-citrus"
+  | "cyberpunk-2077";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
 

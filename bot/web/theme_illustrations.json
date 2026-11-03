@@ -719,6 +719,68 @@
           }
         ]
       }
+    },
+    "cyberpunk-2077": {
+      "workbench": {
+        "layers": [
+          {
+            "id": "cyberpunk-2077-workbench",
+            "asset": {
+              "assetId": "cyberpunk-2077-workbench",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "781ba278c436d27d37847fe0624acde51afd48436ae37a635d70803286788c17",
+              "path": "/assets/theme-illustrations/cyberpunk-2077/workbench/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      },
+      "adminCenter": {
+        "layers": [
+          {
+            "id": "cyberpunk-2077-adminCenter",
+            "asset": {
+              "assetId": "cyberpunk-2077-admin-center",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "06946173a7bd61e8f49892ad4247bc4094b26cecbdfbd1a6e5157afeb21c53b7",
+              "path": "/assets/theme-illustrations/cyberpunk-2077/admin-center/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      },
+      "agentManager": {
+        "layers": [
+          {
+            "id": "cyberpunk-2077-agentManager",
+            "asset": {
+              "assetId": "cyberpunk-2077-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "a46b3d498c636baed52163a2cc892c1bd3f07dcc5e15215eab3cb6f186affafe",
+              "path": "/assets/theme-illustrations/cyberpunk-2077/agent-manager/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      }
     }
   }
 }

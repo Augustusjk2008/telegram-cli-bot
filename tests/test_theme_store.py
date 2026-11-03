@@ -8,7 +8,7 @@ import pytest
 from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
 
 
-PRESET_NAMES = ["钢铁核心", "阿波罗计划", "薄荷柑橘"]
+PRESET_NAMES = ["钢铁核心", "阿波罗计划", "薄荷柑橘", "赛博朋克"]
 
 
 @pytest.fixture
@@ -99,6 +99,8 @@ def test_light_presets_use_the_auxiliary_accent_for_file_tree_folder_semantics()
 
     for theme in data["themes"]:
         if theme["name"] == "钢铁核心":
+            continue
+        if theme["appearance"]["colors"]["scheme"] != "light":
             continue
         overrides = theme["appearance"]["colors"]["overrides"]
         assert overrides["fileTree.folder"] == overrides["accent.strong"]

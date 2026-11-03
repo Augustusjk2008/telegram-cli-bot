@@ -24,6 +24,7 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "armor-core-hud",
   "apollo-plan",
   "mint-citrus",
+  "cyberpunk-2077",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
 const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
@@ -77,6 +78,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "armor-core-hud", label: "装甲核心 HUD 插画组" },
   { id: "apollo-plan", label: "阿波罗计划插画组" },
   { id: "mint-citrus", label: "薄荷柑橘插画组" },
+  { id: "cyberpunk-2077", label: "赛博朋克 2077 插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -127,6 +129,12 @@ export const ILLUSTRATION_TEMPLATES = [
     label: "薄荷柑橘",
     description: "薄荷绿、青柠黄和珊瑚橙",
     colors: { accent: "#087F4FFF", "accent.strong": "#B4472EFF" },
+  },
+  {
+    id: "cyberpunk-2077",
+    label: "赛博朋克 2077",
+    description: "安全黄、霓虹青和热粉紫",
+    colors: { accent: "#F5E500FF", "accent.strong": "#00E5FFFF" },
   },
 ] as const;
 

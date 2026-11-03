@@ -4,7 +4,7 @@ import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
 import { builtinIllustrationScene } from "../theme/illustrationPresets";
 
-function appearanceFor(setId: "forest-grove" | "apollo-plan" | "none" = "forest-grove") {
+function appearanceFor(setId: "forest-grove" | "apollo-plan" | "cyberpunk-2077" | "none" = "forest-grove") {
   const scene = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationScene(setId, surface);
   return resolveAppearance({
     ...BUILTIN_THEME,
@@ -103,5 +103,21 @@ describe("ThemeIllustrationLayer", () => {
     expect(sidebar).toHaveAttribute("data-theme-illustration-count", "1");
     expect(sidebar?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "left-edge-foliage");
     expect(sidebar?.querySelector("img")).toHaveStyle({ width: "100%", height: "100%" });
+  });
+
+  it("resolves the Cyberpunk 2077 scene assets", () => {
+    const appearance = appearanceFor("cyberpunk-2077");
+    expect(appearance.illustrations.resources.workbench).toBe(
+      "/assets/theme-illustrations/cyberpunk-2077/workbench/background.webp",
+    );
+    expect(appearance.illustrations.resources.adminCenter).toBe(
+      "/assets/theme-illustrations/cyberpunk-2077/admin-center/background.webp",
+    );
+    expect(appearance.illustrations.resources.agentManager).toBe(
+      "/assets/theme-illustrations/cyberpunk-2077/agent-manager/background.webp",
+    );
+    render(<ThemeIllustrationLayer surface="workbench" appearance={appearance} />);
+    expect(screen.getByTestId("theme-illustration-layer-workbench").querySelector("img"))
+      .toHaveAttribute("data-theme-illustration-asset", "cyberpunk-2077-workbench");
   });
 });
