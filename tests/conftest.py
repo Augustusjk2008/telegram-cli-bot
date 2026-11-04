@@ -6,6 +6,15 @@ from pathlib import Path
 
 import pytest
 
+# A completed storage migration commits ~/.tcb/storage.json, which makes the
+# locator authoritative for every process.  Test modules import bot while
+# pytest collects them, so reading the developer's real home profile would
+# either point the suite at production data or raise StoragePathError before
+# any fixture can isolate it.  Keep the whole session on a throwaway home;
+# tests that need another one monkeypatch Path.home themselves.
+_SESSION_HOME = Path(tempfile.mkdtemp(prefix="orbit-safe-claw-pytest-home-"))
+Path.home = staticmethod(lambda: _SESSION_HOME)
+
 os.environ.setdefault(
     "TCB_DATA_DIR",
     str(Path(tempfile.gettempdir()) / f"orbit-safe-claw-pytest-data-{os.getpid()}"),
