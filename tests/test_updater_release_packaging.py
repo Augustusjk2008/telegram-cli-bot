@@ -184,6 +184,9 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert migration_index < ensure_token_index < import_index
     assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
+    assert '$env:TCB_PORTABLE_ROOT = $PackageRoot' in portable
+    assert '$portableLocator = Join-Path $PackageRoot ".tcb\\storage.json"' in portable
+    assert 'Remove-Item Env:TCB_DATA_DIR -ErrorAction SilentlyContinue' in portable
 
 
 def test_release_builders_require_packaged_theme_catalogs() -> None:

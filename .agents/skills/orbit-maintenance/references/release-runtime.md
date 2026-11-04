@@ -44,7 +44,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 固定公网转发由公网服务器的 `frps` 和内网机器的内置 `frpc` 配合；配置 `TCB_NODE_ID`、`WEB_BASE_PATH`、`WEB_FIXED_PUBLIC_FORWARD_*`、`TCB_HUB_FRPS_*`、`TCB_HUB_NODE_TOKEN`、`TCB_HUB_FRPC_*`，反向代理必须保留 `/node/<节点 ID>/` 前缀并支持 WebSocket。最小配置见 `README.md` 的“固定公网地址和反向代理”。
 - `bot/runtime_paths.py` 区分 storage root 与 app data root。未迁移时分别为 `~/.tcb` 和 `~/.tcb/orbit-safe-claw`；`TCB_DATA_DIR`（环境变量或 `.env`）只覆盖 app data root。
 - 已提交的 `~/.tcb/storage.json` 定位器优先确定两类根目录；目标缺失时报错，冲突的 `TCB_DATA_DIR` 被拒绝，当前进程冻结路径直到重启。迁移流程见 `bot/storage_migration.py`、`storage_runtime.py`；插件、历史和附件等调用者应使用路径函数。
-- Portable 设置 `TCB_DATA_DIR=<包>/data/orbit-safe-claw`、Pi home 为 `<包>/data/pi-home`；插件和聊天历史等 storage-root 数据仍遵循 `get_tcb_home_root()`。已有定位器与 portable 覆盖冲突时也会报错。
+- Portable 设置 `TCB_PORTABLE_ROOT=<包>`，将 `<包>/.tcb` 作为独立 storage root，避免读取宿主用户的迁移定位器；默认 app data 为 `<包>/data/orbit-safe-claw`、Pi home 为 `<包>/data/pi-home`。绿色版迁移后由包内定位器决定 app data root，并清除默认 `TCB_DATA_DIR` 覆盖。
 - 公告内容通过 `get_announcements_content_path()` 获取；仓库根 `.web_announcements.json` 用于旧数据迁移和发布包公告快照。用户内容应写当前运行态目录；现有仓库局部运行文件（如 `.tcb/startup`、`.plugins`、`managed_bots.json`）按各自实现维护并保持在 Git 外。
 
 ## 验证

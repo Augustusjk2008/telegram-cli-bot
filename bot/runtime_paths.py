@@ -18,6 +18,7 @@ except ImportError:
 
 _CHAT_ATTACHMENT_ALIAS_RE = re.compile(r"[^A-Za-z0-9._-]+")
 TCB_DATA_DIR_ENV: Final = "TCB_DATA_DIR"
+TCB_PORTABLE_ROOT_ENV: Final = "TCB_PORTABLE_ROOT"
 APP_DATA_DIR_NAME: Final = "orbit-safe-claw"
 STORAGE_LOCATOR_SCHEMA: Final = 1
 STORAGE_LOCATOR_FILENAME: Final = "storage.json"
@@ -46,6 +47,9 @@ def _is_windows_platform() -> bool:
 
 
 def _legacy_tcb_home_root() -> Path:
+    portable_root = os.environ.get(TCB_PORTABLE_ROOT_ENV, "").strip()
+    if portable_root:
+        return _canonical_path(portable_root) / ".tcb"
     return Path.home() / ".tcb"
 
 

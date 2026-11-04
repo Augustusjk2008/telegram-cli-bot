@@ -318,7 +318,7 @@ Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否�
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。
 两种入口复用 Codex 历史格式、模型参数及费用语义。
 
-应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止启动。Windows 绿色版默认把应用数据和 Pi home 放在包内 `data/`，插件和聊天历史仍遵循当前存储根目录。
+应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据和 Pi home 放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
 
 <details>
 <summary><strong>托管多个 Bot</strong></summary>

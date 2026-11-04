@@ -140,3 +140,35 @@ def test_conflicting_tcb_data_dir_is_rejected_after_locator(monkeypatch, tmp_pat
     with pytest.raises(runtime_paths.StoragePathError):
         runtime_paths.reset_runtime_path_cache_for_tests()
         runtime_paths.get_app_data_root()
+
+
+def test_portable_root_isolates_storage_locator_from_host_migration(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    host_target = tmp_path / "host-target"
+    portable_root = tmp_path / "portable"
+    portable_data = portable_root / "data" / runtime_paths.APP_DATA_DIR_NAME
+    home.mkdir()
+    host_target.mkdir()
+    portable_root.mkdir()
+    (home / ".tcb").mkdir()
+    (home / ".tcb" / runtime_paths.STORAGE_LOCATOR_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "datasetIdentity": "tcb",
+                "state": "completed",
+                "targetRoot": str(host_target),
+                "appDataRoot": str(host_target / runtime_paths.APP_DATA_DIR_NAME),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setenv(runtime_paths.TCB_PORTABLE_ROOT_ENV, str(portable_root))
+    monkeypatch.setenv(runtime_paths.TCB_DATA_DIR_ENV, str(portable_data))
+    runtime_paths.reset_runtime_path_cache_for_tests()
+
+    assert runtime_paths.get_storage_locator_path() == portable_root / ".tcb" / runtime_paths.STORAGE_LOCATOR_FILENAME
+    assert runtime_paths.get_app_data_root() == portable_data
+
+    runtime_paths.reset_runtime_path_cache_for_tests()

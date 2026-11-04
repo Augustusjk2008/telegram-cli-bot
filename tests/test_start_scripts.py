@@ -181,6 +181,26 @@ Set-PortablePiShellPath -PackageRoot {_ps_quote(script.parent)}
     assert "tools" in json.loads(settings.read_text())["shellPath"]
 
 
+def test_portable_start_uses_package_storage_locator_after_migration(tmp_path):
+    script = _portable_script(tmp_path)
+    package = script.parent
+    (package / ".tcb").mkdir()
+    (package / ".tcb/storage.json").write_text("{}", encoding="utf-8")
+    command = f'''
+$ast = [System.Management.Automation.Language.Parser]::ParseFile({_ps_quote(script)}, [ref]$null, [ref]$null)
+$fn = $ast.Find({{ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-PortableRuntimeEnv' }}, $true)
+Invoke-Expression $fn.Extent.Text
+$env:TCB_DATA_DIR = 'external-override'
+Set-PortableRuntimeEnv -PackageRoot {_ps_quote(package)}
+Write-Output "portable=$env:TCB_PORTABLE_ROOT"
+Write-Output "data=$($env:TCB_DATA_DIR)"
+'''
+    result = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"portable={package}" in result.stdout
+    assert "data=" in result.stdout and "data=external-override" not in result.stdout
+
+
 def test_portable_recovery_uses_cached_runner_even_when_embedded_python_is_missing(tmp_path):
     script = _portable_script(tmp_path)
     package = script.parent

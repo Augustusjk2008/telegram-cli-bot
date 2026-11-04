@@ -646,7 +646,14 @@ function Set-PortableRuntimeEnv {
     $env:WEB_ENABLED = "true"
     $env:PYTHONUTF8 = "1"
     $env:PYTHONNOUSERSITE = "1"
-    $env:TCB_DATA_DIR = Join-Path $PackageRoot "data\orbit-safe-claw"
+    $env:TCB_PORTABLE_ROOT = $PackageRoot
+    $portableDataRoot = Join-Path $PackageRoot "data\orbit-safe-claw"
+    $portableLocator = Join-Path $PackageRoot ".tcb\storage.json"
+    if (Test-Path -LiteralPath $portableLocator -PathType Leaf) {
+        Remove-Item Env:TCB_DATA_DIR -ErrorAction SilentlyContinue
+    } else {
+        $env:TCB_DATA_DIR = $portableDataRoot
+    }
     $env:PI_AGENT_SETTINGS = Join-Path $PackageRoot "data\pi-home\.pi\agent\settings.json"
     $env:PI_AGENT_MODELS = Join-Path $PackageRoot "data\pi-home\.pi\agent\models.json"
     $env:NATIVE_AGENT_PI_COMMAND = Join-Path $PackageRoot "tools\pi\pi.cmd"
