@@ -2727,11 +2727,13 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private isLocalAdminSession() {
-    return this.session.username.trim() === "127.0.0.1" || this.session.capabilities.includes("manage_register_codes");
+    return this.session.username.trim() === "127.0.0.1"
+      || this.session.role === "admin"
+      || this.session.capabilities.includes("manage_register_codes");
   }
 
   private hasAdminOps() {
-    return this.session.username.trim() === "127.0.0.1" || this.session.capabilities.includes("admin_ops");
+    return this.isLocalAdminSession() || this.session.capabilities.includes("admin_ops");
   }
 
   private ensureAdminUser(accountId: string, username = accountId) {
@@ -2791,7 +2793,7 @@ export class MockWebBotClient implements WebBotClient {
     if (this.session.role === "guest") {
       return alias === "main";
     }
-    if (this.session.role !== "member") {
+    if (this.session.role !== "member" && this.session.role !== "admin") {
       return false;
     }
     return this.getAllowedBotsForAccount(this.currentAccountId()).includes(alias);
@@ -3705,11 +3707,32 @@ export class MockWebBotClient implements WebBotClient {
     if (!current) {
       throw new WebApiClientError("用户不存在", { status: 404, code: "user_not_found" });
     }
+    const nextRole = input.role || current.role;
+    if (nextRole === "admin" && current.role !== "admin") {
+      const existingAdmin = Array.from(this.adminUsers.values()).find((user) => user.role === "admin");
+      if (existingAdmin && existingAdmin.accountId !== accountId) {
+        throw new WebApiClientError("管理员账号已存在，最多只能指定一个管理员", { status: 409, code: "admin_exists" });
+      }
+    }
+    const nextCapabilities = nextRole === "admin"
+      ? [...SUPER_ADMIN_CAPABILITIES]
+      : (Array.isArray(input.capabilities)
+        ? [...input.capabilities]
+        : (current.role === "admin" ? [...MEMBER_CAPABILITIES] : current.capabilities));
     this.adminUsers.set(accountId, {
       ...current,
+      role: nextRole,
       disabled: typeof input.disabled === "boolean" ? input.disabled : current.disabled,
-      capabilities: Array.isArray(input.capabilities) ? [...input.capabilities] : current.capabilities,
+      capabilities: nextCapabilities,
     });
+    if (this.currentAccountId() === accountId) {
+      this.session = {
+        ...this.session,
+        role: nextRole,
+        capabilities: [...nextCapabilities],
+        isLocalAdmin: nextRole === "admin",
+      };
+    }
     return this.buildAdminUser(accountId);
   }
 

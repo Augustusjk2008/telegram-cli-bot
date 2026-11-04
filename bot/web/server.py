@@ -152,6 +152,7 @@ from .auth_store import (
     GUEST_CAPABILITIES,
     LOCAL_ADMIN_CAPABILITIES,
     MEMBER_CAPABILITIES,
+    ROLE_ADMIN,
     ROLE_GUEST,
     WebAuthSession,
     WebAuthStore,
@@ -786,7 +787,7 @@ def _serialize_auth_session(
         capabilities=set(session.capabilities),
         allowed_bot_aliases=_BOT_PERMISSION_STORE.allowed_bots_for_account(session.account.account_id),
         owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
-        is_local_admin=session.account.account_id == "local-admin",
+        is_local_admin=session.account.account_id == "local-admin" or session.account.role == ROLE_ADMIN,
     )
     if active_aliases is not None:
         auth.allowed_bot_aliases &= active_aliases
@@ -1324,7 +1325,7 @@ class WebApiServer:
             capabilities=set(session.capabilities),
             allowed_bot_aliases=_BOT_PERMISSION_STORE.allowed_bots_for_account(session.account.account_id),
             owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
-            is_local_admin=session.account.account_id == "local-admin",
+            is_local_admin=session.account.account_id == "local-admin" or session.account.role == ROLE_ADMIN,
         )
 
     def _local_admin_auth_context(self) -> AuthContext:
@@ -1925,6 +1926,7 @@ class WebApiServer:
                 request.match_info["account_id"],
                 disabled=body.get("disabled") if "disabled" in body else None,
                 capabilities=body.get("capabilities") if isinstance(body.get("capabilities"), list) else None,
+                role=body.get("role") if "role" in body else None,
             )
         except AuthStoreError as exc:
             raise _auth_error(exc) from exc

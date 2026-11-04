@@ -1122,7 +1122,7 @@ type RawRegisterCodeCreateResult = RawRegisterCodeItem & {
 type RawAdminUser = {
   account_id?: string;
   username?: string;
-  role?: string;
+  role?: AccountRole;
   disabled?: boolean;
   capabilities?: Capability[];
   created_at?: string;
@@ -4940,6 +4940,7 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({
         ...(typeof input.disabled === "boolean" ? { disabled: input.disabled } : {}),
         ...(Array.isArray(input.capabilities) ? { capabilities: input.capabilities } : {}),
+        ...(input.role ? { role: input.role } : {}),
       }),
     });
     return mapAdminUser(data);

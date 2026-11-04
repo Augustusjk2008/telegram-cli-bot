@@ -14,7 +14,7 @@ export type ChatExecutionMode = "cli" | "native_agent";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
 export type BotActivityStatus = "idle" | "busy";
-export type AccountRole = "member" | "guest";
+export type AccountRole = "member" | "admin" | "guest";
 export type Capability =
   | "view_bots"
   | "view_bot_status"
@@ -91,7 +91,7 @@ export type AnnouncementListResult = {
 export type AdminUser = {
   accountId: string;
   username: string;
-  role: AccountRole | "member";
+  role: "member" | "admin";
   disabled: boolean;
   capabilities: Capability[];
   createdAt: string;
@@ -104,6 +104,7 @@ export type AdminUser = {
 export type AdminUserUpdateInput = {
   disabled?: boolean;
   capabilities?: Capability[];
+  role?: "member" | "admin";
 };
 
 export type UserBotPermissions = {

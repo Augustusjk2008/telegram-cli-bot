@@ -3,6 +3,9 @@
     [switch]$NonInteractive,
     [switch]$InstallExamplePlugins,
     [switch]$SkipExamplePlugins,
+    [Alias("AdminUser")]
+    [string]$AdminUsername = "",
+    [string]$AdminPassword = "",
     [Alias("h", "?")]
     [switch]$Help
 )
@@ -16,8 +19,21 @@ $OutputEncoding = $script:Utf8NoBomEncoding
 $script:RootDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $script:RootDir
 
+if ([string]::IsNullOrWhiteSpace($AdminUsername)) {
+    $AdminUsername = [string]$env:TCB_ADMIN_USERNAME
+    if ([string]::IsNullOrWhiteSpace($AdminUsername)) {
+        $AdminUsername = [string]$env:WEB_ADMIN_USERNAME
+    }
+}
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
+    $AdminPassword = [string]$env:TCB_ADMIN_PASSWORD
+    if ([string]::IsNullOrWhiteSpace($AdminPassword)) {
+        $AdminPassword = [string]$env:WEB_ADMIN_PASSWORD
+    }
+}
+
 $script:StepIndex = 0
-$script:TotalSteps = if ($CheckOnly) { 6 } elseif ($Help) { 0 } else { 12 }
+$script:TotalSteps = if ($CheckOnly) { 6 } elseif ($Help) { 0 } else { 13 }
 $script:Warnings = New-Object System.Collections.Generic.List[string]
 $script:Summary = [ordered]@{}
 $script:WingetAvailable = $false
@@ -82,13 +98,15 @@ function Save-Summary {
 }
 
 function Show-Usage {
-    Write-Host "用法: .\install.ps1 [-CheckOnly] [-NonInteractive] [-InstallExamplePlugins] [-SkipExamplePlugins] [-Help]"
+    Write-Host "用法: .\install.ps1 [-CheckOnly] [-NonInteractive] [-InstallExamplePlugins] [-SkipExamplePlugins] [-AdminUsername <用户名>] [-AdminPassword <密码>] [-Help]"
     Write-Host ""
     Write-Host "参数:"
     Write-Host "  -CheckOnly             只检查环境，不执行安装"
     Write-Host "  -NonInteractive        使用默认值，跳过交互"
     Write-Host "  -InstallExamplePlugins 安装 examples 中的示例插件"
     Write-Host "  -SkipExamplePlugins    跳过示例插件安装"
+    Write-Host "  -AdminUsername         安装时创建的唯一管理员用户名"
+    Write-Host "  -AdminPassword         安装时创建的管理员密码；省略时交互式输入"
     Write-Host "  -Help                  显示帮助并退出"
 }
 
@@ -721,6 +739,73 @@ print(json.dumps(payload, ensure_ascii=False))
     Save-Summary -Key "邀请码" -Value ("已初始化（可用 {0} 次）" -f $maxUses)
 }
 
+function Initialize-WebAdminUser {
+    param([object]$PythonInfo)
+
+    $username = $AdminUsername.Trim()
+    $password = $AdminPassword
+    if ([string]::IsNullOrWhiteSpace($username)) {
+        $choice = Read-Choice -Prompt "是否初始化管理员账号：1) 跳过  2) 初始化" -Choices @("1", "2") -DefaultChoice "1"
+        if ($choice -ne "2") {
+            Save-Summary -Key "管理员账号" -Value "未初始化"
+            return
+        }
+        $username = (Read-Host "管理员用户名").Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($password)) {
+        if ($NonInteractive) {
+            throw "非交互安装创建管理员账号时必须提供 -AdminPassword。"
+        }
+        $securePassword = Read-Host "管理员密码（至少 6 位）" -AsSecureString
+        $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+        try {
+            $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
+        }
+    }
+
+    $code = @"
+import json
+import os
+from bot.runtime_paths import get_auth_accounts_dir, get_auth_register_codes_path, get_auth_secret_path
+from bot.web.auth_store import WebAuthStore
+store = WebAuthStore(
+    users_path=get_auth_accounts_dir(),
+    register_codes_path=get_auth_register_codes_path(),
+    secret_path=get_auth_secret_path(),
+)
+session = store.create_admin(
+    os.environ["CLI_BRIDGE_ADMIN_USERNAME"],
+    os.environ["CLI_BRIDGE_ADMIN_PASSWORD"],
+)
+print(json.dumps({"username": session.account.username}, ensure_ascii=False))
+"@
+
+    $previousUsername = $env:CLI_BRIDGE_ADMIN_USERNAME
+    $previousPassword = $env:CLI_BRIDGE_ADMIN_PASSWORD
+    $env:CLI_BRIDGE_ADMIN_USERNAME = $username
+    $env:CLI_BRIDGE_ADMIN_PASSWORD = $password
+    try {
+        $output = & $PythonInfo.Command @($PythonInfo.PrefixArgs + @("-c", $code))
+        if ($LASTEXITCODE -ne 0) {
+            throw "初始化管理员账号失败。"
+        }
+    } finally {
+        $env:CLI_BRIDGE_ADMIN_USERNAME = $previousUsername
+        $env:CLI_BRIDGE_ADMIN_PASSWORD = $previousPassword
+    }
+
+    $jsonLine = @($output | Where-Object { $_ })[-1]
+    if ([string]::IsNullOrWhiteSpace($jsonLine)) {
+        throw "初始化管理员账号失败：未返回账号信息。"
+    }
+    $payload = $jsonLine | ConvertFrom-Json
+    Write-Info ("管理员账号已创建: {0}" -f $payload.username)
+    Save-Summary -Key "管理员账号" -Value $payload.username
+}
+
 function Resolve-ExamplePluginInstallMode {
     if ($InstallExamplePlugins) {
         return "install"
@@ -956,6 +1041,9 @@ try {
 
     Write-Step "初始化邀请码"
     Initialize-WebRegisterCode -PythonInfo $pythonInfo
+
+    Write-Step "初始化管理员账号"
+    Initialize-WebAdminUser -PythonInfo $pythonInfo
 
     Show-SummaryReport
     exit 0

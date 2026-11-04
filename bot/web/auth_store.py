@@ -16,6 +16,7 @@ from typing import Any
 
 ROLE_MEMBER = "member"
 ROLE_GUEST = "guest"
+ROLE_ADMIN = "admin"
 
 CAP_VIEW_BOTS = "view_bots"
 CAP_VIEW_BOT_STATUS = "view_bot_status"
@@ -103,6 +104,8 @@ def _b64decode(text: str) -> bytes:
 
 
 def capabilities_for_role(role: str) -> frozenset[str]:
+    if role == ROLE_ADMIN:
+        return LOCAL_ADMIN_CAPABILITIES
     if role == ROLE_GUEST:
         return GUEST_CAPABILITIES
     return MEMBER_CAPABILITIES
@@ -231,6 +234,52 @@ class WebAuthStore:
             )
         )
 
+    def create_admin(self, username: str, password: str) -> WebAuthSession:
+        normalized_username = self._normalize_username(username)
+        resolved_username = str(username or "").strip()
+        resolved_password = self._validate_password(password)
+
+        with self._lock:
+            users_data = self._read_json(self.users_path)
+            user_items = self._items(users_data)
+            if any(str(item.get("role") or ROLE_MEMBER).strip() == ROLE_ADMIN for item in user_items):
+                self._raise(409, "admin_exists", "管理员账号已存在，最多只能指定一个管理员")
+            if self._find_user_item(user_items, normalized_username) is not None:
+                self._raise(409, "username_taken", "用户名已存在")
+
+            salt = secrets.token_bytes(16)
+            hashed_password = self._hash_password(resolved_password, salt, _PBKDF2_ITERATIONS)
+            account_id = f"member_{secrets.token_hex(8)}"
+            session_user_id = self._generate_session_user_id(user_items, account_id)
+            created_at = _utc_now()
+            user_items.append(
+                {
+                    "account_id": account_id,
+                    "username_key": self._stable_lookup_key(normalized_username),
+                    "username_enc": self._encrypt_text(resolved_username),
+                    "role": ROLE_ADMIN,
+                    "disabled": False,
+                    "session_user_id": session_user_id,
+                    "capabilities_schema_version": CAPABILITIES_SCHEMA_VERSION,
+                    "capabilities": sorted(LOCAL_ADMIN_CAPABILITIES),
+                    "password_salt": salt.hex(),
+                    "password_hash": hashed_password,
+                    "password_iterations": _PBKDF2_ITERATIONS,
+                    "created_at": created_at,
+                }
+            )
+            self._write_json(self.users_path, users_data)
+
+        return self._issue_session(
+            WebAccount(
+                account_id=account_id,
+                username=resolved_username,
+                role=ROLE_ADMIN,
+                disabled=False,
+                session_user_id=session_user_id,
+            )
+        )
+
     def login_member(self, username: str, password: str) -> WebAuthSession:
         normalized_username = self._normalize_username(username)
         resolved_password = self._validate_password(password)
@@ -276,7 +325,12 @@ class WebAuthStore:
     def has_member_accounts(self) -> bool:
         with self._lock:
             users_data = self._read_json(self.users_path)
-            return any(item.get("role") == ROLE_MEMBER for item in self._items(users_data))
+            return any(item.get("role") in {ROLE_MEMBER, ROLE_ADMIN} for item in self._items(users_data))
+
+    def has_admin_account(self) -> bool:
+        with self._lock:
+            users_data = self._read_json(self.users_path)
+            return any(item.get("role") == ROLE_ADMIN for item in self._items(users_data))
 
     def can_bootstrap_without_auth(self) -> bool:
         return not self.has_member_accounts()
@@ -340,7 +394,7 @@ class WebAuthStore:
                     "created_at": str(item.get("created_at") or ""),
                 }
                 for item in user_items
-                if str(item.get("role") or ROLE_MEMBER) == ROLE_MEMBER
+                if str(item.get("role") or ROLE_MEMBER) in {ROLE_MEMBER, ROLE_ADMIN}
             ]
         items.sort(key=lambda item: item["username"].casefold())
         return {"items": items}
@@ -351,6 +405,7 @@ class WebAuthStore:
         *,
         disabled: bool | None = None,
         capabilities: list[str] | None = None,
+        role: str | None = None,
     ) -> dict[str, Any]:
         resolved_id = str(account_id or "").strip()
         if not resolved_id:
@@ -366,9 +421,30 @@ class WebAuthStore:
             if target is None:
                 self._raise(404, "account_not_found", "账号不存在")
             self._ensure_account_defaults(target, user_items)
+            current_role = str(target.get("role") or ROLE_MEMBER)
+            if role is not None:
+                requested_role = str(role or "").strip().lower()
+                if requested_role not in {ROLE_MEMBER, ROLE_ADMIN}:
+                    self._raise(400, "invalid_account_role", "账号角色只能是 member 或 admin")
+                if requested_role == ROLE_ADMIN and current_role != ROLE_ADMIN:
+                    if any(
+                        item is not target and str(item.get("role") or ROLE_MEMBER) == ROLE_ADMIN
+                        for item in user_items
+                    ):
+                        self._raise(409, "admin_exists", "管理员账号已存在，最多只能指定一个管理员")
+                    target["role"] = ROLE_ADMIN
+                    target["capabilities"] = sorted(LOCAL_ADMIN_CAPABILITIES)
+                    target["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
+                elif requested_role == ROLE_MEMBER and current_role == ROLE_ADMIN:
+                    target["role"] = ROLE_MEMBER
+                    target["capabilities"] = sorted(MEMBER_CAPABILITIES)
+                    target["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
             if disabled is not None:
                 target["disabled"] = bool(disabled)
-            if capabilities is not None:
+            if str(target.get("role") or ROLE_MEMBER) == ROLE_ADMIN:
+                target["capabilities"] = sorted(LOCAL_ADMIN_CAPABILITIES)
+                target["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
+            elif capabilities is not None:
                 target["capabilities"] = sorted(self._sanitize_capabilities(capabilities))
                 target["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
             self._write_json(self.users_path, data)
@@ -558,7 +634,14 @@ class WebAuthStore:
             changed = True
         role = str(item.get("role") or ROLE_MEMBER)
         schema_version = self._parse_capabilities_schema_version(item.get("capabilities_schema_version"))
-        if schema_version < CAPABILITIES_SCHEMA_VERSION:
+        if role == ROLE_ADMIN and (
+            schema_version < CAPABILITIES_SCHEMA_VERSION
+            or item.get("capabilities") != sorted(LOCAL_ADMIN_CAPABILITIES)
+        ):
+            item["capabilities"] = sorted(LOCAL_ADMIN_CAPABILITIES)
+            item["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
+            changed = True
+        elif schema_version < CAPABILITIES_SCHEMA_VERSION:
             item["capabilities"] = sorted(capabilities_for_role(role))
             item["capabilities_schema_version"] = CAPABILITIES_SCHEMA_VERSION
             changed = True
@@ -579,13 +662,15 @@ class WebAuthStore:
         return frozenset(str(value).strip() for value in values if str(value).strip() in _KNOWN_CAPABILITIES)
 
     def _capabilities_for_item(self, item: dict[str, Any]) -> frozenset[str]:
+        if str(item.get("role") or ROLE_MEMBER) == ROLE_ADMIN:
+            return LOCAL_ADMIN_CAPABILITIES
         raw = item.get("capabilities")
         if isinstance(raw, list):
             return self._sanitize_capabilities(raw)
         return capabilities_for_role(str(item.get("role") or ROLE_MEMBER))
 
     def _capabilities_for_account(self, account: WebAccount) -> frozenset[str]:
-        if account.account_id == "local-admin":
+        if account.account_id == "local-admin" or account.role == ROLE_ADMIN:
             return LOCAL_ADMIN_CAPABILITIES
         with self._lock:
             data = self._read_json(self.users_path)
@@ -889,6 +974,7 @@ __all__ = [
     "MEMBER_CAPABILITIES",
     "ROLE_GUEST",
     "ROLE_MEMBER",
+    "ROLE_ADMIN",
     "WebAccount",
     "WebAuthSession",
     "WebAuthStore",

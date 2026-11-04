@@ -174,6 +174,10 @@ function formatStorageDuration(value: number | null | undefined) {
   return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分钟` : `${hours} 小时`;
 }
 
+function nextRoleIsBlocked(user: AdminUser, designatedAdmin?: AdminUser) {
+  return user.role !== "admin" && Boolean(designatedAdmin && designatedAdmin.accountId !== user.accountId);
+}
+
 const STORAGE_MIGRATION_ACTIVE_STATES: StorageMigrationState[] = [
   "preparing",
   "stopping",
@@ -491,6 +495,7 @@ export function AdminCenterScreen({
   const [notice, setNotice] = useState("");
 
   const totalOwnedBots = useMemo(() => users.reduce((sum, user) => sum + user.ownedBotCount, 0), [users]);
+  const designatedAdmin = useMemo(() => users.find((user) => user.role === "admin"), [users]);
   const visibleTabs = useMemo<AdminCenterTab[]>(
     () => [
       ...(canManageEnvConfig ? (["global"] as AdminCenterTab[]) : []),
@@ -975,6 +980,25 @@ export function AdminCenterScreen({
       setNotice(`${user.username} 的账号能力已更新`);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "更新账号能力失败"));
+    }
+  };
+
+  const updateUserRole = async (user: AdminUser) => {
+    const nextRole = user.role === "admin" ? "member" : "admin";
+    if (nextRole === "admin" && designatedAdmin && designatedAdmin.accountId !== user.accountId) {
+      setError(`管理员账号已是 ${designatedAdmin.username}，请先取消现有管理员`);
+      return;
+    }
+    setError("");
+    setNotice("");
+    try {
+      const updated = await client.updateUser(user.accountId, { role: nextRole });
+      setUsers((prev) => prev.map((item) => (
+        item.accountId === user.accountId ? { ...item, ...updated } : item
+      )));
+      setNotice(nextRole === "admin" ? `${user.username} 已设为管理员` : `${user.username} 已取消管理员身份`);
+    } catch (nextError) {
+      setError(getErrorMessage(nextError, "更新管理员账号失败"));
     }
   };
 
@@ -1589,6 +1613,14 @@ export function AdminCenterScreen({
                     >
                       {user.disabled ? "启用" : "停用"}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => void updateUserRole(user)}
+                      disabled={nextRoleIsBlocked(user, designatedAdmin) || !canManageRegisterCodes}
+                      className="rounded-lg border border-[var(--accent-outline)] px-3 py-2 text-sm text-[var(--accent)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {user.role === "admin" ? "取消管理员" : "设为管理员"}
+                    </button>
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {ACCOUNT_CAPABILITY_OPTIONS.map((capability) => (
@@ -1597,6 +1629,7 @@ export function AdminCenterScreen({
                           type="checkbox"
                           aria-label={`${user.username} 账号能力 ${capability.label}`}
                           checked={user.capabilities.includes(capability.id)}
+                          disabled={user.role === "admin"}
                           onChange={(event) => void updateUserCapabilityGrant(user, capability.id, event.target.checked)}
                         />
                         <span>{capability.label}</span>

@@ -11,7 +11,10 @@ from bot.web.auth_store import (
     CAP_MANAGE_BOTS,
     CAP_RUN_UNSAFE_CLI,
     CAP_TERMINAL_EXEC,
+    LOCAL_ADMIN_CAPABILITIES,
     MEMBER_CAPABILITIES,
+    ROLE_ADMIN,
+    AuthStoreError,
     WebAuthStore,
 )
 from bot.web.permission_store import BotPermissionStore
@@ -43,6 +46,46 @@ def test_register_member_consumes_register_code(tmp_path: Path):
     assert CAP_RUN_UNSAFE_CLI not in MEMBER_CAPABILITIES
     assert data["items"][0]["used_count"] == 1
     assert data["items"][0]["usage"][0]["used_by_enc"].startswith("v1:")
+
+
+def test_admin_account_is_created_with_full_capabilities_and_is_unique(tmp_path: Path):
+    store = WebAuthStore(
+        users_path=tmp_path / ".web_users.json",
+        register_codes_path=tmp_path / ".web_register_codes.json",
+    )
+
+    created = store.create_admin("root-user", "pw-123")
+    logged_in = store.login_member("root-user", "pw-123")
+
+    assert created.account.role == ROLE_ADMIN
+    assert logged_in.account.role == ROLE_ADMIN
+    assert set(logged_in.capabilities) == set(LOCAL_ADMIN_CAPABILITIES)
+    assert store.has_admin_account() is True
+    assert store.list_members()["items"][0]["role"] == ROLE_ADMIN
+
+    with pytest.raises(AuthStoreError, match="最多只能指定一个管理员"):
+        store.create_admin("second-root", "pw-456")
+
+
+def test_admin_role_assignment_is_unique_and_restores_member_capabilities(tmp_path: Path):
+    users_path = tmp_path / ".web_users.json"
+    codes_path = tmp_path / ".web_register_codes.json"
+    codes_path.write_text(json.dumps({"items": [{"code": "INVITE-001", "disabled": False}]}), encoding="utf-8")
+    store = WebAuthStore(users_path=users_path, register_codes_path=codes_path)
+
+    admin = store.create_admin("root-user", "pw-123")
+    member = store.register_member("alice", "pw-456", "INVITE-001")
+
+    with pytest.raises(AuthStoreError, match="最多只能指定一个管理员"):
+        store.update_member(member.account.account_id, role=ROLE_ADMIN)
+
+    demoted = store.update_member(admin.account.account_id, role="member")
+    promoted = store.update_member(member.account.account_id, role=ROLE_ADMIN)
+
+    assert demoted["role"] == "member"
+    assert set(demoted["capabilities"]) == set(MEMBER_CAPABILITIES)
+    assert promoted["role"] == ROLE_ADMIN
+    assert set(promoted["capabilities"]) == set(LOCAL_ADMIN_CAPABILITIES)
 
 
 def test_legacy_member_capabilities_migrate_to_safe_schema_v2(tmp_path: Path):

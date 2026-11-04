@@ -8,10 +8,33 @@ CHECK_ONLY=0
 NON_INTERACTIVE=0
 EXAMPLE_PLUGINS_MODE="prompt"
 INSTALL_USER_PHASE="${INSTALL_USER_PHASE:-0}"
-for arg in "$@"; do
+ADMIN_USERNAME="${TCB_ADMIN_USERNAME:-${WEB_ADMIN_USERNAME:-}}"
+ADMIN_PASSWORD="${TCB_ADMIN_PASSWORD:-${WEB_ADMIN_PASSWORD:-}}"
+ORIGINAL_ARGS=("$@")
+while [[ $# -gt 0 ]]; do
+  arg="$1"
+  shift
   case "$arg" in
     --check-only) CHECK_ONLY=1 ;;
     --non-interactive) NON_INTERACTIVE=1 ;;
+    --admin-username|--admin-user)
+      if [[ $# -eq 0 ]]; then
+        echo "[错误] $arg 需要一个用户名" >&2
+        exit 2
+      fi
+      ADMIN_USERNAME="$1"
+      shift
+      ;;
+    --admin-username=*|--admin-user=*) ADMIN_USERNAME="${arg#*=}" ;;
+    --admin-password)
+      if [[ $# -eq 0 ]]; then
+        echo "[错误] $arg 需要一个密码" >&2
+        exit 2
+      fi
+      ADMIN_PASSWORD="$1"
+      shift
+      ;;
+    --admin-password=*) ADMIN_PASSWORD="${arg#*=}" ;;
     --install-example-plugins)
       if [[ "$EXAMPLE_PLUGINS_MODE" == "skip" ]]; then
         echo "[错误] --install-example-plugins 和 --skip-example-plugins 不能同时使用" >&2
@@ -389,6 +412,41 @@ initialize_register_code() {
   info "邀请码: $(printf '%s' "$invite_json" | "$python_bin" -c 'import json,sys; print(json.loads(sys.stdin.read())["code"])')"
 }
 
+initialize_admin_user() {
+  local python_bin="$1"
+  local username="$ADMIN_USERNAME"
+  local password="$ADMIN_PASSWORD"
+
+  if [[ -z "$username" ]]; then
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+      info "跳过管理员账号初始化"
+      return 0
+    fi
+    local choice=""
+    read -r -p "是否初始化管理员账号？[y/N] " choice
+    if [[ ! "$choice" =~ ^[Yy]$ ]]; then
+      info "跳过管理员账号初始化"
+      return 0
+    fi
+    read -r -p "管理员用户名: " username
+  fi
+
+  if [[ -z "$password" ]]; then
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+      fail "非交互安装创建管理员账号时必须提供 --admin-password 或 TCB_ADMIN_PASSWORD"
+      return 1
+    fi
+    read -r -s -p "管理员密码（至少 6 位）: " password
+    printf '\n'
+  fi
+
+  local admin_json
+  admin_json="$(CLI_BRIDGE_ADMIN_USERNAME="$username" CLI_BRIDGE_ADMIN_PASSWORD="$password" \
+    "$python_bin" -c 'import json, os; from bot.runtime_paths import get_auth_accounts_dir, get_auth_register_codes_path, get_auth_secret_path; from bot.web.auth_store import WebAuthStore; store = WebAuthStore(get_auth_accounts_dir(), get_auth_register_codes_path(), get_auth_secret_path()); session = store.create_admin(os.environ["CLI_BRIDGE_ADMIN_USERNAME"], os.environ["CLI_BRIDGE_ADMIN_PASSWORD"]); print(json.dumps({"username": session.account.username}, ensure_ascii=False))')"
+  info "管理员账号已创建: $(printf '%s' "$admin_json" | "$python_bin" -c 'import json,sys; print(json.loads(sys.stdin.read())["username"])')"
+  unset password
+}
+
 install_example_plugins() {
   local python_bin="$1"
   local mode="$EXAMPLE_PLUGINS_MODE"
@@ -424,7 +482,7 @@ run_install_user_phase() {
   else
     user_path="$user_path:$PATH"
   fi
-  exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 PATH="$user_path" bash "$0" "$@"
+  exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 TCB_ADMIN_USERNAME="$ADMIN_USERNAME" TCB_ADMIN_PASSWORD="$ADMIN_PASSWORD" PATH="$user_path" bash "$0" "${ORIGINAL_ARGS[@]}"
 }
 
 install_linux_system_dependencies() {
@@ -583,6 +641,9 @@ ensure_env_file
 
 step "可选初始化邀请码"
 initialize_register_code "$PYTHON_BIN"
+
+step "初始化管理员账号"
+initialize_admin_user "$PYTHON_BIN"
 
 if [[ -z "${WEB_PUBLIC_URL:-}" && ( -z "${WEB_TUNNEL_MODE:-}" || "${WEB_TUNNEL_MODE:-disabled}" == "disabled" ) ]]; then
   info "如需外网访问，可在 .env 中设置 WEB_TUNNEL_MODE=cloudflare_quick，或配置反向代理后填写 WEB_PUBLIC_URL。"
