@@ -8,7 +8,7 @@ import pytest
 from bot.web.theme_store import BUILTIN_THEME_ID, ThemeStore, ThemeStoreError
 
 
-PRESET_NAMES = ["钢铁核心", "阿波罗计划", "薄荷柑橘", "轻音少女", "赛博朋克", "Deepseek"]
+PRESET_NAMES = ["钢铁核心", "阿波罗计划", "薄荷柑橘", "轻音少女", "赛博朋克", "Deepseek", "雾岚纸境", "墨砚铜章"]
 
 
 @pytest.fixture
@@ -23,7 +23,8 @@ def test_packaged_presets_are_loaded_as_readonly_themes(store: ThemeStore) -> No
     assert all(theme["readonly"] is True for theme in library["themes"])
     assert library["themes"][1]["id"] == "theme_0f2e4a8c1d6b4f90a3c7e5b2d8f1046a"
     assert library["themes"][3]["id"] == "theme_43f2d67a91c84f0aa8d5e1c7b3f9264d"
-    assert library["themes"][-1]["id"] == "theme_6f7ac1823da81d2e52d1a1549ee69c85"
+    assert library["themes"][6]["id"] == "theme_7b6e1d3a4c5f708192a3b4c5d6e7f809"
+    assert library["themes"][-1]["id"] == "theme_8c7d2e4b5a6f8192a3b4c5d6e7f8091a"
     assert library["selectedThemeId"] == BUILTIN_THEME_ID
     assert library["revision"] == 0
     assert not store.library_path.exists()

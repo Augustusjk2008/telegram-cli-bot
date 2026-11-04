@@ -4,7 +4,7 @@
 
 ## 主题系统边界
 
-当前发布包包含六套只读预置主题，顺序和身份如下：
+当前发布包包含八套只读预置主题，顺序和身份如下：
 
 | ID | 名称 | 角色 | 当前插画组 |
 | --- | --- | --- | --- |
@@ -14,6 +14,8 @@
 | `theme_43f2d67a91c84f0aa8d5e1c7b3f9264d` | 轻音少女 | 发布预置 | `k-on-light-music` |
 | `theme_3dc3829743be9c6941e6da88c0f780a1` | 赛博朋克 | 发布预置 | `cyberpunk-2077` |
 | `theme_6f7ac1823da81d2e52d1a1549ee69c85` | Deepseek | 发布预置 | `deepseek-big-fish` |
+| `theme_7b6e1d3a4c5f708192a3b4c5d6e7f809` | 雾岚纸境 | 发布预置 | `alpine-fog` |
+| `theme_8c7d2e4b5a6f8192a3b4c5d6e7f8091a` | 墨砚铜章 | 发布预置 | `moonlit-garden` |
 
 每套发布预置都具有 `schemaVersion: 1`、`baseId: "paper-daylight"` 和 `readonly: true`。默认主题应保持在主题列表首位。新增主题时先读取 `bot/web/theme_presets.json`，不要把上表的数量当成永远不变的常量。
 
@@ -97,7 +99,7 @@
 - `chatBodyLineHeight`: `tight`、`normal` 或 `relaxed`
 - `chatBodyParagraphSpacing`: `tight`、`normal` 或 `relaxed`
 
-当前六套发布主题都显式保存默认排版值。编辑主题时保持这四项完整，避免产生依赖隐式默认值的半配置。
+当前八套发布主题都显式保存默认排版值。编辑主题时保持这四项完整，避免产生依赖隐式默认值的半配置。
 
 ## 插画契约
 
