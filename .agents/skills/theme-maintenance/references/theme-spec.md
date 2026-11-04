@@ -17,7 +17,7 @@
 
 每套发布预置都具有 `schemaVersion: 1`、`baseId: "paper-daylight"` 和 `readonly: true`。默认主题应保持在主题列表首位。新增主题时先读取 `bot/web/theme_presets.json`，不要把上表的数量当成永远不变的常量。
 
-全局主题库通过 `/api/public/ui/themes` 和 `/api/ui/themes` 读取。登录页只在当前浏览器保存预览选择；登录后的选中主题在账户之间共享保存。运行时持久化的是选中 ID 和 revision。当前 `bot/web/theme_store.py` 以及主题路由会拒绝主题创建、导入、更新、删除和资源上传，返回只读错误；主题包内的预置内容仍由版本文件提供。
+主题库通过 `/api/public/ui/themes` 和 `/api/ui/themes` 读取。登录页只在当前浏览器保存预览选择；登录后的接口根据当前账户返回其选中主题，账户之间相互隔离。运行时持久化的是主题库 revision 和账户到选中主题 ID 的映射，旧版全局选中 ID 作为迁移回退。当前 `bot/web/theme_store.py` 以及主题路由会拒绝主题创建、导入、更新、删除和资源上传，返回只读错误；主题包内的预置内容仍由版本文件提供。
 
 ## 源文件和消费者
 

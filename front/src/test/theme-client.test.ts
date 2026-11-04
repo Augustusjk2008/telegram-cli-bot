@@ -111,23 +111,27 @@ test("theme export keeps a theme-owned uploaded illustration", () => {
 });
 
 
-test("mock accounts and guests share the theme library and selected theme", async () => {
+test("mock accounts keep their own selected theme", async () => {
   const alice = new MockWebBotClient();
   await alice.login({ username: "alice", password: "password" });
   const initial = await alice.listUiThemes();
   const id = initial.themes.at(-1)!.id;
   const selected = await alice.selectUiTheme(id, initial.revision);
+  expect((await alice.listUiThemes()).selectedThemeId).toBe(id);
   const anonymous = new MockWebBotClient();
   await anonymous.logout();
-  expect(await anonymous.listPublicUiThemes()).toEqual(selected);
+  expect((await anonymous.listPublicUiThemes()).selectedThemeId).toBe("paper-daylight");
   await expect(anonymous.listUiThemes()).rejects.toMatchObject({ status: 401 });
   await expect(anonymous.selectUiTheme("paper-daylight", selected.revision)).rejects.toMatchObject({ status: 401 });
   const bob = new MockWebBotClient();
   await bob.login({ username: "bob", password: "password" });
-  expect(await bob.listUiThemes()).toEqual(selected);
+  expect((await bob.listUiThemes()).selectedThemeId).toBe("paper-daylight");
+  const bobSelected = await bob.selectUiTheme("theme_92ba863d3714c089235dfcef47ce3415", selected.revision);
+  expect(bobSelected.selectedThemeId).toBe("theme_92ba863d3714c089235dfcef47ce3415");
+  expect((await alice.listUiThemes()).selectedThemeId).toBe(id);
   await expect(bob.updateUiTheme(id, { schemaVersion: 1, expectedRevision: selected.revision, name: "共同编辑" })).rejects.toMatchObject({ status: 403 });
   const guest = new MockWebBotClient();
   await guest.loginGuest();
-  expect((await guest.listUiThemes()).selectedThemeId).toBe(id);
-  await expect(guest.deleteUiTheme(id, selected.revision)).rejects.toMatchObject({ status: 403 });
+  expect((await guest.listUiThemes()).selectedThemeId).toBe("paper-daylight");
+  await expect(guest.deleteUiTheme(id, bobSelected.revision)).rejects.toMatchObject({ status: 403 });
 });

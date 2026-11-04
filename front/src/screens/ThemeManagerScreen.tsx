@@ -883,7 +883,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
   return (
     <section
       className="theme-manager"
-      aria-label="全局主题管理"
+      aria-label="主题管理"
       aria-busy={busy || loading}
       data-theme-manager-dirty={dirty ? "true" : "false"}
       onKeyDown={(event) => {
@@ -897,11 +897,11 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       <header className="theme-manager-header">
         <div>
           <h1>主题管理</h1>
-          <p>主题随应用版本发布，所有账户只能选择预置主题</p>
+          <p>主题随应用版本发布，你可以选择要使用的预置主题</p>
         </div>
         <div className="theme-manager-header-actions">
           <span>
-            当前应用：
+            当前使用：
             {library.themes.find((theme) => theme.id === appearance.themeId)
               ?.name || "钢铁核心"}
           </span>
@@ -918,7 +918,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
       </header>
       {!canManage && !loading && (
         <p className="theme-manager-banner">
-          登录正式账户后，可以保存和管理全局主题。
+          登录正式账户后，可以保存自己的主题选择。
         </p>
       )}
       {loading && (
@@ -972,7 +972,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
           aria-label="主题列表"
         >
           <div className="theme-manager-panel-title">
-            <h2>全局主题</h2>
+            <h2>我的主题</h2>
             <span>
               {library.themes.length} 个预置
             </span>
@@ -1010,7 +1010,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                         : "浅色"}
                       {theme.id === BUILTIN_THEME.id ? " · 默认主题" : " · 只读"}
                       {theme.id === library.selectedThemeId
-                        ? " · 当前应用"
+                        ? " · 当前使用"
                         : ""}
                     </span>
                   </button>
@@ -1534,7 +1534,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
               <p>
                 将删除“{draft.theme.name}”。
                 {draft.theme.id === library.selectedThemeId
-                  ? "当前应用会恢复为钢铁核心。"
+                  ? "当前使用会恢复为钢铁核心。"
                   : ""}
                 {dirty ? "未保存的更改也会丢弃。" : ""}
               </p>

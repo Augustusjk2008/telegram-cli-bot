@@ -18,7 +18,8 @@ async def _dispatch(request: web.Request, operation: str) -> web.Response:
     auth = None if operation == "public_list" else await server._with_auth(request)
     try:
         if operation in {"list", "public_list"}:
-            data = await asyncio.to_thread(server.theme_store.list_library)
+            account_id = None if operation == "public_list" else auth.account_id
+            data = await asyncio.to_thread(server.theme_store.list_library, account_id)
         else:
             if auth.role == ROLE_GUEST or auth.account_id == "guest":
                 raise WebApiError(403, "theme_readonly", "请登录正式账户后管理主题")
@@ -29,7 +30,10 @@ async def _dispatch(request: web.Request, operation: str) -> web.Response:
             args = []
             if operation in {"update", "delete"}:
                 args.append(request.match_info["theme_id"])
-            data = await asyncio.to_thread(method, *args, payload)
+            if operation == "select":
+                data = await asyncio.to_thread(method, payload, auth.account_id)
+            else:
+                data = await asyncio.to_thread(method, *args, payload)
     except ThemeStoreError as exc:
         raise WebApiError(exc.status, exc.code, exc.message, exc.data) from exc
     return web.json_response({"ok": True, "data": data})

@@ -178,7 +178,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("全局主题管理", () => {
+describe("主题管理", () => {
   it("does not expose theme import or copy controls", () => {
     api.library = {
       schemaVersion: 1,

@@ -1781,8 +1781,12 @@ function buildMockHdlWindow(rows: TableRow[], request: PluginViewWindowRequest):
   return { offset, limit, totalRows: filtered.length, rows: filtered.slice(offset, offset + limit).map((row) => ({ ...row, cells: { ...row.cells }, actions: clonePluginActions(row.actions) })), appliedSort: sort };
 }
 
+type MockThemeLibraryState = ThemeLibrary & {
+  selectedThemeIds?: Record<string, string>;
+};
+
 export class MockWebBotClient implements WebBotClient {
-  private static uiThemeMemory: ThemeLibrary | null = null;
+  private static uiThemeMemory: MockThemeLibraryState | null = null;
   private static uiThemeAssets = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
 
   private bots = new Map<string, BotSummary>(
@@ -3459,29 +3463,37 @@ export class MockWebBotClient implements WebBotClient {
     return structuredClone(themePresets as unknown as ThemeLibrary);
   }
 
+  private readUiThemeState(): Partial<MockThemeLibraryState> {
+    try {
+      const raw = localStorage.getItem("web-mock-ui-themes:global:v1");
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Fall back to the in-memory mock state when storage is unavailable.
+    }
+    return MockWebBotClient.uiThemeMemory || {};
+  }
+
   private uiThemeLibrary(requireAuth = true): ThemeLibrary {
     if (requireAuth && !this.session.isLoggedIn) {
       throw new WebApiClientError("请先登录", { status: 401, code: "unauthorized" });
     }
-    let state: Partial<ThemeLibrary> = {};
-    try {
-      const raw = localStorage.getItem("web-mock-ui-themes:global:v1");
-      const parsed = raw ? JSON.parse(raw) : {};
-      state = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      state = MockWebBotClient.uiThemeMemory || {};
-    }
+    const state = this.readUiThemeState();
     const library = this.builtinUiThemes();
-    const selectedThemeId = typeof state.selectedThemeId === "string"
-      && library.themes.some((theme) => theme.id === state.selectedThemeId)
-      ? state.selectedThemeId
+    const accountSelection = requireAuth ? state.selectedThemeIds?.[this.currentAccountId()] : undefined;
+    const selectedThemeId = typeof accountSelection === "string"
+      && library.themes.some((theme) => theme.id === accountSelection)
+      ? accountSelection
+      : typeof state.selectedThemeId === "string"
+        && library.themes.some((theme) => theme.id === state.selectedThemeId)
+        ? state.selectedThemeId
       : library.selectedThemeId;
     const revision = Number.isSafeInteger(state.revision) && (state.revision as number) >= 0
       ? state.revision as number
       : library.revision;
     if ((state.scope !== undefined && state.scope !== "global")
       || (state.schemaVersion !== undefined && state.schemaVersion !== 1)) {
-      throw new WebApiClientError("全局主题库格式不受支持", { status: 400, code: "unsupported_theme_schema" });
+      throw new WebApiClientError("主题库格式不受支持", { status: 400, code: "unsupported_theme_schema" });
     }
     return structuredClone({
       ...library,
@@ -3497,7 +3509,7 @@ export class MockWebBotClient implements WebBotClient {
   private mutateUiThemes(expectedRevision: number, change: (library: ThemeLibrary) => void): ThemeLibrary {
     const library = this.uiThemeLibrary();
     if (this.session.role === "guest" || this.currentAccountId() === "guest") {
-      throw new WebApiClientError("请登录正式账户后管理全局主题", { status: 403, code: "theme_readonly" });
+      throw new WebApiClientError("请登录正式账户后管理主题", { status: 403, code: "theme_readonly" });
     }
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
       throw new WebApiClientError("主题库版本必须是非负安全整数", { status: 400, code: "invalid_theme" });
@@ -3509,8 +3521,18 @@ export class MockWebBotClient implements WebBotClient {
     }
     change(library);
     library.revision += 1;
-    MockWebBotClient.uiThemeMemory = structuredClone(library);
-    try { localStorage.setItem("web-mock-ui-themes:global:v1", JSON.stringify(library)); } catch { /* Keep the shared in-memory library available. */ }
+    const state = this.readUiThemeState();
+    const selectedThemeIds = {
+      ...(state.selectedThemeIds || {}),
+      [this.currentAccountId()]: library.selectedThemeId,
+    };
+    const persisted: MockThemeLibraryState = {
+      ...library,
+      selectedThemeId: typeof state.selectedThemeId === "string" ? state.selectedThemeId : this.builtinUiThemes().selectedThemeId,
+      selectedThemeIds,
+    };
+    MockWebBotClient.uiThemeMemory = structuredClone(persisted);
+    try { localStorage.setItem("web-mock-ui-themes:global:v1", JSON.stringify(persisted)); } catch { /* Keep the shared in-memory library available. */ }
     return library;
   }
 
@@ -3578,7 +3600,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async uploadThemeAsset(file: File): Promise<ThemeIllustrationAsset> {
     if (this.session.role === "guest" || this.currentAccountId() === "guest") {
-      throw new WebApiClientError("请登录正式账户后管理全局主题", { status: 403, code: "theme_readonly" });
+      throw new WebApiClientError("请登录正式账户后管理主题", { status: 403, code: "theme_readonly" });
     }
     throw new WebApiClientError("预置主题由应用发布，不能修改", { status: 403, code: "theme_readonly" });
   }

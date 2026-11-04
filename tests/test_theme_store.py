@@ -54,16 +54,20 @@ def test_runtime_library_only_keeps_selection_and_cannot_override_presets(store:
     assert all(theme["readonly"] is True for theme in library["themes"])
 
 
-def test_selection_is_the_only_persisted_theme_state(store: ThemeStore) -> None:
+def test_selection_is_persisted_per_account(store: ThemeStore) -> None:
     library = store.list_library()
     selected_id = library["themes"][-1]["id"]
 
-    selected = store.select({"themeId": selected_id, "expectedRevision": 0})
+    selected = store.select({"themeId": selected_id, "expectedRevision": 0}, "alice")
 
     assert selected["revision"] == 1
     assert selected["selectedThemeId"] == selected_id
+    assert store.list_library("alice")["selectedThemeId"] == selected_id
+    assert store.list_library("bob")["selectedThemeId"] == BUILTIN_THEME_ID
+    assert store.list_library()["selectedThemeId"] == BUILTIN_THEME_ID
     persisted = json.loads(store.library_path.read_text(encoding="utf-8"))
-    assert persisted["selectedThemeId"] == selected_id
+    assert persisted["selectedThemeId"] == BUILTIN_THEME_ID
+    assert persisted["selectedThemeIds"] == {"alice": selected_id}
     assert all(theme["readonly"] is True for theme in persisted["themes"])
 
 

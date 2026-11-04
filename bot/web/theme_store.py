@@ -1,4 +1,4 @@
-"""Global UI themes with atomic persistence and legacy account migration."""
+"""Preset UI themes with atomic persistence and per-account selection."""
 
 from __future__ import annotations
 
@@ -100,6 +100,16 @@ def _revision(value: Any) -> int:
     if type(value) is not int or not 0 <= value <= 9_007_199_254_740_991:
         _invalid("主题库版本必须是非负安全整数")
     return value
+
+
+def _selection_map(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        _invalid("主题选择映射必须是对象")
+    if any(not isinstance(account_id, str) or not account_id.strip()
+           or not isinstance(theme_id, str) or not theme_id.strip()
+           for account_id, theme_id in value.items()):
+        _invalid("主题选择映射包含无效值")
+    return {account_id: theme_id for account_id, theme_id in value.items()}
 
 
 def _name(value: Any) -> str:
@@ -512,6 +522,7 @@ class ThemeStore:
         try:
             fields = {"schemaVersion", "revision", "selectedThemeId", "themes"}
             required = set(fields)
+            fields.add("selectedThemeIds")
             if not legacy:
                 fields |= {"scope", "builtinTheme"}
                 required.add("scope")
@@ -522,6 +533,8 @@ class ThemeStore:
             _revision(data["revision"])
             if not isinstance(data["themes"], list) or not isinstance(data["selectedThemeId"], str):
                 _invalid("主题库结构无效")
+            if "selectedThemeIds" in data:
+                _selection_map(data["selectedThemeIds"])
             if "builtinTheme" in data:
                 builtin = _object(
                     data["builtinTheme"],
@@ -574,7 +587,7 @@ class ThemeStore:
         data["revision"] = 0
         return data
 
-    def _read_selection(self) -> tuple[int, str]:
+    def _read_selection(self) -> tuple[int, str, dict[str, str]]:
         try:
             raw = self.library_path.read_text(encoding="utf-8")
             data = json.loads(raw)
@@ -587,9 +600,10 @@ class ThemeStore:
             selected = data.get("selectedThemeId", BUILTIN_THEME_ID)
             if not isinstance(selected, str):
                 _invalid("主题库 selectedThemeId 必须是字符串")
-            return revision, selected
+            selections = _selection_map(data["selectedThemeIds"]) if "selectedThemeIds" in data else {}
+            return revision, selected, selections
         except FileNotFoundError:
-            return 0, BUILTIN_THEME_ID
+            return 0, BUILTIN_THEME_ID, {}
         except (OSError, UnicodeError, ValueError, ThemeStoreError) as exc:
             detail = str(exc)
             raise ThemeStoreError(500, "theme_store_unreadable", f"主题库文件无法使用，原文件已保留，请修复后重试：{detail}") from exc
@@ -597,27 +611,35 @@ class ThemeStore:
     def _read(self) -> dict[str, Any]:
         data = self._preset_library()
         if self.library_path.exists():
-            revision, selected = self._read_selection()
+            revision, selected, selections = self._read_selection()
             data["revision"] = revision
             if selected in {theme["id"] for theme in data["themes"]}:
                 data["selectedThemeId"] = selected
+            if selections:
+                data["selectedThemeIds"] = selections
         return data
 
     @staticmethod
-    def _library(data: dict[str, Any]) -> dict[str, Any]:
+    def _library(data: dict[str, Any], account_id: str | None = None) -> dict[str, Any]:
         library = copy.deepcopy(data)
+        selections = library.pop("selectedThemeIds", {})
+        if account_id and isinstance(selections, dict):
+            selected = selections.get(account_id)
+            theme_ids = {theme["id"] for theme in library["themes"]}
+            if selected in theme_ids:
+                library["selectedThemeId"] = selected
         library.pop("builtinTheme", None)
         return library
 
-    def list_library(self) -> dict[str, Any]:
+    def list_library(self, account_id: str | None = None) -> dict[str, Any]:
         with _STORE_LOCK:
             try:
-                return self._library(self._read())
+                return self._library(self._read(), account_id)
             except ThemeStoreError as exc:
                 if exc.code != "theme_store_unreadable":
                     raise
                 try:
-                    fallback = self._library(self._preset_library())
+                    fallback = self._library(self._preset_library(), account_id)
                 except ThemeStoreError:
                     fallback = builtin_library()
                 return {**fallback, "error": exc.message}
@@ -642,7 +664,8 @@ class ThemeStore:
                     temporary.unlink()
 
     def _mutate(self, expected_revision: Any,
-                change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+                change: Callable[[dict[str, Any]], None],
+                account_id: str | None = None) -> dict[str, Any]:
         expected_revision = _revision(expected_revision)
         with _STORE_LOCK:
             data = self._read()
@@ -652,7 +675,7 @@ class ThemeStore:
             change(data)
             data["revision"] += 1
             self._write(self.library_path, data)
-            return self._library(data)
+            return self._library(data, account_id)
 
     def _find(self, data: dict[str, Any], theme_id: Any, *, writable: bool = False) -> dict[str, Any]:
         for theme in data["themes"]:
@@ -689,13 +712,21 @@ class ThemeStore:
     def delete(self, theme_id: str, payload: Any) -> dict[str, Any]:
         raise ThemeStoreError(403, "theme_readonly", THEME_READONLY_MESSAGE)
 
-    def select(self, payload: Any) -> dict[str, Any]:
+    def select(self, payload: Any, account_id: str | None = None) -> dict[str, Any]:
         value = _object(payload, {"themeId", "expectedRevision"}, {"themeId", "expectedRevision"}, "应用主题请求")
         if not isinstance(value["themeId"], str):
             _invalid("themeId 必须是主题 ID")
+        if account_id is not None and (not isinstance(account_id, str) or not account_id.strip()):
+            _invalid("账户 ID 无效")
 
         def change(data):
             self._find(data, value["themeId"])
-            data["selectedThemeId"] = value["themeId"]
+            if account_id is None:
+                data["selectedThemeId"] = value["themeId"]
+            else:
+                selections = data.setdefault("selectedThemeIds", {})
+                if not isinstance(selections, dict):
+                    _invalid("主题选择映射必须是对象")
+                selections[account_id] = value["themeId"]
 
-        return self._mutate(value["expectedRevision"], change)
+        return self._mutate(value["expectedRevision"], change, account_id)

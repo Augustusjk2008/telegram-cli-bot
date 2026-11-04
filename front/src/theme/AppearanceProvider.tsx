@@ -39,8 +39,8 @@ function validateLibrary(library: ThemeLibrary): ThemeLibrary {
   return { ...library, themes, selectedThemeId: themes.some((theme) => theme.id === library.selectedThemeId) ? library.selectedThemeId : BUILTIN_THEME.id };
 }
 
-function cacheKey() {
-  return `web-ui-themes:global:v1:${window.location.pathname}`;
+function cacheKey(sessionKey = "login") {
+  return `web-ui-themes:account:v2:${sessionKey}:${window.location.pathname}`;
 }
 
 function loginThemeKey() {
@@ -65,7 +65,7 @@ function useAppearanceState() {
     setLibrary(valid);
     setError(valid.error || "");
     if (cache && !valid.error) {
-      try { localStorage.setItem(cacheKey(), JSON.stringify(valid)); } catch { /* In-memory operation remains available. */ }
+      try { localStorage.setItem(cacheKey(sessionRef.current?.key), JSON.stringify(valid)); } catch { /* In-memory operation remains available. */ }
     }
     return valid;
   }, []);
@@ -117,7 +117,7 @@ function useAppearanceState() {
       try { setLoginThemeId(localStorage.getItem(loginThemeKey())); } catch { /* Login themes also work without browser storage. */ }
     }
     try {
-      const raw = localStorage.getItem(cacheKey());
+      const raw = localStorage.getItem(cacheKey(next.key));
       if (raw) accept(validateLibrary(JSON.parse(raw)), false);
     } catch { /* The server remains authoritative if the cache is unavailable. */ }
     void reload().catch(() => {});
@@ -135,7 +135,7 @@ function useAppearanceState() {
   useLayoutEffect(() => {
     if (!session) return;
     const onStorage = (event: StorageEvent) => {
-      if (event.key === cacheKey()) void reload().catch(() => {});
+      if (event.key === cacheKey(sessionRef.current?.key)) void reload().catch(() => {});
     };
     const onVisibility = () => { if (document.visibilityState === "visible") void reload().catch(() => {}); };
     window.addEventListener("storage", onStorage);
@@ -148,8 +148,8 @@ function useAppearanceState() {
 
   const mutate = useCallback(async (operation: (client: WebBotClient, revision: number) => Promise<ThemeLibrary>) => {
     const activeSession = sessionRef.current;
-    if (!activeSession || activeSession.previewOnly || activeSession.canManage === false) throw new Error("请登录正式账户后管理全局主题");
-    if (!readyRef.current) throw new Error("全局主题库尚未加载成功，请重新加载后再保存");
+    if (!activeSession || activeSession.previewOnly || activeSession.canManage === false) throw new Error("请登录正式账户后管理主题");
+    if (!readyRef.current) throw new Error("主题库尚未加载成功，请重新加载后再保存");
     const generation = generationRef.current;
     try {
       const next = await operation(activeSession.client, libraryRef.current.revision);
@@ -169,7 +169,7 @@ function useAppearanceState() {
   const importThemes = useCallback((document: unknown, expectedRevision: number, assets: ThemeIllustrationAssetImport[] = []) => mutate((client) => client.importUiThemes({ document, expectedRevision, ...(assets.length ? { assets } : {}) })), [mutate]);
   const uploadThemeAsset = useCallback(async (file: File) => {
     const activeSession = sessionRef.current;
-    if (!activeSession || activeSession.previewOnly || activeSession.canManage === false) throw new Error("请登录正式账户后管理全局主题");
+    if (!activeSession || activeSession.previewOnly || activeSession.canManage === false) throw new Error("请登录正式账户后管理主题");
     return activeSession.client.uploadThemeAsset(file);
   }, []);
   const updateTheme = useCallback((id: string, input: UpdateInput) => mutate((client, revision) => client.updateUiTheme(id, { ...input, expectedRevision: input.expectedRevision ?? revision })), [mutate]);
@@ -210,7 +210,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
   }, [value.managerOpen]);
   return <AppearanceContext.Provider value={value}>
     {children}
-    {value.managerOpen && <dialog ref={dialogRef} className="theme-manager-overlay" aria-label="全局主题管理" onCancel={(event) => { event.preventDefault(); requestThemeManagerLeave(value.closeManager); }}
+    {value.managerOpen && <dialog ref={dialogRef} className="theme-manager-overlay" aria-label="主题管理" onCancel={(event) => { event.preventDefault(); requestThemeManagerLeave(value.closeManager); }}
       onKeyDown={(event) => {
         event.stopPropagation();
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") event.preventDefault();

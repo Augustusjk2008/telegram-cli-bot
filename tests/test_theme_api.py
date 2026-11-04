@@ -99,7 +99,7 @@ async def test_public_and_authenticated_reads_return_the_packaged_presets(api):
 
 
 @pytest.mark.asyncio
-async def test_members_and_admins_can_select_but_cannot_modify_presets(api):
+async def test_members_and_admins_keep_independent_theme_selections(api):
     _, listed = await request(api, "GET")
     selected_id = listed["data"]["themes"][-1]["id"]
     status, selected = await request(api, "PATCH", "/api/ui/theme-selection", body={
@@ -108,6 +108,13 @@ async def test_members_and_admins_can_select_but_cannot_modify_presets(api):
     })
     assert status == 200 and selected["data"]["selectedThemeId"] == selected_id
     assert selected_id == "theme_6f7ac1823da81d2e52d1a1549ee69c85"
+
+    status, alice = await request(api, "GET", token="alice")
+    assert status == 200 and alice["data"]["selectedThemeId"] == selected_id
+    status, admin = await request(api, "GET", token="admin")
+    assert status == 200 and admin["data"]["selectedThemeId"] == "paper-daylight"
+    status, public = await request(api, "GET", "/api/public/ui/themes", token="")
+    assert status == 200 and public["data"]["selectedThemeId"] == "paper-daylight"
 
     operations = [
         ("POST", "/api/ui/themes", create_input()),

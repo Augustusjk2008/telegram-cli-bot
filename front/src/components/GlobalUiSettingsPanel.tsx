@@ -40,7 +40,7 @@ export function GlobalUiSettingsPanel({
   async function changeTheme(value: UiThemeName) {
     if (value === themeName || !onThemeChange) return;
     await onThemeChange(value);
-    setNotice("全局主题已更新");
+    setNotice("主题选择已更新");
   }
 
   function changeNotification(value: boolean) {
