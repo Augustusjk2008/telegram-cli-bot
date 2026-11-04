@@ -4,6 +4,7 @@ import io
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -32,6 +33,11 @@ PORTABLE_RUNTIME_LICENSE_FILES = (
     "runtime/node/LICENSE",
     "tools/git/LICENSE.txt",
 )
+POWERSHELL = shutil.which("pwsh") or shutil.which("powershell")
+
+
+def _ps_quote(value: Path) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _announcement_payload(*item_ids: str) -> dict:
@@ -211,6 +217,32 @@ def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_
     assert "WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)" in portable
     assert 'print(f"{key}={value}")' not in portable
     assert "print(f'{key}={value}')" in portable
+
+
+@pytest.mark.skipif(os.name != "nt" or not POWERSHELL, reason="Windows PowerShell unavailable")
+def test_release_tar_builder_preserves_batch_files(tmp_path: Path) -> None:
+    source = tmp_path / "release" / "stage" / "snapshot"
+    batch = source / "scripts" / "empty_recycle_bin.bat"
+    destination = tmp_path / "release" / "artifacts" / "payload.tar.gz"
+    batch.parent.mkdir(parents=True)
+    destination.parent.mkdir(parents=True)
+    batch.write_text("@echo off\r\n", encoding="utf-8", newline="")
+
+    script = Path(".release-local/publish-release.ps1").resolve()
+    command = f'''
+$ErrorActionPreference = "Stop"
+$script:RepoRoot = {_ps_quote(Path.cwd())}
+$ast = [System.Management.Automation.Language.Parser]::ParseFile({_ps_quote(script)}, [ref]$null, [ref]$null)
+foreach ($name in @("Invoke-CheckedCommand", "New-TarGzArchive")) {{
+    $fn = $ast.Find({{ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }}, $true)
+    Invoke-Expression $fn.Extent.Text
+}}
+New-TarGzArchive -SourceDir {_ps_quote(source)} -DestinationFile {_ps_quote(destination)}
+'''
+    result = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    with tarfile.open(destination, "r:gz") as archive:
+        assert "./scripts/empty_recycle_bin.bat" in archive.getnames()
 
 
 def test_updated_frontend_build_uses_npm_without_legacy_script(monkeypatch, tmp_path: Path) -> None:

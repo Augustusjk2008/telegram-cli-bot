@@ -507,10 +507,45 @@ function New-TarGzArchive {
         [string]$DestinationFile
     )
 
-    if (Test-Path -LiteralPath $DestinationFile) {
-        Remove-Item -LiteralPath $DestinationFile -Force
+    $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("orbit-safe-claw-tar-" + [Guid]::NewGuid().ToString("N"))
+    $temporaryArchive = Join-Path $temporaryRoot "archive.tar.gz"
+    [void](New-Item -ItemType Directory -Path $temporaryRoot -Force)
+    try {
+        $tarSucceeded = $false
+        $lastTarOutput = ""
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            if (Test-Path -LiteralPath $temporaryArchive) {
+                Remove-Item -LiteralPath $temporaryArchive -Force
+            }
+            $tarOutput = @(& "tar.exe" "-C" $SourceDir "-czf" $temporaryArchive "." 2>&1)
+            $tarExitCode = $LASTEXITCODE
+            $lastTarOutput = ($tarOutput | Out-String).Trim()
+            if ($lastTarOutput) {
+                Write-Host $lastTarOutput
+            }
+            if ($tarExitCode -eq 0 -and $lastTarOutput -notmatch "Can't add archive to itself") {
+                $tarSucceeded = $true
+                break
+            }
+            if ($attempt -lt 2) {
+                Write-Warning "tar.gz 创建出现自包含警告或失败，将重试一次。"
+            }
+        }
+        if (-not $tarSucceeded) {
+            if ($lastTarOutput) {
+                throw "创建 tar.gz 包失败: $lastTarOutput"
+            }
+            throw "创建 tar.gz 包失败"
+        }
+        if (Test-Path -LiteralPath $DestinationFile) {
+            Remove-Item -LiteralPath $DestinationFile -Force
+        }
+        Move-Item -LiteralPath $temporaryArchive -Destination $DestinationFile -Force
+    } finally {
+        if (Test-Path -LiteralPath $temporaryRoot) {
+            Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
-    Invoke-CheckedCommand -FilePath "tar.exe" -Arguments @("-C", $SourceDir, "-czf", $DestinationFile, ".") -FailureMessage "创建 tar.gz 包失败"
 }
 
 function Write-DistributionMarker {
