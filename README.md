@@ -233,8 +233,8 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 ### 管理与扩展
 
 - Admin Center 管理用户权限、邀请码、公告、更新和运行状态，也可以请求重启后端。
-- 主题库随版本发布，包含「钢铁核心」「阿波罗计划」「薄荷柑橘」「赛博朋克」和「Deepseek」五套预置主题；所有账户（包括管理员）都只能选择和应用主题，不能编辑、导入、删除或上传主题资源。主题选择在登录后共享保存，登录页的预览选择保存在当前浏览器。
-- 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用发布包内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077` 或 `deepseek-big-fish` 资源；透明度范围为 `0` 到 `0.25`。
+- 主题库随版本发布，包含「钢铁核心」「阿波罗计划」「薄荷柑橘」「轻音少女」「赛博朋克」和「Deepseek」六套预置主题；所有账户（包括管理员）都只能选择和应用主题，不能编辑、导入、删除或上传主题资源。主题选择在登录后共享保存，登录页的预览选择保存在当前浏览器。
+- 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用发布包内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077`、`deepseek-big-fish` 或 `k-on-light-music` 资源；透明度范围为 `0` 到 `0.25`。
 - 预置主题的插画资源由发布包中的插画目录和前端资源提供，插画属于主题外观的一部分；主题包导出会保留这些资源。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。

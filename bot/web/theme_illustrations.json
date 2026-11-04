@@ -843,6 +843,68 @@
           }
         ]
       }
+    },
+    "k-on-light-music": {
+      "workbench": {
+        "layers": [
+          {
+            "id": "k-on-light-music-workbench",
+            "asset": {
+              "assetId": "k-on-light-music-workbench",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "5db7e6ed885e75e369f9c3ddd56ada2d498aa56876f70dd0b6130e464671402e",
+              "path": "/assets/theme-illustrations/k-on-light-music/workbench/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      },
+      "adminCenter": {
+        "layers": [
+          {
+            "id": "k-on-light-music-adminCenter",
+            "asset": {
+              "assetId": "k-on-light-music-admin-center",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "fe88ff20b394f2bbfa1367a9d134351a449578eed827aa13272e2b7b4a1c34c8",
+              "path": "/assets/theme-illustrations/k-on-light-music/admin-center/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      },
+      "agentManager": {
+        "layers": [
+          {
+            "id": "k-on-light-music-agentManager",
+            "asset": {
+              "assetId": "k-on-light-music-agent-manager",
+              "mimeType": "image/webp",
+              "width": 1672,
+              "height": 941,
+              "sha256": "88407cbb58273b2e31a64e20a1d0c56446102c0d687f77239d86ccb40ee7674d",
+              "path": "/assets/theme-illustrations/k-on-light-music/agent-manager/background.webp"
+            },
+            "anchor": "center",
+            "enabled": true,
+            "width": 100,
+            "height": 100,
+            "objectPosition": "50% 50%"
+          }
+        ]
+      }
     }
   }
 }

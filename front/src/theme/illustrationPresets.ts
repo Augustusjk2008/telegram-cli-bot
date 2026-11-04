@@ -26,6 +26,7 @@ export const THEME_ILLUSTRATION_SET_IDS = [
   "mint-citrus",
   "cyberpunk-2077",
   "deepseek-big-fish",
+  "k-on-light-music",
 ] as const satisfies readonly ThemeIllustrationSetId[];
 
 const LEGACY_SURFACE_FILENAMES: Record<ThemeIllustrationSurface, string> = {
@@ -81,6 +82,7 @@ export const THEME_ILLUSTRATION_OPTIONS = [
   { id: "mint-citrus", label: "薄荷柑橘插画组" },
   { id: "cyberpunk-2077", label: "赛博朋克 2077 插画组" },
   { id: "deepseek-big-fish", label: "Deepseek 大肥鱼插画组" },
+  { id: "k-on-light-music", label: "轻音少女插画组" },
 ] as const;
 
 export const ILLUSTRATION_TEMPLATES = [
@@ -143,6 +145,12 @@ export const ILLUSTRATION_TEMPLATES = [
     label: "Deepseek 大肥鱼",
     description: "深海蓝、青色光和安静的海流",
     colors: { accent: "#2F8EDBFF", "accent.strong": "#68D9FFFF" },
+  },
+  {
+    id: "k-on-light-music",
+    label: "轻音少女",
+    description: "莓红、紫罗兰、薄荷和湖蓝的轻音部活力",
+    colors: { accent: "#B9356FFF", "accent.strong": "#5D4ED1FF" },
   },
 ] as const;
 

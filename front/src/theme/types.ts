@@ -34,7 +34,8 @@ export type ThemeIllustrationSetId =
   | "apollo-plan"
   | "mint-citrus"
   | "cyberpunk-2077"
-  | "deepseek-big-fish";
+  | "deepseek-big-fish"
+  | "k-on-light-music";
 
 export type ThemeIllustrationUploadMime = "image/png" | "image/jpeg" | "image/webp";
 

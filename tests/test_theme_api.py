@@ -88,6 +88,7 @@ async def test_public_and_authenticated_reads_return_the_packaged_presets(api):
         "钢铁核心",
         "阿波罗计划",
         "薄荷柑橘",
+        "轻音少女",
         "赛博朋克",
         "Deepseek",
     ]
@@ -144,4 +145,4 @@ async def test_corrupt_runtime_selection_is_reported_without_replacing_packaged_
 
     assert status == 200
     assert "原文件已保留" in payload["data"]["error"]
-    assert len(payload["data"]["themes"]) == 5
+    assert len(payload["data"]["themes"]) == 6
