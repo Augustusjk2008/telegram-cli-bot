@@ -14,8 +14,6 @@ __pycache__/
 managed_bots.json
 .git_commit_cli_config.json
 .env
-/AGENTS.md
-/CLAUDE.md
 *.log
 /docs/
 !/docs/

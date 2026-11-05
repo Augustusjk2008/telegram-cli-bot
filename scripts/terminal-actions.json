@@ -90,17 +90,6 @@
       "enabled": true
     },
     {
-      "id": "codegraph",
-      "label": "代码同步",
-      "icon": "Upload",
-      "windowsCommand": "codegraph sync .",
-      "linuxCommand": "codegraph sync .",
-      "macosCommand": "",
-      "cwd": ".",
-      "confirm": false,
-      "enabled": true
-    },
-    {
       "id": "memory",
       "label": "内存占用",
       "icon": "Terminal",

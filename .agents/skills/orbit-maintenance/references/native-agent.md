@@ -32,7 +32,7 @@
 
 - `pi_session_runtime.py` 的单 reader 消费 `client.events()`，runtime 同时只允许一个活动事件消费者；后续 turn 继续使用该 reader。队列有界，压力下优先保留控制和终止事件，丢失 usage 事件会影响用量完整性。
 - runtime 按 owner 串行启动，owner 包含 `(bot_id, user_id, agent_id)`，runtime key 再包含 conversation。空闲淘汰避开 processing、有待处理权限或活动消费者的 runtime；关闭前持久化仍有效的绑定。
-- 必须保持的绑定不变量为 `cwd + model_id + pi_agent + reasoning_effort`；任一项变化都应失效旧 session 和 rollback 链。runtime 的 `binding_matches()` 已比较对应的 `cwd + model + agent_id + reasoning_effort`，并比较 `TCB_REMOTE_MCP_CONFIG`；不匹配时清除旧 session id、history head 和线性索引，再创建进程。
+- 必须保持的绑定不变量为 `cwd + model_id + pi_agent + reasoning_effort`，以及存在时的 `system_prompt_hash`、`prompt_profile`、`child_agent_prompt_hash` 和 `remote_workspace_fingerprint`（service 层 `_native_session_meta_mismatch()` 比较）；任一项变化都应失效旧 session 和 rollback 链。runtime 的 `binding_matches()` 已比较对应的 `cwd + model + agent_id + reasoning_effort`，并比较 `TCB_REMOTE_MCP_CONFIG`；不匹配时清除旧 session id、history head 和线性索引，再创建进程。
 - `service.py:_resolve_pi_binding()` 在启动前比较 conversation 与 PiSessionStore 的 metadata，变化时清理两处绑定、失效 conversation 的 workspace history，并关闭已失效 runtime。metadata 还包含系统提示 hash、child-agent 提示 hash、solo profile 和远程工作区指纹；`_persist_runtime_before_close()` 跳过已失效绑定，防止旧状态回写。四项绑定及远程指纹变化的回归位于 `tests/test_remote_workspace_chat.py`。
 - `config_fingerprint` 与上述会话绑定分开判断：当前由 models 文件的 mtime/size 加远程配置指纹构成，完整 env 也参与 runtime 复用比较。仅 models 文件指纹或普通 env 变化会重建 runtime，仍可能续接同一 session 和 history。修改配置热更新时需核对这个边界，四项绑定失效要求仍须保持。
 - Web rollback 使用本地 `ShadowGitHistory`；远程 SSH 工作区关闭本地 history。rollback 入口再次核对 session metadata；Pi 的 `workspace_history` RPC 不参与 Web 回滚。
