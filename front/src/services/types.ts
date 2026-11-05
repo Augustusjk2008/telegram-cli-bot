@@ -436,6 +436,18 @@ export type CodexUsageStats = {
   rateLimitSamples: CodexRateLimitSample[];
 };
 
+export const GENERAL_CLAUDE_RATE_LIMIT_ID = "claude";
+export type ClaudeUsageProviderKind = CodexUsageProviderKind;
+export type ClaudeUsageProviderResolution = CodexUsageProviderResolution;
+export type ClaudeUsageProvider = CodexUsageProvider;
+export type ClaudeUsageTimeBasis = CodexUsageTimeBasis;
+export type ClaudeUsageAvailableRange = CodexUsageAvailableRange;
+export type ClaudeRateLimitSample = CodexRateLimitSample;
+export type ClaudeUsageConfig = CodexUsageConfig;
+export type ClaudeUsageStatsQuery = CodexUsageStatsQuery;
+export type ClaudeUsageStatsRange = CodexUsageStatsRange;
+export type ClaudeUsageStats = CodexUsageStats;
+
 export type NativeAgentConfigView = {
   provider: string;
   model: string;

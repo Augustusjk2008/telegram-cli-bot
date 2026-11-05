@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  GENERAL_CLAUDE_RATE_LIMIT_ID,
   GENERAL_CODEX_RATE_LIMIT_ID,
   GPT_RESERVE_RATE_LIMIT_ID,
   SECONDARY_CODEX_RATE_LIMIT_ID,
@@ -18,6 +19,12 @@ import "./CodexUsagePanel.css";
 type Props = {
   client: WebBotClient;
   refreshKey?: number;
+};
+
+export type UsagePanelProvider = "codex" | "claude";
+
+type UsagePanelProps = Props & {
+  provider?: UsagePanelProvider;
 };
 
 const numberFormat = new Intl.NumberFormat("zh-CN");
@@ -619,10 +626,12 @@ function CodexRateLimitBucketChart({
   label,
   samples,
   secondaryMetric,
+  providerName,
 }: {
   label: string;
   samples: CodexRateLimitSample[];
   secondaryMetric: RateLimitSecondaryMetric;
+  providerName: string;
 }) {
   const orderedSamples = useMemo(
     () => [...samples].sort(compareSampledAt),
@@ -634,7 +643,7 @@ function CodexRateLimitBucketChart({
       <article className="codex-usage-rate-limit-group">
         <h4>{label}</h4>
         <p className="codex-usage-empty-state">
-          {label === "通用 Codex" ? "暂无通用 Codex 限额样本。" : `暂无 ${label} 限额样本。`}
+          {label === `通用 ${providerName}` ? `暂无通用 ${providerName} 限额样本。` : `暂无 ${label} 限额样本。`}
         </p>
       </article>
     );
@@ -918,10 +927,20 @@ function CodexRateLimitBucketChart({
   );
 }
 
-function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
+function CodexRateLimitChart({
+  samples,
+  providerName,
+}: {
+  samples: CodexRateLimitSample[];
+  providerName: UsagePanelProvider;
+}) {
   const [secondaryMetric, setSecondaryMetric] = useState<RateLimitSecondaryMetric>("duration");
+  const displayName = providerName === "claude" ? "Claude" : "Codex";
+  const generalLimitId = providerName === "claude"
+    ? GENERAL_CLAUDE_RATE_LIMIT_ID
+    : GENERAL_CODEX_RATE_LIMIT_ID;
   const hasWeeklyCredits = samples.some((sample) => (
-    sample.limitId === GENERAL_CODEX_RATE_LIMIT_ID
+    sample.limitId === generalLimitId
     && sample.windowMinutes === WEEKLY_WINDOW_MINUTES
     && creditsValue(sample) !== null
   ));
@@ -935,8 +954,11 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
       samples: CodexRateLimitSample[];
     }>();
     const visibleSamples = samples.filter((sample) => (
-      sample.limitId !== GPT_RESERVE_RATE_LIMIT_ID
-      && sample.limitId !== SECONDARY_CODEX_RATE_LIMIT_ID
+      providerName === "claude"
+        || (
+          sample.limitId !== GPT_RESERVE_RATE_LIMIT_ID
+          && sample.limitId !== SECONDARY_CODEX_RATE_LIMIT_ID
+        )
     ));
     const knownPlanTypesByLimitId = new Map<string, Set<string>>();
     for (const sample of visibleSamples) {
@@ -961,29 +983,30 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
     }
     const groups = Array.from(grouped.values());
     const limitIds = [
-      GENERAL_CODEX_RATE_LIMIT_ID,
+      generalLimitId,
       ...visibleSamples
         .map((sample) => sample.limitId)
         .filter((limitId) => (
-          limitId !== GENERAL_CODEX_RATE_LIMIT_ID
+          limitId !== generalLimitId
         )),
     ];
     return [...new Set(limitIds)].flatMap((limitId) => {
       const matches = groups.filter((group) => group.limitId === limitId);
       return matches.length ? matches : [{ limitId, planType: null, samples: [] }];
     });
-  }, [samples]);
+  }, [generalLimitId, providerName, samples]);
 
   const limitLabel = (limitId: string) => {
-    if (limitId === GENERAL_CODEX_RATE_LIMIT_ID) return "通用 Codex";
+    if (limitId === generalLimitId) return `通用 ${displayName}`;
+    if (providerName === "claude") return limitId;
     if (limitId === SECONDARY_CODEX_RATE_LIMIT_ID) return "gpt-5.3-codex-spark";
     return limitId;
   };
 
   return (
-    <section className="codex-usage-section" aria-labelledby="codex-rate-limit-title">
+    <section className="codex-usage-section" aria-labelledby={`${providerName}-rate-limit-title`}>
       <div className="codex-usage-section-heading">
-        <h3 id="codex-rate-limit-title">Codex 剩余额度趋势</h3>
+        <h3 id={`${providerName}-rate-limit-title`}>{displayName} 剩余额度趋势</h3>
         <div className="codex-usage-chart-controls" role="group" aria-label="图表右轴">
           <span>右轴</span>
           <div className="codex-usage-chart-toggle">
@@ -1016,6 +1039,7 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
             label={limitSamples.length ? `${limitLabel(limitId)} · ${formatPlanType(planType)}` : limitLabel(limitId)}
             samples={limitSamples}
             secondaryMetric={activeSecondaryMetric}
+            providerName={displayName}
           />
         ))}
       </div>
@@ -1023,7 +1047,8 @@ function CodexRateLimitChart({ samples }: { samples: CodexRateLimitSample[] }) {
   );
 }
 
-export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
+export function UsagePanel({ client, refreshKey = 0, provider = "codex" }: UsagePanelProps) {
+  const displayName = provider === "claude" ? "Claude" : "Codex";
   const [config, setConfig] = useState<CodexUsageConfig | null>(null);
   const [stats, setStats] = useState<CodexUsageStats | null>(null);
   const [startDate, setStartDate] = useState("");
@@ -1044,19 +1069,23 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       setError("");
       setNotice("");
       try {
-        const nextConfig = await client.getCodexUsageConfig();
+        const nextConfig = provider === "claude"
+          ? await client.getClaudeUsageConfig()
+          : await client.getCodexUsageConfig();
         if (cancelled || requestId !== queryRequestIdRef.current) return;
         const range = defaultRange(nextConfig.timeBasis.today);
         setConfig(nextConfig);
         setStartDate(range.startDate);
         setEndDate(range.endDate);
 
-        const nextStats = await client.getCodexUsageStats(range);
+        const nextStats = provider === "claude"
+          ? await client.getClaudeUsageStats(range)
+          : await client.getCodexUsageStats(range);
         if (cancelled || requestId !== queryRequestIdRef.current) return;
         setStats(nextStats);
       } catch (nextError) {
         if (!cancelled && requestId === queryRequestIdRef.current) {
-          setError(getErrorMessage(nextError, "加载 Codex 额度失败"));
+          setError(getErrorMessage(nextError, `加载 ${displayName} 额度失败`));
         }
       } finally {
         if (!cancelled && requestId === queryRequestIdRef.current) setLoading(false);
@@ -1067,7 +1096,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [client, refreshKey]);
+  }, [client, displayName, provider, refreshKey]);
 
   const runStatsQuery = async (
     nextStartDate = startDate,
@@ -1088,16 +1117,19 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     setError("");
     setNotice("");
     try {
-      const nextStats = await client.getCodexUsageStats({
+      const query = {
         startDate: normalizedStartDate,
         endDate: normalizedEndDate,
-      });
+      };
+      const nextStats = provider === "claude"
+        ? await client.getClaudeUsageStats(query)
+        : await client.getCodexUsageStats(query);
       if (requestId === queryRequestIdRef.current) {
         setStats(nextStats);
       }
     } catch (nextError) {
       if (requestId === queryRequestIdRef.current) {
-        setError(getErrorMessage(nextError, "查询 Codex 额度失败"));
+        setError(getErrorMessage(nextError, `查询 ${displayName} 额度失败`));
       }
     } finally {
       if (requestId === queryRequestIdRef.current) {
@@ -1111,12 +1143,16 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
     setError("");
     setNotice("");
     try {
-      const nextConfig = await client.updateCodexUsageConfig({ enabled });
+      const nextConfig = provider === "claude"
+        ? await client.updateClaudeUsageConfig({ enabled })
+        : await client.updateCodexUsageConfig({ enabled });
       setConfig(nextConfig);
       setStats((current) => current ? { ...current, enabled: nextConfig.enabled } : current);
-      setNotice(enabled ? "Codex 额度采集已开启。" : "Codex 额度采集已关闭，历史额度仍可查询。");
+      setNotice(enabled
+        ? `${displayName} 额度采集已开启。`
+        : `${displayName} 额度采集已关闭，历史额度仍可查询。`);
     } catch (nextError) {
-      setError(`保存 Codex 额度采集设置失败：${getErrorMessage(nextError, "请稍后重试")}`);
+      setError(`保存 ${displayName} 额度采集设置失败：${getErrorMessage(nextError, "请稍后重试")}`);
     } finally {
       setSaving(false);
     }
@@ -1149,10 +1185,10 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
   const hasRateLimitSamples = Boolean(stats?.rateLimitSamples.length);
 
   return (
-    <section aria-labelledby="codex-usage-title" className="codex-usage-panel">
+    <section aria-labelledby={`${provider}-usage-title`} className="codex-usage-panel">
       <div className="codex-usage-heading">
         <div>
-          <h2 id="codex-usage-title">Codex 额度</h2>
+          <h2 id={`${provider}-usage-title`}>{displayName} 额度</h2>
         </div>
         <span className="codex-usage-time-basis">
           服务端本地时间 {config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "—"}
@@ -1162,19 +1198,19 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
       {error ? <div role="alert" className="codex-usage-alert codex-usage-alert-error">{error}</div> : null}
       {notice ? <div role="status" className="codex-usage-alert codex-usage-alert-success">{notice}</div> : null}
 
-      {loading ? <p role="status" className="codex-usage-loading">正在加载 Codex 额度…</p> : null}
+      {loading ? <p role="status" className="codex-usage-loading">正在加载 {displayName} 额度…</p> : null}
 
       {!loading && config ? (
         <>
-          <section className="codex-usage-section" aria-labelledby="codex-usage-settings-title">
+          <section className="codex-usage-section" aria-labelledby={`${provider}-usage-settings-title`}>
             <div className="codex-usage-section-heading">
               <div>
-                <h3 id="codex-usage-settings-title">采集设置</h3>
+                <h3 id={`${provider}-usage-settings-title`}>采集设置</h3>
               </div>
               <label className="codex-usage-switch">
-                <span>启用 Codex 额度采集</span>
+                <span>启用 {displayName} 额度采集</span>
                 <input
-                  aria-label="启用 Codex 额度采集"
+                  aria-label={`启用 ${displayName} 额度采集`}
                   type="checkbox"
                   checked={config.enabled}
                   disabled={saving}
@@ -1187,8 +1223,8 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
             ) : null}
           </section>
 
-          <section className="codex-usage-section" aria-labelledby="codex-usage-provider-title">
-            <h3 id="codex-usage-provider-title">当前 Provider</h3>
+          <section className="codex-usage-section" aria-labelledby={`${provider}-usage-provider-title`}>
+            <h3 id={`${provider}-usage-provider-title`}>当前 Provider</h3>
             <dl className="codex-usage-provider-details">
               <div>
                 <dt>Provider</dt>
@@ -1196,7 +1232,7 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
               </div>
               <div>
                 <dt>规范化地址</dt>
-                <dd className="codex-usage-breakable">{config.currentProvider.baseUrl || "OpenAI 官方"}</dd>
+                <dd className="codex-usage-breakable">{config.currentProvider.baseUrl || `${displayName} 官方`}</dd>
               </div>
               <div>
                 <dt>解析状态</dt>
@@ -1250,12 +1286,20 @@ export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
 
           {stats ? (
             <>
-              <CodexRateLimitChart samples={stats.rateLimitSamples} />
-              {!hasRateLimitSamples ? <p className="codex-usage-empty">暂无符合筛选条件的 Codex 额度数据。</p> : null}
+              <CodexRateLimitChart samples={stats.rateLimitSamples} providerName={provider} />
+              {!hasRateLimitSamples ? <p className="codex-usage-empty">暂无符合筛选条件的 {displayName} 额度数据。</p> : null}
             </>
           ) : null}
         </>
       ) : null}
     </section>
   );
+}
+
+export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
+  return <UsagePanel client={client} refreshKey={refreshKey} provider="codex" />;
+}
+
+export function ClaudeUsagePanel({ client, refreshKey = 0 }: Props) {
+  return <UsagePanel client={client} refreshKey={refreshKey} provider="claude" />;
 }

@@ -29,6 +29,9 @@ import type {
   CodexUsageConfig,
   CodexUsageStats,
   CodexUsageStatsQuery,
+  ClaudeUsageConfig,
+  ClaudeUsageStats,
+  ClaudeUsageStatsQuery,
   BotExecutionConfigInput,
   CliParamsPayload,
   DeepSeekSelectionRequest,
@@ -215,6 +218,9 @@ export interface WebBotClient {
   getCodexUsageConfig(): Promise<CodexUsageConfig>;
   updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;
   getCodexUsageStats(query?: CodexUsageStatsQuery): Promise<CodexUsageStats>;
+  getClaudeUsageConfig(): Promise<ClaudeUsageConfig>;
+  updateClaudeUsageConfig(input: { enabled: boolean }): Promise<ClaudeUsageConfig>;
+  getClaudeUsageStats(query?: ClaudeUsageStatsQuery): Promise<ClaudeUsageStats>;
   listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;

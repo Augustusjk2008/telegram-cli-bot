@@ -45,6 +45,9 @@ import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 const CodexUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
   default: module.CodexUsagePanel,
 })));
+const ClaudeUsagePanel = lazy(() => import("../components/admin/CodexUsagePanel").then((module) => ({
+  default: module.ClaudeUsagePanel,
+})));
 
 type Props = {
   client?: WebBotClient;
@@ -66,6 +69,7 @@ type AdminCenterTab =
   | "invites"
   | "cli-errors"
   | "codex-usage"
+  | "claude-usage"
   | "updates"
   | "announcements"
   | "network"
@@ -429,6 +433,7 @@ export function AdminCenterScreen({
   const [cliErrorStats, setCliErrorStats] = useState<CliErrorStatsResult | null>(null);
   const [cliErrorHours, setCliErrorHours] = useState(24);
   const [codexUsagePanelKey, setCodexUsagePanelKey] = useState(0);
+  const [claudeUsagePanelKey, setClaudeUsagePanelKey] = useState(0);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
   const [announcementSaving, setAnnouncementSaving] = useState(false);
@@ -473,6 +478,7 @@ export function AdminCenterScreen({
     invites: false,
     "cli-errors": false,
     "codex-usage": false,
+    "claude-usage": false,
     updates: false,
     announcements: false,
     network: false,
@@ -503,6 +509,7 @@ export function AdminCenterScreen({
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
       "codex-usage",
+      "claude-usage",
       "updates",
       "announcements",
       "network",
@@ -877,6 +884,11 @@ export function AdminCenterScreen({
       setLoadedTabs((prev) => ({ ...prev, "codex-usage": true }));
       if (refresh) {
         setCodexUsagePanelKey((current) => current + 1);
+      }
+    } else if (activeTab === "claude-usage") {
+      setLoadedTabs((prev) => ({ ...prev, "claude-usage": true }));
+      if (refresh) {
+        setClaudeUsagePanelKey((current) => current + 1);
       }
     } else if (activeTab === "updates") {
       setLoadedTabs((prev) => ({ ...prev, updates: true }));
@@ -1515,6 +1527,8 @@ export function AdminCenterScreen({
                       ? "错误"
                     : tab === "codex-usage"
                       ? "Codex 额度"
+                    : tab === "claude-usage"
+                      ? "Claude 额度"
                     : tab === "announcements"
                       ? "公告"
                     : tab === "network"
@@ -2061,6 +2075,22 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           ) : (
             <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
               正在加载 Codex 额度面板…
+            </section>
+          )
+        ) : null}
+
+        {!loading && activeTab === "claude-usage" ? (
+          loadedTabs["claude-usage"] ? (
+            <Suspense fallback={(
+              <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+                正在加载 Claude 额度面板…
+              </section>
+            )}>
+              <ClaudeUsagePanel key={claudeUsagePanelKey} client={client} refreshKey={claudeUsagePanelKey} />
+            </Suspense>
+          ) : (
+            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+              正在加载 Claude 额度面板…
             </section>
           )
         ) : null}

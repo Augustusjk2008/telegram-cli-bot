@@ -3,7 +3,12 @@ import themePresets from "../../../bot/web/theme_presets.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { DEFAULT_CHAT_TYPOGRAPHY, isChatTypography, normalizeChatTypography } from "../theme/chatTypography";
 import { normalizeIllustrations } from "../theme/resolveAppearance";
-import { GIT_CAPABILITY_NAMES, GENERAL_CODEX_RATE_LIMIT_ID, WebApiClientError } from "./types";
+import {
+  GIT_CAPABILITY_NAMES,
+  GENERAL_CLAUDE_RATE_LIMIT_ID,
+  GENERAL_CODEX_RATE_LIMIT_ID,
+  WebApiClientError,
+} from "./types";
 import type {
   UiTheme,
   ThemeAppearance,
@@ -69,6 +74,9 @@ import type {
   CodexUsageConfig,
   CodexUsageStats,
   CodexUsageStatsQuery,
+  ClaudeUsageConfig,
+  ClaudeUsageStats,
+  ClaudeUsageStatsQuery,
   CliType,
   CliParamsPayload,
   DeepSeekModelOption,
@@ -2215,6 +2223,67 @@ export class MockWebBotClient implements WebBotClient {
         resetsAt: "2026-08-02T09:00:00+08:00",
         planType: "pro",
         creditsBalance: "520",
+      },
+    ],
+  };
+  private claudeUsageConfig: ClaudeUsageConfig = {
+    enabled: false,
+    currentProvider: {
+      key: "claude_official",
+      kind: "unknown",
+      label: "Claude 官方",
+      baseUrl: null,
+      resolution: "resolved",
+    },
+    timeBasis: {
+      mode: "server_local",
+      utcOffset: "+08:00",
+      today: "2026-07-26",
+    },
+    availableRange: {
+      firstDate: "2026-07-20",
+      lastDate: "2026-07-26",
+    },
+  };
+  private claudeUsageStats: ClaudeUsageStats = {
+    range: {
+      startDate: "2026-06-27",
+      endDate: "2026-07-26",
+    },
+    enabled: false,
+    timeBasis: {
+      mode: "server_local",
+      utcOffset: "+08:00",
+      today: "2026-07-26",
+    },
+    availableRange: {
+      firstDate: "2026-07-20",
+      lastDate: "2026-07-26",
+    },
+    rateLimitSamples: [
+      {
+        limitId: GENERAL_CLAUDE_RATE_LIMIT_ID,
+        sampledAt: "2026-07-20T09:15:00+08:00",
+        usedPercent: 21,
+        windowMinutes: 10080,
+        resetsAt: "2026-07-27T09:00:00+08:00",
+        planType: "pro",
+      },
+      {
+        limitId: GENERAL_CLAUDE_RATE_LIMIT_ID,
+        sampledAt: "2026-07-23T14:30:00+08:00",
+        usedPercent: 39,
+        windowMinutes: 10080,
+        resetsAt: "2026-07-27T09:00:00+08:00",
+        planType: "pro",
+      },
+      {
+        limitId: GENERAL_CLAUDE_RATE_LIMIT_ID,
+        sampledAt: "2026-07-26T18:45:00+08:00",
+        usedPercent: 12,
+        windowMinutes: 10080,
+        resetsAt: "2026-08-02T09:00:00+08:00",
+        planType: "pro",
       },
     ],
   };
@@ -6439,6 +6508,48 @@ export class MockWebBotClient implements WebBotClient {
     }
     const result = cloneCodexUsageStats(this.codexUsageStats);
     result.enabled = this.codexUsageConfig.enabled;
+    result.range = {
+      startDate: query.startDate || result.range.startDate,
+      endDate: query.endDate || result.range.endDate,
+    };
+    if (query.startDate || query.endDate) {
+      const inRange = (date: string) => (
+        (!query.startDate || date >= query.startDate)
+        && (!query.endDate || date <= query.endDate)
+      );
+      result.rateLimitSamples = result.rateLimitSamples.filter((sample) => inRange(sample.sampledAt.slice(0, 10)));
+    }
+    return result;
+  }
+
+  async getClaudeUsageConfig(): Promise<ClaudeUsageConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 Claude 额度", { status: 403, code: "forbidden" });
+    }
+    return cloneCodexUsageConfig(this.claudeUsageConfig);
+  }
+
+  async updateClaudeUsageConfig(input: { enabled: boolean }): Promise<ClaudeUsageConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权修改 Claude 额度采集设置", { status: 403, code: "forbidden" });
+    }
+    this.claudeUsageConfig = {
+      ...this.claudeUsageConfig,
+      enabled: input.enabled,
+    };
+    this.claudeUsageStats = {
+      ...this.claudeUsageStats,
+      enabled: input.enabled,
+    };
+    return this.getClaudeUsageConfig();
+  }
+
+  async getClaudeUsageStats(query: ClaudeUsageStatsQuery = {}): Promise<ClaudeUsageStats> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看 Claude 额度", { status: 403, code: "forbidden" });
+    }
+    const result = cloneCodexUsageStats(this.claudeUsageStats);
+    result.enabled = this.claudeUsageConfig.enabled;
     result.range = {
       startDate: query.startDate || result.range.startDate,
       endDate: query.endDate || result.range.endDate,

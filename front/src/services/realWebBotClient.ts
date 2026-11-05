@@ -106,6 +106,9 @@ import type {
   CodexUsageStats,
   CodexUsageStatsQuery,
   CodexUsageTimeBasis,
+  ClaudeUsageConfig,
+  ClaudeUsageStats,
+  ClaudeUsageStatsQuery,
   CliParamsPayload,
   DeepSeekModelOption,
   DeepSeekProviderOption,
@@ -5177,6 +5180,33 @@ export class RealWebBotClient implements WebBotClient {
     const query = params.toString();
     const data = await this.requestJson<RawCodexUsageStats>(
       `/api/admin/codex-usage/stats${query ? `?${query}` : ""}`,
+    );
+    return mapCodexUsageStats(data);
+  }
+
+  async getClaudeUsageConfig(): Promise<ClaudeUsageConfig> {
+    const data = await this.requestJson<RawCodexUsageConfig>("/api/admin/claude-usage/config");
+    return mapCodexUsageConfig(data);
+  }
+
+  async updateClaudeUsageConfig(input: { enabled: boolean }): Promise<ClaudeUsageConfig> {
+    const data = await this.requestJson<RawCodexUsageConfig>("/api/admin/claude-usage/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ enabled: input.enabled }),
+    });
+    return mapCodexUsageConfig(data);
+  }
+
+  async getClaudeUsageStats(queryInput: ClaudeUsageStatsQuery = {}): Promise<ClaudeUsageStats> {
+    const params = new URLSearchParams();
+    if (queryInput.startDate) params.set("start_date", queryInput.startDate);
+    if (queryInput.endDate) params.set("end_date", queryInput.endDate);
+    const query = params.toString();
+    const data = await this.requestJson<RawCodexUsageStats>(
+      `/api/admin/claude-usage/stats${query ? `?${query}` : ""}`,
     );
     return mapCodexUsageStats(data);
   }

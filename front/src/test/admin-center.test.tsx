@@ -187,6 +187,31 @@ async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "Codex 额度" });
 }
 
+async function openClaudeUsageTab(user: ReturnType<typeof userEvent.setup>) {
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "Claude 额度" }));
+  await screen.findByRole("heading", { name: "Claude 额度" });
+}
+
+test("管理中心显示 Claude 额度页面并复用采集设置", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const getConfig = vi.spyOn(client, "getClaudeUsageConfig");
+  const getStats = vi.spyOn(client, "getClaudeUsageStats");
+  const updateConfig = vi.spyOn(client, "updateClaudeUsageConfig");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openClaudeUsageTab(user);
+
+  expect(getConfig).toHaveBeenCalledTimes(1);
+  expect(getStats).toHaveBeenCalledTimes(1);
+  expect(await screen.findByRole("heading", { name: "Claude 剩余额度趋势" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "启用 Claude 额度采集" })).not.toBeChecked();
+
+  await user.click(screen.getByRole("checkbox", { name: "启用 Claude 额度采集" }));
+  await waitFor(() => expect(updateConfig).toHaveBeenCalledWith({ enabled: true }));
+});
+
 test("全局配置集中显示通用显示、通知和全局提示词预设", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
