@@ -244,7 +244,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 - 主题库随版本发布，包含「钢铁核心」「阿波罗计划」「薄荷柑橘」「轻音少女」「赛博朋克」「Deepseek」「雾岚纸境」和「墨砚铜章」八套预置主题；所有账户（包括管理员）都只能选择和应用主题，不能编辑、导入、删除或上传主题资源。登录后的主题选择按账户分别保存，登录页的预览选择保存在当前浏览器。
 - 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用发布包内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077`、`deepseek-big-fish` 或 `k-on-light-music` 资源；透明度范围为 `0` 到 `0.25`。
 - 预置主题的插画资源由发布包中的插画目录和前端资源提供，插画属于主题外观的一部分；主题包导出会保留这些资源。
-- Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示。
+- Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示；Claude 订阅额度单独采集。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 
 ## 支持矩阵
@@ -442,6 +442,8 @@ Pi runtime 和持久化 session 按 Bot、共享用户、Agent 和 conversation 
 管理中心可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、行内补全或手工终端进程。
 
 统计按日期、Provider 和模型聚合，数据默认保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，不会保存逐轮提示词、认证头或 API 密钥。
+
+Claude 额度在管理中心有独立标签页和开关，同样默认关闭，与 Codex 共用数据库但数据隔离。它记录普通 Claude CLI 进程每轮 stream-json 输出中的最后一条 `rate_limit_event`，包括 5 小时、每周和含超额的每周窗口，并展示每周趋势。套餐类型来自 `claude auth status --json`，只保留登录方式、API Provider 和订阅类型。没有 stream-json 输出的轮次、API Key 或 Bedrock/Vertex 登录，以及自定义 `ANTHROPIC_BASE_URL`，都不会被记录。
 
 </details>
 

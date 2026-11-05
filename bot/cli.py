@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.config import SUPPORTED_CLI_TYPES
@@ -73,6 +74,9 @@ class CliStreamParseResult:
     model: Optional[str] = None
     provider: Optional[str] = None
     terminal_usage_complete: bool = True
+    # Latest Claude ``rate_limit_event.rate_limit_info`` and when it was read.
+    rate_limit_info: Optional[Dict[str, Any]] = None
+    rate_limit_observed_at: Optional[datetime] = None
 
 
 class DeepSeekJsonStreamParser:
@@ -359,6 +363,8 @@ class ClaudeJsonStreamParser:
         self._plain = _BoundedText(raw_tail_max_bytes)
         self.session_id: Optional[str] = None
         self.terminal_usage: Optional[Dict[str, Any]] = None
+        self.rate_limit_info: Optional[Dict[str, Any]] = None
+        self.rate_limit_observed_at: Optional[datetime] = None
         self.total_bytes = 0
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
@@ -373,6 +379,8 @@ class ClaudeJsonStreamParser:
                 "delta_text": None,
                 "error_text": None,
             }
+        if '"rate_limit_event"' in stripped[:80]:
+            self._observe_rate_limit_event(stripped)
         parsed = parse_claude_stream_json_line(stripped)
         terminal_usage = _parse_terminal_usage(stripped, cli_type="claude")
         if terminal_usage is not None:
@@ -388,6 +396,18 @@ class ClaudeJsonStreamParser:
         if not stripped.startswith("{"):
             self._plain.append(stripped, separator="\n")
         return parsed
+
+    def _observe_rate_limit_event(self, line: str) -> None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event, dict) or event.get("type") != "rate_limit_event":
+            return
+        info = event.get("rate_limit_info")
+        if isinstance(info, dict):
+            self.rate_limit_info = info
+            self.rate_limit_observed_at = datetime.now(timezone.utc)
 
     @property
     def preview_text(self) -> Optional[str]:
@@ -420,6 +440,8 @@ class ClaudeJsonStreamParser:
                 item.truncated
                 for item in (self._raw_tail, self._completed, self._delta, self._errors, self._plain)
             ),
+            rate_limit_info=self.rate_limit_info,
+            rate_limit_observed_at=self.rate_limit_observed_at,
         )
 
 

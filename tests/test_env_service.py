@@ -136,6 +136,20 @@ def test_project_float_config_rejects_non_finite_values(monkeypatch: pytest.Monk
     assert config._get_project_float("TEST_FINITE_FLOAT", 7.5) == 7.5
 
 
+def test_env_service_fills_empty_key_in_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WEB_PUBLIC_URL", raising=False)
+    _write_env(tmp_path, "# hub\nWEB_PUBLIC_URL=\nPUSHPLUS_TOPIC=\n")
+    service = EnvConfigService(tmp_path)
+
+    service.patch({"values": {"WEB_PUBLIC_URL": "https://hub.example/node/a"}})
+    service.patch({"values": {"WEB_PUBLIC_URL": "https://hub.example/node/b"}})
+
+    text = (tmp_path / ".env").read_bytes().decode("utf-8")
+    assert text == "# hub\nWEB_PUBLIC_URL=https://hub.example/node/b\nPUSHPLUS_TOPIC=\n"
+    items = {item["key"]: item for item in service.snapshot()["items"]}
+    assert items["WEB_PUBLIC_URL"]["value"] == "https://hub.example/node/b"
+
+
 def test_env_service_accepts_fixed_public_forward_config(tmp_path: Path) -> None:
     _write_env(
         tmp_path,

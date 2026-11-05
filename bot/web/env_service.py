@@ -59,7 +59,9 @@ class EnvLine:
 
 
 _KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
-_LINE_RE = re.compile(r"^(\s*(?:export\s+)?)(" + _KEY_RE.pattern[1:-1] + r")(\s*=\s*)(.*?)(\r?\n?)$")
+# Horizontal whitespace only: `\s` would swallow the newline of an empty `KEY=` line into the
+# separator, and rewriting it would then emit `KEY=\n<value>`.
+_LINE_RE = re.compile(r"^([ \t]*(?:export[ \t]+)?)(" + _KEY_RE.pattern[1:-1] + r")([ \t]*=[ \t]*)(.*?)(\r?\n?)$")
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")

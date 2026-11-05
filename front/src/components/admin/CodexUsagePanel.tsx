@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CLAUDE_OVERAGE_RATE_LIMIT_ID,
   GENERAL_CLAUDE_RATE_LIMIT_ID,
   GENERAL_CODEX_RATE_LIMIT_ID,
   GPT_RESERVE_RATE_LIMIT_ID,
@@ -273,6 +274,9 @@ function formatPlanType(planType: string | null) {
   if (!normalized) return "套餐未知";
   if (normalized === "free") return "Free";
   if (normalized === "pro") return "Pro";
+  if (normalized === "max") return "Max";
+  if (normalized === "team") return "Team";
+  if (normalized === "enterprise") return "Enterprise";
   return planType?.trim() || "套餐未知";
 }
 
@@ -998,6 +1002,7 @@ function CodexRateLimitChart({
 
   const limitLabel = (limitId: string) => {
     if (limitId === generalLimitId) return `通用 ${displayName}`;
+    if (limitId === CLAUDE_OVERAGE_RATE_LIMIT_ID) return "Claude 含超额用量";
     if (providerName === "claude") return limitId;
     if (limitId === SECONDARY_CODEX_RATE_LIMIT_ID) return "gpt-5.3-codex-spark";
     return limitId;

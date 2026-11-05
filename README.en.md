@@ -221,7 +221,7 @@ The keyboard also provides status, stop, configuration, and help actions. Model 
 - The release ships eight preset themes: Steel Core, Apollo Plan, Mint Citrus, K-On, Cyberpunk, Deepseek, Mist Paper, and Ink Brass. Every account, including administrators, can only choose and apply these presets; editing, importing, deleting, and uploading theme resources are disabled. Signed-in accounts save their selected theme independently, while the login page keeps its preview choice in the current browser.
 - A theme `appearance` may include an `illustrations` object for workbench, chat, topbar, and management decoration. For example: `{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`. `setId` uses the release package's built-in `none`, `forest-grove`, `tidal-grove`, `desert-dusk`, `alpine-fog`, `moonlit-garden`, `armor-core-hud`, `apollo-plan`, `mint-citrus`, `cyberpunk-2077`, `deepseek-big-fish`, or `k-on-light-music` resources, and opacity is limited to `0` through `0.25`.
 - Preset illustration resources are shipped in the release package through the illustration catalog and frontend assets, and remain part of each preset appearance when themes are exported.
-- Codex CLI usage can be aggregated by local calendar day, provider, and model.
+- Codex CLI usage can be aggregated by local calendar day, provider, and model; Claude subscription quota is tracked separately.
 - Cloudflare quick tunnels and fixed public forwarding support controlled mobile access.
 
 ## Support Matrix
@@ -410,6 +410,8 @@ Pi runtimes and persisted sessions are isolated by bot, shared user, agent, and 
 Collection can be enabled or disabled immediately in Admin Center. It is disabled by default and only measures regular Codex CLI processes launched by Orbit after collection is enabled. It does not backfill history or include Claude, Pi, native agents, inline completion, or manually launched terminal processes.
 
 Usage is aggregated by date, provider, and model. Data is stored in `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3` by default and does not store per-turn prompts, authentication headers, or API keys.
+
+Claude quota has its own Admin Center tab and switch, also disabled by default, and shares the same database with separate data. It records the last `rate_limit_event` from each stream-json turn of a regular Claude CLI process: the 5-hour, weekly, and overage-included weekly windows, with the weekly trend shown. The plan type comes from `claude auth status --json`; only the login method, API provider, and subscription type are kept. Turns without stream-json output, API-key or Bedrock/Vertex logins, and custom `ANTHROPIC_BASE_URL` values are not recorded.
 
 </details>
 

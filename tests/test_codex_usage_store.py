@@ -9,6 +9,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from bot.codex_usage.claude_rate_limits import ClaudeAuthStatus
 from bot.codex_usage.models import CodexRateLimitSample
 from bot.codex_usage.service import CodexUsageService
 from bot.codex_usage.store import SCHEMA_VERSION, CodexUsageStore
@@ -25,6 +26,21 @@ def _sample(*, limit_id: str = "shared", used_percent: float = 20) -> CodexRateL
         plan_type="pro",
         limit_id=limit_id,
     )
+
+
+class _SubscriptionAuthReader:
+    status = ClaudeAuthStatus(
+        logged_in=True,
+        auth_method="claude.ai",
+        api_provider="firstParty",
+        subscription_type="max",
+    )
+
+    def read(self, **_kwargs):
+        return self.status
+
+    def cached(self):
+        return self.status
 
 
 def test_shared_store_separates_provider_samples_and_settings(tmp_path):
@@ -91,10 +107,11 @@ def test_schema_v7_migrates_existing_samples_to_codex_provider(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_claude_service_reads_shared_store_without_codex_cross_talk(tmp_path):
+async def test_claude_service_reads_shared_store_without_codex_cross_talk(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     store = CodexUsageStore(tmp_path / "usage.sqlite3")
     store.record_rate_limit_sample(_sample(used_percent=20))
-    service = CodexUsageService(store=store)
+    service = CodexUsageService(store=store, claude_auth_status_reader=_SubscriptionAuthReader())
 
     stats = await service.query_stats(
         start_date=datetime(2026, 11, 5, tzinfo=timezone.utc).date(),
@@ -106,13 +123,17 @@ async def test_claude_service_reads_shared_store_without_codex_cross_talk(tmp_pa
     assert stats["rate_limit_samples"] == []
     assert stats["available_range"] == {"first_date": None, "last_date": None}
     assert config["enabled"] is False
-    assert config["current_provider"]["label"] == "Claude 官方"
+    assert config["current_provider"]["label"] == "Claude 官方订阅"
     service.close()
 
 
 @pytest.mark.asyncio
-async def test_claude_admin_routes_use_the_shared_service(tmp_path):
-    service = CodexUsageService(db_path=tmp_path / "usage.sqlite3")
+async def test_claude_admin_routes_use_the_shared_service(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    service = CodexUsageService(
+        db_path=tmp_path / "usage.sqlite3",
+        claude_auth_status_reader=_SubscriptionAuthReader(),
+    )
     server = SimpleNamespace(
         codex_usage_service=service,
         _with_capability=AsyncMock(),
@@ -124,7 +145,7 @@ async def test_claude_admin_routes_use_the_shared_service(tmp_path):
         config_response = await client.get("/api/admin/claude-usage/config")
         assert config_response.status == 200
         config = (await config_response.json())["data"]
-        assert config["current_provider"]["label"] == "Claude 官方"
+        assert config["current_provider"]["label"] == "Claude 官方订阅"
 
         patch_response = await client.patch(
             "/api/admin/claude-usage/config",

@@ -2230,8 +2230,8 @@ export class MockWebBotClient implements WebBotClient {
     enabled: false,
     currentProvider: {
       key: "claude_official",
-      kind: "unknown",
-      label: "Claude 官方",
+      kind: "claude_official",
+      label: "Claude 官方订阅",
       baseUrl: null,
       resolution: "resolved",
     },

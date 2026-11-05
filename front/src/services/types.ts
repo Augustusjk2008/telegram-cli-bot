@@ -368,7 +368,7 @@ export type CliErrorStatsFilters = {
   limit?: number;
 };
 
-export type CodexUsageProviderKind = "openai_official" | "base_url" | "unknown";
+export type CodexUsageProviderKind = "openai_official" | "claude_official" | "base_url" | "unknown";
 
 export type CodexUsageProviderResolution =
   | "resolved"
@@ -437,6 +437,7 @@ export type CodexUsageStats = {
 };
 
 export const GENERAL_CLAUDE_RATE_LIMIT_ID = "claude";
+export const CLAUDE_OVERAGE_RATE_LIMIT_ID = "claude_overage_included";
 export type ClaudeUsageProviderKind = CodexUsageProviderKind;
 export type ClaudeUsageProviderResolution = CodexUsageProviderResolution;
 export type ClaudeUsageProvider = CodexUsageProvider;

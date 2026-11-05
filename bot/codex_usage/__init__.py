@@ -1,4 +1,4 @@
-"""Codex quota collection, persistence and transport wiring."""
+"""Codex and Claude quota collection, persistence and transport wiring."""
 
 from __future__ import annotations
 
@@ -72,6 +72,27 @@ async def record_codex_rate_limit_capture(quota_capture: Any, parsed_result: Any
         logger.warning("Codex 额度记录失败，CLI 流程将继续: %s", exc)
 
 
+async def start_claude_rate_limit_capture(*, env: dict[str, str], command: list[str]) -> Any:
+    """Best-effort Claude quota capture setup; failures never block the CLI turn."""
+
+    try:
+        return await get_codex_usage_service().create_claude_capture(env=env, command=command)
+    except Exception as exc:
+        logger.warning("Claude 额度采集初始化失败，CLI 流程将继续: %s", exc)
+        return None
+
+
+async def record_claude_rate_limit_capture(quota_capture: Any, parsed_result: Any) -> None:
+    """Record the last ``rate_limit_event`` observed by a Claude stream parser."""
+
+    if quota_capture is None or parsed_result is None:
+        return
+    try:
+        await quota_capture.record_once(parsed_result)
+    except Exception as exc:
+        logger.warning("Claude 额度记录失败，CLI 流程将继续: %s", exc)
+
+
 async def close_codex_usage_service() -> None:
     """Close and clear the singleton without creating a never-used database."""
 
@@ -99,6 +120,8 @@ __all__ = [
     "close_codex_usage_service",
     "close_codex_usage_service_sync",
     "get_codex_usage_service",
+    "record_claude_rate_limit_capture",
     "record_codex_rate_limit_capture",
+    "start_claude_rate_limit_capture",
     "start_codex_rate_limit_capture",
 ]

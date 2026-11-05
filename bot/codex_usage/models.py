@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Literal, cast
 
 
-ProviderKind = Literal["openai_official", "base_url", "unknown"]
+ProviderKind = Literal["openai_official", "claude_official", "base_url", "unknown"]
 UsageProvider = Literal["codex", "claude"]
 KNOWN_USAGE_PROVIDERS = ("codex", "claude")
 GENERAL_CODEX_RATE_LIMIT_ID = "codex"
@@ -18,6 +18,8 @@ KNOWN_CODEX_RATE_LIMIT_IDS = (
     SECONDARY_CODEX_RATE_LIMIT_ID,
     GPT_RESERVE_RATE_LIMIT_ID,
 )
+GENERAL_CLAUDE_RATE_LIMIT_ID = "claude"
+CLAUDE_OVERAGE_RATE_LIMIT_ID = "claude_overage_included"
 SQLITE_INT64_MAX = 2**63 - 1
 
 

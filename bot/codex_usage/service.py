@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .app_server_rate_limits import resolve_account_rate_limits
+from .claude_rate_limits import (
+    ClaudeAuthStatusReader,
+    resolve_claude_provider,
+    samples_from_rate_limit_info,
+)
 from .models import (
     CodexRateLimitSample,
     DayLike,
@@ -93,6 +98,41 @@ class CodexQuotaCapture:
         )
 
 
+class ClaudeQuotaCapture:
+    """One Claude process snapshot recording its last ``rate_limit_event`` once."""
+
+    def __init__(
+        self,
+        service: CodexUsageService,
+        *,
+        enabled: bool,
+        executable: str,
+        environment: Mapping[str, str] | None,
+    ) -> None:
+        self._service = service
+        self.enabled = enabled
+        self.executable = executable
+        self.environment = dict(environment) if environment is not None else None
+        self._attempted = False
+
+    async def record_once(self, parsed_result: Any = None, **_: Any) -> bool:
+        if self._attempted:
+            return False
+        self._attempted = True
+        info = getattr(parsed_result, "rate_limit_info", None)
+        if not self.enabled or not isinstance(info, Mapping):
+            return False
+        observed_at = getattr(parsed_result, "rate_limit_observed_at", None)
+        if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
+            observed_at = datetime.now(timezone.utc)
+        return await self._service._record_claude_rate_limit_info(
+            info,
+            sampled_at=observed_at,
+            executable=self.executable,
+            environment=self.environment,
+        )
+
+
 class CodexUsageService:
     """Async facade for Codex quota collection and persistence."""
 
@@ -104,6 +144,7 @@ class CodexUsageService:
         resolver: CodexProviderResolver | Any | None = None,
         rate_limit_resolver: Any | None = None,
         account_rate_limit_resolver: Any | None = None,
+        claude_auth_status_reader: ClaudeAuthStatusReader | Any | None = None,
     ) -> None:
         if store is None:
             store = CodexUsageStore(_default_db_path() if db_path is None else db_path)
@@ -111,6 +152,7 @@ class CodexUsageService:
         self._resolver = resolver or CodexProviderResolver()
         self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit_resolution
         self._account_rate_limit_resolver = account_rate_limit_resolver or resolve_account_rate_limits
+        self._claude_auth_status_reader = claude_auth_status_reader or ClaudeAuthStatusReader()
         self._diagnostics_lock = threading.RLock()
         self._enabled_snapshot: dict[UsageProvider, bool] = {}
         self._write_count = 0
@@ -205,6 +247,67 @@ class CodexUsageService:
     capture_for_process = create_capture
     start_capture = create_capture
 
+    async def create_claude_capture(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+        command: Sequence[str] | str | None = None,
+    ) -> ClaudeQuotaCapture:
+        return ClaudeQuotaCapture(
+            self,
+            enabled=await self.get_enabled("claude"),
+            executable=_command_executable(command) if command else "claude",
+            environment=env,
+        )
+
+    async def _record_claude_rate_limit_info(
+        self,
+        info: Mapping[str, Any],
+        *,
+        sampled_at: datetime,
+        executable: str,
+        environment: Mapping[str, str] | None,
+    ) -> bool:
+        try:
+            auth_status = await asyncio.to_thread(
+                self._claude_auth_status_reader.read,
+                executable=executable,
+                env=environment,
+            )
+            provider = resolve_claude_provider(env=environment, auth_status=auth_status)
+        except Exception as exc:
+            self._mark_provider_resolution_failure(exc)
+            return False
+        if provider.kind != "claude_official":
+            return False
+        samples = samples_from_rate_limit_info(
+            info,
+            sampled_at=sampled_at,
+            plan_type=auth_status.subscription_type if auth_status is not None else None,
+        )
+        return await self._store_samples(samples, "claude")
+
+    async def _store_samples(
+        self,
+        samples: Sequence[CodexRateLimitSample],
+        provider: UsageProvider,
+    ) -> bool:
+        recorded = False
+        for sample in samples:
+            try:
+                await asyncio.to_thread(self._store.record_rate_limit_sample, sample, provider)
+            except Exception as exc:
+                with self._diagnostics_lock:
+                    self._write_failure_count += 1
+                    self._last_error_code = "write_failed"
+                logger.warning("%s 限额写入失败，已忽略: %s", provider, type(exc).__name__)
+                continue
+            recorded = True
+            with self._diagnostics_lock:
+                self._write_count += 1
+                self._last_write_at = datetime.now(timezone.utc).isoformat()
+        return recorded
+
     async def _record_rate_limit_capture(
         self,
         *,
@@ -251,22 +354,7 @@ class CodexUsageService:
         for sample in account_samples:
             if isinstance(sample, CodexRateLimitSample):
                 samples_by_limit_id[sample.limit_id] = sample
-
-        recorded = False
-        for sample in samples_by_limit_id.values():
-            try:
-                await asyncio.to_thread(self._store.record_rate_limit_sample, sample, "codex")
-            except Exception as exc:
-                with self._diagnostics_lock:
-                    self._write_failure_count += 1
-                    self._last_error_code = "write_failed"
-                logger.warning("Codex 限额写入失败，已忽略: %s", type(exc).__name__)
-                continue
-            recorded = True
-            with self._diagnostics_lock:
-                self._write_count += 1
-                self._last_write_at = datetime.now(timezone.utc).isoformat()
-        return recorded
+        return await self._store_samples(tuple(samples_by_limit_id.values()), "codex")
 
     async def query(
         self,
@@ -301,7 +389,7 @@ class CodexUsageService:
         current_provider = (
             await self._safe_current_provider(env=env, argv=argv)
             if normalized_provider == "codex"
-            else _claude_provider()
+            else await self._safe_claude_provider(env=env, argv=argv)
         )
         first_date, last_date = await self.available_range(normalized_provider)
         return {
@@ -359,6 +447,26 @@ class CodexUsageService:
             self._mark_provider_resolution_failure(None)
         return provider
 
+    async def _safe_claude_provider(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+        argv: Sequence[str] | str | None = None,
+    ) -> ProviderInfo:
+        try:
+            # Prefer the status cached by recent turns over spawning another CLI.
+            auth_status = self._claude_auth_status_reader.cached() if argv is None else None
+            if auth_status is None:
+                auth_status = await asyncio.to_thread(
+                    self._claude_auth_status_reader.read,
+                    executable=_command_executable(argv) if argv else "claude",
+                    env=env,
+                )
+            return resolve_claude_provider(env=env, auth_status=auth_status)
+        except Exception as exc:
+            self._mark_provider_resolution_failure(exc)
+            return ProviderInfo(key="unknown", kind="unknown", base_url=None, resolution="config_invalid")
+
     def _mark_provider_resolution_failure(self, exc: Exception | None) -> None:
         with self._diagnostics_lock:
             self._provider_resolution_failure_count += 1
@@ -408,22 +516,15 @@ class CodexUsageService:
         await asyncio.to_thread(self.close)
 
 
-def _claude_provider() -> ProviderInfo:
-    return ProviderInfo(
-        key="claude_official",
-        kind="unknown",
-        base_url=None,
-        resolution="resolved",
-    )
-
-
 def _provider_payload(
     provider: ProviderInfo,
     *,
     usage_provider: UsageProvider = "codex",
 ) -> dict[str, str | None]:
-    if usage_provider == "claude" and provider.key == "claude_official":
-        label = "Claude 官方"
+    if usage_provider == "claude" and provider.kind == "claude_official":
+        label = "Claude 官方订阅"
+    elif usage_provider == "claude" and provider.resolution == "unsupported_override":
+        label = "非订阅登录（无订阅额度）"
     else:
         label = {
             "openai_official": "OpenAI 官方",

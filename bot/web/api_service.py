@@ -98,7 +98,9 @@ from bot.cli import (
     should_suggest_reset_codex_session,
 )
 from bot.codex_usage import (
+    record_claude_rate_limit_capture as _record_claude_rate_limit_capture,
     record_codex_rate_limit_capture as _record_codex_rate_limit_capture,
+    start_claude_rate_limit_capture as _start_claude_rate_limit_capture,
     start_codex_rate_limit_capture as _start_codex_rate_limit_capture,
 )
 from bot.manager import MultiBotManager
@@ -7087,6 +7089,8 @@ async def _stream_cli_chat(
                 quota_capture = None
                 if cli_type == "codex":
                     quota_capture = await _start_codex_rate_limit_capture(env=env, command=cmd)
+                elif cli_type == "claude":
+                    quota_capture = await _start_claude_rate_limit_capture(env=env, command=cmd)
 
                 try:
                     check_chat_stopped(session)
@@ -7553,6 +7557,8 @@ async def _stream_cli_chat(
                 try:
                     if cli_data_provider(cli_type) == "codex":
                         await _record_codex_rate_limit_capture(quota_capture, parsed_result)
+                    elif cli_type == "claude":
+                        await _record_claude_rate_limit_capture(quota_capture, parsed_result)
                 finally:
                     try:
                         if server_reader is not None:

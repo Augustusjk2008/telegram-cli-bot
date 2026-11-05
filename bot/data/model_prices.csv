@@ -10,6 +10,9 @@ gpt-5.5,USD,5,0.5,5,30,,https://developers.openai.com/api/docs/models/gpt-5.5
 gpt-5.4,USD,2.5,0.25,2.5,15,,https://developers.openai.com/api/docs/models/gpt-5.4
 gpt-5.4-mini,USD,0.75,0.075,0.75,4.5,,https://developers.openai.com/api/docs/models/gpt-5.4-mini
 gpt-5.3-codex,USD,1.75,0.175,1.75,14,,https://developers.openai.com/api/docs/models/gpt-5.3-codex
+claude-opus-5-5,USD,4,0.2,5,20,8,https://platform.claude.com/docs/en/about-claude/pricing
+claude-sonnet-5-5,USD,2,0.1,2.5,10,4,https://platform.claude.com/docs/en/about-claude/pricing
+claude-haiku-5-5,USD,0.1,0.01,0.125,0.5,0.2,https://platform.claude.com/docs/en/about-claude/pricing
 claude-opus-4-7,USD,5,0.5,6.25,25,10,https://platform.claude.com/docs/en/about-claude/pricing
 claude-opus-4-6,USD,5,0.5,6.25,25,10,https://platform.claude.com/docs/en/about-claude/pricing
 claude-sonnet-5,USD,2,0.2,2.5,10,4,https://platform.claude.com/docs/en/about-claude/pricing
