@@ -18,6 +18,7 @@ PI_RUNTIME_IDLE_TTL_SECONDS = max(60.0, float(os.environ.get("TCB_PI_RUNTIME_IDL
 PI_RUNTIME_MAX_COUNT = max(1, int(os.environ.get("TCB_PI_RUNTIME_MAX_COUNT", "32")))
 PI_RUNTIME_SHUTDOWN_MAX_CONCURRENCY = max(1, int(os.environ.get("TCB_PI_RUNTIME_SHUTDOWN_MAX_CONCURRENCY", "4")))
 PI_RUNTIME_SHUTDOWN_DEADLINE_SECONDS = max(1.0, float(os.environ.get("TCB_PI_RUNTIME_SHUTDOWN_DEADLINE_SECONDS", "30")))
+PI_RUNTIME_TURN_SETTLE_SECONDS = max(0.1, float(os.environ.get("TCB_PI_RUNTIME_TURN_SETTLE_SECONDS", "3")))
 _STREAM_TERMINAL_RESERVE = 3
 _StreamItem = dict[str, Any] | object
 _BeforeRuntimeClose = Callable[["PiSessionRuntime"], Awaitable[None]]
@@ -77,6 +78,9 @@ class PiSessionRuntime:
         self._stream_closed = False
         self._active_consumers = 0
         self._dropped_usage_events = 0
+        self._idle_event = asyncio.Event()
+        if not self.state.processing:
+            self._idle_event.set()
         self.last_used_at = time.monotonic()
 
     @property
@@ -139,14 +143,38 @@ class PiSessionRuntime:
 
     async def prompt(self, text: str, *, conversation_id: str = "") -> None:
         self.touch()
-        self.state.processing = True
+        if not self._active_consumers:
+            # Anything still queued belongs to an earlier Pi run; a new turn must not consume it.
+            self._discard_stale_stream_items()
+        self._set_processing(True)
         self._ensure_reader()
-        await self.client.prompt(
-            text,
-            conversation_id=conversation_id or self.state.native_session_id,
-            agent_id=self.state.agent_id,
-            reasoning_effort=self.state.reasoning_effort,
-        )
+        try:
+            await self.client.prompt(
+                text,
+                conversation_id=conversation_id or self.state.native_session_id,
+                agent_id=self.state.agent_id,
+                reasoning_effort=self.state.reasoning_effort,
+            )
+        except BaseException:
+            self._set_processing(False)
+            raise
+
+    async def wait_idle(self, timeout: float | None = None) -> bool:
+        """Wait until the reader has seen the current Pi run end; return False on timeout."""
+        loop = asyncio.get_running_loop()
+        limit = PI_RUNTIME_TURN_SETTLE_SECONDS if timeout is None else float(timeout)
+        deadline = loop.time() + max(0.0, limit)
+        while self.state.processing:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            if self._idle_event.is_set():
+                self._idle_event.clear()
+            try:
+                await asyncio.wait_for(self._idle_event.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return not self.state.processing
+        return True
 
     async def capture_state(self) -> dict[str, Any]:
         if self._reader_task is not None:
@@ -168,7 +196,7 @@ class PiSessionRuntime:
                 item = await self._stream_queue.get()
                 if item is _STREAM_DONE:
                     self._stream_queue.put_nowait(_STREAM_DONE)
-                    self.state.processing = False
+                    self._set_processing(False)
                     if self._reader_error is not None:
                         raise self._reader_error
                     return
@@ -195,7 +223,7 @@ class PiSessionRuntime:
             await self.client.abort()
             return True
         finally:
-            self.state.processing = False
+            self._set_processing(False)
 
     def mark_permission_pending(self, permission_id: str) -> None:
         normalized = str(permission_id or "").strip()
@@ -222,18 +250,53 @@ class PiSessionRuntime:
         return {"sent": True, "runtime_id": self.runtime_id}
 
     async def close(self) -> None:
-        self.state.processing = False
+        self._set_processing(False)
         try:
             await self.client.close()
         finally:
             await self._drain_reader()
 
     async def kill(self) -> None:
-        self.state.processing = False
+        self._set_processing(False)
         try:
             await self.client.kill()
         finally:
             await self._drain_reader()
+
+    def _set_processing(self, value: bool) -> None:
+        self.state.processing = bool(value)
+        if value:
+            self._idle_event.clear()
+        else:
+            self._idle_event.set()
+
+    def _observe_run_lifecycle(self, item: _StreamItem) -> None:
+        # Pi RPC brackets every agent run (including automatic retries) with agent_start/agent_end;
+        # turn_end only closes one LLM step and does not mean the run is finished.
+        event_type = _stream_event_type(item)
+        if event_type == "agent_start":
+            self._set_processing(True)
+        elif event_type == "agent_end":
+            self._set_processing(False)
+        elif (
+            event_type == "response"
+            and isinstance(item, dict)
+            and str(item.get("command") or "").strip() == "prompt"
+            and item.get("success") is False
+        ):
+            self._set_processing(False)
+
+    def _discard_stale_stream_items(self) -> None:
+        stream_done = False
+        while True:
+            try:
+                queued = self._stream_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            self._stream_queue.task_done()
+            stream_done = stream_done or queued is _STREAM_DONE
+        if stream_done:
+            self._stream_queue.put_nowait(_STREAM_DONE)
 
     def _ensure_reader(self) -> None:
         if self._reader_task is None:
@@ -242,12 +305,13 @@ class PiSessionRuntime:
     async def _reader_loop(self) -> None:
         try:
             async for event in self.client.events():
+                self._observe_run_lifecycle(event)
                 self._enqueue_stream_item(event)
         except Exception as exc:
             self._reader_error = exc
         finally:
             self._stream_closed = True
-            self.state.processing = False
+            self._set_processing(False)
             self._enqueue_stream_item(_STREAM_DONE)
 
     def _enqueue_stream_item(self, item: _StreamItem) -> None:

@@ -44,7 +44,9 @@ from bot.git_shared import (
     _normalize_git_graph_scope,
     _parse_tree_status_kind,
     _parse_changed_files,
+    _format_porcelain_entries,
     _parse_porcelain_entry,
+    _parse_porcelain_v1_z,
     _parse_porcelain_v2_z,
     _parse_status_header,
     _zero_changed_file_stats,
@@ -694,27 +696,28 @@ def _parse_numstat_value(value: str) -> int:
     return parsed if parsed >= 0 else 0
 
 
-def _normalize_numstat_path(path: str) -> str:
-    normalized = path.strip().replace("\\", "/")
-    brace_match = re.match(r"^(?P<prefix>.*)\{(?P<old>.*) => (?P<new>.*)\}(?P<suffix>.*)$", normalized)
-    if brace_match:
-        return f"{brace_match.group('prefix')}{brace_match.group('new')}{brace_match.group('suffix')}".strip()
-    if " => " in normalized:
-        normalized = normalized.split(" => ", 1)[1].strip()
-        if normalized.endswith("}"):
-            normalized = normalized.rstrip("}").strip()
-    return normalized
-
-
 def _parse_git_numstat(output: str) -> dict[str, dict[str, int]]:
+    """Parse ``git diff --numstat -z`` output.
+
+    Ordinary records are ``added\\tdeleted\\tpath<NUL>``; renames leave the path
+    field empty and append ``old<NUL>new<NUL>``. Paths are never C-quoted.
+    """
     stats: dict[str, dict[str, int]] = {}
-    for raw_line in output.splitlines():
-        if not raw_line.strip():
+    records = (output or "").split("\x00")
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
             continue
-        parts = raw_line.split("\t", 2)
+        parts = record.split("\t", 2)
         if len(parts) < 3:
             continue
-        path = _normalize_numstat_path(parts[2])
+        path = parts[2]
+        if not path:
+            # Rename/copy: skip the original path and key stats by the destination.
+            path = records[index + 1] if index + 1 < len(records) else ""
+            index += 2
         if not path:
             continue
         current = stats.setdefault(path, {"additions": 0, "deletions": 0})
@@ -758,8 +761,8 @@ def _count_untracked_file_additions(repo_root: str, relative_path: str) -> int:
 def _merge_changed_file_stats(repo_root: str, changed_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     has_unstaged = any(bool(item.get("unstaged")) for item in changed_files)
     has_staged = any(bool(item.get("staged")) for item in changed_files)
-    unstaged_stats = _read_git_numstat(repo_root, ["diff", "--numstat", "--"]) if has_unstaged else {}
-    staged_stats = _read_git_numstat(repo_root, ["diff", "--cached", "--numstat", "--"]) if has_staged else {}
+    unstaged_stats = _read_git_numstat(repo_root, ["diff", "--numstat", "-z", "--"]) if has_unstaged else {}
+    staged_stats = _read_git_numstat(repo_root, ["diff", "--cached", "--numstat", "-z", "--"]) if has_staged else {}
 
     merged: list[dict[str, Any]] = []
     for item in changed_files:
@@ -806,10 +809,11 @@ def _parse_tree_status_items(lines: list[str], *, working_dir: str, repo_root: s
         if not raw_line or raw_line.startswith("## "):
             continue
 
-        status = raw_line[:2]
-        path_text = raw_line[3:].strip()
-        if " -> " in path_text:
-            path_text = path_text.split(" -> ", 1)[1].strip()
+        entry = _parse_porcelain_entry(raw_line)
+        if entry is None:
+            continue
+        status = entry["status"]
+        path_text = entry["path"].rstrip("/")
 
         kind = _parse_tree_status_kind(status)
         if not kind:
@@ -1430,10 +1434,13 @@ def get_git_tree_status(manager: MultiBotManager, alias: str, user_id: int) -> d
         }
 
     snapshot = _build_repo_status_snapshot(repo_root)
-    ignored_lines = _read_git_status_text_with_retry(
-        repo_root,
-        ["status", "--porcelain=1", "--ignored=matching", "--untracked-files=normal"],
-    ).splitlines()
+    ignored_lines = [
+        f"{entry['status']} {entry['path']}"
+        for entry in _read_git_status_entries_z(
+            repo_root,
+            ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"],
+        )
+    ]
     return {
         "repo_found": True,
         "working_dir": working_dir,
@@ -1635,7 +1642,8 @@ def _read_git_commit_message_diff_group(
 
 
 def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
-    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short"])
+    status_entries = _read_git_status_entries_z(repo_root, ["status", "--porcelain=1", "-z"])
+    status_text = _format_porcelain_entries(status_entries)
     staged_metadata = _read_git_commit_message_diff_metadata(
         repo_root,
         cached=True,
@@ -1656,7 +1664,7 @@ def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
             repo_root,
             cached=False,
         )
-        untracked_paths = _extract_untracked_paths(status_text)
+        untracked_paths = _extract_untracked_paths(status_entries)
         unstaged_limit, untracked_limit = _allocate_git_diff_sample_limits(
             [len(unstaged_metadata.entries), len(untracked_paths)]
         )
@@ -1692,14 +1700,12 @@ def _read_git_commit_message_context(repo_root: str) -> dict[str, Any]:
     }
 
 
-def _extract_untracked_paths(status_text: str) -> list[str]:
-    paths: list[str] = []
-    for raw_line in (status_text or "").splitlines():
-        entry = _parse_porcelain_entry(raw_line)
-        if entry is None or not entry["untracked"]:
-            continue
-        paths.append(str(entry["path"] or "").strip())
-    return _unique_paths(paths)
+def _read_git_status_entries_z(repo_root: str, args: list[str]) -> list[dict[str, Any]]:
+    return _parse_porcelain_v1_z(_read_git_status_text_with_retry(repo_root, args))
+
+
+def _extract_untracked_paths(entries: list[dict[str, Any]]) -> list[str]:
+    return _unique_paths([str(entry["path"] or "") for entry in entries if entry["untracked"]])
 
 
 def _read_untracked_file_preview(repo_root: str, relative_path: str) -> str:
@@ -1739,7 +1745,11 @@ def _read_git_commit_message_untracked(
 
 
 def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
-    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--short", "--untracked-files=all"])
+    status_entries = _read_git_status_entries_z(
+        repo_root,
+        ["status", "--porcelain=1", "-z", "--untracked-files=all"],
+    )
+    status_text = _format_porcelain_entries(status_entries)
     staged_metadata = _read_git_commit_message_diff_metadata(
         repo_root,
         cached=True,
@@ -1748,7 +1758,7 @@ def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
         repo_root,
         cached=False,
     )
-    untracked_paths = _extract_untracked_paths(status_text)
+    untracked_paths = _extract_untracked_paths(status_entries)
     staged_limit, unstaged_limit, untracked_limit = _allocate_git_diff_sample_limits(
         [
             len(staged_metadata.entries),
@@ -1803,10 +1813,13 @@ def _read_git_smart_commit_message_context(repo_root: str) -> dict[str, Any]:
 
 
 def _build_git_worktree_snapshot(repo_root: str) -> str:
-    status_text = _read_git_status_text_with_retry(repo_root, ["status", "--porcelain=1", "--untracked-files=all"])
+    status_text = _read_git_status_text_with_retry(
+        repo_root,
+        ["status", "--porcelain=1", "-z", "--untracked-files=all"],
+    )
     staged_diff_digest = _run_git_stdout_digest(repo_root, ["diff", "--cached", "--find-renames"])
     unstaged_diff_digest = _run_git_stdout_digest(repo_root, ["diff", "--find-renames"])
-    untracked_paths = _extract_untracked_paths(status_text)
+    untracked_paths = _extract_untracked_paths(_parse_porcelain_v1_z(status_text))
     snapshot = hashlib.sha256()
 
     def update(value: str) -> None:
@@ -2009,7 +2022,9 @@ def get_git_status_porcelain_snapshot(repo_root: str) -> str:
 
 
 def get_git_status_porcelain_text(repo_root: str) -> str:
-    return _read_git_status_text_with_retry(repo_root, ["status", "--porcelain=1", "--untracked-files=all"])
+    return _format_porcelain_entries(
+        _read_git_status_entries_z(repo_root, ["status", "--porcelain=1", "-z", "--untracked-files=all"])
+    )
 
 
 def get_git_smart_commit_repo_hint(manager: MultiBotManager, alias: str) -> tuple[str, str]:
@@ -2155,16 +2170,11 @@ def switch_git_branch(manager: MultiBotManager, alias: str, user_id: int, name: 
 
 
 def _get_status_entries(repo_root: str, paths: list[str] | None = None) -> list[dict[str, Any]]:
-    args = ["status", "--porcelain=1", "--untracked-files=all"]
+    args = ["status", "--porcelain=1", "-z", "--untracked-files=all"]
     if paths:
         args.extend(["--", *paths])
     result = _run_git_status_command_with_retry(repo_root, args)
-    entries: list[dict[str, Any]] = []
-    for raw_line in (result.stdout or "").splitlines():
-        entry = _parse_porcelain_entry(raw_line)
-        if entry is not None:
-            entries.append(entry)
-    return entries
+    return _parse_porcelain_v1_z(result.stdout or "")
 
 
 def _unique_paths(paths: list[str]) -> list[str]:
@@ -2251,10 +2261,13 @@ def _discard_status_entries(repo_root: str, entries: list[dict[str, Any]], *, er
         if "R" in status and original_path:
             restore_paths.append(original_path)
             if path != original_path:
+                # Like the remote service: drop the destination from the index too.
+                unstage_and_remove_paths.append(path)
                 remove_paths.append(path)
             continue
 
         if "C" in status and original_path:
+            unstage_and_remove_paths.append(path)
             remove_paths.append(path)
             continue
 

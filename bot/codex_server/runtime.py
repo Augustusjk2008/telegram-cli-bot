@@ -594,13 +594,16 @@ class CodexServerRegistry:
             completion: concurrent.futures.Future = concurrent.futures.Future()
             self._closing[owner_key] = completion
             self._retiring[owner_key] = runtime
+            # Only an open already in flight at release time belongs to this
+            # close: the epoch bump makes it discard its runtime. Opens started
+            # later wait on `completion` themselves, so waiting on them here
+            # would deadlock.
+            prior_opening = self._opening_done.get(owner_key)
         async def close():
             try:
                 await runtime.close()
-                with self._lock:
-                    opening = self._opening_done.get(owner_key)
-                if opening:
-                    await asyncio.shield(asyncio.wrap_future(opening))
+                if prior_opening:
+                    await asyncio.shield(asyncio.wrap_future(prior_opening))
                 completion.set_result(None)
             except BaseException as exc:
                 completion.set_exception(exc)

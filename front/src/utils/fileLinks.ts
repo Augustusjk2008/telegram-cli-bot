@@ -33,8 +33,23 @@ function unwrapLocalFileUrl(href: string) {
   return href;
 }
 
+function safeDecodeURIComponent(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // Literal "%" (e.g. "50%off") is malformed; decode only the valid escape runs.
+    return value.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run;
+      }
+    });
+  }
+}
+
 function cleanHref(href: string) {
-  const decoded = decodeURIComponent((href || "").trim());
+  const decoded = safeDecodeURIComponent((href || "").trim());
   if (!decoded) {
     return "";
   }

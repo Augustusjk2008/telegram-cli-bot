@@ -454,7 +454,7 @@ For a source installation, set `-Python` to its available Python executable. Lin
 
 If an old `.update-apply-*` transaction is detected, exit the old host, run `python -m bot.updater recover-legacy --repo-root <OLD_INSTALLATION> --host-stopped` from the extracted new release, then prepare again. Missing backups or uncertain target ownership preserve the recovery materials and return `recovery_required`.
 
-The PowerShell bootstrap uses `-BaselinePackage` and `-BaselineSha256` for the baseline. Each installation permits one host at a time; after a storage move, the new host reports the current task-state location to its launcher.
+The PowerShell bootstrap uses `-BaselinePackage` and `-BaselineSha256` for the baseline. Each installation permits one host at a time; after a storage move, the new host reports the current task-state location to its launcher. Update job directories (`updates/<installation>/jobs`, containing dependency environments, staged files and recovery backups) are installation program material; a storage migration leaves them in the original data directory, so do not delete them manually.
 
 The generated `.env` includes:
 

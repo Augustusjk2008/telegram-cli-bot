@@ -347,7 +347,47 @@ def _safe_manifest_relative(relative: str) -> tuple[str, ...]:
     return parts
 
 
-def _walk_source(root: Path, *, hash_files: bool) -> tuple[list[dict[str, Any]], int]:
+def _is_retained_program_dir(kind: str, relative: str) -> bool:
+    """Match update job directories that must stay with the installation.
+
+    ``<app-data>/updates/<installation>/jobs`` holds installation-owned program
+    material: staged packages, frozen executors, transaction backups and
+    dependency environments (POSIX venvs contain symlinks).  Update state keeps
+    absolute references to these paths (for example ``python_executable``), so
+    they are neither copied, rewritten nor deleted; the small update state file
+    itself still moves with the data.
+    """
+    if kind != "app_data":
+        return False
+    parts = [part.casefold() for part in str(relative or "").split("/")]
+    return len(parts) == 3 and parts[0] == "updates" and parts[2] == "jobs" and bool(parts[1])
+
+
+def _retained_program_dirs(spec: dict[str, Any]) -> list[Path]:
+    """Existing retained update job directories below one source root."""
+    if str(spec.get("kind") or "") != "app_data":
+        return []
+    updates = Path(str(spec.get("path") or "")) / "updates"
+    try:
+        if _is_link(updates) or not updates.is_dir():
+            return []
+        candidates = [Path(child.path) for child in os.scandir(updates) if child.is_dir(follow_symlinks=False)]
+    except OSError:
+        return []
+    retained = []
+    for installation in candidates:
+        try:
+            children = list(os.scandir(installation))
+        except OSError:
+            continue
+        for child in children:
+            relative = f"updates/{installation.name}/{child.name}"
+            if child.is_dir(follow_symlinks=False) and _is_retained_program_dir("app_data", relative):
+                retained.append(Path(child.path))
+    return sorted(retained)
+
+
+def _walk_source(root: Path, *, hash_files: bool, kind: str = "") -> tuple[list[dict[str, Any]], int]:
     if not root.exists():
         return [], 0
     if _has_link_ancestor(root):
@@ -388,6 +428,8 @@ def _walk_source(root: Path, *, hash_files: bool) -> tuple[list[dict[str, Any]],
             except OSError as exc:
                 raise StorageMigrationError(f"无法读取源文件: {child_path}") from exc
             relative = _relative_path(root, child_path)
+            if stat.S_ISDIR(child_stat.st_mode) and _is_retained_program_dir(kind, relative):
+                continue
             if stat.S_ISDIR(child_stat.st_mode):
                 entries.append(
                     {
@@ -643,7 +685,7 @@ class StorageMigrationService:
 
             def scan_source(spec: dict[str, str]) -> tuple[str, list[dict[str, Any]], int, str]:
                 try:
-                    entries, size = _walk_source(Path(spec["path"]), hash_files=False)
+                    entries, size = _walk_source(Path(spec["path"]), hash_files=False, kind=spec["kind"])
                     return spec["label"], entries, size, ""
                 except (OSError, StorageMigrationError) as exc:
                     return spec["label"], [], 0, str(exc)
@@ -1061,6 +1103,9 @@ class StorageMigrationService:
             for child in sorted(self._home_root.iterdir(), key=lambda item: item.name.casefold()):
                 if child.name not in known:
                     warnings.append(f"未识别的 ~/.tcb 项已排除: {child.name}")
+        for spec in _source_specs():
+            for retained in _retained_program_dirs(spec):
+                warnings.append(f"升级任务目录属于安装程序材料（依赖环境、暂存文件与恢复备份），迁移后保留在原位置: {retained}")
         repo_plugins = self.repo_root / ".plugins"
         if repo_plugins.exists():
             warnings.append(f"仓库插件目录已排除: {repo_plugins}")
@@ -1471,10 +1516,16 @@ class StorageMigrationService:
             raise StorageMigrationError(f"目标目录不可用: {path}")
 
     def _rewrite_structured_paths(self, plan: dict[str, Any], target: Path) -> None:
-        mappings = [
+        # Retained update job paths are matched first and keep their original value.
+        mappings: list[tuple[Path, Path | None]] = [
+            (_canonical(retained), None)
+            for spec in plan["sourceSpecs"]
+            for retained in _retained_program_dirs(spec)
+        ]
+        mappings.extend(
             (_canonical(spec["path"]), target / Path(*spec["targetRelativeRoot"].split("/")))
             for spec in plan["sourceSpecs"]
-        ]
+        )
         json_entries = [
             entry
             for entry in plan["entries"]
@@ -1561,7 +1612,7 @@ class StorageMigrationService:
         return False, value
 
     @staticmethod
-    def _map_structured_path(value: str, mappings: list[tuple[Path, Path]]) -> str:
+    def _map_structured_path(value: str, mappings: list[tuple[Path, Path | None]]) -> str:
         if not os.path.isabs(os.path.expanduser(value)):
             return value
         try:
@@ -1570,6 +1621,8 @@ class StorageMigrationService:
             return value
         for source, target in mappings:
             if candidate == source or source in candidate.parents:
+                if target is None:
+                    return value
                 relative = candidate.relative_to(source)
                 return str(target / relative)
         return value
@@ -1705,7 +1758,7 @@ class StorageMigrationService:
             root = Path(str(spec.get("path") or ""))
             expected = expected_by_label.get(label, {})
             try:
-                actual_entries, _ = _walk_source(root, hash_files=False)
+                actual_entries, _ = _walk_source(root, hash_files=False, kind=str(spec.get("kind") or ""))
             except StorageMigrationError:
                 if allow_missing and not root.exists():
                     continue
@@ -1829,6 +1882,11 @@ class StorageMigrationService:
             self._write_journal(journal)
 
         _bounded_map(files, self._delete_source_file, on_result=on_result)
+        retained = [path for spec in specs for path in _retained_program_dirs(spec)]
+
+        def keeps_retained(path: Path) -> bool:
+            return any(item == path or path in item.parents for item in retained)
+
         directories = sorted(
             (entry for entry in entries if entry.get("type") == "dir" and entry.get("relativePath")),
             key=lambda item: str(item.get("relativePath")).count("/"),
@@ -1836,7 +1894,7 @@ class StorageMigrationService:
         )
         for entry in directories:
             path = Path(str(entry["sourceRoot"])) / Path(*_safe_manifest_relative(str(entry["relativePath"])))
-            if path.exists():
+            if path.exists() and not keeps_retained(path):
                 if _is_link(path) or not path.is_dir():
                     raise StorageMigrationError(f"源目录清理目标类型不匹配: {path}")
                 try:
@@ -1847,7 +1905,7 @@ class StorageMigrationService:
             self._write_journal(journal)
         for spec in specs:
             root = Path(str(spec.get("path") or ""))
-            if root.exists():
+            if root.exists() and not keeps_retained(root):
                 if _is_link(root) or not root.is_dir():
                     raise StorageMigrationError(f"源根清理目标类型不匹配: {root}")
                 try:

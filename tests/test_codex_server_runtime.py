@@ -106,6 +106,59 @@ async def test_process_reuse_per_turn_parameters_usage_and_sync_release(runtime_
         await registry.aclose()
 
 
+class SlowCloseClient(FakeClient):
+    async def close(self):
+        await asyncio.sleep(0.2)
+        self.alive = False
+
+
+@pytest.mark.asyncio
+async def test_open_right_after_release_waits_for_close_without_deadlock(runtime_setup, monkeypatch):
+    registry, request = runtime_setup
+    monkeypatch.setattr("bot.codex_server.runtime.CodexServerClient", SlowCloseClient)
+    old = await registry.open_or_create(request)
+    try:
+        registry.release_owner(request.owner_key)
+        await asyncio.sleep(0)  # the scheduled close is now inside runtime.close()
+        assert request.owner_key in registry._closing
+        reopened = await asyncio.wait_for(registry.open_or_create(request), 2)
+        assert reopened is not old and not old.alive and reopened.alive
+        assert request.owner_key not in registry._closing
+        assert (await collect(reopened))[-1]["type"] == "turn.completed"
+    finally:
+        await registry.aclose()
+
+
+@pytest.mark.asyncio
+async def test_release_waits_for_open_started_before_it_and_discards_its_runtime(runtime_setup, monkeypatch):
+    registry, request = runtime_setup
+    old = await registry.open_or_create(request)
+    gate = asyncio.Event()
+
+    class GatedClient(FakeClient):
+        @classmethod
+        async def start(cls, *args, **kwargs):
+            await gate.wait()
+            return cls()
+
+    monkeypatch.setattr("bot.codex_server.runtime.CodexServerClient", GatedClient)
+    try:
+        opening = asyncio.create_task(registry.open_or_create(replace(request, conversation_id="other")))
+        while not old._closed:  # the in-flight open retired the old runtime and is now starting
+            await asyncio.sleep(0)
+        completion = registry.release_owner(request.owner_key)
+        await asyncio.sleep(0.05)
+        assert not completion.done()  # release covers the open that was already in flight
+        gate.set()
+        with pytest.raises(CodexServerError, match="已释放"):
+            await asyncio.wait_for(opening, 2)
+        await asyncio.wait_for(asyncio.wrap_future(completion), 2)
+        assert request.owner_key not in registry._runtimes
+        assert not FakeClient.instances[-1].alive
+    finally:
+        await registry.aclose()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("changed", ["cwd", "env", "home", "mcp", "config_file", "conversation", "thread"])
 async def test_binding_changes_rebuild_and_resume(runtime_setup, tmp_path, changed):

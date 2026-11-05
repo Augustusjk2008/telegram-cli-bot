@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -825,3 +826,162 @@ async def test_same_owner_different_runtime_starts_are_serialized_and_capacity_b
     assert registry.get_by_runtime_id(second_runtime.runtime_id) is second_runtime
     assert first_runtime.client.close_count == 1
     await registry.shutdown()
+
+
+class _ScriptedRunClient(_FakeClient):
+    """Pi RPC fake: each prompt() schedules that run's events on one long-lived stdout stream."""
+
+    def __init__(self, runs: list[list[dict[str, Any]]]) -> None:
+        super().__init__()
+        self._runs = list(runs)
+        self._stdout: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def prompt(self, *_args: Any, **_kwargs: Any) -> None:
+        for event in self._runs.pop(0):
+            self._stdout.put_nowait(event)
+
+    async def close(self) -> None:
+        await super().close()
+        self._stdout.put_nowait(None)
+
+    async def kill(self) -> None:
+        await super().kill()
+        self._stdout.put_nowait(None)
+
+    async def events(self):
+        while (event := await self._stdout.get()) is not None:
+            yield event
+
+
+def _delta(text: str) -> dict[str, Any]:
+    return {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}}
+
+
+async def _consume_until(runtime: PiSessionRuntime, stop) -> list[dict[str, Any]]:
+    seen: list[dict[str, Any]] = []
+    stream = runtime.events()
+    try:
+        async for event in stream:
+            seen.append(event)
+            if stop(event):
+                break
+    finally:
+        await stream.aclose()
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_clears_processing_for_eviction_and_archive(tmp_path):
+    client = _ScriptedRunClient([[{"type": "agent_start"}, _delta("hi"), {"type": "turn_end"}, {"type": "agent_end"}]])
+    runtime = _runtime_with_client(client, tmp_path)
+    runtime.state.owner_key = "-123:1:main"
+    registry = PiSessionRuntimeRegistry()
+    registry._by_runtime_id[runtime.runtime_id] = runtime
+    registry._by_key[runtime.state.runtime_key] = runtime
+
+    await runtime.prompt("hello")
+    # The service may finish the turn at turn_end, before agent_end has been consumed.
+    await asyncio.wait_for(
+        _consume_until(runtime, lambda event: event.get("type") in {"turn_end", "agent_end"}), _TEST_TIMEOUT_SECONDS,
+    )
+    assert await asyncio.wait_for(runtime.wait_idle(_TEST_TIMEOUT_SECONDS), _TEST_TIMEOUT_SECONDS)
+    assert runtime.state.processing is False
+
+    await registry.close_bot_runtimes(-123)
+    assert client.close_count == 1
+    assert registry.get_by_runtime_id(runtime.runtime_id) is None
+
+
+@pytest.mark.asyncio
+async def test_idle_eviction_closes_runtime_after_completed_turn(tmp_path):
+    client = _ScriptedRunClient([[{"type": "agent_start"}, _delta("hi"), {"type": "agent_end"}]])
+    runtime = _runtime_with_client(client, tmp_path)
+    registry = PiSessionRuntimeRegistry()
+    registry._by_runtime_id[runtime.runtime_id] = runtime
+    registry._by_key[runtime.state.runtime_key] = runtime
+
+    await runtime.prompt("hello")
+    await asyncio.wait_for(_consume_until(runtime, lambda event: event.get("type") == "agent_end"), _TEST_TIMEOUT_SECONDS)
+    runtime.last_used_at -= 10 ** 6
+    assert await registry.evict_idle() == 1
+    assert client.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_detached_consumer_mid_run_keeps_runtime_processing(tmp_path):
+    client = _ScriptedRunClient([[{"type": "agent_start"}, _delta("partial"), {"type": "turn_end"}]])
+    runtime = _runtime_with_client(client, tmp_path)
+    registry = PiSessionRuntimeRegistry()
+    registry._by_runtime_id[runtime.runtime_id] = runtime
+    registry._by_key[runtime.state.runtime_key] = runtime
+
+    await runtime.prompt("hello")
+    await asyncio.wait_for(_consume_until(runtime, lambda event: event.get("type") == "turn_end"), _TEST_TIMEOUT_SECONDS)
+    assert await runtime.wait_idle(0.05) is False
+    runtime.last_used_at -= 10 ** 6
+    assert await registry.evict_idle() == 0
+    with pytest.raises(ValueError, match="仍在运行"):
+        runtime.state.owner_key = "-123:1:main"
+        await registry.close_bot_runtimes(-123)
+
+    client._stdout.put_nowait({"type": "agent_end"})
+    assert await asyncio.wait_for(runtime.wait_idle(_TEST_TIMEOUT_SECONDS), _TEST_TIMEOUT_SECONDS)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_prompt_response_clears_processing(tmp_path):
+    client = _ScriptedRunClient([[{"type": "response", "command": "prompt", "success": False, "error": "busy"}]])
+    runtime = _runtime_with_client(client, tmp_path)
+    await runtime.prompt("hello")
+    assert await asyncio.wait_for(runtime.wait_idle(_TEST_TIMEOUT_SECONDS), _TEST_TIMEOUT_SECONDS)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_abandoned_on_error_does_not_leak_events_into_next_prompt(tmp_path):
+    error_end = {"type": "message_end", "message": {"role": "assistant", "stopReason": "error", "errorMessage": "overloaded"}}
+    client = _ScriptedRunClient([
+        [{"type": "agent_start"}, error_end, _delta("stale retry of prompt 1"), {"type": "turn_end"}, {"type": "agent_end"}],
+        [{"type": "agent_start"}, _delta("fresh answer"), {"type": "agent_end"}],
+    ])
+    runtime = _runtime_with_client(client, tmp_path)
+
+    await runtime.prompt("prompt 1")
+    first_turn = await asyncio.wait_for(_consume_until(runtime, lambda event: event is error_end), _TEST_TIMEOUT_SECONDS)
+    assert first_turn[-1] is error_end
+    # The service settles the runtime before completing the turn; the old run is allowed to end.
+    assert await asyncio.wait_for(runtime.wait_idle(_TEST_TIMEOUT_SECONDS), _TEST_TIMEOUT_SECONDS)
+
+    await runtime.prompt("prompt 2")
+    second_turn = await asyncio.wait_for(
+        _consume_until(runtime, lambda event: event.get("type") == "agent_end"), _TEST_TIMEOUT_SECONDS,
+    )
+    assert second_turn == [{"type": "agent_start"}, _delta("fresh answer"), {"type": "agent_end"}]
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_prompt_keeps_stream_end_signal_when_discarding_stale_items(tmp_path):
+    runtime = _runtime_with_client(_EventClient([_delta("stale"), {"type": "agent_end"}]), tmp_path)
+    runtime.client.prompt = AsyncMock()
+    runtime._ensure_reader()
+    await asyncio.wait_for(asyncio.shield(runtime._reader_task), _TEST_TIMEOUT_SECONDS)
+    await runtime.prompt("next")
+    assert await asyncio.wait_for(_collect_events(runtime), _TEST_TIMEOUT_SECONDS) == []
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_service_kills_runtime_whose_pi_run_outlives_the_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr("bot.native_agent.pi_session_runtime.PI_RUNTIME_TURN_SETTLE_SECONDS", 0.05)
+    client = _ScriptedRunClient([[{"type": "agent_start"}, {"type": "extension_error", "error": "boom"}, _delta("still running")]])
+    runtime = _runtime_with_client(client, tmp_path)
+    await runtime.prompt("hello")
+    await asyncio.wait_for(
+        _consume_until(runtime, lambda event: event.get("type") == "extension_error"), _TEST_TIMEOUT_SECONDS,
+    )
+    await NativeAgentService()._settle_runtime_after_turn(runtime)
+    assert client.close_count == 1  # kill()
+    assert runtime.state.processing is False
+    await runtime.close()

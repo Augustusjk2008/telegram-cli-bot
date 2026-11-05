@@ -410,6 +410,21 @@ class NativeAgentService:
             env["NATIVE_AGENT_PI_HOME"] = pi_home
         return env or None
 
+    async def _settle_runtime_after_turn(self, runtime: PiSessionRuntime | None) -> None:
+        """Make sure the Pi run behind a finished turn has ended so it cannot leak into the next turn."""
+        if runtime is None:
+            return
+        try:
+            if await runtime.wait_idle():
+                return
+        except Exception:
+            logger.exception("等待 Pi runtime 结束失败: %s", getattr(runtime, "runtime_id", ""))
+        logger.warning("Pi runtime 本轮已结束但 Pi 仍在运行，终止进程以免事件串入下一轮: %s", runtime.runtime_id)
+        try:
+            await runtime.kill()
+        except Exception:
+            logger.exception("Pi runtime 终止失败: %s", getattr(runtime, "runtime_id", ""))
+
     async def _evict_runtime(self, runtime: PiSessionRuntime | None) -> None:
         if runtime is None:
             return
@@ -1254,6 +1269,8 @@ class NativeAgentService:
                 except Exception:
                     pass
 
+            if completion_state != "cancelled":
+                await self._settle_runtime_after_turn(active_runtime)
             final_text = final_text or aggregator.text()
             if completion_state == "completed" and aggregator.saw_tool_failure:
                 completion_state = "error"
@@ -1400,6 +1417,8 @@ class NativeAgentService:
             if isinstance(exc, PiRpcRunError) and _is_pi_transient_upstream_error(exc):
                 await self._evict_runtime(active_runtime)
                 active_runtime = None
+            else:
+                await self._settle_runtime_after_turn(active_runtime)
             error_message = str(exc) or "原生 agent 执行失败"
             if persistence_buffer is not None:
                 await persistence_buffer.close()

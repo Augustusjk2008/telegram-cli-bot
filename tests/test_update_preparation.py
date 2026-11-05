@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -78,7 +79,8 @@ def test_changed_dependencies_are_installed_in_stable_separate_environment(paylo
     monkeypatch.setattr(preparation, "_check_environment", lambda *args: "environment-fingerprint")
     runtime = preparation.prepare_runtime(repo, job_dir, prepared)
     assert runtime["python_executable"].startswith(str(job_dir / "environment"))
-    assert runtime["previous_python_executable"] == str(Path(sys.executable).resolve())
+    # A POSIX venv python is a symlink; resolving it would lose the old environment.
+    assert runtime["previous_python_executable"] == os.path.abspath(sys.executable)
     pip = next(command for command in commands if "install" in command)
     assert str(pip[0]).startswith(str(job_dir / "environment"))
     assert runtime["frontend_prebuilt"] is True
@@ -109,8 +111,8 @@ def test_matching_requirements_still_verify_installed_versions(payload, monkeypa
     monkeypatch.setattr(preparation, "_check_environment", lambda *args: checked.append(args[0]) or "fingerprint")
     monkeypatch.setattr(preparation, "_run", lambda *args: pytest.fail("No install for an exact valid environment"))
     runtime = preparation.prepare_runtime(repo, job_dir, prepared)
-    assert runtime["python_executable"] == str(Path(sys.executable).resolve())
-    assert checked == [Path(sys.executable).resolve()]
+    assert runtime["python_executable"] == os.path.abspath(sys.executable)
+    assert checked == [Path(os.path.abspath(sys.executable))]
 
 
 @pytest.mark.parametrize("option", ["TCB_STARTUP_SKIP_DEP_SYNC", "TCB_STARTUP_USE_SYSTEM_PYTHON"])

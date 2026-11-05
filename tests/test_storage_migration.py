@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from bot.storage_migration import StorageMigrationError, StorageMigrationService
 
 
 @pytest.fixture
-def migration_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+def migration_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Path, Path, Path]]:
     home = tmp_path / "home"
     repo = tmp_path / "repo"
     target = tmp_path / "target"
@@ -22,7 +23,9 @@ def migration_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
     monkeypatch.chdir(repo)
     monkeypatch.delenv("TCB_DATA_DIR", raising=False)
     runtime_paths.reset_runtime_path_cache_for_tests()
-    return home, repo, target
+    yield home, repo, target
+    # Do not leak a frozen committed locator into later test modules.
+    runtime_paths.reset_runtime_path_cache_for_tests()
 
 
 def _make_sources(home: Path, *, with_sqlite: bool = True) -> tuple[Path, Path]:
@@ -575,3 +578,62 @@ def test_precommit_interruption_keeps_source_and_missing_target_has_no_fallback(
     runtime_paths.reset_runtime_path_cache_for_tests()
     with pytest.raises(runtime_paths.StoragePathError):
         runtime_paths.get_app_data_root()
+
+
+@pytest.mark.parametrize("posix_links", [True, False])
+def test_update_job_material_stays_with_installation_during_migration(
+    migration_context: tuple[Path, Path, Path],
+    posix_links: bool,
+) -> None:
+    home, repo, target = migration_context
+    app, _history = _make_sources(home, with_sqlite=False)
+    updates = app / "updates" / "installation-id"
+    job = updates / "jobs" / "job-1"
+    environment = job / "environment"
+    (environment / "bin").mkdir(parents=True)
+    (environment / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
+    (job / "transaction").mkdir()
+    (job / "transaction" / "backup-000000").write_bytes(b"previous program file")
+    python = environment / "bin" / "python"
+    if posix_links:
+        try:
+            # POSIX venvs link their interpreter; this used to block every migration.
+            python.symlink_to(Path(__file__).resolve())
+            (environment / "lib64").symlink_to(environment / "bin", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("当前环境不允许创建符号链接")
+    else:
+        # Windows venvs are plain files; they used to be copied and then deleted.
+        python.write_bytes(b"venv launcher")
+    package = job / "package.zip"
+    package.write_bytes(b"update package")
+    state = {
+        "python_executable": str(python),
+        "job": {"phase": "succeeded", "job_dir": str(job), "python_executable": str(python),
+                "backup_dir": str(job / "transaction"), "source": {"path": str(package)}},
+        "data": {"path": str(app / "attachments")},
+    }
+    (updates / "state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    service = StorageMigrationService(repo)
+    plan = service.preview(str(target))
+    assert plan["blockers"] == []
+    assert any(str(updates / "jobs") in warning for warning in plan["warnings"])
+    assert service.begin(str(plan["id"]))["state"] == "stopping"
+    assert service.execute(str(plan["id"]))["state"] == "awaiting_restart"
+
+    moved_updates = target / "orbit-safe-claw" / "updates" / "installation-id"
+    assert not (moved_updates / "jobs").exists()
+    moved_state = json.loads((moved_updates / "state.json").read_text(encoding="utf-8"))
+    assert moved_state["python_executable"] == str(python)
+    assert moved_state["job"]["source"]["path"] == str(package)
+    assert moved_state["data"]["path"] == str(target / "orbit-safe-claw" / "attachments")
+
+    runtime_paths.reset_runtime_path_cache_for_tests()
+    assert StorageMigrationService(repo).finalize_startup()["state"] == "completed"
+    assert not (app / "config.json").exists()
+    assert not (updates / "state.json").exists()
+    # The recorded interpreter, package and recovery backups remain usable.
+    assert python.is_symlink() or python.is_file()
+    assert package.read_bytes() == b"update package"
+    assert (job / "transaction" / "backup-000000").read_bytes() == b"previous program file"

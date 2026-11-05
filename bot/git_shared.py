@@ -47,34 +47,71 @@ def _parse_status_header(header: str) -> tuple[str, int, int]:
     return current_branch, ahead_count, behind_count
 
 
-def _parse_porcelain_entry(raw_line: str) -> dict[str, Any] | None:
-    if not raw_line or raw_line.startswith("## "):
-        return None
-
-    if raw_line.startswith("?? "):
+def _porcelain_status_entry(status: str, path: str, original_path: str = "") -> dict[str, Any]:
+    if status == "??":
         return {
-            "path": raw_line[3:].strip(),
+            "path": path,
             "original_path": "",
             "status": "??",
             "staged": False,
             "unstaged": False,
             "untracked": True,
         }
-
-    status = raw_line[:2]
-    path_text = raw_line[3:].strip()
-    original_path = ""
-    if " -> " in path_text:
-        original_path, path_text = [part.strip() for part in path_text.split(" -> ", 1)]
-
     return {
-        "path": path_text,
+        "path": path,
         "original_path": original_path,
         "status": status,
         "staged": status[0] not in (" ", "?"),
         "unstaged": status[1] != " ",
         "untracked": False,
     }
+
+
+def _parse_porcelain_entry(raw_line: str) -> dict[str, Any] | None:
+    """Parse an internal ``XY path`` line built from NUL-delimited Git output.
+
+    The path after the status and separator is kept verbatim: it is never
+    C-quoted, trimmed or split on `` -> ``, so spaces, non-ASCII characters and
+    arrow-like names survive.
+    """
+    if not raw_line or raw_line.startswith("## ") or len(raw_line) < 4 or raw_line[2] != " ":
+        return None
+    return _porcelain_status_entry(raw_line[:2], raw_line[3:])
+
+
+def _parse_porcelain_v1_z(status_text: str) -> list[dict[str, Any]]:
+    """Parse ``git status --porcelain=1 -z`` records.
+
+    Renames and copies are ``XY new<NUL>old<NUL>``: the destination comes first,
+    followed by the original path, with no `` -> `` separator.
+    """
+    entries: list[dict[str, Any]] = []
+    records = (status_text or "").split("\x00")
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record or record.startswith("## ") or len(record) < 4 or record[2] != " ":
+            continue
+        status = record[:2]
+        original_path = ""
+        if status[0] in {"R", "C"} or status[1] in {"R", "C"}:
+            if index < len(records):
+                original_path = records[index]
+                index += 1
+        entries.append(_porcelain_status_entry(status, record[3:], original_path))
+    return entries
+
+
+def _format_porcelain_entries(entries: list[dict[str, Any]]) -> str:
+    """Render parsed status entries as readable, unquoted ``--short`` lines."""
+    lines: list[str] = []
+    for entry in entries:
+        path = str(entry.get("path") or "")
+        original_path = str(entry.get("original_path") or "")
+        target = f"{original_path} -> {path}" if original_path else path
+        lines.append(f"{entry.get('status') or '  '} {target}")
+    return "\n".join(lines)
 
 
 def _parse_changed_files(lines: list[str]) -> list[dict[str, Any]]:
