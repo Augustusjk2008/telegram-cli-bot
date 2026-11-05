@@ -4,10 +4,12 @@ import math
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Literal
+from typing import Literal, cast
 
 
 ProviderKind = Literal["openai_official", "base_url", "unknown"]
+UsageProvider = Literal["codex", "claude"]
+KNOWN_USAGE_PROVIDERS = ("codex", "claude")
 GENERAL_CODEX_RATE_LIMIT_ID = "codex"
 SECONDARY_CODEX_RATE_LIMIT_ID = "codex_bengalfox"
 GPT_RESERVE_RATE_LIMIT_ID = "base_model_inference"
@@ -17,6 +19,13 @@ KNOWN_CODEX_RATE_LIMIT_IDS = (
     GPT_RESERVE_RATE_LIMIT_ID,
 )
 SQLITE_INT64_MAX = 2**63 - 1
+
+
+def normalize_usage_provider(value: object) -> UsageProvider:
+    normalized = str(value or "").strip().lower()
+    if normalized not in KNOWN_USAGE_PROVIDERS:
+        raise ValueError("不支持的额度 Provider")
+    return cast(UsageProvider, normalized)
 
 
 def normalize_credits_balance(value: object) -> str | None:

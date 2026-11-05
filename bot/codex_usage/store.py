@@ -9,12 +9,14 @@ from pathlib import Path
 from .models import (
     CodexRateLimitSample,
     DayLike,
+    UsageProvider,
     day_from_number,
     day_number,
+    normalize_usage_provider,
 )
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _SETTING_ENABLED = "enabled"
 _LONG_TERM_LIMIT_WINDOW_MINUTES = 7 * 24 * 60
 
@@ -27,6 +29,8 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS rate_limit_samples (
     sample_id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'codex'
+        CHECK (trim(provider) <> ''),
     day INTEGER NOT NULL,
     limit_id TEXT NOT NULL CHECK (trim(limit_id) <> ''),
     sampled_at_ms INTEGER NOT NULL,
@@ -86,7 +90,7 @@ class CodexUsageStore:
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version not in {0, 1, 2, 3, 4, 5, 6, SCHEMA_VERSION}:
+        if version not in {0, 1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION}:
             raise RuntimeError(f"不支持的 Codex quota schema 版本: {version}")
         connection.executescript(_SCHEMA_SQL)
         if version == 3:
@@ -118,6 +122,17 @@ class CodexUsageStore:
             str(row[1])
             for row in connection.execute("PRAGMA table_info(rate_limit_samples)")
         }
+        if "provider" not in columns:
+            with connection:
+                connection.execute(
+                    """
+                    ALTER TABLE rate_limit_samples
+                    ADD COLUMN provider TEXT NOT NULL
+                    DEFAULT 'codex'
+                    CHECK (trim(provider) <> '')
+                    """
+                )
+            columns.add("provider")
         if "credits_balance" not in columns:
             with connection:
                 connection.execute(
@@ -125,8 +140,8 @@ class CodexUsageStore:
                 )
         connection.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_bucket_time
-            ON rate_limit_samples(limit_id, window_minutes, sampled_at_ms, sample_id)
+            CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_provider_bucket_time
+            ON rate_limit_samples(provider, limit_id, window_minutes, sampled_at_ms, sample_id)
             """
         )
         if version != SCHEMA_VERSION:
@@ -152,14 +167,20 @@ class CodexUsageStore:
             credits_balance=row["credits_balance"],
         )
 
-    def get_enabled(self) -> bool:
+    @staticmethod
+    def _setting_key(provider: UsageProvider) -> str:
+        normalized_provider = normalize_usage_provider(provider)
+        return _SETTING_ENABLED if normalized_provider == "codex" else f"{normalized_provider}.{_SETTING_ENABLED}"
+
+    def get_enabled(self, provider: UsageProvider = "codex") -> bool:
+        setting_key = self._setting_key(provider)
         with self._lock:
             connection = self._get_connection(create=False)
             if connection is None:
                 return False
             row = connection.execute(
                 "SELECT value FROM settings WHERE key = ?",
-                (_SETTING_ENABLED,),
+                (setting_key,),
             ).fetchone()
             if row is None:
                 return False
@@ -167,9 +188,10 @@ class CodexUsageStore:
 
     is_enabled = get_enabled
 
-    def set_enabled(self, enabled: bool) -> None:
+    def set_enabled(self, enabled: bool, provider: UsageProvider = "codex") -> None:
         if type(enabled) is not bool:
             raise ValueError("enabled 必须是布尔值")
+        setting_key = self._setting_key(provider)
         with self._lock:
             connection = self._get_connection(create=True)
             assert connection is not None
@@ -183,12 +205,17 @@ class CodexUsageStore:
                         value = excluded.value,
                         updated_at = excluded.updated_at
                     """,
-                    (_SETTING_ENABLED, "true" if enabled else "false", updated_at),
+                    (setting_key, "true" if enabled else "false", updated_at),
                 )
 
-    def record_rate_limit_sample(self, sample: CodexRateLimitSample) -> None:
+    def record_rate_limit_sample(
+        self,
+        sample: CodexRateLimitSample,
+        provider: UsageProvider = "codex",
+    ) -> None:
         if not isinstance(sample, CodexRateLimitSample):
             raise ValueError("sample 必须是 CodexRateLimitSample")
+        normalized_provider = normalize_usage_provider(provider)
         epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
         sampled_delta = sample.sampled_at.astimezone(timezone.utc) - epoch
         reset_delta = sample.resets_at.astimezone(timezone.utc) - epoch
@@ -206,11 +233,12 @@ class CodexUsageStore:
                 cursor = connection.execute(
                     """
                     INSERT INTO rate_limit_samples(
-                        day, limit_id, sampled_at_ms, used_percent,
+                        provider, day, limit_id, sampled_at_ms, used_percent,
                         window_minutes, resets_at, plan_type, credits_balance
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        normalized_provider,
                         sample_day,
                         sample.limit_id,
                         sampled_at_ms,
@@ -225,11 +253,11 @@ class CodexUsageStore:
                     """
                     SELECT sample_id, used_percent, credits_balance, resets_at, plan_type
                     FROM rate_limit_samples
-                    WHERE limit_id = ? AND window_minutes = ?
+                    WHERE provider = ? AND limit_id = ? AND window_minutes = ?
                     ORDER BY sampled_at_ms DESC, sample_id DESC
                     LIMIT 3
                     """,
-                    (sample.limit_id, sample.window_minutes),
+                    (normalized_provider, sample.limit_id, sample.window_minutes),
                 ).fetchall()
                 if len(rows) == 3 and rows[0]["sample_id"] == cursor.lastrowid:
                     states = [
@@ -249,11 +277,17 @@ class CodexUsageStore:
                             (rows[1]["sample_id"],),
                         )
 
-    def query(self, start_day: DayLike, end_day: DayLike) -> tuple[CodexRateLimitSample, ...]:
+    def query(
+        self,
+        start_day: DayLike,
+        end_day: DayLike,
+        provider: UsageProvider = "codex",
+    ) -> tuple[CodexRateLimitSample, ...]:
         start = day_number(start_day)
         end = day_number(end_day)
         if start > end:
             raise ValueError("起始日期不能晚于结束日期")
+        normalized_provider = normalize_usage_provider(provider)
         with self._lock:
             connection = self._get_connection(create=False)
             if connection is None:
@@ -263,11 +297,12 @@ class CodexUsageStore:
                 SELECT limit_id, sampled_at_ms, used_percent, window_minutes,
                        resets_at, plan_type, credits_balance
                 FROM rate_limit_samples
-                WHERE day >= ? AND day <= ?
+                WHERE provider = ? AND day >= ? AND day <= ?
                   AND window_minutes >= ?
                 ORDER BY sampled_at_ms ASC, sample_id ASC
                 """,
                 (
+                    normalized_provider,
                     start,
                     end,
                     _LONG_TERM_LIMIT_WINDOW_MINUTES,
@@ -275,13 +310,15 @@ class CodexUsageStore:
             ).fetchall()
             return tuple(self._rate_limit_from_row(row) for row in rows)
 
-    def available_range(self) -> tuple[date | None, date | None]:
+    def available_range(self, provider: UsageProvider = "codex") -> tuple[date | None, date | None]:
+        normalized_provider = normalize_usage_provider(provider)
         with self._lock:
             connection = self._get_connection(create=False)
             if connection is None:
                 return None, None
             row = connection.execute(
-                "SELECT MIN(day), MAX(day) FROM rate_limit_samples"
+                "SELECT MIN(day), MAX(day) FROM rate_limit_samples WHERE provider = ?",
+                (normalized_provider,),
             ).fetchone()
             if row is None or row[0] is None:
                 return None, None

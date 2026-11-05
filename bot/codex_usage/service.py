@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .app_server_rate_limits import resolve_account_rate_limits
-from .models import CodexRateLimitSample, DayLike, ProviderInfo
+from .models import (
+    CodexRateLimitSample,
+    DayLike,
+    ProviderInfo,
+    UsageProvider,
+    normalize_usage_provider,
+)
 from .provider import CodexProviderResolver
 from .rollout import TurnRateLimitResolution, resolve_turn_rate_limit_resolution
 from .store import CodexUsageStore
@@ -106,7 +112,7 @@ class CodexUsageService:
         self._rate_limit_resolver = rate_limit_resolver or resolve_turn_rate_limit_resolution
         self._account_rate_limit_resolver = account_rate_limit_resolver or resolve_account_rate_limits
         self._diagnostics_lock = threading.RLock()
-        self._enabled_snapshot = False
+        self._enabled_snapshot: dict[UsageProvider, bool] = {}
         self._write_count = 0
         self._write_failure_count = 0
         self._provider_resolution_failure_count = 0
@@ -117,18 +123,20 @@ class CodexUsageService:
     def db_path(self) -> Path:
         return self._store.db_path
 
-    async def get_enabled(self) -> bool:
-        enabled = await asyncio.to_thread(self._store.get_enabled)
+    async def get_enabled(self, provider: UsageProvider = "codex") -> bool:
+        normalized_provider = normalize_usage_provider(provider)
+        enabled = await asyncio.to_thread(self._store.get_enabled, normalized_provider)
         with self._diagnostics_lock:
-            self._enabled_snapshot = enabled
+            self._enabled_snapshot[normalized_provider] = enabled
         return enabled
 
     enabled = get_enabled
 
-    async def set_enabled(self, enabled: bool) -> None:
-        await asyncio.to_thread(self._store.set_enabled, enabled)
+    async def set_enabled(self, enabled: bool, provider: UsageProvider = "codex") -> None:
+        normalized_provider = normalize_usage_provider(provider)
+        await asyncio.to_thread(self._store.set_enabled, enabled, normalized_provider)
         with self._diagnostics_lock:
-            self._enabled_snapshot = enabled
+            self._enabled_snapshot[normalized_provider] = enabled
 
     update_enabled = set_enabled
 
@@ -247,7 +255,7 @@ class CodexUsageService:
         recorded = False
         for sample in samples_by_limit_id.values():
             try:
-                await asyncio.to_thread(self._store.record_rate_limit_sample, sample)
+                await asyncio.to_thread(self._store.record_rate_limit_sample, sample, "codex")
             except Exception as exc:
                 with self._diagnostics_lock:
                     self._write_failure_count += 1
@@ -260,44 +268,72 @@ class CodexUsageService:
                 self._last_write_at = datetime.now(timezone.utc).isoformat()
         return recorded
 
-    async def query(self, start_day: DayLike, end_day: DayLike) -> tuple[CodexRateLimitSample, ...]:
-        return await asyncio.to_thread(self._store.query, start_day, end_day)
+    async def query(
+        self,
+        start_day: DayLike,
+        end_day: DayLike,
+        provider: UsageProvider = "codex",
+    ) -> tuple[CodexRateLimitSample, ...]:
+        normalized_provider = normalize_usage_provider(provider)
+        return await asyncio.to_thread(self._store.query, start_day, end_day, normalized_provider)
 
-    async def available_range(self) -> tuple[date | None, date | None]:
-        return await asyncio.to_thread(self._store.available_range)
+    async def available_range(self, provider: UsageProvider = "codex") -> tuple[date | None, date | None]:
+        normalized_provider = normalize_usage_provider(provider)
+        return await asyncio.to_thread(self._store.available_range, normalized_provider)
+
+    async def record_rate_limit_sample(
+        self,
+        sample: CodexRateLimitSample,
+        provider: UsageProvider = "codex",
+    ) -> None:
+        normalized_provider = normalize_usage_provider(provider)
+        await asyncio.to_thread(self._store.record_rate_limit_sample, sample, normalized_provider)
 
     async def config_snapshot(
         self,
         *,
         env: Mapping[str, str] | None = None,
         argv: Sequence[str] | str | None = None,
+        provider: UsageProvider = "codex",
     ) -> dict[str, Any]:
-        enabled = await self.get_enabled()
-        provider = await self._safe_current_provider(env=env, argv=argv)
-        first_date, last_date = await self.available_range()
+        normalized_provider = normalize_usage_provider(provider)
+        enabled = await self.get_enabled(normalized_provider)
+        current_provider = (
+            await self._safe_current_provider(env=env, argv=argv)
+            if normalized_provider == "codex"
+            else _claude_provider()
+        )
+        first_date, last_date = await self.available_range(normalized_provider)
         return {
             "enabled": enabled,
-            "current_provider": _provider_payload(provider),
+            "current_provider": _provider_payload(current_provider, usage_provider=normalized_provider),
             "time_basis": _time_basis_payload(),
             "available_range": _available_range_payload(first_date, last_date),
         }
 
-    async def update_enabled(self, enabled: bool) -> dict[str, Any]:
-        await self.set_enabled(enabled)
-        return await self.config_snapshot()
+    async def update_enabled(
+        self,
+        enabled: bool,
+        provider: UsageProvider = "codex",
+    ) -> dict[str, Any]:
+        normalized_provider = normalize_usage_provider(provider)
+        await self.set_enabled(enabled, normalized_provider)
+        return await self.config_snapshot(provider=normalized_provider)
 
     async def query_stats(
         self,
         *,
         start_date: date | None,
         end_date: date | None,
+        provider: UsageProvider = "codex",
     ) -> dict[str, Any]:
+        normalized_provider = normalize_usage_provider(provider)
         start, end = _resolve_query_dates(start_date, end_date)
-        samples = await self.query(start, end)
-        first_date, last_date = await self.available_range()
+        samples = await self.query(start, end, normalized_provider)
+        first_date, last_date = await self.available_range(normalized_provider)
         return {
             "range": {"start_date": start.isoformat(), "end_date": end.isoformat()},
-            "enabled": await self.get_enabled(),
+            "enabled": await self.get_enabled(normalized_provider),
             "time_basis": _time_basis_payload(),
             "available_range": _available_range_payload(first_date, last_date),
             "rate_limit_samples": [_rate_limit_payload(sample) for sample in samples],
@@ -348,13 +384,13 @@ class CodexUsageService:
             }
 
     async def diagnostics_async(self) -> dict[str, int | bool | str | None]:
-        enabled = await self.get_enabled()
+        enabled = await self.get_enabled("codex")
         store_diagnostics = await asyncio.to_thread(self._store.diagnostics)
         return self._diagnostics_payload(enabled=enabled, store_diagnostics=store_diagnostics)
 
     def diagnostics(self) -> _AwaitableDiagnostics:
         with self._diagnostics_lock:
-            enabled = self._enabled_snapshot
+            enabled = self._enabled_snapshot.get("codex", False)
         return _AwaitableDiagnostics(
             self._diagnostics_payload(
                 enabled=enabled,
@@ -372,12 +408,28 @@ class CodexUsageService:
         await asyncio.to_thread(self.close)
 
 
-def _provider_payload(provider: ProviderInfo) -> dict[str, str | None]:
-    label = {
-        "openai_official": "OpenAI 官方",
-        "base_url": provider.base_url or "自定义 Provider",
-        "unknown": "无法识别",
-    }.get(provider.kind, "无法识别")
+def _claude_provider() -> ProviderInfo:
+    return ProviderInfo(
+        key="claude_official",
+        kind="unknown",
+        base_url=None,
+        resolution="resolved",
+    )
+
+
+def _provider_payload(
+    provider: ProviderInfo,
+    *,
+    usage_provider: UsageProvider = "codex",
+) -> dict[str, str | None]:
+    if usage_provider == "claude" and provider.key == "claude_official":
+        label = "Claude 官方"
+    else:
+        label = {
+            "openai_official": "OpenAI 官方",
+            "base_url": provider.base_url or "自定义 Provider",
+            "unknown": "无法识别",
+        }.get(provider.kind, "无法识别")
     return {
         "key": provider.key,
         "kind": provider.kind,

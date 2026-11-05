@@ -1,4 +1,4 @@
-"""Codex quota administration routes."""
+"""Quota administration routes for the supported usage providers."""
 
 from __future__ import annotations
 
@@ -57,30 +57,61 @@ def _date_range(request: web.Request) -> tuple[date | None, date | None]:
 
 
 async def get_config(request: web.Request) -> web.Response:
+    return await _get_config(request, "codex")
+
+
+async def _get_config(request: web.Request, provider: str) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
-    return _json({"ok": True, "data": await server.codex_usage_service.config_snapshot()})
+    return _json({
+        "ok": True,
+        "data": await server.codex_usage_service.config_snapshot(provider=provider),
+    })
 
 
 async def patch_config(request: web.Request) -> web.Response:
+    return await _patch_config(request, "codex")
+
+
+async def _patch_config(request: web.Request, provider: str) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
     payload = await _json_object(request)
     enabled = payload.get("enabled")
     if type(enabled) is not bool:
         raise WebApiError(400, "invalid_enabled", "enabled 必须是 JSON boolean")
-    return _json({"ok": True, "data": await server.codex_usage_service.update_enabled(enabled)})
+    return _json({
+        "ok": True,
+        "data": await server.codex_usage_service.update_enabled(enabled, provider),
+    })
 
 
 async def get_stats(request: web.Request) -> web.Response:
+    return await _get_stats(request, "codex")
+
+
+async def _get_stats(request: web.Request, provider: str) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
     start_date, end_date = _date_range(request)
     data = await server.codex_usage_service.query_stats(
         start_date=start_date,
         end_date=end_date,
+        provider=provider,
     )
     return _json({"ok": True, "data": data})
+
+
+async def get_claude_config(request: web.Request) -> web.Response:
+    return await _get_config(request, "claude")
+
+
+async def patch_claude_config(request: web.Request) -> web.Response:
+    return await _patch_config(request, "claude")
+
+
+async def get_claude_stats(request: web.Request) -> web.Response:
+    return await _get_stats(request, "claude")
 
 
 def register(app: web.Application, server) -> None:
@@ -88,3 +119,6 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/admin/codex-usage/config", get_config)
     app.router.add_patch("/api/admin/codex-usage/config", patch_config)
     app.router.add_get("/api/admin/codex-usage/stats", get_stats)
+    app.router.add_get("/api/admin/claude-usage/config", get_claude_config)
+    app.router.add_patch("/api/admin/claude-usage/config", patch_claude_config)
+    app.router.add_get("/api/admin/claude-usage/stats", get_claude_stats)
