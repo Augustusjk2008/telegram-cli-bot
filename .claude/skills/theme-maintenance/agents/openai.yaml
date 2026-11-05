@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orbit Safe Claw Theme Maintenance"
+  short_description: "维护 Orbit Safe Claw 主题配色、插画目录和发布工作流"
+  default_prompt: "使用 $theme-maintenance 添加、编辑或验证 Orbit Safe Claw 主题。"
