@@ -33,6 +33,7 @@ def test_cluster_prompt_encourages_write_for_implementation_tasks_when_allowed()
     assert "implementation, fixes, or other tasks that require file changes" in prompt
     assert "allow_write=true" in prompt
     assert "Keep analysis, research, and review tasks read-only" in prompt
+    assert "The main agent should use the professional tier only when the user explicitly asks to use the professional tier" in prompt
 
 
 def test_cluster_prompt_keeps_child_tasks_read_only_when_write_is_disallowed() -> None:

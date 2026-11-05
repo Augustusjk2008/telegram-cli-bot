@@ -57,7 +57,7 @@
 ## Cluster 编排配置的执行边界
 
 - 动态任务使用主会话编组里的角色名称和职责；物理槽位的旧 `system_prompt` 在这条链路中会被抑制。
-- Bot 级 `max_parallel_agents`、`default_timeout_seconds` 和 `write_policy` 进入运行时；CLI（含 DeepSeek）和 Pi 共用低、中、高三档 `model_tiers`、`reasoning_efforts` 配置。子任务按入队时的配置快照覆盖模型和思考深度，空档位继承主 Agent 配置；Pi 通过独立的 native config 副本应用覆盖，不修改主 Bot。Pi 子任务模型或思考深度变化仍遵循原有 session/rollback 绑定失效规则。
+- Bot 级 `max_parallel_agents`、`default_timeout_seconds` 和 `write_policy` 进入运行时；CLI（含 DeepSeek）和 Pi 共用低、中、高、专业四档 `model_tiers`、`reasoning_efforts` 配置。专业档用于特殊工作，主 Agent 只有在用户明确提出使用专业档时才选择它。子任务按入队时的配置快照覆盖模型和思考深度，空档位继承主 Agent 配置；Pi 通过独立的 native config 副本应用覆盖，不修改主 Bot。Pi 子任务模型或思考深度变化仍遵循原有 session/rollback 绑定失效规则。
 - 管理页各执行后端共用集群配置面板。CLI 模型和思考深度选项来自各自参数 schema；Pi 模型来自原生模型列表，每档思考深度选项跟随该档实际选择的模型。
 - `conflict_policy` 以及物理槽位的 `enabled`、`allow_cluster`、`allow_write`、`session_policy`、`timeout_seconds` 当前只被解析、保存或回显，不驱动动态任务执行。
 - `ask_agent.allow_write` 当前只按 Bot `write_policy` 校验并记录，不是文件系统或 CLI sandbox 的权限边界。

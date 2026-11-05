@@ -28,6 +28,7 @@ const TIER_LABELS: Array<{ key: TierKey; label: string; hint: string }> = [
   { key: "low", label: "低档", hint: "快、省 token" },
   { key: "medium", label: "中档", hint: "均衡" },
   { key: "high", label: "高档", hint: "复杂任务" },
+  { key: "professional", label: "专业档", hint: "特殊工作" },
 ];
 
 const CLI_OPTIONS: Array<{ value: CliType; label: string }> = [

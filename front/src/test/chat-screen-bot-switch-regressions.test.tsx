@@ -63,8 +63,8 @@ test.each([true, false])("starts on the main Agent without the legacy agent drop
       writePolicy: "main_only",
       maxParallelAgents: 2,
       defaultTimeoutSeconds: 600,
-      modelTiers: { low: "", medium: "", high: "" },
-      reasoningEfforts: { low: "", medium: "", high: "" },
+      modelTiers: { low: "", medium: "", high: "", professional: "" },
+      reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
     },
     agents: [
       { id: "main", name: "主 Agent", systemPrompt: "", enabled: true, isMain: true },
@@ -227,8 +227,8 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
       writePolicy: "main_only",
       maxParallelAgents: 2,
       defaultTimeoutSeconds: 600,
-      modelTiers: { low: "", medium: "", high: "" },
-      reasoningEfforts: { low: "", medium: "", high: "" },
+      modelTiers: { low: "", medium: "", high: "", professional: "" },
+      reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
     },
     agents: [
       { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },

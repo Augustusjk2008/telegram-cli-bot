@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from bot.cluster.config import ClusterExecutionSnapshot, resolve_cluster_execution
+from bot.cluster.config import MODEL_TIER_KEYS, ClusterExecutionSnapshot, resolve_cluster_execution
 from bot.models import BotProfile
 
 
@@ -138,7 +138,7 @@ def _int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
 
 def _model_tier(value: Any) -> str:
     candidate = str(value or "").strip().lower()
-    return candidate if candidate in {"low", "medium", "high"} else "medium"
+    return candidate if candidate in MODEL_TIER_KEYS else "medium"
 
 
 class ClusterRuntime:

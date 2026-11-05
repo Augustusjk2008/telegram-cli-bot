@@ -355,12 +355,13 @@ const DEFAULT_CLUSTER = {
   writePolicy: "all_agents" as const,
   maxParallelAgents: 3,
   defaultTimeoutSeconds: 1800,
-  modelTiers: { low: "", medium: "", high: "" },
-  reasoningEfforts: { low: "", medium: "", high: "" },
+  modelTiers: { low: "", medium: "", high: "", professional: "" },
+  reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
   tierConfigs: {
     low: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
     medium: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
     high: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
+    professional: { cliType: "", cliPath: "", provider: "", model: "", reasoningEffort: "" },
   },
 };
 
@@ -369,6 +370,7 @@ function cloneClusterTierConfigs(value?: typeof DEFAULT_CLUSTER.tierConfigs) {
     low: { ...DEFAULT_CLUSTER.tierConfigs.low, ...(value?.low || {}) },
     medium: { ...DEFAULT_CLUSTER.tierConfigs.medium, ...(value?.medium || {}) },
     high: { ...DEFAULT_CLUSTER.tierConfigs.high, ...(value?.high || {}) },
+    professional: { ...DEFAULT_CLUSTER.tierConfigs.professional, ...(value?.professional || {}) },
   };
 }
 const DEFAULT_AGENT_CLUSTER = {

@@ -1906,6 +1906,7 @@ function mapClusterModelTiers(raw: unknown): ClusterModelTiers {
     low: String(value.low || ""),
     medium: String(value.medium || ""),
     high: String(value.high || ""),
+    professional: String(value.professional || ""),
   };
 }
 
@@ -1913,7 +1914,7 @@ function mapClusterReasoningEfforts(raw: unknown): ClusterReasoningEfforts {
   return mapClusterModelTiers(raw);
 }
 
-const CLUSTER_MODEL_TIERS: ClusterModelTier[] = ["low", "medium", "high"];
+const CLUSTER_MODEL_TIERS: ClusterModelTier[] = ["low", "medium", "high", "professional"];
 
 function mapClusterTierConfig(
   raw: unknown,

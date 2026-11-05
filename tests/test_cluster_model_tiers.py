@@ -23,6 +23,7 @@ def test_cluster_config_normalizes_reasoning_efforts_and_keeps_missing_values_co
                 "low": "medium",
                 "medium": "xhigh",
                 "high": "ultra",
+                "professional": "max",
             }
         }
     )
@@ -32,6 +33,7 @@ def test_cluster_config_normalizes_reasoning_efforts_and_keeps_missing_values_co
         "low": "medium",
         "medium": "xhigh",
         "high": "ultra",
+        "professional": "max",
     }
     assert configured.to_dict()["reasoning_efforts"] == configured.reasoning_efforts
     assert legacy.reasoning_efforts == {tier: "" for tier in MODEL_TIER_KEYS}
@@ -182,6 +184,7 @@ def test_cluster_cli_override_applies_model_and_reasoning_for_selected_tier(
         ("low", "provider/main-model", "medium"),
         ("medium", "provider/main-model", "high"),
         ("high", "other/strong-model", "xhigh"),
+        ("professional", "provider/professional-model", "max"),
     ],
 )
 async def test_pi_cluster_task_applies_tier_from_queued_snapshot_without_changing_main(
@@ -200,8 +203,8 @@ async def test_pi_cluster_task_applies_tier_from_queued_snapshot_without_changin
         },
         cluster=normalize_bot_cluster_config({
             "enabled": True,
-            "model_tiers": {"high": "other/strong-model"},
-            "reasoning_efforts": {"medium": "high", "high": "xhigh"},
+            "model_tiers": {"high": "other/strong-model", "professional": "provider/professional-model"},
+            "reasoning_efforts": {"medium": "high", "high": "xhigh", "professional": "max"},
         }),
     )
     runtime = ClusterRuntime()

@@ -21,7 +21,7 @@ type Props = {
   canManage?: boolean;
 };
 
-const TIERS: ClusterModelTier[] = ["low", "medium", "high"];
+const TIERS: ClusterModelTier[] = ["low", "medium", "high", "professional"];
 
 const EMPTY_TIER_CONFIG: ClusterTierConfig = {
   cliType: "",
@@ -36,12 +36,13 @@ const DEFAULT_CLUSTER: BotClusterConfig = {
   writePolicy: "main_only",
   maxParallelAgents: 1,
   defaultTimeoutSeconds: 600,
-  modelTiers: { low: "", medium: "", high: "" },
-  reasoningEfforts: { low: "", medium: "", high: "" },
+  modelTiers: { low: "", medium: "", high: "", professional: "" },
+  reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
   tierConfigs: {
     low: { ...EMPTY_TIER_CONFIG },
     medium: { ...EMPTY_TIER_CONFIG },
     high: { ...EMPTY_TIER_CONFIG },
+    professional: { ...EMPTY_TIER_CONFIG },
   },
 };
 

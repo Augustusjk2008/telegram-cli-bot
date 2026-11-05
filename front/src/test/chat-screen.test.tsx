@@ -807,8 +807,8 @@ test("cluster chat stays on the main Agent, preserves @ text, and sends no dispa
     writePolicy: "main_only" as const,
     maxParallelAgents: 3,
     defaultTimeoutSeconds: 600,
-    modelTiers: { low: "", medium: "", high: "" },
-    reasoningEfforts: { low: "", medium: "", high: "" },
+    modelTiers: { low: "", medium: "", high: "", professional: "" },
+    reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
   };
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
     id: "assistant-cluster-main",
@@ -881,8 +881,8 @@ test("toggles the Bot cluster config from chat and only shows an assigned enable
     writePolicy: "all_agents" as const,
     maxParallelAgents: 2,
     defaultTimeoutSeconds: 900,
-    modelTiers: { low: "fast-model", medium: "", high: "strong-model" },
-    reasoningEfforts: { low: "low", medium: "medium", high: "high" },
+    modelTiers: { low: "fast-model", medium: "", high: "strong-model", professional: "" },
+    reasoningEfforts: { low: "low", medium: "medium", high: "high", professional: "" },
   };
   const client = createClient({
     getBotOverview: vi.fn(async (): Promise<BotOverview> => ({
@@ -1008,8 +1008,8 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
       writePolicy: "main_only",
       maxParallelAgents: 3,
       defaultTimeoutSeconds: 600,
-      modelTiers: { low: "", medium: "", high: "" },
-      reasoningEfforts: { low: "", medium: "", high: "" },
+      modelTiers: { low: "", medium: "", high: "", professional: "" },
+      reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
     },
     activeClusterRun: {
       runId: "cluster-foreground",
@@ -1588,8 +1588,8 @@ test("opens child conversations from the dynamic cluster team and returns to mai
     writePolicy: "main_only" as const,
     maxParallelAgents: 3,
     defaultTimeoutSeconds: 600,
-    modelTiers: { low: "gpt-5.6-mini", medium: "gpt-5.6-codex", high: "gpt-5.6-pro" },
-    reasoningEfforts: { low: "low", medium: "medium", high: "xhigh" },
+    modelTiers: { low: "gpt-5.6-mini", medium: "gpt-5.6-codex", high: "gpt-5.6-pro", professional: "" },
+    reasoningEfforts: { low: "low", medium: "medium", high: "xhigh", professional: "" },
   };
   const clusterTeam = {
     version: 1 as const,

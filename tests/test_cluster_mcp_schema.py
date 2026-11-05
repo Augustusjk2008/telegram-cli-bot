@@ -39,11 +39,13 @@ def test_python_mcp_registers_explicit_tool_safety_annotations() -> None:
 
 
 def test_ask_agent_description_uses_bot_tier_for_cli_selection() -> None:
-    description = mcp_stdio._tools_for_environment()[4]["description"]
+    tools = {tool["name"]: tool for tool in mcp_stdio._tools_for_environment()}
+    description = tools["ask_agent"]["description"]
 
-    assert "Bot's low/medium/high tier configuration selects the actual CLI" in description
-    assert "cli_type" not in mcp_stdio._tools_for_environment()[4]["inputSchema"]["properties"]
-    assert "cli_path" not in mcp_stdio._tools_for_environment()[4]["inputSchema"]["properties"]
+    assert "Bot's low/medium/high/professional tier configuration selects the actual CLI" in description
+    assert tools["ask_agent"]["inputSchema"]["properties"]["model_tier"]["enum"] == ["low", "medium", "high", "professional"]
+    assert "cli_type" not in tools["ask_agent"]["inputSchema"]["properties"]
+    assert "cli_path" not in tools["ask_agent"]["inputSchema"]["properties"]
 
 
 def test_python_mcp_forwards_each_call_run_id_without_caching(monkeypatch, tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from typing import Any
 
 BOT_WRITE_POLICIES = {"main_only", "all_agents"}
 AGENT_SESSION_POLICIES = {"persistent", "ephemeral", "fork"}
-MODEL_TIER_KEYS = ("low", "medium", "high")
+MODEL_TIER_KEYS = ("low", "medium", "high", "professional")
 CLUSTER_CLI_TYPES = frozenset({"codex", "codex_server", "claude", "antigravity", "deepseek"})
 
 

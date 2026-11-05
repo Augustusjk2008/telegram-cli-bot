@@ -97,8 +97,8 @@ const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
   writePolicy: "all_agents",
   maxParallelAgents: 3,
   defaultTimeoutSeconds: 1800,
-  modelTiers: { low: "", medium: "", high: "" },
-  reasoningEfforts: { low: "", medium: "", high: "" },
+  modelTiers: { low: "", medium: "", high: "", professional: "" },
+  reasoningEfforts: { low: "", medium: "", high: "", professional: "" },
 };
 
 const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
@@ -632,7 +632,7 @@ function EditPanel({
       },
     };
     if (nativeRuntime && nativeAgentModels) {
-      for (const tier of ["low", "medium", "high"] as const) {
+      for (const tier of ["low", "medium", "high", "professional"] as const) {
         if (!clusterReasoningOptions(next.modelTiers[tier]).includes(next.reasoningEfforts[tier])) {
           next.reasoningEfforts[tier] = "";
         }

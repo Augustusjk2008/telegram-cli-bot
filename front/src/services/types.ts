@@ -640,12 +640,13 @@ export type AgentListResult = {
   items: AgentSummary[];
 };
 
-export type ClusterModelTier = "low" | "medium" | "high";
+export type ClusterModelTier = "low" | "medium" | "high" | "professional";
 
 export type ClusterTierValues = {
   low: string;
   medium: string;
   high: string;
+  professional: string;
 };
 
 export type ClusterModelTiers = ClusterTierValues;

@@ -5512,7 +5512,7 @@ export function ChatScreen({
     )
   ));
   const activeTaskModelTier = activeClusterTask?.modelTier;
-  const childModelTier = activeTaskModelTier === "low" || activeTaskModelTier === "high"
+  const childModelTier = activeTaskModelTier === "low" || activeTaskModelTier === "high" || activeTaskModelTier === "professional"
     ? activeTaskModelTier
     : "medium";
   const childSessionModel = nativeExecutionMode
