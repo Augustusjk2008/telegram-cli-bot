@@ -1,5 +1,6 @@
 import json
 import socket
+import sys
 from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,6 +73,27 @@ def test_resolve_runtime_web_bind_raises_typed_error_without_fallback() -> None:
 
     assert exc_info.value.port == requested_port
     assert exc_info.value.host == "127.0.0.1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX TIME_WAIT bind semantics")
+def test_resolve_runtime_web_bind_accepts_time_wait_port_after_restart() -> None:
+    # A previous host that closed accepted connections leaves TIME_WAIT entries;
+    # the supervised restart (no fallback) must still reuse the configured port.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _ = listener.accept()
+    accepted.close()
+    client.recv(1)
+    client.close()
+    listener.close()
+
+    bind = resolve_runtime_web_bind("127.0.0.1", port, allow_port_fallback=False)
+
+    assert bind.actual_port == port
 
 
 def test_auth_cookie_path_uses_public_forward_prefix(monkeypatch: pytest.MonkeyPatch) -> None:

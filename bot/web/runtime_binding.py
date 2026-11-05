@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import errno
 import socket
+import sys
 
 
 _MAX_TCP_PORT = 65535
@@ -57,6 +58,12 @@ def _can_bind_host_port(host: str, port: int) -> bool:
     family, sockaddr = _build_sockaddr(host, port)
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
+        # Mirror asyncio/aiohttp, which enable SO_REUSEADDR on POSIX. Without it,
+        # TIME_WAIT connections left by the previous host make a restart report
+        # the port as busy even though the real listener could bind. Windows
+        # SO_REUSEADDR permits port hijacking, so keep the strict probe there.
+        if sys.platform != "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(sockaddr)
         sock.listen(1)
         return True
