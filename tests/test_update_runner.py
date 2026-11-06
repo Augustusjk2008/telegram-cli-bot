@@ -385,7 +385,24 @@ def test_supervisor_ignores_reused_persisted_host_pid(installation, monkeypatch)
 
     assert runner.supervise(root, store, sys.executable) == 0
     assert started
-    assert store.read()["host_pid"] == 0
+
+
+def test_supervisor_restart_does_not_rewrite_update_state(installation, monkeypatch):
+    # After a storage migration the supervisor still holds the source state file;
+    # rewriting it would block migration cleanup on every start.
+    root, store = installation
+    store.mutate(lambda state: state["job"].update(phase="ready"))
+    before = store.state_path.read_bytes()
+    codes = iter([runner.RESTART_EXIT_CODE, 0])
+
+    def start(*args):
+        child = Child()
+        child.returncode = next(codes)
+        return child
+
+    monkeypatch.setattr(runner, "_start_host", start)
+    assert runner.supervise(root, store, sys.executable) == 0
+    assert store.state_path.read_bytes() == before
 
 
 @pytest.mark.parametrize("fail_new", [False, True])

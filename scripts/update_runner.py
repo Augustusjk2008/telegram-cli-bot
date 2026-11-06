@@ -186,6 +186,7 @@ def _start_host(repo_root: Path, python: str, store, job_id="", token="", legacy
                CLI_BRIDGE_UPDATE_STATE_FILE=str(store.state_path), CLI_BRIDGE_UPDATE_JOB_ID=job_id,
                CLI_BRIDGE_UPDATE_SUPERVISOR_PID=str(os.getpid()),
                CLI_BRIDGE_UPDATE_HANDOFF=str(handoff_path), CLI_BRIDGE_UPDATE_HANDOFF_TOKEN=handoff_token,
+               CLI_BRIDGE_UPDATE_RUNNER_PATH=str(Path(__file__).resolve()),
                TCB_UPDATE_JOB_ID=job_id, TCB_UPDATE_HEALTH_TOKEN=token)
     command = _host_command(repo_root, python)
     if legacy:
@@ -194,11 +195,9 @@ def _start_host(repo_root: Path, python: str, store, job_id="", token="", legacy
     child = subprocess.Popen(command, cwd=repo_root, env=env)
     child.update_handoff_path = handoff_path
     child.update_handoff_token = handoff_token
-    try:
-        store.mutate(lambda state: state.update(host_pid=child.pid))
-    except Exception:
-        _stop_child(child)
-        raise
+    # Do not persist the host PID: the store may be a pre-migration source whose
+    # bytes storage migration verifies before cleanup, and host.lock already
+    # proves host liveness.
     return child
 
 
@@ -420,6 +419,17 @@ def _effective_job(job: dict) -> dict:
     return job
 
 
+def _prune_finished_jobs(store) -> None:
+    """Reclaim superseded job directories once this job is conclusively finished."""
+    # Cleanup is best effort and must never turn a finished job into a failure.
+    try:
+        prune = getattr(store, "prune_job_dirs", None)
+        if prune is not None:
+            prune(runner_path=Path(__file__).resolve())
+    except Exception as exc:
+        print(f"[update] job cleanup skipped: {exc}", file=sys.stderr, flush=True)
+
+
 def recover_job(repo_root: Path, store, job_id: str, error: str):
     job = _effective_job(_job(store, job_id))
     if job.get("phase") not in RECOVERY_PHASES:
@@ -444,6 +454,7 @@ def recover_job(repo_root: Path, store, job_id: str, error: str):
                                  legacy=bool(job.get("bootstrap_legacy")), recovering=True)
         _active_python(store, python)
         _change(store, job_id, "rolled_back", result={"version": job["current_version"], "instance_id": health["instance_id"]})
+        _prune_finished_jobs(store)
         return child, python
     except Exception as exc:
         _stop_child(child)
@@ -489,6 +500,7 @@ def apply_job(repo_root: Path, store, job_id: str):
             # Health and durable success already agree. Retain the backup if final
             # journal bookkeeping fails; the running new host remains authoritative.
             _change(store, job_id, "succeeded", error=f"Backup retained: {exc}")
+        _prune_finished_jobs(store)
         return child, job["python_executable"]
     except Exception as exc:
         _stop_child(child)
@@ -508,9 +520,9 @@ def supervise(repo_root: Path, store, python: str, *, action="supervise", job_id
     next_job = None
     with supervisor_lock(store):
         state = store.read()
-        # supervisor_lock already verifies the installation's host.lock. The
-        # persisted host_pid is diagnostic state and can be reused by an
-        # unrelated process after the old host exits.
+        # supervisor_lock already verifies the installation's host.lock. A
+        # host_pid left in older state files is ignored: the PID can be reused
+        # by an unrelated process after the old host exits.
         job = state.get("job") or {}
         if action == "apply":
             child, python = apply_job(repo_root, store, job_id)
@@ -525,7 +537,6 @@ def supervise(repo_root: Path, store, python: str, *, action="supervise", job_id
         while child is not None:
             code = child.wait()
             store = _store_after_host_exit(repo_root, store, child, code)
-            store.mutate(lambda state: state.update(host_pid=0))
             if code == RESTART_EXIT_CODE:
                 child = _start_host(repo_root, python, store)
                 continue

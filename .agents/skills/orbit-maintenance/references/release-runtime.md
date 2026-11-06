@@ -45,6 +45,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - `bot/runtime_paths.py` 区分 storage root 与 app data root。未迁移时分别为 `~/.tcb` 和 `~/.tcb/orbit-safe-claw`；`TCB_DATA_DIR`（环境变量或 `.env`）只覆盖 app data root。
 - 已提交的 `~/.tcb/storage.json` 定位器优先确定两类根目录；目标缺失时报错，冲突的 `TCB_DATA_DIR` 被拒绝，当前进程冻结路径直到重启。迁移流程见 `bot/storage_migration.py`、`storage_runtime.py`；插件、历史和附件等调用者应使用路径函数。
 - 存储迁移移动 `updates/<安装>/state.json`，但 `updates/<安装>/jobs`（包、暂存、冻结执行器、事务备份、依赖环境）是安装程序材料：不复制、不改写其绝对路径、清理时保留在原位置，使状态中的 `python_executable` 与恢复材料保持有效。
+- `UpdateStore.prune_job_dirs()` 只清理当前状态根 `jobs/` 下的有效任务 ID 子目录：在持有 `preparation.lock` 时运行（`_reserve` 新建任务后；执行器在 `succeeded`/`rolled_back` 后非阻塞获取）。当前任务、被状态任意绝对路径值、`sys.executable`（`abspath`，不解析符号链接）或执行器快照（`CLI_BRIDGE_UPDATE_RUNNER_PATH`）引用的任务、24 小时内修改的目录、事务日志未以 `committed`/`rolled_back` 结束的目录以及链接一律保留；当前任务处于交接、应用、恢复或未知阶段、状态不可读、受监管宿主缺少执行器路径时不清理。删除失败只记录日志。
 - Portable 设置 `TCB_PORTABLE_ROOT=<包>`，将 `<包>/.tcb` 作为独立 storage root，避免读取宿主用户的迁移定位器；默认 app data 为 `<包>/data/orbit-safe-claw`、Pi home 为 `<包>/data/pi-home`。绿色版迁移后由包内定位器决定 app data root，并清除默认 `TCB_DATA_DIR` 覆盖。
 - 公告内容通过 `get_announcements_content_path()` 获取；仓库根 `.web_announcements.json` 用于旧数据迁移和发布包公告快照。用户内容应写当前运行态目录；现有仓库局部运行文件（如 `.tcb/startup`、`.plugins`、`managed_bots.json`）按各自实现维护并保持在 Git 外。
 

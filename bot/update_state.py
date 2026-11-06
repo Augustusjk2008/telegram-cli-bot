@@ -4,11 +4,23 @@ from __future__ import annotations
 import hashlib
 from contextlib import ExitStack
 import json
+import logging
 import os
 from pathlib import Path
 import re
+import shutil
+import sys
 import tempfile
 import time
+
+logger = logging.getLogger(__name__)
+
+JOB_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
+TERMINAL_JOB_PHASES = frozenset({"succeeded", "rolled_back", "failed", "cancelled"})
+# Preparation phases own only their current job directory; any other phase
+# (handoff, application, recovery or an unknown value) suspends pruning.
+PREPARATION_JOB_PHASES = frozenset({"preparing", "ready"})
+JOB_PRUNE_MIN_AGE_SECONDS = 24 * 3600
 
 
 class UpdateConflict(RuntimeError):
@@ -219,9 +231,138 @@ class UpdateStore:
             return state
 
     def job_dir(self, job_id):
-        if not isinstance(job_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id):
+        if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
             raise ValueError("更新任务 ID 无效")
         path = self.root / "jobs" / job_id
         if not path.resolve().is_relative_to(self.root):
             raise UpdateConflict("更新任务目录越界")
         return path
+
+    def prune_job_dirs(self, *, runner_path=None, lock_held=False, min_age_seconds=JOB_PRUNE_MIN_AGE_SECONDS):
+        """Delete finished, unreferenced job directories; never raises.
+
+        Callers must hold ``preparation.lock`` (``lock_held=True``) or let this
+        method take it without waiting, so pruning cannot race a preparation.
+        ``runner_path`` is the executor snapshot of the calling or supervising
+        runner; a supervised host reads it from ``CLI_BRIDGE_UPDATE_RUNNER_PATH``.
+        """
+        try:
+            if lock_held:
+                return self._prune_job_dirs(runner_path, min_age_seconds)
+            with FileLock(self.root / "preparation.lock", timeout=0):
+                return self._prune_job_dirs(runner_path, min_age_seconds)
+        except Exception as exc:
+            logger.warning("Update job pruning skipped: %s", exc)
+            return []
+
+    def _prune_job_dirs(self, runner_path, min_age_seconds):
+        jobs_root = self.root / "jobs"
+        if _is_link(jobs_root) or not jobs_root.is_dir() or not self.state_path.is_file():
+            return []
+        runner = str(runner_path or os.environ.get("CLI_BRIDGE_UPDATE_RUNNER_PATH", ""))
+        # A supervisor started before this contract may run from a job snapshot
+        # that it loads helpers from later; its location is unknown.
+        if os.environ.get("CLI_BRIDGE_UPDATE_PROTOCOL") == "1" and not runner:
+            return []
+        state = self.read()
+        job = state.get("job")
+        if job is not None and not isinstance(job, dict):
+            return []
+        current = (job or {}).get("job_id", "")
+        phase = (job or {}).get("phase", "")
+        if job and phase not in TERMINAL_JOB_PHASES | PREPARATION_JOB_PHASES:
+            return []
+        referenced = set()
+        for value in [*_string_values(state), sys.executable, runner]:
+            name = _job_name_for_path(jobs_root, value)
+            if name:
+                referenced.add(os.path.normcase(name))
+        deleted = []
+        now = time.time()
+        for entry in sorted(os.scandir(jobs_root), key=lambda item: item.name):
+            path = Path(entry.path)
+            if (not JOB_ID_PATTERN.fullmatch(entry.name) or entry.name == current
+                    or os.path.normcase(entry.name) in referenced
+                    or _is_link(path) or not entry.is_dir(follow_symlinks=False)):
+                continue
+            try:
+                if now - _latest_mtime(path) < min_age_seconds or not _transaction_released(path / "transaction"):
+                    continue
+                shutil.rmtree(path)
+                deleted.append(entry.name)
+            except OSError as exc:
+                logger.warning("Cannot delete update job directory %s: %s", path, exc)
+        return deleted
+
+
+def _is_link(path):
+    try:
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            return True
+        return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+    except OSError:
+        return False
+
+
+def _string_values(value, depth=0):
+    if depth > 16:
+        return
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _string_values(child, depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _string_values(child, depth + 1)
+
+
+def _job_name_for_path(jobs_root, value):
+    """Return the job directory name containing an absolute path value."""
+    if not isinstance(value, str) or not value or not os.path.isabs(value):
+        return ""
+    absolute = os.path.abspath(value)
+    # Resolve only the parent: a POSIX venv python is a symlink to its base.
+    candidates = {absolute, os.path.join(os.path.realpath(os.path.dirname(absolute)), os.path.basename(absolute))}
+    roots = {os.path.abspath(jobs_root), os.path.realpath(jobs_root)}
+    for candidate in candidates:
+        for root in roots:
+            try:
+                relative = os.path.relpath(os.path.normcase(candidate), os.path.normcase(root))
+            except ValueError:
+                continue
+            first = relative.split(os.sep, 1)[0]
+            if first not in {"", ".", ".."} and not os.path.isabs(relative):
+                return first
+    return ""
+
+
+def _latest_mtime(path):
+    latest = path.lstat().st_mtime
+    for child in os.scandir(path):
+        latest = max(latest, child.stat(follow_symlinks=False).st_mtime)
+    return latest
+
+
+def _transaction_released(directory):
+    """True only when no transaction exists or its journal ended conclusively."""
+    if not os.path.lexists(directory):
+        return True
+    if _is_link(directory) or not directory.is_dir():
+        return False
+    journal = directory / "journal.jsonl"
+    if not journal.is_file():
+        return not any(directory.iterdir())
+    final = ""
+    for line in journal.read_bytes().splitlines(keepends=True):
+        if not line.endswith(b"\n"):
+            break
+        try:
+            record = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            return False
+        if not isinstance(record, dict):
+            return False
+        if record.get("event") in {"begin", "applied_all", "committed", "rolled_back"}:
+            final = record["event"]
+    return final in {"committed", "rolled_back"}

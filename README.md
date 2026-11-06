@@ -486,7 +486,7 @@ powershell -ExecutionPolicy Bypass -File C:/upgrade/new/scripts/update_bootstrap
 
 如果检测到旧 `.update-apply-*` 事务，先退出旧宿主，在解压的新版本目录运行 `python -m bot.updater recover-legacy --repo-root <旧安装目录> --host-stopped`，然后重新准备。无法确认目标归属或缺少备份时会保留现场并返回 `recovery_required`。
 
-PowerShell 引导入口的基线参数为 `-BaselinePackage` 和 `-BaselineSha256`。同一安装同时只允许一个宿主；数据目录迁移后，启动器会从新宿主接收当前任务状态的位置。升级任务目录（`updates/<安装>/jobs`，含依赖环境、暂存文件和恢复备份）属于安装程序材料，迁移时保留在原数据目录，不要手动删除。
+PowerShell 引导入口的基线参数为 `-BaselinePackage` 和 `-BaselineSha256`。同一安装同时只允许一个宿主；数据目录迁移后，启动器会从新宿主接收当前任务状态的位置。升级任务目录（`updates/<安装>/jobs`，含依赖环境、暂存文件和恢复备份）属于安装程序材料，迁移时保留在原数据目录，不要手动删除。新的准备任务开始或升级成功/回滚后，会自动清理超过 24 小时、已结束且不再被升级状态、当前解释器或执行器引用、事务备份已确认释放的旧任务目录；升级交接、应用或恢复期间不会清理。
 
 首次安装生成的 `.env` 默认包含：
 

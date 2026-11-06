@@ -178,6 +178,8 @@ class UpdateService:
                 lease.__exit__()
                 return None, self.status()
             self.store.job_dir(result["job"]["job_id"]).mkdir(parents=True, exist_ok=True)
+            # The held preparation lease serializes cleanup with every preparation.
+            self.store.prune_job_dirs(lock_held=True)
             return lease, self.status()
         except BaseException:
             lease.__exit__()
