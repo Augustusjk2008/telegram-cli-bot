@@ -458,10 +458,10 @@ async def test_configure_team_extend_assigns_first_free_slot_and_updates_run(mon
             "assignment_revision": 1,
         }
     ]
-    assert runtime.get_run(run.run_id).status == "completed"  # type: ignore[union-attr]
     next_run = runtime.get_run(result["data"]["run_id"])
     assert next_run is not None
     assert next_run.team_revision == 1
+    assert next_run.status == "running"
 
     async def finish_agent_task(_manager, current_run_id, task_id):
         runtime.mark_agent_task_running(current_run_id, task_id)
@@ -715,14 +715,14 @@ async def test_configure_team_rejects_run_after_main_conversation_switch(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_configure_team_changes_are_blocked_by_pending_task(monkeypatch) -> None:
+async def test_configure_team_extend_keeps_running_tasks_and_replace_waits(monkeypatch) -> None:
     import bot.web.api_service as api_service
 
     profile = BotProfile(
         alias="main",
         working_dir=".",
-        agents=[AgentProfile(id="one", name="One")],
-        cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
+        agents=[AgentProfile(id="one", name="One"), AgentProfile(id="two", name="Two")],
+        cluster=BotClusterConfig(enabled=True, max_parallel_agents=2),
     )
     runtime = ClusterRuntime()
     team = {
@@ -736,7 +736,8 @@ async def test_configure_team_changes_are_blocked_by_pending_task(monkeypatch) -
             }
         ],
     }
-    run = runtime.start_run(
+    old_run_id = derive_cluster_run_id("conv_main", 1)
+    runtime.ensure_run(
         ClusterRunRequest(
             bot_alias="main",
             user_id=1,
@@ -744,30 +745,74 @@ async def test_configure_team_changes_are_blocked_by_pending_task(monkeypatch) -
             main_conversation_id="conv_main",
             team_revision=1,
             team=team,
-        )
+        ),
+        old_run_id,
     )
-    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "one", "message": "work"})
-    runtime.create_agent_task(run.run_id, request)
+    request = runtime.validate_ask_agent(old_run_id, {"agent_id": "one", "message": "work"})
+    task = runtime.create_agent_task(old_run_id, request)
+    runtime.mark_agent_task_running(old_run_id, task.task_id)
+    control = api_service._cluster_run_control(old_run_id, 2)
 
     class FakeStore:
+        state = {"cluster_team": team, "cluster_team_revision": 1}
+
         def get_conversation_team(self, _conversation_id):
-            return {"cluster_team": team, "cluster_team_revision": 1}
+            return self.state
+
+        def update_conversation_team(self, _conversation_id, next_team, *, expected_revision):
+            assert expected_revision == self.state["cluster_team_revision"]
+            self.state = {"cluster_team": next_team, "cluster_team_revision": expected_revision + 1}
+            return self.state
 
     monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
     monkeypatch.setattr(api_service, "get_profile_or_raise", lambda *_args: profile)
-    monkeypatch.setattr(api_service, "_chat_store_for_cluster_run", lambda *_args: FakeStore())
+    store = FakeStore()
+    monkeypatch.setattr(api_service, "_chat_store_for_cluster_run", lambda *_args: store)
     monkeypatch.setattr(api_service, "_active_main_conversation_for_cluster_run", lambda *_args: "conv_main")
 
-    with pytest.raises(WebApiError) as exc_info:
+    result = await api_service.handle_cluster_mcp_tool(
+        object(),
+        old_run_id,
+        "configure_team",
+        {"mode": "extend", "roles": [{"name": "补充", "responsibility": "补充检查"}]},
+    )
+
+    new_run_id = derive_cluster_run_id("conv_main", 2)
+    assert result["data"]["changed"] is True
+    assert result["data"]["run_id"] == new_run_id
+    assert [item["agent_id"] for item in result["data"]["assignments"]] == ["one", "two"]
+    assert result["data"]["assignments"][0]["assignment_revision"] == 1
+    assert api_service._CLUSTER_RUN_CONTROLS.get(new_run_id) is control
+    assert old_run_id not in api_service._CLUSTER_RUN_CONTROLS
+
+    # The in-flight child still reports through its original run_id.
+    runtime.complete_agent_task(old_run_id, task.task_id, "done")
+    status = runtime.build_task_status(new_run_id, [task.task_id])
+    assert status["completed_count"] == 1
+    assert status["tasks"][0]["output"] == "done"
+
+    with pytest.raises(WebApiError) as stale_exc:
         await api_service.handle_cluster_mcp_tool(
             object(),
-            run.run_id,
-            "configure_team",
-            {"mode": "extend", "roles": [{"name": "补充", "responsibility": "补充检查"}]},
+            old_run_id,
+            "ask_agent",
+            {"agent_id": "two", "message": "work"},
         )
+    assert stale_exc.value.code == "cluster_run_changed"
+    assert stale_exc.value.data == {"run_id": new_run_id}
 
-    assert exc_info.value.status == 409
-    assert exc_info.value.code == "cluster_team_busy"
+    second = runtime.create_agent_task(new_run_id, runtime.validate_ask_agent(new_run_id, {"agent_id": "two", "message": "x"}))
+    with pytest.raises(WebApiError) as busy_exc:
+        await api_service.handle_cluster_mcp_tool(
+            object(),
+            new_run_id,
+            "configure_team",
+            {"mode": "replace", "roles": [{"name": "新组", "responsibility": "重新开始"}]},
+        )
+    assert busy_exc.value.status == 409
+    assert busy_exc.value.code == "cluster_team_busy"
+    assert second.status == "queued"
+    api_service._CLUSTER_RUN_CONTROLS.clear()
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,7 @@
 - `run_id` 由主会话 `conversation_id + cluster_team_revision` 稳定推导；同一主会话与编组在普通轮次和宿主重启后得到同一个 ID，不新增数据库 ID 字段。
 - 只有 `configure_team` 实际新增、删除、修改或重新分配角色时才递增编组版本并轮换 `run_id`。无变化请求返回 `changed=false` 和原 ID；普通轮次结束、异常、停止、集群开关切换及宿主重启均不轮换。
 - `configure_team` 成功后主 agent 必须查看 `changed`：`changed=true` 时同一轮所有后续工具立即使用响应中的新 `run_id`，`changed=false` 时继续使用原 ID。
+- `extend` 只占用空闲槽位、不改动已有分配，子任务运行中也允许；`ClusterRuntime.rekey_run()` 把同一个运行态对象（任务、消息游标、`_ClusterRunControl`）迁到新 `run_id`，旧 ID 仅作内部别名，供在途子任务继续上报。旧 ID 可读，`ask_agent`/`new_agent_session`/`configure_team` 返回 `cluster_run_changed`/`cluster_team_changed` 及当前 ID。`replace` 可能重新分配忙碌槽位，仍需等主会话子任务结束（`cluster_team_busy`）。
 - 每次工具调用必须显式传入当前 `run_id`；stdio MCP 和 Pi 适配层不缓存或自动切换 ID，只把本次工具参数通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，也不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
 - Cluster task、进度消息和后台任务仍是内存态，不跨宿主重启持久化。
 - 子任务结束后唤醒主会话的通知为英文，只列 task_id 并要求主 agent 用 `poll_agent_tasks(task_ids=...)` 读取结果，不内联子 agent 输出。只有晚于主 agent 结束的子任务才发通知：主 agent 轮次执行中结束的不通知，轮次结束后 `CLUSTER_PARENT_WAKEUP_GRACE_SECONDS`（30 秒）内结束的也不通知。

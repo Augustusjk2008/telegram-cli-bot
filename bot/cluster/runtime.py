@@ -160,6 +160,8 @@ def _model_tier(value: Any) -> str:
 class ClusterRuntime:
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._runs: dict[str, ClusterRun] = {}
+        # run_ids re-keyed in place by a team extend map to their live successor.
+        self._run_aliases: dict[str, str] = {}
         self._parents: dict[str, ClusterParentState] = {}
         self._clock = clock
 
@@ -176,7 +178,7 @@ class ClusterRuntime:
         if not normalized_run_id:
             raise ValueError("run_id 不能为空")
         self.cleanup_finished_runs()
-        run = self._runs.get(normalized_run_id)
+        run = self.get_run(normalized_run_id)
         if run is None:
             return self._create_run(request, normalized_run_id)
         expected_identity = (
@@ -224,8 +226,58 @@ class ClusterRuntime:
         self._runs[run.run_id] = run
         return run
 
+    def resolve_run_id(self, run_id: str) -> str:
+        """Return the live run_id, following in-place re-keys from older team revisions."""
+        current = str(run_id or "").strip()
+        seen: set[str] = set()
+        while current not in self._runs and current in self._run_aliases and current not in seen:
+            seen.add(current)
+            current = self._run_aliases[current]
+        return current
+
     def get_run(self, run_id: str) -> ClusterRun | None:
-        return self._runs.get(str(run_id or "").strip())
+        return self._runs.get(self.resolve_run_id(run_id))
+
+    def _run(self, run_id: str) -> ClusterRun:
+        return self._runs[self.resolve_run_id(run_id)]
+
+    def rekey_run(
+        self,
+        run_id: str,
+        new_run_id: str,
+        *,
+        profile: BotProfile,
+        team: dict[str, Any],
+        team_revision: int,
+    ) -> ClusterRun:
+        """Move a live run to a new team revision without dropping its queued/running tasks.
+
+        Running child tasks keep addressing the old run_id, which stays as an alias, so their
+        progress, results and completion wakeups land in the run the main agent now polls.
+        """
+        run = self._run(run_id)
+        target = str(new_run_id or "").strip()
+        if not target:
+            raise ValueError("run_id 不能为空")
+        existing = self._runs.get(target)
+        if existing is not None and existing is not run:
+            raise ClusterToolError("cluster_run_conflict", "run_id 与当前主会话或编组版本不匹配")
+        previous = run.run_id
+        if previous != target:
+            self._runs.pop(previous, None)
+            self._runs[target] = run
+            self._run_aliases.pop(target, None)
+            for alias, successor in list(self._run_aliases.items()):
+                if successor == previous:
+                    self._run_aliases[alias] = target
+            self._run_aliases[previous] = target
+        run.run_id = target
+        run.profile = copy.deepcopy(profile)
+        run.team = copy.deepcopy(team) if isinstance(team, dict) else {"version": 1, "assignments": []}
+        run.team_revision = max(0, int(team_revision or 0))
+        run.status = "running"
+        run.updated_at = self._now_iso()
+        return run
 
     def rename_bot_alias(self, old_alias: str, new_alias: str) -> None:
         previous = str(old_alias or "").strip().lower()
@@ -240,12 +292,12 @@ class ClusterRuntime:
             run.updated_at = self._now_iso()
 
     def get_team_assignment(self, run_id: str, agent_id: str) -> dict[str, Any] | None:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         assignment = self._team_assignment(run, str(agent_id or "").strip().lower())
         return copy.deepcopy(assignment) if assignment is not None else None
 
     def update_run_team(self, run_id: str, team: dict[str, Any], team_revision: int) -> ClusterRun:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         run.team = copy.deepcopy(team)
         run.team_revision = max(0, int(team_revision or 0))
         run.updated_at = self._now_iso()
@@ -302,13 +354,13 @@ class ClusterRuntime:
         return active_runs[0] if active_runs else None
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> None:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         item = {"created_at": self._now_iso(), **dict(event)}
         run.events.append(item)
         run.updated_at = item["created_at"]
 
     def finish_run(self, run_id: str, status: str = "completed") -> None:
-        run = self._runs.get(str(run_id or "").strip())
+        run = self.get_run(run_id)
         if run is None:
             return
         if run.status == "cancelled" and status != "cancelled":
@@ -334,6 +386,8 @@ class ClusterRuntime:
         self._prune_parent_states()
 
     def _prune_parent_states(self) -> None:
+        for alias in [alias for alias in self._run_aliases if self.resolve_run_id(alias) not in self._runs]:
+            self._run_aliases.pop(alias, None)
         live_conversations = {str(run.main_conversation_id or "").strip() for run in self._runs.values()}
         for conversation_id in list(self._parents):
             if conversation_id not in live_conversations:
@@ -390,7 +444,7 @@ class ClusterRuntime:
 
     def adopt_unfinished_tasks(self, run_id: str, task_ids: list[str] | None = None) -> None:
         """Move unfinished tasks the main agent checked on into its latest request."""
-        run = self._runs.get(str(run_id or "").strip())
+        run = self.get_run(run_id)
         if run is None:
             return
         generation = self.parent_generation(run.main_conversation_id)
@@ -407,7 +461,7 @@ class ClusterRuntime:
         parent_conversation_id: str = "",
         parent_turn_id: str = "",
     ) -> ClusterAgentTask:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         now = self._now_iso()
         execution = request.execution or resolve_cluster_execution(
             run.profile,
@@ -450,7 +504,7 @@ class ClusterRuntime:
         return task
 
     def mark_agent_task_running(self, run_id: str, task_id: str) -> ClusterAgentTask:
-        task = self._runs[str(run_id)].tasks[str(task_id)]
+        task = self._run(run_id).tasks[str(task_id)]
         now = self._now_iso()
         task.status = "running"
         task.started_at = now
@@ -465,7 +519,7 @@ class ClusterRuntime:
         kind: str,
         content: str,
     ) -> ClusterAgentTaskMessage | None:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         task = run.tasks[str(task_id)]
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind not in {"progress", "final"}:
@@ -508,14 +562,14 @@ class ClusterRuntime:
         return message
 
     async def notify_agent_task_message(self, run_id: str) -> None:
-        run = self._runs.get(str(run_id))
+        run = self.get_run(run_id)
         if run is None:
             return
         async with run.message_condition:
             run.message_condition.notify_all()
 
     async def wait_for_task_change(self, run_id: str, task_ids: list[str] | None, wait_seconds: float) -> None:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         deadline = asyncio.get_running_loop().time() + max(0.0, wait_seconds)
         while True:
             if self.build_task_status(run_id, task_ids, include_output=False)["pending_count"] <= 0:
@@ -532,7 +586,7 @@ class ClusterRuntime:
                     return
 
     def complete_agent_task(self, run_id: str, task_id: str, output: str) -> ClusterAgentTask:
-        task = self._runs[str(run_id)].tasks[str(task_id)]
+        task = self._run(run_id).tasks[str(task_id)]
         if task.status == "cancelled":
             return task
         now = self._now_iso()
@@ -548,7 +602,7 @@ class ClusterRuntime:
         return task
 
     def fail_agent_task(self, run_id: str, task_id: str, error: str) -> ClusterAgentTask:
-        task = self._runs[str(run_id)].tasks[str(task_id)]
+        task = self._run(run_id).tasks[str(task_id)]
         if task.status == "cancelled":
             return task
         now = self._now_iso()
@@ -563,7 +617,7 @@ class ClusterRuntime:
         return task
 
     def cancel_run_tasks(self, run_id: str, message: str = "已取消") -> list[ClusterAgentTask]:
-        run = self._runs.get(str(run_id or "").strip())
+        run = self.get_run(run_id)
         if run is None:
             return []
         now = self._now_iso()
@@ -651,7 +705,7 @@ class ClusterRuntime:
         include_messages: bool = False,
         message_limit: int = 20,
     ) -> dict[str, Any]:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         selected_ids = {str(item) for item in task_ids or [] if str(item).strip()}
         tasks = [
             task
@@ -684,7 +738,7 @@ class ClusterRuntime:
         include_final: bool = True,
         message_limit: int = 20,
     ) -> dict[str, Any]:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         allowed_kinds: set[str] = set()
         if include_progress:
             allowed_kinds.add("progress")
@@ -709,13 +763,13 @@ class ClusterRuntime:
         }
 
     def agent_message_read_sequence(self, run_id: str) -> int:
-        run = self._runs.get(str(run_id))
+        run = self.get_run(run_id)
         if run is None:
             return 0
         return max(0, int(getattr(run, "_agent_message_read_sequence", 0)))
 
     def mark_agent_messages_read(self, run_id: str, cursor: int) -> None:
-        run = self._runs.get(str(run_id))
+        run = self.get_run(run_id)
         if run is None:
             return
         run._agent_message_read_sequence = max(
@@ -733,7 +787,7 @@ class ClusterRuntime:
         include_final: bool = True,
         message_limit: int = 20,
     ) -> dict[str, Any]:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(1.0, min(300.0, float(wait_seconds or 60.0)))
         while True:
@@ -774,7 +828,7 @@ class ClusterRuntime:
                     return result
 
     def build_status(self, run_id: str) -> dict[str, Any]:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         capacity = max(1, int(run.profile.cluster.max_parallel_agents or 1))
         active_agents = [agent for agent in run.profile.normalized_agents() if agent.id != "main"][:capacity]
         assignments = {
@@ -832,7 +886,7 @@ class ClusterRuntime:
         }
 
     def validate_new_agent_session(self, run_id: str, payload: dict[str, Any]) -> str:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip().lower()
         if not agent_id:
             raise ClusterToolError("cluster_agent_not_found", "未找到子 agent")
@@ -855,7 +909,7 @@ class ClusterRuntime:
         return agent_id
 
     def validate_ask_agent(self, run_id: str, payload: dict[str, Any]) -> AskAgentRequest:
-        run = self._runs[str(run_id)]
+        run = self._run(run_id)
         agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip().lower()
         message = str(payload.get("message") or "").strip()
         if not message:

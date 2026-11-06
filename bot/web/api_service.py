@@ -1478,6 +1478,13 @@ async def handle_cluster_mcp_tool(
         current_profile = get_profile_or_raise(manager, run.bot_alias)
         if not current_profile.cluster.enabled:
             _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+        requested_run_id = str(run_id or "").strip()
+        if run.run_id != requested_run_id:
+            # extend re-keyed this run; reads follow it, side effects need the current run_id.
+            if tool_name in {"ask_agent", "new_agent_session"}:
+                _raise(409, "cluster_run_changed", "编组已更新，请改用当前 run_id 后重试", {"run_id": run.run_id})
+            if tool_name != "configure_team":
+                run_id = run.run_id
 
         if tool_name == "cluster_status":
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
@@ -1492,6 +1499,8 @@ async def handle_cluster_mcp_tool(
                 current_profile=current_profile,
                 current_conversation_id=lambda: _active_main_conversation_for_cluster_run(manager, run),
             )
+            if configured.get("changed") and _CLUSTER_RUNTIME.get_run(configured.get("run_id", "")) is run:
+                _move_cluster_run_control(run_id, str(configured.get("run_id") or ""))
             return {"ok": True, "data": configured}
         if tool_name == "new_agent_session":
             def create_child_session() -> tuple[str, str]:
@@ -4374,7 +4383,19 @@ def _effective_cli_params(
     return params
 
 
+def _move_cluster_run_control(previous_run_id: str, next_run_id: str) -> None:
+    """Keep one control (concurrency, stop state, background tasks) when extend re-keys a run."""
+    previous = str(previous_run_id or "").strip()
+    target = str(next_run_id or "").strip()
+    if not previous or not target or previous == target:
+        return
+    control = _CLUSTER_RUN_CONTROLS.pop(previous, None)
+    if control is not None and target not in _CLUSTER_RUN_CONTROLS:
+        _CLUSTER_RUN_CONTROLS[target] = control
+
+
 def _cluster_run_control(run_id: str, max_parallel_agents: int) -> _ClusterRunControl:
+    run_id = _CLUSTER_RUNTIME.resolve_run_id(run_id)
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     if control is None:
         control = _ClusterRunControl(asyncio.Semaphore(max(1, int(max_parallel_agents or 1))))
@@ -4383,6 +4404,7 @@ def _cluster_run_control(run_id: str, max_parallel_agents: int) -> _ClusterRunCo
 
 
 def _require_cluster_run_control_ready(run_id: str) -> None:
+    run_id = _CLUSTER_RUNTIME.resolve_run_id(run_id)
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     if control is None or not control.cancel_requested:
         return
@@ -4392,6 +4414,7 @@ def _require_cluster_run_control_ready(run_id: str) -> None:
 
 
 def _cleanup_cluster_run_control_if_idle(run_id: str) -> None:
+    run_id = _CLUSTER_RUNTIME.resolve_run_id(run_id)
     control = _CLUSTER_RUN_CONTROLS.get(run_id)
     run = _CLUSTER_RUNTIME.get_run(run_id)
     if control is None:
@@ -4505,7 +4528,7 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
             if live_run is not None:
                 _clear_cluster_parent_wakeup_pending(live_run)
             return False
-        control = _CLUSTER_RUN_CONTROLS.get(run_id)
+        control = _CLUSTER_RUN_CONTROLS.get(live_run.run_id)
         if control is not None and control.cancel_requested:
             _clear_cluster_parent_wakeup_pending(live_run)
             return False
@@ -4563,7 +4586,7 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
             execution_mode=run.execution_mode,
             internal_continuation=True,
             expected_conversation_id=parent_conversation_id,
-            cluster_run_id=run_id,
+            cluster_run_id=run.run_id,
             allow_unsafe_cli=run.allow_unsafe_cli,
         )
     except WebApiError as exc:
@@ -4650,7 +4673,7 @@ async def _cancel_cluster_run(
     run_id: str, message: str = "已取消", *, captured_run: Any = None,
     captured_control: _ClusterRunControl | None = None,
 ) -> None:
-    normalized_run_id = str(run_id or "").strip()
+    normalized_run_id = _CLUSTER_RUNTIME.resolve_run_id(run_id)
     if not normalized_run_id:
         return
     run = _CLUSTER_RUNTIME.get_run(normalized_run_id)

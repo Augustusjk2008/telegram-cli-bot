@@ -110,6 +110,12 @@ class ClusterTeamService:
             live_run = runtime.get_run(run_id)
             if live_run is None:
                 raise ClusterToolError("cluster_run_not_found", "未找到集群任务")
+            if live_run.run_id != str(run_id or "").strip():
+                raise ClusterToolError(
+                    "cluster_team_changed",
+                    "编组已被另一轮更新，请重新读取后重试",
+                    {"run_id": live_run.run_id},
+                )
             if (
                 current_conversation_id is not None
                 and str(current_conversation_id() or "").strip() != live_run.main_conversation_id
@@ -132,7 +138,9 @@ class ClusterTeamService:
             ]
             capacity_profile = current_profile or live_run.profile
             capacity = max(1, int(capacity_profile.cluster.max_parallel_agents or 1))
-            if runtime.has_pending_tasks(
+            # Extend only fills free slots and keeps existing assignments, so running child
+            # tasks stay valid; replace may reassign busy slots and must wait for them.
+            if mode == "replace" and runtime.has_pending_tasks(
                 bot_alias=live_run.bot_alias,
                 user_id=live_run.user_id,
                 main_conversation_id=live_run.main_conversation_id,
@@ -224,16 +232,25 @@ class ClusterTeamService:
             updated_revision = max(0, int(updated.get("cluster_team_revision") or current_revision + 1))
             next_run_id = derive_cluster_run_id(live_run.main_conversation_id, updated_revision)
             try:
-                runtime.retire_run(run_id)
-                runtime.ensure_run(
-                    _run_request(
-                        live_run,
+                if mode == "extend":
+                    runtime.rekey_run(
+                        run_id,
+                        next_run_id,
                         profile=capacity_profile,
                         team=updated_team,
                         team_revision=updated_revision,
-                    ),
-                    next_run_id,
-                )
+                    )
+                else:
+                    runtime.retire_run(run_id)
+                    runtime.ensure_run(
+                        _run_request(
+                            live_run,
+                            profile=capacity_profile,
+                            team=updated_team,
+                            team_revision=updated_revision,
+                        ),
+                        next_run_id,
+                    )
                 runtime.append_event(
                     next_run_id,
                     {
