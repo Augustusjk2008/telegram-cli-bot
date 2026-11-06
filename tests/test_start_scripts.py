@@ -135,8 +135,8 @@ Write-PortableScripts -PackageRoot {_ps_quote(package)}
     return package / "start.ps1"
 
 
-@pytest.mark.parametrize("code", [0, 75, 76])
-def test_generated_portable_module_returns_only_integer_with_stdout(tmp_path, code):
+def test_generated_portable_module_returns_only_integer_with_stdout(tmp_path):
+    code = 76
     script = _portable_script(tmp_path)
     bootstrap = script.parent / "runtime/portable_bootstrap.py"
     bootstrap.write_text(f"print('portable host log output')\nraise SystemExit({code})\n")

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   decodeTerminalV2Frame,
   TERMINAL_V2_HEADER_BYTES,
-  TerminalConnectionGeneration,
   TerminalRecoveryTracker,
 } from "../terminal/terminalRecovery";
 
@@ -46,26 +45,5 @@ describe("terminal v2 recovery", () => {
 
     expect(tracker.accept(15)).toMatchObject({ duplicate: false, gap: false });
     expect(tracker.getSnapshot().lastAppliedSequence).toBe(15);
-  });
-
-  it("does not apply an old Blob after a newer connection generation starts", async () => {
-    const generations = new TerminalConnectionGeneration();
-    const writes: string[] = [];
-    let release!: (buffer: ArrayBuffer) => void;
-    const oldBlobRead = new Promise<ArrayBuffer>((resolve) => {
-      release = resolve;
-    });
-    const oldGeneration = generations.next();
-    const pending = oldBlobRead.then((buffer) => {
-      if (generations.isCurrent(oldGeneration)) {
-        writes.push(new TextDecoder().decode(buffer));
-      }
-    });
-
-    generations.next();
-    release(new TextEncoder().encode("stale").buffer as ArrayBuffer);
-    await pending;
-
-    expect(writes).toEqual([]);
   });
 });

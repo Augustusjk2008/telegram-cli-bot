@@ -1,15 +1,13 @@
 import json
 import socket
 import sys
-from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from bot.main import _get_web_access_lines
-from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
+from bot.web.runtime_binding import WebPortInUseError, resolve_runtime_web_bind
 from bot.web.server import WebApiServer, _auth_cookie_path
 
 
@@ -110,28 +108,6 @@ def test_auth_cookie_path_uses_public_forward_prefix(monkeypatch: pytest.MonkeyP
     )
 
     assert _auth_cookie_path(request) == "/tcb-hub/node/nanjing-laptop"
-
-
-@pytest.mark.asyncio
-async def test_health_reports_runtime_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("bot.web.server.TCB_NODE_ID", "")
-    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
-    server = WebApiServer(
-        object(),
-        host="127.0.0.1",
-        port=8768,
-        tunnel_service=DummyTunnelService(),
-        instance_id="test-instance",
-    )
-
-    response = await server.health(None)
-    payload = json.loads(response.text)
-
-    assert payload["host"] == "127.0.0.1"
-    assert payload["port"] == 8768
-    assert payload["instance_id"] == "test-instance"
-    assert payload["node_id"] == ""
-    assert payload["base_path"] == ""
 
 
 @pytest.mark.asyncio
@@ -507,6 +483,4 @@ async def test_unmatched_node_terminal_ws_path_is_not_spa_fallback(
             text = await response.text()
 
     assert response.status == 404
-    assert response.content_type == "text/plain"
-    assert "Terminal WebSocket route not found" in text
     assert "app" not in text

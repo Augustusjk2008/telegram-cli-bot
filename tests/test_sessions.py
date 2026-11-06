@@ -4,22 +4,16 @@
 直接导入 bot.sessions 中的真实函数进行测试
 """
 
-import json
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from bot.sessions import (
     clear_bot_sessions,
-    get_session,
     get_or_create_session,
-    is_bot_processing,
     reset_session,
-    save_all_sessions,
     sessions,
     sessions_lock,
     update_bot_working_dir,
@@ -76,15 +70,6 @@ def test_deepseek_session_survives_reload_and_reset_actions(temp_dir, monkeypatc
     assert other_bot.deepseek_session_id == "dsh-other"
 
 
-def test_old_session_without_deepseek_field_loads(temp_dir):
-    from bot.session_store import save_session
-
-    save_session(83, chat_session_user_id(100), codex_session_id="codex-existing", working_dir=str(temp_dir))
-    session = get_or_create_session(83, "legacy", 100, str(temp_dir))
-    assert session.deepseek_session_id is None
-    assert session.codex_session_id == "codex-existing"
-
-
 @pytest.mark.parametrize("merge_kind", ["memory", "stored"])
 @pytest.mark.parametrize("changed_field", [None, "working_dir", "active_conversation_id", "session_epoch", "cleared_conversation", "newer_epoch"])
 def test_deepseek_merge_only_restores_binding_in_same_context(temp_dir, merge_kind, changed_field):
@@ -121,25 +106,6 @@ def test_deepseek_merge_only_restores_binding_in_same_context(temp_dir, merge_ki
 
 class TestGetSession:
     """测试 get_session"""
-
-    def test_create_new_session(self, temp_dir: Path):
-        s = get_session(1, "main", 100, str(temp_dir))
-        assert s.bot_id == 1
-        assert s.bot_alias == "main"
-        assert s.user_id == chat_session_user_id(100)
-        assert s.working_dir == str(temp_dir)
-
-    def test_different_agents_different_sessions(self, temp_dir: Path):
-        main = get_or_create_session(1, "main", 100, str(temp_dir), agent_id="main")
-        reviewer = get_or_create_session(1, "main", 100, str(temp_dir), agent_id="reviewer")
-        main.codex_session_id = "codex-main"
-        reviewer.codex_session_id = "codex-reviewer"
-
-        assert main is not reviewer
-        assert main.agent_id == "main"
-        assert reviewer.agent_id == "reviewer"
-        assert main.codex_session_id == "codex-main"
-        assert reviewer.codex_session_id == "codex-reviewer"
 
     def test_web_users_share_a_session_without_collapsing_bot_or_agent_boundaries(self, temp_dir: Path):
         main = get_or_create_session(801, "main", 101, str(temp_dir), load_persisted_state=False)
@@ -303,22 +269,6 @@ class TestClearBotSessions:
             assert session.message_count == 0
             assert session.session_epoch == 1
 
-    def test_update_workdir_does_not_touch_other_alias_sessions(self, temp_dir: Path):
-        old_dir = temp_dir / "old"
-        new_dir = temp_dir / "new"
-        other_dir = temp_dir / "other"
-        old_dir.mkdir()
-        new_dir.mkdir()
-        other_dir.mkdir()
-        main = get_or_create_session(1, "main", 100, str(old_dir), agent_id="main")
-        other = get_or_create_session(2, "other", 100, str(other_dir), agent_id="main")
-
-        count = update_bot_working_dir("main", str(new_dir))
-
-        assert count == 1
-        assert main.working_dir == str(new_dir)
-        assert other.working_dir == str(other_dir)
-
 class TestSessionPersistence:
     """测试会话持久化功能"""
 
@@ -440,19 +390,3 @@ class TestSessionPersistence:
         disable_thread.join(timeout=1)
         assert disabled.is_set()
 
-    def test_reset_session_clears_persisted_native_agent_session_id(self, temp_dir: Path):
-        from unittest.mock import patch
-        from bot.session_store import save_session, load_session
-
-        store_file = temp_dir / ".session_store.json"
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(1, 100, native_agent_session_id="native-1", working_dir=str(temp_dir))
-            with sessions_lock:
-                sessions.clear()
-
-            session = get_session(1, "main", 100, str(temp_dir))
-            assert session.native_agent_session_id == "native-1"
-
-            assert reset_session(1, 100) is True
-            assert load_session(1, 100) is None

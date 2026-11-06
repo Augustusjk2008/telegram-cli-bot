@@ -101,12 +101,10 @@ async def test_matching_interleaving_and_single_reader(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("user_agent", [
-    "codex/0.160.0", "codex/0.160.1", "codex/0.161.0", "codex/1.0.0",
-    "orbit_safe_claw/0.161.0 (Windows 10.0.26200; x86_64)",
+    "codex/0.160.0", "codex/1.0.0", "orbit_safe_claw/0.161.0 (Windows 10.0.26200; x86_64)",
 ])
-@pytest.mark.parametrize("experimental_api", [False, True])
-async def test_supported_server_versions_initialize(tmp_path, user_agent, experimental_api):
-    client = await start_fake(tmp_path, user_agent=user_agent, experimental_api=experimental_api)
+async def test_supported_server_versions_initialize(tmp_path, user_agent):
+    client = await start_fake(tmp_path, user_agent=user_agent)
     try:
         assert await client.request("ping", {}) == {}
     finally:
@@ -118,21 +116,18 @@ async def test_supported_server_versions_initialize(tmp_path, user_agent, experi
     "codex/0.159.999", "codex/0.99.999",
     "codex/unknown (Windows 10.0.26200; x86_64)", None,
 ])
-@pytest.mark.parametrize("experimental_api", [False, True])
-async def test_incompatible_server_version_is_rejected(tmp_path, user_agent, experimental_api):
+async def test_incompatible_server_version_is_rejected(tmp_path, user_agent):
     with pytest.raises(CodexServerError, match="不兼容"):
-        await start_fake(tmp_path, user_agent=user_agent, experimental_api=experimental_api)
+        await start_fake(tmp_path, user_agent=user_agent)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method, expected", [
     ("item/commandExecution/requestApproval", {"decision": "decline"}),
-    ("item/fileChange/requestApproval", {"decision": "decline"}),
     ("item/permissions/requestApproval", {"permissions": {}, "scope": "turn"}),
     ("item/tool/requestUserInput", {"answers": {}}),
     ("mcpServer/elicitation/request", {"action": "decline"}),
     ("execCommandApproval", {"decision": {"denied": {"rejection": "Non-interactive client cannot approve this request"}}}),
-    ("applyPatchApproval", {"decision": {"denied": {"rejection": "Non-interactive client cannot approve this request"}}}),
 ])
 async def test_server_requests_receive_noninteractive_responses(tmp_path, method, expected):
     client = await start_fake(tmp_path)

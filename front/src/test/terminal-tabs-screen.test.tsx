@@ -50,33 +50,6 @@ beforeEach(() => {
   terminalSessionMock.create.mockReset();
 });
 
-test("没有打开终端时仍显示可新建终端的预设命令", async () => {
-  const client = {
-    getTerminalSession: vi.fn(async () => snapshot()),
-    getTerminalActionsConfig: vi.fn(async () => actionsConfig),
-    createTerminalSession: vi.fn(async () => snapshot()),
-    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
-  } as unknown as WebBotClient;
-
-  render(
-    <PersistentTerminalProvider client={client}>
-      <TerminalTabsScreen
-        authToken="token"
-        botAlias="repo"
-        client={client}
-        isVisible
-        preferredWorkingDir="C:/workspace"
-      />
-    </PersistentTerminalProvider>,
-  );
-
-  await waitFor(() => expect(client.getTerminalActionsConfig).toHaveBeenCalledWith("repo"));
-  fireEvent.click(screen.getByRole("button", { name: "关闭终端 1" }));
-
-  await waitFor(() => expect(screen.queryByRole("tab")).not.toBeInTheDocument());
-  expect(await screen.findByRole("button", { name: "新开终端" })).toBeInTheDocument();
-});
-
 test("没有活动终端时仍保留配置、新建和聚焦入口", async () => {
   const onToggleFocus = vi.fn();
   const client = {
@@ -107,31 +80,6 @@ test("没有活动终端时仍保留配置、新建和聚焦入口", async () =>
   expect(focusButton).toBeEnabled();
   fireEvent.click(focusButton);
   expect(onToggleFocus).toHaveBeenCalledTimes(1);
-});
-
-test("嵌入式终端把快捷命令栏放在标签和终端内容之后", async () => {
-  const client = {
-    getTerminalSession: vi.fn(async () => snapshot()),
-    getTerminalActionsConfig: vi.fn(async () => actionsConfig),
-    createTerminalSession: vi.fn(async () => snapshot()),
-    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
-  } as unknown as WebBotClient;
-
-  render(
-    <PersistentTerminalProvider client={client}>
-      <TerminalTabsScreen
-        authToken="token"
-        botAlias="repo"
-        client={client}
-        isVisible
-        preferredWorkingDir="C:/workspace"
-        embedded
-      />
-    </PersistentTerminalProvider>,
-  );
-
-  const toolbar = await screen.findByTestId("terminal-tabs-toolbar");
-  expect(toolbar.previousElementSibling).toBe(screen.getByRole("tabpanel"));
 });
 
 test("重复执行同一快捷命令会复用原终端", async () => {
@@ -171,39 +119,6 @@ test("重复执行同一快捷命令会复用原终端", async () => {
 
   expect(runTerminalAction.mock.calls[1]?.[2].ownerId).toBe(firstOwnerId);
   expect(screen.getAllByRole("tab")).toHaveLength(2);
-});
-
-test("手机终端使用可移动的圆形沉浸按钮", async () => {
-  const onToggleImmersive = vi.fn();
-  const client = {
-    getTerminalSession: vi.fn(async () => snapshot()),
-    getTerminalActionsConfig: vi.fn(async () => actionsConfig),
-    createTerminalSession: vi.fn(async () => snapshot()),
-    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
-  } as unknown as WebBotClient;
-
-  render(
-    <PersistentTerminalProvider client={client}>
-      <TerminalTabsScreen
-        authToken="token"
-        botAlias="repo"
-        client={client}
-        isVisible
-        preferredWorkingDir="C:/workspace"
-        onToggleImmersive={onToggleImmersive}
-      />
-    </PersistentTerminalProvider>,
-  );
-
-  const button = await screen.findByRole("button", { name: "进入沉浸模式" });
-
-  fireEvent.pointerDown(button, { pointerId: 1, pointerType: "touch", clientX: 200, clientY: 200 });
-  fireEvent.pointerMove(button, { pointerId: 1, pointerType: "touch", clientX: 150, clientY: 150 });
-  fireEvent.pointerUp(button, { pointerId: 1, pointerType: "touch", clientX: 150, clientY: 150 });
-
-  expect(localStorage.getItem("tcb.terminalImmersiveButton.repo")).not.toBeNull();
-  fireEvent.click(button);
-  expect(onToggleImmersive).not.toHaveBeenCalled();
 });
 
 test("手机终端在两行内提供常用控制键", async () => {

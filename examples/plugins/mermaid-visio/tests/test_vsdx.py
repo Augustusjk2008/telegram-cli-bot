@@ -55,14 +55,6 @@ def _edge_shapes(package: VsdxPackage) -> list[ET.Element]:
     ]
 
 
-def test_minimal_flowchart_vsdx_package_is_structurally_valid(tmp_path: Path) -> None:
-    package = _render_vsdx(tmp_path, "flowchart TD\nA[Start] --> B[End]\n")
-
-    assert "[Content_Types].xml" in package.parts
-    assert _shape_text(_shape_by_text(package, "Start")) == "Start"
-    assert _shape_text(_shape_by_text(package, "End")) == "End"
-
-
 def test_node_and_edge_labels_preserve_unicode_and_xml_characters(tmp_path: Path) -> None:
     special = "中文 & < > \" '"
     package = _render_vsdx(

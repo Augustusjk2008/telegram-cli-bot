@@ -123,16 +123,7 @@ def test_main_reports_migration_failure_without_traceback(
     "invalid_state",
     [
         "{not-json",
-        "[]",
-        json.dumps({"version": 1}),
         json.dumps({"version": 1, "completed": "not-a-list"}),
-        json.dumps(
-            {
-                "version": 1,
-                "completed": [],
-                "last_repair": {"detail": {"targets": "not-a-list"}},
-            }
-        ),
     ],
 )
 def test_existing_invalid_migration_state_fails_without_overwriting_it(

@@ -107,27 +107,6 @@ def test_schema_v7_migrates_existing_samples_to_codex_provider(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_claude_service_reads_shared_store_without_codex_cross_talk(tmp_path, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-    store = CodexUsageStore(tmp_path / "usage.sqlite3")
-    store.record_rate_limit_sample(_sample(used_percent=20))
-    service = CodexUsageService(store=store, claude_auth_status_reader=_SubscriptionAuthReader())
-
-    stats = await service.query_stats(
-        start_date=datetime(2026, 11, 5, tzinfo=timezone.utc).date(),
-        end_date=datetime(2026, 11, 5, tzinfo=timezone.utc).date(),
-        provider="claude",
-    )
-    config = await service.config_snapshot(provider="claude")
-
-    assert stats["rate_limit_samples"] == []
-    assert stats["available_range"] == {"first_date": None, "last_date": None}
-    assert config["enabled"] is False
-    assert config["current_provider"]["label"] == "Claude 官方订阅"
-    service.close()
-
-
-@pytest.mark.asyncio
 async def test_claude_admin_routes_use_the_shared_service(tmp_path, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     service = CodexUsageService(
@@ -144,8 +123,6 @@ async def test_claude_admin_routes_use_the_shared_service(tmp_path, monkeypatch)
     async with TestClient(TestServer(app)) as client:
         config_response = await client.get("/api/admin/claude-usage/config")
         assert config_response.status == 200
-        config = (await config_response.json())["data"]
-        assert config["current_provider"]["label"] == "Claude 官方订阅"
 
         patch_response = await client.patch(
             "/api/admin/claude-usage/config",

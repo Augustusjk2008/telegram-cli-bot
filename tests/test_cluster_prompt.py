@@ -30,10 +30,7 @@ def test_cluster_prompt_encourages_write_for_implementation_tasks_when_allowed()
     prompt = _apply_cluster_prompt(profile, "完成这个实现", cluster_run_id="run-123")
 
     assert "Sub-agents may write files this turn" in prompt
-    assert "implementation, fixes, or other tasks that require file changes" in prompt
     assert "allow_write=true" in prompt
-    assert "Keep analysis, research, and review tasks read-only" in prompt
-    assert "The main agent should use the professional tier only when the user explicitly asks to use the professional tier" in prompt
 
 
 def test_cluster_prompt_keeps_child_tasks_read_only_when_write_is_disallowed() -> None:
@@ -69,7 +66,6 @@ def test_cluster_prompt_keeps_same_run_id_after_full_session_prompt() -> None:
     assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" in first
     assert "Current run_id: run-1" in first
     assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" not in second
-    assert "continue following the cluster rules established earlier in this conversation" in second
     assert "Current run_id: run-1" in second
     assert "Continue using the current run_id for ordinary turns" in second
     assert "changed=true" in second

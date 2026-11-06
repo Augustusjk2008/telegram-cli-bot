@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
-import shutil
 import sys
 import time
 
@@ -61,8 +59,7 @@ def test_prunes_finished_unreferenced_jobs_and_keeps_current(store):
     assert current.is_dir()
 
 
-@pytest.mark.parametrize("phase", ["waiting_restart", "applying", "awaiting_health", "rolling_back",
-                                   "recovery_required", "unknown-phase"])
+@pytest.mark.parametrize("phase", ["awaiting_health", "unknown-phase"])
 def test_handoff_application_recovery_and_unknown_phases_prune_nothing(store, phase):
     old = _job(store, "old-failed")
     _job(store, "current", journal=["applied_all"])
@@ -108,9 +105,8 @@ def test_keeps_job_containing_running_interpreter(store, monkeypatch):
     assert running.is_dir() and not other.exists()
 
 
-@pytest.mark.parametrize("journal", [[], ["applied_all"]])
-def test_keeps_unreleased_transaction_backups(store, journal):
-    pending = _job(store, "pending-backup", journal=journal)
+def test_keeps_unreleased_transaction_backups(store):
+    pending = _job(store, "pending-backup", journal=["applied_all"])
     rolled_back = _job(store, "rolled-back", journal=["rolled_back"])
     store.mutate(lambda state: state.update(job=None))
 

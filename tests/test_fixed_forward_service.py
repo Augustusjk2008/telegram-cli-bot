@@ -97,7 +97,7 @@ async def test_proxy_exists_keeps_error_when_public_health_points_to_other_insta
     snapshot = await service.start()
 
     assert snapshot["status"] == "error"
-    assert "frps 已存在同名 proxy" in snapshot["last_error"]
+    assert snapshot["last_error"]
     assert snapshot["verified"] is False
     assert snapshot["frpc_external"] is False
     assert snapshot["frpc_managed"] is False

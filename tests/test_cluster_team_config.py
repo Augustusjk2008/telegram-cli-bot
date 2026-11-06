@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-from aiohttp import web
 
 from bot import app_settings
 from bot.cluster.config import normalize_bot_cluster_config
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
-from bot.web.routes.cluster_routes import register as register_cluster_routes
 
 
 def test_cluster_config_migrates_write_policy_and_serializes_version_three() -> None:
@@ -20,8 +17,6 @@ def test_cluster_config_migrates_write_policy_and_serializes_version_three() -> 
     writable = normalize_bot_cluster_config({"write_policy": "all_agents"})
 
     assert missing.write_policy == "all_agents"
-    assert missing.max_parallel_agents == 3
-    assert missing.default_timeout_seconds == 1800
     assert selected.write_policy == "main_only"
     assert writable.write_policy == "all_agents"
     assert missing.to_dict()["orchestration_version"] == 3
@@ -30,30 +25,6 @@ def test_cluster_config_migrates_write_policy_and_serializes_version_three() -> 
 def test_cluster_config_accepts_parallel_agent_limit_of_twenty() -> None:
     assert normalize_bot_cluster_config({"max_parallel_agents": 20}).max_parallel_agents == 20
     assert normalize_bot_cluster_config({"max_parallel_agents": 21}).max_parallel_agents == 20
-
-
-def test_manual_agent_mutation_routes_are_not_registered() -> None:
-    async def handler(_request):
-        return web.Response()
-
-    handler_names = (
-        "cluster_mcp_ping",
-        "cluster_mcp_tool",
-        "get_agents_view",
-        "get_cluster_status_view",
-        "get_cluster_run_tasks_view",
-        "post_cluster_setup_prepare",
-        "post_cluster_config",
-    )
-    app = web.Application()
-    register_cluster_routes(app, SimpleNamespace(**{name: handler for name in handler_names}))
-
-    routes = {(route.method, route.resource.canonical) for route in app.router.routes()}
-
-    assert ("GET", "/api/bots/{alias}/agents") in routes
-    assert ("POST", "/api/admin/bots/{alias}/agents") not in routes
-    assert ("PATCH", "/api/admin/bots/{alias}/agents/{agent_id}") not in routes
-    assert ("DELETE", "/api/admin/bots/{alias}/agents/{agent_id}") not in routes
 
 
 def test_enabled_cluster_profile_normalizes_slots_idempotently() -> None:

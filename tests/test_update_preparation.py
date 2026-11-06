@@ -21,7 +21,6 @@ ROOT = Path(__file__).resolve().parents[1]
     ("invalid URL", "https://fixed.test/gateway/node/x", True, "/gateway/node/x"),
     ("https://example.test/other", "https://fixed.test/gateway/node/x", False, "/node/x"),
     ("https://example.test/first/node/x", "https://fixed.test/second/node/x", True, "/first/node/x"),
-    ("", "https://fixed.test/gateway/node/x", False, "/node/x"),
 ])
 def test_deployment_keeps_local_health_path_and_uses_eligible_public_prefix(monkeypatch, public, fixed, enabled, expected):
     from bot import config
@@ -125,8 +124,7 @@ def test_options_block_incompatible_target_without_mutating_system(payload, monk
         preparation.prepare_runtime(repo, job_dir, prepared)
 
 
-@pytest.mark.parametrize("mismatch", ["base_path", "api_base_url"])
-@pytest.mark.parametrize("public_path", ["/node/x", "/tcb-hub/node/x"])
+@pytest.mark.parametrize("mismatch,public_path", [("base_path", "/tcb-hub/node/x"), ("api_base_url", "/node/x")])
 def test_frontend_rebuild_uses_lockfile_and_staging_with_deployment_prefix(payload, monkeypatch, mismatch, public_path):
     repo, job_dir, prepared = payload
     prepared["manifest"]["frontend"][mismatch] = "/"

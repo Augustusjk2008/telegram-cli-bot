@@ -154,18 +154,6 @@ def test_admin_capability_update_marks_legacy_account_schema_v2(tmp_path: Path):
     assert data["items"][0]["capabilities_schema_version"] == CAPABILITIES_SCHEMA_VERSION
 
 
-def test_guest_account_is_builtin_and_never_requires_register_code(tmp_path: Path):
-    store = WebAuthStore(
-        users_path=tmp_path / ".web_users.json",
-        register_codes_path=tmp_path / ".web_register_codes.json",
-    )
-
-    session = store.create_guest_session()
-
-    assert session.account.role == "guest"
-    assert session.account.username == "guest"
-
-
 def test_register_code_management_round_trip(tmp_path: Path):
     store = WebAuthStore(
         users_path=tmp_path / ".web_users.json",

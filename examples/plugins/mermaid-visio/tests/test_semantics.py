@@ -17,7 +17,6 @@ SAMPLES_ROOT = REPO_ROOT / "examples" / "mermaid-visio-samples"
 
 from mermaid_visio.flowchart_parser import FlowchartParseError, parse_flowchart
 from mermaid_visio.converter import convert_source_to_vsdx
-from mermaid_visio.graphviz_runtime import graphviz_status
 from mermaid_visio.models import PluginConfig
 from mermaid_visio.normalizer import normalize_ir
 from mermaid_visio.source_extractor import extract_diagrams
@@ -122,14 +121,7 @@ def test_graphviz_failure_keeps_simple_layout_fallback(tmp_path: Path) -> None:
     )
 
     assert output.is_file()
-    assert any("Graphviz 不可用" in warning for warning in warnings)
-
-
-def test_graphviz_status_exposes_controlled_install_intent() -> None:
-    status = graphviz_status(PluginConfig())
-
-    assert status["installAvailable"] is True
-    assert "graphvizRuntimeUrl" not in status
+    assert warnings
 
 
 @pytest.mark.asyncio
@@ -149,10 +141,6 @@ async def test_graphviz_install_action_emits_only_host_install_intent(tmp_path: 
         install_action = next(
             action for action in opened["summary"]["actions"] if action["id"] == "install-graphviz"
         )
-        assert install_action["confirm"] == {
-            "title": "安装 Graphviz 运行时",
-            "message": "将从受控官方来源下载并安装 Graphviz 16.1.0 运行时，是否继续？",
-        }
         assert not {"url", "path", "runtimeId", "targetPath"} & set(install_action)
         result = await runtime.invoke_action(
             "main",

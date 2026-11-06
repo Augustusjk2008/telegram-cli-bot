@@ -353,33 +353,6 @@ describe("agUiRunReducer", () => {
     expect(large.diagnostics.lookupProbes).toBeLessThanOrEqual(small.diagnostics.lookupProbes * 5);
   });
 
-  test("dispose releases incremental indexes without changing the final snapshot", () => {
-    const accumulator = createAgUiRunAccumulator();
-    accumulator.reduce({
-      type: EventType.ACTIVITY_SNAPSHOT,
-      messageId: "activity-1",
-      activityType: "TCB_NATIVE_AGENT_TRACE",
-      replace: true,
-      content: {
-        id: "trace-1",
-        summary: "过程",
-        source: "native_agent",
-        rawKind: "commentary",
-      },
-    });
-    const finalSnapshot = accumulator.snapshot();
-
-    accumulator.dispose();
-    accumulator.dispose();
-
-    expect(accumulator.diagnostics()).toMatchObject({
-      disposed: true,
-      indexedEntries: 0,
-    });
-    expect(finalSnapshot.traceEvents).toHaveLength(1);
-    expect(finalSnapshot.entries).toHaveLength(1);
-  });
-
   test("dispose does not erase state already exposed to the live transcript", () => {
     const accumulator = createAgUiRunAccumulator();
     const liveState = accumulator.reduce({

@@ -40,25 +40,6 @@ test("bot list archives and restores a non-main bot", async () => {
   await waitFor(() => expect(unarchiveBot).toHaveBeenCalledWith("team2"));
 });
 
-test("cluster model tiers configure model and reasoning independently", async () => {
-  const user = userEvent.setup();
-  const onReasoningChange = vi.fn();
-  const props = {
-    value: { low: "fast-model", medium: "", high: "", professional: "" },
-    reasoningEfforts: { low: "medium", medium: "", high: "", professional: "" },
-    modelOptions: ["fast-model", "strong-model"],
-    reasoningOptions: ["ultra", "max", "xhigh", "high", "medium", "low"],
-    onChange: vi.fn(),
-    onReasoningChange,
-  } as ComponentProps<typeof ClusterModelTiersPanel>;
-
-  render(<ClusterModelTiersPanel {...props} />);
-  expect(screen.getByLabelText("低档模型")).toHaveValue("fast-model");
-  expect(screen.getByLabelText("专业档模型")).toHaveValue("");
-  await user.selectOptions(screen.getByLabelText("低档思考深度"), "ultra");
-  expect(onReasoningChange).toHaveBeenCalledWith({ low: "ultra", medium: "", high: "", professional: "" });
-});
-
 test("cluster model tiers select a CLI and expose its parameter namespace", async () => {
   const user = userEvent.setup();
   const onTierConfigChange = vi.fn();

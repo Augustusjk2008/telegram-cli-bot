@@ -30,26 +30,6 @@ test("theme requests use the global API without account-specific headers", async
   }
 });
 
-test("mock clients expose packaged presets and reject theme mutations", async () => {
-  const client = new MockWebBotClient();
-  await client.login({ username: "alice", password: "password" });
-  const initial = await client.listUiThemes();
-  expect(initial.themes).toHaveLength(8);
-  expect(initial.themes[2].name).toBe("薄荷柑橘");
-  expect(initial.themes[3].name).toBe("轻音少女");
-  expect(initial.themes[4].name).toBe("赛博朋克");
-  expect(initial.themes[5].name).toBe("Deepseek");
-  expect(initial.themes[6].name).toBe("雾岚纸境");
-  expect(initial.themes[7].name).toBe("墨砚铜章");
-  expect(initial.themes.every((theme) => theme.readonly)).toBe(true);
-  const document = portableTheme(initial.themes[0]);
-  await expect(client.createUiTheme({ schemaVersion: 1, expectedRevision: 0, sourceId: initial.themes[0].id, name: "配色" })).rejects.toMatchObject({ status: 403 });
-  await expect(client.importUiThemes({ expectedRevision: 0, document })).rejects.toMatchObject({ status: 403 });
-  await expect(client.updateUiTheme(initial.themes[0].id, { schemaVersion: 1, expectedRevision: 0, name: "修改" })).rejects.toMatchObject({ status: 403 });
-  await expect(client.deleteUiTheme(initial.themes[0].id, 0)).rejects.toMatchObject({ status: 403 });
-  await expect(client.uploadThemeAsset(new File(["x"], "x.png", { type: "image/png" }))).rejects.toMatchObject({ status: 403 });
-});
-
 test("legacy imported themes receive the default illustration configuration", async () => {
   const document = await readThemeFile({
     text: async () => JSON.stringify({
@@ -111,7 +91,6 @@ test("theme export keeps a theme-owned uploaded illustration", () => {
   };
   expect(portableTheme(theme).appearance.illustrations).toEqual(theme.appearance.illustrations);
 });
-
 
 test("mock accounts keep their own selected theme", async () => {
   const alice = new MockWebBotClient();

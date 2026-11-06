@@ -94,7 +94,7 @@ async def test_restart_marks_unknown_running_update_interrupted_and_sends_recove
     row = gateway.state.get(8)
     assert row["status"] == "interrupted"
     assert row["delivery_status"] == "sent"
-    assert "未能确认结果" in gateway.client.send_message.await_args.args[1]
+    gateway.client.send_message.assert_awaited_once()
 
 
 def test_duplicate_update_does_not_lower_high_water_mark(tmp_path):

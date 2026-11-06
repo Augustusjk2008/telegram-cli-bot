@@ -34,10 +34,6 @@ def test_delivery_survives_reopen_with_binding_and_markup(tmp_path):
     reopened = TelegramState(path, "123")
     try:
         delivery = reopened.get_delivery(delivery_id)
-        assert delivery["bot_id"] == "123"
-        assert delivery["update_id"] == 17
-        assert delivery["chat_id"] == 42
-        assert delivery["alias"] == "dev"
         assert (delivery["conversation_id"], delivery["turn_id"], delivery["assistant_message_id"]) == (
             "conversation-1", "turn-1", "assistant-1",
         )

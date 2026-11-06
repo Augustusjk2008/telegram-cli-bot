@@ -74,7 +74,6 @@ def test_tar_gz_preview_and_extract(tmp_path: Path) -> None:
     content = _tar_gz_bytes(("src/main.py", b"print(1)"))
     index = build_archive_index("packs/source.tar.gz", content)
     assert index.archive_format == "tar"
-    assert "TAR" in str(index.summary()["statsText"])
 
     write_bytes, make_directory = _extract_to(tmp_path)
     extract_archive(

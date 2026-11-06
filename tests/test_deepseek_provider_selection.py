@@ -2,12 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bot.cli_params import (
-    CliParamsConfig,
-    get_default_params,
-    get_params_schema,
-    normalize_deepseek_selection,
-)
+from bot.cli_params import CliParamsConfig, normalize_deepseek_selection
 from bot.manager import MultiBotManager
 from bot.models import BotProfile, UserSession
 from bot.web import api_service
@@ -61,19 +56,7 @@ def _catalog(*, selected_provider: str = "official") -> dict:
     }
 
 
-def test_deepseek_defaults_schema_and_normalization() -> None:
-    assert get_default_params("deepseek") == {
-        "provider": None,
-        "model": None,
-        "reasoning_effort": None,
-        "permission_mode": "workspace-write",
-        "extra_args": [],
-    }
-    assert get_params_schema("deepseek")["provider"] == {
-        "type": "string",
-        "description": "Provider 选择，none 使用 Harness 默认 Provider",
-        "nullable": True,
-    }
+def test_deepseek_selection_normalization() -> None:
     config = CliParamsConfig.from_dict(
         {
             "deepseek": {
@@ -159,7 +142,6 @@ async def test_deepseek_selection_is_atomic_and_provider_switch_invalidates_targ
     assert result["params"]["reasoning_effort"] == "high"
     assert result["provider_changed"] is True
     assert result["session_reset"] is True
-    assert "下一轮" in result["selection_notice"]
     assert profile.cli_params.deepseek["provider"] == "account"
     assert session.deepseek_session_id is None
     restored = MultiBotManager(

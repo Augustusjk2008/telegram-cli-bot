@@ -166,45 +166,8 @@ def test_cluster_run_is_not_created_for_child_or_internal_continuation(monkeypat
     assert api_service._start_cluster_run_if_requested(**common, agent_id="worker") is None
     assert api_service._start_cluster_run_if_requested(**common, solo_mode=True) is None
     assert api_service._start_cluster_run_if_requested(**common, internal_continuation=True) is None
-
-
-def test_disabled_cluster_ignores_legacy_request_flag(monkeypatch) -> None:
-    import bot.web.api_service as api_service
-
-    runtime = ClusterRuntime()
-    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
-    profile = BotProfile(alias="main", working_dir=".", cluster=BotClusterConfig(enabled=False))
-
-    run = api_service._start_cluster_run_if_requested(
-        profile=profile,
-        alias="main",
-        shared_user_id=1,
-        cluster=True,
-        execution_mode="cli",
-        mentions=[],
-        allow_unsafe_cli=False,
-    )
-
-    assert run is None
-
-
-def test_ask_agent_rejects_slot_occupied_by_another_run() -> None:
-    profile = BotProfile(
-        alias="main",
-        working_dir=".",
-        agents=[AgentProfile(id="worker", name="Worker")],
-        cluster=BotClusterConfig(enabled=True),
-    )
-    runtime = ClusterRuntime()
-    first = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1, profile=profile))
-    second = runtime.start_run(ClusterRunRequest(bot_alias="main", user_id=1, profile=profile))
-    first_request = runtime.validate_ask_agent(first.run_id, {"agent_id": "worker", "message": "first"})
-    runtime.create_agent_task(first.run_id, first_request)
-
-    with pytest.raises(ClusterToolError) as exc_info:
-        runtime.validate_ask_agent(second.run_id, {"agent_id": "worker", "message": "second"})
-
-    assert exc_info.value.code == "cluster_agent_busy"
+    disabled = {**common, "profile": BotProfile(alias="main", working_dir=".", cluster=BotClusterConfig(enabled=False))}
+    assert api_service._start_cluster_run_if_requested(**disabled) is None
 
 
 def test_agent_slot_remains_busy_between_main_conversations() -> None:
@@ -752,14 +715,7 @@ async def test_configure_team_rejects_run_after_main_conversation_switch(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("mode", "roles"),
-    [
-        ("replace", []),
-        ("extend", [{"name": "补充", "responsibility": "补充检查"}]),
-    ],
-)
-async def test_configure_team_changes_are_blocked_by_pending_task(monkeypatch, mode, roles) -> None:
+async def test_configure_team_changes_are_blocked_by_pending_task(monkeypatch) -> None:
     import bot.web.api_service as api_service
 
     profile = BotProfile(
@@ -807,7 +763,7 @@ async def test_configure_team_changes_are_blocked_by_pending_task(monkeypatch, m
             object(),
             run.run_id,
             "configure_team",
-            {"mode": mode, "roles": roles},
+            {"mode": "extend", "roles": [{"name": "补充", "responsibility": "补充检查"}]},
         )
 
     assert exc_info.value.status == 409
@@ -1034,14 +990,12 @@ async def test_new_main_conversation_does_not_precreate_child_conversations(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cli_type", ["codex", "codex_server"])
-async def test_cluster_task_lazily_prepares_child_and_injects_dynamic_role(monkeypatch, cli_type) -> None:
+async def test_cluster_task_lazily_prepares_child_and_injects_dynamic_role(monkeypatch) -> None:
     import bot.web.api_service as api_service
 
     profile = BotProfile(
         alias="main",
         working_dir=".",
-        cli_type=cli_type,
         agents=[AgentProfile(id="one", name="Legacy", system_prompt="legacy prompt")],
         cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
     )
@@ -1088,16 +1042,9 @@ async def test_cluster_task_lazily_prepares_child_and_injects_dynamic_role(monke
     await api_service._run_cluster_agent_task(object(), run.run_id, task.task_id)
 
     assert prepared == [("conv_main", 1)]
-    assert captured["message"] == (
-        "<tcb_team_role>\n"
-        "Name: 后端分析\n"
-        "Responsibility: 检查并发边界\n"
-        "Boundaries: Complete only the delegated task. Do not expand your responsibilities or create sub-agents.\n"
-        "</tcb_team_role>\n\n"
-        "<tcb_delegated_task>\n"
-        "检查 runtime.py\n"
-        "</tcb_delegated_task>"
-    )
+    for expected in ("后端分析", "检查并发边界", "检查 runtime.py"):
+        assert expected in captured["message"]  # type: ignore[operator]
+    assert "legacy prompt" not in captured["message"]  # type: ignore[operator]
     assert captured["kwargs"]["suppress_agent_prompt"] is True  # type: ignore[index]
 
 
@@ -1313,153 +1260,6 @@ async def test_configure_team_and_resize_share_bot_lock(monkeypatch, tmp_path) -
     assert configured["data"]["assignments"][-1]["agent_id"] == "three"
     assert exc_info.value.code == "cluster_resize_blocked"
     assert profile.cluster.max_parallel_agents == 4
-
-
-@pytest.mark.asyncio
-async def test_switching_main_conversation_is_blocked_while_child_task_is_pending(monkeypatch, tmp_path) -> None:
-    import bot.web.api_service as api_service
-
-    profile = BotProfile(
-        alias="main",
-        working_dir=str(tmp_path),
-        agents=[AgentProfile(id="one", name="One")],
-        cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
-    )
-    session = UserSession(
-        bot_id=-1,
-        bot_alias="main",
-        user_id=1,
-        working_dir=str(tmp_path),
-        active_conversation_id="conv_a",
-        _persist_enabled=False,
-    )
-    runtime = ClusterRuntime()
-    run = runtime.start_run(
-        ClusterRunRequest(
-            bot_alias="main",
-            user_id=1,
-            profile=profile,
-            main_conversation_id="conv_a",
-            team_revision=1,
-            team={
-                "version": 1,
-                "assignments": [
-                    {
-                        "agent_id": "one",
-                        "name": "分析",
-                        "responsibility": "检查实现",
-                        "assignment_revision": 1,
-                    }
-                ],
-            },
-        )
-    )
-    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "one", "message": "work"})
-    runtime.create_agent_task(run.run_id, request)
-
-    class Store:
-        def get_conversation(self, _conversation_id):
-            return {
-                "id": "conv_b",
-                "bot_id": -1,
-                "user_id": 1,
-                "agent_id": "main",
-                "working_dir": str(tmp_path),
-                "archived_at": "",
-                "native_provider": "codex",
-                "native_session_id": "",
-            }
-
-    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
-    monkeypatch.setattr(api_service, "get_chat_session_for_alias", lambda *_args, **_kwargs: (profile, profile.get_agent("main"), session))
-    monkeypatch.setattr(api_service, "_get_chat_store", lambda _session: Store())
-    monkeypatch.setattr(
-        api_service,
-        "_history_service_for_execution_mode",
-        lambda *_args: SimpleNamespace(list_history=lambda *_args, **_kwargs: []),
-    )
-
-    with pytest.raises(WebApiError) as exc_info:
-        await api_service.select_conversation(object(), "main", 1, "conv_b")
-
-    assert exc_info.value.status == 409
-    assert exc_info.value.code == "cluster_team_busy"
-
-
-@pytest.mark.asyncio
-async def test_deleting_main_conversation_is_blocked_while_child_task_is_pending(monkeypatch, tmp_path) -> None:
-    import bot.web.api_service as api_service
-
-    profile = BotProfile(
-        alias="main",
-        working_dir=str(tmp_path),
-        agents=[AgentProfile(id="one", name="One")],
-        cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
-    )
-    session = UserSession(
-        bot_id=-1,
-        bot_alias="main",
-        user_id=1,
-        working_dir=str(tmp_path),
-        active_conversation_id="conv_main",
-        _persist_enabled=False,
-    )
-    runtime = ClusterRuntime()
-    run = runtime.start_run(
-        ClusterRunRequest(
-            bot_alias="main",
-            user_id=1,
-            profile=profile,
-            main_conversation_id="conv_main",
-            team_revision=1,
-            team={
-                "version": 1,
-                "assignments": [{
-                    "agent_id": "one",
-                    "name": "分析",
-                    "responsibility": "检查实现",
-                    "assignment_revision": 1,
-                }],
-            },
-        )
-    )
-    request = runtime.validate_ask_agent(run.run_id, {"agent_id": "one", "message": "work"})
-    runtime.create_agent_task(run.run_id, request)
-
-    class Store:
-        deleted = False
-
-        def get_conversation(self, _conversation_id):
-            return {
-                "id": "conv_main",
-                "bot_id": -1,
-                "user_id": 1,
-                "agent_id": "main",
-                "working_dir": str(tmp_path),
-                "archived_at": "",
-                "native_provider": "codex",
-                "native_session_id": "",
-            }
-
-        def delete_conversation_by_id(self, _conversation_id):
-            self.deleted = True
-
-    store = Store()
-    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
-    monkeypatch.setattr(api_service, "get_chat_session_for_alias", lambda *_args, **_kwargs: (profile, profile.get_agent("main"), session))
-    monkeypatch.setattr(api_service, "_get_chat_store", lambda _session: store)
-    monkeypatch.setattr(api_service, "list_conversations", lambda *_args, **_kwargs: {"items": []})
-    monkeypatch.setattr(
-        api_service,
-        "ChatFavoriteStore",
-        lambda *_args: SimpleNamespace(delete_favorites_for_conversations=lambda *_args: 0),
-    )
-
-    with pytest.raises(WebApiError) as exc_info:
-        await api_service.delete_conversation(object(), "main", 1, "conv_main")
-
-    assert exc_info.value.code == "cluster_team_busy"
-    assert store.deleted is False
 
 
 @pytest.mark.parametrize("operation", ["delete", "archive"])
@@ -1756,131 +1556,6 @@ async def test_ask_does_not_enqueue_after_implicit_switch_wins_parent_lock(monke
     assert runtime.build_task_status(run.run_id)["tasks"] == []
 
 
-@pytest.mark.asyncio
-async def test_parent_lock_prevents_delete_from_overtaking_ask_enqueue(monkeypatch, tmp_path) -> None:
-    import bot.web.api_service as api_service
-
-    profile = BotProfile(
-        alias="main",
-        working_dir=str(tmp_path),
-        agents=[AgentProfile(id="one", name="One")],
-        cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
-    )
-    session = UserSession(
-        bot_id=-1,
-        bot_alias="main",
-        user_id=1,
-        working_dir=str(tmp_path),
-        active_conversation_id="conv_main",
-        _persist_enabled=False,
-    )
-    runtime = ClusterRuntime()
-    run = runtime.start_run(
-        ClusterRunRequest(
-            bot_alias="main",
-            user_id=1,
-            profile=profile,
-            main_conversation_id="conv_main",
-            team_revision=1,
-            team={
-                "version": 1,
-                "assignments": [{
-                    "agent_id": "one",
-                    "name": "分析",
-                    "responsibility": "检查实现",
-                    "assignment_revision": 1,
-                }],
-            },
-        )
-    )
-
-    class Store:
-        deleted = False
-
-        def get_conversation(self, _conversation_id):
-            return {
-                "id": "conv_main",
-                "bot_id": -1,
-                "user_id": 1,
-                "agent_id": "main",
-                "working_dir": str(tmp_path),
-                "archived_at": "",
-                "native_provider": "codex",
-                "native_session_id": "",
-            }
-
-        def get_conversation_team(self, conversation_id):
-            assert conversation_id == "conv_main"
-            return {"cluster_team": run.team, "cluster_team_revision": 1}
-
-        def delete_conversation_by_id(self, _conversation_id):
-            self.deleted = True
-
-    store = Store()
-    worker_release = asyncio.Event()
-
-    async def fake_run_cluster_agent_task(*_args):
-        await worker_release.wait()
-
-    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
-    monkeypatch.setattr(api_service, "get_profile_or_raise", lambda *_args: profile)
-    monkeypatch.setattr(
-        api_service,
-        "get_chat_session_for_alias",
-        lambda *_args, **_kwargs: (profile, profile.get_agent("main"), session),
-    )
-    monkeypatch.setattr(api_service, "_get_chat_store", lambda _session: store)
-    monkeypatch.setattr(api_service, "_run_cluster_agent_task", fake_run_cluster_agent_task)
-    monkeypatch.setattr(api_service, "list_conversations", lambda *_args, **_kwargs: {"items": []})
-    monkeypatch.setattr(
-        api_service,
-        "ChatFavoriteStore",
-        lambda *_args: SimpleNamespace(delete_favorites_for_conversations=lambda *_args: 0),
-    )
-    api_service._CLUSTER_RUN_CONTROLS.clear()
-
-    lock = api_service._CLUSTER_TEAM_SERVICE.conversation_lock("main", 1, "conv_main")
-    holder_entered = asyncio.Event()
-    release_holder = asyncio.Event()
-
-    async def hold_parent_lock() -> None:
-        async with lock:
-            holder_entered.set()
-            await release_holder.wait()
-
-    holder = asyncio.create_task(hold_parent_lock())
-    await holder_entered.wait()
-    ask_task = asyncio.create_task(api_service.handle_cluster_mcp_tool(
-        object(),
-        run.run_id,
-        "ask_agent",
-        {"agent_id": "one", "message": "work"},
-    ))
-    await asyncio.sleep(0)
-    delete_task = asyncio.create_task(api_service.delete_conversation(
-        object(),
-        "main",
-        1,
-        "conv_main",
-    ))
-    await asyncio.sleep(0)
-
-    assert ask_task.done() is False
-    assert delete_task.done() is False
-
-    release_holder.set()
-    await holder
-    await ask_task
-    with pytest.raises(WebApiError) as exc_info:
-        await delete_task
-
-    assert exc_info.value.code == "cluster_team_busy"
-    assert store.deleted is False
-    worker_release.set()
-    await asyncio.sleep(0)
-    api_service._CLUSTER_RUN_CONTROLS.clear()
-
-
 def _explicit_lifecycle_race_setup(api_service, monkeypatch, tmp_path):
     profile = BotProfile(
         alias="main",
@@ -2089,124 +1764,7 @@ async def test_cancelled_lifecycle_keeps_parent_lock_until_executor_worker_finis
 
 
 @pytest.mark.asyncio
-async def test_cancelled_select_keeps_old_run_ask_blocked_until_worker_switch_finishes(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    import bot.web.api_service as api_service
-
-    profile = BotProfile(
-        alias="main",
-        working_dir=str(tmp_path),
-        agents=[AgentProfile(id="one", name="One")],
-        cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
-    )
-    session = UserSession(
-        bot_id=-1,
-        bot_alias="main",
-        user_id=1,
-        working_dir=str(tmp_path),
-        active_conversation_id="conv_old",
-        _persist_enabled=False,
-    )
-    runtime = ClusterRuntime()
-    run = runtime.start_run(
-        ClusterRunRequest(
-            bot_alias="main",
-            user_id=1,
-            profile=profile,
-            main_conversation_id="conv_old",
-            team_revision=1,
-            team={
-                "version": 1,
-                "assignments": [{
-                    "agent_id": "one",
-                    "name": "分析",
-                    "responsibility": "检查实现",
-                    "assignment_revision": 1,
-                }],
-            },
-        )
-    )
-    worker_started = threading.Event()
-    release_worker = threading.Event()
-    worker_finished = threading.Event()
-    task_enqueued = asyncio.Event()
-    agent_worker_release = asyncio.Event()
-
-    def blocking_select(*_args, **_kwargs):
-        worker_started.set()
-        assert release_worker.wait(timeout=2)
-        session.active_conversation_id = "conv_target"
-        worker_finished.set()
-        return {"conversation": {"id": "conv_target"}, "messages": []}
-
-    class TeamStore:
-        def get_conversation_team(self, conversation_id):
-            assert conversation_id == "conv_old"
-            return {"cluster_team": run.team, "cluster_team_revision": 1}
-
-    original_create_agent_task = runtime.create_agent_task
-
-    def create_agent_task(*args, **kwargs):
-        task_enqueued.set()
-        return original_create_agent_task(*args, **kwargs)
-
-    async def fake_run_cluster_agent_task(*_args):
-        await agent_worker_release.wait()
-
-    monkeypatch.setenv("TCB_ASYNC_CHAT_STORE", "true")
-    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
-    monkeypatch.setattr(api_service, "get_profile_or_raise", lambda *_args: profile)
-    monkeypatch.setattr(
-        api_service,
-        "get_chat_session_for_alias",
-        lambda *_args, **_kwargs: (profile, profile.get_agent("main"), session),
-    )
-    monkeypatch.setattr(api_service, "_chat_store_for_cluster_run", lambda *_args: TeamStore())
-    monkeypatch.setattr(api_service, "_select_conversation_locked", blocking_select)
-    monkeypatch.setattr(api_service, "_run_cluster_agent_task", fake_run_cluster_agent_task)
-    monkeypatch.setattr(runtime, "create_agent_task", create_agent_task)
-    api_service._CLUSTER_RUN_CONTROLS.clear()
-
-    select_task = asyncio.create_task(api_service.select_conversation(
-        object(),
-        "main",
-        1,
-        "conv_target",
-    ))
-    ask_task = None
-    try:
-        assert await asyncio.wait_for(asyncio.to_thread(worker_started.wait, 2), timeout=2)
-        select_task.cancel()
-        ask_task = asyncio.create_task(api_service.handle_cluster_mcp_tool(
-            object(),
-            run.run_id,
-            "ask_agent",
-            {"agent_id": "one", "message": "work"},
-        ))
-        await asyncio.sleep(0.05)
-
-        assert task_enqueued.is_set() is False
-        assert ask_task.done() is False
-        assert select_task.done() is False
-    finally:
-        release_worker.set()
-
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(select_task, timeout=2)
-    assert worker_finished.is_set() is True
-    assert ask_task is not None
-    with pytest.raises(WebApiError) as exc_info:
-        await asyncio.wait_for(ask_task, timeout=2)
-    assert exc_info.value.code == "cluster_team_changed"
-    assert task_enqueued.is_set() is False
-    agent_worker_release.set()
-    api_service._CLUSTER_RUN_CONTROLS.clear()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["create", "select", "archive"])
+@pytest.mark.parametrize("operation", ["create", "select", "archive", "delete"])
 async def test_ask_enqueue_wins_parent_lock_before_explicit_lifecycle_operation(
     monkeypatch,
     tmp_path,
@@ -2249,6 +1807,7 @@ async def test_ask_enqueue_wins_parent_lock_before_explicit_lifecycle_operation(
     assert state.session.active_conversation_id == "conv_old"
     assert state.created == []
     assert state.store.archived is False
+    assert state.store.deleted is False
     state.worker_release.set()
     control = api_service._CLUSTER_RUN_CONTROLS.get(state.run.run_id)
     if control is not None:

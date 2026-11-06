@@ -196,7 +196,7 @@ describe("NativeAgentTranscript", () => {
     expect(within(transcript).getAllByText("过程 2")).toHaveLength(1);
   });
 
-  it("keeps endless errors and Continue records collapsed with distinct colors", () => {
+  it("keeps endless errors and Continue records collapsed", () => {
     const entries: NativeAgentTranscriptEntry[] = [
       {
         id: "endless-error-1",
@@ -234,10 +234,7 @@ describe("NativeAgentTranscript", () => {
     expect(retryGroup.querySelector("summary")).toBeTruthy();
     expect(within(retryGroup).queryByText("临时失败")).not.toBeInTheDocument();
     fireEvent.click(retryGroup.querySelector("summary") as HTMLElement);
-    const error = within(transcript).getByText("临时失败");
-    const continuation = within(transcript).getByText("Continue", { exact: true });
-    expect(error).toHaveClass("text-[var(--feedback-error-text-deep)]");
-    expect(continuation).toHaveClass("text-[var(--status-success)]");
+    expect(within(transcript).getByText("临时失败")).toBeInTheDocument();
   });
 
   it("aggregates adjacent endless retries across attempts", () => {

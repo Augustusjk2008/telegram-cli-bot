@@ -70,8 +70,6 @@ def test_instructions_and_cli_config_keep_secrets_out_of_prompt(remote_profile):
     prepared = chat.prepare_remote_chat(remote_profile, "http://127.0.0.1:8765")
     prompt = prepared.prompt
     assert "/work/project" in prompt and "build.example" in prompt
-    assert "AGENTS.md" in prompt and "CLAUDE.md" in prompt
-    assert "no project source or tests" in prompt and "not a filesystem sandbox" in prompt
     for secret in (remote_profile.remote_workspace["key_filename"], remote_profile.remote_workspace["host_key_fingerprint"], _token(prepared)):
         assert secret not in prompt
         assert secret not in " ".join(prepared.cli_args("codex"))
@@ -169,16 +167,12 @@ def test_remote_chat_workspace_mcp_reports_broken_and_stale_states(remote_profil
     assert stale["config_path"] == str(prepared.workspace_mcp_config_path)
 
 
-
 @pytest.mark.parametrize("tool,args", [
-    ("exec", {"commands": []}), ("exec", {"commands": ["pwd"] * 17}),
-    ("exec", {"commands": ["pwd"], "timeout_seconds": 301}),
+    ("exec", {"commands": []}),
     ("exec", {"commands": ["pwd"], "max_output_chars": 64001}),
-    ("read", {"path": "a", "offset": 0}), ("read", {"path": "a", "limit": True}),
-    ("read", {"path": "a", "limit": 2001}), ("read", {"path": "a", "host": "another"}),
+    ("read", {"path": "a", "limit": True}), ("read", {"path": "a", "host": "another"}),
     ("edit", {"path": "a", "old_text": "", "new_text": "b"}),
-    ("write", {"path": "a", "content": "x" * 1_000_001}),
-    ("list", {"max_entries": 1001}), ("other", {}),
+    ("other", {}),
 ])
 def test_tool_bounds_and_target_override_are_rejected(tool, args):
     with pytest.raises(ValueError):

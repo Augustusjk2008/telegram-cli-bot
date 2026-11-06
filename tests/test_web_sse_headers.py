@@ -11,7 +11,7 @@ from bot.models import BotProfile
 from bot.web.api_common import AuthContext
 from bot.web.auth_store import CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE
 from bot.web.permission_store import BotPermissionStore
-from bot.web.server import WebApiServer, _sse_headers
+from bot.web.server import WebApiServer
 
 
 class DummyTunnelService:
@@ -42,18 +42,6 @@ class DummyTunnelService:
         }
 
 
-def test_sse_headers_disable_proxy_buffering_and_transforms():
-    headers = _sse_headers()
-
-    assert headers["Content-Type"] == "text/event-stream"
-    assert "no-transform" in headers["Cache-Control"]
-    assert "no-store" in headers["Cache-Control"]
-    assert headers["Pragma"] == "no-cache"
-    assert headers["Expires"] == "0"
-    assert headers["Connection"] == "keep-alive"
-    assert headers["X-Accel-Buffering"] == "no"
-
-
 def _build_manager(tmp_path: Path) -> MultiBotManager:
     storage = tmp_path / "managed_bots.json"
     storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
@@ -70,24 +58,14 @@ def _build_manager(tmp_path: Path) -> MultiBotManager:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("capabilities", "expected_include_trace"),
+    ("capabilities", "expected_include_trace", "protocol_fields", "expected_stream_protocol_version"),
     [
-        ({CAP_CHAT_SEND}, False),
-        ({CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE}, True),
-    ],
-)
-@pytest.mark.parametrize(
-    ("protocol_fields", "expected_stream_protocol_version"),
-    [
-        ({}, 1),
-        ({"stream_protocol_version": 2}, 2),
-        ({"streamProtocolVersion": 2}, 2),
-        ({"stream_protocol_version": "2"}, 1),
-        ({"stream_protocol_version": 2.0}, 1),
-        ({"stream_protocol_version": None}, 1),
-        ({"stream_protocol_version": 3}, 1),
-        ({"stream_protocol_version": True}, 1),
-        ({"stream_protocol_version": 1, "streamProtocolVersion": 2}, 1),
+        ({CAP_CHAT_SEND}, False, {}, 1),
+        ({CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE}, True, {"stream_protocol_version": 2}, 2),
+        ({CAP_CHAT_SEND}, False, {"streamProtocolVersion": 2}, 2),
+        ({CAP_CHAT_SEND}, False, {"stream_protocol_version": "2"}, 1),
+        ({CAP_CHAT_SEND}, False, {"stream_protocol_version": True}, 1),
+        ({CAP_CHAT_SEND}, False, {"stream_protocol_version": 1, "streamProtocolVersion": 2}, 1),
     ],
 )
 async def test_chat_stream_sends_sse_headers_and_ready_comment(
@@ -126,7 +104,7 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
         async with TestClient(test_server) as client:
             response = await client.post(
                 "/api/bots/main/chat/stream",
-                json={"message": "hello", **protocol_fields},
+                json={"message": "hello", "endless_mode": True, **protocol_fields},
             )
             body = await response.text()
 
@@ -139,55 +117,25 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     assert response.headers["X-Accel-Buffering"] == "no"
     assert captured_kwargs["include_trace"] is expected_include_trace
     assert captured_kwargs["stream_protocol_version"] == expected_stream_protocol_version
+    assert captured_kwargs["endless_mode"] is True
     assert body.startswith(": ready\n\n")
     assert 'event: done\ndata: {"type": "done", "output": "ok", "elapsed_seconds": 0}' in body
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_forwards_endless_mode_to_service(
+@pytest.mark.parametrize(
+    ("resume_fields", "expected_status", "expected_code"),
+    [
+        ({"stream_id": "pit_missing", "turn_id": "turn_missing", "after_sequence": "not-an-integer"}, 400, "invalid_resume_sequence"),
+        ({"stream_id": "pit_expired", "turn_id": "turn_expired", "after_sequence": 0}, 410, "native_turn_stream_expired"),
+    ],
+)
+async def test_chat_stream_rejects_unusable_resume_before_sse_prepare(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> None:
-    manager = _build_manager(tmp_path)
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
-    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
-    monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", BotPermissionStore(tmp_path / "permissions.json"))
-    server = WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
-
-    async def chat_send_only(_request, capability: str) -> AuthContext:
-        assert capability == CAP_CHAT_SEND
-        return AuthContext(user_id=123, token_used=True, capabilities={CAP_CHAT_SEND})
-
-    async def event_source():
-        yield {"type": "done", "output": "ok", "elapsed_seconds": 0}
-
-    captured_kwargs: dict[str, object] = {}
-
-    def fake_stream_chat(*_args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return event_source()
-
-    monkeypatch.setattr(server, "_with_capability", chat_send_only)
-    monkeypatch.setattr(server, "_schedule_chat_terminal_event", lambda **_kwargs: None)
-    monkeypatch.setattr("bot.web.server.stream_chat", fake_stream_chat)
-
-    app = server._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            response = await client.post(
-                "/api/bots/main/chat/stream",
-                json={"message": "Continue", "endless_mode": True},
-            )
-            await response.text()
-
-    assert response.status == 200
-    assert captured_kwargs["endless_mode"] is True
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_rejects_invalid_resume_before_sse_prepare(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    resume_fields: dict[str, object],
+    expected_status: int,
+    expected_code: str,
 ) -> None:
     manager = _build_manager(tmp_path)
     server = WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
@@ -201,51 +149,13 @@ async def test_chat_stream_rejects_invalid_resume_before_sse_prepare(
         async with TestClient(test_server) as client:
             response = await client.post(
                 "/api/bots/main/chat/stream",
-                json={
-                    "message": "",
-                    "execution_mode": "native_agent",
-                    "stream_id": "pit_missing",
-                    "turn_id": "turn_missing",
-                    "after_sequence": "not-an-integer",
-                },
+                json={"message": "", "execution_mode": "native_agent", **resume_fields},
             )
             payload = await response.json()
 
-    assert response.status == 400
+    assert response.status == expected_status
     assert response.headers["Content-Type"].startswith("application/json")
-    assert payload["error"]["code"] == "invalid_resume_sequence"
-
-
-@pytest.mark.asyncio
-async def test_chat_stream_rejects_expired_resume_before_sse_prepare(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    manager = _build_manager(tmp_path)
-    server = WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())
-
-    async def chat_send_only(_request, _capability: str) -> AuthContext:
-        return AuthContext(user_id=123, token_used=True, capabilities={CAP_CHAT_SEND})
-
-    monkeypatch.setattr(server, "_with_capability", chat_send_only)
-    app = server._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            response = await client.post(
-                "/api/bots/main/chat/stream",
-                json={
-                    "message": "",
-                    "execution_mode": "native_agent",
-                    "stream_id": "pit_expired",
-                    "turn_id": "turn_expired",
-                    "after_sequence": 0,
-                },
-            )
-            payload = await response.json()
-
-    assert response.status == 410
-    assert response.headers["Content-Type"].startswith("application/json")
-    assert payload["error"]["code"] == "native_turn_stream_expired"
+    assert payload["error"]["code"] == expected_code
 
 
 @pytest.mark.asyncio

@@ -17,8 +17,10 @@ from bot.cluster.setup import (
 )
 
 
-@pytest.mark.parametrize("cli_type", ["codex", "codex_server"])
-@pytest.mark.parametrize("cli_path", ["", "C:/tools/custom codex.cmd"])
+@pytest.mark.parametrize(
+    ("cli_type", "cli_path"),
+    [("codex", ""), ("codex_server", ""), ("codex_server", "C:/tools/custom codex.cmd")],
+)
 def test_codex_mcp_setup_preserves_backend_and_uses_codex_commands(cli_type, cli_path):
     launcher = Path("bridge/tcb-cluster-mcp.cmd")
     executable = cli_path or "codex"

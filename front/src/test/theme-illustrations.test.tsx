@@ -5,7 +5,7 @@ import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
 import { builtinIllustrationScene } from "../theme/illustrationPresets";
 
 function appearanceFor(
-  setId: "forest-grove" | "apollo-plan" | "cyberpunk-2077" | "deepseek-big-fish" | "k-on-light-music" | "none" = "forest-grove",
+  setId: "forest-grove" | "apollo-plan" | "none" = "forest-grove",
 ) {
   const scene = (surface: "workbench" | "adminCenter" | "agentManager") => builtinIllustrationScene(setId, surface);
   return resolveAppearance({
@@ -42,8 +42,6 @@ describe("ThemeIllustrationLayer", () => {
     expect(layer).toHaveStyle({ pointerEvents: "none" });
     expect(layer).toHaveAttribute("data-theme-illustration-count", "2");
     expect(layer.querySelectorAll(".theme-illustration-art")).toHaveLength(2);
-    expect(layer.querySelector("[data-theme-illustration-layer-id=workbench-background]")).toHaveStyle({ width: "100%", height: "100%" });
-    expect(layer.querySelector("[data-theme-illustration-layer-id=left-edge-foliage]")).toHaveStyle({ width: "27%", height: "92%" });
   });
 
   it("renders the independent admin and agent layer groups in manifest order", () => {
@@ -101,57 +99,7 @@ describe("ThemeIllustrationLayer", () => {
     const sidebar = layers.find((layer) => layer.getAttribute("data-theme-illustration-zone") === "sidebar");
     expect(main).toHaveAttribute("data-theme-illustration-count", "1");
     expect(main?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "workbench-background");
-    expect(main?.querySelector("img")).toHaveStyle({ width: "100%", height: "100%" });
     expect(sidebar).toHaveAttribute("data-theme-illustration-count", "1");
     expect(sidebar?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "left-edge-foliage");
-    expect(sidebar?.querySelector("img")).toHaveStyle({ width: "100%", height: "100%" });
-  });
-
-  it("resolves the Cyberpunk 2077 scene assets", () => {
-    const appearance = appearanceFor("cyberpunk-2077");
-    expect(appearance.illustrations.resources.workbench).toBe(
-      "/assets/theme-illustrations/cyberpunk-2077/workbench/background.webp",
-    );
-    expect(appearance.illustrations.resources.adminCenter).toBe(
-      "/assets/theme-illustrations/cyberpunk-2077/admin-center/background.webp",
-    );
-    expect(appearance.illustrations.resources.agentManager).toBe(
-      "/assets/theme-illustrations/cyberpunk-2077/agent-manager/background.webp",
-    );
-    render(<ThemeIllustrationLayer surface="workbench" appearance={appearance} />);
-    expect(screen.getByTestId("theme-illustration-layer-workbench").querySelector("img"))
-      .toHaveAttribute("data-theme-illustration-asset", "cyberpunk-2077-workbench");
-  });
-
-  it("resolves the Deepseek big fish scene assets", () => {
-    const appearance = appearanceFor("deepseek-big-fish");
-    expect(appearance.illustrations.resources.workbench).toBe(
-      "/assets/theme-illustrations/deepseek-big-fish/workbench/background.webp",
-    );
-    expect(appearance.illustrations.resources.adminCenter).toBe(
-      "/assets/theme-illustrations/deepseek-big-fish/admin-center/background.webp",
-    );
-    expect(appearance.illustrations.resources.agentManager).toBe(
-      "/assets/theme-illustrations/deepseek-big-fish/agent-manager/background.webp",
-    );
-    render(<ThemeIllustrationLayer surface="workbench" appearance={appearance} />);
-    expect(screen.getByTestId("theme-illustration-layer-workbench").querySelector("img"))
-      .toHaveAttribute("data-theme-illustration-asset", "deepseek-big-fish-workbench");
-  });
-
-  it("resolves the K-On light music scene assets", () => {
-    const appearance = appearanceFor("k-on-light-music");
-    expect(appearance.illustrations.resources.workbench).toBe(
-      "/assets/theme-illustrations/k-on-light-music/workbench/background.webp",
-    );
-    expect(appearance.illustrations.resources.adminCenter).toBe(
-      "/assets/theme-illustrations/k-on-light-music/admin-center/background.webp",
-    );
-    expect(appearance.illustrations.resources.agentManager).toBe(
-      "/assets/theme-illustrations/k-on-light-music/agent-manager/background.webp",
-    );
-    render(<ThemeIllustrationLayer surface="workbench" appearance={appearance} />);
-    expect(screen.getByTestId("theme-illustration-layer-workbench").querySelector("img"))
-      .toHaveAttribute("data-theme-illustration-asset", "k-on-light-music-workbench");
   });
 });

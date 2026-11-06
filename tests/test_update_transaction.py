@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from scripts import update_transaction as transaction

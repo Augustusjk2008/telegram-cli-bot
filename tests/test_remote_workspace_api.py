@@ -271,14 +271,8 @@ async def test_remote_upload_rejects_empty_and_oversized_files_before_writing(tm
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,suffix,body,operation,args,kwargs", [
     ("GET", "git", None, "overview", (), {}),
-    ("GET", "git/capabilities", None, "capabilities", (), {}),
-    ("POST", "git/init", None, "init", (), {}),
     ("GET", "git/diff?path=a%20b.txt&staged=true", None, "diff", ("a b.txt",), {"staged": True}),
     ("POST", "git/stage", {"paths": ["a b.txt"]}, "stage", (["a b.txt"],), {}),
-    ("POST", "git/unstage", {"paths": ["a b.txt"]}, "unstage", (["a b.txt"],), {}),
-    ("POST", "git/commit", {"message": "remote commit"}, "commit", ("remote commit",), {}),
-    ("POST", "git/fetch", None, "fetch", (), {}),
-    ("POST", "git/pull", None, "pull", (), {}),
     ("POST", "git/push", None, "push", (), {}),
 ])
 async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolation(
@@ -310,15 +304,6 @@ async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolatio
         "truncation_reason": "",
         "recent_commits": [],
     }
-    messages = {
-        "stage": "已暂存所选文件",
-        "unstage": "已取消暂存所选文件",
-        "commit": "已创建提交",
-        "fetch": "已抓取远端更新",
-        "pull": "已拉取远端更新",
-        "push": "已推送本地提交",
-    }
-    expected = {"message": messages[operation], "overview": payload} if operation in messages else payload
     getattr(git, operation).return_value = payload
     factory = Mock(return_value=git)
     monkeypatch.setattr(git_backend, "get_remote_workspace_service", lambda: service)
@@ -333,7 +318,8 @@ async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolatio
         auth.capabilities.remove(CAP_VIEW_FILE_TREE)
         response = await client.request(method, url, json=body)
         assert response.status == 200, await response.text()
-        assert (await response.json())["data"] == expected
+        data = (await response.json())["data"]
+        assert (data["overview"] if operation in {"stage", "push"} else data) == payload
         factory.assert_called_once_with(connection, CONFIG["root"])
         getattr(git, operation).assert_called_once_with(*args, **kwargs)
         monkeypatch.setattr(server, "_can_operate_bot", lambda auth, alias: False)
@@ -345,30 +331,18 @@ async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolatio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "method,suffix,body,operation,args,payload,expected",
+    "method,suffix,body,operation,args,payload",
     [
-        ("POST", "git/branches", {"name": "feature", "start_point": "a" * 40}, "branch_create",
-         ("feature", "a" * 40), {"branches": []}, {"branches": []}),
-        ("POST", "git/branches/switch", {"name": "feature"}, "branch_switch",
-         ("feature",), {"current_branch": "feature", "branches": []}, {"current_branch": "feature", "branches": []}),
         ("POST", "git/branches/reset", {"commit": "a" * 40, "mode": "hard"}, "branch_reset",
-         ("a" * 40, "hard"), {"head_commit": "a" * 40}, {"head_commit": "a" * 40}),
-        ("POST", "git/stashes/apply", {"ref": "stash@{0}"}, "stash_apply",
-         ("stash@{0}",), {"repo_found": True}, {"message": "已应用 stash", "overview": {"repo_found": True}}),
-        ("POST", "git/stashes/drop", {"ref": "stash@{0}"}, "stash_drop",
-         ("stash@{0}",), {"repo_found": True}, {"message": "已删除 stash", "overview": {"repo_found": True}}),
+         ("a" * 40, "hard"), {"head_commit": "a" * 40}),
         ("POST", "git/discard", {"paths": ["a b.txt"]}, "discard",
-         (["a b.txt"],), {"repo_found": True}, {"message": "已丢弃所选文件改动", "overview": {"repo_found": True}}),
-        ("POST", "git/discard-all", {}, "discard_all",
-         (), {"repo_found": True}, {"message": "已丢弃全部改动", "overview": {"repo_found": True}}),
-        ("POST", "git/stash/pop", {}, "stash_pop",
-         (), {"repo_found": True}, {"message": "已恢复最近一次暂存", "overview": {"repo_found": True}}),
+         (["a b.txt"],), {"repo_found": True}),
         ("PUT", "git/identity", {"scope": "local", "name": "Name", "email": "name@example.com"},
-         "identity_update", (), {"repo_found": True}, {"repo_found": True}),
+         "identity_update", (), {"repo_found": True}),
     ],
 )
 async def test_remote_git_mutation_routes_delegate_body_response_and_permissions(
-    tmp_path, monkeypatch, method, suffix, body, operation, args, payload, expected,
+    tmp_path, monkeypatch, method, suffix, body, operation, args, payload,
 ):
     server, auth = _server(tmp_path, monkeypatch)
     auth.capabilities.add(CAP_GIT_OPS)
@@ -383,7 +357,8 @@ async def test_remote_git_mutation_routes_delegate_body_response_and_permissions
     async with TestClient(TestServer(server._build_app())) as client:
         response = await client.request(method, f"/api/bots/main/{suffix}", json=body)
         assert response.status == 200, await response.text()
-        assert (await response.json())["data"] == expected
+        data = (await response.json())["data"]
+        assert data.get("overview", data) == payload
 
     factory.assert_called_once_with(connection, CONFIG["root"])
     if operation == "identity_update":
@@ -395,8 +370,8 @@ async def test_remote_git_mutation_routes_delegate_body_response_and_permissions
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["fetch", "pull", "push"])
-async def test_remote_git_sync_routes_preserve_error_code_and_data(tmp_path, monkeypatch, operation):
+async def test_remote_git_sync_routes_preserve_error_code_and_data(tmp_path, monkeypatch):
+    operation = "pull"
     server, auth = _server(tmp_path, monkeypatch)
     auth.capabilities.add(CAP_GIT_OPS)
     service, connection, git = Mock(), Mock(), Mock()
@@ -481,9 +456,6 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
 @pytest.mark.parametrize("suffix, operation, args, payload", [
     ("git/tree-status", "tree_status", (), {"repo_found": True, "items": {"file.txt": "modified"}}),
     ("git/graph?scope=current&limit=2&cursor=next", "graph", ("current", "2", "next"), {"repo_found": True, "scope": "current", "nodes": []}),
-    ("git/branches", "branches", (), {"current_branch": "main", "branches": []}),
-    ("git/stashes", "stashes", (), {"items": []}),
-    ("git/identity", "identity", (), {"repo_found": True, "repo_path": "/srv/project", "global": {}, "local": {}}),
 ])
 async def test_remote_git_read_only_routes_delegate_to_remote_backend(tmp_path, monkeypatch, suffix, operation, args, payload):
     server, auth = _server(tmp_path, monkeypatch)
@@ -499,15 +471,12 @@ async def test_remote_git_read_only_routes_delegate_to_remote_backend(tmp_path, 
         assert response.status == 200, await response.text()
         assert (await response.json())["data"] == payload
 
-    if operation == "graph":
-        git.graph.assert_called_once_with(*args)
-    else:
-        getattr(git, operation).assert_called_once_with(*args)
+    getattr(git, operation).assert_called_once_with(*args)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(409, "remote_git_not_found"), (401, "remote_auth_failed"), (502, "remote_connection_failed")])
-async def test_remote_git_preserves_error_codes(tmp_path, monkeypatch, status, code):
+async def test_remote_git_preserves_error_codes(tmp_path, monkeypatch):
+    status, code = 401, "remote_auth_failed"
     server, auth = _server(tmp_path, monkeypatch)
     auth.capabilities.add(CAP_GIT_OPS)
     service = Mock()

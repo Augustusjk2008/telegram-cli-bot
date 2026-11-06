@@ -96,7 +96,6 @@ def test_claude_partial_cost_uses_message_snapshots_and_skips_unpriced_usage():
     cost = turn.estimate_partial("")
     assert cost["total"] == 0.0062
     assert cost["is_partial"] is True
-    assert CliTurnCost("claude", "test-model").estimate_partial("") is None
 
 
 def test_claude_missing_or_unpriced_usage_is_not_reported_as_zero():

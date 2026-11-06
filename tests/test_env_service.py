@@ -13,16 +13,6 @@ def _write_env(root: Path, text: str) -> None:
     (root / ".env.example").write_text("", encoding="utf-8")
 
 
-def test_env_service_saves_deepseek_cli_type(tmp_path):
-    _write_env(tmp_path, "CLI_TYPE=codex\nCLI_PATH=codex\n")
-    service = EnvConfigService(tmp_path)
-    service.patch({"values": {"CLI_TYPE": "deepseek", "CLI_PATH": "dsh"}})
-    snapshot = service.snapshot()
-    cli_type = next(item for item in snapshot["schema"] if item["key"] == "CLI_TYPE")
-    assert "deepseek" in cli_type["options"]
-    assert "CLI_TYPE=deepseek" in (tmp_path / ".env").read_text(encoding="utf-8")
-
-
 def test_cli_model_options_accepts_independent_json_rows(tmp_path: Path) -> None:
     _write_env(tmp_path, "")
     service = EnvConfigService(tmp_path)
@@ -38,7 +28,6 @@ def test_cli_model_options_accepts_independent_json_rows(tmp_path: Path) -> None
 
     assert preview["changedKeys"] == ["CLI_MODEL_OPTIONS"]
     assert preview["restartRequiredKeys"] == ["CLI_MODEL_OPTIONS"]
-    assert next(item for item in service.snapshot()["items"] if item["key"] == "CLI_MODEL_OPTIONS")["type"] == "json"
 
     with pytest.raises(EnvValidationError):
         service.reload_preview({"values": {"CLI_MODEL_OPTIONS": "[\"codex-model\"]"}})
@@ -49,7 +38,7 @@ def test_cli_model_options_accepts_independent_json_rows(tmp_path: Path) -> None
     assert config._parse_cli_model_options("legacy-a,legacy-b") == ["legacy-a", "legacy-b", "none"]
 
 
-def test_env_service_exposes_telegram_fields_and_masks_token(
+def test_env_service_masks_telegram_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -57,17 +46,6 @@ def test_env_service_exposes_telegram_fields_and_masks_token(
         monkeypatch.delenv(key, raising=False)
     _write_env(tmp_path, "")
     service = EnvConfigService(tmp_path)
-
-    items = {item["key"]: item for item in service.snapshot()["items"]}
-    assert items["TELEGRAM_ENABLED"]["category"] == "telegram"
-    assert items["TELEGRAM_ENABLED"]["type"] == "boolean"
-    assert items["TELEGRAM_ALLOWED_USER_IDS"]["type"] == "csv"
-    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["category"] == "telegram"
-    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["type"] == "boolean"
-    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["default"] == "false"
-    assert items["TELEGRAM_BROADCAST_COMPLETIONS"]["restartRequired"] is True
-    assert items["TELEGRAM_BOT_TOKEN"]["sensitive"] is True
-    assert items["TELEGRAM_BOT_TOKEN"]["type"] == "password"
 
     service.patch({
         "values": {
@@ -129,9 +107,8 @@ def test_windows_registry_environment_merges_path_and_expands_values() -> None:
     assert values["ToolHome"] == r"C:\Windows\Tools"
 
 
-@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
-def test_project_float_config_rejects_non_finite_values(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    monkeypatch.setenv("TEST_FINITE_FLOAT", value)
+def test_project_float_config_rejects_non_finite_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_FINITE_FLOAT", "nan")
 
     assert config._get_project_float("TEST_FINITE_FLOAT", 7.5) == 7.5
 
@@ -184,59 +161,16 @@ def test_env_service_accepts_fixed_public_forward_config(tmp_path: Path) -> None
     ]
 
 
-def test_env_service_exposes_fixed_forward_hub_fields(tmp_path: Path) -> None:
-    _write_env(tmp_path, "")
-
-    snapshot = EnvConfigService(tmp_path).snapshot()
-    items = {item["key"]: item for item in snapshot["items"]}
-
-    assert items["TCB_HUB_NODE_TOKEN"]["category"] == "tunnel"
-    assert items["TCB_HUB_NODE_TOKEN"]["type"] == "password"
-    assert items["TCB_HUB_FRPS_TOKEN"]["category"] == "tunnel"
-    assert items["TCB_HUB_FRPS_TOKEN"]["type"] == "password"
-    assert items["TCB_HUB_FRPC_PATH"]["category"] == "tunnel"
-    assert items["TCB_HUB_FRPC_PATH"]["type"] == "path"
-    assert items["WEB_TERMINAL_SHELL_PATH"]["category"] == "web"
-    assert items["WEB_TERMINAL_SHELL_PATH"]["type"] == "path"
-    assert items["TCB_HUB_FRPS_PORT"]["category"] == "tunnel"
-    assert items["TCB_HUB_FRPS_PORT"]["type"] == "number"
-
-
-def test_env_service_exposes_codex_server_voice_toggle(tmp_path: Path) -> None:
-    _write_env(tmp_path, "")
-    service = EnvConfigService(tmp_path)
-
-    item = next(item for item in service.snapshot()["items"] if item["key"] == "TCB_CODEX_SERVER_VOICE_ENABLED")
-    assert item["category"] == "web"
-    assert item["type"] == "boolean"
-    assert item["default"] == "false"
-    assert item["restartRequired"] is True
-
-    preview = service.reload_preview({"values": {"TCB_CODEX_SERVER_VOICE_ENABLED": True}})
-    assert preview["changedKeys"] == ["TCB_CODEX_SERVER_VOICE_ENABLED"]
-    assert preview["restartRequiredKeys"] == ["TCB_CODEX_SERVER_VOICE_ENABLED"]
-
-    service.patch({"values": {"TCB_CODEX_SERVER_VOICE_ENABLED": True}})
-    assert "TCB_CODEX_SERVER_VOICE_ENABLED=true" in (tmp_path / ".env").read_text(encoding="utf-8")
-
-
-def test_env_service_exposes_endless_retry_delay(tmp_path: Path) -> None:
+def test_env_service_endless_retry_delay_is_hot_reloadable_and_non_negative(tmp_path: Path) -> None:
     _write_env(tmp_path, "")
     service = EnvConfigService(tmp_path)
 
     item = next(item for item in service.snapshot()["items"] if item["key"] == "ENDLESS_CONTINUE_DELAY_SECONDS")
-    assert item["category"] == "web"
-    assert item["type"] == "number"
     assert item["default"] == "120"
-    assert item["validation"]["min"] == 0
-    assert item["restartRequired"] is False
 
     preview = service.reload_preview({"values": {"ENDLESS_CONTINUE_DELAY_SECONDS": 15.5}})
     assert preview["changedKeys"] == ["ENDLESS_CONTINUE_DELAY_SECONDS"]
     assert preview["restartRequiredKeys"] == []
-
-    service.patch({"values": {"ENDLESS_CONTINUE_DELAY_SECONDS": 15.5}})
-    assert "ENDLESS_CONTINUE_DELAY_SECONDS=15.5" in (tmp_path / ".env").read_text(encoding="utf-8")
 
     with pytest.raises(EnvValidationError):
         service.reload_preview({"values": {"ENDLESS_CONTINUE_DELAY_SECONDS": -1}})

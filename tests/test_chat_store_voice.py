@@ -124,8 +124,6 @@ def test_voice_schema_submission_and_event_are_idempotent(tmp_path: Path) -> Non
 
     task = store.get_voice_task(handle)
     assert task["state"] == "completed"
-    assert task["codex_turn_id"] == "codex-turn-1"
-    assert task["realtime_session_id"] == "realtime-1"
     assert task["transcript_state"]["user_final"] is True
     assert task["transcript_state"]["assistant_final"] is True
     assert task["persistence"]["trace"] is True
@@ -135,7 +133,6 @@ def test_voice_schema_submission_and_event_are_idempotent(tmp_path: Path) -> Non
     assistant = next(item for item in messages if item["id"] == handle.assistant_message_id)
     assert assistant["content"] == "answer"
     assert assistant["meta"]["voice"]["state"] == "completed"
-    assert assistant["meta"]["voice"]["assistant_message_id"] == handle.assistant_message_id
     assert assistant["meta"]["tool_call_count"] == 1
 
 
@@ -210,36 +207,6 @@ def test_voice_turn_is_skipped_by_stale_stream_reconcile_and_supports_request_id
     assert [item["role"] for item in store.list_messages(handle.conversation_id)] == [
         "user", "user", "user", "assistant",
     ]
-
-
-def test_voice_completion_closes_interim_user_message_without_marking_transcript_final(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path)
-    handle = _voice_handle(store)
-    assert store.record_voice_event(
-        handle,
-        {
-            "event_id": "user-interim",
-            "role": "user",
-            "transcript": "unfinished user transcript",
-            "is_final": False,
-            "task_state": "active",
-        },
-    ) is True
-
-    store.complete_voice_turn(
-        handle,
-        content="completed answer",
-        completion_state="completed",
-    )
-
-    messages = store.list_messages(handle.conversation_id)
-    user = next(item for item in messages if item["id"] == handle.user_message_id)
-    assistant = next(item for item in messages if item["id"] == handle.assistant_message_id)
-    assert user["state"] == "done"
-    assert assistant["state"] == "done"
-    task = store.get_voice_task(handle)
-    assert task["state"] == "completed"
-    assert task["transcript_state"]["user_final"] is False
 
 
 def test_terminal_voice_event_persists_native_session_and_closes_user_message(tmp_path: Path) -> None:

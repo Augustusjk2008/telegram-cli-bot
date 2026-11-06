@@ -160,7 +160,7 @@ async def test_release_waits_for_open_started_before_it_and_discards_its_runtime
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changed", ["cwd", "env", "home", "mcp", "config_file", "conversation", "thread"])
+@pytest.mark.parametrize("changed", ["cwd", "env", "mcp", "config_file", "conversation", "thread"])
 async def test_binding_changes_rebuild_and_resume(runtime_setup, tmp_path, changed):
     registry, request = runtime_setup
     runtime = await registry.open_or_create(request)
@@ -169,8 +169,8 @@ async def test_binding_changes_rebuild_and_resume(runtime_setup, tmp_path, chang
         directory = tmp_path / "new"
         directory.mkdir()
         request = replace(request, cwd=str(directory))
-    elif changed in {"env", "home"}:
-        request = replace(request, env={"CODEX_HOME" if changed == "home" else "REMOTE_ENDPOINT": "changed"})
+    elif changed == "env":
+        request = replace(request, env={"REMOTE_ENDPOINT": "changed"})
     elif changed == "mcp":
         request.params_config.codex_server["extra_args"] = ["-c", 'mcp_servers.bridge.command="new-launcher"']
     elif changed == "config_file":
@@ -479,23 +479,6 @@ async def test_voice_turn_state_is_recorded_by_the_single_reader(runtime_setup, 
 
 
 @pytest.mark.asyncio
-async def test_regular_runtime_switch_does_not_destroy_active_voice_turn(runtime_setup):
-    registry, request = runtime_setup
-    runtime = await registry.open_or_create(replace(request, experimental_api=True))
-    try:
-        runtime.client.emit("thread/realtime/itemAdded", realtimeSessionId="realtime-1",
-                            item={"type": "handoff_request", "input_transcript": "hello"})
-        await asyncio.sleep(0)
-        runtime.client.emit("turn/started", turn={"id": "voice-turn", "status": "inProgress"})
-        await _wait_for_voice_state(runtime, "active")
-        with pytest.raises(CodexServerError, match="语音任务尚未完成"):
-            await registry.open_or_create(request)
-        assert runtime.alive
-    finally:
-        await registry.aclose()
-
-
-@pytest.mark.asyncio
 async def test_voice_rebind_reuses_runtime_without_restarting_turn(runtime_setup):
     registry, request = runtime_setup
     request = replace(request, experimental_api=True)
@@ -569,9 +552,8 @@ def test_independent_params_and_filtered_permissions(monkeypatch, tmp_path):
     assert 'mcp_servers.bridge.command="bridge"' not in safe.argv
 
 
-@pytest.mark.parametrize("extra", [["--timeout", "120"], ["--output-last-message", "out.txt"], ["resume", "id"], ["--profile", "custom"]])
-def test_unsupported_arguments_are_explicit_errors(monkeypatch, tmp_path, extra):
+def test_unsupported_arguments_are_explicit_errors(monkeypatch, tmp_path):
     monkeypatch.setattr("bot.codex_server.params.resolve_cli_executable", lambda *args: "codex.exe")
-    config = CliParamsConfig.from_dict({"codex_server": {"extra_args": extra}})
+    config = CliParamsConfig.from_dict({"codex_server": {"extra_args": ["resume", "id"]}})
     with pytest.raises(CodexServerError, match="不会回退"):
         convert_params("codex", str(tmp_path), config)

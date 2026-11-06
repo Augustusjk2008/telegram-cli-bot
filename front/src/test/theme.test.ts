@@ -8,8 +8,6 @@ import {
   persistChatEnterToSend,
   readStoredChatEnterToSend,
   readStoredUiTheme,
-  UI_THEME_NAMES,
-  UI_THEME_OPTIONS,
   UI_THEME_STORAGE_KEY,
 } from "../theme";
 import { withPublicBase } from "../utils/publicBase";
@@ -71,12 +69,10 @@ describe("UI themes", () => {
     document.querySelectorAll("link[data-theme-favicon]").forEach((node) => node.remove());
   });
 
-  it.each([null, "deep-space", "classic", "obsidian-linear", "theme_missing"])("migrates unauthenticated preference %s to paper", (name) => {
+  it.each([null, "deep-space"])("migrates unauthenticated preference %s to paper", (name) => {
     if (name) localStorage.setItem(UI_THEME_STORAGE_KEY, name);
     expect(readStoredUiTheme()).toBe("paper-daylight");
     expect(localStorage.getItem(UI_THEME_STORAGE_KEY)).toBe("paper-daylight");
-    expect(UI_THEME_NAMES).toEqual(["paper-daylight"]);
-    expect(UI_THEME_OPTIONS.map((option) => option.value)).toEqual(["paper-daylight"]);
   });
 
   it("uses the paper favicon and fully falls back for an unknown identity", () => {

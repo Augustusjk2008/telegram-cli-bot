@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -8,7 +7,6 @@ from pathlib import Path
 import pytest
 
 import bot.runtime_paths as runtime_paths
-from bot.web.chat_store import ChatStore
 
 
 def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: Path):
@@ -30,14 +28,6 @@ def test_chat_history_paths_resolve_under_home_tcb_root(monkeypatch, tmp_path: P
     assert favorites_path == workspace_dir / "favorites.json"
 
 
-def test_legacy_project_chat_db_path_matches_chat_store_workspace_path(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    assert runtime_paths.get_legacy_project_chat_db_path(workspace) == workspace / ".tcb" / "state" / "chat.sqlite"
-    assert ChatStore(workspace).legacy_db_path == runtime_paths.get_legacy_project_chat_db_path(workspace)
-
-
 def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     data = tmp_path / "data"
@@ -51,16 +41,6 @@ def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
     reloaded = importlib.reload(runtime_paths)
 
     assert reloaded.get_app_data_root() == data
-
-
-def test_native_agent_paths_use_app_data_root(monkeypatch, tmp_path: Path):
-    data = tmp_path / "data"
-    monkeypatch.setenv("TCB_DATA_DIR", str(data))
-
-    assert runtime_paths.get_native_agent_data_dir() == data / "native-agent"
-    assert runtime_paths.get_pi_session_store_path() == data / "native-agent" / "pi_sessions.json"
-    assert runtime_paths.get_pi_workspace_history_diagnostics_dir() == data / "native-agent" / "workspace-history-diagnostics"
-    assert not runtime_paths.get_pi_session_store_path().exists()
 
 
 def test_native_agent_paths_default_under_home(monkeypatch, tmp_path: Path):

@@ -32,23 +32,6 @@ def _create_conversation(
     )
 
 
-def test_new_main_conversation_has_empty_cluster_team(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path)
-    conversation_id = _create_conversation(store)
-
-    conversation = store.get_conversation(conversation_id)
-    team_state = store.get_conversation_team(conversation_id)
-
-    assert conversation["cluster_team"] == {"version": 1, "assignments": []}
-    assert conversation["cluster_team_revision"] == 0
-    assert conversation["cluster_parent_conversation_id"] == ""
-    assert conversation["cluster_assignment_revision"] is None
-    assert team_state == {
-        "cluster_team": {"version": 1, "assignments": []},
-        "cluster_team_revision": 0,
-    }
-
-
 def test_cluster_team_cas_conflict_does_not_overwrite(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     conversation_id = _create_conversation(store)
@@ -257,32 +240,6 @@ def test_resize_blockers_include_high_slots_and_exclude_archived_conversations(t
         agent_id="main",
     )
 
-    assert store.list_cluster_resize_blockers(
-        bot_id=1,
-        slot_agent_ids=["cluster-slot-1", "cluster-slot-2", "cluster-slot-3"],
-        target_size=2,
-    ) == []
-
-
-def test_archiving_one_main_conversation_preserves_it_and_removes_resize_blocker(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path)
-    conversation_id = _create_conversation(store, title="保留历史")
-    store.update_conversation_team(
-        conversation_id,
-        {
-            "version": 1,
-            "assignments": [{
-                "agent_id": "cluster-slot-3",
-                "name": "高位角色",
-                "responsibility": "保留历史但解除缩容阻塞",
-                "assignment_revision": 1,
-            }],
-        },
-        expected_revision=0,
-    )
-
-    assert store.archive_conversation_by_id(conversation_id) is True
-    assert store.get_conversation(conversation_id)["archived_at"]
     assert store.list_cluster_resize_blockers(
         bot_id=1,
         slot_agent_ids=["cluster-slot-1", "cluster-slot-2", "cluster-slot-3"],

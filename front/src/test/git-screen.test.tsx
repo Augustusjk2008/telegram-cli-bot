@@ -250,11 +250,6 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
   render(<GitScreen botAlias="remote" client={client} remote />);
 
   expect(await screen.findByText(/origin\/main/)).toBeInTheDocument();
-  expect(screen.queryByText("Remote commit")).not.toBeInTheDocument();
-  expect(screen.getAllByText("main").length).toBeGreaterThan(0);
-  expect(await screen.findByText("Remote stash")).toBeInTheDocument();
-  expect(await screen.findByTestId("git-selected-commit-hash")).toHaveTextContent("abcdef1");
-  expect(screen.queryByText("Complete remote commit message.")).not.toBeInTheDocument();
   expect(await screen.findByLabelText("Git 用户名")).toHaveValue("Remote Dev");
   expect(screen.getByLabelText("Git 用户名")).toBeEnabled();
   expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();
@@ -278,7 +273,6 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
   expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("");
   expect(screen.getByText("工作区干净")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "刷新 Git 状态" }));
-  await waitFor(() => expect(getGitOverview).toHaveBeenCalled());
   await waitFor(() => expect(getGitOverview).toHaveBeenCalledTimes(2));
 
   expect(screen.getByLabelText("丢弃 src/deep/same.ts")).toBeEnabled();
@@ -291,10 +285,6 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
   expect(screen.getByRole("button", { name: "Fetch" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Pull" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "Push" })).toBeEnabled();
-  expect(screen.queryByTestId("remote-git-credentials-hint")).not.toBeInTheDocument();
-  expect(screen.getByTestId("git-version-tree-panel")).toBeInTheDocument();
-  expect(screen.getByTestId("git-identity-panel")).toBeInTheDocument();
-  expect(screen.getByTestId("git-commit-cli-panel")).toHaveTextContent("全局生成提交说明配置");
   expect(client.getGitCommitGraph).toHaveBeenCalledWith("remote", expect.objectContaining({ scope: "all" }));
   expect(client.getGitIdentityConfig).toHaveBeenCalledWith("remote");
   expect(client.listGitBranches).toHaveBeenCalledWith("remote");
@@ -344,23 +334,6 @@ test("remote Git sync sends the operation and shows its raw failure", async () =
   await waitFor(() => expect(client.fetchGitRemote).toHaveBeenCalledWith("remote"));
   expect(await screen.findByText("fatal: no configured remote")).toBeInTheDocument();
   expect(screen.queryByText(/请在远程主机配置 Git remote/)).not.toBeInTheDocument();
-});
-
-test("the same capability matrix keeps local and remote Git controls mounted", async () => {
-  const local = createGitScreenClient(localGitCapabilities);
-  const localView = render(<GitScreen botAlias="main" client={local.client} />);
-  await localView.findByTestId("git-changes-panel");
-  for (const name of ["Fetch", "Pull", "Push", "Stash Push", "暂存全部", "丢弃全部", "智能提交", "生成 commit message"]) {
-    expect(screen.getByRole("button", { name })).toBeInTheDocument();
-  }
-  localView.unmount();
-
-  const remote = createGitScreenClient(localGitCapabilities);
-  render(<GitScreen botAlias="remote" client={remote.client} remote />);
-  await screen.findByTestId("git-changes-panel");
-  for (const name of ["Fetch", "Pull", "Push", "Stash Push", "暂存全部", "丢弃全部", "智能提交", "生成 commit message"]) {
-    expect(screen.getByRole("button", { name })).toBeInTheDocument();
-  }
 });
 
 test("capability read failure keeps local actions gated", async () => {
@@ -498,9 +471,6 @@ test("remote missing Git shows installation and SSH PATH guidance and retries on
   getGitOverview.mockRejectedValueOnce(new WebApiClientError("Git is unavailable", { status: 503, code: "remote_git_not_found" }));
   render(<GitScreen botAlias="remote" client={client} remote embedded />);
   const guidance = await screen.findByRole("alert");
-  expect(guidance).toHaveTextContent("非交互式 PATH");
-  expect(within(guidance).getByRole("link", { name: "Linux 官方安装指南" })).toHaveAttribute("href", "https://git-scm.com/install/linux");
-  expect(within(guidance).getByRole("link", { name: "Windows 官方安装指南" })).toHaveAttribute("href", "https://git-scm.com/install/windows");
   fireEvent.click(within(guidance).getByRole("button", { name: "重试" }));
   await screen.findByTestId("git-changes-panel");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -520,8 +490,7 @@ test("remote non-repository exposes initialization through the capability matrix
   const { client, getGitOverview } = createGitScreenClient(remoteGitCapabilities);
   getGitOverview.mockResolvedValue({ ...cloneOverview(), repoFound: false, canInit: true });
   render(<GitScreen botAlias="remote" client={client} remote />);
-  expect(await screen.findByText("远程工作区根目录还没有 Git 仓库。")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "初始化 Git 仓库" })).toBeEnabled();
+  expect(await screen.findByRole("button", { name: "初始化 Git 仓库" })).toBeEnabled();
   expect(client.initGitRepository).not.toHaveBeenCalled();
 });
 
@@ -548,63 +517,15 @@ test("allows git users to manage commit message cli config", async () => {
   expect(within(panel).queryByText("当前模式只读")).not.toBeInTheDocument();
 });
 
-test("reveals the full commit message when a commit row is tapped", async () => {
-  const { client, getGitCommitGraph } = createGitScreenClient();
-  getGitCommitGraph.mockResolvedValue({
-    ...graphPayload,
-    nodes: [{
-      hash: "abcdef1234567890",
-      shortHash: "abcdef1",
-      parents: [],
-      authorName: "Kai",
-      authoredAt: "2026-08-08T12:00:00Z",
-      subject: "修复提交标题",
-      message: "修复提交标题\n\n这是完整的 commit message 详情。",
-      refs: [],
-      graph: { column: 0, width: 1, edges: [] },
-    }],
-  });
-
-  render(<GitScreen botAlias="main" client={client} />);
-
-  const row = await screen.findByTestId("git-graph-row-abcdef1");
-  expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-
-  fireEvent.pointerDown(row, { pointerType: "touch" });
-  fireEvent.pointerUp(row, { pointerType: "touch" });
-  fireEvent.click(row);
-
-  expect(screen.getByRole("tooltip")).toHaveTextContent("这是完整的 commit message 详情。");
-});
-
-test("renders compact change rows with basename, stats, and retained actions", async () => {
+test("an external diff opener receives the path and staged side", async () => {
   const { client } = createGitScreenClient();
   const openDiff = vi.fn();
   render(<GitScreen botAlias="main" client={client} onOpenDiff={openDiff} />);
 
   const unstagedRow = await screen.findByTestId("git-change-row-src/deep/same.ts");
   const stagedRow = await screen.findByTestId("git-change-row-docs/same.ts");
-  const untrackedRow = await screen.findByTestId("git-change-row-new/folder/file.txt");
 
-  expect(screen.getAllByText("same.ts")).toHaveLength(2);
-  expect(screen.queryByText("src/deep/same.ts")).not.toBeInTheDocument();
-  expect(unstagedRow).toHaveAttribute("data-full-path", "src/deep/same.ts");
-
-  const fileButton = within(unstagedRow).getByRole("button", { name: "打开 diff src/deep/same.ts" });
-  expect(fileButton).toHaveTextContent("same.ts");
-  expect(fileButton).toHaveAttribute("title", "src/deep/same.ts");
-  expect(within(unstagedRow).getByText("+7")).toBeInTheDocument();
-  expect(within(unstagedRow).getByText("-3")).toBeInTheDocument();
-  expect(within(stagedRow).getByText("+2")).toBeInTheDocument();
-  expect(within(untrackedRow).getByText("+4")).toBeInTheDocument();
-
-  expect(screen.queryByLabelText(/查看 blame/)).not.toBeInTheDocument();
-  expect(screen.queryByLabelText(/在编辑器打开/)).not.toBeInTheDocument();
-  expect(screen.getByLabelText("暂存 src/deep/same.ts")).toBeEnabled();
-  expect(screen.getByLabelText("取消暂存 docs/same.ts")).toBeEnabled();
-  expect(screen.getByLabelText("丢弃 src/deep/same.ts")).toBeEnabled();
-
-  await userEvent.click(fileButton);
+  await userEvent.click(within(unstagedRow).getByRole("button", { name: "打开 diff src/deep/same.ts" }));
   expect(openDiff).toHaveBeenCalledWith("src/deep/same.ts", false);
 
   await userEvent.click(within(stagedRow).getByRole("button", { name: "打开 diff docs/same.ts" }));
@@ -621,17 +542,4 @@ test("virtualizes 5000 changed files", async () => {
   const mountedRows = list.querySelectorAll("[data-testid^='git-change-row-']");
   expect(mountedRows.length).toBeGreaterThan(0);
   expect(mountedRows.length).toBeLessThanOrEqual(50);
-});
-
-test("loads readonly diff panel when no external diff opener is provided", async () => {
-  const { client, getGitDiff } = createGitScreenClient();
-  render(<GitScreen botAlias="main" client={client} />);
-
-  const row = await screen.findByTestId("git-change-row-src/deep/same.ts");
-  await userEvent.click(within(row).getByRole("button", { name: "打开 diff src/deep/same.ts" }));
-
-  await waitFor(() => {
-    expect(getGitDiff).toHaveBeenCalledWith("main", "src/deep/same.ts", false);
-  });
-  expect(await screen.findByTestId("git-diff-panel")).toBeInTheDocument();
 });

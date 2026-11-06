@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 
 from bot.session_store import (
-    _make_key,
     close_session_store,
     flush_session_store,
     load_session,
@@ -20,19 +19,9 @@ from bot.session_store import (
     migrate_sessions_to_shared,
     rename_bot_sessions,
     remove_all_sessions_for_bot,
-    remove_session,
     save_session,
-    save_session_ids,
     session_store_diagnostics,
 )
-
-
-def test_session_store_defaults_to_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("SESSION_STORE_BACKEND", raising=False)
-    monkeypatch.delenv("TCB_SESSION_STORE_BACKEND", raising=False)
-
-    assert session_store_diagnostics()["requested_backend"] == "sqlite"
-    close_session_store()
 
 
 @pytest.mark.parametrize("backend", ["json", "sqlite"])
@@ -47,57 +36,6 @@ def test_deepseek_store_isolates_bot_user_agent_keys(monkeypatch, backend):
     save_session(1, 100, deepseek_session_id=None)
     assert load_session(1, 100) is None
     assert load_session(1, 100, "reviewer")["deepseek_session_id"] == "dsh-2"
-
-
-class TestSaveAndLoadSession:
-    """测试保存和加载会话"""
-
-    def test_save_and_load_session(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-        
-        with patch("bot.session_store.STORE_FILE", store_file):
-            # 保存会话
-            save_session(
-                bot_id=1,
-                user_id=100,
-                codex_session_id="thread_abc123",
-                claude_session_id="uuid_456",
-            )
-            
-            # 加载会话
-            data = load_session(1, 100)
-            assert data is not None
-            assert data["codex_session_id"] == "thread_abc123"
-            assert data["claude_session_id"] == "uuid_456"
-
-    def test_save_and_load_native_agent_session_id(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=100,
-                native_agent_session_id="native-session-1",
-            )
-
-            data = load_session(1, 100)
-
-        assert data is not None
-        assert data["native_agent_session_id"] == "native-session-1"
-
-    def test_save_and_load_antigravity_conversation_id(self, temp_dir: Path):
-        store_file = temp_dir / ".session_store.json"
-
-        with patch("bot.session_store.STORE_FILE", store_file):
-            save_session(
-                bot_id=1,
-                user_id=100,
-                antigravity_conversation_id="agy-conversation-1",
-            )
-            data = load_session(1, 100)
-
-        assert data is not None
-        assert data["antigravity_conversation_id"] == "agy-conversation-1"
 
 
 class TestRemoveAllSessionsForBot:

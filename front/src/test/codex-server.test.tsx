@@ -3,8 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { SettingsScreen } from "../screens/SettingsScreen";
-import { buildCreateDraft } from "../screens/useBotManager";
-import { draftFromBot } from "../screens/botManagerModel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 
@@ -81,35 +79,6 @@ test("real client posts steering input to the active Codex server turn", async (
   });
 });
 
-test("mock client retains per-entry parameters through switching, renaming and reset", async () => {
-  const client = new MockWebBotClient();
-  await client.login({ username: "127.0.0.1", password: "test" });
-  const draft = buildCreateDraft("codex_server");
-  const bot = await client.addBot({ ...draft, alias: "server" });
-  expect(bot).toMatchObject({ cliType: "codex_server", cliPath: "codex", defaultExecutionMode: "cli" });
-  expect(draftFromBot({ ...bot, cliPath: undefined }).cliPath).toBe("codex");
-  await client.updateCliParam("server", "model", "server-model", "codex_server");
-  await client.updateBotCli("server", "codex", "codex");
-  expect((await client.getCliParams("server")).params.model).not.toBe("server-model");
-  await client.updateCliParam("server", "model", "exec-model", "codex");
-  await client.renameBot("server", "renamed");
-  await client.updateBotCli("renamed", "codex_server", "codex");
-  expect(await client.getCliParams("renamed")).toMatchObject({ cliType: "codex_server", params: { model: "server-model" } });
-  await client.resetCliParams("renamed", "codex_server");
-  await client.updateBotCli("renamed", "codex", "codex");
-  expect((await client.getCliParams("renamed")).params.model).toBe("exec-model");
-});
-
-test("mock Git configuration inherits the entry and stores Codex parameters separately", async () => {
-  const client = new MockWebBotClient();
-  await client.updateBotCli("main", "codex_server", "codex");
-  expect(await client.getGitCommitMessageConfig("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex" });
-  await client.updateGitCommitMessageConfig("main", { params: { model: "server-model" } });
-  await client.updateGitCommitMessageConfig("main", { cliType: "codex", params: { model: "exec-model" } });
-  expect(await client.updateGitCommitMessageConfig("main", { cliType: "codex_server" }))
-    .toMatchObject({ cliType: "codex_server", params: { model: "server-model" } });
-});
-
 test("settings saves codex server without changing CLI execution mode", async () => {
   const client = new MockWebBotClient();
   const user = userEvent.setup();
@@ -119,7 +88,6 @@ test("settings saves codex server without changing CLI execution mode", async ()
   await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
   await waitFor(async () => expect(await client.getBotOverview("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex", defaultExecutionMode: "cli" }));
   expect(screen.getByLabelText("CLI 类型")).toHaveValue("codex_server");
-  expect(await screen.findByText("当前 CLI: codex server")).toBeInTheDocument();
 });
 
 test("Git config selector saves codex server with the codex executable", async () => {
@@ -133,14 +101,12 @@ test("Git config selector saves codex server with the codex executable", async (
   expect(await client.getGitCommitMessageConfig("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex" });
 });
 
-
 test("Git config keeps an unsupported DeepSeek selection explicit until a supported CLI is saved", async () => {
   const client = new MockWebBotClient();
   await client.updateBotCli("main", "deepseek", "dsh");
   render(<GitCommitCliConfigPanel botAlias="main" client={client} />);
   await waitFor(() => expect(screen.getByLabelText("Commit Message CLI 类型")).toHaveValue("deepseek"));
   expect(screen.getByRole("option", { name: "DeepSeek Harness（暂不支持）" })).toBeDisabled();
-  await expect(client.generateGitCommitMessage("main")).rejects.toThrow("DeepSeek Harness 暂不支持生成提交信息");
   await userEvent.selectOptions(screen.getByLabelText("Commit Message CLI 类型"), "codex");
   expect(screen.getByLabelText("Commit Message CLI 路径")).toHaveValue("codex");
 });

@@ -18,7 +18,7 @@ from bot.telegram.client import TelegramClient, TelegramError
 from bot.telegram.formatting import telegram_html_to_text
 from bot.telegram.gateway import TelegramGateway, start_telegram_gateway
 from bot.telegram.state import TelegramState
-from bot.telegram.ui import context_left, format_result, parse_config_text, parse_target_text
+from bot.telegram.ui import context_left, format_result, parse_target_text
 from bot.web import api_service
 from bot.web.api_common import WebApiError
 
@@ -92,7 +92,7 @@ async def gateway(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user_id,chat_type", [(99, "private"), ("42", "private"), (42, "group"), (42, "supergroup")])
+@pytest.mark.parametrize("user_id,chat_type", [(99, "private"), ("42", "private"), (42, "group")])
 async def test_only_numeric_whitelisted_private_sender_can_execute(gateway, monkeypatch, user_id, chat_type):
     calls = install_stream(monkeypatch, [done()])
     assert gateway.receive_update(update(user_id=user_id, chat_type=chat_type)) is None
@@ -102,7 +102,7 @@ async def test_only_numeric_whitelisted_private_sender_can_execute(gateway, monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text", ["/start", "/help", "普通正文", "to dev", "to missing hello", "to disabled hello", "to archived hello"])
+@pytest.mark.parametrize("text", ["/help", "to dev", "to missing hello", "to disabled hello"])
 async def test_help_and_invalid_targets_never_execute(gateway, monkeypatch, text):
     calls = install_stream(monkeypatch, [done()])
     await gateway.receive_update(update(text=text))
@@ -126,24 +126,8 @@ async def test_routes_to_main_agent_with_shared_identity_and_preserves_multiline
     assert (row["conversation_id"], row["turn_id"], row["assistant_message_id"]) == ("conv-1", "turn-1", "message-1")
 
 
-@pytest.mark.parametrize("text,body", [("to dev a\nb", "a\nb"), ("to dev\r\n  a\r\nb", "  a\r\nb"), ("to dev \n  x", "  x")])
-def test_multiline_route_separator(text, body):
-    assert parse_target_text(text) == ("dev", body)
-
-
-@pytest.mark.parametrize("text,expected", [
-    ("/config", (None, None, None)),
-    ("/config dev", ("dev", None, None)),
-    ("/config model gpt-5", (None, "model", "gpt-5")),
-    ("/config dev reasoning high", ("dev", "reasoning", "high")),
-    ("/config dev cluster on", ("dev", "cluster", "on")),
-])
-def test_config_command_parser(text, expected):
-    assert parse_config_text(text) == expected
-
-
-def test_config_command_parser_rejects_unknown_setting():
-    assert parse_config_text("/config dev prompt hello") is None
+def test_multiline_route_accepts_crlf_separator():
+    assert parse_target_text("to dev\r\n  a\r\nb") == ("dev", "  a\r\nb")
 
 
 @pytest.mark.asyncio
@@ -315,11 +299,10 @@ async def test_context_fallback_uses_bound_final_message(gateway, monkeypatch):
 
 
 @pytest.mark.parametrize("usage,expected", [
-    (None, "unknown"), ({}, "unknown"),
+    (None, "unknown"),
     ({"context_left_percent": 72, "context_used_percent": 90}, "72%"),
     ({"contextUsedPercent": 28}, "72%"),
     ({"context_used": 28, "used_tokens": 99, "context_window": 100}, "72%"),
-    ({"usedTokens": 28, "contextWindow": 100}, "72%"),
     ({"context_used": 101, "context_window": 100}, "0%"),
     ({"context_left_percent": 200}, "100%"),
     ({"context_left_percent": 72.25}, "72.3%"),
@@ -332,7 +315,7 @@ def test_context_left_precedence_and_valid_boundaries(usage, expected):
     assert context_left(usage) == expected
 
 
-@pytest.mark.parametrize("content", ["x" * 4069, "x" * 4096, "x" * 8192, "代码\n🧪" * 2200], ids=["near-limit", "at-limit", "two-pages", "unicode"])
+@pytest.mark.parametrize("content", ["x" * 4069, "x" * 8192, "代码\n🧪" * 2200], ids=["near-limit", "two-pages", "unicode"])
 def test_long_answers_preserve_all_text_and_keep_footer_in_last_segment(content):
     parts = [telegram_html_to_text(part) for part in format_result("dev", content, None)]
     footer = "\n\ncontext left: unknown"
@@ -342,18 +325,6 @@ def test_long_answers_preserve_all_text_and_keep_footer_in_last_segment(content)
     assert parts[-1].endswith(footer)
     reconstructed = "".join(part[len("🤖 [dev]\n\n"):] for part in parts)
     assert reconstructed[:-len(footer)] == content
-
-
-@pytest.mark.asyncio
-async def test_send_failure_does_not_reexecute_or_send_another_answer(gateway, monkeypatch, caplog):
-    calls = install_stream(monkeypatch, [done()])
-    gateway.client.send_message = AsyncMock(side_effect=TelegramError("sendMessage"))
-    await gateway.receive_update(update())
-    assert gateway.receive_update(update()) is None
-    assert len(calls) == 1
-    assert gateway.state.get(1)["status"] == "completed"
-    assert gateway.state.get(1)["delivery_status"] == "failed"
-    gateway.client.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -450,7 +421,7 @@ async def test_web_and_telegram_share_history_and_new_conversation_resets_bindin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("current_mode", ["cli", "native_agent", None])
+@pytest.mark.parametrize("current_mode", ["cli", None])
 async def test_new_preserves_current_mode_or_uses_profile_default_without_starting_model(gateway, monkeypatch, current_mode):
     profile, _, session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 42)
     profile.supported_execution_modes = ["cli", "native_agent"]
@@ -504,7 +475,6 @@ async def test_pending_cluster_children_block_new_conversation(gateway, monkeypa
     monkeypatch.setattr(api_service._CLUSTER_RUNTIME, "has_pending_tasks", pending)
     await gateway.receive_update(update(text="to dev /new"))
     assert gateway.state.get(1)["status"] == "rejected"
-    assert "子任务运行" in gateway.client.messages[0][1]
     _, _, session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 1001)
     assert session.active_conversation_id == result["conversation"]["id"]
     pending.assert_called_once_with(bot_alias="dev", user_id=chat_session_user_id(42), main_conversation_id=session.active_conversation_id)

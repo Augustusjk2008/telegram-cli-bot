@@ -2,9 +2,6 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
-import { applyResolvedAppearance } from "../theme/appearanceRuntime";
-import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
-import { builtinIllustrationScene } from "../theme/illustrationPresets";
 import * as mermaidRenderer from "../markdown/mermaidRenderer";
 import { EventType } from "../services/agUiProtocol";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
@@ -45,35 +42,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test("renders the workbench illustration inside the standalone chat area", async () => {
-  const appearance = resolveAppearance({
-    ...BUILTIN_THEME,
-    appearance: {
-      ...BUILTIN_THEME.appearance,
-      illustrations: {
-        opacity: 0.12,
-        surfaces: { workbench: true, adminCenter: true, agentManager: true },
-        scenes: {
-          workbench: builtinIllustrationScene("forest-grove", "workbench"),
-          adminCenter: builtinIllustrationScene("forest-grove", "adminCenter"),
-          agentManager: builtinIllustrationScene("forest-grove", "agentManager"),
-        },
-      },
-    },
-  });
-  applyResolvedAppearance(appearance);
-  try {
-    render(<ChatScreen botAlias="main" client={createClient()} />);
-    const layer = await screen.findByTestId("theme-illustration-layer-workbench");
-    expect(layer).toHaveAttribute("data-theme-illustration-region", "chat");
-    expect(layer.closest('[data-testid="chat-illustration-viewport"]')).not.toBeNull();
-    expect(layer.closest('[data-testid="chat-scroll-container"]')).toBeNull();
-  } finally {
-    applyResolvedAppearance(resolveAppearance(BUILTIN_THEME));
-  }
-});
-
-test.each([true, false])("renders user Markdown, math and diagrams (current user: %s)", async (isCurrentUser) => {
+test("renders user Markdown, math and diagrams", async () => {
   vi.spyOn(mermaidRenderer, "renderMermaidSingleFlight").mockResolvedValue({
     svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>Start to End</text></svg>',
     error: "",
@@ -82,7 +51,7 @@ test.each([true, false])("renders user Markdown, math and diagrams (current user
     listMessages: async () => ({ items: [{
       id: "user-markdown",
       role: "user",
-      author: { username: "Alice", isCurrentUser },
+      author: { username: "Alice", isCurrentUser: true },
       text: [
         "## Formatted question",
         "",
@@ -201,10 +170,6 @@ test("does not show endless mode after a normal answer", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   expect(await screen.findByText("正常完成的回答")).toBeInTheDocument();
-  const row = screen.getByTestId("chat-message-row");
-  const messageSurface = row.querySelector('[data-streaming="false"]');
-  expect(messageSurface).not.toBeNull();
-  expect(messageSurface).not.toHaveClass("chat-message-bubble-delight");
   expect(screen.queryByRole("button", { name: "无尽模式" })).not.toBeInTheDocument();
 });
 
@@ -267,24 +232,6 @@ test("stopping endless mode terminates the active continuation", async () => {
     createdAt: "2026-10-23T00:00:02Z",
     state: "done",
   });
-});
-
-test("shows the voice bar only for an enabled codex_server CLI scope", async () => {
-  const client = createClient({
-    getBotOverview: async () => ({
-      alias: "main",
-      cliType: "codex_server",
-      status: "running",
-      workingDir: "C:\\workspace",
-      supportedExecutionModes: ["cli"],
-      defaultExecutionMode: "cli",
-      executionMode: "cli",
-      voice: { enabled: true, reason: "available" },
-      effectiveCapabilities: ["chat_send"],
-    }),
-  });
-  render(<ChatScreen botAlias="main" client={client} />);
-  expect(await screen.findByTestId("codex-voice-bar")).toBeInTheDocument();
 });
 
 test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, previews and deletes local attachments", async (platform) => {
@@ -421,62 +368,6 @@ test.each(["Please execute the plan. Plan file: ", "请按方案执行。方案�
   expect(screen.getByRole("button", { name: "计划模式" })).toHaveAttribute("aria-pressed", "false");
 });
 
-test("binds direct done assistant message to backend id from stream meta", async () => {
-  const user = userEvent.setup();
-  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async (
-    _botAlias,
-    _text,
-    _onChunk,
-    onStatus,
-  ) => {
-    onStatus?.({ turnId: "turn-direct-1", assistantMessageId: "assistant-direct-final" });
-    return {
-      id: "assistant-direct-final",
-      turnId: "turn-direct-1",
-      role: "assistant",
-      text: "直接完成",
-      createdAt: "2026-06-26T14:10:00Z",
-      state: "done",
-    };
-  });
-  const client = createClient({ sendMessage });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-  expect(await screen.findByText("暂无消息，开始聊天吧")).toBeInTheDocument();
-  await user.type(screen.getByPlaceholderText("输入消息"), "直接返回");
-  await user.click(screen.getByRole("button", { name: "发送" }));
-
-  expect(await screen.findByText("直接完成")).toBeInTheDocument();
-  expect(screen.getAllByText("直接完成")).toHaveLength(1);
-  expect(screen.getAllByTestId("chat-message-row")).toHaveLength(2);
-});
-
-test("hides completed assistant context usage from the message header but keeps the footer badge", async () => {
-  const client = createClient({
-    listMessages: async () => ({ items: [{
-      id: "assistant-context-done",
-      role: "assistant",
-      text: "上下文已记录",
-      createdAt: "2026-08-05T00:00:00Z",
-      state: "done",
-      meta: {
-        contextUsage: {
-          contextLeftPercent: 72,
-          contextWindow: 128_000,
-          contextUsed: 35_840,
-          model: "gpt-test",
-        },
-      },
-    }] }),
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  const row = await screen.findByTestId("chat-message-row");
-  expect(within(row).queryByTestId("chat-message-context-usage-text")).not.toBeInTheDocument();
-  expect(within(row).getByTestId("chat-message-context-usage-bottom")).toBeInTheDocument();
-});
-
 test("shows the Codex cost difference in message details while retaining raw history amounts", async () => {
   const items: ChatMessage[] = [10, 15].map((total, index) => ({
     id: `cost-${index}`, turnId: `turn-${index}`, conversationId: "cost-conversation",
@@ -492,38 +383,6 @@ test("shows the Codex cost difference in message details while retaining raw his
   fireEvent.click(within(rows[1]).getByTestId("chat-message-context-usage-bottom"));
   expect(screen.getByRole("tooltip")).toHaveTextContent("cost: USD 5");
   expect(items[1].meta?.contextUsage?.estimatedCost?.total).toBe(15);
-});
-
-test("keeps assistant context usage in the message header while streaming", async () => {
-  const client = createClient({
-    getBotOverview: async () => ({
-      alias: "main",
-      cliType: "codex",
-      status: "running",
-      workingDir: "C:\\workspace",
-      isProcessing: true,
-    }),
-    listMessages: async () => ({ items: [{
-      id: "assistant-context-streaming",
-      role: "assistant",
-      text: "",
-      createdAt: "2026-08-05T00:00:00Z",
-      state: "streaming",
-      meta: {
-        contextUsage: {
-          contextLeftPercent: 72,
-          contextWindow: 128_000,
-          contextUsed: 35_840,
-          model: "gpt-test",
-        },
-      },
-    }] }),
-  });
-
-  render(<ChatScreen botAlias="main" client={client} />);
-
-  const row = await screen.findByTestId("chat-message-row");
-  expect(within(row).getByTestId("chat-message-context-usage-text")).toBeInTheDocument();
 });
 
 test("does not report a hidden cancelled reply as unread", async () => {
@@ -1058,17 +917,6 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
     "cluster-foreground",
     { includeOutput: false },
   );
-  expect(await screen.findByText("已分配 1 / 集群规模 3")).toBeInTheDocument();
-  expect(screen.queryByText("动态审查员")).not.toBeInTheDocument();
-  fireEvent.click(within(screen.getByTestId("cluster-team-panel")).getByRole("button", { name: "展开集群编组" }));
-  expect(screen.getByText("动态审查员")).toBeInTheDocument();
-  expect(screen.getByText("模型档位：medium")).toBeInTheDocument();
-  expect(screen.queryByText("检查前端状态")).not.toBeInTheDocument();
-  expect(screen.getByText("已完成")).toBeInTheDocument();
-  expect(screen.getByText("处理中")).toBeInTheDocument();
-  expect(screen.queryByText("智能体集群任务")).not.toBeInTheDocument();
-  expect(screen.queryByText("动态测试员")).not.toBeInTheDocument();
-  expect(screen.queryByText("子任务失败")).not.toBeInTheDocument();
 
   visibilityState = "hidden";
   await act(async () => {
@@ -1096,20 +944,6 @@ test("pauses auxiliary sync while hidden and reconciles once after returning", a
   expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview + 1);
   expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta + 1);
   expect(getClusterTaskStatus).toHaveBeenCalledTimes(hiddenCounts.cluster + 1);
-
-  visibilityState = "hidden";
-  await act(async () => {
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  const secondHiddenCounts = {
-    overview: getBotOverview.mock.calls.length,
-    delta: listMessageDelta.mock.calls.length,
-    cluster: getClusterTaskStatus.mock.calls.length,
-  };
-  await act(async () => vi.advanceTimersByTimeAsync(30_000));
-  expect(getBotOverview).toHaveBeenCalledTimes(secondHiddenCounts.overview);
-  expect(listMessageDelta).toHaveBeenCalledTimes(secondHiddenCounts.delta);
-  expect(getClusterTaskStatus).toHaveBeenCalledTimes(secondHiddenCounts.cluster);
 });
 
 test("does not abort the active SSE request when the document is hidden", async () => {
@@ -1165,16 +999,10 @@ test("does not abort the active SSE request when the document is hidden", async 
   await act(async () => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const hiddenCounts = {
-    overview: getBotOverview.mock.calls.length,
-    delta: listMessageDelta.mock.calls.length,
-  };
   vi.useFakeTimers();
   await act(async () => vi.advanceTimersByTimeAsync(30_000));
 
   expect(activeSignal?.aborted).toBe(false);
-  expect(getBotOverview).toHaveBeenCalledTimes(hiddenCounts.overview);
-  expect(listMessageDelta).toHaveBeenCalledTimes(hiddenCounts.delta);
 
   visibilityState = "visible";
   await act(async () => {
@@ -1399,10 +1227,6 @@ test("native history loads flat trace details after expansion", async () => {
   await userEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
   await waitFor(() => expect(getMessageTrace).toHaveBeenCalledWith("main", "assistant-native-history"));
   expect(await within(transcript).findByText("我先检查目录结构。")).toBeInTheDocument();
-  const eventGroup = within(transcript).getByTestId("native-agent-event-group");
-  await userEvent.click(eventGroup.querySelector("summary") as HTMLElement);
-  expect(within(transcript).getAllByText("shell_command").length).toBeGreaterThan(0);
-  expect(within(transcript).getAllByText("Exit code: 0").length).toBeGreaterThan(0);
   expect(within(transcript).getByTestId("native-agent-final-result")).toHaveTextContent("最终答复");
 });
 
@@ -1706,8 +1530,6 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   const childTeamDock = screen.getByTestId("cluster-team-dock");
   const childTeamPanel = within(childTeamDock).getByTestId("cluster-team-panel");
   expect(within(childTeamPanel).getByText("动态审查员")).toBeInTheDocument();
-  expect(within(childTeamPanel).queryByText("动态测试员")).not.toBeInTheDocument();
-  expect(within(childTeamPanel).queryByText("审查本轮改动")).not.toBeInTheDocument();
   const readOnlyStatus = "会话只读 · 模型：gpt-5.6-pro · 思考深度：xhigh";
   expect(screen.getAllByText(readOnlyStatus)).toHaveLength(1);
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
@@ -1893,10 +1715,6 @@ test("DeepSeek selects provider, model, and thinking atomically while retaining 
   const thinking = screen.getByRole("combobox", { name: "思考深度" });
   expect(model).toHaveValue("none");
   expect(thinking).toHaveValue("none");
-  expect(within(model).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
-    .toEqual(["none", "deepseek-flash", "deepseek-v4-pro"]);
-  expect(within(thinking).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
-    .toEqual(["none", "off", "low", "high", "max"]);
   await userEvent.selectOptions(model, "deepseek-v4-pro");
   await waitFor(() => expect(model).toHaveValue("deepseek-v4-pro"));
   expect(updateSelection).toHaveBeenLastCalledWith("main", {

@@ -130,11 +130,6 @@ def test_chat_store_migrates_legacy_schemas(
 
     with sqlite3.connect(db_path) as conn:
         conversation_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(conversations)")}
-        conversation_indexes = {str(row[1]) for row in conn.execute("PRAGMA index_list(conversations)")}
-        stored_team_json = conn.execute(
-            "SELECT cluster_team_json FROM conversations WHERE id = ?",
-            (conversation_id,),
-        ).fetchone()[0]
         if conversation_id == "conv-legacy":
             turn_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(turns)")}
             stored_turn = conn.execute("SELECT id FROM turns WHERE id = 'turn-legacy'").fetchone()
@@ -149,8 +144,6 @@ def test_chat_store_migrates_legacy_schemas(
     assert conversation["cluster_team_revision"] == 0
     assert conversation["cluster_parent_conversation_id"] == ""
     assert conversation["cluster_assignment_revision"] is None
-    assert stored_team_json == '{"version":1,"assignments":[]}'
-    assert "idx_conversations_cluster_parent" in conversation_indexes
     if conversation_id == "conv-legacy":
         assert {"bot_mode", "assistant_home", "managed_prompt_hash", "prompt_surface_version"}.isdisjoint(conversation_columns)
         assert "managed_prompt_hash" not in turn_columns

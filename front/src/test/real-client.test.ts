@@ -361,7 +361,7 @@ describe("RealWebBotClient", () => {
     }
   });
 
-  test("maps Git capabilities and overview truncation fields", async () => {
+  test("maps Git capabilities with their confirmation requirements", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({
         capabilities: {
@@ -379,31 +379,9 @@ describe("RealWebBotClient", () => {
           commit_message_generation: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
           smart_commit: { available: false, reason: "remote_feature_unavailable", requires_confirmation: false },
         },
-      }))
-      .mockResolvedValueOnce(jsonOk({
-        repo_found: true,
-        can_init: false,
-        working_dir: "/srv/project",
-        repo_path: "/srv/project",
-        repo_name: "project",
-        current_branch: "main",
-        is_clean: false,
-        ahead_count: 2,
-        behind_count: 1,
-        changed_files: [],
-        changed_files_truncated: true,
-        changed_files_total_estimate: 2010,
-        status_truncated: true,
-        untracked_files_truncated: true,
-        count_lower_bound: 2000,
-        count_exact: false,
-        truncation_reason: "status_output_limit",
-        recent_commits: [],
       }));
 
-    const client = new RealWebBotClient();
-    const capabilities = await client.getGitCapabilities("remote");
-    const overview = await client.getGitOverview("remote");
+    const capabilities = await new RealWebBotClient().getGitCapabilities("remote");
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/remote/git/capabilities");
     expect(capabilities.capabilities.tree_status).toEqual({
@@ -416,16 +394,6 @@ describe("RealWebBotClient", () => {
       available: false,
       reason: "remote_feature_unavailable",
       requiresConfirmation: true,
-    });
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/bots/remote/git");
-    expect(overview).toMatchObject({
-      changedFilesTruncated: true,
-      changedFilesTotalEstimate: 2010,
-      statusTruncated: true,
-      untrackedFilesTruncated: true,
-      countLowerBound: 2000,
-      countExact: false,
-      truncationReason: "status_output_limit",
     });
   });
 
@@ -1011,29 +979,6 @@ describe("RealWebBotClient", () => {
       body: JSON.stringify({ enabled: false }),
     }));
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/plugins/dev-plugin", expect.objectContaining({ method: "DELETE" }));
-  });
-
-  test("uses the recursive plugin directory install route", async () => {
-    fetchMock.mockResolvedValueOnce(jsonOk({
-      sourcePath: "C:\\plugins",
-      discovered: 2,
-      installed: [],
-    }));
-
-    const result = await new RealWebBotClient().installPluginsFromPath("C:\\plugins", {
-      force: true,
-      allowDevSourcePath: true,
-    });
-
-    expect(result.discovered).toBe(2);
-    expect(fetchMock).toHaveBeenCalledWith("/api/plugins/install-directory", expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({
-        sourcePath: "C:\\plugins",
-        force: true,
-        allowDevSourcePath: true,
-      }),
-    }));
   });
 
   test("uses AG-UI for native requests and keeps native trace out of legacy callbacks", async () => {

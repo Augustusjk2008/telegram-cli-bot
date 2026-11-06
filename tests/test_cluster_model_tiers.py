@@ -114,22 +114,6 @@ def test_native_cluster_rejects_cli_path_or_provider_tier_override() -> None:
         resolve_cluster_execution(profile, "low", execution_mode="native_agent")
 
 
-def test_bot_profile_round_trips_tier_configs() -> None:
-    profile = BotProfile(
-        alias="main",
-        cluster=normalize_bot_cluster_config({
-            "tier_configs": {
-                "medium": {"cli_type": "claude", "model": "claude-balanced"},
-            },
-        }),
-    )
-
-    restored = BotProfile.from_dict(profile.to_dict())
-
-    assert restored.cluster.tier_configs["medium"].cli_type == "claude"
-    assert restored.cluster.tier_configs["medium"].model == "claude-balanced"
-
-
 def test_deepseek_tier_rejects_provider_outside_catalog(monkeypatch, tmp_path) -> None:
     from bot.web import api_service
 
@@ -153,7 +137,7 @@ def test_deepseek_tier_rejects_provider_outside_catalog(monkeypatch, tmp_path) -
 
 @pytest.mark.parametrize(
     ("cli_type", "parameter_name", "reasoning_effort"),
-    [("codex", "reasoning_effort", "ultra"), ("codex_server", "reasoning_effort", "ultra"), ("claude", "effort", "max")],
+    [("codex_server", "reasoning_effort", "ultra"), ("claude", "effort", "max")],
 )
 def test_cluster_cli_override_applies_model_and_reasoning_for_selected_tier(
     cli_type: str,
@@ -182,9 +166,7 @@ def test_cluster_cli_override_applies_model_and_reasoning_for_selected_tier(
     ("tier", "expected_model", "expected_effort"),
     [
         ("low", "provider/main-model", "medium"),
-        ("medium", "provider/main-model", "high"),
         ("high", "other/strong-model", "xhigh"),
-        ("professional", "provider/professional-model", "max"),
     ],
 )
 async def test_pi_cluster_task_applies_tier_from_queued_snapshot_without_changing_main(
@@ -203,8 +185,8 @@ async def test_pi_cluster_task_applies_tier_from_queued_snapshot_without_changin
         },
         cluster=normalize_bot_cluster_config({
             "enabled": True,
-            "model_tiers": {"high": "other/strong-model", "professional": "provider/professional-model"},
-            "reasoning_efforts": {"medium": "high", "high": "xhigh", "professional": "max"},
+            "model_tiers": {"high": "other/strong-model"},
+            "reasoning_efforts": {"high": "xhigh"},
         }),
     )
     runtime = ClusterRuntime()

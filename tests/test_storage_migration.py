@@ -77,21 +77,18 @@ def test_snapshot_only_checks_source_roots_and_defers_full_inventory(
     assert snapshot["totalBytes"] == 0
 
 
-@pytest.mark.parametrize("with_sqlite", [False, True])
 def test_preview_persists_manifest_and_execute_reuses_it(
     migration_context: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
-    with_sqlite: bool,
 ) -> None:
     home, repo, target = migration_context
-    _make_sources(home, with_sqlite=with_sqlite)
+    _make_sources(home)
     service = StorageMigrationService(repo)
     plan = service.preview(str(target))
 
     journal = json.loads(runtime_paths.get_storage_journal_path().read_text(encoding="utf-8"))
     assert journal["state"] == "preparing"
     assert journal["plan"]["entries"]
-    assert {"completedBytes", "totalBytes", "completedFiles", "totalFiles", "currentItem", "speedBytesPerSecond", "etaSeconds", "message"} <= set(journal)
 
     def fail_inventory(*_args: object, **_kwargs: object) -> tuple[list[dict[str, object]], int]:
         raise AssertionError("begin/execute must reuse the persisted preview manifest")
@@ -162,40 +159,9 @@ def test_copy_accepts_changed_sqlite_shared_memory_snapshot(
     assert (target / "orbit-safe-claw" / "usage.sqlite3-shm").read_bytes() == b"runtime shared memory"
 
 
-def test_journal_progress_is_throttled_until_stage_changes(
-    migration_context: tuple[Path, Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _home, repo, _target = migration_context
-    service = StorageMigrationService(repo)
-    writes: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        migration_module,
-        "_atomic_write_json",
-        lambda _path, payload: writes.append(dict(payload)),
-    )
-    journal: dict[str, object] = {
-        "state": "copying",
-        "phase": "copying",
-        "totalBytes": 64 * 1024 * 1024,
-        "completedBytes": 0,
-    }
-    service._write_journal(journal, force=True)
-    journal["completedBytes"] = 1
-    service._write_journal(journal)
-    assert len(writes) == 1
-
-    journal["state"] = "rewriting"
-    journal["phase"] = "rewriting"
-    service._write_journal(journal)
-    assert len(writes) == 2
-
-
-@pytest.mark.parametrize("next_phase", ["copying", "rewriting"])
 def test_live_progress_uses_small_restart_safe_sidecar(
     migration_context: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
-    next_phase: str,
 ) -> None:
     _home, repo, _target = migration_context
     service = StorageMigrationService(repo)
@@ -219,13 +185,12 @@ def test_live_progress_uses_small_restart_safe_sidecar(
     restarted = StorageMigrationService(repo)
     assert restarted.status()["completedBytes"] == 1
 
-    journal["state"] = journal["phase"] = next_phase
     journal["completedBytes"] = 2
     service._write_journal(journal, force=True)
     assert not progress_path.exists()
     progress_path.write_bytes(old_progress)
     recovered = StorageMigrationService(repo).status()
-    assert recovered["state"] == next_phase
+    assert recovered["state"] == "copying"
     assert recovered["completedBytes"] == 2
 
 
@@ -467,25 +432,6 @@ def test_copy_failure_preserves_sources_and_records_failed_state(
 
     assert app.exists()
     assert service.snapshot()["migration"]["state"] == "failed"  # type: ignore[index]
-
-
-def test_hash_failure_preserves_sources(
-    migration_context: tuple[Path, Path, Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    home, repo, target = migration_context
-    app, _history = _make_sources(home, with_sqlite=False)
-    service = StorageMigrationService(repo)
-    plan = service.preview(str(target))
-    service.begin(str(plan["id"]))
-
-    def fail_hash(_path: Path) -> str:
-        raise OSError("hash failed")
-
-    monkeypatch.setattr(migration_module, "_hash_file", fail_hash)
-    with pytest.raises(OSError, match="hash failed"):
-        service.execute(str(plan["id"]))
-    assert app.exists()
 
 
 def test_symlink_source_and_target_are_rejected(

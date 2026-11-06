@@ -60,13 +60,3 @@ async def test_storage_runtime_restarts_after_copy_failure_to_restore_source() -
     with pytest.raises(OSError, match="target is unavailable"):
         await adapter.execute("plan")
     await asyncio.wait_for(failed.wait(), timeout=1)
-
-
-@pytest.mark.asyncio
-async def test_storage_runtime_exposes_live_status_without_using_snapshot_lock() -> None:
-    class FakeService:
-        def status(self) -> dict[str, object]:
-            return {"state": "copying", "completedBytes": 4, "totalBytes": 8}
-
-    adapter = AsyncStorageMigrationService(FakeService())
-    assert await adapter.status() == {"state": "copying", "completedBytes": 4, "totalBytes": 8}

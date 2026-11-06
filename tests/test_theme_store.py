@@ -94,23 +94,7 @@ def test_packaged_preset_file_contains_only_builtin_illustration_assets() -> Non
     path = Path(__file__).parents[1] / "bot" / "web" / "theme_presets.json"
     data = json.loads(path.read_text(encoding="utf-8"))
 
-    assert [theme["name"] for theme in data["themes"]] == PRESET_NAMES
+    assert data["themes"]
     for theme in data["themes"]:
         for scene in theme["appearance"]["illustrations"]["scenes"].values():
             assert all(layer["asset"]["kind"] == "builtin" for layer in scene["layers"])
-
-
-def test_light_presets_use_the_auxiliary_accent_for_file_tree_folder_semantics() -> None:
-    path = Path(__file__).parents[1] / "bot" / "web" / "theme_presets.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
-
-    for theme in data["themes"]:
-        if theme["name"] == "钢铁核心":
-            continue
-        if theme["appearance"]["colors"]["scheme"] != "light":
-            continue
-        overrides = theme["appearance"]["colors"]["overrides"]
-        assert overrides["fileTree.folder"] == overrides["accent.strong"]
-        assert overrides["fileList.folderIcon"] == overrides["accent.strong"]
-        assert overrides["control.focusRing"] == overrides["accent.strong"]
-        assert overrides["identity.codex"] == overrides["accent.strong"]

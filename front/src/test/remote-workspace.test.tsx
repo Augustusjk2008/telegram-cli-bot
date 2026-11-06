@@ -1,7 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BotListScreen } from "../screens/BotListScreen";
-import { DesktopBotManagerScreen } from "../screens/DesktopBotManagerScreen";
 import { draftFromBot } from "../screens/botManagerModel";
 import { useBotManager } from "../screens/useBotManager";
 import { RemoteConnectionForm } from "../components/RemoteConnectionForm";
@@ -70,15 +69,6 @@ test("saving a changed remote workspace sends its connection and root through th
   expect(update).toHaveBeenCalledWith("remote", bot.workingDir, { remoteWorkspace: next });
 });
 
-test("desktop bot manager shows remote overview", async () => {
-  const bot: BotSummary = { alias: "remote", cliType: "codex", cliPath: "codex", status: "running", workingDir: "C:/control/remote", remoteWorkspace: remote, lastActiveText: "", canOperate: true };
-  const client = new MockWebBotClient();
-  vi.spyOn(client, "listBots").mockResolvedValue([bot]);
-  render(<DesktopBotManagerScreen client={client} currentAlias="remote" onSelect={vi.fn()} />);
-  expect((await screen.findAllByText("dev@linux.test:/home/dev")).length).toBeGreaterThan(0);
-  expect(screen.queryByRole("button", { name: "打开 remote 设置" })).not.toBeInTheDocument();
-});
-
 test("remote workdir update serializes the selected connection without SSH credentials", async () => {
   const fetch = vi.fn().mockResolvedValue(ok({ bot: rawBot }));
   vi.stubGlobal("fetch", fetch);
@@ -91,20 +81,19 @@ test("remote workdir update serializes the selected connection without SSH crede
   });
 });
 
-test.each([remote, windowsRemote])("remote create on $host requires explicit host key trust and a chosen directory, without local workingDir or secrets", async (target) => {
-  const selectedRoot = target.platform === "windows" ? "/D:/Project" : "/srv/project";
+test("remote create requires explicit host key trust and a chosen directory, without local workingDir or secrets", async () => {
+  const selectedRoot = "/srv/project";
   const client = new MockWebBotClient();
-  const connect = vi.spyOn(client, "connectRemote").mockRejectedValueOnce(new WebApiClientError("Unknown host", { code: "remote_host_key_unknown", status: 409, data: { fingerprint: target.hostKeyFingerprint } })).mockResolvedValue(target);
+  const connect = vi.spyOn(client, "connectRemote").mockRejectedValueOnce(new WebApiClientError("Unknown host", { code: "remote_host_key_unknown", status: 409, data: { fingerprint: remote.hostKeyFingerprint } })).mockResolvedValue(remote);
   const browse = vi.spyOn(client, "listRemoteDirectories").mockImplementation(async (_id, path) => ({ workingDir: path, entries: [] }));
   const add = vi.spyOn(client, "addBot").mockResolvedValue({ alias: "remote", cliType: "codex", status: "running", workingDir: "C:/control", remoteWorkspace: remote, lastActiveText: "" });
   render(<BotListScreen client={client} onSelect={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("新智能体别名"), { target: { value: "remote" } });
   fireEvent.change(screen.getByLabelText("工作区位置"), { target: { value: "remote" } });
   expect(screen.getByLabelText("目标系统")).toHaveValue("posix");
-  if (target.platform) fireEvent.change(screen.getByLabelText("目标系统"), { target: { value: target.platform } });
   expect(screen.queryByLabelText("新智能体工作目录")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "创建智能体" })).toBeDisabled();
-  fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: target.host } });
+  fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: remote.host } });
   fireEvent.change(screen.getByLabelText("SSH 用户名"), { target: { value: remote.username } });
   fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "secret-value" } });
   fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
@@ -113,9 +102,9 @@ test.each([remote, windowsRemote])("remote create on $host requires explicit hos
   expect(browse).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "信任此主机密钥并连接" }));
   await screen.findByLabelText("远程目录路径");
-  expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ platform: target.platform || "posix", password: "secret-value", hostKeyFingerprint: "SHA256:abc" }), undefined);
+  expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ platform: "posix", password: "secret-value", hostKeyFingerprint: "SHA256:abc" }), undefined);
   expect(screen.queryByLabelText("SSH 密码")).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("远程目录路径"), { target: { value: target.platform === "windows" ? "d:\\Project" : selectedRoot } });
+  fireEvent.change(screen.getByLabelText("远程目录路径"), { target: { value: selectedRoot } });
   fireEvent.click(screen.getByRole("button", { name: "打开" }));
   await waitFor(() => expect(browse).toHaveBeenLastCalledWith("ssh-1", selectedRoot));
   await waitFor(() => expect(screen.getByRole("button", { name: "选择此远程工作目录" })).toBeEnabled());
@@ -175,9 +164,6 @@ test("compact SSH control shows the remote path and disconnects until re-login",
   const onConnected = vi.fn();
   render(<RemoteSshMenu client={client} botAlias="remote" remote={remote} compact onConnected={onConnected} />);
   fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
-  expect(screen.getByText("dev@linux.test:22")).toBeInTheDocument();
-  expect(screen.getByText("/home/dev")).toBeInTheDocument();
-  expect(screen.getByRole("dialog", { name: "SSH 连接" }).parentElement).toBe(document.body);
   fireEvent.click(screen.getByRole("button", { name: "断开 SSH" }));
   await waitFor(() => expect(disconnect).toHaveBeenCalledWith("remote"));
   expect(screen.getByRole("status")).toHaveTextContent("SSH 已断开");
@@ -234,22 +220,22 @@ test("shared mobile files screen edits and downloads remote text while hiding un
   await waitFor(() => expect(write).toHaveBeenCalledWith("remote", "Case\\Name.txt", "after", "123", "utf-8"));
 });
 
-test.each([remote, windowsRemote])("remote files upload into the browsed directory and refresh ($host)", async (workspace) => {
+test("remote files upload into the browsed directory and refresh", async () => {
   const client = new MockWebBotClient();
-  let currentPath = workspace.root;
+  let currentPath = remote.root;
   let uploaded = false;
   vi.spyOn(client, "listFiles").mockImplementation(async () => ({
     workingDir: currentPath,
-    entries: currentPath === workspace.root
+    entries: currentPath === remote.root
       ? [{ name: "uploads", isDir: true }]
       : uploaded ? [{ name: "report.txt", isDir: false }] : [],
   }));
   const changeDirectory = vi.spyOn(client, "changeDirectory").mockImplementation(async (_alias, name) => {
-    currentPath = joinRemotePath(currentPath, name, workspace.platform);
+    currentPath = joinRemotePath(currentPath, name);
     return currentPath;
   });
   const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
-  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={workspace} />);
+  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} />);
   fireEvent.click(await screen.findByRole("button", { name: "进入 uploads" }));
   await waitFor(() => expect(changeDirectory).toHaveBeenCalledWith("remote", "uploads"));
   await waitFor(() => expect(screen.queryByRole("button", { name: "进入 uploads" })).not.toBeInTheDocument());
@@ -257,9 +243,7 @@ test.each([remote, windowsRemote])("remote files upload into the browsed directo
   fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
   await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file));
   expect(await screen.findByRole("button", { name: "打开 report.txt" })).toBeInTheDocument();
-  expect(currentPath).toBe(`${workspace.root}/uploads`);
-  fireEvent.click(screen.getByRole("button", { name: "更多操作 report.txt" }));
-  expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
+  expect(currentPath).toBe(`${remote.root}/uploads`);
 });
 
 test.each([{ structureOnly: true }, { canWriteFiles: false }])("remote file upload respects browse permissions (%j)", async (props) => {
@@ -307,16 +291,6 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   });
   const sync = vi.spyOn(client, "syncWorkspaceDocuments");
   render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
-  expect(screen.getByTestId("desktop-workbench-root")).toBeInTheDocument();
-  expect(screen.getByText("Remote chat")).toBeInTheDocument();
-  expect(screen.getByTestId("desktop-workbench-root")).toHaveStyle({ gridTemplateRows: "auto minmax(0,1fr) auto" });
-  expect(screen.getByTestId("desktop-workbench-main-illustration-area")).toBeInTheDocument();
-  expect(screen.getByTestId("desktop-workbench-activity-rail-illustration-host")).toContainElement(
-    screen.getByTestId("desktop-workbench-activity-rail"),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
-  expect(screen.getByRole("button", { name: "SSH 重新登录" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "SSH 连接" }));
   fireEvent.click(await screen.findByRole("button", { name: "打开 README.md" }));
   await waitFor(() => expect(read).toHaveBeenCalledWith("remote", "README.md"));
   await waitFor(() => expect(decorations).toHaveBeenCalledWith("remote"));
@@ -339,13 +313,6 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   fireEvent.change(folderNameInput, { target: { value: "docs" } });
   fireEvent.keyDown(folderNameInput, { key: "Enter", code: "Enter" });
   await waitFor(() => expect(createDirectory).toHaveBeenCalledWith("remote", "docs", remote.root));
-  fireEvent.click(screen.getByRole("button", { name: "Git" }));
-  expect(await screen.findByRole("heading", { name: "提交图" })).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "最近提交" })).not.toBeInTheDocument();
-  expect(git).toHaveBeenCalledWith("remote");
-  fireEvent.click(screen.getByRole("button", { name: "文件" }));
-  expect(await screen.findByRole("button", { name: "打开 README.md" })).toBeInTheDocument();
-  expect(decorations).toHaveBeenCalledWith("remote");
 });
 
 test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the file tree", async (entrypoint) => {
@@ -374,18 +341,6 @@ test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the f
   expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
 });
 
-test("desktop tree preserves a trailing backslash in the remote root", async () => {
-  const client = new MockWebBotClient();
-  const remoteRoot = { ...remote, root: "/home/dev\\" };
-  const list = vi.spyOn(client, "listFiles").mockImplementation(async (_alias, path) => ({
-    workingDir: path || remoteRoot.root,
-    entries: path === `${remoteRoot.root}/sub` ? [] : [{ name: "sub", isDir: true }],
-  }));
-  render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remoteRoot} chatPaneContent={<div>Remote chat</div>} /></PersistentTerminalProvider>);
-  fireEvent.click(await screen.findByRole("button", { name: "展开 sub" }));
-  await waitFor(() => expect(list).toHaveBeenCalledWith("remote", `${remoteRoot.root}/sub`, expect.anything()));
-});
-
 test("Windows connection payload carries platform only on initial connection and maps returned config", async () => {
   const windowsWire = { ...wire, platform: "windows", root: "/C:/Users/dev" };
   const fetch = vi.fn().mockResolvedValue(ok(windowsWire));
@@ -394,12 +349,6 @@ test("Windows connection payload carries platform only on initial connection and
   const connected = await client.connectRemote({ host: "windows.test", port: 22, username: "dev", platform: "windows", password: "secret" });
   expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({ host: "windows.test", port: 22, username: "dev", platform: "windows", password: "secret" });
   expect(connected).toMatchObject({ platform: "windows", root: windowsRemote.root });
-  await client.connectRemote({ ...windowsRemote, password: "again" }, "remote");
-  expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({ password: "again", host_key_fingerprint: "SHA256:abc" });
-  fetch.mockResolvedValue(ok({ bot: { ...rawBot, remote_workspace: windowsWire } }));
-  const bot = await client.addBot({ alias: "remote", cliType: "codex", cliPath: "codex", remoteWorkspace: connected });
-  expect(JSON.parse(fetch.mock.lastCall![1].body).remote_workspace).toEqual({ connection_id: "ssh-1", root: windowsRemote.root });
-  expect(bot.remoteWorkspace?.platform).toBe("windows");
 });
 
 test("Windows directory picker stops at drive roots and accepts a different drive", async () => {

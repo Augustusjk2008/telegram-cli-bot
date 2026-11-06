@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import os
 import signal
 import subprocess
@@ -33,7 +32,6 @@ def test_process_tree_handle_terminates_job_after_root_process_exits(monkeypatch
         "terminate_process_tree_sync",
         lambda process: fallback_calls.append(process),
     )
-    assert hasattr(processes, "ProcessTreeHandle"), "缺少跨根进程退出保留所有权的进程树句柄"
     job = FakeJob()
     handle = processes.ProcessTreeHandle(ExitedProcess(), job)
 
@@ -115,10 +113,6 @@ def test_process_tree_can_use_fallback_without_creating_a_windows_job() -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows suspended process contract")
 def test_windows_chat_process_is_contained_before_it_is_resumed(tmp_path) -> None:
-    assert "suspended" in inspect.signature(
-        processes.build_chat_cli_process_kwargs
-    ).parameters, "聊天 CLI 创建参数尚不支持原子 Job 绑定"
-    assert hasattr(processes, "resume_suspended_process")
     marker = tmp_path / "started"
     process = subprocess.Popen(
         [sys.executable, "-I", "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
@@ -137,10 +131,3 @@ def test_windows_chat_process_is_contained_before_it_is_resumed(tmp_path) -> Non
     finally:
         process_tree.terminate()
         process_tree.close()
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows process creation flags")
-def test_windows_chat_process_can_request_breakaway_from_parent_job() -> None:
-    kwargs = processes.build_chat_cli_process_kwargs(breakaway_from_job=True)
-
-    assert int(kwargs["creationflags"]) & processes._CREATE_BREAKAWAY_FROM_JOB

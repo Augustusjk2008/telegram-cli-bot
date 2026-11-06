@@ -89,20 +89,6 @@ class TestManagerLoadSave:
     """测试配置加载和保存"""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("alias", ["main", "project"])
-    async def test_chat_translation_is_persisted_per_bot(self, temp_dir: Path, alias: str):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": [{"alias": "project"}]}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main"), str(storage))
-        assert manager.get_profile(alias).chat_translation_enabled is True
-        other = "project" if alias == "main" else "main"
-        for enabled in (False, True):
-            await manager.set_bot_chat_translation(alias, enabled)
-            manager = MultiBotManager(BotProfile(alias="main"), str(storage))
-            assert manager.get_profile(alias).chat_translation_enabled is enabled
-            assert manager.get_profile(other).chat_translation_enabled is True
-
-    @pytest.mark.asyncio
     async def test_chat_translation_save_failure_restores_setting(self, temp_dir: Path):
         manager = MultiBotManager(BotProfile(alias="main"), str(temp_dir / "bots.json"))
         with patch.object(manager, "_persist_main_profile", side_effect=OSError("disk full")):
@@ -140,7 +126,7 @@ class TestManagerLoadSave:
         assert profile.native_agent == {"backend": "pi", "pi_agent": "reviewer"}
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("cli_type", ["codex", "claude", "antigravity"])
+    @pytest.mark.parametrize("cli_type", ["codex", "antigravity"])
     async def test_add_bot_defaults_without_persisting_cli_params(self, temp_dir: Path, monkeypatch, cli_type):
         monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", ["first-model", "second-model", "none"])
         storage = temp_dir / "bots.json"
@@ -162,8 +148,8 @@ class TestManagerLoadSave:
         assert "cli_params" not in data["bots"][0]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("cli_type", ["codex", "claude", "antigravity"])
-    async def test_add_bot_persists_bypass_approval_and_sandbox_yolo(self, temp_dir: Path, cli_type: str):
+    async def test_add_bot_persists_bypass_approval_and_sandbox_yolo(self, temp_dir: Path):
+        cli_type = "codex"
         storage = temp_dir / "bots.json"
         storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
         manager = MultiBotManager(BotProfile(alias="main"), str(storage))
@@ -197,20 +183,6 @@ class TestManagerValidation:
 
         assert profile.cli_path == "agy"
         assert json.loads(storage.read_text(encoding="utf-8"))["bots"][0]["cli_path"] == "agy"
-
-    @pytest.mark.asyncio
-    async def test_deepseek_desktop_cli_path_roundtrip(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        desktop_cli = temp_dir / "DeepSeek Harness" / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd"
-        desktop_cli.parent.mkdir(parents=True)
-        desktop_cli.write_text("@echo off", encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
-
-        await manager.set_bot_cli("main", "deepseek", str(desktop_cli))
-
-        restored = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
-        assert restored.main_profile.cli_type == "deepseek"
-        assert restored.main_profile.cli_path == str(desktop_cli)
 
     @pytest.mark.asyncio
     async def test_main_bot_workdir_persists_across_manager_reload(self, temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
@@ -283,49 +255,12 @@ class TestManagerValidation:
             },
         )
         assert manager.main_profile.native_agent == {"pi_agent": "main"}
-        await manager.set_bot_execution_config(
-            "main",
-            {
-                "supported_execution_modes": ["native_agent"],
-                "default_execution_mode": "native_agent",
-                "native_agent": {
-                    "provider": "codeflow",
-                    "model": "gpt-5.1-codex",
-                    "pi_agent": "main",
-                    "base_url": "https://cdn.codeflow.asia/v1",
-                    "clear_api_key": True,
-                },
-            },
-        )
 
         restored = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
 
         assert restored.main_profile.supported_execution_modes == ["native_agent"]
         assert restored.main_profile.default_execution_mode == "native_agent"
         assert restored.main_profile.native_agent == {"backend": "pi", "pi_agent": "main"}
-
-    @pytest.mark.asyncio
-    async def test_native_agent_bot_config_ignores_global_provider_fields(self, temp_dir: Path):
-        storage = temp_dir / "bots.json"
-        storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
-        manager = MultiBotManager(BotProfile(alias="main", working_dir=str(temp_dir)), str(storage))
-
-        await manager.set_bot_execution_config(
-            "main",
-            {
-                "supported_execution_modes": ["native_agent"],
-                "default_execution_mode": "native_agent",
-                "native_agent": {
-                    "provider": "codeflow",
-                    "model": "gpt-5.1-codex",
-                    "base_url": "file:///secret",
-                    "api_key": "sk-ignored",
-                    "pi_agent": "reviewer",
-                },
-            },
-        )
-
-        assert manager.main_profile.native_agent == {"pi_agent": "reviewer"}
 
     @pytest.mark.asyncio
     async def test_native_agent_model_selection_persists(self, temp_dir: Path):

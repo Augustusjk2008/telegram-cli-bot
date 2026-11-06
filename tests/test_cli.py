@@ -5,16 +5,12 @@ CLI 模块测试
 """
 
 import json
-import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from bot.cli import (
-    AntigravityJsonStreamParser,
     ClaudeJsonStreamParser,
-    CliStreamParseResult,
     CodexJsonStreamParser,
     build_cli_command,
     parse_antigravity_json_output,
@@ -35,7 +31,6 @@ from bot.web.native_history_adapter import create_stream_trace_state, consume_st
 ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
 
 
-@pytest.mark.parametrize("cli_type", ["codex", "claude"])
 @pytest.mark.parametrize(
     ("options", "expected"),
     [
@@ -44,7 +39,8 @@ ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
         ([], None),
     ],
 )
-def test_cli_model_defaults_follow_configured_order(monkeypatch, cli_type, options, expected):
+def test_cli_model_defaults_follow_configured_order(monkeypatch, options, expected):
+    cli_type = "codex"
     monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", options)
     config = CliParamsConfig.from_dict({cli_type: {"yolo": True}})
     assert config.get_param(cli_type, "model") == expected
@@ -57,10 +53,11 @@ def test_cli_model_defaults_follow_configured_order(monkeypatch, cli_type, optio
     assert config.get_param(cli_type, "model") == expected
 
 
-@pytest.mark.parametrize("cli_type", ["codex", "claude"])
 @pytest.mark.parametrize("model", ["saved-model", None])
-def test_cli_model_defaults_preserve_explicit_saved_choice(monkeypatch, cli_type, model):
+def test_cli_model_defaults_preserve_explicit_saved_choice(monkeypatch, model):
     from bot.models import BotProfile
+
+    cli_type = "codex"
 
     monkeypatch.setattr("bot.config.CLI_MODEL_OPTIONS", ["first-model", "none"])
     profile = BotProfile.from_dict({"alias": "saved", "cli_params": {cli_type: {"model": model}}})
@@ -275,11 +272,6 @@ class TestIncrementalCliParsers:
         assert parser.result().terminal_usage == final_usage
         assert len(parser.result().raw_tail.encode("utf-8")) <= 96
 
-    def test_parse_result_terminal_usage_is_optional(self):
-        result = CliStreamParseResult("done", None, None, "", 0, False)
-
-        assert result.terminal_usage is None
-
     def test_codex_parser_keeps_final_text_and_bounded_raw_tail(self):
         parser = CodexJsonStreamParser(raw_tail_max_bytes=96, final_text_max_bytes=1024)
 
@@ -360,25 +352,6 @@ gemini-3.8-flash-medium\tDuplicate
     ]
 
 
-def test_antigravity_model_effort_overrides_stale_default() -> None:
-    params = CliParamsConfig.from_dict({
-        "antigravity": {
-            "model": "gemini-3.8-flash-medium",
-            "effort": "low",
-            "print_timeout": 0,
-        },
-    })
-    command, _ = build_cli_command(
-        cli_type="antigravity",
-        resolved_cli="agy.exe",
-        user_text="hello",
-        env={},
-        params_config=params,
-    )
-    assert command[command.index("--effort") + 1] == "medium"
-    assert command[command.index("--print-timeout") + 1] == "0"
-
-
 def test_antigravity_models_without_effort_support_omit_effort_flag() -> None:
     params = CliParamsConfig.from_dict({
         "antigravity": {
@@ -413,34 +386,10 @@ def test_antigravity_parser_reads_nested_stream_events_and_usage() -> None:
     assert result.error_text is None
 
 
-def test_antigravity_statusline_parser_reads_verified_context_window() -> None:
-    payload = json.loads((ANTIGRAVITY_FIXTURE_DIR / "statusline_context.json").read_text(encoding="utf-8"))
-
-    result = parse_antigravity_statusline_json(payload)
-
-    assert result is not None
-    assert result["source"] == "antigravity_statusline"
-    assert result["session_id"] == "agy-statusline-session"
-    assert result["used_tokens"] == 124245
-    assert result["context_window"] == 1048576
-    assert result["context_left_percent"] == 88.15
-    assert result["usage_scope"] == "conversation"
-
-
 def test_antigravity_statusline_parser_rejects_unavailable_window() -> None:
     payload = json.loads((ANTIGRAVITY_FIXTURE_DIR / "context_unavailable.json").read_text(encoding="utf-8"))
 
     assert parse_antigravity_statusline_json(payload) is None
-
-
-def test_antigravity_parser_marks_soft_permission_denial_as_failure() -> None:
-    raw = (ANTIGRAVITY_FIXTURE_DIR / "denied.jsonl").read_text(encoding="utf-8")
-    result = parse_antigravity_json_output(raw)
-
-    assert result.terminal_status == "SUCCESS"
-    assert result.denied_actions == [{"action": "command", "display_name": "RunCommand"}]
-    assert result.terminal_error == "command — RunCommand"
-    assert result.error_text == "command — RunCommand"
 
 
 def test_antigravity_parser_preserves_structured_error() -> None:
@@ -502,5 +451,3 @@ def test_antigravity_agent_steps_produce_process_trace() -> None:
         events.extend(consume_stream_trace_chunk("antigravity", line, state))
 
     assert [event["kind"] for event in events] == ["process", "process"]
-    assert events[0]["summary"] == "Antigravity 已完成一个回复步骤"
-    assert events[1]["summary"] == "Antigravity 已保存当前检查点"

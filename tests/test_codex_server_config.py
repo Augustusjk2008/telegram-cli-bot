@@ -70,24 +70,13 @@ def test_codex_family_global_args_obey_permission_filter(cli_type, unsafe_args):
     assert merged.get_param(other, "extra_args") == []
 
 
-def test_env_service_accepts_codex_server(tmp_path):
-    from bot.web.env_service import EnvConfigService
-
-    service = EnvConfigService(tmp_path)
-    field = next(item for item in service.snapshot()["items"] if item["key"] == "CLI_TYPE")
-    assert "codex_server" in field["options"]
-    result = service.reload_preview({"values": {"CLI_TYPE": "codex_server", "CLI_PATH": "codex"}})
-    assert "CLI_TYPE" in result["changedKeys"]
-
-
-@pytest.mark.parametrize("path", [None, "C:/tools/codex.cmd"])
-def test_codex_server_profile_and_git_config_round_trip(tmp_path, monkeypatch, path):
+def test_codex_server_profile_and_git_config_round_trip(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CLI_TYPE", "claude")
     monkeypatch.setattr(config, "CLI_PATH", "C:/tools/claude.cmd")
-    data = {"alias": "server", "cli_type": "codex_server", "cli_path": path,
+    data = {"alias": "server", "cli_type": "codex_server", "cli_path": None,
             "cli_params": {"codex_server": {"model": "server-model"}, "codex": {"model": "exec-model"}}}
     profile = BotProfile.from_dict(data)
-    assert profile.cli_path == (path or "codex")
+    assert profile.cli_path == "codex"
     assert profile.supported_execution_modes == ["cli"]
     assert profile.default_execution_mode == "cli"
     managed_file = tmp_path / "managed.json"

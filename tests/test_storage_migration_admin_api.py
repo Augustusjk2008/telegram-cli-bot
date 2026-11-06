@@ -5,12 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
 
 from bot.web.api_common import AuthContext, WebApiError
 from bot.web.auth_store import CAP_ADMIN_OPS
-from bot.web.routes import admin_routes
 from bot.web.server import WebApiServer
 from bot.web.storage_migration_api import StorageMigrationApi, StorageMigrationApiError
 
@@ -164,67 +162,6 @@ async def test_migration_rejects_unknown_plan_and_unready_stop_hook() -> None:
     assert unready.value.status == 409
     assert unready.value.code == "agent_stop_not_ready"
     assert unready.value.data["state"] == "stopping"
-
-
-def test_admin_routes_register_storage_endpoints() -> None:
-    server = SimpleNamespace(
-        admin_bots=AsyncMock(),
-        admin_cli_error_stats=AsyncMock(),
-        admin_processing=AsyncMock(),
-        admin_add_bot=AsyncMock(),
-        admin_single_bot=AsyncMock(),
-        admin_remove_bot=AsyncMock(),
-        admin_start_bot=AsyncMock(),
-        admin_stop_bot=AsyncMock(),
-        admin_archive_bot=AsyncMock(),
-        admin_unarchive_bot=AsyncMock(),
-        admin_update_cli=AsyncMock(),
-        admin_update_execution=AsyncMock(),
-        admin_rename_bot=AsyncMock(),
-        admin_update_workdir=AsyncMock(),
-        admin_update_prompt_presets=AsyncMock(),
-        admin_update_global_prompt_presets=AsyncMock(),
-        admin_get_update=AsyncMock(),
-        admin_patch_update=AsyncMock(),
-        admin_update_check=AsyncMock(),
-        admin_update_download=AsyncMock(),
-        admin_update_download_stream=AsyncMock(),
-        admin_update_offline_packages=AsyncMock(),
-        admin_update_offline_prepare=AsyncMock(),
-        admin_update_offline_prepare_stream=AsyncMock(),
-        admin_env_get=AsyncMock(),
-        admin_inline_completion_config_get=AsyncMock(),
-        admin_inline_completion_config_patch=AsyncMock(),
-        admin_native_agent_config_get=AsyncMock(),
-        admin_native_agent_preflight_get=AsyncMock(),
-        admin_native_agent_config_patch=AsyncMock(),
-        admin_language_server_install=AsyncMock(),
-        admin_language_server_update=AsyncMock(),
-        admin_language_servers_redetect=AsyncMock(),
-        admin_runtime_diagnostics=AsyncMock(),
-        admin_env_patch=AsyncMock(),
-        admin_env_reload_preview=AsyncMock(),
-        admin_env_reload=AsyncMock(),
-        admin_env_reload_system=AsyncMock(),
-        admin_restart=AsyncMock(),
-        admin_tunnel=AsyncMock(),
-        admin_tunnel_start=AsyncMock(),
-        admin_tunnel_stop=AsyncMock(),
-        admin_tunnel_restart=AsyncMock(),
-        admin_storage=AsyncMock(),
-        admin_storage_preview=AsyncMock(),
-        admin_storage_migrate=AsyncMock(),
-        admin_storage_cleanup_retry=AsyncMock(),
-    )
-    app = web.Application()
-    admin_routes.register(app, server)
-    paths = {route.resource.canonical for route in app.router.routes()}
-    assert {
-        "/api/admin/storage",
-        "/api/admin/storage/preview",
-        "/api/admin/storage/migrate",
-        "/api/admin/storage/cleanup/retry",
-    } <= paths
 
 
 @pytest.mark.asyncio

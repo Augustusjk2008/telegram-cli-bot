@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import runpy
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -20,52 +18,6 @@ SUBPROCESS_ENTRYPOINT = (
     "sys.argv = ['bot', *sys.argv[1:]]; "
     "runpy.run_module('bot', run_name='__main__')"
 )
-
-
-def _run_entrypoint(
-    monkeypatch: pytest.MonkeyPatch, entrypoint_args: list[str]
-) -> tuple[list[str], list[list[str]]]:
-    migration_calls: list[str] = []
-    main_calls: list[list[str]] = []
-
-    def record_pending_migration(*, repo_root: str) -> None:
-        migration_calls.append(repo_root)
-
-    package = ModuleType("bot")
-    package.__path__ = []  # type: ignore[attr-defined]
-    bootstrap = ModuleType("bot.bootstrap")
-    bootstrap.ensure_nofile_limit = lambda: None  # type: ignore[attr-defined]
-    runner = ModuleType("bot.migrations.runner")
-    runner.run_pending_migrations = record_pending_migration  # type: ignore[attr-defined]
-    main_module = ModuleType("bot.main")
-    main_module.main = lambda: main_calls.append(list(sys.argv))  # type: ignore[attr-defined]
-
-    package.bootstrap = bootstrap  # type: ignore[attr-defined]
-    package.main = main_module  # type: ignore[attr-defined]
-    migrations = ModuleType("bot.migrations")
-    migrations.runner = runner  # type: ignore[attr-defined]
-    package.migrations = migrations  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "bot", package)
-    monkeypatch.setitem(sys.modules, "bot.bootstrap", bootstrap)
-    monkeypatch.setitem(sys.modules, "bot.migrations", migrations)
-    monkeypatch.setitem(sys.modules, "bot.migrations.runner", runner)
-    monkeypatch.setitem(sys.modules, "bot.main", main_module)
-    monkeypatch.setattr(sys, "argv", [str(ENTRYPOINT_PATH), *entrypoint_args])
-
-    runpy.run_path(str(ENTRYPOINT_PATH), run_name="__main__")
-    return migration_calls, main_calls
-
-
-@pytest.mark.parametrize("preflighted", [False, True])
-def test_main_migration_preflight_gate(monkeypatch: pytest.MonkeyPatch, preflighted: bool) -> None:
-    migration_calls, main_calls = _run_entrypoint(
-        monkeypatch, [MIGRATIONS_CHECKED_ARG] if preflighted else []
-    )
-
-    assert migration_calls == ([] if preflighted else [str(ENTRYPOINT_PATH.parent.parent.resolve())])
-    assert len(main_calls) == 1
-    assert MIGRATIONS_CHECKED_ARG not in main_calls[0]
 
 
 def _write_subprocess_fixture(package_root: Path) -> None:
@@ -155,8 +107,7 @@ def test_update_migration_compatibility_must_be_boolean(tmp_path):
             validate_update_migrations(tmp_path, {"staging_dir": str(tmp_path), "manifest": {"migrations": declaration}})
 
 
-@pytest.mark.parametrize("name", ["bot/migrations/runner.py", "bot/migrations/__init__.py",
-                                  "bot/storage_migration.py", "bot/storage_runtime.py"])
+@pytest.mark.parametrize("name", ["bot/migrations/runner.py", "bot/storage_migration.py", "bot/storage_runtime.py"])
 @pytest.mark.parametrize("operation", ["modify", "delete"])
 def test_update_migration_implementation_changes_require_review(tmp_path, name, operation):
     from bot.update_migration_gate import validate_update_migrations

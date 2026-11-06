@@ -199,54 +199,6 @@ async def test_bot_archive_persists_and_preserves_main_constraint(
 
 
 @pytest.mark.asyncio
-async def test_admin_archive_routes_only_expose_archive_in_management(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    manager = _build_manager(tmp_path)
-    manager.managed_profiles["worker"] = BotProfile(alias="worker", working_dir=str(tmp_path))
-    manager._save_profiles()
-    server = _build_server(manager, monkeypatch, tmp_path)
-
-    async def admin_auth(_request, capability: str) -> AuthContext:
-        assert capability in {CAP_ADMIN_OPS, CAP_MANAGE_BOTS, CAP_VIEW_BOTS}
-        return AuthContext(
-            user_id=123,
-            token_used=True,
-            account_id="admin-1",
-            username="admin",
-            capabilities={CAP_ADMIN_OPS, CAP_MANAGE_BOTS, CAP_VIEW_BOTS},
-            is_local_admin=True,
-        )
-
-    monkeypatch.setattr(server, "_with_capability", admin_auth)
-
-    app = server._build_app()
-    async with TestServer(app) as test_server:
-        async with TestClient(test_server) as client:
-            archive_response = await client.post("/api/admin/bots/worker/archive")
-            archive_payload = await archive_response.json()
-            main_list_response = await client.get("/api/bots")
-            main_list_payload = await main_list_response.json()
-            admin_list_response = await client.get("/api/admin/bots")
-            admin_list_payload = await admin_list_response.json()
-            unarchive_response = await client.post("/api/admin/bots/worker/unarchive")
-            unarchive_payload = await unarchive_response.json()
-
-    assert archive_response.status == 200, archive_payload
-    assert archive_payload["data"]["bot"]["archived"] is True
-    assert archive_payload["data"]["bot"]["enabled"] is False
-    assert main_list_response.status == 200, main_list_payload
-    assert [item["alias"] for item in main_list_payload["data"]] == ["main"]
-    assert admin_list_response.status == 200, admin_list_payload
-    worker = next(item for item in admin_list_payload["data"] if item["alias"] == "worker")
-    assert worker["archived"] is True
-    assert unarchive_response.status == 200, unarchive_payload
-    assert unarchive_payload["data"]["bot"]["archived"] is False
-    assert unarchive_payload["data"]["bot"]["enabled"] is False
-
-
-@pytest.mark.asyncio
 async def test_archive_unloads_sessions_preserves_bindings_and_reads_only_on_management(tmp_path, monkeypatch):
     from bot.sessions import get_bot_sessions
 

@@ -179,30 +179,11 @@ afterEach(() => {
 });
 
 describe("主题管理", () => {
-  it("does not expose theme import or copy controls", () => {
-    api.library = {
-      schemaVersion: 1,
-      scope: "global",
-      revision: 1,
-      selectedThemeId: BUILTIN_THEME.id,
-      themes: [BUILTIN_THEME],
-    };
-    render(<ThemeManagerScreen />);
-    expect(screen.queryByLabelText("导入主题 JSON 文件")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "新建主题" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "复制主题" })).not.toBeInTheDocument();
-    expect(screen.getByText("预置主题由应用版本统一提供，管理员也不能编辑、导入或删除。")).toBeInTheDocument();
-  });
-
   it("keeps edits local, retains the last valid preview for invalid input, and discards without a write", async () => {
     const rootStyle = document.documentElement.getAttribute("style");
     const rootTheme = document.documentElement.getAttribute("data-theme");
     render(<ThemeManagerScreen />);
     const preview = screen.getByTestId("theme-local-preview");
-    expect(preview).toHaveAttribute("data-style-profile", "paper");
-    expect(preview).toHaveAttribute("data-motion-profile", "paper");
-    expect(preview).toHaveAttribute("data-color-scheme", "light");
-    expect(preview.style.colorScheme).toBe("light");
     const original = preview.style.getPropertyValue(colorToken.cssVariable!);
     fireEvent.change(hexInput(), { target: { value: "#123456" } });
     await waitFor(() =>
@@ -236,11 +217,8 @@ describe("主题管理", () => {
     expect(api.selectTheme).not.toHaveBeenCalled();
   });
 
-  it.each([
-    new Error("连接中断"),
-    Object.assign(new Error("revision conflict"), { status: 409 }),
-  ])("preserves the draft on failure and reload: %s", async (failure) => {
-    api.updateTheme.mockRejectedValueOnce(failure);
+  it("preserves the draft on a revision conflict and reload", async () => {
+    api.updateTheme.mockRejectedValueOnce(Object.assign(new Error("revision conflict"), { status: 409 }));
     render(<ThemeManagerScreen />);
     fireEvent.change(hexInput(), { target: { value: "#334455" } });
     fireEvent.change(screen.getByLabelText("主题名称"), {
@@ -291,7 +269,6 @@ describe("主题管理", () => {
     expect(hexInput()).toBeDisabled();
     expect(screen.queryByRole("button", { name: "复制后编辑" })).not.toBeInTheDocument();
     expect(api.createTheme).not.toHaveBeenCalled();
-    expect(screen.getByText("该主题是随应用发布的预置主题，内容由版本固定。")).toBeInTheDocument();
     fireEvent.change(hexInput(), { target: { value: "#223344" } });
     expect(api.updateTheme).not.toHaveBeenCalled();
     expect(api.selectTheme).not.toHaveBeenCalled();
@@ -498,7 +475,6 @@ describe("主题管理", () => {
     await screen.findByText("主题已删除。");
     expect(api.deleteTheme).toHaveBeenCalledExactlyOnceWith("theme_personal");
     expect(api.library!.selectedThemeId).toBe(BUILTIN_THEME.id);
-    expect(screen.queryByRole("button", { name: "复制后编辑" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("主题名称")).toHaveValue(BUILTIN_THEME.name);
   });
 

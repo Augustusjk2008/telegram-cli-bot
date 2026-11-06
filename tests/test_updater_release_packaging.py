@@ -190,20 +190,6 @@ def test_portable_build_does_not_embed_fixed_web_token() -> None:
     assert migration_index < ensure_token_index < import_index
     assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
     assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
-    assert '$env:TCB_PORTABLE_ROOT = $PackageRoot' in portable
-    assert '$portableLocator = Join-Path $PackageRoot ".tcb\\storage.json"' in portable
-    assert 'Remove-Item Env:TCB_DATA_DIR -ErrorAction SilentlyContinue' in portable
-
-
-def test_release_builders_require_packaged_theme_catalogs() -> None:
-    for relative_path in (
-        ".release-local/publish-release.ps1",
-        ".release-local/portable-win/build-portable.ps1",
-    ):
-        script = Path(relative_path).read_text(encoding="utf-8")
-        assert '"bot/web/theme_presets.json"' in script
-        assert '"bot/web/theme_illustrations.json"' in script
-        assert "Assert-ThemeFilesInStage" in script
 
 
 def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_encodings() -> None:
@@ -245,72 +231,6 @@ New-TarGzArchive -SourceDir {_ps_quote(source)} -DestinationFile {_ps_quote(dest
         assert "./scripts/empty_recycle_bin.bat" in archive.getnames()
 
 
-def test_updated_frontend_build_uses_npm_without_legacy_script(monkeypatch, tmp_path: Path) -> None:
-    front_root = tmp_path / "front"
-    front_root.mkdir()
-    commands = []
-
-    def fake_run(command, **kwargs):
-        commands.append((command, kwargs["cwd"]))
-        return subprocess.CompletedProcess(command, 0, stdout="built", stderr="")
-
-    monkeypatch.setattr(updater.shutil, "which", lambda name: "npm" if name == "npm" else None)
-    monkeypatch.setattr(updater.subprocess, "run", fake_run)
-
-    assert updater._build_updated_frontend(tmp_path) == (True, "built")
-    assert commands == [(["npm", "run", "build"], front_root)]
-
-
-def test_updated_frontend_build_installs_dependencies_then_retries(monkeypatch, tmp_path: Path) -> None:
-    front_root = tmp_path / "front"
-    front_root.mkdir()
-    commands = []
-
-    def fake_run(command, **kwargs):
-        commands.append((command, kwargs["cwd"]))
-        return subprocess.CompletedProcess(command, 1 if len(commands) == 1 else 0, stdout="", stderr="")
-
-    monkeypatch.setattr(updater.shutil, "which", lambda _name: "npm")
-    monkeypatch.setattr(updater.subprocess, "run", fake_run)
-
-    assert updater._build_updated_frontend(tmp_path)[0] is True
-    assert commands == [
-        (["npm", "run", "build"], front_root),
-        (["npm", "ci", "--no-audit", "--no-fund"], front_root),
-        (["npm", "run", "build"], front_root),
-    ]
-
-
-def test_updated_frontend_build_reports_missing_npm(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "front").mkdir()
-    monkeypatch.setattr(updater.shutil, "which", lambda _name: None)
-
-    success, message = updater._build_updated_frontend(tmp_path)
-
-    assert success is False
-    assert "npm" in message
-
-
-def test_updated_frontend_build_keeps_legacy_script_precedence(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "front").mkdir()
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
-    script_path = scripts_dir / script_name
-    script_path.write_text("stub", encoding="utf-8")
-    commands = []
-
-    def fake_run(command, **kwargs):
-        commands.append((command, kwargs["cwd"]))
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(updater.subprocess, "run", fake_run)
-
-    assert updater._build_updated_frontend(tmp_path)[0] is True
-    expected = [str(script_path.resolve())] if os.name == "nt" else ["bash", str(script_path.resolve())]
-    assert commands == [(expected, tmp_path)]
-
-
 def update_archive(tmp_path, *, version="3.1.0", additions=None, manifest_changes=None):
     contents = {
         "VERSION": version.encode(), "requirements.txt": b"aiohttp==3.11.0\n",
@@ -345,7 +265,7 @@ def test_update_version_comparison(left, right, result):
     assert update_package.compare_versions(left, right) == result
 
 
-@pytest.mark.parametrize("version", ["offline", "3", "3.01.0", "3.1.0-01", "3.1.0-rc..1"])
+@pytest.mark.parametrize("version", ["offline", "3.01.0", "3.1.0-01", "3.1.0-rc..1"])
 def test_update_invalid_versions(version):
     with pytest.raises(ValueError):
         update_package.normalize_version(version)

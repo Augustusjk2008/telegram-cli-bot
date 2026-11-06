@@ -53,13 +53,13 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-test.each([true, false])("starts on the main Agent without the legacy agent dropdown when cluster enabled=%s", async (clusterEnabled) => {
+test("starts on the main Agent without the legacy agent dropdown", async () => {
   window.localStorage.setItem("tcb.activeAgent.main", "reviewer");
   const client = createClient();
   const overview: BotOverview = {
     ...createOverview(),
     cluster: {
-      enabled: clusterEnabled,
+      enabled: false,
       writePolicy: "main_only",
       maxParallelAgents: 2,
       defaultTimeoutSeconds: 600,

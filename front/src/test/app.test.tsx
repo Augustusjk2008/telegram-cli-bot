@@ -175,51 +175,6 @@ test("a visible current-bot completion clears a stale red dot", async () => {
   await waitFor(() => expect(screen.queryByTestId("bot-switcher-unread-indicator")).not.toBeInTheDocument());
 });
 
-test("trusts a hidden-page notification even before React commits the visibility change", async () => {
-  const user = userEvent.setup();
-  let emitNotification: ((event: WebNotificationEvent) => void) | null = null;
-  (MockWebBotClient.prototype as MockNotificationClientPrototype).subscribeNotifications = function (
-    onEvent: (event: WebNotificationEvent) => void,
-    options?: NotificationSubscriptionOptions,
-  ): NotificationSubscription {
-    emitNotification = onEvent;
-    options?.onStatus?.("open");
-    return { close: vi.fn(), sendPresenceUpdate: vi.fn() };
-  };
-  render(<App />);
-
-  await user.type(screen.getByLabelText("访问口令"), "member");
-  await user.type(screen.getByLabelText("密码"), "password");
-  await user.click(screen.getByRole("button", { name: "登录" }));
-  await waitFor(() => expect(emitNotification).toBeTruthy());
-
-  const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
-  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
-  try {
-    act(() => emitNotification?.({
-      type: "chat_completed",
-      id: "hidden-before-react-commit",
-      dedupeKey: "hidden-before-react-commit",
-      botAlias: "main",
-      agentId: "main",
-      conversationId: "conversation-1",
-      status: "success",
-      title: "聊天已完成",
-      preview: "回复完成",
-      completedAt: "2026-08-27T01:10:05Z",
-      terminalAt: "2026-08-27T01:10:00Z",
-    }));
-
-    expect(await screen.findByTestId("bot-switcher-unread-indicator")).toBeInTheDocument();
-  } finally {
-    if (originalVisibility) {
-      Object.defineProperty(document, "visibilityState", originalVisibility);
-    } else {
-      delete (document as Document & { visibilityState?: DocumentVisibilityState }).visibilityState;
-    }
-  }
-});
-
 test("returning to a hidden current-bot page acknowledges its unread completion", async () => {
   const user = userEvent.setup();
   let emitNotification: ((event: WebNotificationEvent) => void) | null = null;

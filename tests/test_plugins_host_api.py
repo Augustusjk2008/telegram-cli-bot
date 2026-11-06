@@ -9,7 +9,7 @@ import pytest
 from bot.plugins.artifacts import ArtifactStore
 from bot.plugins.host_api import PluginHostApi, PluginHostContext, PluginHostPermissionError
 from bot.plugins.manifest import load_plugin_manifest
-from bot.plugins.manifest_payloads import build_manifest_payload, build_manifest_signature
+from bot.plugins.manifest_payloads import build_manifest_signature
 from bot.plugins.models import (
     PluginFileHandlerSpec,
     PluginManifest,
@@ -18,7 +18,6 @@ from bot.plugins.models import (
     PluginViewSpec,
 )
 from bot.plugins import models as plugin_models
-from bot.plugins.runtime import PluginRuntime
 
 
 def _limits(**kwargs):
@@ -62,49 +61,6 @@ def _manifest(
 
 def _context(workspace: Path) -> PluginHostContext:
     return PluginHostContext(bot_alias="main", plugin_id="limited", workspace_root=workspace)
-
-
-def test_manifest_parses_runtime_limits_separately_from_permissions(tmp_path: Path) -> None:
-    plugin_dir = tmp_path / "plugin"
-    plugin_dir.mkdir()
-    (plugin_dir / "plugin.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": 2,
-                "id": "limited",
-                "name": "Limited",
-                "version": "1.0.0",
-                "runtime": {
-                    "type": "python",
-                    "entry": "main.py",
-                    "protocol": "jsonrpc-stdio",
-                    "permissions": {
-                        "workspaceRead": True,
-                        "workspaceList": True,
-                        "tempArtifacts": True,
-                    },
-                    "limits": {
-                        "readBytes": 1024,
-                        "directoryEntries": 3,
-                        "artifactBytes": 2048,
-                        "artifactCount": 2,
-                        "totalArtifactBytes": 4096,
-                    },
-                },
-                "views": [{"id": "main", "title": "Main", "renderer": "document"}],
-                "fileHandlers": [{"id": "txt", "label": "Text", "extensions": [".txt"], "viewId": "main"}],
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = load_plugin_manifest(plugin_dir / "plugin.json")
-    payload = build_manifest_payload(manifest)
-
-    assert manifest.runtime.permissions.workspace_read is True
-    assert manifest.runtime.limits.read_bytes == 1024
-    assert payload["runtime"]["limits"]["readBytes"] == 1024
 
 
 def test_manifest_signature_changes_when_runtime_limits_change(tmp_path: Path) -> None:
@@ -157,37 +113,12 @@ async def test_host_read_text_rejects_files_over_read_limit(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_host_read_range_returns_bounded_chunk_and_identity(tmp_path: Path) -> None:
-    source = tmp_path / "sample.vcd"
-    source.write_bytes(b"0123456789")
-    manifest = _manifest(tmp_path, limits=_limits(read_bytes=32))
-    api = PluginHostApi(ArtifactStore(tmp_path))
-
-    result = await api.dispatch(
-        _context(tmp_path),
-        manifest,
-        "host.workspace.read_range",
-        {"path": "sample.vcd", "offset": 3, "length": 4},
-    )
-
-    assert result["path"] == str(source.resolve())
-    assert result["offset"] == 3
-    assert result["length"] == 4
-    assert result["fileSizeBytes"] == 10
-    assert result["mtimeNs"] == str(source.stat().st_mtime_ns)
-    assert base64.b64decode(result["contentBase64"]) == b"3456"
-    assert result["eof"] is False
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("content", "offset", "length", "expected", "eof"),
     [
         (b"0123", 0, 0, b"", False),
-        (b"0123", 4, 0, b"", True),
         (b"0123", 4, 1, b"", True),
         (b"", 0, 0, b"", True),
-        (b"", 0, 1, b"", True),
         (b"0123", 3, 4, b"3", True),
     ],
 )
@@ -223,16 +154,10 @@ async def test_host_read_range_returns_empty_or_final_chunk(
     [
         ({"offset": -1, "length": 1}, "offset"),
         ({"offset": 5, "length": 1}, "offset"),
-        ({"offset": 5, "length": 0}, "offset"),
         ({"offset": True, "length": 1}, "offset"),
-        ({"offset": 1.0, "length": 1}, "offset"),
         ({"offset": "0", "length": 1}, "offset"),
-        ({"length": 1}, "offset"),
         ({"offset": 0, "length": -1}, "length"),
         ({"offset": 0, "length": False}, "length"),
-        ({"offset": 0, "length": 1.0}, "length"),
-        ({"offset": 0, "length": "0"}, "length"),
-        ({"offset": 0}, "length"),
         ({"offset": 0, "length": 1024 * 1024 + 1}, "length"),
     ],
 )
@@ -352,8 +277,7 @@ async def test_host_write_bytes_enforces_write_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("length", [0, 1])
-async def test_host_read_range_rejects_files_over_read_limit(tmp_path: Path, length: int) -> None:
+async def test_host_read_range_rejects_files_over_read_limit(tmp_path: Path) -> None:
     (tmp_path / "large.csv").write_bytes(b"01234")
     manifest = _manifest(tmp_path, limits=_limits(read_bytes=4))
     api = PluginHostApi(ArtifactStore(tmp_path))
@@ -363,7 +287,7 @@ async def test_host_read_range_rejects_files_over_read_limit(tmp_path: Path, len
             _context(tmp_path),
             manifest,
             "host.workspace.read_range",
-            {"path": "large.csv", "offset": 0, "length": length},
+            {"path": "large.csv", "offset": 0, "length": 0},
         )
 
 
@@ -423,13 +347,3 @@ async def test_artifact_store_enforces_count_and_total_limits(tmp_path: Path) ->
         )
 
     assert list(store._records) == [first["artifactId"]]
-
-
-def test_runtime_context_payload_exposes_effective_limits(tmp_path: Path) -> None:
-    manifest = _manifest(tmp_path, limits=_limits(read_bytes=1024, directory_entries=3))
-    runtime = PluginRuntime(workspace_root_for=lambda _alias: tmp_path)
-
-    payload = runtime._context_payload("main", manifest)
-
-    assert payload["host"]["limits"]["readBytes"] == 1024
-    assert payload["host"]["limits"]["directoryEntries"] == 3

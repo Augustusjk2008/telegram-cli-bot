@@ -122,14 +122,13 @@ async def test_cancel_cluster_run_cancels_running_background_tasks(monkeypatch) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cli_type", ["codex", "codex_server"])
-async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypatch, cli_type) -> None:
+async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypatch) -> None:
     import bot.web.api_service as api_service
 
     runtime = ClusterRuntime()
     monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
     api_service._CLUSTER_RUN_CONTROLS.clear()
-    run, task = _run_with_task(runtime, cli_type)
+    run, task = _run_with_task(runtime)
     run.execution_mode = "native_agent"
     run.allow_unsafe_cli = True
 

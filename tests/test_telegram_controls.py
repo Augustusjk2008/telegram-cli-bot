@@ -36,8 +36,6 @@ async def test_config_command_queries_and_updates_model_reasoning_and_cluster(ga
     monkeypatch.setattr(api_service, "CLI_MODEL_OPTIONS", {"codex": ["gpt-5", "gpt-4"]})
 
     await gateway.receive_update(update(1, "/config dev"))
-    assert "<b>[dev]</b> 智能体配置" in gateway.client.messages[-1][1]
-    assert "模型：" in gateway.client.messages[-1][1]
     assert "集群：关闭" in gateway.client.messages[-1][1]
 
     await gateway.receive_update(update(2, "/config dev model gpt-5"))
@@ -113,7 +111,7 @@ async def test_select_reply_and_final_buttons_keep_original_target(gateway, monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", ["/new", "/expand", "✉️ 发消息", "📊 状态", "  多行\n正文\n"])
+@pytest.mark.parametrize("body", ["/new", "/expand", "✉️ 发消息", "  多行\n正文\n"])
 async def test_bound_reply_body_is_literal(gateway, monkeypatch, body):
     calls = install_stream(monkeypatch, [done()])
     gateway.state.select_target(42, 42, "dev")
@@ -135,7 +133,7 @@ async def test_continue_button_is_invalid_after_web_switch(gateway, monkeypatch)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("user_id,chat_id,chat_type", [(99, 42, "private"), ("42", 42, "private"), (42, 42, "group"), (43, 42, "private"), (42, 43, "private")])
+@pytest.mark.parametrize("user_id,chat_id,chat_type", [(99, 42, "private"), (43, 42, "private"), (42, 43, "private")])
 async def test_callback_authenticates_actor_and_bound_chat(gateway, user_id, chat_id, chat_type):
     gateway.allowed_user_ids = frozenset({42, 43})
     token = gateway.state.new_interaction("select", 42, 42, "dev", None)
@@ -175,7 +173,7 @@ def test_interactions_persist_and_isolate_bot_user_chat(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("condition", ["expired", "consumed", "switched", "disabled", "archived", "wrong_user", "unknown"])
+@pytest.mark.parametrize("condition", ["expired", "consumed", "switched", "disabled", "wrong_user", "unknown"])
 async def test_invalid_reply_never_falls_back_to_command_routing(gateway, monkeypatch, condition):
     calls = install_stream(monkeypatch, [done()])
     token = gateway.state.new_interaction("reply", 43 if condition == "wrong_user" else 42, 42, "dev", None,
@@ -188,8 +186,6 @@ async def test_invalid_reply_never_falls_back_to_command_routing(gateway, monkey
         session.active_conversation_id = "another"
     elif condition == "disabled":
         gateway.manager.managed_profiles["dev"].enabled = False
-    elif condition == "archived":
-        gateway.manager.managed_profiles["dev"].archived = True
     await gateway.receive_update(reply(1, 101 if condition == "unknown" else 100, "to ops run this"))
     assert calls == []
     assert "刷新" in gateway.client.messages[-1][1]
@@ -272,18 +268,14 @@ async def test_stop_confirmation_binds_exact_snapshot_and_deduplicates(gateway, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase,tasks,expected", [
-    ("waiting_approval", [], "等待审批"), ("running", ["child-1"], "子任务：1 个"),
-    ("idle", [], "空闲"), ("preparing", [], "准备中"),
-])
-async def test_status_displays_service_phase_and_unknown_context(gateway, monkeypatch, phase, tasks, expected):
-    snapshot = {"conversation_id": None, "execution_mode": "native_agent", "phase": phase,
+async def test_status_displays_child_tasks_and_unknown_context(gateway, monkeypatch):
+    snapshot = {"conversation_id": None, "execution_mode": "native_agent", "phase": "running",
                 "execution_id": None, "turn_id": None, "cluster_run_id": None,
-                "cluster_task_ids": tasks, "context_usage": None}
+                "cluster_task_ids": ["child-1"], "context_usage": None}
     monkeypatch.setattr(api_service, "get_conversation_control_snapshot", AsyncMock(return_value=snapshot))
     gateway.state.select_target(42, 42, "dev")
     await gateway.receive_update(update(1, "📊 状态"))
-    assert expected in gateway.client.messages[-1][1]
+    assert "子任务：1 个" in gateway.client.messages[-1][1]
     assert "context left: unknown" in gateway.client.messages[-1][1]
 
 

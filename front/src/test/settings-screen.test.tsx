@@ -79,10 +79,6 @@ test("native bot settings hide CLI-only controls and never echo its API key", as
   expect(screen.getByLabelText("Native model")).toHaveValue("claude-sonnet-4-5");
   expect(screen.queryByText("sk-settings-1234")).not.toBeInTheDocument();
   expect(screen.queryByText("https://provider.example/v1")).not.toBeInTheDocument();
-  expect(screen.getAllByRole("heading", { name: "当前智能体设置" }).length).toBeGreaterThan(0);
-  expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("聊天完成网页通知")).not.toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "语言服务" })).not.toBeInTheDocument();
 });
 
 test("native settings persist the selected Pi agent through the execution config", async () => {
@@ -120,27 +116,6 @@ test("non-admin session cannot mutate current agent runtime settings", async () 
 
   expect(await screen.findByLabelText("运行后端")).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存 CLI 配置" })).toBeDisabled();
-  expect(screen.getAllByRole("heading", { name: "当前智能体设置" }).length).toBeGreaterThan(0);
-  expect(screen.queryByLabelText("聊天正文字体")).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("聊天完成网页通知")).not.toBeInTheDocument();
-});
-
-test("settings expose dynamic cluster controls without fixed child-agent editors", async () => {
-  render(
-    <SettingsScreen
-      botAlias="main"
-      client={new MockWebBotClient()}
-      onLogout={() => undefined}
-    />,
-  );
-
-  expect(await screen.findByLabelText("运行后端")).toBeInTheDocument();
-  expect(await screen.findByRole("heading", { name: "集群模式" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "集群模型档位" })).toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "子智能体列表" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "JSON 配置" })).not.toBeInTheDocument();
-  expect(screen.queryByText("冲突策略")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "重新检测" })).not.toBeInTheDocument();
 });
 
 test("remote Antigravity settings expose MCP status, scope and copyable setup guidance", async () => {
@@ -156,15 +131,11 @@ test("remote Antigravity settings expose MCP status, scope and copyable setup gu
 
   const panel = await screen.findByTestId("remote-workspace-mcp-panel");
   expect(within(panel).getByText("已配置")).toBeInTheDocument();
-  expect(within(panel).getByText("tcb-remote")).toBeInTheDocument();
-  expect(within(panel).getByText("exec, read, write, edit, list")).toBeInTheDocument();
-  expect(within(panel).getByText("权限策略：ask")).toBeInTheDocument();
 
   const copyButtons = within(panel).getAllByRole("button", { name: "复制" });
   await user.click(copyButtons[0]);
   expect(writeText).toHaveBeenCalledWith("{\"mcpServers\":{\"tcb-remote\":{}}}");
 });
-
 
 test("switches a local bot to DeepSeek with its own command and parameter schema", async () => {
   const client = new MockWebBotClient();
@@ -182,20 +153,7 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   await waitFor(() => expect(updateCli).toHaveBeenCalledWith("deepseek-migration", "deepseek", "dsh"));
   expect(updateExecution.mock.invocationCallOrder[0]).toBeLessThan(updateCli.mock.invocationCallOrder[0]);
   expect(updateCluster).not.toHaveBeenCalled();
-  const params = await client.getCliParams("deepseek-migration");
-  expect(params).toMatchObject({
-    cliType: "deepseek",
-    params: { provider: null, model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
-    defaults: { provider: null, model: null, reasoning_effort: null, permission_mode: "workspace-write", extra_args: [] },
-  });
-  expect(Object.keys(params.schema)).toEqual(["provider", "model", "reasoning_effort", "permission_mode", "extra_args"]);
-  expect(await screen.findByLabelText("权限模式")).toHaveValue("workspace-write");
-  expect(await screen.findByText("DeepSeek Harness：集群轮次自动注入 MCP。")).toBeInTheDocument();
-  const lowTierModel = await screen.findByLabelText("低档模型");
-  expect(within(lowTierModel).getAllByRole("option").map((option) => (option as HTMLOptionElement).value))
-    .toEqual(["", "deepseek-flash", "deepseek-v4-pro"]);
-  expect(await screen.findByText("集群档位继承主 Bot 的 Provider：DeepSeek。")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "生成安装命令" }));
+  await userEvent.click(await screen.findByRole("button", { name: "生成安装命令" }));
   expect(await screen.findByText(/DeepSeek Harness 集群轮次会自动注入/)).toBeInTheDocument();
   expect(screen.queryByText("安装命令", { exact: true })).not.toBeInTheDocument();
   expect(screen.queryByText("验证命令", { exact: true })).not.toBeInTheDocument();

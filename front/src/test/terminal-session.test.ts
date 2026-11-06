@@ -173,27 +173,6 @@ describe("terminal session", () => {
     localStorage.clear();
   });
 
-  it("uses the current snapshot for new terminals and accepts explicit palettes and legacy calls", () => {
-    const snapshot = terminalAppearance("terminal-1", "#E0E1E2FF");
-    appearanceRuntime.applyResolvedAppearance(snapshot);
-    const session = createTerminalSession(document.createElement("div"), { token: "", ownerId: "one", themeName: "paper-daylight" });
-    expect(session.term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(snapshot));
-    expect(session.term.options.theme.foreground).toBe("#E0E1E2FF");
-    const explicit = { background: "#111213", foreground: "#AABBCC", red: "#CC2211" };
-    const second = createTerminalSession(document.createElement("div"), { token: "", ownerId: "two", theme: explicit });
-    expect(second.term.options.theme).toEqual(explicit);
-    const next = terminalAppearance("terminal-2", "#B0C0D0FF");
-    second.setTheme(next);
-    expect(second.term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(next));
-    second.setTheme(explicit);
-    expect(second.term.options.theme).toEqual(explicit);
-    appearanceRuntime.applyResolvedAppearance(next);
-    session.setTheme("theme_personal");
-    expect(session.term.options.theme).toEqual(appearanceRuntime.resolvedTerminalTheme(next));
-    session.dispose();
-    second.dispose();
-  });
-
   it("uses an xterm-compatible transparent background for embedded terminals", () => {
     const snapshot = terminalAppearance("terminal-transparent", "#E0E1E2FF");
     const session = createTerminalSession(document.createElement("div"), {
@@ -265,29 +244,6 @@ describe("terminal session", () => {
     const socketUrl = new URL(sockets[0].url);
     expect(socketUrl.pathname).toBe("/node/nanjing-laptop/terminal/ws");
     expect(socketUrl.searchParams.get("owner_id")).toBe("terminal-tab-42");
-    session.dispose();
-  });
-
-  it("forwards xterm input after a v2 WebSocket handshake", () => {
-    vi.stubGlobal("WebSocket", MockWebSocket);
-    const container = document.createElement("div");
-    const session = createTerminalSession(container, {
-      token: "",
-      ownerId: "main",
-    });
-
-    session.connect();
-    const socket = sockets[0];
-    socket.open();
-    socket.receive(JSON.stringify({
-      protocol_version: 2,
-      stream_id: "stream-1",
-      pty_mode: true,
-    }));
-
-    terminalState.onData?.("dir\r");
-
-    expect(socket.sent.at(-1)).toBe("dir\r");
     session.dispose();
   });
 

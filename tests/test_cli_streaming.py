@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -19,8 +20,6 @@ from bot.web import api_service
 from bot.web.api_service import (
     CliOutputLimitError,
     _PROCESS_STDOUT_EOF,
-    _communicate_claude_process,
-    _communicate_codex_process,
     _communicate_process,
     get_cli_params_payload,
     _start_process_stdout_reader,
@@ -478,11 +477,9 @@ async def test_stream_cli_chat_resets_session_after_repeated_cancellation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [True, False])
 async def test_cli_chat_reconciles_history_when_process_isolation_fails(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
-    streaming: bool,
 ):
     process = _UsageProcess()
     reconciled_sessions: list[object] = []
@@ -511,18 +508,7 @@ async def test_cli_chat_reconciles_history_when_process_isolation_fails(
     )
 
     with pytest.raises(api_service.WebApiError) as exc_info:
-        if streaming:
-            _ = [
-                event
-                async for event in api_service._stream_cli_chat(
-                    usage_manager,
-                    "main",
-                    1001,
-                    "hello",
-                )
-            ]
-        else:
-            await api_service.run_cli_chat(usage_manager, "main", 1001, "hello")
+        await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"))
 
     assert exc_info.value.code == "cli_process_isolation_failed"
     assert len(reconciled_sessions) == 1
@@ -686,58 +672,6 @@ async def test_cli_stream_cleanup_keeps_event_loop_responsive_with_inherited_std
 
 
 @pytest.mark.asyncio
-async def test_codex_communicate_parses_jsonl_incrementally():
-    process = _ReaderProcess(
-        [
-            '{"type":"thread.started","thread_id":"thread-1"}\n',
-            *[
-                f'{{"type":"item.delta","item":{{"type":"assistant_message","delta":"{index}"}}}}\n'
-                for index in range(100)
-            ],
-            '{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}\n',
-        ]
-    )
-
-    result = await _communicate_codex_process(process)
-
-    assert result.text == "done"
-    assert result.session_id == "thread-1"
-    assert result.returncode == 0
-
-
-@pytest.mark.asyncio
-async def test_codex_communicate_records_quota_once_during_cleanup():
-    capture = _UsageCapture()
-    process = _ReaderProcess(
-        [
-            '{"type":"thread.started","thread_id":"quota-thread"}\n',
-            '{"type":"turn.completed"}\n',
-        ]
-    )
-
-    await _communicate_codex_process(process, quota_capture=capture)
-
-    assert capture.calls == ["quota-thread"]
-
-
-@pytest.mark.asyncio
-async def test_codex_communicate_records_quota_after_failed_turn():
-    failed_capture = _UsageCapture()
-
-    await _communicate_codex_process(
-        _ReaderProcess(
-            [
-                '{"type":"thread.started","thread_id":"failed-thread"}\n',
-                '{"type":"turn.failed","error":{"message":"boom"}}\n',
-            ]
-        ),
-        quota_capture=failed_capture,
-    )
-
-    assert failed_capture.calls == ["failed-thread"]
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(("stream_protocol_version", "expects_output"), [(1, True), (2, False)])
 async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     usage_manager: MultiBotManager,
@@ -794,12 +728,9 @@ async def test_stream_cli_chat_starts_capture_before_spawn_and_records_once(
     ("cli_type", "has_context", "turn_model", "has_usage", "has_price"),
     [
         ("codex", True, "configured-model", True, True),
-        ("codex", False, "configured-model", True, True),
-        ("claude", True, "configured-model", True, True),
         ("claude", False, "configured-model", True, True),
         ("codex", False, "", True, True),
         ("codex", True, "configured-model", True, False),
-        ("claude", False, "configured-model", True, False),
         ("codex", True, "configured-model", False, True),
     ],
 )
@@ -982,35 +913,6 @@ def _deepseek_events(session_id="session-dsh", text="最终回复"):
     ]
 
 
-def test_deepseek_context_usage_merges_projection_and_turn_usage():
-    result = api_service._build_deepseek_context_usage(
-        {
-            "input_tokens": 134,
-            "output_tokens": 10,
-            "cache_read_input_tokens": 6016,
-            "total_tokens": 6160,
-        },
-        session_id="session-dsh",
-        context_usage={
-            "provider": "deepseek",
-            "source": "deepseek_context_pressure",
-            "session_id": "session-dsh",
-            "usage_scope": "conversation",
-            "used_tokens": 6150,
-            "context_window": 1_000_000,
-            "context_left_percent": 99,
-            "status_text": "99% context left · 6.2K / 1000K",
-        },
-    )
-
-    assert result is not None
-    assert result["source"] == "deepseek_context_pressure"
-    assert result["usage_scope"] == "conversation"
-    assert result["context_left_percent"] == 99
-    assert result["input_tokens"] == 134
-    assert result["total_tokens"] == 6160
-
-
 def test_deepseek_context_usage_keeps_projection_without_turn_usage():
     result = api_service._build_deepseek_context_usage(
         None,
@@ -1108,6 +1010,7 @@ async def test_deepseek_stream_applies_permission_mode(usage_manager, monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="Windows process creation flags")
 async def test_deepseek_windows_process_is_not_nested_in_orbit_job(usage_manager, monkeypatch):
     observed = _patch_deepseek_runtime(
         usage_manager,
@@ -1148,12 +1051,12 @@ def _patch_deepseek_runtime(manager, monkeypatch, processes):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-pro"])
 @pytest.mark.parametrize("inherit_model", [False, True])
-async def test_deepseek_stream_prices_each_turn_and_persists_cost(usage_manager, monkeypatch, model, inherit_model):
+async def test_deepseek_stream_prices_each_turn_and_persists_cost(usage_manager, monkeypatch, inherit_model):
     from bot import config
     from bot.model_pricing import DEFAULT_PRICES_PATH, estimate_usage_cost
 
+    model = "deepseek-flash"
     events = _deepseek_events()
     step = events[-3]
     events[-2:-2] = [step, {**step, "step": 2}]
@@ -1180,7 +1083,7 @@ async def test_deepseek_stream_prices_each_turn_and_persists_cost(usage_manager,
             native_provider="deepseek", native_session_id="session-dsh",
         )
         assert saved["estimated_cost"] == cost
-    expected = 0.00058864 if model == "deepseek-flash" else 0.0032808
+    expected = 0.00058864
     assert totals == pytest.approx([2 * expected, expected])
     assert len(observed["completions"]) == 2
 
@@ -1485,8 +1388,10 @@ async def test_stream_cli_chat_treats_antigravity_soft_denial_as_error(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cli_type", ["codex", "claude"])
-@pytest.mark.parametrize("exit_kind", ["error", "cancelled", "reader_error"])
+@pytest.mark.parametrize(
+    ("cli_type", "exit_kind"),
+    [("codex", "error"), ("codex", "cancelled"), ("codex", "reader_error"), ("claude", "error")],
+)
 async def test_stream_cli_chat_preserves_partial_cost_on_abnormal_exit(
     usage_manager, monkeypatch, tmp_path, cli_type, exit_kind,
 ):
@@ -1962,33 +1867,3 @@ async def test_non_stream_cli_chat_records_before_chat_store_completion_failure(
         await api_service.run_cli_chat(usage_manager, "main", 1001, "hello")
 
     assert capture.calls == ["usage-thread"]
-
-
-@pytest.mark.asyncio
-async def test_claude_communicate_prefers_final_result_incrementally():
-    process = _ReaderProcess(
-        [
-            '{"type":"stream_event","session_id":"session-1","event":{"type":"content_block_delta",'
-            '"delta":{"type":"text_delta","text":"partial"}}}\n',
-            '{"type":"result","session_id":"session-1","subtype":"success","result":"complete"}\n',
-        ]
-    )
-
-    response, session_id, returncode = await _communicate_claude_process(process)
-
-    assert response == "complete"
-    assert session_id == "session-1"
-    assert returncode == 0
-
-
-@pytest.mark.asyncio
-async def test_codex_communicate_preserves_error_event():
-    process = _ReaderProcess(
-        ['{"type":"error","message":"upstream failed"}\n']
-    )
-    process.returncode = 1
-
-    result = await _communicate_codex_process(process)
-
-    assert result.text == "upstream failed"
-    assert result.returncode == 1

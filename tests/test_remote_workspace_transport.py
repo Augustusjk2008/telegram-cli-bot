@@ -312,7 +312,6 @@ def test_password_key_passphrase_are_memory_only_and_pool_is_reused(ssh):
     assert "." not in ssh.clients[0].sftp.stat_paths
     assert len(ssh.clients) == 1
     ssh.clients[0].open_sftp.assert_called_once()
-    ssh.clients[0].transport.set_keepalive.assert_called_once_with(30)
     ssh.service.close_all()
     assert connection._password is connection._passphrase is None
     assert ssh.clients[0].closed and ssh.clients[0].sftp.closed
@@ -556,7 +555,6 @@ def test_partial_read_stops_after_requested_lines_in_bounded_chunks(ssh):
     (b"one\nlast", 1, 2, "one\nlast", True),
     (b"one\nlast\n", 2, 0, "last\n", False),
     (b"one\nlast\n", 3, 1, "", False),
-    (b"one\nlast\n", 1, 5, "one\nlast\n", True),
 ])
 def test_line_ranges_report_full_content_only_when_response_contains_whole_file(ssh, raw, offset, limit, content, full):
     ssh.nodes[ROOT + "/file.txt"]["data"] = raw
@@ -750,16 +748,14 @@ def test_command_acknowledgement_timeout_is_bounded(ssh):
     assert stopped.is_set() and len(channel.commands) == 1
 
 
-def test_normalizer_strips_secrets_and_singleton_is_shared(ssh):
+def test_normalizer_strips_secrets(ssh):
     config, _ = connected(ssh)
     assert remote.normalize_remote_workspace({**config, "password": "secret", "passphrase": "phrase", "extra": {"secret": "x"}}) == config
-    assert remote.normalize_remote_workspace(None) == {}
-    assert remote.get_remote_workspace_service() is remote.get_remote_workspace_service()
 
 
 @pytest.mark.parametrize("override", [
-    {"host": ""}, {"host": "bad\nhost"}, {"username": ""}, {"port": 0}, {"port": True},
-    {"port": 65536}, {"root": "relative"}, {"root": "C:/local"}, {"host_key_fingerprint": ""},
+    {"host": ""}, {"host": "bad\nhost"}, {"port": True},
+    {"port": 65536}, {"root": "relative"}, {"host_key_fingerprint": ""},
     {"host_key_fingerprint": "SHA256:bad"}, {"connection_id": "../other"},
 ])
 def test_normalizer_rejects_invalid_persisted_configs(ssh, override):

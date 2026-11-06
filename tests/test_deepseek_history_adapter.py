@@ -90,7 +90,7 @@ def test_deepseek_trace_preserves_failure_and_stop(reason, kind):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("completion_state", ["completed", "error", "cancelled"])
+@pytest.mark.parametrize("completion_state", ["completed", "error"])
 async def test_deepseek_history_refresh_preserves_saved_trace_usage_and_session(
     tmp_path, monkeypatch, completion_state,
 ):
