@@ -8,7 +8,8 @@
   background: var(--workbench-shell-bg);
 }
 
-.desktop-workbench-root > :not(.orbit-canvas) {
+/* Lift workbench chrome above the canvas; viewport overlays (.fixed) keep their own positioning and z-index. */
+.desktop-workbench-root > :not(.orbit-canvas, .fixed) {
   position: relative;
   z-index: 1;
 }
