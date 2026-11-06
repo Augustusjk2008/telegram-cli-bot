@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Cpu, KeyRound, Server, ShieldCheck, SquareTerminal } from "lucide-react";
+import { clsx } from "clsx";
 import {
   APP_KICKER,
   APP_LOGIN_NAME,
@@ -10,6 +11,8 @@ import {
 import { AppLogo } from "../components/AppLogo";
 import { ThemeDropdown } from "../components/ThemeDropdown";
 import type { PublicHostInfo } from "../services/types";
+import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
+import "../styles/login.css";
 
 type LoginMode = "login" | "register";
 
@@ -47,28 +50,17 @@ export function LoginScreen({
   ];
 
   return (
-    <main className="relative min-h-[100dvh] overflow-x-hidden bg-[var(--workbench-shell-bg)] px-3 py-3 text-[var(--text)] sm:px-5 sm:py-5">
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div
-          className="absolute inset-0 opacity-55"
-          style={{
-            backgroundImage: [
-              "linear-gradient(to right, var(--hero-grid) 1px, transparent 1px)",
-              "linear-gradient(to bottom, var(--hero-grid) 1px, transparent 1px)",
-            ].join(","),
-            backgroundSize: "32px 32px, 32px 32px",
-            maskImage: "linear-gradient(180deg, var(--login-mask-start), var(--login-mask-end) 72%, transparent 100%)",
-          }}
-        />
-        <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[var(--hero-glow)] to-transparent" />
-        <div className="absolute right-[-5rem] top-[-2rem] h-72 w-72" style={{ background: "radial-gradient(circle, var(--bg-glow-strong) 0, transparent 66%)" }} />
+    <main className="login-screen orbit-shell relative min-h-[100dvh] overflow-x-hidden text-[var(--text)]">
+      <div className="orbit-canvas login-canvas" aria-hidden="true">
+        <ThemeIllustrationLayer surface="workbench" className="login-canvas-art" />
       </div>
+      <div className="login-scrim" aria-hidden="true" />
 
-      <div className="relative z-10 mx-auto flex min-h-[calc(100dvh-1.5rem)] w-full max-w-6xl flex-col gap-4 sm:min-h-[calc(100dvh-2.5rem)]">
-        <div className="flex min-h-10 items-center justify-between gap-3 border border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2.5 py-2 shadow-[var(--shadow-surface)]">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface-glass)]">
-              <AppLogo size={22} decorative />
+      <div className="login-layout relative z-10">
+        <header className="login-topbar">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="login-logo">
+              <AppLogo size={28} decorative />
             </span>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{APP_LOGIN_NAME}</div>
@@ -76,171 +68,159 @@ export function LoginScreen({
             </div>
           </div>
           {onThemeChange ? (
-            <div className="w-[min(12rem,44vw)] shrink-0">
+            <div className="login-theme-picker w-[min(13rem,46vw)] shrink-0">
               <ThemeDropdown value={themeName} onChange={onThemeChange} variant="compact" menuAlign="right" />
             </div>
           ) : null}
-        </div>
+        </header>
 
-        <div className="grid flex-1 items-center gap-4 lg:grid-cols-[1fr_25rem]">
-          <section className="min-w-0 border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-4 shadow-[var(--shadow-card)] sm:p-5">
-            <div className="flex min-w-0 items-start justify-between gap-3 border-b border-[var(--workbench-hairline)] pb-4">
-              <div className="min-w-0">
-                <div className="mb-2 inline-flex items-center gap-2 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 py-1 text-xs font-medium text-[var(--accent)]">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  本地 agent 控制台
-                </div>
-                <h1 className="text-xl font-bold text-[var(--text)] sm:text-2xl">{APP_LOGIN_NAME}</h1>
+        <section className="login-hero" aria-label="主机信息">
+          <div className="orbit-chip login-kicker" data-tone="accent">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            本地 agent 控制台
+          </div>
+          <h1 className="login-title">{APP_LOGIN_NAME}</h1>
+          <p className="login-tagline">在浏览器里驾驭本机的 Codex、Claude、Antigravity、DeepSeek 与 Pi。</p>
+          <div className="login-host-grid">
+            {hostStatusItems.map(({ label, value, Icon }) => (
+              <div key={label} className="login-host-chip">
+                <span className="login-host-label">
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </span>
+                <span className="login-host-value" title={value}>{value}</span>
               </div>
-              <div className="hidden rounded-md border border-[var(--border)] bg-[var(--surface-glass)] px-2 py-1 font-mono text-[11px] text-[var(--muted)] sm:block">
-                v{APP_VERSION}
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {hostStatusItems.map(({ label, value, Icon }) => (
-                <div key={label} className="min-w-0 border border-[var(--border)] bg-[var(--surface-glass)] p-3">
-                  <div className="mb-2 flex items-center gap-2 text-xs text-[var(--muted)]">
-                    <Icon className="h-3.5 w-3.5 text-[var(--accent)]" />
-                    {label}
-                  </div>
-                  <div className="truncate text-sm font-semibold text-[var(--text)]" title={value}>{value}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 border border-[var(--border)] bg-[var(--surface-glass)] p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-[var(--accent-strong)]">
+            ))}
+            <div className="login-host-chip">
+              <span className="login-host-label">
                 <SquareTerminal className="h-3.5 w-3.5" />
-                主机摘要
-              </div>
-              <p className="break-all text-sm leading-6 text-[var(--muted)]">{hostSummary}</p>
+                版本
+              </span>
+              <span className="login-host-value font-mono">v{APP_VERSION}</span>
             </div>
-          </section>
+          </div>
+          <p className="login-host-summary" title={hostSummary}>{hostSummary}</p>
+        </section>
 
-          <section className="relative min-w-0 overflow-hidden border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)] sm:p-5">
-            <div className="absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--accent),transparent)] opacity-80" />
-            <div className="relative">
-              <div className="flex items-center gap-2 text-xs font-medium text-[var(--accent-strong)]">
-                <KeyRound className="h-3.5 w-3.5" />
-                访问控制
-              </div>
-              <h2 className="mt-2 text-xl font-bold text-[var(--text)]">接入控制台</h2>
-              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                账号登录，注册需注册码；也可 guest 只读进入。
-                {allowLegacyTokenLogin ? <span className="sr-only">输入访问口令，管理本地主 Bot 与子 Bot。</span> : null}
-              </p>
+        <section className="login-card orbit-island orbit-island--reading" aria-label="接入控制台">
+          <div className="login-card-glow" aria-hidden="true" />
+          <div className="flex items-center gap-2 text-xs font-medium text-[var(--accent)]">
+            <KeyRound className="h-3.5 w-3.5" />
+            访问控制
+          </div>
+          <h2 className="mt-2 text-[22px] font-bold leading-tight text-[var(--text)]">接入控制台</h2>
+          <p className="mt-1.5 text-sm leading-6 text-[var(--muted)]">
+            账号登录，注册需注册码；也可 guest 只读进入。
+            {allowLegacyTokenLogin ? <span className="sr-only">输入访问口令，管理本地主 Bot 与子 Bot。</span> : null}
+          </p>
 
-              <div className="mt-5 inline-flex rounded-md border border-[var(--border)] bg-[var(--surface-glass)] p-0.5">
-                {([
-                  ["login", "登录"],
-                  ["register", "注册"],
-                ] as const).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="tab"
-                    aria-selected={mode === value}
-                    onClick={() => setMode(value)}
-                    className={mode === value
-                      ? "rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-foreground)]"
-                      : "rounded-md px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              <form
-                className="mt-5 flex flex-col gap-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const formData = new FormData(event.currentTarget);
-                  const username = String(formData.get("username") || "").trim();
-                  const password = String(formData.get("password") || "");
-                  const remember = formData.get("rememberLogin") === "on";
-                  const legacyTokenMode = allowLegacyTokenLogin && mode === "login" && Boolean(username) && !password;
-                  if (!username || (!password && !legacyTokenMode)) {
-                    return;
-                  }
-                  if (mode === "register") {
-                    const registerCode = String(formData.get("registerCode") || "").trim();
-                    if (!registerCode) {
-                      return;
-                    }
-                    void onRegister?.({ username, password, registerCode, remember });
-                    return;
-                  }
-                  void onLogin?.({ username, password, remember });
-                }}
+          <div className="orbit-segmented mt-5 w-full" role="tablist" aria-label="登录方式">
+            {([
+              ["login", "登录"],
+              ["register", "注册"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={mode === value}
+                onClick={() => setMode(value)}
+                className="h-8 flex-1 text-[13px]"
               >
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="username" className="text-sm font-medium text-[var(--muted)]">用户名</label>
-                  <input
-                    id="username"
-                    name="username"
-                    type="text"
-                    aria-label={allowLegacyTokenLogin && mode === "login" ? "访问口令" : undefined}
-                    className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--surface-glass)] px-4 py-3 text-[var(--text)] shadow-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
-                    placeholder="alice"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <label htmlFor="password" className="text-sm font-medium text-[var(--muted)]">密码</label>
-                  <input
-                    id="password"
-                    name="password"
-                    type="password"
-                    className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--surface-glass)] px-4 py-3 text-[var(--text)] shadow-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
-                    placeholder="请输入密码"
-                  />
-                </div>
-                {mode === "register" ? (
-                  <div className="flex flex-col gap-2">
-                    <label htmlFor="registerCode" className="text-sm font-medium text-[var(--muted)]">注册码</label>
-                    <input
-                      id="registerCode"
-                      name="registerCode"
-                      type="text"
-                      className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--surface-glass)] px-4 py-3 text-[var(--text)] shadow-sm transition-colors focus:border-[var(--accent)] focus:outline-none"
-                      placeholder="INVITE-001"
-                    />
-                  </div>
-                ) : null}
-                {error ? (
-                  <div className="rounded-md border border-[var(--login-error-border)] bg-[var(--login-error-background)] px-4 py-3 text-sm text-[var(--login-error-text)]">
-                    {error}
-                  </div>
-                ) : null}
-                <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                  <input
-                    type="checkbox"
-                    name="rememberLogin"
-                    checked={rememberLogin}
-                    onChange={(event) => setRememberLogin(event.currentTarget.checked)}
-                    className="h-4 w-4 accent-[var(--accent)]"
-                  />
-                  <span>记住登录</span>
-                </label>
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full rounded-md border border-[var(--accent-outline)] bg-[var(--accent)] px-4 py-3 text-base font-semibold text-[var(--accent-foreground)] shadow-[0_14px_32px_var(--accent-soft-strong)] transition hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
-                >
-                  {isLoading ? "处理中..." : mode === "register" ? "注册并登录" : "登录"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void onGuestLogin?.({ remember: rememberLogin })}
-                  disabled={isLoading}
-                  className="w-full rounded-md border border-[var(--border)] bg-[var(--surface-glass)] px-4 py-3 text-sm font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-60"
-                >
-                  以 guest 进入
-                </button>
-              </form>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <form
+            className="mt-5 flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const formData = new FormData(event.currentTarget);
+              const username = String(formData.get("username") || "").trim();
+              const password = String(formData.get("password") || "");
+              const remember = formData.get("rememberLogin") === "on";
+              const legacyTokenMode = allowLegacyTokenLogin && mode === "login" && Boolean(username) && !password;
+              if (!username || (!password && !legacyTokenMode)) {
+                return;
+              }
+              if (mode === "register") {
+                const registerCode = String(formData.get("registerCode") || "").trim();
+                if (!registerCode) {
+                  return;
+                }
+                void onRegister?.({ username, password, registerCode, remember });
+                return;
+              }
+              void onLogin?.({ username, password, remember });
+            }}
+          >
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="username" className="text-[13px] font-medium text-[var(--muted)]">用户名</label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                autoComplete="username"
+                aria-label={allowLegacyTokenLogin && mode === "login" ? "访问口令" : undefined}
+                className="orbit-field"
+                placeholder="alice"
+              />
             </div>
-          </section>
-        </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="password" className="text-[13px] font-medium text-[var(--muted)]">密码</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
+                className="orbit-field"
+                placeholder="请输入密码"
+              />
+            </div>
+            {mode === "register" ? (
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="registerCode" className="text-[13px] font-medium text-[var(--muted)]">注册码</label>
+                <input
+                  id="registerCode"
+                  name="registerCode"
+                  type="text"
+                  className="orbit-field"
+                  placeholder="INVITE-001"
+                />
+              </div>
+            ) : null}
+            {error ? (
+              <div role="alert" className="rounded-[var(--radius-control)] border border-[var(--login-error-border)] bg-[var(--login-error-background)] px-3.5 py-2.5 text-sm text-[var(--login-error-text)]">
+                {error}
+              </div>
+            ) : null}
+            <label className="login-remember">
+              <input
+                type="checkbox"
+                name="rememberLogin"
+                checked={rememberLogin}
+                onChange={(event) => setRememberLogin(event.currentTarget.checked)}
+              />
+              <span>记住登录</span>
+            </label>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className={clsx("orbit-btn orbit-btn--primary orbit-btn--lg w-full text-[15px] font-semibold", isLoading && "login-busy")}
+            >
+              {isLoading ? "处理中..." : mode === "register" ? "注册并登录" : "登录"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void onGuestLogin?.({ remember: rememberLogin })}
+              disabled={isLoading}
+              className="orbit-btn orbit-btn--secondary orbit-btn--lg w-full"
+            >
+              以 guest 进入
+            </button>
+          </form>
+        </section>
       </div>
     </main>
   );

@@ -292,12 +292,12 @@ export function EditorPane({
     return (
       <div
         data-testid="editor-empty-state"
-        className="editor-empty-state flex h-full min-h-0 items-center justify-center p-6 text-center text-sm text-[var(--muted)]"
+        className="editor-empty-state flex h-full min-h-0 items-end justify-start p-5 text-sm text-[var(--muted)]"
       >
-        <div className="relative z-10 space-y-2">
-          <p>未打开文件</p>
-          <p><kbd className="font-mono text-[var(--text)]">Ctrl+P</kbd> 快速打开文件</p>
-          <p><kbd className="font-mono text-[var(--text)]">Ctrl+Shift+F</kbd> 全文搜索</p>
+        <div className="orbit-window-card">
+          <p className="text-[13px] font-semibold text-[var(--text)]">未打开文件</p>
+          <p className="flex items-center justify-between gap-6"><span>快速打开文件</span><kbd className="orbit-kbd">Ctrl+P</kbd></p>
+          <p className="flex items-center justify-between gap-6"><span>全文搜索</span><kbd className="orbit-kbd">Ctrl+Shift+F</kbd></p>
         </div>
       </div>
     );

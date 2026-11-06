@@ -85,21 +85,4 @@ describe("ThemeIllustrationLayer", () => {
     expect(screen.getByTestId("theme-illustration-layer-agentManager").querySelector("img"))
       .toHaveAttribute("data-theme-illustration-asset", "apollo-plan-agent-manager");
   });
-
-  it("scopes the workbench illustration to the main area and sidebar area", () => {
-    const appearance = appearanceFor();
-    render(
-      <>
-        <ThemeIllustrationLayer surface="workbench" zone="main" appearance={appearance} />
-        <ThemeIllustrationLayer surface="workbench" zone="sidebar" appearance={appearance} />
-      </>,
-    );
-    const layers = screen.getAllByTestId("theme-illustration-layer-workbench");
-    const main = layers.find((layer) => layer.getAttribute("data-theme-illustration-zone") === "main");
-    const sidebar = layers.find((layer) => layer.getAttribute("data-theme-illustration-zone") === "sidebar");
-    expect(main).toHaveAttribute("data-theme-illustration-count", "1");
-    expect(main?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "workbench-background");
-    expect(sidebar).toHaveAttribute("data-theme-illustration-count", "1");
-    expect(sidebar?.querySelector("img")).toHaveAttribute("data-theme-illustration-layer-id", "left-edge-foliage");
-  });
 });

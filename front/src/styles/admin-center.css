@@ -1,0 +1,662 @@
+/*
+ * Admin Center: cover banner + grouped glass navigation + content islands.
+ * Builds on the Orbit primitives in orbit.css; every color, radius, shadow and glow comes
+ * from the theme variables. Rules here are unlayered so they win over Tailwind utilities on
+ * the embedded settings panels (Tailwind v4 keeps utilities in @layer utilities).
+ */
+
+.admin-center {
+  --admin-max: 1320px;
+  --admin-gutter: clamp(16px, 2.4vw, 32px);
+  --admin-nav-width: 220px;
+  --admin-island-pad: 20px 22px;
+  --admin-overlap: 40px;
+  position: relative;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ cover */
+
+.admin-center .admin-cover {
+  display: flex;
+  background:
+    radial-gradient(90% 120% at 85% 0%, color-mix(in srgb, var(--glow-color) calc(var(--glow-strength) * 22%), transparent), transparent 70%),
+    linear-gradient(180deg, var(--bg-top), var(--bg));
+}
+
+.admin-cover-inner {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 18px;
+  width: 100%;
+  max-width: var(--admin-max);
+  margin-inline: auto;
+  padding: 32px var(--admin-gutter) calc(var(--admin-overlap) + 30px);
+}
+
+.admin-cover-copy {
+  max-width: 34rem;
+}
+
+.admin-cover-eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.admin-cover-title {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(28px, 2.5vw, 36px);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 12px color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.admin-cover-description {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+  text-shadow: 0 1px 8px color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.admin-cover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-cover-actions .orbit-btn {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+/* ------------------------------------------------------------------- body */
+
+.admin-body {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: var(--admin-nav-width) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  max-width: var(--admin-max);
+  margin: calc(var(--admin-overlap) * -1) auto 0;
+  padding: 0 var(--admin-gutter) 56px;
+}
+
+/* ------------------------------------------------------------- side nav */
+
+.admin-nav {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  padding: 10px 8px;
+  scrollbar-width: thin;
+}
+
+.admin-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.admin-nav-group + .admin-nav-group {
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.admin-nav-caption {
+  padding: 2px 12px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.admin-nav-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 31px;
+  padding-inline: 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+
+.admin-nav-tab:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+.admin-nav-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.admin-nav-tab[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.admin-nav-tab[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 3px;
+  width: 3px;
+  border-radius: var(--radius-chip);
+  background: var(--accent);
+  box-shadow: 0 0 calc(var(--glow-strength) * 10px) var(--glow-color);
+}
+
+/* -------------------------------------------------------------- content */
+
+.admin-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding-inline: 4px;
+}
+
+.admin-content-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.admin-content-kicker {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.admin-content-title {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.admin-content-description {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-content-head .orbit-btn {
+  flex: none;
+}
+
+.admin-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Islands: own sections use .orbit-island; embedded settings panels get the same material. */
+.admin-island {
+  padding: var(--admin-island-pad);
+  animation: orbitRise 240ms var(--ease-out);
+}
+
+.admin-embed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.admin-embed > :is(section, div) {
+  position: relative;
+  padding: var(--admin-island-pad);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  background: var(--island-bg-strong);
+  box-shadow: var(--shadow-island), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  animation: orbitRise 240ms var(--ease-out);
+}
+
+:root[data-material-glass="none"] .admin-embed > :is(section, div) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--island-solid);
+}
+
+/* Nested cards inside an island read as quiet wells rather than holes punched to --bg. */
+.admin-content .admin-well {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+}
+
+.admin-content :is(section, div).admin-well > table thead,
+.admin-content .admin-well thead {
+  background: var(--fill-subtle);
+}
+
+/* Embedded panels still paint some nested boxes with --bg; inside glass they become wells. */
+.admin-embed :is(div, p, article, label, li, pre).bg-\[var\(--bg\)\] {
+  border-color: var(--hairline);
+  background: var(--fill-subtle);
+}
+
+/* Form fields share the Orbit field look, including fields inside embedded panels. */
+.admin-content :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea
+) {
+  border-color: var(--border);
+  border-radius: var(--radius-control);
+  background-color: var(--surface-glass);
+  color: var(--text);
+  transition: border-color 140ms var(--ease-out), box-shadow 180ms var(--ease-out);
+}
+
+.admin-content :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea
+):hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.admin-content :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea
+):focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-halo);
+}
+
+@media (min-width: 900px) {
+  .admin-content :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]),
+    select,
+    textarea
+  ) {
+    font-size: 13.5px;
+  }
+}
+
+.admin-content input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+/* ------------------------------------------------------------ callouts */
+
+.admin-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  animation: orbitRise 200ms var(--ease-out);
+}
+
+.admin-callout > svg {
+  margin-top: 2px;
+}
+
+.admin-callout,
+.admin-tint {
+  border: 1px solid transparent;
+  border-radius: var(--radius-card);
+}
+
+:is(.admin-callout, .admin-tint)[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--status-success) 18%, transparent);
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+
+:is(.admin-callout, .admin-tint)[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--status-warning) 20%, transparent);
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+:is(.admin-callout, .admin-tint)[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--status-danger) 20%, transparent);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+:is(.admin-callout, .admin-tint)[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--status-info) 18%, transparent);
+  background: var(--status-info-bg);
+  color: var(--status-info);
+}
+
+.admin-tint--strong[data-tone="danger"] {
+  border-color: var(--status-danger-border);
+  box-shadow: var(--shadow-raised);
+}
+
+/* ------------------------------------------------------------- buttons */
+
+.admin-btn--warning {
+  border-color: color-mix(in srgb, var(--status-warning) 28%, transparent);
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+.admin-btn--warning:not(:disabled):hover {
+  background: color-mix(in srgb, var(--status-warning) 16%, var(--status-warning-bg));
+}
+
+.admin-btn--warning-solid {
+  background: var(--button-warning-background-strong);
+  color: var(--button-filled-foreground);
+}
+
+.admin-btn--warning-solid:not(:disabled):hover {
+  background: color-mix(in srgb, var(--button-warning-background-strong) 88%, var(--text));
+}
+
+.admin-btn--wrap {
+  height: auto;
+  min-height: 32px;
+  max-width: 100%;
+  padding-block: 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.admin-btn--danger-quiet {
+  color: var(--status-danger);
+}
+
+.admin-btn--danger-quiet:not(:disabled):hover {
+  background: var(--status-danger-bg);
+}
+
+/* ------------------------------------------------------- env sub-nav */
+
+.admin-subnav {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.admin-subnav-item {
+  flex: none;
+  height: 32px;
+  padding-inline: 12px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+
+.admin-subnav-item:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+.admin-subnav-item[data-active="true"] {
+  background: var(--fill-pressed);
+  color: var(--text);
+  font-weight: 600;
+}
+
+@media (min-width: 1024px) {
+  .admin-subnav {
+    flex-direction: column;
+    overflow: visible;
+  }
+}
+
+/* -------------------------------------------------------------- users */
+
+.admin-user-card {
+  padding: 16px;
+}
+
+.admin-user-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-user-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.admin-user-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-group-caption {
+  margin: 14px 0 4px;
+  padding-inline: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.admin-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 212px));
+  gap: 2px 14px;
+}
+
+/* A compact on/off row: label text on the left, a switch (restyled checkbox) on the right. */
+.admin-toggle,
+.admin-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 140ms var(--ease-out);
+}
+
+.admin-toggle:hover,
+.admin-choice:hover {
+  background: var(--fill-hover);
+}
+
+.admin-toggle-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Every on/off checkbox in the Admin Center reads as a switch (embedded panels included). */
+.admin-content input[type="checkbox"] {
+  --admin-switch-thumb: var(--muted);
+  flex: none;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  border-radius: min(999px, calc(var(--radius-control) * 3));
+  background:
+    radial-gradient(circle closest-side, var(--admin-switch-thumb) 0 calc(100% - 1px), transparent 100%) 3px 50% / 12px 12px no-repeat,
+    var(--fill-pressed);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  transition: background-position 160ms var(--ease-out), background-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+
+.admin-content input[type="checkbox"]:checked {
+  --admin-switch-thumb: var(--island-solid);
+  background:
+    radial-gradient(circle closest-side, var(--admin-switch-thumb) 0 calc(100% - 1px), transparent 100%) calc(100% - 3px) 50% / 12px 12px no-repeat,
+    var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent), var(--glow-halo);
+}
+
+.admin-content input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.admin-content input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.admin-toggle > input[type="checkbox"] {
+  order: 9;
+  margin-left: auto;
+}
+
+.admin-toggle:has(> input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.admin-toggle:has(> input:disabled):hover {
+  background: transparent;
+}
+
+.admin-toggle > input[type="checkbox"]:disabled {
+  opacity: 1;
+}
+
+
+.admin-choice {
+  border: 1px solid var(--hairline);
+  background: var(--fill-subtle);
+}
+
+.admin-choice:has(> input:checked) {
+  border-color: var(--accent-outline);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------- narrow widths */
+
+@media (max-width: 899px) {
+  .admin-center {
+    --admin-island-pad: 16px;
+    --admin-overlap: 24px;
+  }
+
+  .admin-center .admin-cover {
+    min-height: 180px;
+  }
+
+  .admin-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .admin-nav {
+    top: 0;
+    z-index: 5;
+    max-height: none;
+    overflow: hidden;
+    padding: 4px;
+  }
+
+  .admin-nav-list {
+    flex-direction: row;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .admin-nav-group {
+    display: contents;
+  }
+
+  .admin-nav-group + .admin-nav-group {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .admin-nav-caption {
+    display: none;
+  }
+
+  .admin-nav-tab {
+    flex: none;
+    width: auto;
+    height: 30px;
+    font-size: 13px;
+  }
+
+  .admin-nav-group + .admin-nav-group > .admin-nav-tab:first-of-type {
+    margin-left: 10px;
+  }
+
+  .admin-nav-tab[aria-selected="true"]::before {
+    display: none;
+  }
+
+  .admin-content-description {
+    display: none;
+  }
+}

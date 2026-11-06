@@ -26,7 +26,7 @@
 | 文件 | 作用 | 什么时候修改 |
 | --- | --- | --- |
 | `bot/web/theme_presets.json` | 发布主题清单和每套主题的完整外观 | 添加或编辑发布预置 |
-| `bot/web/theme_catalog.json` | `schemaVersion: 1` 的颜色 token 目录；当前有 298 个 token | 增加/删除 token、CSS 变量或 token 语义 |
+| `bot/web/theme_catalog.json` | `schemaVersion: 1` 的颜色 token 目录；当前有 299 个 token（`light.glow` 是主题光色，默认派生自 `accent`） | 增加/删除 token、CSS 变量或 token 语义 |
 | `bot/web/theme_illustrations.json` | `schemaVersion: 3` 的内置插画组、三类 surface、图层元数据和资源路径 | 添加/替换内置插画资产 |
 | `front/public/assets/theme-illustrations/` | 与插画目录路径对应的静态资源 | 添加/替换内置插画文件 |
 | `front/src/theme/resolveAppearance.ts` | 前端外观规范化、派生颜色解析、插画解析和对比度计算 | 只有主题契约或解析行为改变时修改 |
@@ -65,6 +65,12 @@
           "chatBodyLineHeight": "normal",
           "chatBodyParagraphSpacing": "normal"
         },
+        "material": {
+          "shape": "crisp",
+          "glass": "frost",
+          "glow": "soft",
+          "depth": "float"
+        },
         "illustrations": {}
       },
       "readonly": true,
@@ -101,6 +107,17 @@
 
 当前八套发布主题都显式保存默认排版值。编辑主题时保持这四项完整，避免产生依赖隐式默认值的半配置。
 
+## 材质契约
+
+`appearance.material` 描述主题的非颜色质感，可以省略（解析器使用 `crisp/frost/soft/float`）。若提供它，四个字段都必须存在：
+
+- `shape`: `sharp`、`crisp`、`soft` 或 `round`，决定 `--radius-control/chip/card/panel/overlay/bubble`
+- `glass`: `none`、`frost` 或 `deep`，决定玻璃面板的模糊、饱和度和透明度（`--glass-*`）；`none` 为不透明纸面
+- `glow`: `none`、`soft` 或 `vivid`，决定 `--glow-strength`；`none` 同时关闭扫光、呼吸灯等光效动画
+- `depth`: `flat`、`print` 或 `float`，决定 `--shadow-island/raised/overlay`；`print` 使用实色偏移阴影
+
+`front/src/theme/material.ts` 把材质解析成 CSS 变量，并在根节点写入 `data-material-*` 属性；后端 `theme_store.py` 校验同一枚举。设计系统原语（岛面板、按钮、分段控件、封面横幅等）在 `front/src/styles/orbit.css`，只消费这些变量，不写死圆角、阴影和光效。八套发布主题都显式保存完整材质。
+
 ## 插画契约
 
 新发布主题使用规范化的 `appearance.illustrations`：
@@ -121,7 +138,7 @@
 }
 ```
 
-当前 surface 只有 `workbench`、`adminCenter` 和 `agentManager`，三者都必须出现。每个场景包含 1 到 32 个图层，图层 ID 在场景内唯一。图层必填 `id`、`asset`、`anchor` 和 `enabled`；`anchor` 为 `top`、`left`、`right`、`bottom`、`bottom-left`、`bottom-right` 或 `center`。可选的 `x`、`y` 范围为 -100 到 100，`width` 和 `height` 范围为 0.01 到 300，`opacity` 范围为 0 到 1，`objectPosition` 最长 120 个字符。场景总透明度 `opacity` 范围为 0 到 0.25。
+当前 surface 只有 `workbench`、`adminCenter` 和 `agentManager`，三者都必须出现。每个场景包含 1 到 32 个图层，图层 ID 在场景内唯一。图层必填 `id`、`asset`、`anchor` 和 `enabled`；`anchor` 为 `top`、`left`、`right`、`bottom`、`bottom-left`、`bottom-right` 或 `center`。可选的 `x`、`y` 范围为 -100 到 100，`width` 和 `height` 范围为 0.01 到 300，`opacity` 范围为 0 到 1，`objectPosition` 最长 120 个字符。场景总透明度 `opacity` 范围为 0 到 1；新界面把插画作为全强度画布和封面使用，发布预置通常为 1，文字区域的可读性由玻璃面板负责。
 
 内置资源必须来自 `theme_illustrations.json`，并完整匹配其中的 `assetId`、`mimeType`、`width`、`height` 和 `sha256`。资源路径必须与 `front/public/assets/` 下的实际文件对应。上传资源另有单文件 4 MiB、单主题总量 12 MiB 的限制；发布预置不应把上传资源写入主题文件。
 

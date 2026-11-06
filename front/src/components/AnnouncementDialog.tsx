@@ -138,45 +138,46 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-backdrop-45)] p-0 sm:items-center sm:p-4">
+    <div className="orbit-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
       <section
         role="dialog"
         aria-modal="true"
         aria-label="公告"
-        className="grid max-h-[88dvh] w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-t-lg border border-[var(--border)] bg-[var(--surface)] shadow-2xl sm:max-h-[80vh] sm:w-[min(720px,calc(100vw-32px))] sm:rounded-lg"
+        className="orbit-dialog grid max-h-[88dvh] w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-h-[80vh] sm:w-[min(680px,calc(100vw-32px))]"
       >
-        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+        <header className="flex items-center justify-between px-5 pb-2 pt-4">
           <div>
-            <h2 className="text-base font-semibold text-[var(--text)]">公告</h2>
+            <h2 className="text-[17px] font-semibold text-[var(--text)]">公告</h2>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">新版本与运维通知</p>
           </div>
           <button
             type="button"
             aria-label="关闭公告"
             onClick={() => onClose(latestId)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text)] hover:bg-[var(--surface-strong)]"
+            className="orbit-btn orbit-btn--ghost orbit-btn--icon"
           >
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </header>
 
-        <div className="overflow-y-auto px-4 py-4">
+        <div className="overflow-y-auto px-5 pb-4 pt-2">
           {items.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-[var(--border)] p-6 text-center text-sm text-[var(--muted)]">
+            <div className="rounded-[var(--radius-card)] bg-[var(--fill-subtle)] p-6 text-center text-sm text-[var(--muted)]">
               暂无公告
             </div>
           ) : (
-            <ol className="relative space-y-4 border-l border-[var(--border)] pl-4">
+            <ol className="relative ml-1.5 space-y-4 border-l border-[var(--hairline-strong)] pl-5">
               {items.map((item) => (
                 <li key={item.id} className="relative">
                   <span
                     aria-hidden="true"
-                    className={`absolute -left-[21px] top-1.5 h-3 w-3 rounded-full border-2 ${severityClass[item.severity] || severityClass.info}`}
+                    className={`announcement-dot absolute -left-[27px] top-4 h-3 w-3 rounded-full border-2 ${severityClass[item.severity] || severityClass.info}`}
                   />
-                  <article className="rounded-lg border border-[var(--border)] bg-[var(--surface-strong)] p-3">
+                  <article className="rounded-[var(--radius-card)] bg-[var(--fill-subtle)] p-4 shadow-[inset_0_0_0_1px_var(--hairline)]">
                     <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-                      <span>{item.publisher}</span>
+                      <span className="font-medium text-[var(--text)]">{item.publisher}</span>
                       <span>{formatTime(item.publishedAt)}</span>
-                      <span className="rounded border border-[var(--border)] px-1.5 py-0.5">{item.category}</span>
+                      <span className="orbit-chip" data-tone="accent">{item.category}</span>
                     </div>
                     <h3 className="mt-2 text-sm font-semibold text-[var(--text)]">{renderSafeInlineHtml(item.title)}</h3>
                     <p className="mt-1 text-sm text-[var(--muted)]">{renderSafeInlineHtml(item.summary)}</p>
@@ -199,11 +200,11 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
           )}
         </div>
 
-        <footer className="sticky bottom-0 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+        <footer className="flex justify-end border-t border-[var(--hairline)] px-5 py-3">
           <button
             type="button"
             onClick={() => onClose(latestId)}
-            className="w-full rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-[var(--accent-foreground)]"
+            className="orbit-btn orbit-btn--primary min-w-24 sm:w-auto"
           >
             关闭
           </button>

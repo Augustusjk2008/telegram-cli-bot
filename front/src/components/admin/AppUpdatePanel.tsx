@@ -10,7 +10,7 @@ const PHASES: Record<AppUpdatePhase, string> = {
   rolled_back: "已恢复旧版本", recovery_required: "需要人工恢复",
 };
 const RETRY_PHASES = new Set(["failed", "cancelled"]);
-const buttonClass = "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60";
+const buttonClass = "orbit-btn orbit-btn--secondary";
 const errorClass = "whitespace-pre-wrap break-words text-sm text-[var(--feedback-error-text-deep)]";
 
 function packageLabel(kind?: string) {
@@ -172,7 +172,7 @@ export function AppUpdatePanel({ client, refreshKey = 0 }: { client: WebBotClien
       {confirming && <p role="status" className="text-sm">正在确认后台状态，连接恢复后将核对任务结果与运行版本。{connectionError}</p>}
       {actionError && <p role="alert" className={errorClass}>{actionError}</p>}
       {status?.lastError && status.lastError !== job?.error && status.lastError !== actionError && <p role="alert" className={errorClass}>{status.lastError}</p>}
-      {job && <div data-testid="update-job" className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
+      {job && <div data-testid="update-job" className="admin-well space-y-2 p-3 text-sm">
         <p role="status">任务阶段: {job.phase === "succeeded" ? (confirmedSuccess ? "升级成功" : "正在核对运行版本") : PHASES[job.phase] || job.phase}</p>
         <p className="break-all">任务: {job.jobId} · 修订: {job.revision}</p>
         {job.progress.message && <p className="whitespace-pre-wrap break-words">{job.progress.message}</p>}
@@ -191,7 +191,7 @@ export function AppUpdatePanel({ client, refreshKey = 0 }: { client: WebBotClien
           {(RETRY_PHASES.has(job.phase) || (job.phase === "ready" && job.requiresPreparation)) && <button className={buttonClass} disabled={busy} onClick={() => void runAction("retry", () => client.retryUpdateJob(job.jobId, job.revision))}>重试</button>}
         </div>
       </div>}
-      <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] px-3 py-3 text-sm">
+      <label className="admin-well flex items-center justify-between gap-4 px-3 py-3 text-sm">
         自动下载更新
         <input type="checkbox" checked={Boolean(status?.updateEnabled)} disabled={toggleSaving || !status} onChange={(event) => void saveToggle(event.target.checked)} />
       </label>
@@ -201,13 +201,13 @@ export function AppUpdatePanel({ client, refreshKey = 0 }: { client: WebBotClien
         <button className={buttonClass} disabled={!canPrepare || !status?.latestVersion || Boolean(checkError || status.lastCheck.error || status.lastCheck.cached || status.lastCheck.ok === false)} onClick={() => void runAction("prepare", () => client.downloadUpdate())}>{action === "prepare" ? "提交准备中..." : "准备更新"}</button>
         <button className={buttonClass} onClick={() => void queryStatus()}>查询后台状态</button>
       </div>
-      <div className="min-w-0 space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
+      <div className="admin-well min-w-0 space-y-3 p-3 text-sm">
         <h3 className="font-semibold">离线升级</h3>
         <p className="break-all">宿主离线包目录: {packages?.artifactsDir || "尚未加载"}</p>
         {packagesLoading && <p role="status">正在加载离线包...</p>}
         {packageError && <p role="alert" className={errorClass}>{packageError}</p>}
         {packages?.items.map((item) => <div key={item.path} className="space-y-1">
-          <button className={`${buttonClass} max-w-full break-all text-left`} disabled={!canPrepare || !item.valid} onClick={() => void runAction("offline", () => client.prepareOfflineUpdate(item.path, item.version))}>{item.name} · {packageLabel(item.packageKind)}</button>
+          <button className={`${buttonClass} admin-btn--wrap`} disabled={!canPrepare || !item.valid} onClick={() => void runAction("offline", () => client.prepareOfflineUpdate(item.path, item.version))}>{item.name} · {packageLabel(item.packageKind)}</button>
           {!item.valid && <p className={errorClass}>{item.error || "包校验失败"}</p>}
         </div>)}
         <label className="block space-y-1">宿主机器上的离线包路径
@@ -226,7 +226,7 @@ export function AppUpdatePanel({ client, refreshKey = 0 }: { client: WebBotClien
           {staleConfirmation && <p role="alert" className={errorClass}>任务状态已变化，请关闭确认框并重新确认。</p>}
           <div className="flex flex-wrap gap-2">
             <button autoFocus className={buttonClass} onClick={() => setConfirmJob(null)}>暂不应用</button>
-            <button className={buttonClass} disabled={busy || Boolean(staleConfirmation) || job?.requiresPreparation || !launcher?.supported || launcher.protocol !== 1} onClick={() => {
+            <button className="orbit-btn orbit-btn--primary" disabled={busy || Boolean(staleConfirmation) || job?.requiresPreparation || !launcher?.supported || launcher.protocol !== 1} onClick={() => {
               setConfirmJob(null);
               void runAction("apply", () => client.applyUpdateJob(confirmJob.jobId, confirmJob.revision));
             }}>确认应用并重启服务</button>

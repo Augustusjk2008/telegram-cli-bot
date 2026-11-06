@@ -241,7 +241,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 ### 管理与扩展
 
 - Admin Center 管理用户权限、唯一管理员账号、邀请码、公告、更新和运行状态，也可以请求重启后端。本地 `127.0.0.1` 登录可在没有指定管理员账号时把一个已有账号设为管理员；已有管理员时不能再指定第二个。
-- 主题库随版本发布，包含「钢铁核心」「阿波罗计划」「薄荷柑橘」「轻音少女」「赛博朋克」「Deepseek」「雾岚纸境」和「墨砚铜章」八套预置主题；所有账户（包括管理员）都只能选择和应用主题，不能编辑、导入、删除或上传主题资源。登录后的主题选择按账户分别保存，登录页的预览选择保存在当前浏览器。
+- 主题库随版本发布，包含「钢铁核心」「阿波罗计划」「薄荷柑橘」「轻音少女」「赛博朋克」「Deepseek」「雾岚纸境」和「墨砚铜章」八套预置主题，每套主题同时定义配色、材质（圆角、玻璃、光效与阴影）和插画；所有账户（包括管理员）都只能选择和应用主题，不能编辑、导入、删除或上传主题资源。登录后的主题选择按账户分别保存，登录页的预览选择保存在当前浏览器。
 - 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用发布包内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077`、`deepseek-big-fish` 或 `k-on-light-music` 资源；透明度范围为 `0` 到 `0.25`。
 - 预置主题的插画资源由发布包中的插画目录和前端资源提供，插画属于主题外观的一部分；主题包导出会保留这些资源。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示；Claude 订阅额度单独采集。

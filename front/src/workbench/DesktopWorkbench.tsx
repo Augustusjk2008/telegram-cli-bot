@@ -229,6 +229,7 @@ export function DesktopWorkbench({
     processing: false,
   });
   const previewAgentId = (externalChatStatus || localChatStatus).agentId || "main";
+  const chatRunning = Boolean((externalChatStatus || localChatStatus).processing || (externalChatStatus || localChatStatus).state === "running");
   const previewScopeIdentity = `${botAlias}\n${workspaceUserScope}`;
   const htmlPreviewScopeIdentity = `${previewScopeIdentity}\n${previewAgentId}\n${(externalChatStatus || localChatStatus).workingDir || ""}\n${JSON.stringify(remoteWorkspace || null)}`;
   const previewScopeIdentityRef = useRef(previewScopeIdentity);
@@ -1401,9 +1402,12 @@ export function DesktopWorkbench({
       data-has-focus={focusedPane ? "true" : "false"}
       data-focused-pane={focusedPane || "none"}
       data-resizing={isResizingPane ? "true" : "false"}
-      className="desktop-workbench-root theme-illustration-host grid h-[100dvh] min-h-0 w-full grid-cols-[minmax(0,1fr)]"
+      className="desktop-workbench-root orbit-shell theme-illustration-host grid h-[100dvh] min-h-0 w-full grid-cols-[minmax(0,1fr)]"
       style={{ gridTemplateRows: "auto minmax(0,1fr) auto" }}
     >
+      <div data-testid="desktop-workbench-canvas" className="orbit-canvas" aria-hidden="true">
+        <ThemeIllustrationLayer surface="workbench" className="workbench-canvas-illustration" />
+      </div>
       {focusedPane ? (
         <button
           type="button"
@@ -1436,25 +1440,23 @@ export function DesktopWorkbench({
         onToggleChat={toggleChat}
         onViewModeChange={(nextMode) => onViewModeChange?.(nextMode)}
         onOpenBotSwitcher={(anchorRect) => onOpenBotSwitcher?.(anchorRect)}
+        onOpenCommandPalette={!structureOnly && !remoteWorkspace ? () => setCommandPaletteOpen(true) : undefined}
         onLogout={() => onLogout?.()}
       />
 
-      <div data-testid="desktop-workbench-shell" className="desktop-workbench-shell theme-illustration-host relative min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
+      <div data-testid="desktop-workbench-shell" className="desktop-workbench-shell relative min-h-0 overflow-hidden">
         <div
           data-testid="desktop-workbench-columns"
           ref={columnsRef}
-          className="grid h-full min-h-0 p-0.5"
+          className="grid h-full min-h-0"
           style={{ gridTemplateColumns: columnTemplate }}
         >
-          <div data-testid="desktop-workbench-main-illustration-area" className="workbench-main-illustration-area" aria-hidden="true">
-            <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" zone="main" />
-          </div>
 
           <section
             data-testid="desktop-pane-files"
             data-collapsed={layoutState.sidebarCollapsed ? "true" : "false"}
             data-focused={focusedPane === "sidebar" ? "true" : "false"}
-            className="desktop-workbench-pane grid min-h-0 overflow-hidden"
+            className="desktop-workbench-pane orbit-island grid min-h-0 overflow-hidden"
           >
             <div
               className={clsx(
@@ -1466,7 +1468,6 @@ export function DesktopWorkbench({
                 data-testid="desktop-workbench-activity-rail-illustration-host"
                 className="workbench-activity-rail-illustration-host relative min-h-0 min-w-0 overflow-hidden"
               >
-                <ThemeIllustrationLayer surface="workbench" className="workbench-sidebar-illustration" zone="sidebar" />
                 <WorkbenchActivityRail
                   activeItem={activeActivityItem}
                   sidebarCollapsed={layoutState.sidebarCollapsed}
@@ -1524,7 +1525,7 @@ export function DesktopWorkbench({
                 data-collapsed={layoutState.editorCollapsed ? "true" : "false"}
                 data-focused={focusedPane === "editor" ? "true" : "false"}
                 className={clsx(
-                  "desktop-workbench-pane min-h-0 overflow-hidden",
+                  "desktop-workbench-pane orbit-island orbit-island--solid min-h-0 overflow-hidden",
                   !showEditorPane && "hidden",
                 )}
               >
@@ -1624,7 +1625,7 @@ export function DesktopWorkbench({
                 data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
                 data-focused={focusedPane === "terminal" ? "true" : "false"}
                 className={clsx(
-                  "desktop-workbench-pane row-start-3 min-h-0 overflow-hidden",
+                  "desktop-workbench-pane orbit-island orbit-island--solid row-start-3 min-h-0 overflow-hidden",
                   !showTerminalPane && "hidden",
                 )}
               >
@@ -1679,11 +1680,13 @@ export function DesktopWorkbench({
             data-testid="desktop-pane-chat"
             data-collapsed={layoutState.chatCollapsed ? "true" : "false"}
             data-focused={focusedPane === "chat" ? "true" : "false"}
+            data-running={chatRunning ? "true" : "false"}
             className={clsx(
-              "desktop-workbench-pane theme-illustration-host min-h-0 overflow-hidden",
+              "desktop-workbench-pane orbit-island orbit-island--reading min-h-0 overflow-hidden",
               !showChatPane && "hidden",
             )}
           >
+            {chatRunning ? <div className="orbit-sweep chat-pane-sweep" aria-hidden="true" /> : null}
             <div className="theme-illustration-content h-full min-h-0">
               {resolvedChatPaneContent || (
                 <ChatPane

@@ -1,4 +1,5 @@
 import { normalizeChatTypography } from "./chatTypography";
+import { normalizeThemeMaterial } from "./material";
 import { normalizeIllustrations } from "./resolveAppearance";
 import type { PortableTheme, ThemeDocument, ThemeIllustrationAssetImport, UiTheme } from "./types";
 
@@ -142,6 +143,7 @@ export function portableTheme(theme: UiTheme): PortableTheme {
     appearance: {
       colors: { ...theme.appearance.colors, overrides: { ...theme.appearance.colors.overrides } },
       typography: normalizeChatTypography(theme.appearance.typography),
+      material: normalizeThemeMaterial(theme.appearance.material),
       illustrations: normalizeIllustrations(theme.appearance.illustrations),
     },
   };

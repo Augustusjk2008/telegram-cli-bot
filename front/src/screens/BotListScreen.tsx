@@ -7,9 +7,10 @@ import { LogOut } from "lucide-react";
 import { BotActivitySummary } from "../components/BotActivitySummary";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
-import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import { getBotAccentStyle } from "../utils/botVisual";
+import { getBotIdentityTextStyle } from "../utils/botVisual";
+import { FleetAvatar, FleetStats, FleetStatusChip } from "./AgentManagerParts";
+import "../styles/agent-manager.css";
 import type { BotSummary, CliType, CreateBotInput } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import {
@@ -18,7 +19,7 @@ import {
   useBotManager,
   type CreateDraft,
 } from "./useBotManager";
-import { DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { countBotManagerStats, DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
@@ -273,48 +274,218 @@ export function BotListScreen({
   const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || createDraft.runtimeBackend === "native_agent";
 
   return (
-    <main data-ui-density="compact" className="theme-illustration-host relative flex-1 overflow-y-auto bg-[var(--bg)] p-4">
-      <ThemeIllustrationLayer surface="agentManager" className="theme-illustration-fixed" />
-      <header className="theme-illustration-host mb-3 flex items-center justify-between gap-3">
-        <h1 className="theme-illustration-content text-2xl font-bold">智能体管理</h1>
-        <div className="theme-illustration-content flex items-center gap-2">
+    <main data-ui-density="compact" className="am-screen am-mobile orbit-shell">
+      <header className="am-cover am-cover--compact orbit-cover">
+        <div className="orbit-cover-art">
+          <ThemeIllustrationLayer surface="agentManager" />
+        </div>
+        <div className="am-cover-row">
+          <div>
+            <p className="am-cover-eyebrow">ORBIT 舰队</p>
+            <h1 className="am-cover-title">智能体管理</h1>
+          </div>
           {onLogout ? (
             <button
               type="button"
               aria-label="退出登录"
               title="退出登录"
               onClick={onLogout}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+              className="orbit-btn orbit-btn--icon am-glass-btn shrink-0"
             >
               <LogOut className="h-4 w-4" />
             </button>
           ) : null}
         </div>
+        <div className="am-cover-main">
+          <FleetStats stats={countBotManagerStats(bots)} />
+        </div>
       </header>
 
+      <div className="am-mobile-body">
       {error ? (
-        <div className="mb-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
+        <div role="alert" className="am-banner" data-tone="danger">
           {error}
         </div>
       ) : null}
       {notice ? (
-        <div className="mb-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
+        <div className="am-banner" data-tone="success">
           {notice}
         </div>
       ) : null}
 
       {canManage && bots.some((bot) => !isMainBot(bot) && !isBotArchived(bot)) ? (
-        <section aria-label="批量操作" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
-          <span className="text-sm text-[var(--muted)]">已选择 {selectedAliases.length} 个智能体</span>
-          <button type="button" onClick={() => void handleBatchToggle("start")} disabled={selectedAliases.length === 0 || savingAction !== ""} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">批量启动</button>
-          <button type="button" onClick={() => void handleBatchToggle("stop")} disabled={selectedAliases.length === 0 || savingAction !== ""} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">批量停止</button>
-          <button type="button" onClick={() => setSelectedAliases([])} disabled={selectedAliases.length === 0 || savingAction !== ""} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">清除选择</button>
+        <section aria-label="批量操作" className="am-mobile-bulk orbit-island">
+          <span>已选择 {selectedAliases.length} 个智能体</span>
+          <button type="button" onClick={() => void handleBatchToggle("start")} disabled={selectedAliases.length === 0 || savingAction !== ""} className="orbit-btn orbit-btn--ghost orbit-btn--sm">批量启动</button>
+          <button type="button" onClick={() => void handleBatchToggle("stop")} disabled={selectedAliases.length === 0 || savingAction !== ""} className="orbit-btn orbit-btn--ghost orbit-btn--sm">批量停止</button>
+          <button type="button" onClick={() => setSelectedAliases([])} disabled={selectedAliases.length === 0 || savingAction !== ""} className="orbit-btn orbit-btn--ghost orbit-btn--sm">清除选择</button>
         </section>
       ) : null}
 
+      {loading ? (
+        <div className="am-empty">加载中...</div>
+      ) : bots.length === 0 ? (
+        <div className="am-empty">暂无智能体</div>
+      ) : (
+        <div className="grid gap-2.5">
+          {bots.map((bot) => {
+            const isMain = isMainBot(bot);
+            const isRenaming = renamingAlias === bot.alias;
+            const isArchived = isBotArchived(bot);
+            const isOffline = isBotOffline(bot);
+            const servicePillStatus = isOffline ? "offline" : "online";
+            return (
+              <section
+                key={bot.alias}
+                data-offline={isOffline ? "true" : undefined}
+                className="am-card orbit-island orbit-island--reading"
+              >
+                <div className="am-card-head">
+                  {canManage && !isMain && !isArchived ? (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${bot.alias}`}
+                      checked={selectedAliases.includes(bot.alias)}
+                      onChange={(event) => setSelectedAliases((current) => event.target.checked ? [...new Set([...current, bot.alias])] : current.filter((alias) => alias !== bot.alias))}
+                      className="am-check shrink-0"
+                    />
+                  ) : null}
+                  <FleetAvatar alias={bot.alias} />
+                  <div className="am-card-meta flex-1">
+                    <div className="am-name-line">
+                      <h3 className="am-card-title">{bot.alias}</h3>
+                      {isMain ? <span className="am-tag">主</span> : null}
+                      {bot.remoteWorkspace ? <span className="am-tag">远程</span> : null}
+                      {isArchived ? <span className="am-tag" data-tone="warning">已归档</span> : null}
+                      {bot.canOperate === false ? <span className="am-tag" data-tone="restricted">无权限 · 只读</span> : null}
+                    </div>
+                    <div className="am-type">
+                      <span aria-hidden="true" className="am-type-mark" style={getBotIdentityTextStyle(bot.cliType)} />
+                      {getRuntimeBackend(bot) === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
+                    </div>
+                  </div>
+                  <div className="am-status shrink-0 justify-end">
+                    {bot.status === "unread" ? <FleetStatusChip status="unread" /> : null}
+                    <FleetStatusChip status={servicePillStatus} />
+                  </div>
+                </div>
+                <div className="am-path" title={workspaceLabel(bot)}>
+                  {workspaceLabel(bot) || "未设置"}
+                </div>
+                {bot.remoteWorkspace && <RemoteReconnectButton client={client} botAlias={bot.alias} remote={bot.remoteWorkspace} disabled={bot.canOperate === false} />}
+                <BotActivitySummary bot={bot} />
+
+                <div
+                  data-testid={`bot-actions-${bot.alias}`}
+                  className="am-card-actions"
+                >
+                  <button
+                    type="button"
+                    aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
+                    onClick={() => {
+                      if (isOffline) {
+                        return;
+                      }
+                      onSelect(bot.alias);
+                    }}
+                    disabled={isOffline}
+                    className={isOffline ? "orbit-btn orbit-btn--secondary orbit-btn--sm am-tone-danger cursor-not-allowed" : "orbit-btn orbit-btn--primary orbit-btn--sm"}
+                  >
+                    {isOffline ? "不可进入" : "进入"}
+                  </button>
+                  {onOpenBotSettings ? (
+                    <button
+                      type="button"
+                      aria-label={`打开 ${bot.alias} 设置`}
+                      onClick={() => onOpenBotSettings(bot.alias)}
+                      className="orbit-btn orbit-btn--secondary orbit-btn--sm"
+                    >
+                      打开设置
+                    </button>
+                  ) : null}
+                  {canManage && !isMain ? (
+                    <>
+                      <button
+                        type="button"
+                        aria-label={isArchived ? `取消归档 ${bot.alias}` : isOffline ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
+                        onClick={() => void (isArchived ? unarchiveBot(bot) : toggleBot(bot))}
+                        disabled={savingAction !== ""}
+                        className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+                      >
+                        {savingAction === `${bot.alias}:archive`
+                          ? "处理中..."
+                          : isArchived ? "取消归档" : savingAction === `${bot.alias}:toggle` ? "处理中..." : isOffline ? "启动" : "停止"}
+                      </button>
+                      {!isArchived ? (
+                        <button
+                          type="button"
+                          aria-label={`归档 ${bot.alias}`}
+                          onClick={() => void archiveBot(bot)}
+                          disabled={savingAction !== ""}
+                          className="orbit-btn orbit-btn--ghost orbit-btn--sm am-tone-warning"
+                        >
+                          归档
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        aria-label={`重命名 ${bot.alias}`}
+                        onClick={() => {
+                          setRenamingAlias((prev) => prev === bot.alias ? "" : bot.alias);
+                          setRenameDrafts((prev) => ({ ...prev, [bot.alias]: bot.alias }));
+                        }}
+                        disabled={savingAction !== "" || isArchived}
+                        className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+                      >
+                        改名
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`删除 ${bot.alias}`}
+                        onClick={() => {
+                          setPendingDeleteAlias(bot.alias);
+                          setDeleteHistory(false);
+                          setDeleteWorkspace(false);
+                          setDeleteWorkspaceConfirmText("");
+                        }}
+                        disabled={savingAction !== ""}
+                        className="orbit-btn orbit-btn--ghost orbit-btn--sm am-tone-danger"
+                      >
+                        删除
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+
+                {isRenaming ? (
+                  <div className="am-rename">
+                    <input
+                      aria-label={`${bot.alias} 新别名`}
+                      type="text"
+                      value={renameDrafts[bot.alias] || ""}
+                      onChange={(event) => setRenameDrafts((prev) => ({ ...prev, [bot.alias]: event.target.value }))}
+                      className="orbit-field"
+                    />
+                    <button
+                      type="button"
+                      aria-label={`保存别名 ${bot.alias}`}
+                      onClick={() => void saveRename(bot)}
+                      disabled={savingAction !== ""}
+                      className="orbit-btn orbit-btn--primary"
+                    >
+                      {savingAction === `${bot.alias}:rename` ? "保存中..." : "保存别名"}
+                    </button>
+                  </div>
+                ) : null}
+              </section>
+            );
+          })}
+        </div>
+      )}
+
       {canManage ? (
-        <section className="mb-4 space-y-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
-        <h2 className="text-lg font-semibold">新增智能体</h2>
+        <section className="am-mobile-section orbit-island orbit-island--reading">
+        <h2>新增智能体</h2>
         <div className="space-y-3">
           <input
             aria-label="新智能体别名"
@@ -443,189 +614,13 @@ export function BotListScreen({
           type="button"
           onClick={() => void handleCreateBot()}
           disabled={savingAction !== "" || (remoteCreate && !createDraft.remoteWorkspace)}
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
+          className="orbit-btn orbit-btn--primary justify-self-start"
         >
           {savingAction === "create" ? "创建中..." : "创建智能体"}
         </button>
         </section>
       ) : null}
-
-      {loading ? (
-        <div className="text-center text-[var(--muted)]">加载中...</div>
-      ) : bots.length === 0 ? (
-        <div className="text-center text-[var(--muted)]">暂无智能体</div>
-      ) : (
-        <div className="space-y-4">
-          {bots.map((bot) => {
-            const isMain = isMainBot(bot);
-            const isRenaming = renamingAlias === bot.alias;
-            const isArchived = isBotArchived(bot);
-            const isOffline = isBotOffline(bot);
-            const servicePillStatus = isOffline ? "offline" : "online";
-            return (
-              <section
-                key={bot.alias}
-                className={
-                  isOffline
-                    ? "relative space-y-3 overflow-hidden rounded-2xl border border-[var(--feedback-error-border-light)] bg-[var(--surface)] p-4 pl-5"
-                    : "relative space-y-3 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 pl-5"
-                }
-              >
-                <span
-                  aria-hidden="true"
-                  className="absolute left-0 top-0 h-full w-[3px]"
-                  style={getBotAccentStyle(bot.alias)}
-                />
-                <div className="flex items-start">
-                  {canManage && !isMain && !isArchived ? (
-                    <input
-                      type="checkbox"
-                      aria-label={`选择 ${bot.alias}`}
-                      checked={selectedAliases.includes(bot.alias)}
-                      onChange={(event) => setSelectedAliases((current) => event.target.checked ? [...new Set([...current, bot.alias])] : current.filter((alias) => alias !== bot.alias))}
-                      className="mr-3 mt-1 h-4 w-4 shrink-0"
-                    />
-                  ) : null}
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <h3 className="min-w-0 max-w-full truncate text-lg font-semibold text-[var(--text)]">{bot.alias}</h3>
-                      {isMain ? (
-                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span>
-                      ) : null}
-                      {bot.remoteWorkspace ? (
-                        <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span>
-                      ) : null}
-                      {isArchived ? (
-                        <span className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--feedback-warning-text-deep)]">已归档</span>
-                      ) : null}
-                      {bot.canOperate === false ? (
-                        <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
-                      ) : null}
-                      {bot.status === "unread" ? <StatusPill status="unread" /> : null}
-                      <StatusPill status={servicePillStatus} />
-                    </div>
-                    <div className="truncate text-xs font-medium text-[var(--muted)]">
-                      {getRuntimeBackend(bot) === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
-                    </div>
-                    <div className="truncate font-mono text-xs text-[var(--muted)]" title={workspaceLabel(bot)}>
-                      {workspaceLabel(bot) || "未设置"}
-                    </div>
-                    {bot.remoteWorkspace && <RemoteReconnectButton client={client} botAlias={bot.alias} remote={bot.remoteWorkspace} disabled={bot.canOperate === false} />}
-                    <BotActivitySummary bot={bot} />
-                  </div>
-                </div>
-
-                <div
-                  data-testid={`bot-actions-${bot.alias}`}
-                  className="flex flex-wrap items-center gap-2"
-                >
-                  <button
-                    type="button"
-                    aria-label={isOffline ? `${bot.alias} 当前离线，不可进入` : `进入 ${bot.alias}`}
-                    onClick={() => {
-                      if (isOffline) {
-                        return;
-                      }
-                      onSelect(bot.alias);
-                    }}
-                    disabled={isOffline}
-                    className={
-                      isOffline
-                        ? "cursor-not-allowed rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-strong)] opacity-100"
-                        : "rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                    }
-                  >
-                    {isOffline ? "不可进入" : "进入"}
-                  </button>
-                  {onOpenBotSettings ? (
-                    <button
-                      type="button"
-                      aria-label={`打开 ${bot.alias} 设置`}
-                      onClick={() => onOpenBotSettings(bot.alias)}
-                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                    >
-                      打开设置
-                    </button>
-                  ) : null}
-                  {canManage && !isMain ? (
-                    <>
-                      <button
-                        type="button"
-                        aria-label={isArchived ? `取消归档 ${bot.alias}` : isOffline ? `启动 ${bot.alias}` : `停止 ${bot.alias}`}
-                        onClick={() => void (isArchived ? unarchiveBot(bot) : toggleBot(bot))}
-                        disabled={savingAction !== ""}
-                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                      >
-                        {savingAction === `${bot.alias}:archive`
-                          ? "处理中..."
-                          : isArchived ? "取消归档" : savingAction === `${bot.alias}:toggle` ? "处理中..." : isOffline ? "启动" : "停止"}
-                      </button>
-                      {!isArchived ? (
-                        <button
-                          type="button"
-                          aria-label={`归档 ${bot.alias}`}
-                          onClick={() => void archiveBot(bot)}
-                          disabled={savingAction !== ""}
-                          className="rounded-lg border border-[var(--feedback-warning-border-light)] px-3 py-2 text-sm text-[var(--feedback-warning-text-deep)] hover:bg-[var(--feedback-warning-background-subtle)] disabled:opacity-60"
-                        >
-                          归档
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        aria-label={`重命名 ${bot.alias}`}
-                        onClick={() => {
-                          setRenamingAlias((prev) => prev === bot.alias ? "" : bot.alias);
-                          setRenameDrafts((prev) => ({ ...prev, [bot.alias]: bot.alias }));
-                        }}
-                        disabled={savingAction !== "" || isArchived}
-                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                      >
-                        改名
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`删除 ${bot.alias}`}
-                        onClick={() => {
-                          setPendingDeleteAlias(bot.alias);
-                          setDeleteHistory(false);
-                          setDeleteWorkspace(false);
-                          setDeleteWorkspaceConfirmText("");
-                        }}
-                        disabled={savingAction !== ""}
-                        className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
-                      >
-                        删除
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-
-                {isRenaming ? (
-                  <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
-                    <input
-                      aria-label={`${bot.alias} 新别名`}
-                      type="text"
-                      value={renameDrafts[bot.alias] || ""}
-                      onChange={(event) => setRenameDrafts((prev) => ({ ...prev, [bot.alias]: event.target.value }))}
-                      className="min-w-[220px] flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
-                    />
-                    <button
-                      type="button"
-                      aria-label={`保存别名 ${bot.alias}`}
-                      onClick={() => void saveRename(bot)}
-                      disabled={savingAction !== ""}
-                      className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
-                    >
-                      {savingAction === `${bot.alias}:rename` ? "保存中..." : "保存别名"}
-                    </button>
-                  </div>
-                ) : null}
-              </section>
-            );
-          })}
-        </div>
-      )}
+      </div>
       {showWorkdirPicker ? (
         <DirectoryPickerDialog
           title="选择工作目录"

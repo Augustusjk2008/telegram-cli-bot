@@ -23,6 +23,7 @@ import {
   normalizeChatTypography,
 } from "./chatTypography";
 import { PAPER_MOTION, PAPER_STYLE } from "./types";
+import { DEFAULT_THEME_MATERIAL, isThemeMaterial, materialCssVariables, normalizeThemeMaterial } from "./material";
 import {
   builtinIllustrationScene,
   defaultIllustrations,
@@ -36,6 +37,8 @@ import {
 export const THEME_TOKENS = catalog.tokens as ColorToken[];
 export const MAX_THEME_ILLUSTRATION_UPLOAD_BYTES = 4 * 1024 * 1024;
 export const MAX_THEME_ILLUSTRATION_TOTAL_BYTES = 12 * 1024 * 1024;
+export const MAX_THEME_ILLUSTRATION_OPACITY = 1;
+const APPEARANCE_KEYS = ["colors", "typography", "material", "illustrations"];
 const THEME_ILLUSTRATION_UPLOAD_MIMES = ["image/png", "image/jpeg", "image/webp"] as const satisfies readonly ThemeIllustrationUploadMime[];
 const THEME_ILLUSTRATION_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
 const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/;
@@ -50,6 +53,7 @@ export const BUILTIN_THEME: UiTheme = PRESET_LIBRARY.themes.find((theme) => them
   appearance: {
     colors: { scheme: "light", overrides: {} },
     typography: DEFAULT_CHAT_TYPOGRAPHY,
+    material: DEFAULT_THEME_MATERIAL,
     illustrations: defaultIllustrations(),
   },
   readonly: true,
@@ -292,7 +296,7 @@ export function normalizeIllustrations(value: unknown): ThemeIllustrations {
   if (isLegacy(value)) {
     const normalized = canonicalFromLegacy(value);
     if (typeof normalized.opacity !== "number" || !Number.isFinite(normalized.opacity)
-      || normalized.opacity < 0 || normalized.opacity > 0.25) throw new Error("主题插画透明度必须在 0 到 0.25 之间");
+      || normalized.opacity < 0 || normalized.opacity > MAX_THEME_ILLUSTRATION_OPACITY) throw new Error("主题插画透明度必须在 0 到 1 之间");
     return normalized;
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("主题插画配置无效");
@@ -300,8 +304,8 @@ export function normalizeIllustrations(value: unknown): ThemeIllustrations {
   if (Object.keys(candidate).some((key) => !["opacity", "surfaces", "scenes"].includes(key))) {
     throw new Error("主题插画配置包含不支持的字段");
   }
-  if (typeof candidate.opacity !== "number" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > 0.25) {
-    throw new Error("主题插画透明度必须在 0 到 0.25 之间");
+  if (typeof candidate.opacity !== "number" || !Number.isFinite(candidate.opacity) || candidate.opacity < 0 || candidate.opacity > MAX_THEME_ILLUSTRATION_OPACITY) {
+    throw new Error("主题插画透明度必须在 0 到 1 之间");
   }
   const surfaces = candidate.surfaces;
   if (!surfaces || typeof surfaces !== "object" || Array.isArray(surfaces)) throw new Error("主题插画区域配置无效");
@@ -335,12 +339,13 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   const colors: Record<string, string> = {};
   const cssVariables: Record<string, string> = {};
   const tokens = new Map(THEME_TOKENS.map((token) => [token.key, token]));
-  if (!theme.appearance || Object.keys(theme.appearance).some((key) => key !== "colors" && key !== "typography" && key !== "illustrations")
+  if (!theme.appearance || Object.keys(theme.appearance).some((key) => !APPEARANCE_KEYS.includes(key))
     || !theme.appearance.colors || !["light", "dark"].includes(theme.appearance.colors.scheme)
     || Object.keys(theme.appearance.colors).some((key) => key !== "scheme" && key !== "overrides")
     || !theme.appearance.colors.overrides || typeof theme.appearance.colors.overrides !== "object"
     || Array.isArray(theme.appearance.colors.overrides)
-    || (theme.appearance.typography !== undefined && !isChatTypography(theme.appearance.typography))) throw new Error("此主题包含尚不支持的外观配置");
+    || (theme.appearance.typography !== undefined && !isChatTypography(theme.appearance.typography))
+    || (theme.appearance.material !== undefined && !isThemeMaterial(theme.appearance.material))) throw new Error("此主题包含尚不支持的外观配置");
   const rawIllustrations = theme.appearance.illustrations;
   const illustrations = normalizeIllustrations(rawIllustrations);
   for (const [key, value] of Object.entries(theme.appearance.colors.overrides)) {
@@ -370,6 +375,8 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
   }
   const typography = normalizeChatTypography(theme.appearance.typography);
   Object.assign(cssVariables, chatTypographyCssVariables(typography));
+  const material = normalizeThemeMaterial(theme.appearance.material);
+  Object.assign(cssVariables, materialCssVariables(material));
   const legacyData = legacyUploadData(rawIllustrations as ThemeIllustrationsValue);
   const sceneResources = Object.fromEntries(
     THEME_ILLUSTRATION_SURFACES.map((surface) => [
@@ -389,8 +396,8 @@ export function resolveAppearance(theme: UiTheme): ResolvedAppearance {
     sceneResources,
     ...(legacySetId ? { setId: legacySetId } : {}),
   } as ResolvedAppearance["illustrations"];
-  const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography, resolvedIllustrations]);
-  return { themeId: theme.id, scheme: theme.appearance.colors.scheme, typography, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, illustrations: resolvedIllustrations, revision };
+  const revision = JSON.stringify([theme.id, theme.appearance.colors.scheme, colors, typography, material, resolvedIllustrations]);
+  return { themeId: theme.id, scheme: theme.appearance.colors.scheme, typography, material, colors, cssVariables, styleProfile: "paper", motionProfile: "paper", style: PAPER_STYLE, motion: PAPER_MOTION, illustrations: resolvedIllustrations, revision };
 }
 
 function channels(color: string) {

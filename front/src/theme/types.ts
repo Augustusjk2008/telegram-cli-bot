@@ -12,6 +12,18 @@ export type ChatTypography = {
   chatBodyParagraphSpacing: ChatBodyParagraphSpacingName;
 };
 
+export type ThemeMaterialShape = "sharp" | "crisp" | "soft" | "round";
+export type ThemeMaterialGlass = "none" | "frost" | "deep";
+export type ThemeMaterialGlow = "none" | "soft" | "vivid";
+export type ThemeMaterialDepth = "flat" | "print" | "float";
+
+export type ThemeMaterial = {
+  shape: ThemeMaterialShape;
+  glass: ThemeMaterialGlass;
+  glow: ThemeMaterialGlow;
+  depth: ThemeMaterialDepth;
+};
+
 export type ThemeIllustrationSurface =
   | "workbench"
   | "adminCenter"
@@ -119,6 +131,7 @@ export const PAPER_MOTION = { profile: "paper" } as const;
 export type ThemeAppearance = {
   colors: { scheme: ColorScheme; overrides: Record<string, string> };
   typography?: ChatTypography;
+  material?: ThemeMaterial;
   illustrations?: ThemeIllustrationsValue;
 };
 
@@ -185,6 +198,7 @@ export type ResolvedAppearance = {
   themeId: string;
   scheme: ColorScheme;
   typography: ChatTypography;
+  material: ThemeMaterial;
   colors: Record<string, string>;
   cssVariables: Record<string, string>;
   styleProfile: "paper";

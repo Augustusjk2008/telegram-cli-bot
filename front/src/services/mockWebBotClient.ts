@@ -2,6 +2,7 @@ import themeCatalog from "../../../bot/web/theme_catalog.json";
 import themePresets from "../../../bot/web/theme_presets.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
 import { DEFAULT_CHAT_TYPOGRAPHY, isChatTypography, normalizeChatTypography } from "../theme/chatTypography";
+import { isThemeMaterial, normalizeThemeMaterial } from "../theme/material";
 import { normalizeIllustrations } from "../theme/resolveAppearance";
 import {
   GIT_CAPABILITY_NAMES,
@@ -3641,7 +3642,7 @@ export class MockWebBotClient implements WebBotClient {
 
   private uiThemeAppearance(appearance: ThemeAppearance): ThemeAppearance {
     const invalid = () => new WebApiClientError("主题配色包含不支持的字段、颜色或透明度", { status: 400, code: "invalid_theme" });
-    if (!appearance || Object.keys(appearance).some((key) => key !== "colors" && key !== "typography" && key !== "illustrations") || !appearance.colors) throw invalid();
+    if (!appearance || Object.keys(appearance).some((key) => key !== "colors" && key !== "typography" && key !== "material" && key !== "illustrations") || !appearance.colors) throw invalid();
     const { colors } = appearance;
     if (Object.keys(colors).some((key) => key !== "scheme" && key !== "overrides")
       || !["light", "dark"].includes(colors.scheme) || !colors.overrides
@@ -3657,12 +3658,14 @@ export class MockWebBotClient implements WebBotClient {
       overrides[key] = `#${hex}`;
     }
     if (appearance.typography !== undefined && !isChatTypography(appearance.typography)) throw invalid();
+    if (appearance.material !== undefined && !isThemeMaterial(appearance.material)) throw invalid();
     let illustrations: ReturnType<typeof normalizeIllustrations>;
     try { illustrations = normalizeIllustrations(appearance.illustrations); }
     catch { throw invalid(); }
     return {
       colors: { scheme: colors.scheme, overrides },
       typography: normalizeChatTypography(appearance.typography || DEFAULT_CHAT_TYPOGRAPHY),
+      ...(appearance.material === undefined ? {} : { material: normalizeThemeMaterial(appearance.material) }),
       illustrations,
     };
   }

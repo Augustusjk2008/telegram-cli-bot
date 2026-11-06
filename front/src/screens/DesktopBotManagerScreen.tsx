@@ -27,10 +27,11 @@ import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
-import { StatusPill } from "../components/StatusPill";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
-import { getBotAccentColor, getBotAccentStyle } from "../utils/botVisual";
+import { getBotIdentityTextStyle } from "../utils/botVisual";
+import { FleetAvatar, FleetStats, FleetStatusChip } from "./AgentManagerParts";
+import "../styles/agent-manager.css";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import type {
   BotClusterConfig,
@@ -198,12 +199,6 @@ function cliPathPlaceholder(cliType: CliType) {
 
 function runtimeBackendLabel(runtimeBackend: ChatExecutionMode) {
   return runtimeBackend === "native_agent" ? "原生 agent" : "CLI";
-}
-
-function issueClassName(severity: "info" | "warning") {
-  return severity === "warning"
-    ? "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-deep)]"
-    : "border-[var(--border)] bg-[var(--surface-strong)] text-[var(--muted)]";
 }
 
 function clampInspectorWidth(width: number, availableWidth?: number) {
@@ -1436,7 +1431,7 @@ export function DesktopBotManagerScreen({
     ];
 
     return (
-      <div className="mb-3 inline-flex rounded-md border border-[var(--border)] bg-[var(--surface-strong)] p-0.5">
+      <div className="orbit-segmented orbit-segmented--accent am-inspector-tabs">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -1451,12 +1446,6 @@ export function DesktopBotManagerScreen({
               setMode("inspect");
               setInspectorTab(tab.id);
             }}
-            className={clsx(
-              "h-8 rounded px-2 text-xs",
-              inspectorTab === tab.id
-                ? "tcb-selected-accent"
-                : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
-            )}
           >
             {tab.label}
           </button>
@@ -1465,506 +1454,503 @@ export function DesktopBotManagerScreen({
     );
   }
 
+  function renderBotTags(bot: BotSummary, options: { remote?: boolean } = {}) {
+    return (
+      <>
+        {isMainBot(bot) ? <span className="am-tag">主</span> : null}
+        {options.remote && bot.remoteWorkspace ? <span className="am-tag">远程</span> : null}
+        {isBotArchived(bot) ? <span className="am-tag" data-tone="warning">已归档</span> : null}
+        {bot.alias === currentAlias ? <span className="am-tag" data-tone="accent">当前</span> : null}
+        {bot.canOperate === false ? <span className="am-tag" data-tone="restricted">无权限 · 只读</span> : null}
+      </>
+    );
+  }
+
   return (
     <main
       data-testid="desktop-bot-manager-screen"
       data-ui-density="compact"
-      className="desktop-bot-manager-screen theme-illustration-host flex h-[100dvh] min-h-0 flex-col bg-[var(--bg)] text-[var(--text)]"
+      className="desktop-bot-manager-screen am-screen orbit-shell flex h-[100dvh] min-h-0 flex-col overflow-hidden"
     >
-      <ThemeIllustrationLayer surface="agentManager" className="theme-illustration-fixed" />
-      <header className="theme-illustration-host border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2">
-        <div className="theme-illustration-content flex items-center gap-3">
-          <h1 className="text-lg font-semibold">智能体管理</h1>
-          <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
-            <span>总数 {stats.total}</span>
-            <span>在线 {stats.online}</span>
-            <span>处理中 {stats.busy}</span>
-            <span>离线 {stats.offline}</span>
+      <header className="am-cover orbit-cover">
+        <div className="orbit-cover-art">
+          <ThemeIllustrationLayer surface="agentManager" />
+        </div>
+        <div className="am-cover-bar">
+          <div className="am-search">
+            <Search aria-hidden="true" />
+            <input
+              aria-label="搜索智能体"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索智能体、目录、agent"
+              className="orbit-field"
+            />
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <div className="relative w-[320px]">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
-              <input
-                aria-label="搜索智能体"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索智能体、目录、agent"
-                className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--bg)] pl-8 pr-3 text-sm outline-none focus:border-[var(--accent)]"
-              />
-            </div>
-            {selectedAliases.size > 0 ? (
-              <div className="flex items-center gap-1 border-r border-[var(--border)] pr-2">
-                <span className="px-1 text-xs text-[var(--muted)]">已选 {selectedAliases.size}</span>
-                <button
-                  type="button"
-                  onClick={() => void runBulkAction("start")}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs hover:bg-[var(--surface-strong)]"
-                >
-                  <Play className="h-3.5 w-3.5" />
-                  批量启动
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void runBulkAction("stop")}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--border)] px-2 text-xs hover:bg-[var(--surface-strong)]"
-                >
-                  <Square className="h-3.5 w-3.5" />
-                  批量停止
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void runBulkAction("delete")}
-                  className="inline-flex h-8 items-center gap-1 rounded-md border border-[var(--feedback-error-border-light)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  批量删除
-                </button>
-              </div>
-            ) : null}
+          <button
+            type="button"
+            aria-label="刷新智能体"
+            title="刷新智能体"
+            onClick={() => {
+              if (!confirmDiscardDirty()) {
+                return;
+              }
+              setDirty(false);
+              void manager.loadBots();
+            }}
+            className="orbit-btn orbit-btn--icon am-glass-btn"
+          >
+            <RefreshCw className={clsx("h-4 w-4", manager.loading && "animate-spin")} />
+          </button>
+          {canManage ? (
             <button
               type="button"
-              aria-label="刷新智能体"
               onClick={() => {
                 if (!confirmDiscardDirty()) {
                   return;
                 }
                 setDirty(false);
-                void manager.loadBots();
+                clearSelection();
+                setMode("create");
               }}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface-strong)]"
+              className="orbit-btn orbit-btn--primary"
             >
-              <RefreshCw className="h-4 w-4" />
+              <Plus className="h-4 w-4" />
+              新增智能体
             </button>
-            {canManage ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!confirmDiscardDirty()) {
-                    return;
-                  }
-                  setDirty(false);
-                  clearSelection();
-                  setMode("create");
-                }}
-                className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent"
-              >
-                <Plus className="h-4 w-4" />
-                新增智能体
-              </button>
-            ) : null}
-            {onLogout ? (
-              <button
-                type="button"
-                aria-label="退出登录"
-                title="退出登录"
-                onClick={onLogout}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <div className="mt-3 inline-flex rounded-md border border-[var(--border)] bg-[var(--surface-strong)] p-0.5">
-          {STATUS_FILTERS.map((filter) => (
+          ) : null}
+          {onLogout ? (
             <button
-              key={filter.id}
               type="button"
-              aria-pressed={statusFilter === filter.id}
-              onClick={() => setStatusFilter(filter.id)}
-              className={clsx(
-                "h-8 rounded px-2 text-xs",
-                statusFilter === filter.id
-                  ? "tcb-selected-accent"
-                  : "text-[var(--muted)] hover:bg-[var(--surface)] hover:text-[var(--text)]",
-              )}
+              aria-label="退出登录"
+              title="退出登录"
+              onClick={onLogout}
+              className="orbit-btn orbit-btn--icon am-glass-btn"
             >
-              {filter.label}
+              <LogOut className="h-4 w-4" />
             </button>
-          ))}
+          ) : null}
+        </div>
+        <div className="am-cover-main">
+          <div>
+            <p className="am-cover-eyebrow">ORBIT 舰队</p>
+            <h1 className="am-cover-title">智能体管理</h1>
+            <p className="am-cover-description">调度本机与远程工作区里的每一个智能体。</p>
+          </div>
+          <FleetStats stats={stats} />
         </div>
       </header>
 
-      {manager.error ? (
-        <div className="border-b border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-4 py-2 text-sm text-[var(--feedback-error-text-deep)]">{manager.error}</div>
-      ) : null}
-      {manager.notice ? (
-        <div className="border-b border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-4 py-2 text-sm text-[var(--feedback-success-text-deep)]">{manager.notice}</div>
-      ) : null}
-
-      <div
-        ref={layoutRef}
-        className="grid min-h-0 flex-1"
-        style={{
-          gridTemplateColumns: `minmax(${LIST_MIN_WIDTH}px, 1fr) ${RESIZER_WIDTH}px ${inspectorWidth}px`,
-        }}
-      >
-        <section
-          data-testid="desktop-bot-manager-list"
-          tabIndex={0}
-          onKeyDown={handleTableKeyDown}
-          className="theme-illustration-host min-h-0 overflow-auto bg-[var(--surface)] focus:outline-none"
-        >
-          {manager.loading ? (
-            <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">加载中...</div>
-          ) : visibleBots.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">没有匹配的智能体</div>
-          ) : (
-            <table aria-label="智能体舰队" className="w-full min-w-[680px] table-fixed border-separate border-spacing-0 text-sm">
-              <thead className="sticky top-0 z-10 bg-[var(--surface)] text-left text-xs text-[var(--muted)]">
-                <tr className="border-b border-[var(--border)]">
-                  <th className="w-10 px-3 py-2">
-                    <button
-                      type="button"
-                      aria-label="选择当前可见智能体"
-                      onClick={selectVisibleBots}
-                      className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--surface-strong)]"
-                    >
-                      <CheckSquare className="h-4 w-4" />
-                    </button>
-                  </th>
-                  <th className="w-[220px] px-2 py-2">智能体</th>
-                  <th className="w-[110px] px-2 py-2">状态</th>
-                  <th className="w-[120px] px-2 py-2">类型</th>
-                  <th className="px-2 py-2">工作目录</th>
-                  <th className="w-[96px] px-2 py-2 text-right">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleBots.map((bot) => {
-                  const focused = mode !== "create" && focusedBot?.alias === bot.alias;
-                  const current = bot.alias === currentAlias;
-                  const checked = selectedAliases.has(bot.alias);
-                  const issues = detectBotIssues(bot, manager.bots);
-                  const runtimeBackend = getRuntimeBackend(bot);
-
-                  return (
-                    <tr
-                      key={bot.alias}
-                      aria-selected={focused}
-                      className={clsx(
-                        "border-b border-[var(--border)]",
-                        focused ? "tcb-soft-selected" : "hover:bg-[var(--surface-strong)]",
-                      )}
-                    >
-                      <td className="px-3 py-2 align-middle">
-                        <input
-                          type="checkbox"
-                          aria-label={`选择 ${bot.alias}`}
-                          checked={checked}
-                          onChange={() => toggleBotSelection(bot.alias)}
-                          className="h-4 w-4 rounded border-[var(--border)]"
-                        />
-                      </td>
-                      <td className="px-2 py-2 align-middle">
-                        <button
-                          type="button"
-                          aria-label={`聚焦 ${bot.alias}`}
-                          onClick={() => focusBot(bot.alias)}
-                          onDoubleClick={() => {
-                            if (!isBotOffline(bot)) {
-                              onSelect(bot.alias);
-                            }
-                          }}
-                          className="flex w-full min-w-0 items-center gap-2 text-left"
-                        >
-                          <span
-                            aria-hidden="true"
-                            className="h-8 w-[3px] shrink-0 rounded-full"
-                            style={getBotAccentStyle(bot.alias)}
-                          />
-                          <span className="min-w-0">
-                            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                              <span className="min-w-0 max-w-full truncate text-sm font-semibold text-[var(--text)]">{bot.alias}</span>
-                              {isMainBot(bot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
-                              {bot.remoteWorkspace ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">远程</span> : null}
-                              {isBotArchived(bot) ? <span className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--feedback-warning-text-deep)]">已归档</span> : null}
-                              {current ? <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span> : null}
-                              {bot.canOperate === false ? (
-                                <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
-                              ) : null}
-                            </span>
-                            {issues.length > 0 ? (
-                              <span className="mt-1 flex flex-wrap gap-1">
-                                {issues.slice(0, 2).map((issue) => (
-                                  <span key={issue.code} className={clsx("rounded border px-1 py-0.5 text-[10px]", issueClassName(issue.severity))}>
-                                    {issue.label}
-                                  </span>
-                                ))}
-                              </span>
-                            ) : null}
-                          </span>
-                        </button>
-                      </td>
-                      <td className="px-2 py-2 align-middle">
-                        <div className="flex flex-col items-start gap-1">
-                          {bot.status === "unread" ? <StatusPill status="unread" /> : null}
-                          <StatusPill status={managerPillStatus(bot)} />
-                        </div>
-                      </td>
-                      <td className={clsx(
-                        "px-2 py-2 align-middle text-xs",
-                        focused ? "text-[var(--text)]" : "text-[var(--muted)]",
-                      )}>
-                        {runtimeBackend === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
-                      </td>
-                      <td
-                        className={clsx(
-                          "truncate px-2 py-2 align-middle font-mono text-xs",
-                          focused ? "text-[var(--text)]" : "text-[var(--muted)]",
-                        )}
-                        title={workspaceLabel(bot)}
-                      >
-                        {workspaceLabel(bot) || "未设置"}
-                      </td>
-                      <td className="px-2 py-2 align-middle">
-                        <div className="flex justify-end gap-1">
-                          <button
-                            type="button"
-                            aria-label="从表格进入"
-                            disabled={isBotOffline(bot)}
-                            onClick={() => onSelect(bot.alias)}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <LogIn className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="打开配置"
-                            disabled={Boolean(bot.archived)}
-                            onClick={() => {
-                              focusBot(bot.alias);
-                              setInspectorTab("config");
-                            }}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] hover:bg-[var(--surface-strong)]"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </section>
+      <div className="am-body">
+        {manager.error ? (
+          <div role="alert" className="am-banner" data-tone="danger">{manager.error}</div>
+        ) : null}
+        {manager.notice ? (
+          <div className="am-banner" data-tone="success">{manager.notice}</div>
+        ) : null}
 
         <div
-          role="separator"
-          aria-label="调整智能体列表和详情宽度"
-          aria-orientation="vertical"
-          aria-valuemin={INSPECTOR_MIN_WIDTH}
-          aria-valuemax={INSPECTOR_MAX_WIDTH}
-          aria-valuenow={inspectorWidth}
-          title="拖动调整左右宽度"
-          onPointerDown={startPaneResize}
-          className="group flex cursor-col-resize items-stretch justify-center border-x border-[var(--border)] bg-[var(--bg)] hover:bg-[var(--surface-strong)]"
+          ref={layoutRef}
+          className="am-layout"
+          style={{
+            gridTemplateColumns: `minmax(${LIST_MIN_WIDTH}px, 1fr) ${RESIZER_WIDTH}px ${inspectorWidth}px`,
+          }}
         >
-          <span className="my-2 w-px bg-[var(--border)] group-hover:bg-[var(--accent)]" />
-        </div>
-
-        <aside className="theme-illustration-host min-h-0 overflow-y-auto bg-[var(--bg)] p-4">
-          {mode === "create" ? (
-            <CreatePanel
-              manager={manager}
-              canManage={canManage}
-              canCreateWorkdirDirectory={canCreateWorkdirDirectory}
-              canRunUnsafeCli={canRunUnsafeCli}
-              nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
-              onCreated={(alias) => {
-                setDirty(false);
-                setFocusedAlias(alias);
-                setMode("inspect");
-                setInspectorTab("overview");
-              }}
-              onDirtyChange={setDirty}
-            />
-          ) : selectedBots.length > 0 ? (
-            <BulkSummaryPanel selectedBots={selectedBots} />
-          ) : focusedBot ? (
-            <div>
-              {renderInspectorTabs()}
-              {inspectorTab === "config" && !focusedBot.archived ? (
-                <EditPanel
-                  bot={focusedBot}
-                  manager={manager}
-                  canManage={canManage}
-                  canConfigureBot={canManage || focusedBot.canOperate !== false}
-                  canCreateWorkdirDirectory={canCreateWorkdirDirectory}
-                  nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
-                  onCancel={() => {
-                    setDirty(false);
-                    setInspectorTab("overview");
-                  }}
-                  onSaved={(alias) => {
-                    setDirty(false);
-                    setFocusedAlias(alias);
-                    setInspectorTab("overview");
-                  }}
-                  onOpenConversation={onSelect}
-                  onDirtyChange={setDirty}
-                />
-              ) : (
-                <div className="space-y-4">
-                  <div
-                    className="flex items-start border-l-4 pl-3"
-                    style={{ borderLeftColor: getBotAccentColor(focusedBot.alias) }}
+          <div className="am-list-island orbit-island">
+            <div className="am-list-head">
+              <div className="orbit-segmented orbit-segmented--accent">
+                {STATUS_FILTERS.map((filter) => (
+                  <button
+                    key={filter.id}
+                    type="button"
+                    aria-pressed={statusFilter === filter.id}
+                    onClick={() => setStatusFilter(filter.id)}
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                        <h2 className="min-w-0 max-w-full truncate text-lg font-semibold">{focusedBot.alias}</h2>
-                        {isMainBot(focusedBot) ? <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted)]">主</span> : null}
-                        {isBotArchived(focusedBot) ? <span className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--feedback-warning-text-deep)]">已归档</span> : null}
-                        {focusedBot.alias === currentAlias ? (
-                          <span className="rounded border border-transparent px-1.5 py-0.5 text-[10px] leading-none tcb-selected-accent">当前</span>
-                        ) : null}
-                        {focusedBot.canOperate === false ? (
-                          <span className="rounded border border-[var(--access-restricted-border)] bg-[var(--access-badge-background)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--access-restricted-text-emphasis)]">无权限 · 只读</span>
-                        ) : null}
-                        {focusedBotIssues.slice(0, 2).map((issue) => (
-                          <span key={issue.code} className={clsx("rounded border px-1.5 py-0.5 text-[10px] leading-none", issueClassName(issue.severity))}>
-                            {issue.label}
-                          </span>
-                        ))}
-                        <StatusPill status={managerPillStatus(focusedBot)} />
-                      </div>
-                      <div className="mt-1 text-sm text-[var(--muted)]">
-                        {runtimeBackendLabel(getRuntimeBackend(focusedBot))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                    <div className="text-xs font-medium text-[var(--muted)]">运行后端</div>
-                    <div className="mt-1 text-sm">{runtimeBackendLabel(getRuntimeBackend(focusedBot))}</div>
-                  </div>
-
-                  {getRuntimeBackend(focusedBot) === "cli" ? (
-                    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                      <div className="text-xs font-medium text-[var(--muted)]">CLI 路径</div>
-                      <div className="mt-1 break-all font-mono text-xs">{focusedBot.cliPath || defaultCliPathForType(focusedBot.cliType)}</div>
-                    </div>
-                  ) : (
-                    <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                      <div className="text-xs font-medium text-[var(--muted)]">原生 agent</div>
-                      <div className="mt-1 space-y-1 text-xs text-[var(--muted)]">
-                        <div>Provider/Model: 全局配置</div>
-                        <div>Pi agent: {focusedBot.nativeAgent?.piAgent || "未设置"}</div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                    <div className="text-xs font-medium text-[var(--muted)]">工作目录</div>
-                    <div className="mt-1 break-all font-mono text-xs">{workspaceLabel(focusedBot)}</div>
-                    {focusedBot.remoteWorkspace && <RemoteReconnectButton client={manager.client} botAlias={focusedBot.alias} remote={focusedBot.remoteWorkspace} disabled={focusedBot.canOperate === false} />}
-                  </div>
-
-                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-3">
-                    <div className="text-xs font-medium text-[var(--muted)]">状态</div>
-                    <BotActivitySummary bot={focusedBot} className="mt-1" />
-                    {focusedBotIssues.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {focusedBotIssues.map((issue) => (
-                          <span key={issue.code} className={clsx("rounded border px-1.5 py-0.5 text-xs", issueClassName(issue.severity))}>
-                            {issue.label}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      aria-label={isBotOffline(focusedBot) ? `${focusedBot.alias} 当前离线，不可进入` : `进入 ${focusedBot.alias}`}
-                      disabled={isBotOffline(focusedBot)}
-                      onClick={() => onSelect(focusedBot.alias)}
-                      className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <LogIn className="h-4 w-4" />
-                      进入
-                    </button>
-                    {canManage ? (
-                      <button
-                        type="button"
-                        aria-label={`编辑 ${focusedBot.alias}`}
-                        disabled={Boolean(focusedBot.archived)}
-                        onClick={() => setInspectorTab("config")}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)]"
-                      >
-                        <Pencil className="h-4 w-4" />
-                        编辑
-                      </button>
-                    ) : null}
-                    {canManage && !isMainBot(focusedBot) ? (
-                      <button
-                        type="button"
-                        aria-label={isBotArchived(focusedBot)
-                          ? `取消归档 ${focusedBot.alias}`
-                          : isBotOffline(focusedBot) ? `启动 ${focusedBot.alias}` : `停止 ${focusedBot.alias}`}
-                        onClick={() => void (isBotArchived(focusedBot) ? manager.unarchiveBot(focusedBot) : manager.toggleBot(focusedBot))}
-                        disabled={manager.savingAction !== ""}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-                      >
-                        {isBotArchived(focusedBot)
-                          ? <ArchiveRestore className="h-4 w-4" />
-                          : isBotOffline(focusedBot) ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                        {isBotArchived(focusedBot) ? "取消归档" : isBotOffline(focusedBot) ? "启动" : "停止"}
-                      </button>
-                    ) : null}
-                    {canManage && !isMainBot(focusedBot) && !isBotArchived(focusedBot) ? (
-                      <button
-                        type="button"
-                        aria-label={`归档 ${focusedBot.alias}`}
-                        onClick={() => void manager.archiveBot(focusedBot)}
-                        disabled={manager.savingAction !== ""}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--feedback-warning-border-light)] px-3 text-sm text-[var(--feedback-warning-text-deep)] hover:bg-[var(--feedback-warning-background-subtle)] disabled:opacity-60"
-                      >
-                        <Archive className="h-4 w-4" />
-                        归档
-                      </button>
-                    ) : null}
-                    {canManage && !isMainBot(focusedBot) ? (
-                      <button
-                        type="button"
-                        aria-label={`删除 ${focusedBot.alias}`}
-                        onClick={() => openDeleteDialog(focusedBot.alias)}
-                        disabled={manager.savingAction !== ""}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--feedback-error-border-light)] px-3 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        删除
-                      </button>
-                    ) : null}
-                  </div>
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
+              {selectedAliases.size > 0 ? (
+                <div className="am-bulk">
+                  <span className="am-bulk-count">已选 {selectedAliases.size}</span>
+                  <button
+                    type="button"
+                    onClick={() => void runBulkAction("start")}
+                    className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    批量启动
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runBulkAction("stop")}
+                    className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                    批量停止
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void runBulkAction("delete")}
+                    className="orbit-btn orbit-btn--ghost orbit-btn--sm am-tone-danger"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    批量删除
+                  </button>
                 </div>
+              ) : (
+                <span className="am-list-count ml-auto">{visibleBots.length} / {stats.total} 个智能体</span>
               )}
             </div>
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">暂无可展示智能体</div>
-          )}
-        </aside>
-      </div>
+            <section
+              data-testid="desktop-bot-manager-list"
+              tabIndex={0}
+              onKeyDown={handleTableKeyDown}
+              className="am-list-scroll"
+            >
+              {manager.loading ? (
+                <div className="am-empty">加载中...</div>
+              ) : visibleBots.length === 0 ? (
+                <div className="am-empty">没有匹配的智能体</div>
+              ) : (
+                <table aria-label="智能体舰队" className="am-table">
+                  <thead>
+                    <tr>
+                      <th className="w-11">
+                        <button
+                          type="button"
+                          aria-label="选择当前可见智能体"
+                          title="选择当前可见智能体"
+                          onClick={selectVisibleBots}
+                          className="orbit-btn orbit-btn--ghost orbit-btn--icon orbit-btn--sm"
+                        >
+                          <CheckSquare className="h-3.5 w-3.5" />
+                        </button>
+                      </th>
+                      <th className="w-[28%]">智能体</th>
+                      <th className="w-[124px]">状态</th>
+                      <th className="w-[128px]">类型</th>
+                      <th>工作目录</th>
+                      <th className="w-[76px] text-right">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleBots.map((bot) => {
+                      const focused = mode !== "create" && focusedBot?.alias === bot.alias;
+                      const checked = selectedAliases.has(bot.alias);
+                      const issues = detectBotIssues(bot, manager.bots);
+                      const runtimeBackend = getRuntimeBackend(bot);
 
-      {bulkResult ? (
-        <footer className="border-t border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-xs text-[var(--muted)]">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-medium text-[var(--text)]">{bulkResultSummary(bulkResult)}</span>
+                      return (
+                        <tr
+                          key={bot.alias}
+                          aria-selected={focused}
+                          data-checked={checked ? "true" : undefined}
+                          className="am-row"
+                        >
+                          <td>
+                            <input
+                              type="checkbox"
+                              aria-label={`选择 ${bot.alias}`}
+                              checked={checked}
+                              onChange={() => toggleBotSelection(bot.alias)}
+                              className="am-check ml-1.5"
+                            />
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              aria-label={`聚焦 ${bot.alias}`}
+                              onClick={() => focusBot(bot.alias)}
+                              onDoubleClick={() => {
+                                if (!isBotOffline(bot)) {
+                                  onSelect(bot.alias);
+                                }
+                              }}
+                              className="am-identity-btn"
+                            >
+                              <FleetAvatar alias={bot.alias} />
+                              <span className="min-w-0 flex-1">
+                                <span className="am-name-line">
+                                  <span className="am-name">{bot.alias}</span>
+                                  {renderBotTags(bot, { remote: true })}
+                                </span>
+                                {issues.length > 0 ? (
+                                  <span className="am-issues">
+                                    {issues.slice(0, 2).map((issue) => (
+                                      <span key={issue.code} className="am-tag" data-tone={issue.severity === "warning" ? "warning" : undefined}>
+                                        {issue.label}
+                                      </span>
+                                    ))}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          </td>
+                          <td>
+                            <div className="am-status">
+                              {bot.status === "unread" ? <FleetStatusChip status="unread" /> : null}
+                              <FleetStatusChip status={managerPillStatus(bot)} />
+                            </div>
+                          </td>
+                          <td>
+                            <div className="am-type">
+                              <span aria-hidden="true" className="am-type-mark" style={getBotIdentityTextStyle(bot.cliType)} />
+                              {runtimeBackend === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="am-path" title={workspaceLabel(bot)}>
+                              {workspaceLabel(bot) || "未设置"}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="am-row-actions">
+                              <button
+                                type="button"
+                                aria-label="从表格进入"
+                                title="进入"
+                                disabled={isBotOffline(bot)}
+                                onClick={() => onSelect(bot.alias)}
+                                className="orbit-btn orbit-btn--ghost orbit-btn--icon orbit-btn--sm disabled:cursor-not-allowed"
+                              >
+                                <LogIn className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label="打开配置"
+                                title="配置"
+                                disabled={Boolean(bot.archived)}
+                                onClick={() => {
+                                  focusBot(bot.alias);
+                                  setInspectorTab("config");
+                                }}
+                                className="orbit-btn orbit-btn--ghost orbit-btn--icon orbit-btn--sm"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          </div>
+
+          <div
+            role="separator"
+            aria-label="调整智能体列表和详情宽度"
+            aria-orientation="vertical"
+            aria-valuemin={INSPECTOR_MIN_WIDTH}
+            aria-valuemax={INSPECTOR_MAX_WIDTH}
+            aria-valuenow={inspectorWidth}
+            title="拖动调整左右宽度"
+            onPointerDown={startPaneResize}
+            className="am-resizer"
+          >
+            <span />
+          </div>
+
+          <aside className="am-inspector orbit-island orbit-island--reading">
+            {mode === "create" ? (
+              <CreatePanel
+                manager={manager}
+                canManage={canManage}
+                canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+                canRunUnsafeCli={canRunUnsafeCli}
+                nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
+                onCreated={(alias) => {
+                  setDirty(false);
+                  setFocusedAlias(alias);
+                  setMode("inspect");
+                  setInspectorTab("overview");
+                }}
+                onDirtyChange={setDirty}
+              />
+            ) : selectedBots.length > 0 ? (
+              <BulkSummaryPanel selectedBots={selectedBots} />
+            ) : focusedBot ? (
+              <div>
+                {renderInspectorTabs()}
+                {inspectorTab === "config" && !focusedBot.archived ? (
+                  <EditPanel
+                    bot={focusedBot}
+                    manager={manager}
+                    canManage={canManage}
+                    canConfigureBot={canManage || focusedBot.canOperate !== false}
+                    canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+                    nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
+                    onCancel={() => {
+                      setDirty(false);
+                      setInspectorTab("overview");
+                    }}
+                    onSaved={(alias) => {
+                      setDirty(false);
+                      setFocusedAlias(alias);
+                      setInspectorTab("overview");
+                    }}
+                    onOpenConversation={onSelect}
+                    onDirtyChange={setDirty}
+                  />
+                ) : (
+                  <div>
+                    <div className="am-detail-head">
+                      <FleetAvatar alias={focusedBot.alias} large />
+                      <div className="min-w-0 flex-1">
+                        <h2 className="am-detail-title">{focusedBot.alias}</h2>
+                        <div className="am-name-line mt-1.5">
+                          <FleetStatusChip status={managerPillStatus(focusedBot)} />
+                          {renderBotTags(focusedBot)}
+                          {focusedBotIssues.slice(0, 2).map((issue) => (
+                            <span key={issue.code} className="am-tag" data-tone={issue.severity === "warning" ? "warning" : undefined}>
+                              {issue.label}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="am-detail-sub">
+                          {getRuntimeBackend(focusedBot) === "cli" ? `CLI / ${cliTypeLabel(focusedBot.cliType)}` : "原生 agent"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <dl className="am-defs">
+                      <div className="am-def">
+                        <dt>运行后端</dt>
+                        <dd>{runtimeBackendLabel(getRuntimeBackend(focusedBot))}</dd>
+                      </div>
+                      {getRuntimeBackend(focusedBot) === "cli" ? (
+                        <div className="am-def">
+                          <dt>CLI 路径</dt>
+                          <dd className="am-mono">{focusedBot.cliPath || defaultCliPathForType(focusedBot.cliType)}</dd>
+                        </div>
+                      ) : (
+                        <div className="am-def">
+                          <dt>原生 agent</dt>
+                          <dd className="text-[var(--muted)]">
+                            <div>Provider/Model: 全局配置</div>
+                            <div>Pi agent: {focusedBot.nativeAgent?.piAgent || "未设置"}</div>
+                          </dd>
+                        </div>
+                      )}
+                      <div className="am-def">
+                        <dt>工作目录</dt>
+                        <dd>
+                          <div className="am-mono">{workspaceLabel(focusedBot)}</div>
+                          {focusedBot.remoteWorkspace && <RemoteReconnectButton client={manager.client} botAlias={focusedBot.alias} remote={focusedBot.remoteWorkspace} disabled={focusedBot.canOperate === false} />}
+                        </dd>
+                      </div>
+                      <div className="am-def">
+                        <dt>状态</dt>
+                        <dd>
+                          <BotActivitySummary bot={focusedBot} />
+                          {focusedBotIssues.length > 0 ? (
+                            <div className="am-issues mt-2">
+                              {focusedBotIssues.map((issue) => (
+                                <span key={issue.code} className="am-tag" data-tone={issue.severity === "warning" ? "warning" : undefined}>
+                                  {issue.label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <div className="am-detail-actions">
+                      <button
+                        type="button"
+                        aria-label={isBotOffline(focusedBot) ? `${focusedBot.alias} 当前离线，不可进入` : `进入 ${focusedBot.alias}`}
+                        disabled={isBotOffline(focusedBot)}
+                        onClick={() => onSelect(focusedBot.alias)}
+                        className="orbit-btn orbit-btn--primary disabled:cursor-not-allowed"
+                      >
+                        <LogIn className="h-4 w-4" />
+                        进入
+                      </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          aria-label={`编辑 ${focusedBot.alias}`}
+                          disabled={Boolean(focusedBot.archived)}
+                          onClick={() => setInspectorTab("config")}
+                          className="orbit-btn orbit-btn--secondary"
+                        >
+                          <Pencil className="h-4 w-4" />
+                          编辑
+                        </button>
+                      ) : null}
+                      {canManage && !isMainBot(focusedBot) ? (
+                        <>
+                          <span aria-hidden="true" className="am-detail-actions-sep" />
+                          <button
+                            type="button"
+                            aria-label={isBotArchived(focusedBot)
+                              ? `取消归档 ${focusedBot.alias}`
+                              : isBotOffline(focusedBot) ? `启动 ${focusedBot.alias}` : `停止 ${focusedBot.alias}`}
+                            onClick={() => void (isBotArchived(focusedBot) ? manager.unarchiveBot(focusedBot) : manager.toggleBot(focusedBot))}
+                            disabled={manager.savingAction !== ""}
+                            className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+                          >
+                            {isBotArchived(focusedBot)
+                              ? <ArchiveRestore className="h-3.5 w-3.5" />
+                              : isBotOffline(focusedBot) ? <Play className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                            {isBotArchived(focusedBot) ? "取消归档" : isBotOffline(focusedBot) ? "启动" : "停止"}
+                          </button>
+                        </>
+                      ) : null}
+                      {canManage && !isMainBot(focusedBot) && !isBotArchived(focusedBot) ? (
+                        <button
+                          type="button"
+                          aria-label={`归档 ${focusedBot.alias}`}
+                          onClick={() => void manager.archiveBot(focusedBot)}
+                          disabled={manager.savingAction !== ""}
+                          className="orbit-btn orbit-btn--ghost orbit-btn--sm am-tone-warning"
+                        >
+                          <Archive className="h-3.5 w-3.5" />
+                          归档
+                        </button>
+                      ) : null}
+                      {canManage && !isMainBot(focusedBot) ? (
+                        <button
+                          type="button"
+                          aria-label={`删除 ${focusedBot.alias}`}
+                          onClick={() => openDeleteDialog(focusedBot.alias)}
+                          disabled={manager.savingAction !== ""}
+                          className="orbit-btn orbit-btn--ghost orbit-btn--sm am-tone-danger"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          删除
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="am-empty">暂无可展示智能体</div>
+            )}
+          </aside>
+        </div>
+
+        {bulkResult ? (
+          <footer className="am-footer orbit-island">
+            <strong>{bulkResultSummary(bulkResult)}</strong>
             {bulkResult.skipped.map((item) => (
-              <span key={`skipped:${item.alias}`} className="rounded border border-[var(--border)] px-1.5 py-0.5">
+              <span key={`skipped:${item.alias}`} className="am-tag">
                 {item.alias}: {item.reason}
               </span>
             ))}
             {bulkResult.failed.map((item) => (
-              <span key={`failed:${item.alias}`} className="rounded border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-1.5 py-0.5 text-[var(--feedback-error-text-deep)]">
+              <span key={`failed:${item.alias}`} className="am-tag" data-tone="danger">
                 {item.alias}: {item.message}
               </span>
             ))}
-          </div>
-        </footer>
-      ) : null}
+          </footer>
+        ) : null}
+      </div>
       {pendingDeleteAlias || pendingBulkDeleteCount > 0 ? (
         <DeleteBotDialog
           title={pendingDeleteAlias ? `删除智能体 ${pendingDeleteAlias}` : `批量删除 ${pendingBulkDeleteCount} 个智能体`}

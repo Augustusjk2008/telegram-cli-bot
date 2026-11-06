@@ -36,6 +36,12 @@ _CHAT_TYPOGRAPHY_VALUES = {
     "chatBodyLineHeight": {"tight", "normal", "relaxed"},
     "chatBodyParagraphSpacing": {"tight", "normal", "relaxed"},
 }
+_THEME_MATERIAL_VALUES = {
+    "shape": {"sharp", "crisp", "soft", "round"},
+    "glass": {"none", "frost", "deep"},
+    "glow": {"none", "soft", "vivid"},
+    "depth": {"flat", "print", "float"},
+}
 _ILLUSTRATION_SURFACES = ("workbench", "adminCenter", "agentManager")
 _LEGACY_ILLUSTRATION_SURFACES = ("workbench", "chat", "topbar", "management")
 _ILLUSTRATION_SET_IDS = (
@@ -358,8 +364,8 @@ class ThemeStore:
                 },
             }
         opacity = illustrations["opacity"]
-        if isinstance(opacity, bool) or not isinstance(opacity, (int, float)) or not math.isfinite(opacity) or not 0 <= opacity <= 0.25:
-            _invalid("illustrations.opacity 必须是 0 到 0.25 之间的数字")
+        if isinstance(opacity, bool) or not isinstance(opacity, (int, float)) or not math.isfinite(opacity) or not 0 <= opacity <= 1:
+            _invalid("illustrations.opacity 必须是 0 到 1 之间的数字")
         surfaces = _object(illustrations["surfaces"], set(_ILLUSTRATION_SURFACES), set(_ILLUSTRATION_SURFACES), "illustrations.surfaces")
         if any(type(surfaces[surface]) is not bool for surface in _ILLUSTRATION_SURFACES):
             _invalid("illustrations.surfaces 的值必须是布尔值")
@@ -472,7 +478,7 @@ class ThemeStore:
         *,
         asset_overrides: dict[str, tuple[dict[str, Any], bytes]] | None = None,
     ) -> dict[str, Any]:
-        appearance = _object(value, {"colors", "typography", "illustrations"}, {"colors"}, "appearance")
+        appearance = _object(value, {"colors", "typography", "material", "illustrations"}, {"colors"}, "appearance")
         colors = _object(appearance["colors"], {"scheme", "overrides"}, {"scheme", "overrides"}, "colors")
         if colors["scheme"] not in ("light", "dark"):
             _invalid("配色模式必须是 light 或 dark")
@@ -507,6 +513,17 @@ class ThemeStore:
                 if not isinstance(typography[key], str) or typography[key] not in choices:
                     _invalid(f"{key} 包含不支持的值")
             result["typography"] = {key: typography[key] for key in _CHAT_TYPOGRAPHY_DEFAULTS}
+        if "material" in appearance:
+            material = _object(
+                appearance["material"],
+                set(_THEME_MATERIAL_VALUES),
+                set(_THEME_MATERIAL_VALUES),
+                "material",
+            )
+            for key, choices in _THEME_MATERIAL_VALUES.items():
+                if not isinstance(material[key], str) or material[key] not in choices:
+                    _invalid(f"material.{key} 包含不支持的值")
+            result["material"] = {key: material[key] for key in _THEME_MATERIAL_VALUES}
         result["illustrations"] = self._illustrations_value(
             appearance.get("illustrations"), asset_overrides=asset_overrides,
         )

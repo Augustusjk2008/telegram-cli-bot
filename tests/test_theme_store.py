@@ -98,3 +98,18 @@ def test_packaged_preset_file_contains_only_builtin_illustration_assets() -> Non
     for theme in data["themes"]:
         for scene in theme["appearance"]["illustrations"]["scenes"].values():
             assert all(layer["asset"]["kind"] == "builtin" for layer in scene["layers"])
+
+
+def test_preset_material_is_complete_and_unsupported_values_are_rejected(store: ThemeStore) -> None:
+    material_keys = {"shape", "glass", "glow", "depth"}
+    for theme in store.list_library()["themes"]:
+        assert set(theme["appearance"]["material"]) == material_keys
+
+    appearance = {
+        "colors": {"scheme": "dark", "overrides": {}},
+        "material": {"shape": "round", "glass": "deep", "glow": "none", "depth": "print"},
+    }
+    assert store._appearance(appearance)["material"] == appearance["material"]
+    for invalid in ({**appearance["material"], "glow": "laser"}, {"shape": "round"}):
+        with pytest.raises(ThemeStoreError):
+            store._appearance({**appearance, "material": invalid})

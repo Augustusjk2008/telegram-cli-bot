@@ -21,6 +21,10 @@ export function applyResolvedAppearance(appearance: ResolvedAppearance) {
     root.dataset.colorScheme = appearance.scheme;
     root.dataset.styleProfile = appearance.styleProfile;
     root.dataset.motionProfile = appearance.motionProfile;
+    root.dataset.materialShape = appearance.material.shape;
+    root.dataset.materialGlass = appearance.material.glass;
+    root.dataset.materialGlow = appearance.material.glow;
+    root.dataset.materialDepth = appearance.material.depth;
     root.dataset.illustrationScenes = "workbench,adminCenter,agentManager";
     root.style.colorScheme = appearance.scheme;
     for (const name of Object.keys(currentAppearance.cssVariables)) {

@@ -93,6 +93,23 @@ describe("UI themes", () => {
     expect(contrastRatio(theme.selectionForeground, theme.selectionBackground)).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("resolves theme material into CSS variables and rejects unsupported material", () => {
+    const fallback = resolveAppearance({ ...BUILTIN_THEME, appearance: { colors: BUILTIN_THEME.appearance.colors } });
+    expect(fallback.material).toEqual({ shape: "crisp", glass: "frost", glow: "soft", depth: "float" });
+    const sharp = resolveAppearance({
+      ...BUILTIN_THEME,
+      appearance: { ...BUILTIN_THEME.appearance, material: { shape: "sharp", glass: "none", glow: "none", depth: "print" } },
+    });
+    expect(sharp.cssVariables["--radius-panel"]).toBe("4px");
+    expect(sharp.cssVariables["--glass-blur"]).toBe("0px");
+    expect(sharp.cssVariables["--glow-strength"]).toBe("0");
+    expect(sharp.revision).not.toBe(fallback.revision);
+    expect(() => resolveAppearance({
+      ...BUILTIN_THEME,
+      appearance: { ...BUILTIN_THEME.appearance, material: { shape: "blob" } as never },
+    })).toThrow();
+  });
+
   it("normalizes legacy illustration data and includes illustration edits in the revision", () => {
     expect(normalizeIllustrations(undefined)).toEqual(defaultIllustrations());
     const forest = resolveAppearance({

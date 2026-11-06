@@ -3,6 +3,8 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 import {
   Bot,
+  ChevronRight,
+  ChevronsUpDown,
   FolderGit2,
   GitBranch,
   LogOut,
@@ -15,6 +17,7 @@ import {
   PanelRightDashed,
   PanelTop,
   PanelTopDashed,
+  Search,
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
@@ -51,6 +54,7 @@ type Props = {
   onToggleChat: () => void;
   onViewModeChange: (viewMode: ViewMode) => void;
   onOpenBotSwitcher: (anchorRect?: DOMRect) => void;
+  onOpenCommandPalette?: () => void;
   onLogout: () => void;
 };
 
@@ -76,6 +80,7 @@ export function WorkbenchHeader({
   onToggleChat,
   onViewModeChange,
   onOpenBotSwitcher,
+  onOpenCommandPalette,
   onLogout,
 }: Props) {
   const reduceMotion = useReducedMotion();
@@ -120,16 +125,74 @@ export function WorkbenchHeader({
   return (
     <header
       data-testid="desktop-workbench-titlebar"
-      className="workbench-topbar theme-illustration-host relative z-20 flex min-h-9 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1"
+      className="workbench-topbar relative z-20 flex min-h-9 items-center justify-between gap-2 px-2 py-1"
     >
-      <div className="workbench-topbar-context flex min-w-0 items-center gap-2">
-        <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)]">
-          <AppLogo size={21} decorative />
+      <div className="workbench-topbar-context flex min-w-0 flex-1 items-center gap-2">
+        <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center">
+          <AppLogo size={24} decorative />
         </span>
+        <button
+          type="button"
+          aria-label={`切换 Bot: ${currentBot}`}
+          onClick={(event) => onOpenBotSwitcher(event.currentTarget.getBoundingClientRect())}
+          className="workbench-bot-switch relative inline-flex h-7 max-w-[15rem] items-center gap-1.5 text-xs font-semibold text-[var(--text)] transition-[border-color,box-shadow,background-color]"
+        >
+          <span className="workbench-bot-avatar" aria-hidden="true">
+            <Bot className="h-3.5 w-3.5" />
+          </span>
+          {hasUnreadOtherBots ? (
+            <span
+              data-testid="bot-switcher-unread-indicator"
+              data-unread-bump={hasUnreadOtherBots ? "true" : "false"}
+              aria-hidden="true"
+              className="pointer-events-none absolute left-5 top-1 h-2.5 w-2.5 rounded-full bg-[var(--notification-unread)] ring-2 ring-[var(--surface-strong)]"
+            />
+          ) : null}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={currentBot}
+              className="inline-block min-w-0 truncate text-[13px]"
+              {...botLabelMotion}
+            >
+              {currentBot}
+            </motion.span>
+          </AnimatePresence>
+          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden="true" />
+        </button>
+        <nav aria-label="工作区位置" className="workbench-breadcrumb min-w-0">
+          <ChevronRight className="workbench-breadcrumb-separator h-3.5 w-3.5" aria-hidden="true" />
+          {workspaceAction || <span className="workbench-status-chip min-w-0 max-w-[22rem]">
+            <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+            <span className="truncate">{workspaceName}</span>
+          </span>}
+          {branchName ? (
+            <>
+              <ChevronRight className="workbench-breadcrumb-separator h-3.5 w-3.5" aria-hidden="true" />
+              <span className="workbench-status-chip max-w-[14rem] font-mono text-[12px]">
+                <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--accent-strong)]" />
+                <span className="truncate">{branchName}</span>
+              </span>
+            </>
+          ) : null}
+        </nav>
+      </div>
+      {onOpenCommandPalette ? (
+        <button
+          type="button"
+          aria-label="快速打开文件"
+          onClick={onOpenCommandPalette}
+          className="workbench-command-trigger hidden lg:inline-flex"
+        >
+          <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-left">搜索文件、跳转代码…</span>
+          <kbd className="orbit-kbd">Ctrl P</kbd>
+        </button>
+      ) : null}
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
         {productMode && onProductModeChange ? (
           <div
             aria-label="产品模式"
-            className="workbench-segmented inline-flex shrink-0 border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
+            className="workbench-segmented inline-flex shrink-0"
             role="group"
           >
             <button
@@ -138,10 +201,10 @@ export function WorkbenchHeader({
               aria-pressed={productMode === "build"}
               onClick={() => onProductModeChange("build")}
               className={clsx(
-                "h-7 px-2 text-xs font-medium transition-colors",
+                "h-7 px-2.5 text-xs font-medium transition-colors",
                 productMode === "build"
                   ? "tcb-selected-accent"
-                  : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+                  : "text-[var(--muted)] hover:text-[var(--text)]",
               )}
             >
               IDE
@@ -153,63 +216,23 @@ export function WorkbenchHeader({
               disabled={!soloAvailable}
               onClick={() => onProductModeChange("solo")}
               className={clsx(
-                "h-7 px-2 text-xs font-medium transition-colors disabled:opacity-50",
+                "h-7 px-2.5 text-xs font-medium transition-colors disabled:opacity-50",
                 productMode === "solo"
                   ? "tcb-selected-accent"
-                  : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+                  : "text-[var(--muted)] hover:text-[var(--text)]",
               )}
             >
               Solo
             </button>
           </div>
         ) : null}
-        <button
-          type="button"
-          aria-label={`切换 Bot: ${currentBot}`}
-          onClick={(event) => onOpenBotSwitcher(event.currentTarget.getBoundingClientRect())}
-          className={clsx(
-            "workbench-bot-switch relative inline-flex h-7 max-w-[13rem] items-center gap-1.5 border border-[var(--border)] bg-transparent px-2 text-xs font-semibold text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
-            hasUnreadOtherBots ? "pr-4.5" : "",
-          )}
-        >
-          <Bot className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-          {hasUnreadOtherBots ? (
-            <span
-              data-testid="bot-switcher-unread-indicator"
-              data-unread-bump={hasUnreadOtherBots ? "true" : "false"}
-              aria-hidden="true"
-              className="pointer-events-none absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-[var(--notification-unread)] ring-2 ring-[var(--surface-strong)]"
-            />
-          ) : null}
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.span
-              key={currentBot}
-              className="inline-block min-w-0 truncate"
-              {...botLabelMotion}
-            >
-              {currentBot}
-            </motion.span>
-          </AnimatePresence>
-        </button>
-        {workspaceAction || <span className="workbench-status-chip min-w-0 max-w-[22rem] text-[var(--muted)]">
-          <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-[var(--accent-strong)]" />
-          <span className="truncate">{workspaceName}</span>
-        </span>}
-        {branchName ? (
-          <span className="workbench-status-chip max-w-[14rem] font-mono text-[var(--muted)]">
-            <GitBranch className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
-            <span className="truncate">{branchName}</span>
-          </span>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5">
         {announcementAction ? (
           <div className="flex items-center">{announcementAction}</div>
         ) : null}
         {layoutControls.length > 0 ? (
           <div
             aria-label="布局开关"
-            className="workbench-segmented inline-flex border border-[var(--border)] bg-[var(--surface-glass)] p-0.5"
+            className="workbench-segmented inline-flex"
             role="group"
           >
             {layoutControls.map(({ id, visible, Icon, label, onToggle }) => (
@@ -224,7 +247,7 @@ export function WorkbenchHeader({
                   "inline-flex h-7 w-7 items-center justify-center transition-colors",
                   visible
                     ? "tcb-selected-accent"
-                    : "text-[var(--muted)] hover:bg-[var(--surface-strong)] hover:text-[var(--text)]",
+                    : "text-[var(--muted)] hover:text-[var(--text)]",
                 )}
               >
                 <Icon className="h-4 w-4" />
@@ -232,8 +255,8 @@ export function WorkbenchHeader({
             ))}
           </div>
         ) : null}
-        <div aria-label="视图模式" className="workbench-segmented inline-flex border border-[var(--border)] bg-[var(--surface-glass)] p-0.5">
-          <span className="hidden h-7 items-center px-1.5 text-[var(--muted)] sm:inline-flex" aria-hidden="true">
+        <div aria-label="视图模式" className="workbench-segmented inline-flex">
+          <span className="hidden h-7 items-center px-1.5 text-[var(--muted)] xl:inline-flex" aria-hidden="true">
             <MonitorSmartphone className="h-3.5 w-3.5" />
           </span>
           {VIEW_MODE_OPTIONS.map(({ value: nextMode, label, shortLabel }) => (
@@ -248,7 +271,7 @@ export function WorkbenchHeader({
                 "h-7 px-2 text-xs font-medium transition-colors",
                 viewMode === nextMode
                   ? "tcb-selected-accent"
-                  : "text-[var(--text)] hover:bg-[var(--surface-strong)]",
+                  : "text-[var(--muted)] hover:text-[var(--text)]",
               )}
             >
               {shortLabel}
@@ -260,7 +283,7 @@ export function WorkbenchHeader({
           aria-label="退出登录"
           title="退出登录"
           onClick={onLogout}
-          className="workbench-logout inline-flex h-8 w-8 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--muted)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+          className="workbench-logout inline-flex h-8 w-8 items-center justify-center text-[var(--muted)] transition-colors hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
         >
           <LogOut className="h-4 w-4" />
         </button>

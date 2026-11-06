@@ -1,0 +1,402 @@
+/*
+ * Mobile shell chrome ("observation deck" on a phone).
+ *
+ * The theme art sits behind everything as a softened backdrop; the top bar floats transparently
+ * over it with glass controls, the active screen is a sheet, and the tab bar is a floating glass
+ * capsule above the safe area. Only theme variables are used, so radius, glass and glow follow
+ * the theme material (paper/ink themes with --glow-strength 0 get no glow).
+ */
+
+.mobile-shell {
+  --mobile-shell-gutter: 8px;
+  --mobile-shell-control: 38px;
+  isolation: isolate;
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+}
+
+/* ------------------------------------------------------------ backdrop */
+
+.mobile-shell > .mobile-shell-canvas {
+  position: absolute;
+}
+
+/* illustrations.css hides every layer on mobile; re-enable only the shell backdrop. */
+[data-layout="mobile"].mobile-shell > .mobile-shell-canvas > .theme-illustration-layer {
+  display: block;
+}
+
+/* 16:9 art in a portrait viewport: keep the focal subject (~45% x, ~30% y) centered. */
+[data-layout="mobile"].mobile-shell > .mobile-shell-canvas .theme-illustration-art {
+  object-fit: cover;
+  object-position: 43% 30% !important;
+  filter: blur(1px) saturate(1.05);
+  transform: scale(1.03);
+}
+
+/* Readability veil: calm overall wash, denser at the top bar and around the tab bar. */
+.mobile-shell > .mobile-shell-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      180deg,
+      var(--canvas-scrim) 0%,
+      color-mix(in srgb, var(--bg) 22%, transparent) 18%,
+      color-mix(in srgb, var(--bg) 34%, transparent) 60%,
+      var(--canvas-scrim) 100%
+    );
+}
+
+/* ------------------------------------------------------------ top bar */
+
+.mobile-shell-topbar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: calc(env(safe-area-inset-top) + 8px) 10px 8px;
+  background: linear-gradient(180deg, var(--canvas-scrim), transparent);
+}
+
+.mobile-shell-bot,
+.mobile-shell-icon-button,
+.mobile-shell-actions > button,
+.mobile-shell-actions > div:not(.mobile-shell-menu) > button {
+  border: 1px solid var(--hairline-strong);
+  background: var(--island-bg);
+  box-shadow: var(--shadow-raised), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  color: var(--text);
+  transition:
+    background-color 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    box-shadow 180ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+
+:root[data-material-glass="none"] :is(
+  .mobile-shell-bot,
+  .mobile-shell-icon-button,
+  .mobile-shell-actions > button,
+  .mobile-shell-actions > div:not(.mobile-shell-menu) > button,
+  .mobile-shell-menu,
+  .mobile-shell-tabbar
+) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--island-solid);
+}
+
+.mobile-shell-bot:hover,
+.mobile-shell-icon-button:hover,
+.mobile-shell-actions > button:hover,
+.mobile-shell-actions > div:not(.mobile-shell-menu) > button:hover {
+  border-color: var(--hairline-strong);
+  background: var(--island-bg-strong);
+}
+
+.mobile-shell-bot:active,
+.mobile-shell-icon-button:active,
+.mobile-shell-actions > button:active,
+.mobile-shell-actions > div:not(.mobile-shell-menu) > button:active {
+  transform: translateY(1px);
+}
+
+:is(
+  .mobile-shell-bot,
+  .mobile-shell-icon-button,
+  .mobile-shell-actions > button,
+  .mobile-shell-actions > div:not(.mobile-shell-menu) > button,
+  .mobile-shell-tab
+):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+/* Bot switcher pill */
+.mobile-shell-bot {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 62%;
+  height: var(--mobile-shell-control);
+  padding: 3px 10px 3px 3px;
+  border-radius: var(--radius-overlay);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.mobile-shell-bot-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: calc(var(--radius-overlay) - 3px);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-outline);
+}
+
+.mobile-shell-bot-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-shell-bot-chevron {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.mobile-shell-unread {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--notification-unread);
+  box-shadow: 0 0 0 2px var(--workbench-panel-bg);
+  pointer-events: none;
+}
+
+/* Right-side actions: remote (SSH), announcement, view mode */
+.mobile-shell-actions {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mobile-shell-icon-button,
+.mobile-shell-actions > button,
+.mobile-shell-actions > div:not(.mobile-shell-menu) > button {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: var(--mobile-shell-control);
+  height: var(--mobile-shell-control);
+  padding-inline: 10px;
+  border-radius: var(--radius-overlay);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mobile-shell-icon-button,
+.mobile-shell-actions > button {
+  width: var(--mobile-shell-control);
+  padding: 0;
+}
+
+.mobile-shell-icon-button[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent-outline);
+  background: var(--accent-soft);
+}
+
+.mobile-shell-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  gap: 2px;
+  width: 136px;
+  padding: 4px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-card);
+  background: var(--island-bg-strong);
+  box-shadow: var(--shadow-overlay), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  animation: orbitRise 180ms var(--ease-out);
+}
+
+.mobile-shell-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding-inline: 10px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+
+.mobile-shell-menu-item:hover {
+  background: var(--fill-hover);
+}
+
+.mobile-shell-menu-item[aria-checked="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.mobile-shell-menu-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+/* ------------------------------------------------------------ stage */
+
+.mobile-shell-stage {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mobile-shell[data-chrome="visible"] > .mobile-shell-stage {
+  margin-inline: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  background: var(--workbench-panel-bg);
+  box-shadow: var(--shadow-island);
+}
+
+/* ------------------------------------------------------------ tab bar */
+
+.mobile-shell-tabbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  height: 60px;
+  margin: 8px 10px calc(env(safe-area-inset-bottom) + 10px);
+  padding: 5px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-overlay);
+  background: var(--island-bg-strong);
+  box-shadow: var(--shadow-overlay), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.mobile-shell-tab {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  border-radius: calc(var(--radius-overlay) - 4px);
+  color: var(--muted);
+  transition: color 160ms var(--ease-out);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-shell-tab:hover {
+  color: var(--text);
+}
+
+.mobile-shell-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 28px;
+  border-radius: var(--radius-overlay);
+  transition: background-color 180ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+.mobile-shell-tab-label {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-shell-tab[aria-current="page"] {
+  color: var(--accent);
+}
+
+.mobile-shell-tab[aria-current="page"] .mobile-shell-tab-label {
+  font-weight: 600;
+}
+
+.mobile-shell-tab[aria-current="page"] .mobile-shell-tab-icon {
+  background: var(--accent-soft);
+  box-shadow:
+    inset 0 0 0 1px var(--accent-outline),
+    0 0 calc(var(--glow-strength) * 16px) color-mix(in srgb, var(--glow-color) calc(var(--glow-strength) * 30%), transparent);
+}
+
+/* Small light on the capsule rim above the active tab. */
+.mobile-shell-tab[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow:
+    0 0 calc(var(--glow-strength) * 10px) var(--glow-color),
+    0 0 calc(var(--glow-strength) * 4px) var(--glow-color);
+  transform: translateX(-50%);
+  animation: orbitFadeIn 220ms var(--ease-out);
+}
+
+:root[data-material-glow="none"] .mobile-shell-tab[aria-current="page"]::before {
+  box-shadow: none;
+}
+
+@media (max-width: 370px) {
+  .mobile-shell-topbar {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .mobile-shell-actions {
+    gap: 4px;
+  }
+
+  .mobile-shell-tabbar {
+    margin-inline: 8px;
+    padding: 4px;
+  }
+
+  .mobile-shell-tab-icon {
+    width: 38px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-shell-menu,
+  .mobile-shell-tab[aria-current="page"]::before {
+    animation: none;
+  }
+}

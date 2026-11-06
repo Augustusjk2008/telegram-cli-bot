@@ -41,6 +41,7 @@ import type {
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
+import "../styles/admin-center.css";
 import type { UsagePanelProvider } from "../components/admin/UsagePanel";
 
 const UsagePanel = lazy(() => import("../components/admin/UsagePanel").then((module) => ({
@@ -77,6 +78,32 @@ type AdminCenterTab =
   | "native-agent"
   | "storage"
   | "env";
+
+const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: string }> = {
+  global: { label: "全局配置", description: "界面主题、输入习惯与全局提示词预设" },
+  env: { label: "环境配置", description: "查看和修改服务运行所用的环境变量" },
+  network: { label: "网络", description: "Git 代理与公网转发状态" },
+  updates: { label: "升级", description: "检查、准备并应用程序更新" },
+  storage: { label: "数据迁移", description: "将运行数据迁移到新的存储目录" },
+  users: { label: "用户", description: "账号角色、能力授权与可操作的 Bot" },
+  invites: { label: "邀请", description: "生成和管理注册邀请码" },
+  "native-agent": { label: "原生 Agent", description: "原生 Agent 运行时配置与预检" },
+  "inline-completion": { label: "补全", description: "编辑器 AI 行内补全服务" },
+  "chat-translation": { label: "翻译", description: "聊天消息翻译服务" },
+  usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
+  announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
+  notifications: { label: "通知", description: "任务完成推送的状态与测试" },
+  "lan-chat": { label: "联机聊天", description: "局域网内多实例联机聊天" },
+  "cli-errors": { label: "错误", description: "CLI 执行错误的统计与最近记录" },
+};
+
+const ADMIN_TAB_GROUPS: Array<{ label: string; tabs: AdminCenterTab[] }> = [
+  { label: "系统", tabs: ["global", "env", "network", "updates", "storage"] },
+  { label: "成员", tabs: ["users", "invites"] },
+  { label: "智能与服务", tabs: ["native-agent", "inline-completion", "chat-translation", "usage"] },
+  { label: "消息", tabs: ["announcements", "notifications", "lan-chat"] },
+  { label: "诊断", tabs: ["cli-errors"] },
+];
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
@@ -260,13 +287,13 @@ function nativePreflightStatusClass(preflight?: NativeAgentPreflightResult) {
   if (status === "失败") return "border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-deep)]";
   if (status === "警告") return "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-stronger)]";
   if (status === "通过") return "border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] text-[var(--feedback-success-text-deep)]";
-  return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
+  return "admin-well text-[var(--muted)]";
 }
 
 function nativePreflightCheckClass(check: NativeAgentPreflightCheck) {
   if (check.severity === "error" && !check.ok) return "border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-stronger)]";
   if (check.severity === "warning" && !check.ok) return "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-stronger)]";
-  return "border-[var(--border)] bg-[var(--bg)] text-[var(--muted)]";
+  return "admin-well text-[var(--muted)]";
 }
 
 function shortErrorText(value: string) {
@@ -1466,106 +1493,104 @@ export function AdminCenterScreen({
     }
   };
 
+  const activeTabMeta = ADMIN_TAB_META[activeTab];
+  const activeGroup = ADMIN_TAB_GROUPS.find((group) => group.tabs.includes(activeTab));
+
   return (
-    <main data-ui-density="compact" className="theme-illustration-host relative min-h-[100dvh] bg-[var(--bg)]">
-      <ThemeIllustrationLayer surface="adminCenter" className="theme-illustration-fixed" />
-      <div className="theme-illustration-content mx-auto flex min-h-[100dvh] max-w-6xl flex-col p-4">
-        <header className="theme-illustration-host mb-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
-          <div className="theme-illustration-content space-y-1">
-            <h1 className="text-2xl font-bold text-[var(--text)]">管理中心</h1>
+    <main data-ui-density="compact" className="admin-center orbit-shell">
+      <header className="admin-cover orbit-cover">
+        <div className="orbit-cover-art">
+          <ThemeIllustrationLayer surface="adminCenter" />
+        </div>
+        <div className="admin-cover-inner">
+          <div className="admin-cover-copy">
+            <p className="admin-cover-eyebrow">Orbit 控制台</p>
+            <h1 className="admin-cover-title">管理中心</h1>
+            <p className="admin-cover-description">统一管理成员权限、运行环境、服务集成与系统升级。</p>
           </div>
-          <div className="theme-illustration-content flex flex-wrap gap-2">
+          <div className="admin-cover-actions">
             <button
               type="button"
               onClick={() => void requestServiceRestart()}
               disabled={serviceRestarting}
-              className="inline-flex items-center gap-2 rounded-lg border border-transparent bg-[var(--button-warning-background-strong)] px-3 py-2 text-sm text-[var(--button-filled-foreground)] hover:bg-[var(--button-warning-background-deep)] disabled:opacity-60"
+              className="orbit-btn admin-btn--warning"
             >
               <RefreshCw className={`h-4 w-4${serviceRestarting ? " animate-spin" : ""}`} />
               {serviceRestarting ? "请求中..." : "重启后端"}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-            >
+            <button type="button" onClick={onClose} className="orbit-btn orbit-btn--secondary">
               <ArrowLeft className="h-4 w-4" />
               返回
             </button>
           </div>
-        </header>
-
-        <div role="tablist" aria-label="管理中心功能" className="mb-3 flex flex-wrap items-center gap-1.5">
-          {visibleTabs.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-              className={activeTab === tab
-                ? "rounded-md px-2.5 py-1.5 text-sm tcb-selected-accent"
-                : "rounded-md border border-[var(--border)] px-2.5 py-1.5 text-sm"}
-            >
-              {tab === "global" ? "全局配置" : tab === "users"
-                ? "用户"
-                : tab === "invites"
-                  ? "邀请"
-                  : tab === "updates"
-                    ? "升级"
-                    : tab === "cli-errors"
-                      ? "错误"
-                    : tab === "usage"
-                      ? "Usage"
-                    : tab === "announcements"
-                      ? "公告"
-                    : tab === "network"
-                      ? "网络"
-                    : tab === "notifications"
-                      ? "通知"
-                    : tab === "chat-translation"
-                      ? "翻译"
-                    : tab === "inline-completion"
-                      ? "补全"
-                    : tab === "native-agent"
-                      ? "原生 Agent"
-                      : tab === "storage"
-                        ? "数据迁移"
-                      : tab === "env"
-                        ? "环境配置"
-                        : "联机聊天"}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => void refreshActiveTab("", true)}
-            disabled={loading || refreshing}
-            className="ml-auto inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-          >
-            <RefreshCw className="h-4 w-4" />
-            {refreshing ? "刷新中..." : "刷新"}
-          </button>
         </div>
+      </header>
 
-        {error ? (
-          <div className="mb-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
-            {error}
+      <div className="admin-body">
+        <nav className="admin-nav orbit-island orbit-island--reading" aria-label="管理中心导航">
+          <div role="tablist" aria-label="管理中心功能" className="admin-nav-list">
+            {ADMIN_TAB_GROUPS.map((group) => {
+              const tabs = group.tabs.filter((tab) => visibleTabs.includes(tab));
+              if (!tabs.length) return null;
+              return (
+                <div key={group.label} role="none" className="admin-nav-group">
+                  <div role="none" aria-hidden="true" className="admin-nav-caption">{group.label}</div>
+                  {tabs.map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab}
+                      onClick={() => setActiveTab(tab)}
+                      className="admin-nav-tab"
+                    >
+                      {ADMIN_TAB_META[tab].label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
           </div>
-        ) : null}
-        {notice ? (
-          <div className="mb-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
-            {notice}
-          </div>
-        ) : null}
+        </nav>
 
-        {loading ? (
-          <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm text-[var(--muted)]">
-            加载中...
-          </section>
-        ) : null}
+        <div className="admin-content">
+          <div className="admin-content-head">
+            <div className="admin-content-heading">
+              <span className="admin-content-kicker">{activeGroup?.label}</span>
+              <span className="admin-content-title">{activeTabMeta.label}</span>
+              <span className="admin-content-description">{activeTabMeta.description}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshActiveTab("", true)}
+              disabled={loading || refreshing}
+              className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+            >
+              <RefreshCw className={`h-3.5 w-3.5${refreshing ? " animate-spin" : ""}`} />
+              {refreshing ? "刷新中..." : "刷新"}
+            </button>
+          </div>
+
+          {error ? (
+            <div role="alert" className="admin-callout" data-tone="danger">
+              <AlertTriangle className="h-4 w-4 flex-none" />
+              <span>{error}</span>
+            </div>
+          ) : null}
+          {notice ? (
+            <div role="status" className="admin-callout" data-tone="success">
+              <span>{notice}</span>
+            </div>
+          ) : null}
+
+          {loading ? (
+            <section className="admin-island orbit-island orbit-island--reading text-sm text-[var(--muted)]">
+              加载中...
+            </section>
+          ) : null}
 
         {!loading && activeTab === "global" && canManageEnvConfig ? (
-          <div className="space-y-4">
+          <div className="admin-embed">
             <GlobalUiSettingsPanel
               canManage={canManageEnvConfig}
               themeName={themeName}
@@ -1582,51 +1607,57 @@ export function AdminCenterScreen({
         ) : null}
 
         {!loading && activeTab === "users" ? (
-          <section aria-labelledby="user-permissions-title" className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+          <section aria-labelledby="user-permissions-title" className="admin-island orbit-island orbit-island--reading">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 id="user-permissions-title" className="text-base font-semibold text-[var(--text)]">用户权限</h2>
                 <p className="text-xs text-[var(--muted)]">共 {users.length} 人，累计已创建 {totalOwnedBots} 个 Bot</p>
               </div>
             </div>
-            <div className="mt-3 space-y-3">
+            <div className="mt-4 space-y-3">
               {users.map((user) => (
-                <article key={user.accountId} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
+                <article key={user.accountId} className="admin-user-card admin-well">
+                  <div className="admin-user-head">
+                    <div className="admin-user-avatar" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</div>
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium text-[var(--text)]">{user.username}</p>
-                        <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--muted)]">
+                        <span className="orbit-chip" data-tone={user.role === "admin" ? "accent" : undefined}>
                           {user.role}
                         </span>
                         {user.disabled ? (
-                          <span className="rounded-full border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">
+                          <span className="orbit-chip" data-tone="warning">
                             已停用
                           </span>
                         ) : null}
                       </div>
-                      <p className="text-xs text-[var(--muted)]">{user.accountId}</p>
-                      <p className="text-xs text-[var(--muted)]">已创建 {user.ownedBotCount}/{user.botCreateLimit} 个 Bot</p>
+                      <p className="admin-user-meta">
+                        <span className="break-all">{user.accountId}</span>
+                        <span>已创建 {user.ownedBotCount}/{user.botCreateLimit} 个 Bot</span>
+                      </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void toggleUserDisabled(user)}
-                      className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
-                    >
-                      {user.disabled ? "启用" : "停用"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void updateUserRole(user)}
-                      disabled={nextRoleIsBlocked(user, designatedAdmin) || !canManageRegisterCodes}
-                      className="rounded-lg border border-[var(--accent-outline)] px-3 py-2 text-sm text-[var(--accent)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {user.role === "admin" ? "取消管理员" : "设为管理员"}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void toggleUserDisabled(user)}
+                        className="orbit-btn orbit-btn--ghost orbit-btn--sm"
+                      >
+                        {user.disabled ? "启用" : "停用"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void updateUserRole(user)}
+                        disabled={nextRoleIsBlocked(user, designatedAdmin) || !canManageRegisterCodes}
+                        className="orbit-btn orbit-btn--secondary orbit-btn--sm"
+                      >
+                        {user.role === "admin" ? "取消管理员" : "设为管理员"}
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <p className="admin-group-caption">账号能力</p>
+                  <div className="admin-toggle-grid">
                     {ACCOUNT_CAPABILITY_OPTIONS.map((capability) => (
-                      <label key={`${user.accountId}-${capability.id}`} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                      <label key={`${user.accountId}-${capability.id}`} className="admin-toggle">
                         <input
                           type="checkbox"
                           aria-label={`${user.username} 账号能力 ${capability.label}`}
@@ -1634,22 +1665,23 @@ export function AdminCenterScreen({
                           disabled={user.role === "admin"}
                           onChange={(event) => void updateUserCapabilityGrant(user, capability.id, event.target.checked)}
                         />
-                        <span>{capability.label}</span>
+                        <span className="admin-toggle-label">{capability.label}</span>
                       </label>
                     ))}
                   </div>
-                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {bots.length ? <p className="admin-group-caption">可操作 Bot</p> : null}
+                  <div className="admin-toggle-grid">
                     {bots.map((bot) => (
-                      <label key={`${user.accountId}-${bot.alias}`} className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm">
+                      <label key={`${user.accountId}-${bot.alias}`} className="admin-toggle">
                         <input
                           type="checkbox"
                           aria-label={`${user.username} 可操作 Bot ${bot.alias}`}
                           checked={user.allowedBots.includes(bot.alias)}
                           onChange={(event) => void updateUserBotGrant(user, bot.alias, event.target.checked)}
                         />
-                        <span>{bot.alias}</span>
+                        <span className="admin-toggle-label">{bot.alias}</span>
                         {user.ownedBots.includes(bot.alias) ? (
-                          <span className="text-xs text-[var(--muted)]">创建者</span>
+                          <span className="orbit-chip" data-tone="accent">创建者</span>
                         ) : null}
                       </label>
                     ))}
@@ -1662,8 +1694,8 @@ export function AdminCenterScreen({
         ) : null}
 
         {!loading && activeTab === "invites" ? (
-          <div className="space-y-4">
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-4">
+          <div className="admin-stack">
+            <section className="admin-island orbit-island orbit-island--reading space-y-4">
               <div className="flex flex-wrap items-end gap-3">
                 <label className="space-y-1">
                   <span className="text-sm text-[var(--text)]">可用次数</span>
@@ -1680,7 +1712,7 @@ export function AdminCenterScreen({
                   type="button"
                   onClick={() => void createRegisterCode()}
                   disabled={registerCodeCreating}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                  className="orbit-btn orbit-btn--primary"
                 >
                   <Save className="h-4 w-4" />
                   {registerCodeCreating ? "生成中..." : "生成邀请码"}
@@ -1688,26 +1720,26 @@ export function AdminCenterScreen({
               </div>
 
               {createdRegisterCode ? (
-                <div className="rounded-lg border border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-success-text-deep)]">
+                <div className="admin-tint px-3 py-3 text-sm" data-tone="success">
                   最新邀请码: <span className="font-semibold">{createdRegisterCode.code}</span>
                 </div>
               ) : null}
             </section>
 
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
+            <section className="admin-island orbit-island orbit-island--reading space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-base font-semibold text-[var(--text)]">邀请码列表</h2>
                 <span className="text-xs text-[var(--muted)]">共 {registerCodes.length} 个</span>
               </div>
 
               {registerCodes.length ? registerCodes.map((item) => (
-                <article key={item.codeId} className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3 space-y-3">
+                <article key={item.codeId} className="admin-well p-3 space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-1 text-sm text-[var(--muted)]">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium text-[var(--text)]">{item.codePreview}</p>
                         {item.disabled ? (
-                          <span className="rounded-full border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">
+                          <span className="orbit-chip" data-tone="warning">
                             已停用
                           </span>
                         ) : null}
@@ -1721,7 +1753,7 @@ export function AdminCenterScreen({
                         type="button"
                         onClick={() => void mutateRegisterCode(item.codeId, { maxUsesDelta: 1 }, "邀请码次数已增加")}
                         disabled={registerCodeActionId === item.codeId}
-                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        className="orbit-btn orbit-btn--secondary"
                       >
                         +1
                       </button>
@@ -1729,7 +1761,7 @@ export function AdminCenterScreen({
                         type="button"
                         onClick={() => void mutateRegisterCode(item.codeId, { maxUsesDelta: -1 }, "邀请码次数已减少")}
                         disabled={registerCodeActionId === item.codeId || item.remainingUses <= 0}
-                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        className="orbit-btn orbit-btn--secondary"
                       >
                         -1
                       </button>
@@ -1737,7 +1769,7 @@ export function AdminCenterScreen({
                         type="button"
                         onClick={() => void mutateRegisterCode(item.codeId, { disabled: !item.disabled }, item.disabled ? "邀请码已启用" : "邀请码已停用")}
                         disabled={registerCodeActionId === item.codeId}
-                        className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        className="orbit-btn orbit-btn--secondary"
                       >
                         {item.disabled ? "启用" : "停用"}
                       </button>
@@ -1745,7 +1777,7 @@ export function AdminCenterScreen({
                         type="button"
                         onClick={() => void removeRegisterCode(item.codeId)}
                         disabled={registerCodeActionId === item.codeId}
-                        className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
+                        className="orbit-btn admin-btn--danger-quiet"
                       >
                         删除
                       </button>
@@ -1753,7 +1785,7 @@ export function AdminCenterScreen({
                   </div>
 
                   {item.usage.length ? (
-                    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--muted)] space-y-1">
+                    <div className="admin-well px-3 py-2 text-xs text-[var(--muted)] space-y-1">
                       {item.usage.map((usage, index) => (
                         <p key={`${item.codeId}-${index}`}>{usage.usedAt || "未知时间"} · {usage.usedBy || "未知用户"}</p>
                       ))}
@@ -1770,8 +1802,8 @@ export function AdminCenterScreen({
         ) : null}
 
         {!loading && activeTab === "network" ? (
-          <div className="space-y-4">
-            <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="admin-stack">
+            <section className="admin-island orbit-island orbit-island--reading space-y-4">
               <div className="flex items-start gap-2">
                 <Globe className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
                 <div>
@@ -1779,7 +1811,7 @@ export function AdminCenterScreen({
                 </div>
               </div>
 
-              <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div className="space-y-3 admin-well p-3">
                 <h3 className="text-sm font-semibold text-[var(--text)]">Git 代理</h3>
                 <div data-testid="git-proxy-control-row" className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <input
@@ -1796,7 +1828,7 @@ export function AdminCenterScreen({
                     aria-label="保存 Git 代理"
                     onClick={() => void saveGitProxy()}
                     disabled={savingGitProxy}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60 sm:w-auto"
+                    className="orbit-btn orbit-btn--primary w-full sm:w-auto"
                   >
                     <Save className="h-4 w-4" />
                     {savingGitProxy ? "保存中..." : "保存"}
@@ -1807,7 +1839,7 @@ export function AdminCenterScreen({
             </section>
 
             {tunnel ? (
-              <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <section className="admin-island orbit-island orbit-island--reading space-y-4">
                 {(() => {
                   const fixedForward = isFixedPublicForward(tunnel);
                   const heartbeatStatus = fixedForward ? heartbeatStatusText(tunnel.heartbeatStatus) : "";
@@ -1866,7 +1898,7 @@ export function AdminCenterScreen({
 
                       {fixedForward ? (
                         <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-                          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
+                          <div className="admin-well px-3 py-3 text-[var(--muted)]">
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-medium text-[var(--text)]">frpc 状态</span>
                               <StateBadge tone={frpcStatusTone}>{frpcStatus}</StateBadge>
@@ -1885,7 +1917,7 @@ export function AdminCenterScreen({
                             </div>
                           </div>
 
-                          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-3 text-[var(--muted)]">
+                          <div className="admin-well px-3 py-3 text-[var(--muted)]">
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-medium text-[var(--text)]">Heartbeat</span>
                               <StateBadge tone={tunnelServiceTone(tunnel.heartbeatStatus)}>{heartbeatStatus}</StateBadge>
@@ -1910,7 +1942,7 @@ export function AdminCenterScreen({
                               type="button"
                               onClick={() => void runTunnelAction("start")}
                               disabled={tunnelAction !== "" || tunnel.status === "running" || tunnel.status === "starting" || tunnel.status === "connected" || tunnel.status === "verifying_public" || tunnel.status === "waiting_url"}
-                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                              className="orbit-btn orbit-btn--secondary"
                             >
                               启动 Tunnel
                             </button>
@@ -1918,7 +1950,7 @@ export function AdminCenterScreen({
                               type="button"
                               onClick={() => void runTunnelAction("stop")}
                               disabled={tunnelAction !== "" || tunnel.status === "stopped"}
-                              className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                              className="orbit-btn orbit-btn--secondary"
                             >
                               停止 Tunnel
                             </button>
@@ -1926,7 +1958,7 @@ export function AdminCenterScreen({
                               type="button"
                               onClick={() => void runTunnelAction("restart")}
                               disabled={tunnelAction !== ""}
-                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                              className="orbit-btn orbit-btn--secondary"
                             >
                               <RefreshCw className="h-4 w-4" />
                               重启 Tunnel
@@ -1934,21 +1966,21 @@ export function AdminCenterScreen({
                           </>
                         ) : isFixedPublicForward(tunnel) ? (
                           <>
-                            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                            <div className="admin-well px-3 py-2 text-sm text-[var(--muted)]">
                               固定公网转发通过环境配置维护
                             </div>
                             <button
                               type="button"
                               onClick={() => void runTunnelAction("restart")}
                               disabled={tunnelAction !== ""}
-                              className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                              className="orbit-btn orbit-btn--secondary"
                             >
                               <RefreshCw className="h-4 w-4" />
                               {tunnelAction === "restart" ? "恢复中..." : "尝试恢复"}
                             </button>
                           </>
                         ) : (
-                          <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                          <div className="admin-well px-3 py-2 text-sm text-[var(--muted)]">
                             当前使用 WEB_PUBLIC_URL 手工配置地址
                           </div>
                         )}
@@ -1957,7 +1989,7 @@ export function AdminCenterScreen({
                           type="button"
                           onClick={() => void copyTunnelUrl()}
                           disabled={tunnelAction !== "" || !tunnel.publicUrl}
-                          className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                          className="orbit-btn orbit-btn--secondary"
                         >
                           <Copy className="h-4 w-4" />
                           复制公网地址
@@ -1972,7 +2004,7 @@ export function AdminCenterScreen({
         ) : null}
 
         {!loading && activeTab === "notifications" ? (
-          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section className="admin-island orbit-island orbit-island--reading space-y-4">
             <div className="flex items-start gap-2">
               <Bell className="mt-0.5 h-5 w-5 text-[var(--accent)]" />
               <div>
@@ -1981,13 +2013,13 @@ export function AdminCenterScreen({
             </div>
 
             <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 PushPlus: <span className="font-medium text-[var(--text)]">{pushPlusStatusText(notificationSettings)}</span>
               </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 Token: <span className="font-medium text-[var(--text)]">{notificationSettings?.pushPlusConfigured ? "已设置" : "未设置"}</span>
               </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 Topic: <span className="font-medium text-[var(--text)]">{notificationSettings?.pushPlusTopicConfigured ? "已设置" : "未设置"}</span>
               </p>
             </div>
@@ -1997,14 +2029,14 @@ export function AdminCenterScreen({
                 type="button"
                 onClick={() => void sendPushPlusTest()}
                 disabled={testingPushPlus || !notificationSettings?.pushPlusEnabled}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className="orbit-btn orbit-btn--secondary"
               >
                 {testingPushPlus ? "发送中..." : "测试 PushPlus 推送"}
               </button>
               <button
                 type="button"
                 onClick={() => setShowPushPlusGuide(true)}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                className="orbit-btn orbit-btn--secondary"
               >
                 PushPlus 配置教程
               </button>
@@ -2012,7 +2044,7 @@ export function AdminCenterScreen({
                 type="button"
                 onClick={openNotificationEnv}
                 disabled={!canManageEnvConfig}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className="orbit-btn orbit-btn--secondary"
               >
                 打开环境配置
               </button>
@@ -2020,7 +2052,7 @@ export function AdminCenterScreen({
 
             {showPushPlusGuide ? (
               <div
-                className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"
+                className="admin-well p-4"
                 role="dialog"
                 aria-label="PushPlus 配置教程"
               >
@@ -2029,7 +2061,7 @@ export function AdminCenterScreen({
                   <button
                     type="button"
                     onClick={() => setShowPushPlusGuide(false)}
-                    className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-strong)]"
+                    className="orbit-btn orbit-btn--ghost orbit-btn--sm"
                   >
                     关闭
                   </button>
@@ -2041,7 +2073,7 @@ export function AdminCenterScreen({
                   <li>复制 token</li>
                   <li>在环境配置的通知分类写入变量</li>
                 </ol>
-                <pre className="mt-3 overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-xs text-[var(--text)]">
+                <pre className="admin-well mt-3 overflow-x-auto p-3 text-xs text-[var(--text)]">
                   <code>{`PUSHPLUS_ENABLED=true
 PUSHPLUS_TOKEN=你的token
 PUSHPLUS_TOPIC=可选群组编码`}</code>
@@ -2054,45 +2086,51 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         {!loading && activeTab === "usage" ? (
           loadedTabs.usage ? (
             <Suspense fallback={(
-              <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+              <section className="admin-island orbit-island orbit-island--reading text-sm text-[var(--muted)]">
                 正在加载 Usage 面板…
               </section>
             )}>
-              <UsagePanel
-                client={client}
-                provider={usageProvider}
-                onProviderChange={setUsageProvider}
-                refreshKey={usagePanelKey}
-              />
+              <div className="admin-embed">
+                <UsagePanel
+                  client={client}
+                  provider={usageProvider}
+                  onProviderChange={setUsageProvider}
+                  refreshKey={usagePanelKey}
+                />
+              </div>
             </Suspense>
           ) : (
-            <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+            <section className="admin-island orbit-island orbit-island--reading text-sm text-[var(--muted)]">
               正在加载 Usage 面板…
             </section>
           )
         ) : null}
 
         {!loading && activeTab === "chat-translation" ? (
-          <ChatTranslationSettingsPanel key={chatTranslationPanelKey} client={client} onSaved={() => setNotice("聊天翻译配置已保存")} />
+          <div className="admin-embed">
+            <ChatTranslationSettingsPanel key={chatTranslationPanelKey} client={client} onSaved={() => setNotice("聊天翻译配置已保存")} />
+          </div>
         ) : null}
 
         {!loading && activeTab === "inline-completion" ? (
-          <AiInlineCompletionSettingsPanel
-            key={inlineCompletionPanelKey}
-            client={client}
-            onSaved={() => {
-              setError("");
-              setNotice("AI inline 补全配置已保存");
-            }}
-            onError={(message) => {
-              setNotice("");
-              setError(message);
-            }}
-          />
+          <div className="admin-embed">
+            <AiInlineCompletionSettingsPanel
+              key={inlineCompletionPanelKey}
+              client={client}
+              onSaved={() => {
+                setError("");
+                setNotice("AI inline 补全配置已保存");
+              }}
+              onError={(message) => {
+                setNotice("");
+                setError(message);
+              }}
+            />
+          </div>
         ) : null}
 
         {!loading && activeTab === "lan-chat" ? (
-          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section className="admin-island orbit-island orbit-island--reading space-y-4">
             <div>
               <h2 className="text-base font-semibold text-[var(--text)]">联机聊天</h2>
             </div>
@@ -2103,7 +2141,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 ["host", "作为主机"],
                 ["join", "加入主机"],
               ] as const).map(([mode, label]) => (
-                <label key={mode} className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
+                <label key={mode} className="admin-choice">
                   <input
                     type="radio"
                     name="lan-chat-mode"
@@ -2179,7 +2217,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               type="button"
               onClick={() => void saveLanChatConfig()}
               disabled={lanChatSaving}
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+              className="orbit-btn orbit-btn--primary"
             >
               <Save className="h-4 w-4" />
               {lanChatSaving ? "保存中..." : "保存联机聊天配置"}
@@ -2188,7 +2226,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {!loading && activeTab === "native-agent" ? (
-          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section className="admin-island orbit-island orbit-island--reading space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">Pi 原生 agent 配置</h2>
@@ -2199,7 +2237,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void runNativeAgentPreflight()}
                   disabled={nativeAgentPreflightRunning}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  className="orbit-btn orbit-btn--secondary"
                 >
                   <RefreshCw className="h-4 w-4" />
                   {nativeAgentPreflightRunning ? "检查中..." : "运行检查"}
@@ -2208,7 +2246,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void saveNativeAgentConfig()}
                   disabled={nativeAgentSaving}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                  className="orbit-btn orbit-btn--primary"
                 >
                   <Save className="h-4 w-4" />
                   {nativeAgentSaving ? "保存中..." : "保存配置"}
@@ -2217,13 +2255,13 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] lg:grid-cols-2">
-              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="break-all admin-well px-3 py-2">
                 Pi settings: {nativeAgentConfig?.configPath || "-"}
               </p>
-              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="break-all admin-well px-3 py-2">
                 Pi models: {nativeAgentConfig?.modelsPath || "-"}
               </p>
-              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="break-all admin-well px-3 py-2">
                 Workspace history: {nativeAgentConfig?.workspaceHistoryEnabled ? "启用" : "关闭"}
               </p>
             </div>
@@ -2280,7 +2318,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 {(nativeAgentConfig?.models || []).length ? (
                   <div className="space-y-2">
                     {nativeAgentConfig?.models.map((model) => (
-                      <div key={model.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
+                      <div key={model.id} className="admin-well px-3 py-2 text-sm">
                         <p className="font-medium text-[var(--text)]">{model.provider} / {model.name}</p>
                         <p className="text-xs text-[var(--muted)]">
                           context {model.contextWindow?.toLocaleString() || "未配置"}
@@ -2291,7 +2329,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     ))}
                   </div>
                 ) : (
-                  <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--muted)]">
+                  <p className="admin-well px-3 py-2 text-sm text-[var(--muted)]">
                     暂无模型
                   </p>
                 )}
@@ -2301,13 +2339,13 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {!loading && activeTab === "storage" ? (
-          <section aria-labelledby="storage-migration-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section aria-labelledby="storage-migration-title" className="admin-island orbit-island orbit-island--reading space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 id="storage-migration-title" className="text-base font-semibold text-[var(--text)]">TCB 数据迁移</h2>
                 <p className="mt-1 text-sm text-[var(--muted)]">迁移聊天历史、附件、插件和集群 MCP 等运行数据。</p>
               </div>
-              <span className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--muted)]">
+              <span className="orbit-chip">
                 {storageSnapshot && isStorageMigrationActive(storageSnapshot)
                   ? storageMigrationStateText(storageSnapshot.phase || storageSnapshot.state)
                   : storageSnapshot?.canMigrate
@@ -2319,10 +2357,10 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             <div className="grid gap-3 text-sm sm:grid-cols-2">
-              <p className="break-all rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="break-all admin-well px-3 py-2">
                 当前数据根目录: <span className="text-[var(--text)]">{storageSnapshot?.currentRoot || "-"}</span>
               </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 已发现数据: <span className="font-medium text-[var(--text)]">
                   {storageSnapshot?.sizePending ? "点击“预览并校验”计算" : formatStorageBytes(storageSnapshot?.totalBytes || 0)}
                 </span>
@@ -2332,7 +2370,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             <div className="space-y-2">
               <h3 className="text-sm font-medium text-[var(--text)]">数据来源</h3>
               {(storageSnapshot?.sources || []).map((source) => (
-                <div key={source.id} className="grid gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm sm:grid-cols-[1fr_auto]">
+                <div key={source.id} className="admin-well grid gap-1 px-3 py-2 text-sm sm:grid-cols-[1fr_auto]">
                   <div>
                     <p className="font-medium text-[var(--text)]">{source.label || source.id}</p>
                     <p className="break-all text-xs text-[var(--muted)]">{source.path || "路径由服务管理"}</p>
@@ -2364,7 +2402,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 type="button"
                 onClick={() => void previewStorageMigration()}
                 disabled={storageAction !== "" || !storageTargetRoot.trim()}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className="orbit-btn orbit-btn--secondary"
               >
                 {storageAction === "preview"
                   ? (storagePreview?.jobId && !storagePreview.planId ? "扫描中..." : "校验中...")
@@ -2373,7 +2411,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             {storagePreview ? (
-              <div className="space-y-3 rounded-xl border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] p-3 text-sm text-[var(--feedback-warning-text-emphasis)]">
+              <div className="admin-tint space-y-3 p-3 text-sm" data-tone="warning">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <h3 className="font-semibold">迁移预览</h3>
@@ -2394,7 +2432,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => setStorageConfirmOpen(true)}
                   disabled={storageAction !== "" || !storagePreview.planId || storageSnapshot?.maintenance || Boolean(storagePreview.blockers?.length)}
-                  className="rounded-lg bg-[var(--button-warning-background-deep)] px-3 py-2 text-sm font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-warning-background-stronger)] disabled:opacity-60"
+                  className="orbit-btn admin-btn--warning-solid"
                 >
                   确认并迁移
                 </button>
@@ -2409,7 +2447,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               || storageSnapshot.state === "failed"
               || storageSnapshot.progress !== undefined
             ) ? (
-              <div data-testid="storage-migration-progress" className="space-y-3 rounded-lg border border-[var(--feedback-information-border-light)] bg-[var(--feedback-information-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-information-text-emphasis)]">
+              <div data-testid="storage-migration-progress" className="admin-tint space-y-3 px-3 py-3 text-sm" data-tone="info">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="font-medium">当前阶段: {storageMigrationStateText(storageSnapshot.phase || storageSnapshot.state)}</p>
                   {storageSnapshot.jobId ? <span className="font-mono text-xs">jobId: {storageSnapshot.jobId}</span> : null}
@@ -2452,14 +2490,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 type="button"
                 onClick={() => void retryStorageCleanup()}
                 disabled={storageAction !== ""}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className="orbit-btn orbit-btn--secondary"
               >
                 {storageAction === "retry" ? "重试中..." : "重试原始数据清理"}
               </button>
             ) : null}
 
             {storageConfirmOpen ? (
-              <div role="dialog" aria-label="确认数据迁移" className="rounded-xl border-2 border-[var(--feedback-error-border-visible)] bg-[var(--feedback-error-background-subtle)] p-4 text-sm text-[var(--feedback-error-text-emphasis)]">
+              <div role="dialog" aria-label="确认数据迁移" className="admin-tint admin-tint--strong p-4 text-sm" data-tone="danger">
                 <h3 className="font-semibold">确认停止全部智能体并迁移数据？</h3>
                 <p className="mt-2">迁移开始前会停止全部智能体进程并 flush 未写入数据。校验通过后，系统会删除已验证的原始数据。迁移期间请勿关闭服务。</p>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -2467,7 +2505,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void startStorageMigration()}
                     disabled={storageAction !== ""}
-                    className="rounded-lg bg-[var(--button-danger-background-deep)] px-3 py-2 font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-danger-background-stronger)] disabled:opacity-60"
+                    className="orbit-btn orbit-btn--danger"
                   >
                     {storageAction === "migrate" ? "启动中..." : "我确认停止全部智能体并继续"}
                   </button>
@@ -2475,7 +2513,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => setStorageConfirmOpen(false)}
                     disabled={storageAction !== ""}
-                    className="rounded-lg border border-[var(--feedback-error-border-visible)] px-3 py-2 hover:bg-[var(--feedback-error-background-soft)] disabled:opacity-60"
+                    className="orbit-btn admin-btn--danger-quiet"
                   >
                     取消
                   </button>
@@ -2486,7 +2524,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {!loading && activeTab === "env" && canManageEnvConfig ? (
-          <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section className="admin-island orbit-island orbit-island--reading space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">环境配置</h2>
@@ -2499,7 +2537,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void reloadSystemEnvConfig()}
                   disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length > 0}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  className="orbit-btn orbit-btn--secondary"
                 >
                   <RefreshCw className={`h-4 w-4${envSystemReloading ? " animate-spin" : ""}`} />
                   {envSystemReloading ? "加载中..." : "重新加载 Windows 环境"}
@@ -2508,7 +2546,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void reloadEnvConfig()}
                   disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length > 0}
-                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  className="orbit-btn orbit-btn--secondary"
                 >
                   <RefreshCw className={`h-4 w-4${envReloading ? " animate-spin" : ""}`} />
                   {envReloading ? "加载中..." : "重新加载 .env"}
@@ -2517,7 +2555,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void previewEnvChanges()}
                   disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                  className="orbit-btn orbit-btn--secondary"
                 >
                   预览 diff
                 </button>
@@ -2525,7 +2563,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void saveEnvChanges()}
                   disabled={envSaving || envReloading || envSystemReloading || envChangedItems.length === 0 || Boolean(envConflictMessage)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                  className="orbit-btn orbit-btn--primary"
                 >
                   <Save className="h-4 w-4" />
                   {envSaving ? "保存中..." : "保存环境配置"}
@@ -2534,7 +2572,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             {envSavedImpact && (envSavedImpact.restartRequiredKeys.length || envSavedImpact.rebuildRequiredKeys.length) ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-warning-text-stronger)]">
+              <div className="admin-tint flex flex-wrap items-center justify-between gap-3 px-3 py-3 text-sm" data-tone="warning">
                 <span>
                   {envSavedImpact.restartRequiredKeys.length ? `需重启: ${envSavedImpact.restartRequiredKeys.join(", ")}` : ""}
                   {envSavedImpact.restartRequiredKeys.length && envSavedImpact.rebuildRequiredKeys.length ? "；" : ""}
@@ -2545,7 +2583,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                     type="button"
                     onClick={() => void requestEnvRestart()}
                     disabled={envRestarting}
-                    className="rounded-lg border border-transparent bg-[var(--button-warning-background-strong)] px-3 py-2 text-sm text-[var(--button-filled-foreground)] hover:bg-[var(--button-warning-background-deep)] disabled:opacity-60"
+                    className="orbit-btn admin-btn--warning-solid"
                   >
                     {envRestarting ? "请求中..." : "重启服务"}
                   </button>
@@ -2554,13 +2592,13 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             {envConflictMessage ? (
-              <div className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-3 text-sm text-[var(--feedback-error-text-deep)]">
+              <div className="admin-tint px-3 py-3 text-sm" data-tone="danger">
                 {envConflictMessage}
               </div>
             ) : null}
 
             {envPreview ? (
-              <div role="dialog" aria-label="环境配置 diff 确认" className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div role="dialog" aria-label="环境配置 diff 确认" className="space-y-3 admin-well p-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="font-medium text-[var(--text)]">保存前确认</p>
@@ -2573,7 +2611,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   <button
                     type="button"
                     onClick={() => setEnvPreview(null)}
-                    className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)]"
+                    className="orbit-btn orbit-btn--secondary"
                   >
                     取消
                   </button>
@@ -2587,7 +2625,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                         ? "重新生成"
                         : formatEnvValue(envDraft[item.key], item.sensitive && !envVisibleSecrets[item.key]);
                     return (
-                      <div key={item.key} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs">
+                      <div key={item.key} className="admin-well px-3 py-2 text-xs">
                         <p className="font-medium text-[var(--text)]">{item.key}</p>
                         <p className="break-all text-[var(--muted)]">- {formatEnvValue(item.value, item.sensitive)}</p>
                         <p className="break-all text-[var(--text)]">+ {afterValue || "空值"}</p>
@@ -2599,7 +2637,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   type="button"
                   onClick={() => void saveEnvChanges()}
                   disabled={envSaving || envReloading || envSystemReloading || Boolean(envConflictMessage)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                  className="orbit-btn orbit-btn--primary"
                 >
                   <Save className="h-4 w-4" />
                   确认保存
@@ -2608,15 +2646,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             ) : null}
 
             <div className="grid gap-4 lg:grid-cols-[180px_1fr]">
-              <nav className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
+              <nav className="admin-subnav">
                 {envCategories.map((category) => (
                   <button
                     key={category}
                     type="button"
                     onClick={() => setActiveEnvCategory(category)}
-                    className={(activeEnvCategory || envCategories[0]) === category
-                      ? "whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm tcb-selected-accent"
-                      : "whitespace-nowrap rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"}
+                    data-active={(activeEnvCategory || envCategories[0]) === category ? "true" : undefined}
+                    className="admin-subnav-item"
                   >
                     {ENV_CATEGORY_LABELS[category] || category}
                   </button>
@@ -2629,14 +2666,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                   const secretAction = envSecretActions[item.key];
                   const secretMasked = item.sensitive && item.masked && !envVisibleSecrets[item.key] && secretAction !== "edit";
                   return (
-                    <article key={item.key} className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                    <article key={item.key} className="space-y-3 admin-well p-3">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="font-medium text-[var(--text)]">{item.label}</h3>
-                            <span className="rounded-full border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--muted)]">{item.key}</span>
-                            {item.restartRequired ? <span className="rounded-full border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">重启生效</span> : null}
-                            {item.rebuildRequired ? <span className="rounded-full border border-[var(--feedback-workspace-info-border-light)] bg-[var(--feedback-workspace-info-background-subtle)] px-2 py-0.5 text-xs text-[var(--feedback-workspace-info-text-deep)]">需 build</span> : null}
+                            <span className="orbit-chip">{item.key}</span>
+                            {item.restartRequired ? <span className="orbit-chip" data-tone="warning">重启生效</span> : null}
+                            {item.rebuildRequired ? <span className="orbit-chip" data-tone="info">需 build</span> : null}
                           </div>
                           <p className="text-sm text-[var(--muted)]">{item.description}</p>
                           <p className="text-xs text-[var(--muted)]">默认: {formatEnvValue(item.defaultValue)} · 来源: {item.source || "未知"}</p>
@@ -2649,7 +2686,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                                 setEnvVisibleSecrets((prev) => ({ ...prev, [item.key]: !prev[item.key] }));
                                 setEnvSecretActions((prev) => ({ ...prev, [item.key]: "edit" }));
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-strong)]"
+                              className="orbit-btn orbit-btn--ghost orbit-btn--sm"
                             >
                               {envVisibleSecrets[item.key] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                               {envVisibleSecrets[item.key] ? "遮蔽" : "显示"}
@@ -2661,7 +2698,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                                 setEnvDraft((prev) => ({ ...prev, [item.key]: "" }));
                                 setEnvPreview(null);
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--feedback-error-border-light)] px-2 py-1 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]"
+                              className="orbit-btn orbit-btn--sm admin-btn--danger-quiet"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                               清空
@@ -2673,7 +2710,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                                 setEnvDraft((prev) => ({ ...prev, [item.key]: "重新生成" }));
                                 setEnvPreview(null);
                               }}
-                              className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--surface-strong)]"
+                              className="orbit-btn orbit-btn--ghost orbit-btn--sm"
                             >
                               <RotateCcw className="h-3.5 w-3.5" />
                               重新生成
@@ -2758,8 +2795,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {!loading && activeTab === "announcements" ? (
-          <div className="space-y-4">
-            <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <div className="admin-stack">
+            <section className="admin-island orbit-island orbit-island--reading space-y-4">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">发布公告</h2>
               </div>
@@ -2824,7 +2861,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
 
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
                 {announcementDraft.sections.map((section, index) => (
-                  <div key={index} className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                  <div key={index} className="space-y-2 admin-well p-3">
                     <input
                       aria-label={`公告段落 ${index + 1} 标题`}
                       value={section.label}
@@ -2846,20 +2883,20 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 type="button"
                 onClick={() => void saveAnnouncement()}
                 disabled={announcementSaving}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+                className="orbit-btn orbit-btn--primary"
               >
                 <Save className="h-4 w-4" />
                 {announcementSaving ? "发布中..." : "发布公告"}
               </button>
             </section>
 
-            <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <section className="admin-island orbit-island orbit-island--reading space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-base font-semibold text-[var(--text)]">公告列表</h2>
                 <span className="text-xs text-[var(--muted)]">共 {announcements.length} 条</span>
               </div>
               {announcements.length ? announcements.map((item) => (
-                <article key={item.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
+                <article key={item.id} className="admin-well p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 space-y-1">
                       <p className="font-medium text-[var(--text)]">{item.title}</p>
@@ -2870,7 +2907,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                       type="button"
                       onClick={() => void removeAnnouncement(item.id)}
                       disabled={announcementDeletingId === item.id}
-                      className="rounded-lg border border-[var(--feedback-error-border-light)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:opacity-60"
+                      className="orbit-btn admin-btn--danger-quiet"
                     >
                       {announcementDeletingId === item.id ? "删除中..." : "删除"}
                     </button>
@@ -2883,10 +2920,14 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </div>
         ) : null}
 
-        {activeTab === "updates" ? <AppUpdatePanel client={client} refreshKey={updateRefreshKey} /> : null}
+        {activeTab === "updates" ? (
+          <div className="admin-embed">
+            <AppUpdatePanel client={client} refreshKey={updateRefreshKey} />
+          </div>
+        ) : null}
 
         {!loading && activeTab === "cli-errors" ? (
-          <section aria-labelledby="cli-error-stats-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          <section aria-labelledby="cli-error-stats-title" className="admin-island orbit-island orbit-island--reading space-y-4">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 id="cli-error-stats-title" className="text-base font-semibold text-[var(--text)]">CLI 错误统计</h2>
@@ -2909,26 +2950,26 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
 
             <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 总错误: <span className="font-semibold text-[var(--text)]">{cliErrorStats?.summary.total || 0}</span>
               </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 CLI 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byCliType || {}, cliTypeLabel)}</span>
               </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 Bot 最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byBot || {})}</span>
               </p>
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <p className="admin-well px-3 py-2">
                 类别最高: <span className="font-semibold text-[var(--text)]">{topEntryLabel(cliErrorStats?.summary.byCategory || {})}</span>
               </p>
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div className="admin-well p-3">
                 <h3 className="text-sm font-semibold text-[var(--text)]">按类别</h3>
                 <div className="mt-3 space-y-2 text-sm">
                   {Object.entries(cliErrorStats?.summary.byCategory || {}).map(([category, count]) => (
-                    <div key={category} className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] px-3 py-2">
+                    <div key={category} className="admin-well flex items-center justify-between gap-3 px-3 py-2">
                       <span className="text-[var(--text)]">{category}</span>
                       <span className="text-[var(--muted)]">{count}</span>
                     </div>
@@ -2939,11 +2980,11 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+              <div className="admin-well p-3">
                 <h3 className="text-sm font-semibold text-[var(--text)]">高频错误</h3>
                 <div className="mt-3 space-y-2 text-sm">
                   {(cliErrorStats?.topErrors || []).map((item) => (
-                    <div key={`${item.category}-${item.message}`} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                    <div key={`${item.category}-${item.message}`} className="admin-well px-3 py-2">
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-[var(--muted)]">{item.category}</span>
                         <span className="text-[var(--text)]">{item.count} 次</span>
@@ -2956,7 +2997,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg)]">
+            <div className="overflow-hidden admin-well">
               <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-2">
                 <AlertTriangle className="h-4 w-4 text-[var(--feedback-warning-text)]" />
                 <h3 className="text-sm font-semibold text-[var(--text)]">最近错误</h3>
@@ -2996,6 +3037,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             </div>
           </section>
         ) : null}
+        </div>
       </div>
     </main>
   );

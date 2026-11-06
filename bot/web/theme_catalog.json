@@ -196,6 +196,18 @@
       }
     },
     {
+      "key": "light.glow",
+      "label": "主题光色",
+      "group": "装饰",
+      "description": "焦点光晕、运行扫光和主操作辉光使用的主题光色",
+      "cssVariable": "--glow-color",
+      "default": "#A94A2EFF",
+      "allowAlpha": false,
+      "derive": {
+        "from": "accent"
+      }
+    },
+    {
       "key": "decoration.backgroundGlow",
       "label": "背景柔光",
       "group": "装饰",

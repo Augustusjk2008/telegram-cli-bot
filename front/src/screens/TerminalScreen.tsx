@@ -509,8 +509,8 @@ export function TerminalScreen({
 
       <section className={`relative flex-1 overflow-hidden border-b border-[var(--workbench-hairline)] ${embedded ? "bg-transparent" : "bg-[var(--terminal-bg)]"}`}>
         {!terminal.snapshot.started || terminal.snapshot.closed ? (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--terminal-muted)]">
-            {terminal.snapshot.closed ? "终端已关闭" : "未启动终端"}
+          <div data-terminal-idle="true" className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--terminal-muted)]">
+            <span className="terminal-idle-label">{terminal.snapshot.closed ? "终端已关闭" : "未启动终端"}</span>
           </div>
         ) : (
           <div

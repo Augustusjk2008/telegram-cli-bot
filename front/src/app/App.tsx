@@ -65,6 +65,7 @@ import {
 } from "./lazyScreens";
 import "../styles/tokens.css";
 import "../styles/global.css";
+import "../styles/orbit.css";
 
 const SESSION_TOKEN_STORAGE_KEY = "web-session-token";
 const LEGACY_TOKEN_STORAGE_KEY = "web-api-token";

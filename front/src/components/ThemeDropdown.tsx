@@ -4,6 +4,7 @@ import { Check, ChevronDown, Moon, Sun } from "lucide-react";
 import type { UiThemeName } from "../theme";
 import { useOptionalAppearance } from "../theme/AppearanceProvider";
 import { BUILTIN_THEME, resolveAppearance } from "../theme/resolveAppearance";
+import { withPublicBase } from "../utils/publicBase";
 
 type Props = {
   value: UiThemeName;
@@ -42,16 +43,36 @@ export function ThemeDropdown({ value, onChange, className, variant = "default",
         <Icon className="h-4 w-4 text-[var(--accent)]" /><span className="min-w-0 flex-1 truncate">{selected.name}</span><ChevronDown className="h-4 w-4 text-[var(--muted)]" />
       </button>
       {open && <div role="listbox" aria-label="界面主题选项"
-        className={clsx("absolute z-50 mt-2 max-h-[70vh] overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface-overlay)] p-1.5 shadow-[var(--shadow-card)]", menuAlign === "right" ? "right-0 w-64 max-w-[calc(100vw-1rem)]" : "left-0 right-0")}>
+        className={clsx("theme-dropdown-menu absolute z-50 mt-2 max-h-[70vh] overflow-y-auto p-1.5", menuAlign === "right" ? "right-0 w-72 max-w-[calc(100vw-1rem)]" : "left-0 right-0")}>
         {themes.map((theme) => {
-          const colors = resolveAppearance(theme).colors;
-          return <button key={theme.id} type="button" role="option" aria-selected={theme.id === value}
+          const resolved = resolveAppearance(theme);
+          const colors = resolved.colors;
+          const art = resolved.illustrations.opacity > 0 && resolved.illustrations.surfaces.workbench
+            ? resolved.illustrations.resources.workbench
+            : "";
+          const artUrl = art ? (art.startsWith("data:") ? art : withPublicBase(art)) : "";
+          return <button key={theme.id} type="button" role="option" aria-label={theme.name} aria-selected={theme.id === value}
             onClick={() => { onChange(theme.id); setOpen(false); }}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]">
-            <span className="flex h-6 w-12 overflow-hidden rounded border border-[var(--border)]" aria-hidden="true">
-              {[colors["surface.base"], colors.accent, colors["accent.strong"]].map((color, index) => <span key={index} className="flex-1" style={{ background: color }} />)}
+            className="theme-dropdown-option flex w-full items-center gap-3 px-2 py-1.5 text-left text-sm text-[var(--text)]">
+            <span
+              className="theme-dropdown-thumb"
+              aria-hidden="true"
+              style={{
+                backgroundColor: colors.canvas,
+                backgroundImage: artUrl
+                  ? `url("${artUrl}")`
+                  : `linear-gradient(135deg, ${colors.canvas}, ${colors.accent})`,
+              }}
+            >
+              <span className="theme-dropdown-swatches">
+                {[colors["surface.base"], colors.accent, colors["light.glow"]].map((color, index) => <span key={index} style={{ background: color }} />)}
+              </span>
             </span>
-            <span className="min-w-0 flex-1 truncate">{theme.name}</span>{theme.id === value && <Check className="h-4 w-4 text-[var(--accent)]" />}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">{theme.name}</span>
+              <span className="block text-[11px] text-[var(--muted)]">{resolved.scheme === "dark" ? "深色" : "浅色"}</span>
+            </span>
+            {theme.id === value && <Check className="h-4 w-4 shrink-0 text-[var(--accent)]" />}
           </button>;
         })}
       </div>}

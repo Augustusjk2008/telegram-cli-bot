@@ -25,6 +25,7 @@ import {
   CHAT_BODY_PARAGRAPH_SPACING_OPTIONS,
   normalizeChatTypography,
 } from "../theme/chatTypography";
+import { normalizeThemeMaterial } from "../theme/material";
 import type { ChatTypography, ThemeIllustrationSurface, ThemeIllustrationUploadMime, ThemeIllustrations, UiTheme, ThemeLibrary } from "../theme/types";
 import { downloadThemeDocument, portableTheme, readThemeFile } from "../theme/themeTransfer";
 import { builtinIllustrationScene, illustrationSetIdForScene, ILLUSTRATION_TEMPLATES, THEME_ILLUSTRATION_OPTIONS, THEME_ILLUSTRATION_SURFACES } from "../theme/illustrationPresets";
@@ -99,6 +100,7 @@ function editableValue(theme: UiTheme) {
       a.localeCompare(b),
     ),
     normalizeChatTypography(theme.appearance.typography),
+    normalizeThemeMaterial(theme.appearance.material),
     normalizeIllustrations(theme.appearance.illustrations),
   ]);
 }
@@ -1155,7 +1157,7 @@ export function ThemeManagerScreen({ onClose }: { onClose?: () => void }) {
                     type="range"
                     aria-label="插画透明度"
                     min="0"
-                    max="0.25"
+                    max="1"
                     step="0.01"
                     value={illustrations.opacity}
                     onChange={(event) => changeIllustrations({ opacity: Number(event.target.value) })}

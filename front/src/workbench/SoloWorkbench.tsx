@@ -208,8 +208,11 @@ export function SoloWorkbench({
     <div
       data-testid="solo-workbench-root"
       data-resizing={isResizing ? "true" : "false"}
-      className="desktop-workbench-root solo-workbench-root theme-illustration-host grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto]"
+      className="desktop-workbench-root solo-workbench-root orbit-shell grid h-[100dvh] min-h-0 w-full grid-rows-[auto_minmax(0,1fr)_auto]"
     >
+      <div data-testid="solo-workbench-canvas" className="orbit-canvas" aria-hidden="true">
+        <ThemeIllustrationLayer surface="workbench" className="workbench-canvas-illustration" />
+      </div>
       <WorkbenchHeader
         currentBot={botAlias}
         workspaceName={workspaceName}
@@ -234,14 +237,13 @@ export function SoloWorkbench({
         onLogout={onLogout}
       />
 
-      <div data-testid="solo-workbench-shell" className="desktop-workbench-shell theme-illustration-host relative min-h-0 overflow-hidden bg-[var(--workbench-titlebar-bg)]">
-        <ThemeIllustrationLayer surface="workbench" className="workbench-main-illustration" />
+      <div data-testid="solo-workbench-shell" className="desktop-workbench-shell relative min-h-0 overflow-hidden">
         <div
           ref={columnsRef}
-          className="grid h-full min-h-0 p-0.5"
+          className="solo-workbench-columns grid h-full min-h-0"
           style={{ gridTemplateColumns: columnTemplate }}
         >
-          <section data-testid="solo-chat-pane" className="desktop-workbench-pane theme-illustration-host min-h-0 overflow-hidden">
+          <section data-testid="solo-chat-pane" className="desktop-workbench-pane orbit-island orbit-island--reading min-h-0 overflow-hidden">
             {resolvedChatPaneContent}
           </section>
 
@@ -260,8 +262,8 @@ export function SoloWorkbench({
             }}
           />
 
-          <section data-testid="solo-tabs-pane" className="desktop-workbench-pane grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-            <div className="flex min-w-0 items-center gap-1 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2 py-1.5" role="tablist" aria-label="Solo 标签">
+          <section data-testid="solo-tabs-pane" className="desktop-workbench-pane orbit-island grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+            <div className="flex min-w-0 items-center gap-1 border-b border-[var(--workbench-hairline)] bg-transparent px-2 py-1.5" role="tablist" aria-label="Solo 标签">
               {tabs.map((tab) => {
                 const active = tab.id === activeTab.id;
                 const Icon = tab.kind === "session" ? Info : tab.kind === "session-changes" ? History : FileText;

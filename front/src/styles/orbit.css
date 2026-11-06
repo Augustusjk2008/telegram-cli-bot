@@ -1,0 +1,557 @@
+/*
+ * Orbit design system.
+ *
+ * Every theme is a world behind the window (the illustration canvas); the interface is a set
+ * of glass instruments floating in front of it. Colors come from the theme catalog tokens,
+ * the non-color feel comes from appearance.material (radius, glass, glow and depth) and is
+ * applied as CSS variables by resolveAppearance. The defaults below only cover the first
+ * paint before a theme is resolved.
+ *
+ * Decorative edges use --hairline (soft). Form controls keep the catalog --border tokens,
+ * which meet the 3:1 non-text contrast target.
+ */
+
+:root {
+  --radius-chip: 6px;
+  --radius-card: 8px;
+  --radius-bubble: 12px;
+  --glass-blur: 18px;
+  --glass-saturate: 1.2;
+  --glass-tint: 82%;
+  --glass-tint-strong: 90%;
+  --glow-strength: 0.55;
+  --shadow-island: 0 1px 2px var(--shadow-soft-color), 0 14px 36px -12px var(--shadow-elevated-color);
+  --shadow-raised: 0 1px 2px var(--shadow-soft-color), 0 6px 16px -6px var(--shadow-elevated-color);
+  --shadow-overlay: 0 2px 6px var(--shadow-soft-color), 0 28px 72px -18px var(--shadow-elevated-color);
+
+  --island-gap: 8px;
+  --hairline: color-mix(in srgb, var(--text) 12%, transparent);
+  --hairline-strong: color-mix(in srgb, var(--text) 20%, transparent);
+  --rim-light: color-mix(in srgb, #ffffff 80%, transparent);
+  --island-bg: color-mix(in srgb, var(--workbench-panel-bg) var(--glass-tint), transparent);
+  --island-bg-strong: color-mix(in srgb, var(--workbench-panel-bg) var(--glass-tint-strong), transparent);
+  --island-solid: var(--workbench-panel-bg);
+  --canvas-scrim: color-mix(in srgb, var(--bg) 70%, transparent);
+  --fill-subtle: color-mix(in srgb, var(--text) 5%, transparent);
+  --fill-hover: color-mix(in srgb, var(--text) 8%, transparent);
+  --fill-pressed: color-mix(in srgb, var(--text) 12%, transparent);
+  --glow-soft: color-mix(in srgb, var(--glow-color) calc(var(--glow-strength) * 30%), transparent);
+  --glow-halo: 0 0 calc(var(--glow-strength) * 24px) color-mix(in srgb, var(--glow-color) calc(var(--glow-strength) * 42%), transparent);
+  --focus-halo: 0 0 0 1px var(--accent-outline), 0 0 0 4px color-mix(in srgb, var(--glow-color) 20%, transparent), var(--glow-halo);
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1.15);
+
+  /* Light motion is driven by glow strength; glow "none" and reduced motion switch it off below. */
+  --motion-sheen: linear-gradient(90deg, transparent, color-mix(in srgb, var(--glow-color) 26%, transparent), transparent);
+  --status-sweep-animation: orbitSweep 2.4s ease-in-out infinite;
+  --streaming-sweep-animation: orbitSweep 2.2s var(--ease-out) infinite;
+  --runtime-sheen-animation: orbitSweep 2.8s ease-in-out infinite;
+  --composer-pulse-animation: chatComposerPulse 1.4s ease-out 1;
+  --breathe-animation: orbitBreathe 2.4s ease-in-out infinite;
+}
+
+:root[data-color-scheme="dark"] {
+  --hairline: color-mix(in srgb, var(--text) 10%, transparent);
+  --hairline-strong: color-mix(in srgb, var(--text) 17%, transparent);
+  --rim-light: color-mix(in srgb, #ffffff 8%, transparent);
+  --canvas-scrim: color-mix(in srgb, var(--bg) 62%, transparent);
+  --fill-subtle: color-mix(in srgb, var(--text) 5%, transparent);
+  --fill-hover: color-mix(in srgb, var(--text) 9%, transparent);
+  --fill-pressed: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+:root[data-motion-profile="paper"]:not([data-material-glow="none"]) {
+  --motion-sheen: linear-gradient(90deg, transparent, color-mix(in srgb, var(--glow-color) 26%, transparent), transparent);
+  --status-sweep-animation: orbitSweep 2.4s ease-in-out infinite;
+  --streaming-sweep-animation: orbitSweep 2.2s var(--ease-out) infinite;
+  --runtime-sheen-animation: orbitSweep 2.8s ease-in-out infinite;
+  --composer-pulse-animation: chatComposerPulse 1.4s ease-out 1;
+}
+
+:root[data-material-glow="none"] {
+  --motion-sheen: none;
+  --status-sweep-animation: none;
+  --streaming-sweep-animation: none;
+  --runtime-sheen-animation: none;
+  --composer-pulse-animation: none;
+  --breathe-animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  :root[data-motion-profile="paper"]:not([data-material-glow="none"]) {
+    --status-sweep-animation: none;
+    --streaming-sweep-animation: none;
+    --runtime-sheen-animation: none;
+    --composer-pulse-animation: none;
+    --breathe-animation: none;
+  }
+}
+
+/* Print depth: crisp ink outlines replace soft glass edges. */
+:root[data-material-depth="print"] {
+  --hairline: color-mix(in srgb, var(--text) 22%, transparent);
+  --rim-light: transparent;
+}
+
+@keyframes orbitSweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes orbitBreathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); opacity: 0.85; }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 22%, transparent); opacity: 1; }
+}
+
+@keyframes orbitFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes orbitRise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ------------------------------------------------------------------ canvas */
+
+.orbit-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(140% 90% at 50% -10%, color-mix(in srgb, var(--glow-color) 10%, transparent), transparent 60%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+}
+
+.orbit-canvas > .theme-illustration-layer {
+  animation: orbitFadeIn 420ms var(--ease-out);
+}
+
+/* Theme art keeps its full strength on the canvas; the layer's own opacity is the theme value. */
+.orbit-canvas .theme-illustration-art {
+  object-fit: cover;
+}
+
+/* --------------------------------------------------------------- islands */
+
+.orbit-island {
+  position: relative;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-panel);
+  background: var(--island-bg);
+  box-shadow: var(--shadow-island), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.orbit-island--reading {
+  background: var(--island-bg-strong);
+}
+
+.orbit-island--solid {
+  background: var(--island-solid);
+}
+
+:root[data-material-glass="none"] .orbit-island {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--island-solid);
+}
+
+/* -------------------------------------------------------------- controls */
+
+.orbit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding-inline: 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text);
+  background: transparent;
+  transition:
+    background-color 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    box-shadow 180ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+
+.orbit-btn:disabled {
+  opacity: 0.5;
+}
+
+.orbit-btn:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.orbit-btn--sm { height: 28px; padding-inline: 10px; font-size: 12px; }
+.orbit-btn--lg { height: 40px; padding-inline: 16px; font-size: 14px; }
+.orbit-btn--icon { width: 32px; padding: 0; }
+.orbit-btn--icon.orbit-btn--sm { width: 28px; }
+
+.orbit-btn--primary {
+  color: var(--accent-foreground);
+  background: var(--accent);
+  box-shadow: var(--shadow-raised), inset 0 1px 0 color-mix(in srgb, #ffffff 22%, transparent);
+}
+
+.orbit-btn--primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+  box-shadow: var(--shadow-raised), var(--glow-halo);
+}
+
+.orbit-btn--secondary {
+  border-color: var(--hairline-strong);
+  background: var(--surface-glass);
+}
+
+.orbit-btn--secondary:not(:disabled):hover,
+.orbit-btn--ghost:not(:disabled):hover {
+  background: var(--fill-hover);
+}
+
+.orbit-btn--ghost {
+  color: var(--muted);
+}
+
+.orbit-btn--ghost:not(:disabled):hover {
+  color: var(--text);
+}
+
+.orbit-btn--danger {
+  color: var(--button-filled-foreground);
+  background: var(--button-danger-background-strong);
+}
+
+.orbit-btn[aria-pressed="true"],
+.orbit-btn[data-active="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.orbit-segmented {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: calc(var(--radius-control) + 2px);
+  background: var(--fill-subtle);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.orbit-segmented > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 26px;
+  padding-inline: 8px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+
+.orbit-segmented > button:not(:disabled):hover {
+  color: var(--text);
+  background: var(--fill-hover);
+}
+
+.orbit-segmented > button:disabled {
+  opacity: 0.45;
+}
+
+.orbit-segmented > button[aria-pressed="true"],
+.orbit-segmented > button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--workbench-selected-surface);
+  box-shadow: 0 1px 2px var(--shadow-soft-color), inset 0 0 0 1px var(--hairline);
+}
+
+:root[data-color-scheme="dark"] .orbit-segmented > button[aria-pressed="true"],
+:root[data-color-scheme="dark"] .orbit-segmented > button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.orbit-segmented--accent > button[aria-pressed="true"],
+.orbit-segmented--accent > button[aria-selected="true"] {
+  color: var(--accent);
+}
+
+.orbit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding-inline: 8px;
+  border-radius: var(--radius-chip);
+  background: var(--fill-subtle);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.orbit-chip[data-tone="accent"] { background: var(--accent-soft); color: var(--accent); }
+.orbit-chip[data-tone="success"] { background: var(--status-success-bg); color: var(--status-success); }
+.orbit-chip[data-tone="warning"] { background: var(--status-warning-bg); color: var(--status-warning); }
+.orbit-chip[data-tone="danger"] { background: var(--status-danger-bg); color: var(--status-danger); }
+.orbit-chip[data-tone="info"] { background: var(--status-info-bg); color: var(--status-info); }
+
+.orbit-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: currentColor;
+}
+
+.orbit-dot[data-state="running"],
+.orbit-dot[data-state="active"] {
+  color: var(--glow-color);
+  animation: var(--breathe-animation);
+}
+
+.orbit-dot[data-state="success"],
+.orbit-dot[data-state="online"] { color: var(--status-success); }
+.orbit-dot[data-state="warning"] { color: var(--status-warning); }
+.orbit-dot[data-state="error"],
+.orbit-dot[data-state="offline"] { color: var(--status-danger); }
+
+.orbit-field {
+  width: 100%;
+  height: 40px;
+  padding-inline: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-glass);
+  color: var(--text);
+  transition: border-color 140ms var(--ease-out), box-shadow 180ms var(--ease-out), background-color 140ms var(--ease-out);
+}
+
+.orbit-field::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.orbit-field:hover {
+  border-color: var(--border-strong);
+}
+
+.orbit-field:focus,
+.orbit-field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-halo);
+}
+
+.orbit-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding-inline: 5px;
+  border-radius: 4px;
+  background: var(--fill-subtle);
+  box-shadow: inset 0 -1px 0 var(--hairline-strong), inset 0 0 0 1px var(--hairline);
+  color: var(--muted);
+  font: 500 11px/1 var(--code-font-family);
+}
+
+/* A slow light streak along the top edge of a running surface. */
+.orbit-sweep {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.orbit-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--glow-color), transparent);
+  box-shadow: 0 0 calc(var(--glow-strength) * 12px) var(--glow-color);
+  transform: translateX(-100%);
+  animation: var(--streaming-sweep-animation);
+}
+
+/* ---------------------------------------------------------------- overlays */
+
+.orbit-backdrop {
+  background: color-mix(in srgb, var(--overlay-backdrop-45) 100%, transparent);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.35 + 2px)) saturate(1.05);
+  backdrop-filter: blur(calc(var(--glass-blur) * 0.35 + 2px)) saturate(1.05);
+  animation: orbitFadeIn 160ms var(--ease-out);
+}
+
+.orbit-dialog {
+  position: relative;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-overlay) var(--radius-overlay) 0 0;
+  background: color-mix(in srgb, var(--surface) calc(var(--glass-tint-strong) + 6%), transparent);
+  box-shadow: var(--shadow-overlay), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  animation: orbitRise 220ms var(--ease-out);
+}
+
+@media (min-width: 640px) {
+  .orbit-dialog {
+    border-radius: var(--radius-overlay);
+  }
+}
+
+.orbit-dialog::before {
+  content: "";
+  position: absolute;
+  inset: 0 18% auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glow-color), transparent);
+  opacity: calc(var(--glow-strength) * 0.9);
+}
+
+/* ------------------------------------------------------------ theme picker */
+
+.theme-dropdown-menu {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-overlay);
+  background: color-mix(in srgb, var(--surface-overlay) calc(var(--glass-tint-strong) + 6%), transparent);
+  box-shadow: var(--shadow-overlay), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  animation: orbitRise 180ms var(--ease-out);
+}
+
+.theme-dropdown-option {
+  border-radius: calc(var(--radius-overlay) - 6px);
+  transition: background-color 140ms var(--ease-out);
+}
+
+.theme-dropdown-option:hover,
+.theme-dropdown-option:focus-visible {
+  background: var(--fill-hover);
+}
+
+.theme-dropdown-option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.theme-dropdown-thumb {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 64px;
+  height: 36px;
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background-position: 45% 35%;
+  background-size: cover;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.theme-dropdown-swatches {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  gap: 2px;
+}
+
+.theme-dropdown-swatches > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.25);
+}
+
+/* ------------------------------------------------------------ cover banner */
+
+.orbit-cover {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: clamp(200px, 22vw, 340px);
+}
+
+.orbit-cover-art {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+}
+
+.orbit-cover-art .theme-illustration-art {
+  object-fit: cover;
+}
+
+.orbit-cover::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--bg) 78%, transparent) 0%, color-mix(in srgb, var(--bg) 30%, transparent) 42%, transparent 68%),
+    linear-gradient(180deg, transparent 38%, color-mix(in srgb, var(--bg) 70%, transparent) 78%, var(--bg) 100%);
+}
+
+/* --------------------------------------------------------------- empty states as windows */
+
+.orbit-window-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  min-width: 240px;
+  padding: 16px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--island-bg-strong);
+  box-shadow: var(--shadow-raised), inset 0 1px 0 var(--rim-light);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  color: var(--text);
+  text-align: left;
+  animation: orbitRise 260ms var(--ease-out);
+}
+
+:root[data-material-glass="none"] .orbit-window-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--island-solid);
+}
+
+/* ------------------------------------------------------- decorative hairlines */
+
+/*
+ * Most panels and cards in the app use Tailwind's border-[var(--border)] for decoration.
+ * Inside the Orbit shells that edge becomes the soft hairline; form controls keep the
+ * stronger catalog border so their boundaries stay at the 3:1 target.
+ */
+:where(.orbit-shell) :where(.border-\[var\(--border\)\], .border-\[var\(--workbench-hairline\)\]) {
+  border-color: var(--hairline);
+}
+
+:where(.orbit-shell) :where(input, textarea, select):where(.border-\[var\(--border\)\]) {
+  border-color: var(--border);
+}
+
+.orbit-shell :focus-visible {
+  outline-color: var(--accent);
+}
