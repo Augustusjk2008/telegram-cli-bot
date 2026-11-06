@@ -57,6 +57,29 @@ class CodexUsageStore:
         self._lock = threading.RLock()
         self._connection: sqlite3.Connection | None = None
 
+    @staticmethod
+    def _is_recoverable_io_error(exc: BaseException) -> bool:
+        return isinstance(exc, sqlite3.OperationalError) and "disk i/o error" in str(exc).casefold()
+
+    def _discard_connection(self) -> None:
+        connection = self._connection
+        self._connection = None
+        if connection is None:
+            return
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+    def _read_with_recovery(self, operation):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if not self._is_recoverable_io_error(exc):
+                raise
+            self._discard_connection()
+            return operation()
+
     def _get_connection(self, *, create: bool) -> sqlite3.Connection | None:
         if self._connection is not None:
             return self._connection
@@ -175,16 +198,19 @@ class CodexUsageStore:
     def get_enabled(self, provider: UsageProvider = "codex") -> bool:
         setting_key = self._setting_key(provider)
         with self._lock:
-            connection = self._get_connection(create=False)
-            if connection is None:
-                return False
-            row = connection.execute(
-                "SELECT value FROM settings WHERE key = ?",
-                (setting_key,),
-            ).fetchone()
-            if row is None:
-                return False
-            return str(row["value"]).strip().lower() in {"1", "true", "yes", "on"}
+            def read() -> bool:
+                connection = self._get_connection(create=False)
+                if connection is None:
+                    return False
+                row = connection.execute(
+                    "SELECT value FROM settings WHERE key = ?",
+                    (setting_key,),
+                ).fetchone()
+                if row is None:
+                    return False
+                return str(row["value"]).strip().lower() in {"1", "true", "yes", "on"}
+
+            return self._read_with_recovery(read)
 
     is_enabled = get_enabled
 
@@ -289,40 +315,46 @@ class CodexUsageStore:
             raise ValueError("起始日期不能晚于结束日期")
         normalized_provider = normalize_usage_provider(provider)
         with self._lock:
-            connection = self._get_connection(create=False)
-            if connection is None:
-                return ()
-            rows = connection.execute(
-                """
-                SELECT limit_id, sampled_at_ms, used_percent, window_minutes,
-                       resets_at, plan_type, credits_balance
-                FROM rate_limit_samples
-                WHERE provider = ? AND day >= ? AND day <= ?
-                  AND window_minutes >= ?
-                ORDER BY sampled_at_ms ASC, sample_id ASC
-                """,
-                (
-                    normalized_provider,
-                    start,
-                    end,
-                    _LONG_TERM_LIMIT_WINDOW_MINUTES,
-                ),
-            ).fetchall()
-            return tuple(self._rate_limit_from_row(row) for row in rows)
+            def read() -> tuple[CodexRateLimitSample, ...]:
+                connection = self._get_connection(create=False)
+                if connection is None:
+                    return ()
+                rows = connection.execute(
+                    """
+                    SELECT limit_id, sampled_at_ms, used_percent, window_minutes,
+                           resets_at, plan_type, credits_balance
+                    FROM rate_limit_samples
+                    WHERE provider = ? AND day >= ? AND day <= ?
+                      AND window_minutes >= ?
+                    ORDER BY sampled_at_ms ASC, sample_id ASC
+                    """,
+                    (
+                        normalized_provider,
+                        start,
+                        end,
+                        _LONG_TERM_LIMIT_WINDOW_MINUTES,
+                    ),
+                ).fetchall()
+                return tuple(self._rate_limit_from_row(row) for row in rows)
+
+            return self._read_with_recovery(read)
 
     def available_range(self, provider: UsageProvider = "codex") -> tuple[date | None, date | None]:
         normalized_provider = normalize_usage_provider(provider)
         with self._lock:
-            connection = self._get_connection(create=False)
-            if connection is None:
-                return None, None
-            row = connection.execute(
-                "SELECT MIN(day), MAX(day) FROM rate_limit_samples WHERE provider = ?",
-                (normalized_provider,),
-            ).fetchone()
-            if row is None or row[0] is None:
-                return None, None
-            return day_from_number(int(row[0])), day_from_number(int(row[1]))
+            def read() -> tuple[date | None, date | None]:
+                connection = self._get_connection(create=False)
+                if connection is None:
+                    return None, None
+                row = connection.execute(
+                    "SELECT MIN(day), MAX(day) FROM rate_limit_samples WHERE provider = ?",
+                    (normalized_provider,),
+                ).fetchone()
+                if row is None or row[0] is None:
+                    return None, None
+                return day_from_number(int(row[0])), day_from_number(int(row[1]))
+
+            return self._read_with_recovery(read)
 
     def diagnostics(self) -> dict[str, int | bool | str]:
         with self._lock:

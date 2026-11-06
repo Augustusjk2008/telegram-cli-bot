@@ -63,6 +63,35 @@ def test_shared_store_separates_provider_samples_and_settings(tmp_path):
     store.close()
 
 
+def test_read_reopens_connection_after_disk_io_error(tmp_path):
+    store = CodexUsageStore(tmp_path / "usage.sqlite3")
+    sample = _sample()
+    store.record_rate_limit_sample(sample)
+    connection = store._connection
+    assert connection is not None
+
+    class _FlakyConnection:
+        def __init__(self, inner):
+            self.inner = inner
+            self.failed = False
+
+        def execute(self, *args, **kwargs):
+            if not self.failed:
+                self.failed = True
+                raise sqlite3.OperationalError("disk I/O error")
+            return self.inner.execute(*args, **kwargs)
+
+        def close(self):
+            self.inner.close()
+
+    flaky = _FlakyConnection(connection)
+    store._connection = flaky
+
+    assert store.available_range() == (sample.sampled_at.date(),) * 2
+    assert store._connection is not flaky
+    store.close()
+
+
 def test_schema_v7_migrates_existing_samples_to_codex_provider(tmp_path):
     path = tmp_path / "usage.sqlite3"
     connection = sqlite3.connect(path)
