@@ -174,6 +174,7 @@ import type {
   FileCreateResult,
   FileDeleteOptions,
   FileDownloadProgress,
+  FileUploadProgress,
   FileEntry,
   FileMoveResult,
   FileReadMode,
@@ -4118,6 +4119,63 @@ async function readDownloadBlobWithProgress(
   return new Blob(chunks, { type: contentType });
 }
 
+function createUploadAbortError() {
+  return new DOMException("上传已取消", "AbortError");
+}
+
+/**
+ * The multipart body is slightly larger than the file, so progress is reported
+ * as a ratio of the request and scaled back to the file size the user knows.
+ */
+function emitFileUploadProgress(
+  onProgress: ((progress: FileUploadProgress) => void) | undefined,
+  ratio: number,
+  fileSize: number,
+) {
+  if (!onProgress) {
+    return;
+  }
+  const clampedRatio = Math.min(1, Math.max(0, ratio));
+  onProgress({
+    uploadedBytes: Math.round(clampedRatio * fileSize),
+    totalBytes: fileSize,
+    percent: Math.floor(clampedRatio * 100),
+  });
+}
+
+function parseUploadResponse<T>(
+  response: { status: number; body: string; contentType: string },
+  fallbackMessage: string,
+): T {
+  const succeeded = response.status >= 200 && response.status < 300;
+  let payload: JsonEnvelope<T> | null = null;
+  try {
+    const parsed = JSON.parse(response.body) as unknown;
+    payload = parsed && typeof parsed === "object" ? parsed as JsonEnvelope<T> : null;
+  } catch {
+    payload = null;
+  }
+  if (!payload) {
+    if (!succeeded) {
+      throw new WebApiClientError(`${fallbackMessage}（HTTP ${response.status}）`, { status: response.status });
+    }
+    const looksLikeHtml = response.contentType.includes("text/html") || /^\s*</.test(response.body);
+    throw new Error(
+      looksLikeHtml
+        ? "服务返回了页面内容而不是 JSON，请确认 Web API 已启动，并且前后端版本已同步更新"
+        : "服务返回了无法解析的数据，请刷新页面后重试",
+    );
+  }
+  if (!succeeded || !payload.ok) {
+    throw new WebApiClientError(payload.error?.message || fallbackMessage, {
+      status: response.status,
+      code: payload.error?.code,
+      data: mapApiErrorData(payload.error?.code, payload.error?.data),
+    });
+  }
+  return payload.data;
+}
+
 function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
@@ -4491,6 +4549,70 @@ export class RealWebBotClient implements WebBotClient {
       });
     }
     return payload.data;
+  }
+
+  /** fetch() cannot observe request-body progress, so multipart uploads use XMLHttpRequest. */
+  private uploadMultipartFile<T>(
+    path: string,
+    file: File,
+    fallbackMessage: string,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(createUploadAbortError());
+        return;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      const xhr = new XMLHttpRequest();
+      let settled = false;
+      function settle(complete: () => void) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal?.removeEventListener("abort", handleAbort);
+        complete();
+      }
+      function handleAbort() {
+        settle(() => reject(createUploadAbortError()));
+        xhr.abort();
+      }
+
+      xhr.open("POST", withApiBase(path));
+      Object.entries(this.headers() as Record<string, string>).forEach(([name, value]) => {
+        xhr.setRequestHeader(name, value);
+      });
+      xhr.upload.onprogress = (event) => {
+        const total = event.lengthComputable && event.total > 0 ? event.total : file.size;
+        if (!settled && total > 0) {
+          emitFileUploadProgress(onProgress, event.loaded / total, file.size);
+        }
+      };
+      xhr.upload.onload = () => {
+        if (!settled) {
+          emitFileUploadProgress(onProgress, 1, file.size);
+        }
+      };
+      xhr.onload = () => settle(() => {
+        try {
+          resolve(parseUploadResponse<T>({
+            status: xhr.status,
+            body: xhr.responseText,
+            contentType: xhr.getResponseHeader("content-type") || "",
+          }, fallbackMessage));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      xhr.onerror = () => settle(() => reject(new Error(`${fallbackMessage}：网络连接中断`)));
+      xhr.onabort = () => settle(() => reject(createUploadAbortError()));
+      signal?.addEventListener("abort", handleAbort, { once: true });
+      emitFileUploadProgress(onProgress, 0, file.size);
+      xhr.send(formData);
+    });
   }
 
   private async requestUpdateStatusStream(
@@ -6943,15 +7065,18 @@ export class RealWebBotClient implements WebBotClient {
     return mapWorkspaceDocumentCloseResult(data);
   }
 
-  async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {
-    const formData = new FormData();
-    formData.append("file", file);
-    const data = await this.requestJson<RawChatAttachmentUploadResult>(
+  async uploadChatAttachment(
+    botAlias: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatAttachmentUploadResult> {
+    const data = await this.uploadMultipartFile<RawChatAttachmentUploadResult>(
       `/api/bots/${encodeURIComponent(botAlias)}/chat/attachments`,
-      {
-        method: "POST",
-        body: formData,
-      },
+      file,
+      "上传附件失败",
+      onProgress,
+      signal,
     );
     return mapChatAttachmentUploadResult(data);
   }
@@ -6972,18 +7097,19 @@ export class RealWebBotClient implements WebBotClient {
     return mapChatAttachmentDeleteResult(data);
   }
 
-  async uploadFile(botAlias: string, file: File): Promise<void> {
-    const formData = new FormData();
-    formData.append("file", file);
-    const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/upload`), {
-      method: "POST",
-      credentials: "same-origin",
-      headers: this.headers(),
-      body: formData,
-    });
-    if (!response.ok) {
-      throw new Error("上传失败");
-    }
+  async uploadFile(
+    botAlias: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.uploadMultipartFile<unknown>(
+      `/api/bots/${encodeURIComponent(botAlias)}/files/upload`,
+      file,
+      "上传失败",
+      onProgress,
+      signal,
+    );
   }
 
   async downloadFile(

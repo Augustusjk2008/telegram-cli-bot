@@ -2,6 +2,7 @@ import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { FilePreviewSurface } from "./FilePreviewSurface";
+import { TransferProgressBar } from "./TransferProgressBar";
 import { isFilePreviewFullyLoaded } from "../utils/filePreview";
 
 type DesktopAnchorRect = {
@@ -183,19 +184,7 @@ export function FilePreviewDialog({
             <span className="truncate">{downloadProgressText}</span>
             {typeof downloadPercent === "number" ? <span className="font-mono">{downloadPercent}%</span> : null}
           </div>
-          <div
-            role="progressbar"
-            aria-label={`${title} 下载进度`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={typeof downloadPercent === "number" ? downloadPercent : undefined}
-            className="h-1.5 overflow-hidden rounded-full bg-[var(--surface-strong)]"
-          >
-            <div
-              className="h-full rounded-full bg-[var(--accent)] transition-[width]"
-              style={{ width: `${typeof downloadPercent === "number" ? downloadPercent : 100}%` }}
-            />
-          </div>
+          <TransferProgressBar label={`${title} 下载进度`} percent={downloadPercent} className="h-1.5" />
         </div>
         {onCancelDownload ? (
           <button

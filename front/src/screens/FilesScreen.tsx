@@ -1,6 +1,7 @@
 import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
 import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { clsx } from "clsx";
 import { ChevronLeft, FilePlus, FolderOpen, FolderPlus, House, Upload } from "lucide-react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
@@ -8,6 +9,7 @@ import { FileNameDialog } from "../components/FileNameDialog";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { SurfacePanel } from "../components/SurfacePanel";
 import { ToolbarButton } from "../components/ToolbarButton";
+import { TransferProgressBar } from "../components/TransferProgressBar";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   CodeLocation,
@@ -15,6 +17,7 @@ import type {
   FileDownloadProgress,
   FileEntry,
   FileReadResult,
+  FileUploadProgress,
   InlineCompletionConfig,
   RemoteWorkspace,
   WorkspaceDocumentCloseItem,
@@ -30,6 +33,7 @@ import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isAbortError } from "../utils/errorMessage";
 import { isAbsolutePathInput } from "../utils/pathInput";
 import { deletePathWithReadonlyConfirmation } from "../utils/deletePath";
+import { formatTransferDetail } from "../utils/transferProgress";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
@@ -214,21 +218,57 @@ type ActiveDownload = FileDownloadProgress & {
   filename: string;
 };
 
-function formatBytes(value: number) {
-  if (value >= 1024 * 1024) {
-    return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  }
-  if (value >= 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${value} B`;
-}
+type ActiveUpload = FileUploadProgress & {
+  filename: string;
+};
 
-function formatDownloadDetail(progress: ActiveDownload) {
-  if (typeof progress.totalBytes === "number" && progress.totalBytes > 0) {
-    return `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
-  }
-  return formatBytes(progress.downloadedBytes);
+type TransferProgressPanelProps = {
+  verb: "上传" | "下载";
+  filename: string;
+  transferredBytes: number;
+  totalBytes?: number;
+  percent?: number;
+  awaitingServer?: boolean;
+  onCancel: () => void;
+};
+
+function TransferProgressPanel({
+  verb,
+  filename,
+  transferredBytes,
+  totalBytes,
+  percent,
+  awaitingServer = false,
+  onCancel,
+}: TransferProgressPanelProps) {
+  const detail = formatTransferDetail(transferredBytes, totalBytes);
+  return (
+    <SurfacePanel
+      role="status"
+      aria-label={`${verb}进度`}
+      className="mb-4 px-4 py-3 text-sm"
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="min-w-0 truncate font-medium">正在{verb} {filename}</span>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="font-mono text-xs text-[var(--muted)]">
+            {typeof percent === "number" ? `${percent}%` : detail}
+          </span>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-[var(--workbench-hairline)] px-3 py-1.5 text-xs text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)]"
+          >
+            取消{verb}
+          </button>
+        </div>
+      </div>
+      <TransferProgressBar label={`${filename} ${verb}进度`} percent={percent} className="h-2" />
+      <div className="mt-1 text-xs text-[var(--muted)]">
+        {awaitingServer ? `${detail} · 等待服务器处理` : detail}
+      </div>
+    </SurfacePanel>
+  );
 }
 
 export function FilesScreen({
@@ -278,6 +318,7 @@ export function FilesScreen({
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<ActiveUpload | null>(null);
   const [statusText, setStatusText] = useState("");
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const listingRequestSeqRef = useRef(0);
@@ -302,6 +343,7 @@ export function FilesScreen({
   const codeNavigationHoverRequestSeqRef = useRef(0);
   const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
   const downloadAbortControllerRef = useRef<AbortController | null>(null);
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
   const editorDocumentScopeRef = useRef<EditorDocumentScopeBinding | null>(null);
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
@@ -348,11 +390,14 @@ export function FilesScreen({
 
   useEffect(() => {
     setDownloadProgress(null);
+    setUploadProgress(null);
     return () => {
       listingRequestSeqRef.current += 1;
       abortExplicitCodeNavigation();
       downloadAbortControllerRef.current?.abort();
       downloadAbortControllerRef.current = null;
+      // Leaving the screen must not silently drop an upload; it keeps running, only untracked.
+      uploadAbortControllerRef.current = null;
       const binding = editorDocumentScopeRef.current;
       if (binding?.client === client && binding.botAlias === botAlias) {
         void queueEditorDocumentClose(client, botAlias, binding.scope).catch(() => {});
@@ -656,6 +701,48 @@ export function FilesScreen({
     }
     controller.abort();
     setDownloadProgress(null);
+  };
+
+  const handleUploadEntry = async (file: File) => {
+    if (!canMutateFiles || uploadAbortControllerRef.current) {
+      return;
+    }
+    const controller = new AbortController();
+    uploadAbortControllerRef.current = controller;
+    setError("");
+    setStatusText("");
+    setUploadProgress({ filename: file.name, uploadedBytes: 0, totalBytes: file.size, percent: 0 });
+    let uploaded = false;
+    try {
+      await client.uploadFile(botAlias, file, (progress) => {
+        if (uploadAbortControllerRef.current === controller && !controller.signal.aborted) {
+          setUploadProgress({ filename: file.name, ...progress });
+        }
+      }, controller.signal);
+      uploaded = true;
+    } catch (err) {
+      if (!isAbortError(err) && uploadAbortControllerRef.current === controller) {
+        setError(err instanceof Error && err.message ? err.message : "上传失败");
+        setStatusText("");
+      }
+    }
+    if (uploadAbortControllerRef.current !== controller) {
+      return;
+    }
+    uploadAbortControllerRef.current = null;
+    setUploadProgress(null);
+    if (uploaded) {
+      await loadListing();
+    }
+  };
+
+  const handleCancelUpload = () => {
+    const controller = uploadAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    controller.abort();
+    setUploadProgress(null);
   };
 
   const loadPreview = async (name: string, mode: "preview" | "full") => {
@@ -1135,20 +1222,27 @@ export function FilesScreen({
               </ToolbarButton>
             ) : null}
             {canMutateFiles && !isVirtualRoot ? (
-              <label title="上传文件" className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]">
+              <label
+                title={uploadProgress ? "正在上传文件" : "上传文件"}
+                className={clsx(
+                  "inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--text)] transition-colors",
+                  uploadProgress
+                    ? "cursor-not-allowed opacity-50"
+                    : "cursor-pointer hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]",
+                )}
+              >
                 <Upload className="w-5 h-5" />
                 <input
                   aria-label="上传文件"
                   type="file"
                   className="hidden"
+                  disabled={Boolean(uploadProgress)}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
                     event.currentTarget.value = "";
-                    if (!file) return;
-                    if (!canMutateFiles) return;
-                    void client.uploadFile(botAlias, file)
-                      .then(() => loadListing())
-                      .catch((err: Error) => setError(err.message || "上传失败"));
+                    if (file) {
+                      void handleUploadEntry(file);
+                    }
                   }}
                 />
               </label>
@@ -1212,42 +1306,26 @@ export function FilesScreen({
               {statusText}
             </SurfacePanel>
           ) : null}
+          {uploadProgress ? (
+            <TransferProgressPanel
+              verb="上传"
+              filename={uploadProgress.filename}
+              transferredBytes={uploadProgress.uploadedBytes}
+              totalBytes={uploadProgress.totalBytes}
+              percent={uploadProgress.percent}
+              awaitingServer={uploadProgress.percent === 100}
+              onCancel={handleCancelUpload}
+            />
+          ) : null}
           {downloadProgress ? (
-            <SurfacePanel
-              role="status"
-              aria-label="下载进度"
-              className="mb-4 px-4 py-3 text-sm"
-            >
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="min-w-0 truncate font-medium">正在下载 {downloadProgress.filename}</span>
-                <div className="flex shrink-0 items-center gap-3">
-                  <span className="font-mono text-xs text-[var(--muted)]">
-                    {typeof downloadProgress.percent === "number" ? `${downloadProgress.percent}%` : formatDownloadDetail(downloadProgress)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCancelDownload}
-                    className="rounded-lg border border-[var(--workbench-hairline)] px-3 py-1.5 text-xs text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)]"
-                  >
-                    取消下载
-                  </button>
-                </div>
-              </div>
-              <div
-                role="progressbar"
-                aria-label={`${downloadProgress.filename} 下载进度`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={typeof downloadProgress.percent === "number" ? downloadProgress.percent : undefined}
-                className="h-2 overflow-hidden rounded-full bg-[var(--surface-strong)]"
-              >
-                <div
-                  className="h-full rounded-full bg-[var(--accent)] transition-[width]"
-                  style={{ width: `${typeof downloadProgress.percent === "number" ? downloadProgress.percent : 100}%` }}
-                />
-              </div>
-              <div className="mt-1 text-xs text-[var(--muted)]">{formatDownloadDetail(downloadProgress)}</div>
-            </SurfacePanel>
+            <TransferProgressPanel
+              verb="下载"
+              filename={downloadProgress.filename}
+              transferredBytes={downloadProgress.downloadedBytes}
+              totalBytes={downloadProgress.totalBytes}
+              percent={downloadProgress.percent}
+              onCancel={handleCancelDownload}
+            />
           ) : null}
           {loading ? (
             <div className="text-center text-[var(--muted)] mt-10">加载中...</div>
@@ -1337,7 +1415,9 @@ export function FilesScreen({
           onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
           onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
           onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}
-          downloadProgressText={previewDownloadProgress ? formatDownloadDetail(previewDownloadProgress) : ""}
+          downloadProgressText={previewDownloadProgress
+            ? formatTransferDetail(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes)
+            : ""}
           downloadPercent={previewDownloadProgress?.percent}
         />
       ) : null}

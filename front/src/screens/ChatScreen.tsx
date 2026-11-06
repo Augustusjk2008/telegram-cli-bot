@@ -25,7 +25,7 @@ import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lu
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
-import { ChatComposer, type ChatComposerModelOption } from "../components/ChatComposer";
+import { ChatComposer, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
@@ -1951,7 +1951,9 @@ export function ChatScreen({
   const [clusterSaving, setClusterSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
   const [queuedMessage, setQueuedMessage] = useState<QueuedChatMessage | null>(null);
-  const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [attachmentUploadProgress, setAttachmentUploadProgress] = useState<ChatComposerUploadProgress | null>(null);
+  const attachmentUploadAbortControllerRef = useRef<AbortController | null>(null);
+  const uploadingAttachments = attachmentUploadProgress !== null;
   const [previewName, setPreviewName] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
@@ -2876,7 +2878,9 @@ export function ChatScreen({
     setPreviewResult(null);
     setBotOverview(null);
     setPendingAttachments([]);
-    setUploadingAttachments(false);
+    attachmentUploadAbortControllerRef.current?.abort();
+    attachmentUploadAbortControllerRef.current = null;
+    setAttachmentUploadProgress(null);
     setSoloRollbackTarget(null);
     setSoloRollbacking(false);
     setDeletedAttachmentKeys({});
@@ -4166,24 +4170,52 @@ export function ChatScreen({
       setError("DeepSeek Harness 暂不支持图片或语音附件");
       return;
     }
+    if (attachmentUploadAbortControllerRef.current) {
+      return;
+    }
     setError("");
-    setUploadingAttachments(true);
+    const controller = new AbortController();
+    attachmentUploadAbortControllerRef.current = controller;
+    const isTracked = () => attachmentUploadAbortControllerRef.current === controller;
     try {
-      const uploadedAttachments: PendingChatAttachment[] = [];
-      for (const file of files) {
-        const uploaded = await client.uploadChatAttachment(botAlias, file);
-        uploadedAttachments.push({
+      for (const [index, file] of files.entries()) {
+        const batch = { filename: file.name, fileIndex: index + 1, fileCount: files.length };
+        setAttachmentUploadProgress({ ...batch, uploadedBytes: 0, totalBytes: file.size, percent: 0 });
+        const uploaded = await client.uploadChatAttachment(botAlias, file, (progress) => {
+          if (isTracked() && !controller.signal.aborted) {
+            setAttachmentUploadProgress({ ...batch, ...progress });
+          }
+        }, controller.signal);
+        if (!isTracked()) {
+          return;
+        }
+        // Keep finished files attached so a later failure or cancellation does not orphan them.
+        const attachment: PendingChatAttachment = {
           ...uploaded,
           id: `${uploaded.savedPath}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        });
+        };
+        setPendingAttachments((prev) => [...prev, attachment]);
       }
-      setPendingAttachments((prev) => [...prev, ...uploadedAttachments]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "上传附件失败");
+      if (isTracked() && !isAbortError(err)) {
+        setError(err instanceof Error ? err.message : "上传附件失败");
+      }
     } finally {
-      setUploadingAttachments(false);
+      if (isTracked()) {
+        attachmentUploadAbortControllerRef.current = null;
+        setAttachmentUploadProgress(null);
+      }
     }
   }, [botAlias, client]);
+
+  const handleCancelAttachmentUpload = useCallback(() => {
+    attachmentUploadAbortControllerRef.current?.abort();
+  }, []);
+
+  useEffect(() => () => {
+    attachmentUploadAbortControllerRef.current?.abort();
+    attachmentUploadAbortControllerRef.current = null;
+  }, []);
 
   const handleRemoveAttachment = useCallback((attachmentId: string) => {
     const removedAttachment = pendingAttachments.find((attachment) => attachment.id === attachmentId);
@@ -6054,6 +6086,8 @@ export function ChatScreen({
             mobileLayout={mobileLayout}
             enterToSend={enterToSend}
             uploadingAttachments={uploadingAttachments}
+            attachmentUploadProgress={attachmentUploadProgress}
+            onCancelAttachmentUpload={handleCancelAttachmentUpload}
             placeholder={voiceInputLocked ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
             providerOptions={deepSeekProviderOptions}
             selectedProvider={selectedDeepSeekProvider}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileMoveResult, FileRenameResult, RemoteWorkspace } from "../services/types";
+import type { FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileMoveResult, FileRenameResult, FileUploadProgress, RemoteWorkspace } from "../services/types";
 import { joinRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage, isAbortError } from "../utils/errorMessage";
@@ -35,6 +35,14 @@ export type FileTreeDownloadProgress = FileDownloadProgress & {
   path: string;
 };
 
+export type FileTreeUploadProgress = FileUploadProgress & {
+  filename: string;
+  fileIndex: number;
+  fileCount: number;
+};
+
+const FILE_TREE_UPLOAD_BUSY_MESSAGE = "已有文件正在上传，请等待完成或取消后再试";
+
 export type UseFileTreeResult = {
   rootPath: string;
   loading: boolean;
@@ -45,6 +53,7 @@ export type UseFileTreeResult = {
   highlightedPath: string;
   selectedPath: string;
   downloadProgress: FileTreeDownloadProgress | null;
+  uploadProgress: FileTreeUploadProgress | null;
   selectPath: (path: string) => void;
   clearSelection: () => void;
   isExpanded: (path: string) => boolean;
@@ -62,6 +71,9 @@ export type UseFileTreeResult = {
   deletePath: (path: string, options?: FileDeleteOptions) => Promise<void>;
   downloadFile: (path: string) => Promise<void>;
   cancelDownload: () => void;
+  /** Resolves false when the batch stopped being tracked because the bot or client changed. */
+  uploadFiles: (files: File[]) => Promise<boolean>;
+  cancelUpload: () => void;
 };
 
 function joinTreePath(parent: string, name: string) {
@@ -157,6 +169,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   const [highlightedPath, setHighlightedPath] = useState("");
   const [selectedPath, setSelectedPath] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<FileTreeDownloadProgress | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<FileTreeUploadProgress | null>(null);
   const expandedPathsRef = useRef<string[]>([]);
   const branchesRef = useRef<Record<string, FileTreeBranchState>>({});
   const selectedPathRef = useRef("");
@@ -166,6 +179,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   const inFlightBranchLoadsRef = useRef<Map<string, InFlightBranchLoad>>(new Map());
   const backgroundRestoreIdRef = useRef(0);
   const downloadAbortControllerRef = useRef<AbortController | null>(null);
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     expandedPathsRef.current = expandedPaths;
@@ -465,6 +479,9 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   useEffect(() => () => {
     downloadAbortControllerRef.current?.abort();
     downloadAbortControllerRef.current = null;
+    // Switching away must not silently drop an upload; it keeps running, only untracked.
+    uploadAbortControllerRef.current = null;
+    setUploadProgress(null);
   }, [botAlias, client]);
 
   function selectPath(path: string) {
@@ -682,6 +699,60 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     setDownloadProgress(null);
   }
 
+  async function uploadFiles(files: File[]) {
+    if (files.length === 0) {
+      return false;
+    }
+    if (uploadAbortControllerRef.current) {
+      throw new Error(FILE_TREE_UPLOAD_BUSY_MESSAGE);
+    }
+    const controller = new AbortController();
+    uploadAbortControllerRef.current = controller;
+    const isTracked = () => uploadAbortControllerRef.current === controller;
+    let failure: unknown = null;
+    try {
+      for (const [index, file] of files.entries()) {
+        if (controller.signal.aborted) {
+          break;
+        }
+        const batch = { filename: file.name, fileIndex: index + 1, fileCount: files.length };
+        if (isTracked()) {
+          setUploadProgress({ ...batch, uploadedBytes: 0, totalBytes: file.size, percent: 0 });
+        }
+        await client.uploadFile(botAlias, file, (progress) => {
+          if (isTracked() && !controller.signal.aborted) {
+            setUploadProgress({ ...batch, ...progress });
+          }
+        }, controller.signal);
+        if (isTracked()) {
+          highlightPath(file.name);
+        }
+      }
+    } catch (nextError) {
+      if (!isAbortError(nextError)) {
+        failure = nextError;
+      }
+    }
+    if (!isTracked()) {
+      return false;
+    }
+    uploadAbortControllerRef.current = null;
+    setUploadProgress(null);
+    if (failure) {
+      throw failure;
+    }
+    return true;
+  }
+
+  function cancelUpload() {
+    const controller = uploadAbortControllerRef.current;
+    if (!controller) {
+      return;
+    }
+    controller.abort();
+    setUploadProgress(null);
+  }
+
   return {
     rootPath,
     loading,
@@ -692,6 +763,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     highlightedPath,
     selectedPath,
     downloadProgress,
+    uploadProgress,
     selectPath,
     clearSelection,
     isExpanded: (path: string) => expandedPaths.includes(path),
@@ -709,5 +781,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     deletePath,
     downloadFile,
     cancelDownload,
+    uploadFiles,
+    cancelUpload,
   };
 }

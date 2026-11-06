@@ -269,14 +269,14 @@ test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, preview
   expect(input).toBeEnabled();
   const draft = new File(["draft"], "draft.txt", { type: "text/plain" });
   await user.upload(input, draft);
-  expect(upload).toHaveBeenCalledWith("main", draft);
+  expect(upload).toHaveBeenCalledWith("main", draft, expect.any(Function), expect.any(AbortSignal));
   await user.click(await screen.findByRole("button", { name: "移除附件 draft.txt" }));
   await waitFor(() => expect(remove).toHaveBeenCalledWith("main", `${attachmentRoot}\\draft.txt`));
   expect(screen.queryByText("draft.txt")).not.toBeInTheDocument();
 
   const file = new File(["<html>Local attachment</html>"], "report.html", { type: "text/html" });
   await user.upload(input, file);
-  expect(upload).toHaveBeenLastCalledWith("main", file);
+  expect(upload).toHaveBeenLastCalledWith("main", file, expect.any(Function), expect.any(AbortSignal));
   await screen.findByRole("button", { name: "移除附件 report.html" });
   fireEvent.change(screen.getByPlaceholderText("输入消息"), { target: { value: "检查附件" } });
   await user.click(screen.getByRole("button", { name: "发送" }));
@@ -1801,4 +1801,36 @@ test("DeepSeek keeps an editable model input when the selected provider has no m
     model: "deepseek-custom",
     reasoningEffort: "none",
   }));
+});
+
+test("chat attachment uploads show progress and cancelling keeps files that already finished", async () => {
+  const user = userEvent.setup();
+  let pendingSignal: AbortSignal | undefined;
+  const upload = vi.fn<WebBotClient["uploadChatAttachment"]>(async (_alias, file, onProgress, signal) => {
+    if (file.name === "notes.txt") {
+      return { filename: file.name, savedPath: `C:\\attachments\\${file.name}`, size: file.size };
+    }
+    pendingSignal = signal;
+    onProgress?.({ uploadedBytes: 512, totalBytes: 2048, percent: 25 });
+    return new Promise<never>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new DOMException("上传已取消", "AbortError")), { once: true });
+    });
+  });
+  const client = createClient({ uploadChatAttachment: upload });
+  render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByText("暂无消息，开始聊天吧");
+  const input = screen.getByLabelText("上传附件");
+  expect(input).toBeEnabled();
+
+  await user.upload(input, [new File(["notes"], "notes.txt"), new File(["video"], "clip.mp4")]);
+
+  expect(await screen.findByRole("progressbar", { name: "clip.mp4 上传进度" })).toHaveAttribute("aria-valuenow", "25");
+  expect(screen.getByRole("status", { name: "附件上传进度" })).toHaveTextContent("正在上传 clip.mp4 (2/2)");
+  expect(screen.getByRole("button", { name: "移除附件 notes.txt" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "取消上传附件" }));
+  await waitFor(() => expect(screen.queryByRole("status", { name: "附件上传进度" })).not.toBeInTheDocument());
+  expect(pendingSignal?.aborted).toBe(true);
+  expect(screen.getByRole("button", { name: "移除附件 notes.txt" })).toBeEnabled();
+  expect(screen.queryByText("上传已取消")).not.toBeInTheDocument();
 });

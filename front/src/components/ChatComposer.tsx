@@ -1,12 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Trash2, X } from "lucide-react";
-import type { DeepSeekProviderOption, PromptPreset } from "../services/types";
+import type { DeepSeekProviderOption, FileUploadProgress, PromptPreset } from "../services/types";
+import { formatTransferDetail } from "../utils/transferProgress";
+import { TransferProgressBar } from "./TransferProgressBar";
 
 export type ChatComposerModelOption = {
   value: string;
   label: string;
   title?: string;
+};
+
+export type ChatComposerUploadProgress = FileUploadProgress & {
+  filename: string;
+  fileIndex: number;
+  fileCount: number;
 };
 
 type ComposerAttachment = {
@@ -26,6 +34,8 @@ type Props = {
   enterToSend?: boolean;
   pulse?: boolean;
   uploadingAttachments?: boolean;
+  attachmentUploadProgress?: ChatComposerUploadProgress | null;
+  onCancelAttachmentUpload?: () => void;
   placeholder?: string;
   modelDescription?: string;
   providerOptions?: DeepSeekProviderOption[];
@@ -70,6 +80,8 @@ export function ChatComposer({
   enterToSend = true,
   pulse = false,
   uploadingAttachments = false,
+  attachmentUploadProgress = null,
+  onCancelAttachmentUpload,
   placeholder = "输入消息",
   modelDescription,
   providerOptions = [],
@@ -488,9 +500,46 @@ export function ChatComposer({
             </span>
           ))}
           {uploadingAttachments ? (
-            <span className="inline-flex items-center gap-1.5 rounded-md border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2.5 py-1 text-xs text-[var(--feedback-warning-text-deep)]">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              正在上传附件
+            <span
+              role="status"
+              aria-label="附件上传进度"
+              className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-2.5 py-1 text-xs text-[var(--feedback-warning-text-deep)]"
+            >
+              <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              {attachmentUploadProgress ? (
+                <>
+                  <span
+                    className="min-w-0 truncate"
+                    title={formatTransferDetail(attachmentUploadProgress.uploadedBytes, attachmentUploadProgress.totalBytes)}
+                  >
+                    正在上传 {attachmentUploadProgress.filename}
+                    {attachmentUploadProgress.fileCount > 1
+                      ? ` (${attachmentUploadProgress.fileIndex}/${attachmentUploadProgress.fileCount})`
+                      : ""}
+                  </span>
+                  <TransferProgressBar
+                    label={`${attachmentUploadProgress.filename} 上传进度`}
+                    percent={attachmentUploadProgress.percent}
+                    className="h-1.5 w-16 shrink-0"
+                  />
+                  <span className="shrink-0 font-mono">
+                    {typeof attachmentUploadProgress.percent === "number"
+                      ? `${attachmentUploadProgress.percent}%`
+                      : formatTransferDetail(attachmentUploadProgress.uploadedBytes, attachmentUploadProgress.totalBytes)}
+                  </span>
+                </>
+              ) : "正在上传附件"}
+              {onCancelAttachmentUpload ? (
+                <button
+                  type="button"
+                  aria-label="取消上传附件"
+                  title="取消上传"
+                  onClick={onCancelAttachmentUpload}
+                  className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded hover:bg-[var(--workbench-hover-bg)]"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              ) : null}
             </span>
           ) : null}
         </div>

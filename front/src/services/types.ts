@@ -1656,6 +1656,12 @@ export type FileDownloadProgress = {
   percent?: number;
 };
 
+export type FileUploadProgress = {
+  uploadedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+};
+
 export type FileReadMode = "head" | "cat";
 export type FilePreviewKind = "text" | "image" | "html";
 

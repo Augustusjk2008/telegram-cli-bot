@@ -51,6 +51,7 @@ import type {
   FileCreateResult,
   FileDeleteOptions,
   FileDownloadProgress,
+  FileUploadProgress,
   FileMoveResult,
   FileReadResult,
   HtmlPreviewSession,
@@ -377,9 +378,19 @@ export interface WebBotClient {
     input: WorkspaceDocumentCloseInput,
     signal?: AbortSignal,
   ): Promise<WorkspaceDocumentCloseResult>;
-  uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult>;
+  uploadChatAttachment(
+    botAlias: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatAttachmentUploadResult>;
   deleteChatAttachment(botAlias: string, savedPath: string): Promise<ChatAttachmentDeleteResult>;
-  uploadFile(botAlias: string, file: File): Promise<void>;
+  uploadFile(
+    botAlias: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
   downloadFile(
     botAlias: string,
     filename: string,

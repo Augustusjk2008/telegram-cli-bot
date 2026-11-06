@@ -104,6 +104,7 @@ import type {
   FileCopyResult,
   FileCreateResult,
   FileDownloadProgress,
+  FileUploadProgress,
   FileEntry,
   FileReadResult,
   HtmlPreviewSession,
@@ -287,6 +288,11 @@ import { fallbackAgents } from "../utils/defaultAgents";
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
 const MEMBER_BOT_LIMIT = 10;
+
+function emitMockUploadProgress(file: File, onProgress?: (progress: FileUploadProgress) => void) {
+  onProgress?.({ uploadedBytes: 0, totalBytes: file.size, percent: 0 });
+  onProgress?.({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
+}
 
 function getMockUpdatePath(packageKind: AppUpdatePackageKind) {
   if (packageKind === "portable") return ".updates/orbit-safe-claw-windows-x64.zip";
@@ -6390,7 +6396,14 @@ export class MockWebBotClient implements WebBotClient {
     return { closed: input.documents.length };
   }
 
-  async uploadChatAttachment(botAlias: string, file: File): Promise<ChatAttachmentUploadResult> {
+  async uploadChatAttachment(
+    botAlias: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatAttachmentUploadResult> {
+    signal?.throwIfAborted();
+    emitMockUploadProgress(file, onProgress);
     const filename = file.name || "attachment.bin";
     return {
       filename,
@@ -6409,8 +6422,14 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async uploadFile(botAlias: string, file: File): Promise<void> {
-    return;
+  async uploadFile(
+    botAlias: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
+    emitMockUploadProgress(file, onProgress);
   }
 
   async downloadFile(

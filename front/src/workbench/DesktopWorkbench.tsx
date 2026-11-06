@@ -42,6 +42,7 @@ import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
+import { WorkbenchTransferStatus } from "./WorkbenchTransferStatus";
 import {
   LazyDebugPane as DebugPane,
   LazyEditorPane as EditorPane,
@@ -116,23 +117,6 @@ function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPat
 
   const relativePath = normalizedAbsolutePath.slice(normalizedRepoPath.length + 1);
   return relativePath || path;
-}
-
-function formatBytes(value: number) {
-  if (value >= 1024 * 1024) {
-    return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  }
-  if (value >= 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-  return `${value} B`;
-}
-
-function formatDownloadProgress(downloadedBytes: number, totalBytes?: number) {
-  if (typeof totalBytes === "number" && totalBytes > 0) {
-    return `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`;
-  }
-  return formatBytes(downloadedBytes);
 }
 
 type Props = {
@@ -1199,11 +1183,9 @@ export function DesktopWorkbench({
     if (!canMutateFiles) {
       return;
     }
-    for (const file of files) {
-      await client.uploadFile(botAlias, file);
-      fileTree.highlightPath(file.name);
+    if (await fileTree.uploadFiles(files)) {
+      await refreshWorkspaceChrome({ preserveExpandedPaths: true });
     }
-    await refreshWorkspaceChrome({ preserveExpandedPaths: true });
   }
 
   async function handleFileTreeHome() {
@@ -1744,22 +1726,28 @@ export function DesktopWorkbench({
         onRestartLanguageService={canRestartLanguageService ? restartCurrentLanguageService : undefined}
         rightAction={(
           <div className="flex items-center gap-2">
+            {fileTree.uploadProgress ? (
+              <WorkbenchTransferStatus
+                verb="上传"
+                target={fileTree.uploadProgress.fileCount > 1
+                  ? `${fileTree.uploadProgress.filename} (${fileTree.uploadProgress.fileIndex}/${fileTree.uploadProgress.fileCount})`
+                  : fileTree.uploadProgress.filename}
+                transferredBytes={fileTree.uploadProgress.uploadedBytes}
+                totalBytes={fileTree.uploadProgress.totalBytes}
+                percent={fileTree.uploadProgress.percent}
+                awaitingServer={fileTree.uploadProgress.percent === 100}
+                onCancel={fileTree.cancelUpload}
+              />
+            ) : null}
             {fileTree.downloadProgress ? (
-              <div className="flex items-center gap-2">
-                <span role="status" aria-label="下载进度" className="max-w-[18rem] truncate">
-                  下载 {fileTree.downloadProgress.path}
-                  {typeof fileTree.downloadProgress.percent === "number"
-                    ? ` ${fileTree.downloadProgress.percent}%`
-                    : ` ${formatDownloadProgress(fileTree.downloadProgress.downloadedBytes, fileTree.downloadProgress.totalBytes)}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={fileTree.cancelDownload}
-                  className="rounded border border-[var(--workbench-hairline)] px-2 py-0.5 text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)]"
-                >
-                  取消下载
-                </button>
-              </div>
+              <WorkbenchTransferStatus
+                verb="下载"
+                target={fileTree.downloadProgress.path}
+                transferredBytes={fileTree.downloadProgress.downloadedBytes}
+                totalBytes={fileTree.downloadProgress.totalBytes}
+                percent={fileTree.downloadProgress.percent}
+                onCancel={fileTree.cancelDownload}
+              />
             ) : null}
             {lanChatDock}
           </div>

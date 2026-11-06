@@ -3,6 +3,7 @@ import { EventType } from "../services/agUiProtocol";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { WebApiClientError } from "../services/types";
 import { buildFileDownloadUrl } from "../utils/fileLinks";
+import { isAbortError } from "../utils/errorMessage";
 
 describe("RealWebBotClient", () => {
   const fetchMock = vi.fn();
@@ -78,6 +79,108 @@ describe("RealWebBotClient", () => {
     expect(url).toBe("/node/update-host/api/admin/update/offline/upload");
     expect(request.body.get("file")).toBe(file);
     expect(request.headers["Content-Type"]).toBeUndefined();
+  });
+
+  class FakeUploadXhr {
+    static instances: FakeUploadXhr[] = [];
+    method = "";
+    url = "";
+    headers: Record<string, string> = {};
+    body: FormData | null = null;
+    status = 0;
+    responseText = "";
+    contentType = "application/json";
+    aborted = false;
+    upload: {
+      onprogress: ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | null;
+      onload: (() => void) | null;
+    } = { onprogress: null, onload: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+
+    constructor() {
+      FakeUploadXhr.instances.push(this);
+    }
+
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+    }
+
+    setRequestHeader(name: string, value: string) {
+      this.headers[name] = value;
+    }
+
+    getResponseHeader(name: string) {
+      return name.toLowerCase() === "content-type" ? this.contentType : null;
+    }
+
+    send(body: FormData) {
+      this.body = body;
+    }
+
+    abort() {
+      this.aborted = true;
+      this.onabort?.();
+    }
+
+    respond(status: number, body: unknown, contentType = "application/json") {
+      this.status = status;
+      this.responseText = typeof body === "string" ? body : JSON.stringify(body);
+      this.contentType = contentType;
+      this.onload?.();
+    }
+  }
+
+  test("uploads multipart files with request progress under the node prefix", async () => {
+    window.history.replaceState(null, "", "/node/files-host/");
+    vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/files-host" });
+    FakeUploadXhr.instances = [];
+    vi.stubGlobal("XMLHttpRequest", FakeUploadXhr);
+    const file = new File(["0123456789"], "report.txt", { type: "text/plain" });
+    const progress = vi.fn();
+
+    const upload = new RealWebBotClient().uploadFile("main bot", file, progress);
+    const xhr = FakeUploadXhr.instances[0];
+    expect(xhr.method).toBe("POST");
+    expect(xhr.url).toBe("/node/files-host/api/bots/main%20bot/files/upload");
+    expect(xhr.body?.get("file")).toBe(file);
+    expect(xhr.headers["Content-Type"]).toBeUndefined();
+    // The multipart request is larger than the file; progress is scaled back to the file size.
+    xhr.upload.onprogress?.({ lengthComputable: true, loaded: 60, total: 120 });
+    xhr.upload.onload?.();
+    xhr.respond(200, { ok: true, data: { filename: "report.txt", saved_path: "C:/workspace/report.txt", size: 10 } });
+
+    await expect(upload).resolves.toBeUndefined();
+    expect(progress.mock.calls.map(([event]) => event)).toEqual([
+      { uploadedBytes: 0, totalBytes: 10, percent: 0 },
+      { uploadedBytes: 5, totalBytes: 10, percent: 50 },
+      { uploadedBytes: 10, totalBytes: 10, percent: 100 },
+    ]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("upload failures keep the API message and cancelled uploads reject as aborts", async () => {
+    FakeUploadXhr.instances = [];
+    vi.stubGlobal("XMLHttpRequest", FakeUploadXhr);
+    const client = new RealWebBotClient();
+    const file = new File(["x"], "large.bin");
+
+    const tooLarge = client.uploadChatAttachment("main", file);
+    expect(FakeUploadXhr.instances[0].url).toBe("/api/bots/main/chat/attachments");
+    FakeUploadXhr.instances[0].respond(413, { ok: false, error: { code: "file_too_large", message: "上传文件不能超过 20MB" } });
+    await expect(tooLarge).rejects.toMatchObject({ status: 413, code: "file_too_large", message: "上传文件不能超过 20MB" });
+
+    const proxyFailure = client.uploadFile("main", file);
+    FakeUploadXhr.instances[1].respond(502, "<html>Bad Gateway</html>", "text/html");
+    await expect(proxyFailure).rejects.toThrow("上传失败（HTTP 502）");
+
+    const controller = new AbortController();
+    const cancelled = client.uploadFile("main", file, undefined, controller.signal);
+    controller.abort();
+    expect(isAbortError(await cancelled.catch((error: unknown) => error))).toBe(true);
+    expect(FakeUploadXhr.instances[2].aborted).toBe(true);
   });
 
   test("update apply conflicts retain the API error and never replay the mutation", async () => {

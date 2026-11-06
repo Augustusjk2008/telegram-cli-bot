@@ -241,7 +241,7 @@ test("remote files upload into the browsed directory and refresh", async () => {
   await waitFor(() => expect(screen.queryByRole("button", { name: "进入 uploads" })).not.toBeInTheDocument());
   const file = new File(["remote upload"], "report.txt", { type: "text/plain" });
   fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
-  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file));
+  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file, expect.any(Function), expect.any(AbortSignal)));
   expect(await screen.findByRole("button", { name: "打开 report.txt" })).toBeInTheDocument();
   expect(currentPath).toBe(`${remote.root}/uploads`);
 });
@@ -334,7 +334,7 @@ test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the f
   } else {
     fireEvent.drop(screen.getByTestId("desktop-file-tree-dropzone"), { dataTransfer: { files: [file], types: ["Files"] } });
   }
-  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file));
+  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file, expect.any(Function), expect.any(AbortSignal)));
   expect(await screen.findByRole("button", { name: "打开 report.txt" })).toBeInTheDocument();
   expect(list).toHaveBeenCalled();
   fireEvent.contextMenu(screen.getByRole("button", { name: "打开 report.txt" }));

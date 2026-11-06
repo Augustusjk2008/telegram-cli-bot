@@ -128,3 +128,88 @@ test("unmounting the file tree aborts its active download", async () => {
 
   expect(capturedSignal?.aborted).toBe(true);
 });
+
+function pendingUntilAborted(signal?: AbortSignal) {
+  return new Promise<void>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => {
+      reject(new DOMException("上传已取消", "AbortError"));
+    }, { once: true });
+  });
+}
+
+test("file-tree uploads track batch progress, refuse an overlapping batch and can be cancelled", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: "C:\\workspace", entries: [] });
+  let capturedSignal: AbortSignal | undefined;
+  const upload = vi.spyOn(client, "uploadFile").mockImplementation(((_botAlias, file, onProgress, signal) => {
+    if (file.name === "small.txt") {
+      return Promise.resolve();
+    }
+    capturedSignal = signal;
+    onProgress?.({ uploadedBytes: 400, totalBytes: 1000, percent: 40 });
+    return pendingUntilAborted(signal);
+  }) as typeof client.uploadFile);
+
+  const { result } = renderHook(() => useFileTree("main", client));
+  await waitFor(() => expect(result.current.rootPath).toBe("C:\\workspace"));
+
+  let uploadPromise!: Promise<boolean>;
+  act(() => {
+    uploadPromise = result.current.uploadFiles([new File(["a"], "small.txt"), new File(["b"], "large.bin")]);
+  });
+  await waitFor(() => expect(result.current.uploadProgress).toEqual({
+    filename: "large.bin",
+    fileIndex: 2,
+    fileCount: 2,
+    uploadedBytes: 400,
+    totalBytes: 1000,
+    percent: 40,
+  }));
+  expect(result.current.highlightedPath).toBe("small.txt");
+  await expect(result.current.uploadFiles([new File(["c"], "other.txt")])).rejects.toThrow("已有文件正在上传");
+
+  act(() => {
+    result.current.cancelUpload();
+  });
+  await act(async () => {
+    await expect(uploadPromise).resolves.toBe(true);
+  });
+
+  expect(capturedSignal?.aborted).toBe(true);
+  expect(upload).toHaveBeenCalledTimes(2);
+  expect(result.current.uploadProgress).toBeNull();
+  expect(result.current.error).toBe("");
+});
+
+test("switching bots stops tracking a file-tree upload without cancelling it", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: "C:\\workspace", entries: [] });
+  const pendingUpload = deferred<void>();
+  let capturedSignal: AbortSignal | undefined;
+  vi.spyOn(client, "uploadFile").mockImplementation(((_botAlias, _file, onProgress, signal) => {
+    capturedSignal = signal;
+    onProgress?.({ uploadedBytes: 1, totalBytes: 2, percent: 50 });
+    return pendingUpload.promise;
+  }) as typeof client.uploadFile);
+
+  const { result, rerender } = renderHook(({ botAlias }) => useFileTree(botAlias, client), {
+    initialProps: { botAlias: "main" },
+  });
+  await waitFor(() => expect(result.current.rootPath).toBe("C:\\workspace"));
+
+  let uploadPromise!: Promise<boolean>;
+  act(() => {
+    uploadPromise = result.current.uploadFiles([new File(["ab"], "report.txt")]);
+  });
+  await waitFor(() => expect(result.current.uploadProgress?.percent).toBe(50));
+
+  rerender({ botAlias: "other" });
+  expect(result.current.uploadProgress).toBeNull();
+  expect(capturedSignal?.aborted).toBe(false);
+
+  await act(async () => {
+    pendingUpload.resolve();
+    await expect(uploadPromise).resolves.toBe(false);
+  });
+  expect(result.current.uploadProgress).toBeNull();
+});
