@@ -194,9 +194,6 @@ export function PluginsScreen({
       onClose={() => setInstallPickerOpen(false)}
     />
   ) : null;
-  const renderedInstallPickerDialog = installPickerDialog && typeof document !== "undefined"
-    ? createPortal(installPickerDialog, document.body)
-    : installPickerDialog;
 
   return (
     <>
@@ -278,7 +275,7 @@ export function PluginsScreen({
           </div>
         </section>
       </main>
-      {renderedInstallPickerDialog}
+      {installPickerDialog}
       {renderedUninstallDialog}
     </>
   );

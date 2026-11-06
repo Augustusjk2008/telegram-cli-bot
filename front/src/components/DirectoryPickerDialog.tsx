@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, FolderOpen, FolderPlus, House } from "lucide-react";
 import type { DirectoryListing } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
@@ -257,7 +258,7 @@ export function DirectoryPickerDialog({
 
   const directories = entries.filter((entry) => entry.isDir);
 
-  return (
+  const dialog = (
     <div
       className="workbench-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4"
       role="dialog"
@@ -380,4 +381,6 @@ export function DirectoryPickerDialog({
       </div>
     </div>
   );
+  // Render at the viewport level so ancestors with transforms, filters or overflow clipping cannot trap the overlay.
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
