@@ -51,6 +51,8 @@
 - `configure_team` 成功后主 agent 必须查看 `changed`：`changed=true` 时同一轮所有后续工具立即使用响应中的新 `run_id`，`changed=false` 时继续使用原 ID。
 - 每次工具调用必须显式传入当前 `run_id`；stdio MCP 和 Pi 适配层不缓存或自动切换 ID，只把本次工具参数通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，也不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
 - Cluster task、进度消息和后台任务仍是内存态，不跨宿主重启持久化。
+- 子任务结束后唤醒主会话的通知为英文，只列 task_id 并要求主 agent 用 `poll_agent_tasks(task_ids=...)` 读取结果，不内联子 agent 输出。只有晚于主 agent 结束的子任务才发通知：主 agent 轮次执行中结束的不通知，轮次结束后 `CLUSTER_PARENT_WAKEUP_GRACE_SECONDS`（30 秒）内结束的也不通知。
+- 通知只覆盖最近一次用户请求：`_start_cluster_run_if_requested()` 按 `session._execution_id` 递增主会话的请求代数（无尽模式各次尝试共用同一代），内部续接轮次不递增；旧请求的子任务只有在最新请求中被 `poll_agent_tasks` 查询且仍未结束时才转入当前请求。主 agent 状态按主会话保存在 `ClusterRuntime`，`configure_team` 轮换 `run_id` 后仍然有效。
 - Pi runtime 通过 `TCB_CLUSTER_MCP_CONFIG` 定位 bridge 配置；其余 CLI 的 stdio launcher 或 DeepSeek patch 向 `mcp_stdio.py` 传入 `--config`，读取同一 bridge 配置文件。
 - `profile.cluster.enabled` 是当前 Bot 级集群开关；请求体旧 `cluster` 字段仅为兼容输入，不决定是否启动 cluster run。
 
@@ -86,4 +88,4 @@ npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
 - CLI/provider：`tests/test_cli_streaming.py`、`tests/test_codex_server_runtime.py`、`tests/test_codex_server_config.py`；DeepSeek 定向检查见对应参考。
 - Session/history：`tests/test_sessions.py`、`tests/test_session_store.py`、`tests/test_chat_history_service.py`、`tests/test_chat_store_revision.py`、`tests/test_pi_workspace_history.py`。
 - AG-UI/聚合：`tests/test_native_agent_ag_ui_mapper.py`、`tests/test_native_agent_aggregator.py`。
-- Cluster：`tests/test_cluster_setup.py`、`tests/test_cluster_mcp_schema.py`、`tests/test_cluster_mcp_client.py`、`tests/test_cluster_auto_run.py`、`tests/test_cluster_new_agent_session.py`、`tests/test_cluster_team_config.py`、`tests/test_cluster_model_tiers.py`、`tests/test_cluster_cancel.py`。
+- Cluster：`tests/test_cluster_setup.py`、`tests/test_cluster_mcp_schema.py`、`tests/test_cluster_mcp_client.py`、`tests/test_cluster_auto_run.py`、`tests/test_cluster_new_agent_session.py`、`tests/test_cluster_team_config.py`、`tests/test_cluster_model_tiers.py`、`tests/test_cluster_cancel.py`、`tests/test_cluster_parent_wakeup.py`。

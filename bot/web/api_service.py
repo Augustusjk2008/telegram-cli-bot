@@ -1537,6 +1537,7 @@ async def handle_cluster_mcp_tool(
             include_output = payload.get("include_output", payload.get("includeOutput", True)) is not False
             include_messages = payload.get("include_messages", payload.get("includeMessages", True)) is not False
             await _wait_for_cluster_tasks_if_requested(run_id, task_ids, _cluster_task_wait_seconds(payload))
+            _CLUSTER_RUNTIME.adopt_unfinished_tasks(run_id, task_ids)
             return {
                 "ok": True,
                 "data": _CLUSTER_RUNTIME.build_task_status(
@@ -4432,13 +4433,7 @@ def _cluster_parent_wakeup_tasks(run: Any) -> list[Any]:
     tasks: list[Any] = []
     for task_id in list(pending_ids):
         task = run.tasks.get(task_id)
-        if (
-            task is None
-            or task.wakeup_sent
-            or task.status not in {"completed", "failed"}
-            or not str(task.parent_conversation_id or "").strip()
-            or str(task.parent_conversation_id or "").strip() != str(run.main_conversation_id or "").strip()
-        ):
+        if task is None or not _CLUSTER_RUNTIME.parent_wakeup_eligible(run, task):
             pending_ids.discard(task_id)
             if task is not None:
                 task.wakeup_pending = False
@@ -4449,14 +4444,23 @@ def _cluster_parent_wakeup_tasks(run: Any) -> list[Any]:
     return tasks
 
 
-def _queue_cluster_parent_wakeup(run: Any, task_id: str) -> bool:
+def _cluster_parent_turn_active(manager: MultiBotManager, run: Any) -> bool:
+    try:
+        _profile, _agent, session = get_chat_session_for_alias(manager, run.bot_alias, run.user_id, "main")
+    except Exception:
+        return True
+    with session._lock:
+        return bool(session.is_processing or session._execution_id)
+
+
+def _queue_cluster_parent_wakeup(manager: MultiBotManager, run: Any, task_id: str) -> bool:
+    """Queue a completion notice only for a child that finished well after the main agent."""
     task = run.tasks.get(str(task_id or ""))
+    if task is None or not _CLUSTER_RUNTIME.parent_wakeup_eligible(run, task):
+        return False
     if (
-        task is None
-        or task.wakeup_sent
-        or task.status not in {"completed", "failed"}
-        or not str(task.parent_conversation_id or "").strip()
-        or str(task.parent_conversation_id or "").strip() != str(run.main_conversation_id or "").strip()
+        _CLUSTER_RUNTIME.parent_turn_finished_recently(run.main_conversation_id)
+        or _cluster_parent_turn_active(manager, run)
     ):
         return False
     task.wakeup_pending = True
@@ -4465,22 +4469,23 @@ def _queue_cluster_parent_wakeup(run: Any, task_id: str) -> bool:
 
 
 def _cluster_parent_wakeup_message(tasks: list[Any]) -> str:
+    task_ids = json.dumps([task.task_id for task in tasks])
     if len(tasks) == 1:
         task = tasks[0]
-        role_name = str(task.role_name or task.agent_id or "子 Agent").strip()
-        state = "正常结束" if task.status == "completed" else "异常结束"
+        role_name = str(task.role_name or task.agent_id or "child agent").strip()
+        outcome, detail = ("completed", "result") if task.status == "completed" else ("failed", "error details")
         return (
-            "【集群提示】\n"
-            f"子 Agent「{role_name}」会话已{state}，task_id={task.task_id}。\n"
-            "请调用 poll_agent_tasks 查询结果并继续处理。"
+            "[TCB cluster completion]\n"
+            f'Child agent "{role_name}" {outcome} after your last turn ended (task_id={task.task_id}).\n'
+            f"Call poll_agent_tasks with task_ids={task_ids} to read its {detail}, then continue."
         )
-    lines = ["【集群提示】", "以下子 Agent 会话已结束："]
+    lines = ["[TCB cluster completion]", "These child agents finished after your last turn ended:"]
     for task in tasks:
-        role_name = str(task.role_name or task.agent_id or "子 Agent").strip()
-        state = "正常结束" if task.status == "completed" else "异常结束"
-        lines.append(f"- {role_name}：{state}，task_id={task.task_id}")
+        role_name = str(task.role_name or task.agent_id or "child agent").strip()
+        outcome = "completed" if task.status == "completed" else "failed"
+        lines.append(f"- {role_name}: {outcome} (task_id={task.task_id})")
     lines.append("")
-    lines.append("请调用 poll_agent_tasks 查询详情并继续处理。")
+    lines.append(f"Call poll_agent_tasks with task_ids={task_ids} to read their results, then continue.")
     return "\n".join(lines)
 
 
@@ -4594,7 +4599,7 @@ def _schedule_cluster_parent_wakeup(
     if run is None:
         return
     if task_id:
-        _queue_cluster_parent_wakeup(run, task_id)
+        _queue_cluster_parent_wakeup(manager, run, task_id)
     if not run.pending_parent_wakeup_task_ids:
         return
     existing = run.parent_wakeup_task
@@ -4626,6 +4631,19 @@ def _schedule_cluster_parent_wakeup(
             _schedule_cluster_parent_wakeup(manager, run.run_id)
 
     wakeup_task.add_done_callback(finish_wakeup)
+
+
+def _finish_cluster_parent_turn(manager: MultiBotManager, run_id: str) -> None:
+    """Start the grace window after a main-agent turn, then retry deferred notices.
+
+    The conversation may hold a newer run_id when configure_team rotated it mid-turn.
+    """
+    run = _CLUSTER_RUNTIME.get_run(str(run_id or "").strip())
+    if run is None or not str(run.main_conversation_id or "").strip():
+        return
+    _CLUSTER_RUNTIME.finish_parent_turn(run.main_conversation_id)
+    for conversation_run in _CLUSTER_RUNTIME.conversation_runs(run.main_conversation_id):
+        _schedule_cluster_parent_wakeup(manager, conversation_run.run_id)
 
 
 async def _cancel_cluster_run(
@@ -4682,6 +4700,7 @@ def _start_cluster_run_if_requested(
     internal_continuation: bool = False,
     main_conversation_id: str = "",
     team_state: dict[str, Any] | None = None,
+    parent_request_id: str = "",
 ):
     del cluster  # Legacy clients may still send this field; orchestration is Bot-scoped.
     if not profile.cluster.enabled:
@@ -4705,10 +4724,12 @@ def _start_cluster_run_if_requested(
             else {"version": 1, "assignments": []}
         ),
     )
-    return _CLUSTER_RUNTIME.ensure_run(
+    run = _CLUSTER_RUNTIME.ensure_run(
         request,
         derive_cluster_run_id(request.main_conversation_id, request.team_revision),
     )
+    _CLUSTER_RUNTIME.begin_parent_request(run.main_conversation_id, parent_request_id)
+    return run
 
 
 def _ensure_cluster_main_conversation_locked(
@@ -8269,6 +8290,7 @@ async def _run_native_agent_chat(
         internal_continuation=internal_continuation,
         main_conversation_id=main_conversation_id,
         team_state=cluster_team_state,
+        parent_request_id=str(session._execution_id or ""),
     )
     effective_cluster_run_id = str(cluster_run_id or (cluster_run.run_id if cluster_run else "")).strip()
     try:
@@ -8296,7 +8318,7 @@ async def _run_native_agent_chat(
         if cluster_run:
             _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
         if str(agent_id or "main").strip().lower() == "main" and effective_cluster_run_id:
-            _schedule_cluster_parent_wakeup(manager, effective_cluster_run_id)
+            _finish_cluster_parent_turn(manager, effective_cluster_run_id)
 
 
 def _chat_stream_event_is_visible(event: dict[str, Any], *, include_trace: bool) -> bool:
@@ -8920,6 +8942,7 @@ async def _stream_native_agent_chat(
             internal_continuation=internal_continuation or bool(normalized_resume_stream_id),
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
+            parent_request_id=str(session._execution_id or ""),
         )
         effective_cluster_run_id = str(cluster_run_id or "").strip() or (
             cluster_run.run_id if cluster_run is not None else ""
@@ -8956,6 +8979,9 @@ async def _stream_native_agent_chat(
             finally:
                 if cluster_run:
                     _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
+                # A reconnectable turn can outlive its first consumer; record its real end.
+                if str(agent_id or "main").strip().lower() == "main" and effective_cluster_run_id and not endless_mode:
+                    _finish_cluster_parent_turn(manager, effective_cluster_run_id)
                 if execution_id is not None and not endless_mode:
                     _finish_control_execution(session, execution_id)
 
@@ -9040,8 +9066,6 @@ async def run_chat(
                 cluster_run_id=cluster_run_id,
                 internal_continuation=internal_continuation,
             )
-            if str(agent_id or "main").strip().lower() == "main" and cluster_run_id:
-                _schedule_cluster_parent_wakeup(manager, cluster_run_id)
             return result
         main_conversation_id = ""
         cluster_team_state: dict[str, Any] | None = None
@@ -9071,6 +9095,7 @@ async def run_chat(
             internal_continuation=internal_continuation,
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
+            parent_request_id=str(session._execution_id or ""),
         )
         request = _build_chat_run_request(
             alias,
@@ -9099,7 +9124,7 @@ async def run_chat(
             if str(agent_id or "main").strip().lower() == "main":
                 wakeup_run_id = cluster_run.run_id if cluster_run is not None else str(cluster_run_id or "").strip()
                 if wakeup_run_id:
-                    _schedule_cluster_parent_wakeup(manager, wakeup_run_id)
+                    _finish_cluster_parent_turn(manager, wakeup_run_id)
 
 
 async def stream_chat(
@@ -9251,6 +9276,7 @@ async def stream_chat(
                 internal_continuation=internal_continuation or bool(resume_stream_id),
                 main_conversation_id=main_conversation_id,
                 team_state=cluster_team_state,
+                parent_request_id=str(session._execution_id or ""),
             )
             request = _build_chat_run_request(
                 alias,
@@ -9318,7 +9344,7 @@ async def stream_chat(
                 except Exception:
                     wakeup_run_id = ""
             if wakeup_run_id:
-                _schedule_cluster_parent_wakeup(manager, wakeup_run_id)
+                _finish_cluster_parent_turn(manager, wakeup_run_id)
         if endless_started and session is not None:
             _set_endless_session_state(session, active=False, processing=False)
 

@@ -3,13 +3,19 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from bot.cluster.config import MODEL_TIER_KEYS, ClusterExecutionSnapshot, resolve_cluster_execution
 from bot.models import BotProfile
+
+# A child that finishes this soon after the main agent ends its turn counts as
+# finishing together with it, so no completion notice wakes the main agent.
+CLUSTER_PARENT_WAKEUP_GRACE_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -74,12 +80,22 @@ class ClusterAgentTask:
     execution: ClusterExecutionSnapshot | None = None
     parent_conversation_id: str = ""
     parent_turn_id: str = ""
+    parent_generation: int = 0
     wakeup_pending: bool = False
     wakeup_sent: bool = False
 
     @property
     def execution_snapshot(self) -> ClusterExecutionSnapshot | None:
         return self.execution
+
+
+@dataclass
+class ClusterParentState:
+    """Main-agent bookkeeping for one main conversation, shared by all of its run_ids."""
+
+    generation: int = 0
+    request_id: str = ""
+    finished_at: float | None = None
 
 
 @dataclass
@@ -142,8 +158,10 @@ def _model_tier(value: Any) -> str:
 
 
 class ClusterRuntime:
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._runs: dict[str, ClusterRun] = {}
+        self._parents: dict[str, ClusterParentState] = {}
+        self._clock = clock
 
     @staticmethod
     def _now_iso() -> str:
@@ -257,6 +275,7 @@ class ClusterRuntime:
         run_ids = [run.run_id for run in self._runs.values() if run.bot_alias == bot_alias]
         for run_id in run_ids:
             self._runs.pop(run_id, None)
+        self._prune_parent_states()
         return run_ids
 
     def find_active_run(
@@ -312,6 +331,73 @@ class ClusterRuntime:
         finished.sort(key=lambda item: item.updated_at, reverse=True)
         for run in finished[keep_latest:]:
             self._runs.pop(run.run_id, None)
+        self._prune_parent_states()
+
+    def _prune_parent_states(self) -> None:
+        live_conversations = {str(run.main_conversation_id or "").strip() for run in self._runs.values()}
+        for conversation_id in list(self._parents):
+            if conversation_id not in live_conversations:
+                self._parents.pop(conversation_id, None)
+
+    def conversation_runs(self, main_conversation_id: str) -> list[ClusterRun]:
+        conversation_id = str(main_conversation_id or "").strip()
+        if not conversation_id:
+            return []
+        return [run for run in self._runs.values() if run.main_conversation_id == conversation_id]
+
+    def parent_generation(self, main_conversation_id: str) -> int:
+        state = self._parents.get(str(main_conversation_id or "").strip())
+        return state.generation if state is not None else 0
+
+    def begin_parent_request(self, main_conversation_id: str, request_id: str = "") -> int:
+        """Start a new user request; children from earlier requests no longer wake the main agent.
+
+        Endless-mode attempts share one request_id, so they stay in the same request.
+        """
+        conversation_id = str(main_conversation_id or "").strip()
+        if not conversation_id:
+            return 0
+        state = self._parents.setdefault(conversation_id, ClusterParentState())
+        normalized_request_id = str(request_id or "").strip()
+        if normalized_request_id and normalized_request_id == state.request_id:
+            return state.generation
+        state.generation += 1
+        state.request_id = normalized_request_id
+        return state.generation
+
+    def finish_parent_turn(self, main_conversation_id: str) -> None:
+        """Record that the main agent ended a turn; this starts the wakeup grace window."""
+        conversation_id = str(main_conversation_id or "").strip()
+        if not conversation_id:
+            return
+        self._parents.setdefault(conversation_id, ClusterParentState()).finished_at = self._clock()
+
+    def parent_turn_finished_recently(self, main_conversation_id: str) -> bool:
+        state = self._parents.get(str(main_conversation_id or "").strip())
+        if state is None or state.finished_at is None:
+            return False
+        return self._clock() - state.finished_at <= CLUSTER_PARENT_WAKEUP_GRACE_SECONDS
+
+    def parent_wakeup_eligible(self, run: ClusterRun, task: ClusterAgentTask) -> bool:
+        conversation_id = str(run.main_conversation_id or "").strip()
+        return bool(
+            conversation_id
+            and not task.wakeup_sent
+            and task.status in {"completed", "failed"}
+            and str(task.parent_conversation_id or "").strip() == conversation_id
+            and task.parent_generation == self.parent_generation(conversation_id)
+        )
+
+    def adopt_unfinished_tasks(self, run_id: str, task_ids: list[str] | None = None) -> None:
+        """Move unfinished tasks the main agent checked on into its latest request."""
+        run = self._runs.get(str(run_id or "").strip())
+        if run is None:
+            return
+        generation = self.parent_generation(run.main_conversation_id)
+        selected_ids = {str(item) for item in task_ids or [] if str(item).strip()}
+        for task in run.tasks.values():
+            if task.status in {"queued", "running"} and (not selected_ids or task.task_id in selected_ids):
+                task.parent_generation = generation
 
     def create_agent_task(
         self,
@@ -347,6 +433,7 @@ class ClusterRuntime:
             execution=copy.deepcopy(execution),
             parent_conversation_id=str(parent_conversation_id or "").strip(),
             parent_turn_id=str(parent_turn_id or "").strip(),
+            parent_generation=self.parent_generation(run.main_conversation_id),
         )
         run.tasks[task.task_id] = task
         run.events.append({
