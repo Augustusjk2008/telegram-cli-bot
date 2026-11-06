@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -7,7 +7,7 @@ import {
   GENERAL_CODEX_RATE_LIMIT_ID,
   GPT_RESERVE_RATE_LIMIT_ID,
 } from "../services/types";
-import type { AppUpdatePhase, AppUpdateStatus } from "../services/types";
+import type { AppUpdatePhase, AppUpdateStatus, CodexUsageStats } from "../services/types";
 
 function createAdminClient() {
   const client = new MockWebBotClient();
@@ -181,19 +181,14 @@ test("缓存检查失败阻止在线准备，不支持的启动器阻止应用",
   expect(screen.getByRole("button", { name: "应用更新" })).toBeDisabled();
 });
 
+// Codex is the default provider on the Usage page.
 async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "Codex 额度" }));
-  await screen.findByRole("heading", { name: "Codex 额度" });
+  await user.click(screen.getByRole("tab", { name: "Usage" }));
+  await screen.findByRole("heading", { name: "Usage", level: 2 });
 }
 
-async function openClaudeUsageTab(user: ReturnType<typeof userEvent.setup>) {
-  await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "Claude 额度" }));
-  await screen.findByRole("heading", { name: "Claude 额度" });
-}
-
-test("管理中心显示 Claude 额度页面并复用采集设置", async () => {
+test("Usage 页面切换到 Claude 后复用采集设置", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const getConfig = vi.spyOn(client, "getClaudeUsageConfig");
@@ -201,15 +196,48 @@ test("管理中心显示 Claude 额度页面并复用采集设置", async () => 
   const updateConfig = vi.spyOn(client, "updateClaudeUsageConfig");
 
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
-  await openClaudeUsageTab(user);
+  await openCodexUsageTab(user);
+  await user.click(screen.getByRole("tab", { name: "Claude" }));
 
+  expect(await screen.findByRole("heading", { name: "Claude 剩余额度趋势" })).toBeInTheDocument();
   expect(getConfig).toHaveBeenCalledTimes(1);
   expect(getStats).toHaveBeenCalledTimes(1);
-  expect(await screen.findByRole("heading", { name: "Claude 剩余额度趋势" })).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: "启用 Claude 额度采集" })).not.toBeChecked();
 
   await user.click(screen.getByRole("checkbox", { name: "启用 Claude 额度采集" }));
   await waitFor(() => expect(updateConfig).toHaveBeenCalledWith({ enabled: true }));
+});
+
+test("Usage 页面合并 Codex 与 Claude，切换后丢弃旧响应并在刷新后保留选择", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const codexStats = await client.getCodexUsageStats();
+  let resolveStaleCodexStats!: (stats: CodexUsageStats) => void;
+  const getCodexStats = vi.spyOn(client, "getCodexUsageStats").mockImplementationOnce(() => new Promise((resolve) => {
+    resolveStaleCodexStats = resolve;
+  }));
+  const getClaudeConfig = vi.spyOn(client, "getClaudeUsageConfig");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+  expect(screen.queryByRole("tab", { name: /额度/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Codex" })).toHaveAttribute("aria-selected", "true");
+  await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(1));
+
+  await user.click(screen.getByRole("tab", { name: "Claude" }));
+  expect(await screen.findByRole("heading", { name: "Claude 剩余额度趋势" })).toBeInTheDocument();
+  await act(async () => resolveStaleCodexStats(codexStats));
+  expect(screen.getByText("当前剩余 88%")).toBeInTheDocument();
+  expect(screen.queryByText("当前剩余 92%")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "刷新" }));
+  await waitFor(() => expect(getClaudeConfig).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("tab", { name: "Claude" })).toHaveAttribute("aria-selected", "true");
+
+  screen.getByRole("tab", { name: "Claude" }).focus();
+  await user.keyboard("{ArrowLeft}");
+  expect(screen.getByRole("tab", { name: "Codex" })).toHaveFocus();
+  expect(await screen.findByRole("heading", { name: "Codex 剩余额度趋势" })).toBeInTheDocument();
 });
 
 test("全局配置保存全局提示词预设", async () => {

@@ -407,11 +407,11 @@ Pi runtimes and persisted sessions are isolated by bot, shared user, agent, and 
 <details>
 <summary><strong>Codex CLI usage statistics</strong></summary>
 
-Collection can be enabled or disabled immediately in Admin Center. It is disabled by default and only measures regular Codex CLI processes launched by Orbit after collection is enabled. It does not backfill history or include Claude, Pi, native agents, inline completion, or manually launched terminal processes.
+Collection can be enabled or disabled immediately on the Admin Center Usage page. It is disabled by default and only measures regular Codex CLI processes launched by Orbit after collection is enabled. It does not backfill history or include Claude, Pi, native agents, inline completion, or manually launched terminal processes.
 
 Usage is aggregated by date, provider, and model. Data is stored in `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3` by default and does not store per-turn prompts, authentication headers, or API keys.
 
-Claude quota has its own Admin Center tab and switch, also disabled by default, and shares the same database with separate data. It records the last `rate_limit_event` from each stream-json turn of a regular Claude CLI process: the 5-hour, weekly, and overage-included weekly windows, with the weekly trend shown. The plan type comes from `claude auth status --json`; only the login method, API provider, and subscription type are kept. Turns without stream-json output, API-key or Bedrock/Vertex logins, and custom `ANTHROPIC_BASE_URL` values are not recorded.
+Claude quota shares the Usage page with Codex, with an in-page switcher between the two; Claude has its own collection switch, also disabled by default, and shares the same database with separate data. It records the last `rate_limit_event` from each stream-json turn of a regular Claude CLI process: the 5-hour, weekly, and overage-included weekly windows, with the weekly trend shown. The plan type comes from `claude auth status --json`; only the login method, API provider, and subscription type are kept. Turns without stream-json output, API-key or Bedrock/Vertex logins, and custom `ANTHROPIC_BASE_URL` values are not recorded.
 
 </details>
 

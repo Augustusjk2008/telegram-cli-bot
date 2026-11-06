@@ -439,11 +439,11 @@ Pi runtime 和持久化 session 按 Bot、共享用户、Agent 和 conversation 
 <details>
 <summary><strong>Codex CLI 用量统计</strong></summary>
 
-管理中心可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、行内补全或手工终端进程。
+管理中心的 Usage 页面可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、行内补全或手工终端进程。
 
 统计按日期、Provider 和模型聚合，数据默认保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，不会保存逐轮提示词、认证头或 API 密钥。
 
-Claude 额度在管理中心有独立标签页和开关，同样默认关闭，与 Codex 共用数据库但数据隔离。它记录普通 Claude CLI 进程每轮 stream-json 输出中的最后一条 `rate_limit_event`，包括 5 小时、每周和含超额的每周窗口，并展示每周趋势。套餐类型来自 `claude auth status --json`，只保留登录方式、API Provider 和订阅类型。没有 stream-json 输出的轮次、API Key 或 Bedrock/Vertex 登录，以及自定义 `ANTHROPIC_BASE_URL`，都不会被记录。
+Claude 额度与 Codex 共用 Usage 页面，可在页内切换查看；Claude 采集开关独立，同样默认关闭，与 Codex 共用数据库但数据隔离。它记录普通 Claude CLI 进程每轮 stream-json 输出中的最后一条 `rate_limit_event`，包括 5 小时、每周和含超额的每周窗口，并展示每周趋势。套餐类型来自 `claude auth status --json`，只保留登录方式、API Provider 和订阅类型。没有 stream-json 输出的轮次、API Key 或 Bedrock/Vertex 登录，以及自定义 `ANTHROPIC_BASE_URL`，都不会被记录。
 
 </details>
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   CLAUDE_OVERAGE_RATE_LIMIT_ID,
   GENERAL_CLAUDE_RATE_LIMIT_ID,
@@ -15,17 +15,28 @@ import type {
 import type { WebBotClient } from "../../services/webBotClient";
 import { getErrorMessage } from "../../utils/errorMessage";
 import { codexConsumptionBars, codexConsumptionCurve, type QuotaCurveSegment } from "../../utils/codexConsumptionRate";
-import "./CodexUsagePanel.css";
-
-type Props = {
-  client: WebBotClient;
-  refreshKey?: number;
-};
+import "./UsagePanel.css";
 
 export type UsagePanelProvider = "codex" | "claude";
 
-type UsagePanelProps = Props & {
-  provider?: UsagePanelProvider;
+const USAGE_PROVIDERS: readonly UsagePanelProvider[] = ["codex", "claude"];
+
+const USAGE_PROVIDER_LABELS: Record<UsagePanelProvider, string> = {
+  codex: "Codex",
+  claude: "Claude",
+};
+
+type UsagePanelProps = {
+  client: WebBotClient;
+  provider: UsagePanelProvider;
+  onProviderChange: (provider: UsagePanelProvider) => void;
+  refreshKey?: number;
+};
+
+type ProviderUsageViewProps = {
+  client: WebBotClient;
+  provider: UsagePanelProvider;
+  onTimeBasisChange: (utcOffset: string) => void;
 };
 
 const numberFormat = new Intl.NumberFormat("zh-CN");
@@ -1052,8 +1063,10 @@ function CodexRateLimitChart({
   );
 }
 
-export function UsagePanel({ client, refreshKey = 0, provider = "codex" }: UsagePanelProps) {
-  const displayName = provider === "claude" ? "Claude" : "Codex";
+// Keyed by provider and refresh generation, so each switch starts from a clean
+// state and late responses for the previous provider land on an unmounted view.
+function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsageViewProps) {
+  const displayName = USAGE_PROVIDER_LABELS[provider];
   const [config, setConfig] = useState<CodexUsageConfig | null>(null);
   const [stats, setStats] = useState<CodexUsageStats | null>(null);
   const [startDate, setStartDate] = useState("");
@@ -1101,7 +1114,12 @@ export function UsagePanel({ client, refreshKey = 0, provider = "codex" }: Usage
     return () => {
       cancelled = true;
     };
-  }, [client, displayName, provider, refreshKey]);
+  }, [client, displayName, provider]);
+
+  const utcOffset = config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "";
+  useEffect(() => {
+    if (utcOffset) onTimeBasisChange(utcOffset);
+  }, [onTimeBasisChange, utcOffset]);
 
   const runStatsQuery = async (
     nextStartDate = startDate,
@@ -1190,16 +1208,7 @@ export function UsagePanel({ client, refreshKey = 0, provider = "codex" }: Usage
   const hasRateLimitSamples = Boolean(stats?.rateLimitSamples.length);
 
   return (
-    <section aria-labelledby={`${provider}-usage-title`} className="codex-usage-panel">
-      <div className="codex-usage-heading">
-        <div>
-          <h2 id={`${provider}-usage-title`}>{displayName} 额度</h2>
-        </div>
-        <span className="codex-usage-time-basis">
-          服务端本地时间 {config?.timeBasis.utcOffset || stats?.timeBasis.utcOffset || "—"}
-        </span>
-      </div>
-
+    <>
       {error ? <div role="alert" className="codex-usage-alert codex-usage-alert-error">{error}</div> : null}
       {notice ? <div role="status" className="codex-usage-alert codex-usage-alert-success">{notice}</div> : null}
 
@@ -1297,14 +1306,73 @@ export function UsagePanel({ client, refreshKey = 0, provider = "codex" }: Usage
           ) : null}
         </>
       ) : null}
-    </section>
+    </>
   );
 }
 
-export function CodexUsagePanel({ client, refreshKey = 0 }: Props) {
-  return <UsagePanel client={client} refreshKey={refreshKey} provider="codex" />;
-}
+export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 }: UsagePanelProps) {
+  // The server-local offset is shared by both providers, so keep the last one
+  // visible while the next provider view loads.
+  const [utcOffset, setUtcOffset] = useState("");
 
-export function ClaudeUsagePanel({ client, refreshKey = 0 }: Props) {
-  return <UsagePanel client={client} refreshKey={refreshKey} provider="claude" />;
+  const handleProviderTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const lastIndex = USAGE_PROVIDERS.length - 1;
+    let nextIndex: number;
+    if (event.key === "ArrowRight") nextIndex = index === lastIndex ? 0 : index + 1;
+    else if (event.key === "ArrowLeft") nextIndex = index === 0 ? lastIndex : index - 1;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = lastIndex;
+    else return;
+    event.preventDefault();
+    event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]
+      ?.focus();
+    onProviderChange(USAGE_PROVIDERS[nextIndex]);
+  };
+
+  return (
+    <section aria-labelledby="usage-title" className="codex-usage-panel">
+      <div className="codex-usage-heading">
+        <div className="codex-usage-title-group">
+          <h2 id="usage-title">Usage</h2>
+          <div role="tablist" aria-label="Usage 来源" className="codex-usage-provider-tabs">
+            {USAGE_PROVIDERS.map((id, index) => {
+              const selected = id === provider;
+              return (
+                <button
+                  key={id}
+                  id={`usage-provider-tab-${id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  aria-controls={selected ? "usage-provider-panel" : undefined}
+                  tabIndex={selected ? 0 : -1}
+                  className={selected ? "tcb-selected-accent" : undefined}
+                  onClick={() => onProviderChange(id)}
+                  onKeyDown={(event) => handleProviderTabKeyDown(event, index)}
+                >
+                  {USAGE_PROVIDER_LABELS[id]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <span className="codex-usage-time-basis">服务端本地时间 {utcOffset || "—"}</span>
+      </div>
+
+      <div
+        role="tabpanel"
+        id="usage-provider-panel"
+        aria-labelledby={`usage-provider-tab-${provider}`}
+        className="codex-usage-provider-panel"
+      >
+        <ProviderUsageView
+          key={`${provider}:${refreshKey}`}
+          client={client}
+          provider={provider}
+          onTimeBasisChange={setUtcOffset}
+        />
+      </div>
+    </section>
+  );
 }
