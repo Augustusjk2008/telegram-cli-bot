@@ -292,8 +292,19 @@ export function EditorPane({
     return (
       <div
         data-testid="editor-empty-state"
-        className="editor-empty-state flex h-full min-h-0 items-end justify-start p-5 text-sm text-[var(--muted)]"
+        className="editor-empty-state relative flex h-full min-h-0 items-end justify-start p-5 text-sm text-[var(--muted)]"
       >
+        {focused ? (
+          <button
+            type="button"
+            aria-label="退出聚焦编辑器"
+            title="退出聚焦编辑器"
+            onClick={onToggleFocus}
+            className="absolute right-1 top-1 inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+          >
+            <Minimize2 className="h-4 w-4" />
+          </button>
+        ) : null}
         <div className="orbit-window-card">
           <p className="text-[13px] font-semibold text-[var(--text)]">未打开文件</p>
           <p className="flex items-center justify-between gap-6"><span>快速打开文件</span><kbd className="orbit-kbd">Ctrl+P</kbd></p>
