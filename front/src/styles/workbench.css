@@ -817,8 +817,27 @@
   min-height: 28px;
   padding-inline: 14px;
   border-color: transparent;
-  background: linear-gradient(0deg, var(--canvas-scrim), transparent);
+  background: transparent;
   color: var(--muted);
+  /* Soft halo in the canvas colour keeps glyph edges legible over busy art. */
+  text-shadow: 0 0 2px var(--bg), 0 0 6px var(--bg);
+}
+
+/* Status bar scrim lives on the canvas (above the art, below the panes) so it never dims pane content.
+   Solid under the bar, then fades out over the 44px above it. */
+:root[data-style-profile="paper"] .desktop-workbench-root > .orbit-canvas::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 1;
+  height: 72px;
+  pointer-events: none;
+  background: linear-gradient(
+    0deg,
+    var(--statusbar-scrim) 0,
+    var(--statusbar-scrim) 28px,
+    transparent 100%
+  );
 }
 
 @keyframes workbenchShellReveal {

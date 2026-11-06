@@ -32,6 +32,7 @@
   --island-bg-strong: color-mix(in srgb, var(--workbench-panel-bg) var(--glass-tint-strong), transparent);
   --island-solid: var(--workbench-panel-bg);
   --canvas-scrim: color-mix(in srgb, var(--bg) 70%, transparent);
+  --statusbar-scrim: color-mix(in srgb, var(--bg) 88%, transparent);
   --fill-subtle: color-mix(in srgb, var(--text) 5%, transparent);
   --fill-hover: color-mix(in srgb, var(--text) 8%, transparent);
   --fill-pressed: color-mix(in srgb, var(--text) 12%, transparent);
@@ -55,6 +56,7 @@
   --hairline-strong: color-mix(in srgb, var(--text) 17%, transparent);
   --rim-light: color-mix(in srgb, #ffffff 8%, transparent);
   --canvas-scrim: color-mix(in srgb, var(--bg) 62%, transparent);
+  --statusbar-scrim: color-mix(in srgb, var(--bg) 85%, transparent);
   --fill-subtle: color-mix(in srgb, var(--text) 5%, transparent);
   --fill-hover: color-mix(in srgb, var(--text) 9%, transparent);
   --fill-pressed: color-mix(in srgb, var(--text) 13%, transparent);
