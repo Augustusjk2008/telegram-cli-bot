@@ -31,12 +31,14 @@ describe("RealWebBotClient", () => {
 
   beforeEach(() => {
     window.history.replaceState(null, "", "/");
+    delete window.__TCB_PUBLIC_ENV__;
     vi.stubGlobal("__PUBLIC_ENV__", {});
     vi.stubGlobal("fetch", fetchMock);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    delete window.__TCB_PUBLIC_ENV__;
     fetchMock.mockReset();
     vi.unstubAllGlobals();
   });
@@ -621,6 +623,18 @@ describe("RealWebBotClient", () => {
       "/node/nanjing-laptop/api/bots/main/files/download?filename=docs%2Freadme.md",
     );
     expect(session).toMatchObject({ isLoggedIn: true, token: "" });
+  });
+
+  test("uses the runtime base path when the server serves the app from root", async () => {
+    window.__TCB_PUBLIC_ENV__ = { VITE_API_BASE_URL: "/node/local" };
+    fetchMock.mockResolvedValue(jsonOk({ user_id: 1001 }));
+
+    await new RealWebBotClient().login({ username: "alice", password: "secret" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/node/local/api/auth/login",
+      expect.any(Object),
+    );
   });
 
   test("ignores a stale configured public base path when served from root", async () => {

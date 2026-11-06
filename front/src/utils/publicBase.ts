@@ -60,7 +60,9 @@ function resolveBaseDiagnostics(keys: readonly string[]): PublicBaseDiagnostics 
   const configuredBasePath = normalizeBasePath(selected.value);
   return {
     pagePath: currentPagePath(),
-    selectedBasePath: pageUsesBasePath(configuredBasePath) ? configuredBasePath : "",
+    selectedBasePath: source === "runtime" || pageUsesBasePath(configuredBasePath)
+      ? configuredBasePath
+      : "",
     configuredBasePath,
     source,
     envKey: selected.key,
