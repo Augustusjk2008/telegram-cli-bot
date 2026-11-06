@@ -253,6 +253,11 @@
   animation: orbitRise 240ms var(--ease-out);
 }
 
+/* Each glass panel is its own stacking context; lift the one hosting an open popup above later siblings. */
+.admin-embed > :is(section, div):has([aria-expanded="true"]) {
+  z-index: 1;
+}
+
 :root[data-material-glass="none"] .admin-embed > :is(section, div) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
