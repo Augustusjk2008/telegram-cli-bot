@@ -6,6 +6,8 @@ import type { DocumentViewPayload } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { withPublicBase } from "../../utils/publicBase";
 import "./PdfView.css";
+import { useViewerPan, ViewerToolToggle } from "./viewerTools";
+import type { ViewerTool } from "./viewerTools";
 
 GlobalWorkerOptions.workerSrc = import.meta.env.DEV
   ? workerUrl
@@ -92,7 +94,9 @@ export default function PdfView({ botAlias, client, payload }: {
   const [pageInput, setPageInput] = useState("1");
   const [zoom, setZoom] = useState("fit");
   const [width, setWidth] = useState(0);
+  const [tool, setTool] = useState<ViewerTool>("select");
   const scroller = useRef<HTMLDivElement>(null);
+  const pan = useViewerPan(tool, scroller);
   const artifactId = payload.pdf!.artifactId;
 
   useEffect(() => {
@@ -161,9 +165,10 @@ export default function PdfView({ botAlias, client, payload }: {
             <option value="fit">适合宽度</option>
             {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((scale) => <option key={scale} value={scale}>{scale * 100}%</option>)}
           </select>
+          <ViewerToolToggle tool={tool} onChange={setTool} />
         </div>
       </div>
-      <div ref={scroller} className="min-h-0 min-w-0 flex-1 overflow-auto bg-[var(--surface-strong)]">
+      <div ref={scroller} {...pan.handlers} className={`min-h-0 min-w-0 flex-1 overflow-auto bg-[var(--surface-strong)] ${pan.className}`}>
         {error ? <div role="alert" className="p-4 text-sm text-[var(--danger)]">{error}</div>
           : pdf ? <PdfPage pdf={pdf} pageNumber={pageNumber} zoom={zoom} width={width} />
           : <div role="status" className="p-4 text-sm text-[var(--muted)]">PDF 加载中...</div>}

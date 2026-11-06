@@ -1,0 +1,22 @@
+.viewer-hand-tool,
+.viewer-hand-tool * {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.viewer-hand-tool img {
+  -webkit-user-drag: none;
+}
+
+.viewer-hand-tool.is-panning,
+.viewer-hand-tool.is-panning * {
+  cursor: grabbing;
+}
+
+/* Override the PDF text layer's own text cursor and selection. */
+.viewer-hand-tool .pdf-text-layer :is(span, br) {
+  cursor: inherit;
+  user-select: none;
+  -webkit-user-select: none;
+}

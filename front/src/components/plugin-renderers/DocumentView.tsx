@@ -17,6 +17,8 @@ import type {
   PluginRenderResult,
 } from "../../services/types";
 import { PluginActionBar } from "./PluginActionBar";
+import { useViewerPan, ViewerToolToggle } from "./viewerTools";
+import type { ViewerTool } from "./viewerTools";
 
 type Props = {
   botAlias: string;
@@ -651,6 +653,8 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
 
   const document = summary.formatting === "document";
   const [documentZoom, setDocumentZoom] = useState("1");
+  const [tool, setTool] = useState<ViewerTool>("select");
+  const pan = useViewerPan(tool, scrollRef);
   const actions = session ? summary.actions : snapshot!.payload.actions;
   const visibleWindows = session
     ? (sectionIds.length ? sectionIds : [initialSectionId]).flatMap((id) => windows.has(id) ? [windows.get(id)!] : [])
@@ -663,9 +667,9 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
         <div className="text-lg font-semibold text-[var(--text)]">{summary.title || view.title}</div>
         <div className="mt-1 text-xs text-[var(--muted)]">{summary.path}</div>
         {summary.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{summary.statsText}</div> : null}
-        {document ? (
+        {hasBlocks || nextSectionId ? (
           <div role="toolbar" aria-label="文档阅读工具" className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-            <label className="flex items-center gap-1">
+            {document ? <label className="flex items-center gap-1">
               <span>缩放</span>
               <select
                 aria-label="缩放"
@@ -677,7 +681,8 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
                   <option key={scale} value={scale}>{scale * 100}%</option>
                 ))}
               </select>
-            </label>
+            </label> : null}
+            <ViewerToolToggle tool={tool} onChange={setTool} />
           </div>
         ) : null}
       </div>
@@ -711,7 +716,8 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
       {hasBlocks || nextSectionId ? (
         <div
           data-testid="document-section-content"
-          className={document ? "flow-root shrink-0 p-4" : "space-y-4 pb-6"}
+          {...pan.handlers}
+          className={`${document ? "flow-root shrink-0 p-4" : "space-y-4 pb-6"} ${pan.className}`}
           style={document ? {
             backgroundColor: "#ffffff",
             color: "#000000",
