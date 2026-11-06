@@ -377,6 +377,46 @@ async def test_terminal_close_waits_for_inflight_create_before_releasing_session
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/terminal/session/rebuild", "/api/bots/main/terminal/session/rebuild"])
+async def test_legacy_rebuild_routes_create_a_session_for_the_requested_owner(tmp_path, monkeypatch, path):
+    from unittest.mock import AsyncMock
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from bot.manager import MultiBotManager
+    from bot.models import BotProfile
+    from bot.web.api_common import AuthContext
+    from bot.web.auth_store import CAP_TERMINAL_EXEC
+    from bot.web.server import WebApiServer
+
+    storage = tmp_path / "bots.json"
+    storage.write_text('{"bots": []}', encoding="utf-8")
+    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
+    monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
+    manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
+    server = WebApiServer(manager, host="127.0.0.1", port=8765)
+    member = AuthContext(user_id=42, token_used=True, account_id="member", capabilities={CAP_TERMINAL_EXEC})
+    no_terminal = AuthContext(user_id=42, token_used=True, account_id="member", capabilities=set())
+    monkeypatch.setattr(server, "_auth_context", lambda request: member)
+    monkeypatch.setattr(server, "_can_operate_bot", lambda auth, alias: alias == "main")
+    server._terminal_manager.create = AsyncMock(return_value={"started": True})
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post(path, json={"owner_id": "legacy-tab", "cwd": str(tmp_path)})
+        assert response.status == 200, await response.text()
+        assert (await response.json())["data"] == {"started": True}
+
+        monkeypatch.setattr(server, "_auth_context", lambda request: no_terminal)
+        denied = await client.post(path, json={"owner_id": "legacy-tab"})
+        assert denied.status == 403
+
+    server._terminal_manager.create.assert_awaited_once()
+    call = server._terminal_manager.create.await_args
+    assert call.args == (42, "legacy-tab")
+    assert call.kwargs["cwd"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
 async def test_remote_terminal_factories_create_independent_channels():
     from bot.platform.terminal import PtyWrapper
     from bot.web.terminal_manager import TerminalSessionManager

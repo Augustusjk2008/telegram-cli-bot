@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -53,10 +52,6 @@ SUPPORTED_UPDATE_PACKAGE_KINDS = {
     WINDOWS_PORTABLE_PACKAGE_KIND,
     LINUX_PACKAGE_KIND,
     MACOS_PACKAGE_KIND,
-}
-FRONTEND_BUILD_TRIGGER_PATHS = {
-    "scripts/build_web_frontend.bat",
-    "scripts/build_web_frontend.sh",
 }
 
 
@@ -609,52 +604,6 @@ def _emit_download_log(
     )
 
 
-def _run_frontend_build_command(command: list[str], cwd: Path) -> tuple[bool, str]:
-    try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except Exception as exc:
-        return False, f"执行前端构建失败: {exc}"
-
-    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip()).strip()
-    if result.returncode != 0:
-        return False, output or f"前端构建失败，退出码 {result.returncode}"
-    return True, output or "Web 前端构建完成"
-
-
-def _build_updated_frontend(repo_root: Path) -> tuple[bool, str]:
-    front_root = repo_root / "front"
-    if not front_root.exists():
-        return True, "未检测到前端目录，跳过构建"
-
-    script_name = "build_web_frontend.bat" if os.name == "nt" else "build_web_frontend.sh"
-    script_path = (repo_root / "scripts" / script_name).resolve()
-    if script_path.exists():
-        command = [str(script_path)] if os.name == "nt" else ["bash", str(script_path)]
-        return _run_frontend_build_command(command, repo_root)
-
-    npm_path = shutil.which("npm")
-    if not npm_path:
-        return False, "未找到前端构建脚本，且系统中没有 npm，无法重建前端资源"
-
-    build_command = [npm_path, "run", "build"]
-    success, output = _run_frontend_build_command(build_command, front_root)
-    if success:
-        return success, output
-
-    installed, install_output = _run_frontend_build_command([npm_path, "ci", "--no-audit", "--no-fund"], front_root)
-    if not installed:
-        return installed, install_output
-    return _run_frontend_build_command(build_command, front_root)
-
-
 def _list_package_entry_paths(package_path: Path) -> list[str]:
     entries: list[str] = []
 
@@ -1123,15 +1072,6 @@ def _normalize_archive_path_for_stream(package_path: Path, raw_path: str) -> str
 def _is_protected_update_path(relative_path: str) -> bool:
     from scripts.update_package import protected
     return protected(relative_path)
-
-def _needs_frontend_build(repo_root: Path, relative_paths: list[str]) -> bool:
-    normalized = [str(path or "").replace("\\", "/").strip("/") for path in relative_paths]
-    if any(path.startswith("front/") for path in normalized):
-        return True
-    if any(path in FRONTEND_BUILD_TRIGGER_PATHS for path in normalized):
-        return True
-    front_root = repo_root / "front"
-    return front_root.exists() and not (front_root / "dist").exists()
 
 
 def _append_update_journal(journal_path: Path, record: dict[str, Any]) -> None:

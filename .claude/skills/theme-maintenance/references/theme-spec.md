@@ -32,7 +32,7 @@
 | `front/src/theme/resolveAppearance.ts` | 前端外观规范化、派生颜色解析、插画解析和对比度计算 | 只有主题契约或解析行为改变时修改 |
 | `front/src/theme/types.ts` | 主题结构、surface、插画组和资源类型 | 新增 surface 或插画组类型时修改 |
 | `front/src/theme/illustrationPresets.ts` | 插画组 ID、显示选项、模板和 catalog 映射 | 新增插画组或编辑主题管理器选项时修改 |
-| `bot/web/theme_store.py` | 后端 token、插画、主题文件校验和全局 selection 持久化 | 后端契约改变，或新增插画组需要加入允许列表时修改 |
+| `bot/web/theme_store.py` | 后端 token、插画、主题文件校验和按账户的 selection 持久化 | 后端契约改变，或新增插画组需要加入允许列表时修改 |
 | `tests/test_theme_store.py`、`tests/test_theme_api.py` | 后端主题数据和 API 契约 | 清单身份、只读边界或资源契约改变时更新 |
 | `front/src/test/theme*.test.ts*` | 前端解析、客户端、插画和管理器契约 | 受影响的前端行为改变时更新 |
 
@@ -75,7 +75,7 @@
 }
 ```
 
-示例中的 `illustrations` 只是占位，发布主题必须使用完整的规范化场景配置。新主题 ID 应稳定且唯一，格式为 `theme_` 加 32 位小写十六进制；`paper-daylight` 是保留的默认 ID。不要通过改名或复用旧 ID 生成一个看似全新的主题，否则已经保存的全局选择会指向另一个外观。
+示例中的 `illustrations` 只是占位，发布主题必须使用完整的规范化场景配置。新主题 ID 应稳定且唯一，格式为 `theme_` 加 32 位小写十六进制；`paper-daylight` 是保留的默认 ID。不要通过改名或复用旧 ID 生成一个看似全新的主题，否则各账户已保存的选择会指向另一个外观。
 
 `name` 经过后端校验后必须是 1 到 80 个字符，不能包含控制字符。`updatedAt` 必须是包含时区的 ISO 时间字符串，`version` 是至少为 1 的整数。主题的 `baseId` 当前固定为 `paper-daylight`，`schemaVersion` 当前固定为 1。
 
