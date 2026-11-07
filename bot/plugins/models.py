@@ -113,6 +113,7 @@ class PluginManifest:
     file_handlers: tuple[PluginFileHandlerSpec, ...]
     config_schema: PluginConfigSchemaSpec | None = None
     catalog_actions: tuple[PluginActionSpec, ...] = ()
+    icon: str = ""
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,45 @@
 from __future__ import annotations
 
+import base64
 import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
+
+MAX_PLUGIN_ICON_BYTES = 128 * 1024
+_ICON_MIME_TYPES = {
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+
+@lru_cache(maxsize=128)
+def _encode_icon(path: str, mtime_ns: int, size: int) -> str:
+    data = Path(path).read_bytes()
+    if len(data) > MAX_PLUGIN_ICON_BYTES:
+        return ""
+    mime = _ICON_MIME_TYPES[Path(path).suffix.lower()]
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def build_icon_data_url(manifest) -> str:
+    """Inline the manifest icon so `<img>` renders it without an authenticated fetch."""
+    if not manifest.icon:
+        return ""
+    root = manifest.root.resolve()
+    try:
+        path = (root / manifest.icon).resolve()
+        path.relative_to(root)
+        stat = path.stat()
+    except (OSError, ValueError):
+        return ""
+    if not path.is_file() or stat.st_size > MAX_PLUGIN_ICON_BYTES:
+        return ""
+    try:
+        return _encode_icon(str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return ""
 
 
 def serialize_permissions(manifest) -> dict[str, Any]:
@@ -95,6 +133,7 @@ def build_manifest_signature(manifest) -> str:
             "name": manifest.name,
             "version": manifest.version,
             "description": manifest.description,
+            "icon": manifest.icon,
             "enabled": manifest.enabled,
             "config": dict(manifest.config),
             "runtime": {
@@ -157,4 +196,7 @@ def build_manifest_payload(manifest) -> dict[str, Any]:
     }
     if manifest.config_schema is not None:
         payload["configSchema"] = serialize_config_schema(manifest)
+    icon_url = build_icon_data_url(manifest)
+    if icon_url:
+        payload["iconUrl"] = icon_url
     return payload

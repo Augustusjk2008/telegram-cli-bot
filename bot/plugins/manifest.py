@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .models import (
@@ -19,6 +19,7 @@ from .models import (
 )
 
 MAX_PLUGIN_READ_BYTES = 256 * 1024 * 1024
+PLUGIN_ICON_EXTENSIONS = {".svg", ".png", ".webp"}
 
 
 def _expect_mapping(value: Any, label: str) -> dict[str, Any]:
@@ -39,6 +40,25 @@ def _normalize_choice(value: Any, label: str, allowed: set[str], default: str) -
     if text not in allowed:
         raise ValueError(f"{label} 仅支持: {', '.join(sorted(allowed))}")
     return text
+
+
+def _parse_icon(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("icon 必须是插件目录内的相对路径")
+    text = value.strip().replace("\\", "/")
+    path = PurePosixPath(text)
+    if (
+        not text
+        or path.is_absolute()
+        or ":" in text
+        or any(part in {"", ".", ".."} for part in text.split("/"))
+    ):
+        raise ValueError(f"icon 必须是插件目录内的相对路径: {value}")
+    if path.suffix.lower() not in PLUGIN_ICON_EXTENSIONS:
+        raise ValueError(f"icon 仅支持: {', '.join(sorted(PLUGIN_ICON_EXTENSIONS))}")
+    return path.as_posix()
 
 
 def _parse_permissions(value: Any) -> PluginPermissions:
@@ -329,4 +349,5 @@ def load_plugin_manifest(path: Path) -> PluginManifest:
         file_handlers=tuple(file_handlers),
         config_schema=config_schema,
         catalog_actions=catalog_actions,
+        icon=_parse_icon(raw.get("icon")),
     )

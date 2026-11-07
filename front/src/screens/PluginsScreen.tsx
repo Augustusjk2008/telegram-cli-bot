@@ -1,7 +1,7 @@
 import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Puzzle } from "lucide-react";
+import { Puzzle, Trash2 } from "lucide-react";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { PluginCatalog } from "../components/PluginCatalog";
 import { SectionHeader } from "../components/SectionHeader";
@@ -261,9 +261,11 @@ export function PluginsScreen({
                   type="button"
                   onClick={() => setPendingUninstallPlugin(plugin.id)}
                   disabled={!canOperate || updatingPluginId === plugin.id}
-                  className={buttonClass("border-[var(--feedback-error-border-light)] text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]")}
+                  aria-label={`卸载 ${plugin.name}`}
+                  title="卸载"
+                  className={toolbarButtonClass("ghost", "icon", "h-7 w-7 hover:bg-[var(--feedback-error-background-subtle)] hover:text-[var(--feedback-error-text-deep)]")}
                 >
-                  卸载
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               )}
             />

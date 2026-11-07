@@ -71,7 +71,7 @@ export function PluginConfigForm({ plugin, disabled = false, onSubmit }: Props) 
   }
 
   return (
-    <div className="mt-3 space-y-3 border-t border-[var(--border)]/70 bg-[var(--surface-strong)] px-3 py-3">
+    <div className="space-y-3 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-3 py-3">
       {plugin.configSchema.title ? (
         <div className="text-sm font-medium text-[var(--text)]">{plugin.configSchema.title}</div>
       ) : null}

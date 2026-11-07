@@ -9,7 +9,7 @@ import pytest
 from bot.plugins.artifacts import ArtifactStore
 from bot.plugins.host_api import PluginHostApi, PluginHostContext, PluginHostPermissionError
 from bot.plugins.manifest import load_plugin_manifest
-from bot.plugins.manifest_payloads import build_manifest_signature
+from bot.plugins.manifest_payloads import MAX_PLUGIN_ICON_BYTES, build_manifest_payload, build_manifest_signature
 from bot.plugins.models import (
     PluginFileHandlerSpec,
     PluginManifest,
@@ -100,6 +100,63 @@ def test_manifest_allows_explicit_waveform_read_limit(tmp_path: Path) -> None:
     manifest = load_plugin_manifest(plugin_dir / "plugin.json")
 
     assert manifest.runtime.limits.read_bytes == 256 * 1024 * 1024
+
+
+def _write_icon_manifest(plugin_dir: Path, icon) -> Path:
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = plugin_dir / "plugin.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "id": "iconic",
+                "name": "Iconic",
+                "version": "1.0.0",
+                "icon": icon,
+                "runtime": {"type": "python", "entry": "main.py", "protocol": "jsonrpc-stdio"},
+                "views": [{"id": "main", "title": "Main", "renderer": "document"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def test_manifest_icon_is_inlined_as_data_url(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugin"
+    manifest_path = _write_icon_manifest(plugin_dir, "assets/icon.svg")
+    (plugin_dir / "assets").mkdir()
+    (plugin_dir / "assets" / "icon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
+
+    payload = build_manifest_payload(load_plugin_manifest(manifest_path))
+
+    assert payload["iconUrl"].startswith("data:image/svg+xml;base64,")
+
+
+@pytest.mark.parametrize("icon", ["../icon.svg", "/etc/icon.svg", "C:/icon.svg", "icon.html", "a/./icon.svg", 7])
+def test_manifest_rejects_icon_outside_plugin_or_unsupported(tmp_path: Path, icon) -> None:
+    manifest_path = _write_icon_manifest(tmp_path / "plugin", icon)
+
+    with pytest.raises(ValueError, match="icon"):
+        load_plugin_manifest(manifest_path)
+
+
+def test_manifest_icon_skips_missing_oversized_and_escaping_files(tmp_path: Path) -> None:
+    plugin_dir = tmp_path / "plugin"
+    manifest_path = _write_icon_manifest(plugin_dir, "icon.png")
+    assert "iconUrl" not in build_manifest_payload(load_plugin_manifest(manifest_path))
+
+    (plugin_dir / "icon.png").write_bytes(b"x" * (MAX_PLUGIN_ICON_BYTES + 1))
+    assert "iconUrl" not in build_manifest_payload(load_plugin_manifest(manifest_path))
+
+    (plugin_dir / "icon.png").unlink()
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"png")
+    try:
+        (plugin_dir / "icon.png").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    assert "iconUrl" not in build_manifest_payload(load_plugin_manifest(manifest_path))
 
 
 @pytest.mark.asyncio

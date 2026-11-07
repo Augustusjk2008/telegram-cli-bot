@@ -1827,6 +1827,8 @@ export type PluginSummary = {
   name: string;
   version: string;
   description: string;
+  /** Inline data URL built by the host from the manifest `icon` file. */
+  iconUrl?: string;
   enabled?: boolean;
   config?: Record<string, unknown>;
   views: Array<{
