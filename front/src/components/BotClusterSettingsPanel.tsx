@@ -1,6 +1,9 @@
+import { clsx } from "clsx";
+import { LoaderCircle, Network } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ClusterModelTiersPanel } from "./ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "./ClusterSetupPanel";
+import { SettingsField, SettingsSection, SettingsSwitch, settingsControlClassName } from "./SettingsSection";
 import type {
   BotClusterConfig,
   BotOverview,
@@ -204,41 +207,78 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
     : mainCliParams?.schema.reasoning_effort?.enum || mainCliParams?.schema.effort?.enum || [];
 
   return (
-    <section aria-labelledby="bot-cluster-settings-title" className="space-y-5 border-t border-[var(--border)] pt-5 text-sm">
-      <div className="space-y-1">
-        <h2 id="bot-cluster-settings-title" className="text-base font-semibold text-[var(--text)]">集群模式</h2>
-        <p className="text-sm text-[var(--muted)]">子智能体由主 agent 按当前会话动态编组；这里配置并发、写入策略、超时和模型档位。</p>
+    <SettingsSection
+      id="settings-section-cluster"
+      titleId="bot-cluster-settings-title"
+      icon={<Network className="h-3.5 w-3.5" />}
+      title="集群模式"
+      description="子智能体由主 agent 按当前会话动态编组；这里配置并发、写入策略、超时和模型档位。"
+      badge={(
+        <span
+          className={clsx(
+            "inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-medium",
+            cluster.enabled
+              ? "bg-[var(--status-success-bg)] text-[var(--status-success)]"
+              : "bg-[var(--workbench-active-bg)] text-[var(--muted)]",
+          )}
+        >
+          {cluster.enabled ? "已启用" : "未启用"}
+        </span>
+      )}
+      actions={(
+        <>
+          {saving ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin text-[var(--muted)]" /> : null}
+          <SettingsSwitch
+            aria-label="启用集群模式"
+            title="启用集群模式"
+            checked={cluster.enabled}
+            disabled={!canManage || saving || !status}
+            onChange={(event) => void save({ enabled: event.target.checked })}
+          />
+        </>
+      )}
+    >
+      <div className="space-y-2.5">
+        {inheritedCliType === "deepseek" || nativeRuntime ? (
+          <div className="space-y-0.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--muted)]">
+            {inheritedCliType === "deepseek" ? <p>DeepSeek Harness：集群轮次自动注入 MCP。</p> : null}
+            {inheritedCliType === "deepseek" ? <p>集群档位继承主 Bot 的 Provider：DeepSeek。</p> : null}
+            {nativeRuntime ? <p>当前 Bot 使用原生 Agent/Pi 执行。模型档位沿用原生模型配置；为档位选择 CLI 会在保存时被拒绝。</p> : null}
+          </div>
+        ) : null}
+        {error ? <p role="alert" className="text-xs text-[var(--feedback-error-text-deep)]">{error}</p> : null}
+        <div className="grid gap-2 @sm:grid-cols-2 @xl:grid-cols-3">
+          <SettingsField label="并发规模">
+            <select aria-label="集群规模" value={cluster.maxParallelAgents} disabled={!canManage || saving} onChange={(event) => void save({ maxParallelAgents: Number(event.target.value) })} className={settingsControlClassName}>
+              {Array.from({ length: 20 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </SettingsField>
+          <SettingsField label="子 Agent 写入策略">
+            <select aria-label="子 Agent 写入策略" value={cluster.writePolicy} disabled={!canManage || saving} onChange={(event) => void save({ writePolicy: event.target.value as BotClusterConfig["writePolicy"] })} className={settingsControlClassName}>
+              <option value="main_only">仅主 Agent 可写</option>
+              <option value="all_agents">允许子 Agent 写入</option>
+            </select>
+          </SettingsField>
+          <SettingsField label="默认超时（秒）">
+            <input aria-label="任务超时（秒）" type="number" min={60} max={3600} value={timeoutDraft} disabled={!canManage || saving} onChange={(event) => setTimeoutDraft(event.target.value)} onBlur={() => void saveTimeout()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} className={settingsControlClassName} />
+          </SettingsField>
+        </div>
+        <ClusterModelTiersPanel
+          value={cluster.modelTiers}
+          reasoningEfforts={cluster.reasoningEfforts}
+          tierConfigs={cluster.tierConfigs}
+          cliParamsByType={cliParamsByType}
+          inheritedCliType={inheritedCliType}
+          nativeRuntime={nativeRuntime}
+          modelOptions={fallbackModelOptions}
+          reasoningOptions={fallbackReasoningOptions}
+          disabled={!canManage || saving}
+          onTierConfigChange={(tier, next) => void save({ tierConfigs: { ...cluster.tierConfigs, [tier]: next } as ClusterTierConfigs })}
+          onChange={(modelTiers) => void save({ modelTiers })}
+          onReasoningChange={(reasoningEfforts) => void save({ reasoningEfforts })}
+        />
+        <ClusterSetupPanel botAlias={botAlias} client={client} canManage={canManage} />
       </div>
-      {inheritedCliType === "deepseek" ? <p className="text-xs text-[var(--muted)]">DeepSeek Harness：集群轮次自动注入 MCP。</p> : null}
-      {inheritedCliType === "deepseek" ? <p className="text-xs text-[var(--muted)]">集群档位继承主 Bot 的 Provider：DeepSeek。</p> : null}
-      {nativeRuntime ? (
-        <p className="text-xs text-[var(--muted)]">当前 Bot 使用原生 Agent/Pi 执行。模型档位沿用原生模型配置；为档位选择 CLI 会在保存时被拒绝。</p>
-      ) : null}
-      {error ? <p role="alert" className="text-sm text-[var(--feedback-error-text-deep)]">{error}</p> : null}
-      <label className="flex items-center justify-between gap-3 border-y border-[var(--border)] py-3 font-medium text-[var(--text)]">
-        <span>启用集群模式</span>
-        <input type="checkbox" checked={cluster.enabled} disabled={!canManage || saving || !status} onChange={(event) => void save({ enabled: event.target.checked })} className="h-4 w-4" />
-      </label>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="grid gap-1"><span className="font-medium text-[var(--text)]">并发规模</span><select aria-label="集群规模" value={cluster.maxParallelAgents} disabled={!canManage || saving} onChange={(event) => void save({ maxParallelAgents: Number(event.target.value) })} className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3">{Array.from({ length: 20 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label className="grid gap-1"><span className="font-medium text-[var(--text)]">子 Agent 写入策略</span><select aria-label="子 Agent 写入策略" value={cluster.writePolicy} disabled={!canManage || saving} onChange={(event) => void save({ writePolicy: event.target.value as BotClusterConfig["writePolicy"] })} className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3"><option value="main_only">仅主 Agent 可写</option><option value="all_agents">允许子 Agent 写入</option></select></label>
-        <label className="grid gap-1"><span className="font-medium text-[var(--text)]">默认超时（秒）</span><input aria-label="任务超时（秒）" type="number" min={60} max={3600} value={timeoutDraft} disabled={!canManage || saving} onChange={(event) => setTimeoutDraft(event.target.value)} onBlur={() => void saveTimeout()} className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3" /></label>
-      </div>
-      <ClusterModelTiersPanel
-        value={cluster.modelTiers}
-        reasoningEfforts={cluster.reasoningEfforts}
-        tierConfigs={cluster.tierConfigs}
-        cliParamsByType={cliParamsByType}
-        inheritedCliType={inheritedCliType}
-        nativeRuntime={nativeRuntime}
-        modelOptions={fallbackModelOptions}
-        reasoningOptions={fallbackReasoningOptions}
-        disabled={!canManage || saving}
-        onTierConfigChange={(tier, next) => void save({ tierConfigs: { ...cluster.tierConfigs, [tier]: next } as ClusterTierConfigs })}
-        onChange={(modelTiers) => void save({ modelTiers })}
-        onReasoningChange={(reasoningEfforts) => void save({ reasoningEfforts })}
-      />
-      <ClusterSetupPanel botAlias={botAlias} client={client} canManage={canManage} />
-    </section>
+    </SettingsSection>
   );
 }

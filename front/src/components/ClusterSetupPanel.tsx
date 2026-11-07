@@ -76,44 +76,44 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
   }, [botAlias]);
 
   return (
-    <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-2 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold text-[var(--text)]">集群 MCP</h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">{status?.mcp.serverName || "tcb-cluster"}</p>
+          <h2 className="text-xs font-semibold text-[var(--text)]">集群 MCP</h2>
+          <p className="font-mono text-[11px] text-[var(--muted)]">{status?.mcp.serverName || "tcb-cluster"}</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => void loadStatus()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm"
+            className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] px-2 text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]"
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw className="h-3.5 w-3.5" />
             刷新状态
           </button>
           <button
             type="button"
             onClick={() => void prepareInstall()}
             disabled={!canManage}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm tcb-solid-accent disabled:opacity-60"
+            className="tcb-solid-accent inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-xs font-medium hover:opacity-90 disabled:opacity-60"
           >
-            <Wrench className="h-4 w-4" />
+            <Wrench className="h-3.5 w-3.5" />
             生成安装命令
           </button>
         </div>
       </div>
       {loading ? (
-        <p className="mt-3 inline-flex items-center gap-2 text-sm text-[var(--muted)]">
-          <LoaderCircle className="h-4 w-4 animate-spin" />
+        <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
+          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
           处理中
         </p>
       ) : null}
-      {error ? <p className="mt-3 text-sm text-[var(--feedback-error-text-deep)]">{error}</p> : null}
+      {error ? <p className="mt-2 text-xs text-[var(--feedback-error-text-deep)]">{error}</p> : null}
       {status ? (
-        <div className="mt-3 grid gap-2 text-sm">
+        <div className="mt-2 grid gap-1.5">
           {targetStatuses(status).map(([cliType, target]) => (
-            <div key={cliType} className="grid gap-1 border-b border-[var(--border)] pb-2 last:border-0">
-              <div>{cliLabel(cliType)}：{target.message || target.state || "未检测"}</div>
+            <div key={cliType} className="grid gap-0.5 border-b border-[var(--workbench-hairline)] pb-1.5 last:border-0 last:pb-0">
+              <div className="text-[var(--text)]">{cliLabel(cliType)}：{target.message || target.state || "未检测"}</div>
               {target.configPath ? <div className="break-all text-xs text-[var(--muted)]">配置：{target.configPath}</div> : null}
               {target.scope ? <div className="text-xs text-[var(--muted)]">范围：{target.scope}</div> : null}
               {target.allowedTools?.length ? <div className="text-xs text-[var(--muted)]">允许工具：{target.allowedTools.join("、")}</div> : null}
@@ -122,25 +122,25 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
         </div>
       ) : null}
       {prepare ? (
-        <div className="mt-4 space-y-3">
+        <div className="mt-2.5 space-y-2.5">
           {prepare.unsupported ? (
-            <div className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] p-3 text-sm text-[var(--status-warning)]">
+            <div className="rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-2.5 py-2 text-xs text-[var(--status-warning)]">
               {prepare.message || "当前 CLI 暂不支持集群 MCP"}
             </div>
           ) : null}
           {prepare.mcpSetupSnippet ? (
-            <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-sm text-[var(--muted)]">
+            <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 py-2 text-xs text-[var(--muted)]">
               {prepare.mcpSetupSnippet}
             </div>
           ) : null}
           {prepare.targets && Object.keys(prepare.targets).length > 0 ? (
-            <div className="grid gap-3">
+            <div className="grid gap-2">
               {Object.entries(prepare.targets).map(([cliType, target]) => (
-                <div key={cliType} className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-sm">
+                <div key={cliType} className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 py-2 text-xs">
                   <div className="font-medium text-[var(--text)]">{cliLabel(target.cliType || cliType)}</div>
                   {target.message ? <p className="mt-1 text-xs text-[var(--muted)]">{target.message}</p> : null}
-                  {target.installCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-2 text-xs">安装：{commandText(target.installCommand)}</pre> : null}
-                  {target.verifyCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-2 text-xs">验证：{commandText(target.verifyCommand)}</pre> : null}
+                  {target.installCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2 py-1.5 text-[11px] leading-4">安装：{commandText(target.installCommand)}</pre> : null}
+                  {target.verifyCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2 py-1.5 text-[11px] leading-4">验证：{commandText(target.verifyCommand)}</pre> : null}
                   {target.deepseekPatchPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">DeepSeek patch：{target.deepseekPatchPath}</p> : null}
                   {target.piExtensionPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">Pi 扩展：{target.piExtensionPath}</p> : null}
                 </div>
@@ -148,16 +148,16 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
             </div>
           ) : null}
           {prepare.installCommand.length > 0 ? <div>
-            <div className="text-sm font-medium text-[var(--text)]">安装命令</div>
-            <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.installCommand)}</pre>
+            <div className="text-xs font-medium text-[var(--text)]">安装命令</div>
+            <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{commandText(prepare.installCommand)}</pre>
           </div> : null}
           {prepare.verifyCommand.length > 0 ? <div>
-            <div className="text-sm font-medium text-[var(--text)]">验证命令</div>
-            <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.verifyCommand)}</pre>
+            <div className="text-xs font-medium text-[var(--text)]">验证命令</div>
+            <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{commandText(prepare.verifyCommand)}</pre>
           </div> : null}
           {prepare.workspaceMcpConfigPath ? (
             <div>
-              <div className="text-sm font-medium text-[var(--text)]">Antigravity 工作区 MCP</div>
+              <div className="text-xs font-medium text-[var(--text)]">Antigravity 工作区 MCP</div>
               <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.workspaceMcpConfigPath}</p>
               {prepare.workspaceMcpScope ? <p className="mt-1 text-xs text-[var(--muted)]">范围：{prepare.workspaceMcpScope}</p> : null}
               {prepare.mcpAllowedTools?.length ? (
@@ -166,32 +166,32 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
               {prepare.statuslineCommand?.length ? (
                 <>
                   <p className="mt-2 text-xs text-[var(--muted)]">状态栏遥测命令（配置到 Antigravity settings.json 的 statusLine.command）</p>
-                  <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.statuslineCommand)}</pre>
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{commandText(prepare.statuslineCommand)}</pre>
                 </>
               ) : null}
             </div>
           ) : null}
           {prepare.piExtensionPath ? (
             <div>
-              <div className="text-sm font-medium text-[var(--text)]">Pi 扩展</div>
+              <div className="text-xs font-medium text-[var(--text)]">Pi 扩展</div>
               <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piExtensionPath}</p>
               <p className="mt-1 text-xs text-[var(--muted)]">{prepare.piExtensionName || "tcb-cluster.ts"}</p>
             </div>
           ) : prepare.piSettingsSnippet ? (
             <div>
-              <div className="text-sm font-medium text-[var(--text)]">Pi settings.json</div>
+              <div className="text-xs font-medium text-[var(--text)]">Pi settings.json</div>
               <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piSettingsPath}</p>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{prepare.piSettingsSnippet}</pre>
+              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{prepare.piSettingsSnippet}</pre>
             </div>
           ) : null}
           {prepare.selfTestCommand && prepare.selfTestCommand.length > 0 ? (
             <div>
-              <div className="text-sm font-medium text-[var(--text)]">本项目自检</div>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] p-3 text-xs">{commandText(prepare.selfTestCommand)}</pre>
+              <div className="text-xs font-medium text-[var(--text)]">本项目自检</div>
+              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{commandText(prepare.selfTestCommand)}</pre>
             </div>
           ) : null}
           {prepare.piExtensionPath ? (
-            <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
+            <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 py-2 text-[11px] text-[var(--muted)]">
               <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
               <ol className="mt-2 list-decimal space-y-1 pl-5">
                 <li>生成 launcher 和 config</li>
@@ -202,7 +202,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
               <p className="mt-2">Pi 是主 agent，子 agent 仍由本项目 cluster runtime 托管。</p>
             </div>
           ) : prepare.piSettingsSnippet ? (
-            <div className="rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 text-xs text-[var(--muted)]">
+            <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 py-2 text-[11px] text-[var(--muted)]">
               <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
               <ol className="mt-2 list-decimal space-y-1 pl-5">
                 <li>生成 launcher 和 config</li>

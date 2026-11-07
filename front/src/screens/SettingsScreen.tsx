@@ -2,14 +2,22 @@ import { cliTypeLabel } from "../utils/cliType";
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
-import { useEffect, useState } from "react";
-import { Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bot, Check, Copy, Cpu, FolderOpen, LoaderCircle, MessageSquareText, Network, Plug, Save, SlidersHorizontal, X } from "lucide-react";
 import { BotCliParamsPanel } from "../components/BotCliParamsPanel";
 import { BotClusterSettingsPanel } from "../components/BotClusterSettingsPanel";
 import { BotPromptPresetsPanel } from "../components/BotPromptPresetsPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
-import { toolbarButtonClass } from "../components/ToolbarButton";
+import {
+  SettingsDirtyBadge,
+  SettingsField,
+  SettingsNotice,
+  SettingsSection,
+  settingsButtonClassName,
+  settingsControlClassName,
+  settingsPrimaryButtonClassName,
+  settingsTextareaClassName,
+} from "../components/SettingsSection";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import { copyText } from "../utils/clipboard";
@@ -44,20 +52,6 @@ type Props = {
   onWorkdirUpdated?: (workingDir: string) => void;
   sessionCapabilities?: string[];
 };
-
-function settingsPanelClass(extra = "") {
-  return clsx(
-    "space-y-3",
-    extra,
-  );
-}
-
-function settingsButtonClass(kind: "plain" | "primary" | "danger" = "plain", extra = "") {
-  if (kind === "danger") {
-    return toolbarButtonClass("danger", "md", extra);
-  }
-  return toolbarButtonClass(kind, "md", extra);
-}
 
 function nativeAgentDraftFromOverview(overview?: Pick<BotOverview, "nativeAgent"> | null): NativeAgentDraft {
   return {
@@ -127,6 +121,9 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [copiedRemoteMcpItem, setCopiedRemoteMcpItem] = useState("");
+  const [activeSection, setActiveSection] = useState("settings-section-runtime");
+  const scrollRegionRef = useRef<HTMLElement | null>(null);
+  const navLockUntilRef = useRef(0);
   const isMainBot = botAlias === "main";
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("manage_bots") || sessionCapabilities.includes("admin_ops");
   const canCreateWorkdirDirectory =
@@ -341,351 +338,466 @@ export function SettingsScreen({
     }
   };
 
+  const runtimeDirty = Boolean(overview) && (
+    runtimeBackendDraft !== runtimeBackend
+    || (runtimeBackendDraft === "cli"
+      ? cliTypeDraft !== overview?.cliType || cliPathDraft.trim() !== (overview?.cliPath || "").trim()
+      : nativeAgentDraft.piAgent.trim() !== (overview?.nativeAgent?.piAgent || "").trim()
+        || (Boolean(overview?.nativeAgent?.model) && nativeAgentDraft.model.trim() !== (overview?.nativeAgent?.model || "").trim()))
+  );
+  const workdirDirty = Boolean(overview)
+    && !overview?.remoteWorkspace
+    && normalizePathInput(workdirDraft) !== normalizePathInput(overview?.workingDir || "");
+  const runtimeSummary = overview
+    ? nativeRuntime
+      ? `原生 agent · ${overview.nativeAgent?.model || nativeAgentModels?.selectedModel || "全局默认模型"}`
+      : `${cliTypeLabel(overview.cliType)} CLI`
+    : "";
+  const statusRunning = overview?.status === "running";
+  const statusLabel = overview ? ({ running: "运行中", busy: "处理中", unread: "未读", offline: "离线" } as Record<string, string>)[overview.status] || overview.status : "";
+  const navSections = [
+    { id: "settings-section-runtime", label: "运行", icon: Cpu },
+    { id: "settings-section-workdir", label: "目录", icon: FolderOpen },
+    { id: "settings-section-cluster", label: "集群", icon: Network },
+    ...(!nativeRuntime ? [{ id: "settings-section-params", label: "参数", icon: SlidersHorizontal }] : []),
+    { id: "settings-section-presets", label: "预设", icon: MessageSquareText },
+  ];
+
+  const scrollToSection = (sectionId: string) => {
+    const container = scrollRegionRef.current;
+    const target = container?.querySelector<HTMLElement>(`[data-settings-section="${sectionId}"]`);
+    if (!container || !target) return;
+    setActiveSection(sectionId);
+    navLockUntilRef.current = Date.now() + 800;
+    container.scrollTo({ top: target.offsetTop, behavior: "smooth" });
+  };
+
+  const syncActiveSection = () => {
+    const container = scrollRegionRef.current;
+    if (!container || Date.now() < navLockUntilRef.current) return;
+    const sections = Array.from(container.querySelectorAll<HTMLElement>("[data-settings-section]"));
+    if (sections.length === 0) return;
+    const atBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 4;
+    let current = sections[0];
+    for (const section of sections) {
+      if (section.offsetTop <= container.scrollTop + 24) {
+        current = section;
+      }
+    }
+    const next = atBottom ? sections[sections.length - 1] : current;
+    setActiveSection(next.dataset.settingsSection || "");
+  };
+
   return (
-    <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}>
-      {embedded ? null : (
-        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] p-3">
-          <h1 className="text-xl font-bold">当前智能体设置</h1>
-          <p className="text-sm text-[var(--muted)]">{overview?.alias || botAlias}</p>
-        </header>
-      )}
-
-      <section className={clsx("flex-1 space-y-3 overflow-y-auto", embedded ? "bg-[var(--workbench-titlebar-bg)] p-3" : "p-4")}>
-        {loading ? (
-          <div className="text-center text-[var(--muted)]">加载中...</div>
-        ) : null}
-        {error ? (
-          <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">
-            {error}
+    <main
+      data-ui-density="compact"
+      className={clsx("@container flex h-full min-h-0 flex-col text-[var(--text)]", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}
+    >
+      <header className="shrink-0 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
+        <div className={clsx("flex min-w-0 items-center gap-2.5 px-3 pb-2 pt-2.5", embedded ? "" : "mx-auto w-full max-w-3xl")}>
+          <span className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--workbench-active-bg)] text-[var(--accent)]">
+            <Bot className="h-[18px] w-[18px]" />
+            {overview ? (
+              <span
+                aria-hidden="true"
+                className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--workbench-titlebar-bg)]"
+                style={{ backgroundColor: statusRunning ? "var(--status-success)" : "var(--muted)" }}
+              />
+            ) : null}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">当前智能体设置</p>
+            <h1 className="truncate text-sm font-semibold leading-5">{overview?.alias || botAlias}</h1>
+            {overview ? (
+              <p className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-[var(--muted)]">
+                <span className="shrink-0">{statusLabel}</span>
+                <span aria-hidden="true">·</span>
+                <span className="min-w-0 truncate">{runtimeSummary}</span>
+              </p>
+            ) : null}
           </div>
-        ) : null}
-        {notice ? (
-          <div className="rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">
-            {notice}
-          </div>
-        ) : null}
-
+        </div>
         {overview ? (
-          <section
-              aria-labelledby={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-              className={settingsPanelClass("text-sm text-[var(--muted)]")}
-            >
-              <div className="space-y-1">
-                <h2
-                  id={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
-                  className="text-base font-semibold text-[var(--text)]"
+          <nav aria-label="设置分区" className={clsx("flex min-w-0 gap-0.5 overflow-x-auto px-2 pb-1.5 [scrollbar-width:none]", embedded ? "" : "mx-auto w-full max-w-3xl")}>
+            {navSections.map(({ id, label, icon: Icon }) => {
+              const active = activeSection === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-current={active ? "true" : undefined}
+                  onClick={() => scrollToSection(id)}
+                  className={clsx(
+                    "inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]",
+                    active
+                      ? "bg-[var(--workbench-active-bg)] text-[var(--accent)]"
+                      : "text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]",
+                  )}
                 >
-                  当前智能体设置
-                </h2>
-                {isMainBot ? (
-                  <p className="text-sm text-[var(--muted)]">主 Bot 的运行配置入口。</p>
-                ) : null}
-              </div>
+                  <Icon aria-hidden="true" className="hidden h-3 w-3 @xs:block" />
+                  {label}
+                  {(id === "settings-section-runtime" && runtimeDirty) || (id === "settings-section-workdir" && workdirDirty) ? (
+                    <span aria-label="有未保存更改" className="h-1.5 w-1.5 rounded-full bg-[var(--status-warning)]" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+        ) : null}
+      </header>
 
-              <div className="space-y-2">
-                <p><span className="font-medium text-[var(--text)]">运行后端:</span> {nativeRuntime ? "原生 agent" : "CLI"}</p>
-                {!nativeRuntime ? <p><span className="font-medium text-[var(--text)]">CLI:</span> {cliTypeLabel(overview.cliType)}</p> : null}
-                {!nativeRuntime && overview.cliPath ? (
-                  <p className="break-all"><span className="font-medium text-[var(--text)]">CLI 路径:</span> {overview.cliPath}</p>
-                ) : null}
-                {nativeRuntime ? (
-                  <p>
-                    <span className="font-medium text-[var(--text)]">Model:</span>{" "}
-                    {overview.nativeAgent?.model || nativeAgentModels?.selectedModel || "使用全局默认"}
-                  </p>
-                ) : null}
-                {nativeRuntime && (overview.nativeAgent?.reasoningEffort || nativeAgentModels?.selectedReasoningEffort) ? (
-                  <p>
-                    <span className="font-medium text-[var(--text)]">Reasoning:</span>{" "}
-                    {overview.nativeAgent?.reasoningEffort || nativeAgentModels?.selectedReasoningEffort}
-                  </p>
-                ) : null}
-                {nativeRuntime ? <p><span className="font-medium text-[var(--text)]">Pi agent:</span> {overview.nativeAgent?.piAgent || "未设置"}</p> : null}
-                <p><span className="font-medium text-[var(--text)]">状态:</span> {overview.status}</p>
-                <p className="break-all"><span className="font-medium text-[var(--text)]">目录:</span> {workspaceLabel(overview)}</p>
-              </div>
+      <section
+        ref={scrollRegionRef}
+        onScroll={syncActiveSection}
+        className={clsx("relative min-h-0 flex-1 overflow-y-auto", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--bg)]")}
+      >
+        <div className={clsx("min-w-0", embedded ? "" : "mx-auto w-full max-w-3xl")}>
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 px-3 py-10 text-xs text-[var(--muted)]">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              加载中...
+            </div>
+          ) : null}
+          {error || notice ? (
+            <div className="space-y-1.5 px-3 pt-2.5">
+              {error ? <SettingsNotice tone="danger">{error}</SettingsNotice> : null}
+              {notice ? (
+                <SettingsNotice tone="success" className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1">{notice}</span>
+                  <button type="button" aria-label="关闭提示" onClick={() => setNotice("")} className="-my-0.5 -mr-1 rounded p-0.5 opacity-70 hover:opacity-100">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </SettingsNotice>
+              ) : null}
+            </div>
+          ) : null}
 
-              <div className="space-y-3 border-t border-[var(--border)] pt-3">
-                <h3 className="font-medium text-[var(--text)]">运行配置</h3>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="space-y-1">
-                    <span className="text-sm text-[var(--text)]">运行后端</span>
-                    <select
-                      aria-label="运行后端"
-                      value={runtimeBackendDraft}
-                      disabled={!canManageBotRuntime}
-                      onChange={(event) => setRuntimeBackendDraft(event.target.value as ChatExecutionMode)}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                    >
-                      <option value="cli">CLI</option>
-                      {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
-                    </select>
-                  </label>
-                </div>
-
+          {overview ? (
+            <SettingsSection
+              id="settings-section-runtime"
+              titleId={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
+              icon={<Cpu className="h-3.5 w-3.5" />}
+              title="运行配置"
+              description={isMainBot ? "主 Bot 的运行后端与执行入口。" : "选择执行后端以及 CLI 或原生 agent 参数。"}
+              badge={runtimeDirty ? <SettingsDirtyBadge /> : null}
+            >
+              <div className="grid gap-2 @md:grid-cols-2">
+                <SettingsField label="运行后端">
+                  <select
+                    aria-label="运行后端"
+                    value={runtimeBackendDraft}
+                    disabled={!canManageBotRuntime}
+                    onChange={(event) => setRuntimeBackendDraft(event.target.value as ChatExecutionMode)}
+                    className={settingsControlClassName}
+                  >
+                    <option value="cli">CLI</option>
+                    {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
+                  </select>
+                </SettingsField>
                 {runtimeBackendDraft === "cli" ? (
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="space-y-1">
-                    <span className="text-sm text-[var(--text)]">CLI 类型</span>
-                    <select
-                      aria-label="CLI 类型"
-                      value={cliTypeDraft}
-                      disabled={!canManageBotRuntime}
-                      onChange={(event) => {
-                        const cliType = event.target.value as CliType;
-                        if (cliType === "deepseek" || cliTypeDraft === "deepseek") setCliPathDraft(defaultCliPathForType(cliType));
-                        setCliTypeDraft(cliType);
-                      }}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                    >
-                      <option value="codex">codex</option>
-                      <option value="codex_server">codex server</option>
-                      <option value="claude">claude</option>
-                      <option value="antigravity">Antigravity CLI</option>
-                      <option value="deepseek" disabled={Boolean(overview?.remoteWorkspace)}>DeepSeek Harness</option>
-                    </select>
-                  </label>
-                  <label className="space-y-1">
-                    <span className="text-sm text-[var(--text)]">CLI 路径</span>
-                    <input
-                      aria-label="CLI 路径"
-                      type="text"
-                      value={cliPathDraft}
-                      disabled={!canManageBotRuntime}
-                      onChange={(event) => setCliPathDraft(event.target.value)}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                      placeholder={defaultCliPathForType(cliTypeDraft)}
-                    />
-                  </label>
-                  </div>
+                  <>
+                    <SettingsField label="CLI 类型">
+                      <select
+                        aria-label="CLI 类型"
+                        value={cliTypeDraft}
+                        disabled={!canManageBotRuntime}
+                        onChange={(event) => {
+                          const cliType = event.target.value as CliType;
+                          if (cliType === "deepseek" || cliTypeDraft === "deepseek") setCliPathDraft(defaultCliPathForType(cliType));
+                          setCliTypeDraft(cliType);
+                        }}
+                        className={settingsControlClassName}
+                      >
+                        <option value="codex">codex</option>
+                        <option value="codex_server">codex server</option>
+                        <option value="claude">claude</option>
+                        <option value="antigravity">Antigravity CLI</option>
+                        <option value="deepseek" disabled={Boolean(overview?.remoteWorkspace)}>DeepSeek Harness</option>
+                      </select>
+                    </SettingsField>
+                    <SettingsField label="CLI 路径" className="@md:col-span-2">
+                      <input
+                        aria-label="CLI 路径"
+                        type="text"
+                        value={cliPathDraft}
+                        disabled={!canManageBotRuntime}
+                        onChange={(event) => setCliPathDraft(event.target.value)}
+                        className={clsx(settingsControlClassName, "font-mono")}
+                        placeholder={defaultCliPathForType(cliTypeDraft)}
+                        spellCheck={false}
+                      />
+                    </SettingsField>
+                  </>
                 ) : (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="space-y-1">
-                        <span className="text-sm text-[var(--text)]">Native model</span>
-                        <select
-                          aria-label="Native model"
-                          value={nativeSelectedModel}
-                          disabled={!canManageBotRuntime || savingCliConfig || !nativeAgentModels?.items.length}
-                          onChange={(event) => {
-                            const selected = nativeAgentModels?.items.find((item) => item.id === event.target.value);
-                            setNativeAgentDraft((prev) => ({
-                              ...prev,
-                              model: event.target.value,
-                              reasoningEffort: selected?.defaultReasoningEffort || selected?.reasoningEfforts?.[0] || "",
-                            }));
-                          }}
-                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                        >
-                          {nativeSelectedModel && !nativeAgentModels?.items.some((model) => model.id === nativeSelectedModel) ? (
-                            <option value={nativeSelectedModel}>{nativeSelectedModel}</option>
-                          ) : null}
-                          {nativeAgentModels?.items.length ? nativeAgentModels.items.map((model) => (
-                            <option key={model.id} value={model.id}>{model.label || model.id}</option>
-                          )) : (
-                            <option value="">使用全局默认</option>
-                          )}
-                        </select>
-                      </label>
-                      <label className="space-y-1">
-                        <span className="text-sm text-[var(--text)]">Reasoning effort</span>
-                        <select
-                          aria-label="Reasoning effort"
-                          value={nativeAgentDraft.reasoningEffort || nativeAgentModels?.selectedReasoningEffort || ""}
-                          disabled={!canManageBotRuntime || savingCliConfig || nativeReasoningEffortOptions.length === 0}
-                          onChange={(event) => setNativeAgentDraft((prev) => ({ ...prev, reasoningEffort: event.target.value }))}
-                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                        >
-                          {nativeReasoningEffortOptions.length ? nativeReasoningEffortOptions.map((effort) => (
-                            <option key={effort} value={effort}>{effort}</option>
-                          )) : (
-                            <option value="">使用模型默认</option>
-                          )}
-                        </select>
-                      </label>
-                    </div>
-                    <NativeAgentConfigFields
-                      provider={nativeAgentDraft.provider}
-                      model={nativeAgentDraft.model}
-                      piAgent={nativeAgentDraft.piAgent}
-                      baseUrl={nativeAgentDraft.baseUrl}
-                      apiKey={nativeAgentDraft.apiKey}
-                      hasApiKey={nativeAgentDraft.hasApiKey}
-                      apiKeyMasked={nativeAgentDraft.apiKeyMasked}
-                      clearApiKey={nativeAgentDraft.clearApiKey}
-                      editing
-                      disabled={!canManageBotRuntime || savingCliConfig}
-                      onNativeAgentChange={(patch) => setNativeAgentDraft((prev) => ({
-                        ...prev,
-                        ...patch,
-                      }))}
-                    />
-                  </div>
+                  <>
+                    <SettingsField label="Pi agent">
+                      <input
+                        aria-label="Pi agent"
+                        value={nativeAgentDraft.piAgent}
+                        disabled={!canManageBotRuntime || savingCliConfig}
+                        onChange={(event) => setNativeAgentDraft((prev) => ({ ...prev, piAgent: event.target.value }))}
+                        className={settingsControlClassName}
+                        placeholder="main"
+                        spellCheck={false}
+                      />
+                    </SettingsField>
+                    <SettingsField label="Native model">
+                      <select
+                        aria-label="Native model"
+                        value={nativeSelectedModel}
+                        disabled={!canManageBotRuntime || savingCliConfig || !nativeAgentModels?.items.length}
+                        onChange={(event) => {
+                          const selected = nativeAgentModels?.items.find((item) => item.id === event.target.value);
+                          setNativeAgentDraft((prev) => ({
+                            ...prev,
+                            model: event.target.value,
+                            reasoningEffort: selected?.defaultReasoningEffort || selected?.reasoningEfforts?.[0] || "",
+                          }));
+                        }}
+                        className={settingsControlClassName}
+                      >
+                        {nativeSelectedModel && !nativeAgentModels?.items.some((model) => model.id === nativeSelectedModel) ? (
+                          <option value={nativeSelectedModel}>{nativeSelectedModel}</option>
+                        ) : null}
+                        {nativeAgentModels?.items.length ? nativeAgentModels.items.map((model) => (
+                          <option key={model.id} value={model.id}>{model.label || model.id}</option>
+                        )) : (
+                          <option value="">使用全局默认</option>
+                        )}
+                      </select>
+                    </SettingsField>
+                    <SettingsField label="Reasoning effort">
+                      <select
+                        aria-label="Reasoning effort"
+                        value={nativeAgentDraft.reasoningEffort || nativeAgentModels?.selectedReasoningEffort || ""}
+                        disabled={!canManageBotRuntime || savingCliConfig || nativeReasoningEffortOptions.length === 0}
+                        onChange={(event) => setNativeAgentDraft((prev) => ({ ...prev, reasoningEffort: event.target.value }))}
+                        className={settingsControlClassName}
+                      >
+                        {nativeReasoningEffortOptions.length ? nativeReasoningEffortOptions.map((effort) => (
+                          <option key={effort} value={effort}>{effort}</option>
+                        )) : (
+                          <option value="">使用模型默认</option>
+                        )}
+                      </select>
+                    </SettingsField>
+                    <p className="text-[11px] leading-4 text-[var(--muted)] @md:col-span-2">
+                      Provider、Base URL、API Key 在全局环境配置中设置。
+                    </p>
+                  </>
                 )}
+              </div>
+              <div className="mt-2.5 flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => void saveRuntimeConfig()}
                   disabled={!canManageBotRuntime || savingCliConfig}
-                  className={settingsButtonClass("primary")}
+                  className={settingsPrimaryButtonClassName}
                 >
-                  <Save className="h-4 w-4" />
+                  {savingCliConfig ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                   {savingCliConfig
                     ? "保存中..."
                     : runtimeBackendDraft === "native_agent" ? "保存原生 agent 配置" : "保存 CLI 配置"}
                 </button>
               </div>
+            </SettingsSection>
+          ) : null}
 
-              <div className="space-y-3 border-t border-[var(--border)] pt-3">
-                <div>
-                  {overview?.remoteWorkspace && <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} />}
-                  <label htmlFor="bot-workdir" className="font-medium text-[var(--text)]">工作目录</label>
-                </div>
-                <div>
+          {overview ? (
+            <SettingsSection
+              id="settings-section-workdir"
+              titleId="bot-workdir-title"
+              icon={<FolderOpen className="h-3.5 w-3.5" />}
+              title="工作目录"
+              description={overview.remoteWorkspace ? "远程工作区目录由 SSH 连接决定。" : "智能体执行命令与读写文件的根目录。"}
+              badge={workdirDirty ? <SettingsDirtyBadge /> : null}
+              actions={overview.remoteWorkspace ? (
+                <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} />
+              ) : null}
+            >
+              <div className="flex min-w-0 items-center gap-1">
+                <div className="relative min-w-0 flex-1">
+                  <FolderOpen aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted)]" />
                   <input
                     id="bot-workdir"
                     aria-label="工作目录"
                     type="text"
                     value={workdirDraft}
+                    title={workdirDraft}
                     onChange={(event) => {
                       setWorkdirDraft(event.target.value);
                       if (pendingWorkdirConflict) {
                         setPendingWorkdirConflict(null);
                       }
                     }}
-                    readOnly={!canManageBotRuntime || Boolean(overview?.remoteWorkspace)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing && workdirDirty && canManageBotRuntime && !savingWorkdir) {
+                        event.preventDefault();
+                        void saveWorkdir();
+                      }
+                    }}
+                    readOnly={!canManageBotRuntime || Boolean(overview.remoteWorkspace)}
+                    spellCheck={false}
+                    className={clsx(settingsControlClassName, "pl-7 font-mono")}
                   />
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    aria-label="浏览工作目录"
-                    onClick={() => setShowWorkdirPicker(true)}
-                    disabled={!canManageBotRuntime || savingWorkdir || Boolean(overview?.remoteWorkspace)}
-                    className={settingsButtonClass("plain")}
-                  >
-                    浏览目录
-                  </button>
+                <button
+                  type="button"
+                  aria-label="浏览工作目录"
+                  title="浏览目录"
+                  onClick={() => setShowWorkdirPicker(true)}
+                  disabled={!canManageBotRuntime || savingWorkdir || Boolean(overview.remoteWorkspace)}
+                  className={clsx(settingsButtonClassName, "h-8")}
+                >
+                  浏览
+                </button>
+              </div>
+              {!overview.remoteWorkspace ? (
+                <div className="mt-2.5 flex items-center justify-end gap-2">
+                  {workdirDirty ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWorkdirDraft(normalizePathInput(overview.workingDir));
+                        setPendingWorkdirConflict(null);
+                      }}
+                      disabled={savingWorkdir}
+                      className={settingsButtonClassName}
+                    >
+                      还原
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => void saveWorkdir()}
-                    disabled={!canManageBotRuntime || savingWorkdir || Boolean(overview?.remoteWorkspace)}
-                    className={settingsButtonClass("primary")}
+                    disabled={!canManageBotRuntime || savingWorkdir}
+                    className={settingsPrimaryButtonClassName}
                   >
-                    <Save className="h-4 w-4" />
+                    {savingWorkdir ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                     {savingWorkdir ? "保存中..." : "保存工作目录"}
                   </button>
                 </div>
-              </div>
+              ) : null}
 
-              {overview?.cliType === "antigravity" && overview.remoteWorkspace && overview.remoteWorkspaceMcp ? (
-                <div data-testid="remote-workspace-mcp-panel" className="space-y-3 border-t border-[var(--border)] pt-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="font-medium text-[var(--text)]">Antigravity 远程 MCP</h3>
-                    <span className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)]">
+              {overview.cliType === "antigravity" && overview.remoteWorkspace && overview.remoteWorkspaceMcp ? (
+                <div data-testid="remote-workspace-mcp-panel" className="mt-3 space-y-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-2.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Plug className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                    <h3 className="min-w-0 flex-1 truncate text-xs font-semibold text-[var(--text)]">Antigravity 远程 MCP</h3>
+                    <span
+                      className={clsx(
+                        "shrink-0 rounded-full border px-1.5 text-[10px] leading-4",
+                        overview.remoteWorkspaceMcp.state === "installed"
+                          ? "border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success)]"
+                          : "border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] text-[var(--status-warning)]",
+                      )}
+                    >
                       {remoteWorkspaceMcpStateLabel(overview.remoteWorkspaceMcp.state)}
                     </span>
                   </div>
-                  <div className="space-y-1 text-sm text-[var(--muted)]">
-                    <p><span className="font-medium text-[var(--text)]">服务：</span>{overview.remoteWorkspaceMcp.serverName}</p>
-                    {overview.remoteWorkspaceMcp.scope ? <p><span className="font-medium text-[var(--text)]">范围：</span>{overview.remoteWorkspaceMcp.scope}</p> : null}
-                    {overview.remoteWorkspaceMcp.configPath ? <p className="break-all"><span className="font-medium text-[var(--text)]">配置路径：</span>{overview.remoteWorkspaceMcp.configPath}</p> : null}
-                    {overview.remoteWorkspaceMcp.message ? <p>{overview.remoteWorkspaceMcp.message}</p> : null}
-                    {overview.remoteWorkspaceMcp.allowedTools.length ? (
-                      <p><span className="font-medium text-[var(--text)]">工具：</span>{overview.remoteWorkspaceMcp.allowedTools.join(", ")}</p>
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-[11px] leading-4">
+                    <dt className="text-[var(--muted)]">服务</dt>
+                    <dd className="min-w-0 truncate font-mono">{overview.remoteWorkspaceMcp.serverName}</dd>
+                    {overview.remoteWorkspaceMcp.scope ? (
+                      <>
+                        <dt className="text-[var(--muted)]">范围</dt>
+                        <dd className="min-w-0 truncate">{overview.remoteWorkspaceMcp.scope}</dd>
+                      </>
                     ) : null}
-                  </div>
+                    {overview.remoteWorkspaceMcp.configPath ? (
+                      <>
+                        <dt className="text-[var(--muted)]">配置</dt>
+                        <dd className="min-w-0 break-all font-mono">{overview.remoteWorkspaceMcp.configPath}</dd>
+                      </>
+                    ) : null}
+                    {overview.remoteWorkspaceMcp.allowedTools.length ? (
+                      <>
+                        <dt className="text-[var(--muted)]">工具</dt>
+                        <dd className="min-w-0 break-words">{overview.remoteWorkspaceMcp.allowedTools.join(", ")}</dd>
+                      </>
+                    ) : null}
+                    {overview.remoteWorkspaceMcp.askPolicy ? (
+                      <>
+                        <dt className="text-[var(--muted)]">权限</dt>
+                        <dd className="min-w-0 break-words">权限策略：{overview.remoteWorkspaceMcp.askPolicy}</dd>
+                      </>
+                    ) : null}
+                  </dl>
+                  {overview.remoteWorkspaceMcp.message ? <p className="text-[11px] leading-4 text-[var(--muted)]">{overview.remoteWorkspaceMcp.message}</p> : null}
                   {overview.remoteWorkspaceMcp.diagnostics?.length ? (
-                    <div className="space-y-2 rounded border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] p-2 text-sm text-[var(--status-danger)]">
+                    <SettingsNotice tone="danger" className="space-y-1">
                       {overview.remoteWorkspaceMcp.diagnostics.map((diagnostic, index) => (
                         <p key={`${diagnostic.code || "diagnostic"}-${index}`}>
                           {diagnostic.message}{diagnostic.action ? `：${diagnostic.action}` : ""}
                         </p>
                       ))}
-                    </div>
+                    </SettingsNotice>
                   ) : null}
                   {overview.remoteWorkspaceMcp.setupInstructions ? (
-                    <p className="text-sm text-[var(--muted)]">{overview.remoteWorkspaceMcp.setupInstructions}</p>
+                    <p className="text-[11px] leading-4 text-[var(--muted)]">{overview.remoteWorkspaceMcp.setupInstructions}</p>
                   ) : null}
-                  {overview.remoteWorkspaceMcp.askPolicy ? (
-                    <p className="text-sm text-[var(--muted)]">权限策略：{overview.remoteWorkspaceMcp.askPolicy}</p>
-                  ) : null}
-                  {overview.remoteWorkspaceMcp.mcpSetupSnippet ? (
-                    <div className="space-y-2">
+                  {([
+                    ["mcp", "MCP 设置说明", "Antigravity MCP 设置说明", overview.remoteWorkspaceMcp.mcpSetupSnippet, 5],
+                    ["statusLine", "statusLine 设置说明", "Antigravity statusLine 设置说明", overview.remoteWorkspaceMcp.statusLineSnippet, 2],
+                  ] as const).map(([item, label, ariaLabel, snippet, rows]) => snippet ? (
+                    <div key={item} className="space-y-1">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium text-[var(--text)]">MCP 设置说明</span>
+                        <span className="text-[11px] font-medium text-[var(--muted)]">{label}</span>
                         <button
                           type="button"
-                          onClick={() => void copyRemoteMcpText(overview.remoteWorkspaceMcp?.mcpSetupSnippet || "", "mcp")}
-                          className={settingsButtonClass("plain")}
+                          onClick={() => void copyRemoteMcpText(snippet, item)}
+                          className={clsx(settingsButtonClassName, "h-6 px-1.5 text-[11px]")}
                         >
-                          {copiedRemoteMcpItem === "mcp" ? "已复制" : "复制"}
+                          {copiedRemoteMcpItem === item ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                          {copiedRemoteMcpItem === item ? "已复制" : "复制"}
                         </button>
                       </div>
                       <textarea
-                        aria-label="Antigravity MCP 设置说明"
+                        aria-label={ariaLabel}
                         readOnly
-                        value={overview.remoteWorkspaceMcp.mcpSetupSnippet}
-                        rows={5}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)]"
+                        value={snippet}
+                        rows={rows}
+                        className={clsx(settingsTextareaClassName, "resize-none font-mono text-[11px] leading-4")}
                       />
                     </div>
-                  ) : null}
-                  {overview.remoteWorkspaceMcp.statusLineSnippet ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium text-[var(--text)]">statusLine 设置说明</span>
-                        <button
-                          type="button"
-                          onClick={() => void copyRemoteMcpText(overview.remoteWorkspaceMcp?.statusLineSnippet || "", "statusLine")}
-                          className={settingsButtonClass("plain")}
-                        >
-                          {copiedRemoteMcpItem === "statusLine" ? "已复制" : "复制"}
-                        </button>
-                      </div>
-                      <textarea
-                        aria-label="Antigravity statusLine 设置说明"
-                        readOnly
-                        value={overview.remoteWorkspaceMcp.statusLineSnippet}
-                        rows={2}
-                        className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)]"
-                      />
-                    </div>
-                  ) : null}
+                  ) : null)}
                 </div>
               ) : null}
-          </section>
-        ) : null}
+            </SettingsSection>
+          ) : null}
 
-        {showWorkdirPicker ? (
-          <DirectoryPickerDialog
-            title="选择工作目录"
-            botAlias={botAlias}
-            client={client}
-            initialPath={workdirDraft}
-            mutateBrowseState={false}
-            mode="workdir"
-            canCreateDirectory={canCreateWorkdirDirectory}
-            onPick={(workingDir) => {
-              setWorkdirDraft(workingDir);
-              setPendingWorkdirConflict(null);
-            }}
-            onClose={() => setShowWorkdirPicker(false)}
-          />
-        ) : null}
+          {showWorkdirPicker ? (
+            <DirectoryPickerDialog
+              title="选择工作目录"
+              botAlias={botAlias}
+              client={client}
+              initialPath={workdirDraft}
+              mutateBrowseState={false}
+              mode="workdir"
+              canCreateDirectory={canCreateWorkdirDirectory}
+              onPick={(workingDir) => {
+                setWorkdirDraft(workingDir);
+                setPendingWorkdirConflict(null);
+              }}
+              onClose={() => setShowWorkdirPicker(false)}
+            />
+          ) : null}
 
-        {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} /> : null}
+          {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} /> : null}
 
-        {overview && !nativeRuntime ? (
-          <BotCliParamsPanel
-            botAlias={botAlias}
-            client={client}
-            canManage={canConfigureBot}
-            reloadKey={`${botAlias}:${overview.cliType}:${overview.cliPath || ""}`}
-          />
-        ) : null}
+          {overview && !nativeRuntime ? (
+            <BotCliParamsPanel
+              botAlias={botAlias}
+              client={client}
+              canManage={canConfigureBot}
+              reloadKey={`${botAlias}:${overview.cliType}:${overview.cliPath || ""}`}
+              variant="section"
+            />
+          ) : null}
 
-        {overview ? <BotPromptPresetsPanel botAlias={botAlias} client={client} canManage={canConfigureBot} /> : null}
+          {overview ? <BotPromptPresetsPanel botAlias={botAlias} client={client} canManage={canConfigureBot} /> : null}
+        </div>
       </section>
 
       {pendingWorkdirConflict ? (
@@ -695,26 +807,26 @@ export function SettingsScreen({
           aria-modal="true"
           aria-labelledby="workdir-reset-title"
         >
-          <div className="w-full max-w-md rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-2xl">
-            <h2 id="workdir-reset-title" className="text-base font-semibold text-[var(--text)]">
+          <div className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 shadow-2xl">
+            <h2 id="workdir-reset-title" className="text-sm font-semibold text-[var(--text)]">
               确认切换工作目录
             </h2>
-            <p className="mt-3 text-sm text-[var(--muted)]">切换工作目录会丢失当前会话。</p>
-            <p className="mt-2 break-all text-sm text-[var(--text)]">
-              当前目录：{pendingWorkdirConflict.currentWorkingDir}
-            </p>
-            <p className="break-all text-sm text-[var(--text)]">
-              目标目录：{pendingWorkdirConflict.requestedWorkingDir}
-            </p>
-            <p className="text-sm text-[var(--muted)]">
+            <p className="mt-2 text-xs text-[var(--muted)]">切换工作目录会丢失当前会话。</p>
+            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+              <dt className="text-[var(--muted)]">当前目录</dt>
+              <dd className="break-all font-mono text-[var(--text)]">{pendingWorkdirConflict.currentWorkingDir}</dd>
+              <dt className="text-[var(--muted)]">目标目录</dt>
+              <dd className="break-all font-mono text-[var(--text)]">{pendingWorkdirConflict.requestedWorkingDir}</dd>
+            </dl>
+            <p className="mt-2 text-xs text-[var(--status-warning)]">
               将清空 {pendingWorkdirConflict.historyCount} 条聊天消息。
             </p>
-            <div className="mt-5 flex justify-end gap-3">
+            <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setPendingWorkdirConflict(null)}
                 disabled={savingWorkdir}
-                className="rounded-full border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                className={settingsButtonClassName}
               >
                 取消
               </button>
@@ -722,7 +834,7 @@ export function SettingsScreen({
                 type="button"
                 onClick={() => void confirmWorkdirChange()}
                 disabled={savingWorkdir}
-                className="tcb-solid-danger rounded-full px-4 py-2 text-sm hover:opacity-90 disabled:opacity-60"
+                className="tcb-solid-danger inline-flex h-7 items-center rounded-[var(--radius-control)] px-2.5 text-xs font-medium hover:opacity-90 disabled:opacity-60"
               >
                 {savingWorkdir ? "切换中..." : "确认并切换"}
               </button>
@@ -730,7 +842,6 @@ export function SettingsScreen({
           </div>
         </div>
       ) : null}
-
     </main>
   );
 }

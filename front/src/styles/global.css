@@ -374,3 +374,49 @@ select:disabled {
     opacity: 1;
   }
 }
+
+/* Compact toggle switch used by settings panels; keeps native checkbox semantics. */
+.settings-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 1.875rem;
+  height: 1.125rem;
+  margin: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 32%, transparent);
+  cursor: pointer;
+  appearance: none;
+  transition: background-color 150ms ease;
+}
+
+.settings-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(1.125rem - 4px);
+  height: calc(1.125rem - 4px);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 88%, transparent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+
+.settings-switch:checked {
+  background: var(--accent);
+}
+
+.settings-switch:checked::after {
+  background: var(--accent-foreground);
+  transform: translateX(0.75rem);
+}
+
+.settings-switch:focus-visible {
+  outline: 2px solid var(--workbench-focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

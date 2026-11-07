@@ -1,7 +1,18 @@
 import { cliTypeLabel } from "../utils/cliType";
 import { useEffect, useState } from "react";
-import { RefreshCw, Save } from "lucide-react";
+import { clsx } from "clsx";
+import { LoaderCircle, RotateCcw, Save, SlidersHorizontal } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import {
+  SettingsDirtyBadge,
+  SettingsNotice,
+  SettingsSection,
+  SettingsSwitch,
+  settingsControlClassName,
+  settingsIconButtonClassName,
+  settingsPrimaryButtonClassName,
+  settingsTextareaClassName,
+} from "./SettingsSection";
 import type { CliParamField, CliParamsPayload } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
@@ -12,6 +23,8 @@ type Props = {
   className?: string;
   reloadKey?: string | number;
   canManage?: boolean;
+  /** "section" renders flat inside the settings page; "card" keeps a bordered card for other hosts. */
+  variant?: "card" | "section";
 };
 
 type DraftValues = Record<string, string | boolean>;
@@ -85,6 +98,7 @@ export function BotCliParamsPanel({
   className = "",
   reloadKey = "",
   canManage = true,
+  variant = "card",
 }: Props) {
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
@@ -178,118 +192,144 @@ export function BotCliParamsPanel({
     }
   }
 
+  const booleanEntries = entries.filter(([, field]) => field.type === "boolean");
+  const valueEntries = entries.filter(([, field]) => field.type !== "boolean");
+
   return (
-    <section className={`rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 ${className}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-[var(--text)]">CLI 参数</h2>
-          <p className="text-sm text-[var(--muted)]">当前 CLI: {cliParams ? cliTypeLabel(cliParams.cliType) : "加载中"}</p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+    <SettingsSection
+      id="settings-section-params"
+      titleId={`bot-cli-params-title-${botAlias}`}
+      icon={<SlidersHorizontal className="h-3.5 w-3.5" />}
+      title="CLI 参数"
+      description={`当前 CLI: ${cliParams ? cliTypeLabel(cliParams.cliType) : "加载中"}`}
+      badge={hasChanges ? <SettingsDirtyBadge /> : null}
+      className={variant === "card"
+        ? clsx("@container rounded-lg border border-[var(--border)] bg-[var(--surface)] last:border-b", className)
+        : className}
+      actions={(
+        <>
+          <button
+            type="button"
+            aria-label="恢复默认参数"
+            title="恢复默认参数"
+            onClick={() => void reset()}
+            disabled={!canManage || resetting}
+            className={settingsIconButtonClassName}
+          >
+            <RotateCcw className={clsx("h-3.5 w-3.5", resetting ? "animate-spin" : "")} />
+          </button>
           <button
             type="button"
             onClick={() => void save()}
             disabled={!canManage || saving || !hasChanges}
-            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent hover:opacity-90 disabled:opacity-60"
+            className={settingsPrimaryButtonClassName}
           >
-            <Save className="h-4 w-4" />
+            {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             {saving ? "保存中..." : "保存参数"}
           </button>
-          <button
-            type="button"
-            onClick={() => void reset()}
-            disabled={!canManage || resetting}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-          >
-            <RefreshCw className="h-4 w-4" />
-            {resetting ? "重置中..." : "恢复默认参数"}
-          </button>
-        </div>
-      </div>
+        </>
+      )}
+    >
+      <div className="space-y-2.5">
+        {error ? <SettingsNotice tone="danger">{error}</SettingsNotice> : null}
+        {notice ? <SettingsNotice tone="success">{notice}</SettingsNotice> : null}
+        {loading ? (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            加载中...
+          </div>
+        ) : null}
+        {cliParams?.cliType === "deepseek" ? (
+          <div className="space-y-0.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--muted)]">
+            <p>Provider、模型和思考深度可在聊天中原子选择；headless 模式下运行 pwsh 等工具需要选择 danger-full-access。</p>
+            <p>
+              当前 Provider：{cliParams.selectedProvider || String(cliParams.params.provider || "默认")}
+              {cliParams.catalogStatus ? ` · catalog：${cliParams.catalogStatus}` : ""}
+            </p>
+            {cliParams.catalogDiagnostic ? <p className="text-[var(--status-warning)]">{cliParams.catalogDiagnostic}</p> : null}
+          </div>
+        ) : null}
 
-      {error ? <div className="mt-3 rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)]">{error}</div> : null}
-      {notice ? <div className="mt-3 rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)]">{notice}</div> : null}
-      {loading ? <div className="mt-4 text-sm text-[var(--muted)]">加载中...</div> : null}
-      {cliParams?.cliType === "deepseek" ? (
-        <div className="mt-3 space-y-1 text-sm text-[var(--muted)]">
-          <p>Provider、模型和思考深度可在聊天中原子选择；headless 模式下运行 pwsh 等工具需要选择 danger-full-access。</p>
-          <p>
-            当前 Provider：{cliParams.selectedProvider || String(cliParams.params.provider || "默认")}
-            {cliParams.catalogStatus ? ` · catalog：${cliParams.catalogStatus}` : ""}
-          </p>
-          {cliParams.catalogDiagnostic ? <p className="text-[var(--status-warning)]">{cliParams.catalogDiagnostic}</p> : null}
-        </div>
-      ) : null}
+        {valueEntries.length > 0 ? (
+          <div className="grid gap-2 @md:grid-cols-2">
+            {valueEntries.map(([key, field]) => {
+              const label = fieldLabel(key, field);
+              const value = draftValues[key] ?? "";
+              const inputId = `cli-param-${botAlias}-${key}`;
+              const changed = baseDrafts[key] !== value;
+              return (
+                <div key={key} className={clsx("min-w-0 space-y-1", field.type === "string_list" ? "@md:col-span-2" : "")}>
+                  <label htmlFor={inputId} className="flex min-w-0 items-center gap-1 text-[11px] font-medium text-[var(--muted)]">
+                    <span className="min-w-0 truncate" title={label}>{label}</span>
+                    {changed ? <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-warning)]" /> : null}
+                  </label>
+                  {field.enum ? (
+                    <select
+                      id={inputId}
+                      aria-label={label}
+                      value={String(value)}
+                      disabled={!canManage}
+                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                      className={settingsControlClassName}
+                    >
+                      {field.enum.map((item) => (
+                        <option key={item} value={item}>{item}</option>
+                      ))}
+                    </select>
+                  ) : field.type === "string_list" ? (
+                    <textarea
+                      id={inputId}
+                      aria-label={label}
+                      rows={3}
+                      value={String(value)}
+                      disabled={!canManage}
+                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                      className={clsx(settingsTextareaClassName, "font-mono")}
+                      placeholder="每行一个参数"
+                      spellCheck={false}
+                    />
+                  ) : (
+                    <input
+                      id={inputId}
+                      aria-label={label}
+                      type={field.type === "number" ? "number" : "text"}
+                      value={String(value)}
+                      disabled={!canManage}
+                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
+                      className={settingsControlClassName}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
-      <div className="mt-3 space-y-3">
-        {entries.map(([key, field]) => {
-          const label = fieldLabel(key, field);
-          const value = draftValues[key] ?? "";
-          const inputId = `cli-param-${botAlias}-${key}`;
-
-          if (field.type === "boolean") {
-            return (
-              <label
-                key={key}
-                htmlFor={inputId}
-                className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm font-medium text-[var(--text)]"
-              >
-                <span>{label}</span>
-                <input
-                  id={inputId}
-                  aria-label={label}
-                  type="checkbox"
-                  checked={Boolean(value)}
-                  disabled={!canManage}
-                  onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
-                  className="h-4 w-4 shrink-0"
-                />
-              </label>
-            );
-          }
-
-          return (
-            <div key={key} className="space-y-2">
-              <label htmlFor={inputId} className="block text-sm font-medium text-[var(--text)]">{label}</label>
-              {field.enum ? (
-                <select
-                  id={inputId}
-                  aria-label={label}
-                  value={String(value)}
-                  disabled={!canManage}
-                  onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
+        {booleanEntries.length > 0 ? (
+          <div className="grid overflow-hidden rounded-md border border-[var(--workbench-hairline)] @md:grid-cols-2">
+            {booleanEntries.map(([key, field]) => {
+              const label = fieldLabel(key, field);
+              const inputId = `cli-param-${botAlias}-${key}`;
+              return (
+                <label
+                  key={key}
+                  htmlFor={inputId}
+                  className="-mb-px -mr-px flex min-h-9 min-w-0 cursor-pointer items-center justify-between gap-3 border-b border-r border-[var(--workbench-hairline)] px-2.5 py-1.5 text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]"
                 >
-                  {field.enum.map((item) => (
-                    <option key={item} value={item}>{item}</option>
-                  ))}
-                </select>
-              ) : field.type === "string_list" ? (
-                <textarea
-                  id={inputId}
-                  aria-label={label}
-                  rows={3}
-                  value={String(value)}
-                  disabled={!canManage}
-                  onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                  placeholder="每行一个参数"
-                />
-              ) : (
-                <input
-                  id={inputId}
-                  aria-label={label}
-                  type={field.type === "number" ? "number" : "text"}
-                  value={String(value)}
-                  disabled={!canManage}
-                  onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60"
-                />
-              )}
-            </div>
-          );
-        })}
+                  <span className="min-w-0 leading-4 text-[var(--text)]">{label}</span>
+                  <SettingsSwitch
+                    id={inputId}
+                    aria-label={label}
+                    checked={Boolean(draftValues[key])}
+                    disabled={!canManage}
+                    onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
+                  />
+                </label>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
-    </section>
+    </SettingsSection>
   );
 }
