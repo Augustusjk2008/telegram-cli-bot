@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import {
   CLAUDE_OVERAGE_RATE_LIMIT_ID,
   GENERAL_CLAUDE_RATE_LIMIT_ID,
@@ -64,6 +64,18 @@ function subtractDays(dateText: string, days: number) {
   parsed.setUTCDate(parsed.getUTCDate() - days);
   return formatDateValue(parsed);
 }
+
+type QuickRangeKey = "today" | "7d" | "30d" | "90d" | "all";
+
+const QUICK_RANGES: readonly { key: QuickRangeKey; label: string; days: number | null }[] = [
+  { key: "today", label: "今天", days: 1 },
+  { key: "7d", label: "近 7 天", days: 7 },
+  { key: "30d", label: "近 30 天", days: 30 },
+  { key: "90d", label: "近 90 天", days: 90 },
+  { key: "all", label: "全部", days: null },
+];
+
+const DEFAULT_QUICK_RANGE: QuickRangeKey = "30d";
 
 function defaultRange(today: string) {
   const endDate = today || formatDateValue(new Date());
@@ -300,6 +312,68 @@ function compareSampledAt(left: CodexRateLimitSample, right: CodexRateLimitSampl
   if (Number.isFinite(leftTimestamp)) return -1;
   if (Number.isFinite(rightTimestamp)) return 1;
   return 0;
+}
+
+const DEFAULT_CHART_WIDTH = 640;
+const MIN_CHART_WIDTH = 280;
+
+function useMeasuredWidth(fallback: number) {
+  const [width, setWidth] = useState(fallback);
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      const next = Math.round(node.clientWidth);
+      if (next > 0) setWidth(Math.max(MIN_CHART_WIDTH, next));
+    };
+    update();
+    observerRef.current = new ResizeObserver(update);
+    observerRef.current.observe(node);
+  }, []);
+  return { width, ref };
+}
+
+type PaceTone = "good" | "warning" | "critical" | "neutral";
+
+type QuotaPace = {
+  tone: PaceTone;
+  label: string;
+  hint: string;
+  timePercent: number | null;
+  exhaustText: string;
+};
+
+/**
+ * Compare the remaining quota with the remaining share of the window.  When
+ * quota outlasts time the bucket is on pace; the latest consumption rate then
+ * estimates whether it runs out before the next reset.
+ */
+function quotaPace(sample: CodexRateLimitSample, latestRate: number | null): QuotaPace {
+  const remaining = remainingPercent(sample);
+  const hasReset = Number.isFinite(Date.parse(sample.resetsAt)) && Number.isFinite(Date.parse(sample.sampledAt));
+  const timePercent = hasReset ? Math.min(100, Math.max(0, remainingDurationPercent(sample))) : null;
+  const resetMs = remainingDurationMs(sample);
+  let exhaustText = "—";
+  if (remaining <= 0) exhaustText = "已耗尽";
+  else if (latestRate !== null) {
+    const exhaustMs = latestRate > 0 ? (remaining / latestRate) * HOUR_MS : Infinity;
+    exhaustText = hasReset && exhaustMs >= resetMs
+      ? "重置前充足"
+      : Number.isFinite(exhaustMs) ? `约 ${formatRemainingDuration(exhaustMs)}` : "重置前充足";
+  }
+  if (remaining <= 0) {
+    return { tone: "critical", label: "已耗尽", hint: "额度已用完，等待重置", timePercent, exhaustText };
+  }
+  if (timePercent === null) {
+    return { tone: "neutral", label: "节奏未知", hint: "缺少有效的重置时间", timePercent, exhaustText };
+  }
+  const delta = remaining - timePercent;
+  const hint = `剩余额度 ${formatPercentValue(remaining)}，窗口剩余时间 ${formatPercentValue(timePercent)}`;
+  if (delta >= 0) return { tone: "good", label: "节奏充裕", hint, timePercent, exhaustText };
+  if (delta >= -15) return { tone: "warning", label: "略快于均速", hint, timePercent, exhaustText };
+  return { tone: "critical", label: "消耗偏快", hint, timePercent, exhaustText };
 }
 
 type ChartPoint = {
@@ -652,6 +726,9 @@ function CodexRateLimitBucketChart({
     () => [...samples].sort(compareSampledAt),
     [samples],
   );
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const gradientId = `usage-quota-area-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const chartWidth = useMeasuredWidth(DEFAULT_CHART_WIDTH);
   const latest = orderedSamples.at(-1);
   if (!latest) {
     return (
@@ -664,12 +741,15 @@ function CodexRateLimitBucketChart({
     );
   }
 
-  const width = 640;
-  const height = 250;
-  const left = 64;
-  const right = 64;
-  const top = 32;
-  const bottom = 42;
+  // Size the viewBox to the rendered width so labels keep their native size
+  // and the plot keeps a fixed height regardless of how wide the card is.
+  const width = chartWidth.width;
+  const height = 200;
+  const narrow = width < 480;
+  const left = narrow ? 44 : 56;
+  const right = narrow ? 48 : 60;
+  const top = 26;
+  const bottom = 30;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
   const timestamps = orderedSamples.map((sample) => Date.parse(sample.sampledAt));
@@ -793,143 +873,241 @@ function CodexRateLimitBucketChart({
       )
     : null;
   const latestRemaining = remainingPercent(latest);
-  const latestDuration = formatRemainingDuration(remainingDurationMs(latest));
+  const latestDurationMs = remainingDurationMs(latest);
+  const latestDuration = formatRemainingDuration(latestDurationMs);
   const durationWindowDays = latest.windowMinutes / 1440;
   const durationDaysForPercent = (remaining: number) => (
     durationDaysFormat.format((remaining / 100) * durationWindowDays)
   );
   const latestCredits = creditSamples.length ? creditsValue(creditSamples.at(-1)!) : null;
   const accessibleLabel = `${label} 剩余额度与${secondaryLabel}趋势，共 ${orderedSamples.length} 个样本，当前剩余 ${formatPercentValue(latestRemaining)}，剩余时长 ${latestDuration}，剩余 Credits ${formatCreditsValue(latestCredits)}，最近消耗 ${latestRateText}`;
+  const pace = quotaPace(latest, latestRate);
+  const plotBottom = top + plotHeight;
+  const quotaAreaPath = quotaPath && quotaCurve.length
+    ? `${quotaPath} L ${quotaCurve.at(-1)!.end.x} ${plotBottom} L ${quotaCurve[0].start.x} ${plotBottom} Z`
+    : "";
+  const hovered = hoverIndex === null ? null : orderedSamples[hoverIndex] ?? null;
+  const hoveredPoint = hoverIndex === null ? null : points[hoverIndex] ?? null;
+  const hoveredCredits = hovered ? creditsValue(hovered) : null;
+  const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
+    if (points.length < 2) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width) return;
+    const x = ((event.clientX - rect.left) / rect.width) * width;
+    let nearest = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      if (Math.abs(points[index].x - x) < Math.abs(points[nearest].x - x)) nearest = index;
+    }
+    setHoverIndex(nearest);
+  };
 
   return (
     <article className="codex-usage-rate-limit-group">
-      <div className="codex-usage-section-heading codex-usage-rate-limit-heading">
-        <div>
+      <header className="codex-usage-bucket-header">
+        <div className="codex-usage-bucket-title">
           <h4>{label}</h4>
+          <span className="codex-usage-badge">{formatWindow(latest.windowMinutes)}窗口</span>
         </div>
-        <div className="codex-usage-rate-limit-summary" aria-label="最新限额样本摘要">
-          <strong>当前剩余 {formatPercentValue(latestRemaining)}</strong>
-          <span title={latestRate === null
-            ? "当前曲线末端无法计算消耗速度"
-            : `${formatServerLocalTime(latest.sampledAt)} 的平滑额度曲线消耗速度`}>
-            最近消耗 {latestRateText}
-          </span>
-          <span>剩余时长 {latestDuration}</span>
-          {latestCredits !== null ? <span>剩余 Credits {formatCreditsValue(latestCredits)}</span> : null}
-          <span>已用 {formatPercentValue(latest.usedPercent)}</span>
-          <span>{formatWindow(latest.windowMinutes)}窗口</span>
-          <span>重置时间 {formatServerLocalTime(latest.resetsAt)}</span>
+        <span className="codex-usage-pace" data-tone={pace.tone} title={pace.hint}>
+          <span className="codex-usage-pace-dot" aria-hidden="true" />
+          {pace.label}
+        </span>
+      </header>
+
+      <div className="codex-usage-bucket-overview">
+        <div className="codex-usage-bucket-hero">
+          <strong className="codex-usage-bucket-hero-value">{formatPercentValue(latestRemaining)}</strong>
+          <span>当前剩余</span>
+        </div>
+        <div className="codex-usage-meter" aria-hidden="true">
+          <div className="codex-usage-meter-track" data-tone={pace.tone}>
+            <span className="codex-usage-meter-fill" style={{ width: `${latestRemaining}%` }} />
+            {pace.timePercent !== null ? (
+              <span className="codex-usage-meter-marker" style={{ left: `${pace.timePercent}%` }} />
+            ) : null}
+          </div>
+          <div className="codex-usage-meter-legend">
+            <span><i className="codex-usage-swatch-quota" />额度 {formatPercentValue(latestRemaining)}</span>
+            {pace.timePercent !== null ? (
+              <span><i className="codex-usage-swatch-time" />时间 {formatPercentValue(pace.timePercent)}</span>
+            ) : null}
+          </div>
         </div>
       </div>
+
+      <dl className="codex-usage-bucket-stats" aria-label="最新限额样本摘要">
+        <div>
+          <dt>剩余时长</dt>
+          <dd>{latestDuration}</dd>
+        </div>
+        <div>
+          <dt>重置时间</dt>
+          <dd title={formatServerLocalTime(latest.resetsAt)}>{formatAxisTime(latest.resetsAt)}</dd>
+        </div>
+        <div>
+          <dt>最近消耗</dt>
+          <dd title={latestRate === null
+            ? "当前曲线末端无法计算消耗速度"
+            : `${formatServerLocalTime(latest.sampledAt)} 的平滑额度曲线消耗速度`}>
+            {latestRate === null ? "—" : `${consumptionRateFormat.format(latestRate)} %/时`}
+          </dd>
+        </div>
+        <div>
+          <dt>预计耗尽</dt>
+          <dd>{pace.exhaustText}</dd>
+        </div>
+        {latestCredits !== null ? (
+          <div>
+            <dt>Credits</dt>
+            <dd>{formatCreditsValue(latestCredits)}</dd>
+          </div>
+        ) : null}
+      </dl>
+
       <div className="codex-usage-rate-limit-chart">
-        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={accessibleLabel}>
-          <title>{label} 剩余额度与{secondaryLabel}趋势</title>
-          <desc>
-            {showCredits
-              ? `按采样时间展示该额度桶的剩余额度与 Credits；右轴为剩余 Credits，从 ${formatCreditsValue(creditsBounds.min)} 到 ${formatCreditsValue(creditsBounds.max)}。`
-              : showConsumption
-              ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；柱高为固定时间区间内平滑额度曲线负导数的平均值，随横轴范围变化；重置间隔为过渡估计，数据不足处留空。`
-              : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
-          </desc>
-          <line
-            className="codex-usage-rate-limit-quota-axis"
-            x1={left}
-            x2={left}
-            y1={top}
-            y2={top + plotHeight}
-          />
-          <line
-            className={`codex-usage-rate-limit-${secondaryClass}-axis`}
-            x1={width - right}
-            x2={width - right}
-            y1={top}
-            y2={top + plotHeight}
-          />
-          <text
-            className="codex-usage-rate-limit-quota-axis-title"
-            x={left}
-            y={18}
-            textAnchor="start"
+        <div className="codex-usage-rate-limit-plot" ref={chartWidth.ref}>
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            role="img"
+            aria-label={accessibleLabel}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={() => setHoverIndex(null)}
           >
-            剩余额度
-          </text>
-          <text
-            className={`codex-usage-rate-limit-${secondaryClass}-axis-title`}
-            x={width - right}
-            y={18}
-            textAnchor="end"
-          >
-            {showCredits ? "Credits" : showConsumption ? "消耗速度（百分点/小时）" : "剩余时长"}
-          </text>
-          {axisTicks.map((remaining, index) => {
-            const y = yForPercent(remaining);
-            return (
-              <g key={remaining} className="codex-usage-rate-limit-grid">
-                <line x1={left} x2={width - right} y1={y} y2={y} />
-                <text
-                  className="codex-usage-rate-limit-quota-tick"
-                  x={left - 10}
-                  y={y + 4}
-                  textAnchor="end"
-                >
-                  {remaining}%
-                </text>
-                <text
-                  className={`codex-usage-rate-limit-${secondaryClass}-tick`}
-                  x={width - right + 10}
-                  y={y + 4}
-                  textAnchor="start"
-                >
-                  {showConsumption
-                    ? consumptionRateFormat.format(rateAxisMin + index * (rateAxisMax - rateAxisMin) / RATE_LIMIT_AXIS_INTERVALS)
-                    : showCredits
-                      ? formatCreditsValue(secondaryAxisTicks?.[index] ?? null)
-                    : `${durationDaysForPercent(remaining)} 天`}
-                </text>
-              </g>
-            );
-          })}
-          {points.length > 1 ? (
-            <>
-              {showConsumption ? consumptionBars.map((bar) => {
-                const visibleStart = Math.max(left, bar.start);
-                const visibleEnd = Math.min(width - right, bar.end);
-                return (
-                  <rect
-                    key={bar.start}
-                    className="codex-usage-rate-limit-consumption-bar"
-                    x={visibleStart + (visibleEnd - visibleStart) * 0.15}
-                    y={Math.min(yForRate(0), yForRate(bar.rate))}
-                    width={(visibleEnd - visibleStart) * 0.7}
-                    height={Math.abs(yForRate(0) - yForRate(bar.rate))}
-                    rx={1.5}
-                  >
-                    <title>{`${formatConsumptionPeriod(
-                      bar.start,
-                      bar.end,
-                      minTimestamp,
-                      timestampRange,
-                      left,
-                      plotWidth,
-                      orderedSamples,
-                    )}，${consumptionRateFormat.format(bar.rate)}%每小时`}</title>
-                  </rect>
-                );
-              }) : showCredits
-                ? <path className="codex-usage-rate-limit-credits-line" d={creditsPath} />
-                : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
-              <path className="codex-usage-rate-limit-line" d={quotaPath} />
-            </>
-          ) : null}
-          <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 12} textAnchor="start">
-            {formatAxisTime(orderedSamples[0].sampledAt)}
-          </text>
-          {orderedSamples.length > 1 ? (
-            <text className="codex-usage-rate-limit-axis-label" x={width - right} y={height - 12} textAnchor="end">
-              {formatAxisTime(latest.sampledAt)}
+            <title>{label} 剩余额度与{secondaryLabel}趋势</title>
+            <desc>
+              {showCredits
+                ? `按采样时间展示该额度桶的剩余额度与 Credits；右轴为剩余 Credits，从 ${formatCreditsValue(creditsBounds.min)} 到 ${formatCreditsValue(creditsBounds.max)}。`
+                : showConsumption
+                ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；柱高为固定时间区间内平滑额度曲线负导数的平均值，随横轴范围变化；重置间隔为过渡估计，数据不足处留空。`
+                : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
+            </desc>
+            <defs>
+              <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" className="codex-usage-rate-limit-area-stop-top" />
+                <stop offset="100%" className="codex-usage-rate-limit-area-stop-bottom" />
+              </linearGradient>
+            </defs>
+            <text
+              className="codex-usage-rate-limit-quota-axis-title"
+              x={left}
+              y={16}
+              textAnchor="start"
+            >
+              剩余额度
             </text>
+            <text
+              className={`codex-usage-rate-limit-${secondaryClass}-axis-title`}
+              x={width - right}
+              y={16}
+              textAnchor="end"
+            >
+              {showCredits ? "Credits" : showConsumption ? "消耗速度（百分点/小时）" : "剩余时长"}
+            </text>
+            {axisTicks.map((remaining, index) => {
+              const y = yForPercent(remaining);
+              return (
+                <g key={remaining} className="codex-usage-rate-limit-grid">
+                  <line x1={left} x2={width - right} y1={y} y2={y} />
+                  <text
+                    className="codex-usage-rate-limit-quota-tick"
+                    x={left - 8}
+                    y={y + 4}
+                    textAnchor="end"
+                  >
+                    {remaining}%
+                  </text>
+                  <text
+                    className={`codex-usage-rate-limit-${secondaryClass}-tick`}
+                    x={width - right + 8}
+                    y={y + 4}
+                    textAnchor="start"
+                  >
+                    {showConsumption
+                      ? consumptionRateFormat.format(rateAxisMin + index * (rateAxisMax - rateAxisMin) / RATE_LIMIT_AXIS_INTERVALS)
+                      : showCredits
+                        ? formatCreditsValue(secondaryAxisTicks?.[index] ?? null)
+                      : `${durationDaysForPercent(remaining)} 天`}
+                  </text>
+                </g>
+              );
+            })}
+            {points.length > 1 ? (
+              <>
+                {quotaAreaPath ? (
+                  <path className="codex-usage-rate-limit-area" d={quotaAreaPath} fill={`url(#${gradientId})`} />
+                ) : null}
+                {showConsumption ? consumptionBars.map((bar) => {
+                  const visibleStart = Math.max(left, bar.start);
+                  const visibleEnd = Math.min(width - right, bar.end);
+                  return (
+                    <rect
+                      key={bar.start}
+                      className="codex-usage-rate-limit-consumption-bar"
+                      x={visibleStart + (visibleEnd - visibleStart) * 0.15}
+                      y={Math.min(yForRate(0), yForRate(bar.rate))}
+                      width={(visibleEnd - visibleStart) * 0.7}
+                      height={Math.abs(yForRate(0) - yForRate(bar.rate))}
+                      rx={1.5}
+                    >
+                      <title>{`${formatConsumptionPeriod(
+                        bar.start,
+                        bar.end,
+                        minTimestamp,
+                        timestampRange,
+                        left,
+                        plotWidth,
+                        orderedSamples,
+                      )}，${consumptionRateFormat.format(bar.rate)}%每小时`}</title>
+                    </rect>
+                  );
+                }) : showCredits
+                  ? <path className="codex-usage-rate-limit-credits-line" d={creditsPath} />
+                  : <path className="codex-usage-rate-limit-duration-line" d={durationPath} />}
+                <path className="codex-usage-rate-limit-line" d={quotaPath} />
+                {hoveredPoint ? (
+                  <g className="codex-usage-rate-limit-hover" aria-hidden="true">
+                    <line x1={hoveredPoint.x} x2={hoveredPoint.x} y1={top} y2={plotBottom} />
+                    {!showConsumption && !(showCredits && hoveredPoint.creditsY === null) ? (
+                      <circle
+                        className="codex-usage-rate-limit-hover-secondary"
+                        cx={hoveredPoint.x}
+                        cy={showCredits ? hoveredPoint.creditsY as number : hoveredPoint.durationY}
+                        r={4}
+                      />
+                    ) : null}
+                    <circle className="codex-usage-rate-limit-hover-quota" cx={hoveredPoint.x} cy={hoveredPoint.quotaY} r={4.5} />
+                  </g>
+                ) : null}
+              </>
+            ) : null}
+            <text className="codex-usage-rate-limit-axis-label" x={left} y={height - 8} textAnchor="start">
+              {formatAxisTime(orderedSamples[0].sampledAt)}
+            </text>
+            {orderedSamples.length > 1 ? (
+              <text className="codex-usage-rate-limit-axis-label" x={width - right} y={height - 8} textAnchor="end">
+                {formatAxisTime(latest.sampledAt)}
+              </text>
+            ) : null}
+          </svg>
+          {hovered && hoveredPoint ? (
+            <div
+              className="codex-usage-rate-limit-tooltip"
+              data-align={hoveredPoint.x > width * 0.62 ? "end" : "start"}
+              style={{
+                left: `${(hoveredPoint.x / width) * 100}%`,
+                top: `${(Math.max(top, Math.min(hoveredPoint.quotaY, plotBottom - 40)) / height) * 100}%`,
+              }}
+              aria-hidden="true"
+            >
+              <time>{formatServerLocalTime(hovered.sampledAt)}</time>
+              <span><i className="codex-usage-swatch-quota" />剩余额度 <b>{formatPercentValue(remainingPercent(hovered))}</b></span>
+              <span><i className="codex-usage-swatch-time" />剩余时长 <b>{formatRemainingDuration(remainingDurationMs(hovered))}</b></span>
+              {hoveredCredits !== null && hovered.windowMinutes === WEEKLY_WINDOW_MINUTES ? (
+                <span><i className="codex-usage-swatch-time" />Credits <b>{formatCreditsValue(hoveredCredits)}</b></span>
+              ) : null}
+            </div>
           ) : null}
-        </svg>
+        </div>
       </div>
       {showConsumption ? (
         <p className="codex-usage-rate-limit-note">
@@ -1022,7 +1200,16 @@ function CodexRateLimitChart({
   return (
     <section className="codex-usage-section" aria-labelledby={`${providerName}-rate-limit-title`}>
       <div className="codex-usage-section-heading">
-        <h3 id={`${providerName}-rate-limit-title`}>{displayName} 剩余额度趋势</h3>
+        <div className="codex-usage-chart-title">
+          <h3 id={`${providerName}-rate-limit-title`}>{displayName} 剩余额度趋势</h3>
+          <div className="codex-usage-chart-legend" aria-hidden="true">
+            <span><i className="codex-usage-swatch-quota" />剩余额度</span>
+            <span>
+              <i className={activeSecondaryMetric === "duration" ? "codex-usage-swatch-time codex-usage-swatch-dashed" : "codex-usage-swatch-time"} />
+              {activeSecondaryMetric === "credits" ? "Credits" : activeSecondaryMetric === "consumption" ? "消耗速度" : "剩余时长"}
+            </span>
+          </div>
+        </div>
         <div className="codex-usage-chart-controls" role="group" aria-label="图表右轴">
           <span>右轴</span>
           <div className="codex-usage-chart-toggle">
@@ -1076,6 +1263,7 @@ function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsag
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [quickRange, setQuickRange] = useState<QuickRangeKey | "custom">(DEFAULT_QUICK_RANGE);
   const queryRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -1181,7 +1369,8 @@ function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsag
     }
   };
 
-  const applyQuickRange = (days: number | null) => {
+  const applyQuickRange = (key: QuickRangeKey, days: number | null) => {
+    setQuickRange(key);
     const today = config?.timeBasis.today || stats?.timeBasis.today || formatDateValue(new Date());
     const availableRange = stats?.availableRange || config?.availableRange;
     const range = days === null
@@ -1199,6 +1388,7 @@ function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsag
   };
 
   const resetFilters = () => {
+    setQuickRange(DEFAULT_QUICK_RANGE);
     const range = defaultRange(config?.timeBasis.today || stats?.timeBasis.today || "");
     setStartDate(range.startDate);
     setEndDate(range.endDate);
@@ -1216,13 +1406,38 @@ function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsag
 
       {!loading && config ? (
         <>
-          <section className="codex-usage-section" aria-labelledby={`${provider}-usage-settings-title`}>
-            <div className="codex-usage-section-heading">
-              <div>
-                <h3 id={`${provider}-usage-settings-title`}>采集设置</h3>
-              </div>
+          <section className="codex-usage-section codex-usage-toolbar" aria-labelledby={`${provider}-usage-toolbar-title`}>
+            <h3 id={`${provider}-usage-toolbar-title`} className="codex-usage-visually-hidden">采集与筛选</h3>
+            <div className="codex-usage-toolbar-row">
+              <dl className="codex-usage-provider-details" aria-label="当前 Provider">
+                <div>
+                  <dt>Provider</dt>
+                  <dd>{providerLabel(config.currentProvider)}</dd>
+                </div>
+                <div className="codex-usage-provider-url">
+                  <dt>规范化地址</dt>
+                  <dd className="codex-usage-breakable" title={config.currentProvider.baseUrl || undefined}>
+                    {config.currentProvider.baseUrl || `${displayName} 官方`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>解析状态</dt>
+                  <dd>
+                    <span
+                      className="codex-usage-status-dot"
+                      data-tone={config.currentProvider.resolution === "resolved"
+                        ? "good"
+                        : config.currentProvider.resolution ? "warning" : "neutral"}
+                      aria-hidden="true"
+                    />
+                    {config.currentProvider.resolution
+                      ? providerResolutionLabels[config.currentProvider.resolution]
+                      : "未知/未提供"}
+                  </dd>
+                </div>
+              </dl>
               <label className="codex-usage-switch">
-                <span>启用 {displayName} 额度采集</span>
+                <span>{config.enabled ? "采集中" : "采集已关闭"}</span>
                 <input
                   aria-label={`启用 ${displayName} 额度采集`}
                   type="checkbox"
@@ -1232,71 +1447,63 @@ function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsag
                 />
               </label>
             </div>
+
+            <form
+              className="codex-usage-filter-form"
+              aria-label="筛选条件"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setQuickRange("custom");
+                void runStatsQuery();
+              }}
+            >
+              <div className="codex-usage-segmented" role="group" aria-label="日期快捷范围">
+                {QUICK_RANGES.map(({ key, label, days }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={quickRange === key}
+                    disabled={querying}
+                    onClick={() => applyQuickRange(key, days)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="codex-usage-date-fields">
+                <input
+                  aria-label="起始日期"
+                  type="date"
+                  value={startDate}
+                  disabled={querying}
+                  onChange={(event) => {
+                    setQuickRange("custom");
+                    setStartDate(event.target.value);
+                  }}
+                />
+                <span aria-hidden="true">→</span>
+                <input
+                  aria-label="结束日期"
+                  type="date"
+                  value={endDate}
+                  disabled={querying}
+                  onChange={(event) => {
+                    setQuickRange("custom");
+                    setEndDate(event.target.value);
+                  }}
+                />
+              </div>
+              <div className="codex-usage-form-actions">
+                <button type="submit" className="codex-usage-primary" disabled={querying}>
+                  {querying ? "查询中…" : "查询"}
+                </button>
+                <button type="button" onClick={resetFilters} disabled={querying}>重置</button>
+              </div>
+            </form>
             {!config.enabled && hasRateLimitSamples ? (
               <p className="codex-usage-disabled-history">额度采集已关闭，历史额度仍可查询。</p>
             ) : null}
           </section>
-
-          <section className="codex-usage-section" aria-labelledby={`${provider}-usage-provider-title`}>
-            <h3 id={`${provider}-usage-provider-title`}>当前 Provider</h3>
-            <dl className="codex-usage-provider-details">
-              <div>
-                <dt>Provider</dt>
-                <dd>{providerLabel(config.currentProvider)}</dd>
-              </div>
-              <div>
-                <dt>规范化地址</dt>
-                <dd className="codex-usage-breakable">{config.currentProvider.baseUrl || `${displayName} 官方`}</dd>
-              </div>
-              <div>
-                <dt>解析状态</dt>
-                <dd>
-                  {config.currentProvider.resolution
-                    ? providerResolutionLabels[config.currentProvider.resolution]
-                    : "未知/未提供"}
-                </dd>
-              </div>
-            </dl>
-          </section>
-
-          <form
-            className="codex-usage-section codex-usage-filter-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void runStatsQuery();
-            }}
-          >
-            <div className="codex-usage-section-heading">
-              <div>
-                <h3>筛选条件</h3>
-              </div>
-              <div className="codex-usage-quick-actions" aria-label="日期快捷范围">
-                <button type="button" disabled={querying} onClick={() => applyQuickRange(1)}>今天</button>
-                <button type="button" disabled={querying} onClick={() => applyQuickRange(7)}>近 7 天</button>
-                <button type="button" disabled={querying} onClick={() => applyQuickRange(30)}>近 30 天</button>
-                <button type="button" disabled={querying} onClick={() => applyQuickRange(90)}>近 90 天</button>
-                <button type="button" disabled={querying} onClick={() => applyQuickRange(null)}>全部</button>
-              </div>
-            </div>
-
-            <div className="codex-usage-date-fields">
-              <label>
-                起始日期
-                <input aria-label="起始日期" type="date" value={startDate} disabled={querying} onChange={(event) => setStartDate(event.target.value)} />
-              </label>
-              <label>
-                结束日期
-                <input aria-label="结束日期" type="date" value={endDate} disabled={querying} onChange={(event) => setEndDate(event.target.value)} />
-              </label>
-            </div>
-
-            <div className="codex-usage-form-actions">
-              <button type="submit" className="codex-usage-primary" disabled={querying}>
-                {querying ? "查询中…" : "查询"}
-              </button>
-              <button type="button" onClick={resetFilters} disabled={querying}>重置</button>
-            </div>
-          </form>
 
           {stats ? (
             <>

@@ -92,7 +92,7 @@ def get_cli_output_limits(env: Mapping[str, str] | None = None) -> CliOutputLimi
 DEFAULT_CLAUDE_PARAMS = {
     # 基础参数
     "yolo": False,                   # --dangerously-skip-permissions
-    "effort": "max",                 # --effort: max/high/medium/low
+    "effort": "max",                 # --effort: max/xhigh/high/medium/low
     "disable_prompts": True,         # CLAUDE_CODE_DISABLE_PROMPTS=1
     "stream_json": True,             # --output-format stream-json --verbose --include-partial-messages
     # 可选参数
@@ -178,7 +178,7 @@ PARAM_SCHEMA_MAP = {
         "effort": {
             "type": "string",
             "description": "努力程度",
-            "enum": ["max", "high", "medium", "low"],
+            "enum": ["max", "xhigh", "high", "medium", "low"],
         },
         "disable_prompts": {"type": "boolean", "description": "禁用交互式提示"},
         "stream_json": {"type": "boolean", "description": "启用 stream-json 流式输出"},
@@ -879,7 +879,7 @@ def get_params_help(cli_type: str) -> str:
 <code>effort</code> - 努力程度 (字符串)
   默认: "max"
   对应参数: --effort
-  可选值: "max", "high", "medium", "low"
+  可选值: "max", "xhigh", "high", "medium", "low"
 
 <code>disable_prompts</code> - 禁用交互式提示 (布尔值)
   默认: True

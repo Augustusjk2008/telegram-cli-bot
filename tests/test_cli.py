@@ -21,6 +21,7 @@ from bot.cli import (
 from bot.cli_params import (
     CliParamsConfig,
     clamp_unsafe_cli_params,
+    coerce_param_value,
     get_cli_model_options,
     get_cli_output_limits,
     get_default_params,
@@ -451,3 +452,19 @@ def test_antigravity_agent_steps_produce_process_trace() -> None:
         events.extend(consume_stream_trace_chunk("antigravity", line, state))
 
     assert [event["kind"] for event in events] == ["process", "process"]
+
+
+def test_claude_effort_accepts_xhigh_and_passes_it_to_cli() -> None:
+    assert coerce_param_value("claude", "effort", "xhigh") == "xhigh"
+    with pytest.raises(ValueError):
+        coerce_param_value("claude", "effort", "extra")
+
+    params = CliParamsConfig.from_dict({"claude": {"effort": "xhigh"}})
+    command, _ = build_cli_command(
+        cli_type="claude",
+        resolved_cli="claude",
+        user_text="hello",
+        env={},
+        params_config=params,
+    )
+    assert command[command.index("--effort") + 1] == "xhigh"

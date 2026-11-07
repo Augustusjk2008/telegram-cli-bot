@@ -1,16 +1,17 @@
+/* ------------------------------------------------------------- layout */
+
 .codex-usage-panel,
 .codex-usage-provider-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0.75rem;
+  gap: 0.625rem;
   min-width: 0;
 }
 
 .codex-usage-heading,
 .codex-usage-section-heading,
 .codex-usage-switch,
-.codex-usage-form-actions,
-.codex-usage-quick-actions {
+.codex-usage-form-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -19,7 +20,6 @@
 .codex-usage-heading,
 .codex-usage-section-heading {
   justify-content: space-between;
-  align-items: flex-start;
 }
 
 .codex-usage-heading h2,
@@ -31,10 +31,12 @@
 .codex-usage-heading h2 {
   font-size: 1.05rem;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
-.codex-usage-heading {
-  align-items: center;
+.codex-usage-section h3 {
+  font-size: 0.9rem;
+  font-weight: 650;
 }
 
 .codex-usage-title-group {
@@ -45,73 +47,120 @@
   min-width: 0;
 }
 
-.codex-usage-provider-tabs {
+.codex-usage-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------- segmented controls */
+
+.codex-usage-provider-tabs,
+.codex-usage-segmented,
+.codex-usage-chart-toggle {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
-  background: var(--bg);
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: var(--radius-control, 0.4rem);
+  background: var(--fill-subtle, var(--bg));
+  font-size: 0.75rem;
+}
+
+.codex-usage-provider-tabs {
   font-size: 0.8125rem;
 }
 
-.codex-usage-provider-tabs button {
-  min-height: 1.75rem;
-  padding: 0.2rem 0.75rem;
+.codex-usage-provider-tabs button,
+.codex-usage-segmented button,
+.codex-usage-chart-toggle button {
+  min-height: 1.6rem;
+  padding: 0.15rem 0.6rem;
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: calc(var(--radius-control, 0.4rem) - 2px);
   font: inherit;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color 140ms var(--ease-out, ease), color 140ms var(--ease-out, ease);
 }
 
-/* The selected tab takes its colors from the shared tcb-selected-accent class. */
-.codex-usage-provider-tabs button[aria-selected="false"] {
+/* The selected provider tab takes its colors from the shared tcb-selected-accent class. */
+.codex-usage-provider-tabs button[aria-selected="false"],
+.codex-usage-segmented button,
+.codex-usage-chart-toggle button {
   background: transparent;
   color: var(--muted);
 }
 
-.codex-usage-provider-tabs button[aria-selected="false"]:hover {
-  background: var(--surface-strong);
+.codex-usage-provider-tabs button[aria-selected="false"]:hover,
+.codex-usage-segmented button:hover:not(:disabled),
+.codex-usage-chart-toggle button:hover {
+  background: var(--fill-hover, var(--surface-strong));
   color: var(--text);
 }
 
-.codex-usage-section h3 {
-  font-size: 0.95rem;
-  font-weight: 650;
+.codex-usage-segmented button[aria-pressed="true"],
+.codex-usage-chart-toggle button[aria-pressed="true"] {
+  background: var(--island-solid, var(--surface));
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--hairline-strong, var(--border)), 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
 }
 
-.codex-usage-empty-state,
-.codex-usage-empty,
-.codex-usage-loading {
-  margin: 0.2rem 0 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
+.codex-usage-provider-tabs button:focus-visible,
+.codex-usage-segmented button:focus-visible,
+.codex-usage-chart-toggle button:focus-visible,
+.codex-usage-form-actions button:focus-visible,
+.codex-usage-date-fields input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .codex-usage-time-basis {
   flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: 0.35rem;
-  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
 }
+
+/* ------------------------------------------------------------- surfaces */
 
 .codex-usage-section,
 .codex-usage-loading,
 .codex-usage-empty {
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: var(--radius-card, 0.5rem);
   background: var(--surface);
   padding: 0.75rem;
 }
 
+.codex-usage-empty-state,
+.codex-usage-empty,
+.codex-usage-loading {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.codex-usage-empty-state {
+  margin-top: 0.5rem;
+  border: 1px dashed var(--hairline-strong, var(--border));
+  border-radius: var(--radius-md, 0.4rem);
+  padding: 1.25rem 0.75rem;
+  text-align: center;
+}
+
 .codex-usage-alert {
-  border-radius: 0.4rem;
-  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-md, 0.4rem);
+  padding: 0.5rem 0.75rem;
   font-size: 0.8125rem;
 }
 
@@ -124,218 +173,427 @@
 .codex-usage-alert-success,
 .codex-usage-disabled-history {
   border: 1px solid var(--usage-success-border);
-  border-radius: 0.35rem;
   background: var(--usage-success-background);
   color: var(--usage-success-text);
 }
 
 .codex-usage-disabled-history {
-  margin: 0.5rem 0 0;
-  padding: 0.5rem 0.625rem;
-  font-size: 0.8125rem;
+  margin: 0.6rem 0 0;
+  border-radius: var(--radius-md, 0.35rem);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
 }
 
-.codex-usage-switch {
-  cursor: pointer;
-  color: var(--text);
-  font-size: 0.8125rem;
-  font-weight: 600;
+/* -------------------------------------------------------------- toolbar */
+
+.codex-usage-toolbar {
+  position: relative;
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
 }
 
-.codex-usage-switch input {
-  width: 1rem;
-  height: 1rem;
+.codex-usage-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
 }
 
 .codex-usage-provider-details {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: 1px;
-  margin: 0.55rem 0 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  background: var(--border);
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1.25rem;
+  min-width: 0;
+  margin: 0;
 }
 
 .codex-usage-provider-details > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
   min-width: 0;
-  background: var(--bg);
-  padding: 0.5rem 0.6rem;
+}
+
+.codex-usage-provider-details .codex-usage-provider-url {
+  flex: 0 1 22rem;
 }
 
 .codex-usage-provider-details dt {
+  flex: none;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
 }
 
 .codex-usage-provider-details dd {
-  margin: 0.15rem 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
   color: var(--text);
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   font-weight: 600;
+}
+
+.codex-usage-provider-url dd {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--code-font-family, ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .codex-usage-breakable {
   overflow-wrap: anywhere;
 }
 
-.codex-usage-date-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin-top: 0.65rem;
+.codex-usage-status-dot,
+.codex-usage-pace-dot {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--muted);
 }
 
-.codex-usage-date-fields label {
-  display: grid;
-  gap: 0.25rem;
-  color: var(--text);
-  font-size: 0.8125rem;
+.codex-usage-status-dot[data-tone="good"],
+.codex-usage-pace[data-tone="good"] .codex-usage-pace-dot {
+  background: var(--status-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success) 18%, transparent);
 }
 
-.codex-usage-date-fields input {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  background: var(--bg);
-  color: var(--text);
-  padding: 0.4rem 0.5rem;
+.codex-usage-status-dot[data-tone="warning"],
+.codex-usage-pace[data-tone="warning"] .codex-usage-pace-dot {
+  background: var(--status-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-warning) 18%, transparent);
 }
 
-.codex-usage-quick-actions,
-.codex-usage-form-actions {
-  flex-wrap: wrap;
+.codex-usage-pace[data-tone="critical"] .codex-usage-pace-dot {
+  background: var(--status-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-danger) 18%, transparent);
 }
 
-.codex-usage-filter-form button,
-.codex-usage-form-actions button {
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  background: var(--surface);
-  color: var(--text);
-  padding: 0.35rem 0.55rem;
-  font-size: 0.8125rem;
+.codex-usage-switch {
+  flex: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
-.codex-usage-filter-form button:hover:not(:disabled),
-.codex-usage-form-actions button:hover:not(:disabled) {
-  background: var(--surface-strong);
-}
-
-.codex-usage-filter-form button:focus-visible,
-.codex-usage-switch input:focus-visible,
-.codex-usage-date-fields input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.codex-usage-form-actions {
-  margin-top: 0.65rem;
-}
-
-.codex-usage-form-actions .codex-usage-primary {
-  border-color: transparent;
-}
-
-.codex-usage-filter-form button:disabled,
 .codex-usage-switch input:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
 
-.codex-usage-rate-limit-heading {
-  flex-direction: column;
-  gap: 0.4rem;
+.codex-usage-filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  border-top: 1px solid var(--hairline, var(--border));
+  padding-top: 0.6rem;
+}
+
+.codex-usage-date-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.codex-usage-date-fields input {
+  min-width: 0;
+  height: 1.9rem;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius-control, 0.3rem);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0 0.45rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-usage-form-actions {
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.codex-usage-form-actions button {
+  height: 1.9rem;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius-control, 0.3rem);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.codex-usage-form-actions button:hover:not(:disabled) {
+  background: var(--fill-hover, var(--surface-strong));
+}
+
+.codex-usage-form-actions .codex-usage-primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-foreground, #fff);
+}
+
+.codex-usage-form-actions .codex-usage-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+}
+
+.codex-usage-filter-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ---------------------------------------------------------- chart group */
+
+.codex-usage-chart-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.9rem;
+  min-width: 0;
+}
+
+.codex-usage-chart-legend,
+.codex-usage-meter-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.codex-usage-chart-legend span,
+.codex-usage-meter-legend span,
+.codex-usage-rate-limit-tooltip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.codex-usage-swatch-quota,
+.codex-usage-swatch-time {
+  display: inline-block;
+  flex: none;
+  width: 0.75rem;
+  height: 0.2rem;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.codex-usage-swatch-time {
+  background: var(--accent-strong);
+}
+
+.codex-usage-swatch-dashed {
+  background: repeating-linear-gradient(90deg, var(--accent-strong) 0 4px, transparent 4px 6px);
 }
 
 .codex-usage-chart-controls {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   color: var(--muted);
-  font-size: 0.75rem;
-}
-
-.codex-usage-chart-toggle {
-  display: inline-flex;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 0.35rem;
-  background: var(--bg);
-}
-
-.codex-usage-chart-toggle button {
-  min-height: 1.75rem;
-  padding: 0.2rem 0.55rem;
-  border: 0;
-  border-radius: 0.2rem;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.codex-usage-chart-toggle button:hover,
-.codex-usage-chart-toggle button[aria-pressed="true"] {
-  background: var(--surface-strong);
-  color: var(--text);
-}
-
-.codex-usage-chart-toggle button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  font-size: 0.72rem;
 }
 
 .codex-usage-rate-limit-note {
-  margin: 0.4rem 0 0;
+  margin: 0.35rem 0 0;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   line-height: 1.5;
 }
 
 .codex-usage-rate-limit-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(32rem, 100%), 1fr));
-  gap: 0.75rem;
-  margin-top: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(30rem, 100%), 1fr));
+  gap: 0.625rem;
+  margin-top: 0.6rem;
 }
 
 .codex-usage-rate-limit-group {
+  min-width: 0;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: var(--radius-md, 0.45rem);
+  background: color-mix(in srgb, var(--bg) 55%, var(--surface));
+  padding: 0.65rem 0.7rem 0.6rem;
+}
+
+.codex-usage-bucket-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.codex-usage-bucket-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   min-width: 0;
 }
 
 .codex-usage-rate-limit-group h4 {
   margin: 0;
+  overflow: hidden;
   color: var(--text);
-  font-size: 0.875rem;
+  font-size: 0.84rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.codex-usage-rate-limit-summary {
-  display: flex;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 0.2rem 0.5rem;
-  max-width: 100%;
+.codex-usage-badge {
+  flex: none;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.68rem;
+  white-space: nowrap;
 }
 
-.codex-usage-rate-limit-summary strong {
+.codex-usage-pace {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
   color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
+
+.codex-usage-bucket-overview {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.codex-usage-bucket-hero {
+  display: grid;
+  flex: none;
+  line-height: 1.05;
+}
+
+.codex-usage-bucket-hero-value {
+  color: var(--text);
+  font-size: 1.65rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.codex-usage-bucket-hero span {
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.codex-usage-meter {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.codex-usage-meter-track {
+  position: relative;
+  height: 0.5rem;
+  overflow: visible;
+  border-radius: 999px;
+  background: var(--fill-pressed, var(--surface-strong));
+}
+
+.codex-usage-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, transparent), var(--accent));
+  transition: width 240ms var(--ease-out, ease);
+}
+
+.codex-usage-meter-track[data-tone="warning"] .codex-usage-meter-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--status-warning) 65%, transparent), var(--status-warning));
+}
+
+.codex-usage-meter-track[data-tone="critical"] .codex-usage-meter-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--status-danger) 65%, transparent), var(--status-danger));
+}
+
+.codex-usage-meter-marker {
+  position: absolute;
+  top: -0.2rem;
+  bottom: -0.2rem;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.codex-usage-bucket-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  margin: 0.6rem 0 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: var(--radius-sm, 0.35rem);
+  background: var(--surface);
+}
+
+/* Draw only leading separators; the clipped container hides those on its edges. */
+.codex-usage-bucket-stats > div {
+  min-width: 0;
+  box-shadow: -1px -1px 0 var(--hairline, var(--border));
+  padding: 0.35rem 0.5rem;
+}
+
+.codex-usage-bucket-stats dt {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.codex-usage-bucket-stats dd {
+  margin: 0.1rem 0 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- chart */
 
 .codex-usage-rate-limit-chart {
+  position: relative;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  margin-top: 0.5rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.3rem;
-  background: var(--bg);
+  margin-top: 0.55rem;
+}
+
+.codex-usage-rate-limit-plot {
+  position: relative;
 }
 
 .codex-usage-rate-limit-chart svg {
@@ -343,137 +601,179 @@
   width: 100%;
   max-width: 100%;
   height: auto;
+  overflow: visible;
+  touch-action: pan-y;
 }
 
 .codex-usage-rate-limit-grid line {
-  stroke: var(--border);
+  stroke: var(--hairline, var(--border));
   stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-axis-label {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .codex-usage-rate-limit-quota-axis-title,
 .codex-usage-rate-limit-consumption-axis-title,
 .codex-usage-rate-limit-duration-axis-title,
 .codex-usage-rate-limit-credits-axis-title {
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.codex-usage-rate-limit-quota-axis-title,
-.codex-usage-rate-limit-quota-tick {
-  fill: var(--accent);
-}
-
-.codex-usage-rate-limit-quota-axis {
-  stroke: var(--accent);
-}
-
-.codex-usage-rate-limit-duration-axis-title,
-.codex-usage-rate-limit-duration-tick,
-.codex-usage-rate-limit-consumption-axis-title,
-.codex-usage-rate-limit-consumption-tick,
-.codex-usage-rate-limit-credits-axis-title,
-.codex-usage-rate-limit-credits-tick {
-  fill: var(--accent-strong);
-}
-
-.codex-usage-rate-limit-duration-axis,
-.codex-usage-rate-limit-consumption-axis {
-  stroke: var(--accent-strong);
-}
-
-.codex-usage-rate-limit-quota-axis,
-.codex-usage-rate-limit-consumption-axis,
-.codex-usage-rate-limit-duration-axis,
-.codex-usage-rate-limit-credits-axis {
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
+  fill: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
 }
 
 .codex-usage-rate-limit-quota-tick,
 .codex-usage-rate-limit-consumption-tick,
 .codex-usage-rate-limit-duration-tick,
 .codex-usage-rate-limit-credits-tick {
-  font-size: 11px;
+  fill: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-usage-rate-limit-area-stop-top {
+  stop-color: var(--accent);
+  stop-opacity: 0.22;
+}
+
+.codex-usage-rate-limit-area-stop-bottom {
+  stop-color: var(--accent);
+  stop-opacity: 0;
+}
+
+.codex-usage-rate-limit-area {
+  stroke: none;
+  pointer-events: none;
+}
+
+.codex-usage-rate-limit-line,
+.codex-usage-rate-limit-duration-line,
+.codex-usage-rate-limit-credits-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-line {
-  fill: none;
   stroke: var(--accent);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-duration-line {
-  fill: none;
   stroke: var(--accent-strong);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-  stroke-dasharray: 7 5;
+  stroke-dasharray: 6 4;
+  stroke-opacity: 0.85;
 }
 
 .codex-usage-rate-limit-credits-line {
-  fill: none;
   stroke: var(--accent-strong);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
 }
 
 .codex-usage-rate-limit-consumption-bar {
   fill: var(--accent-strong);
-  fill-opacity: 0.45;
+  fill-opacity: 0.4;
 }
 
 .codex-usage-rate-limit-consumption-bar:hover {
   fill-opacity: 0.7;
 }
 
+.codex-usage-rate-limit-hover line {
+  stroke: var(--muted);
+  stroke-dasharray: 2 3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.codex-usage-rate-limit-hover circle {
+  stroke: var(--surface);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.codex-usage-rate-limit-hover-quota {
+  fill: var(--accent);
+}
+
+.codex-usage-rate-limit-hover-secondary {
+  fill: var(--accent-strong);
+}
+
+.codex-usage-rate-limit-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 9.5rem;
+  margin-top: -0.25rem;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius-md, 0.4rem);
+  background: var(--island-solid, var(--surface));
+  box-shadow: var(--shadow-float, 0 6px 20px rgb(0 0 0 / 0.14));
+  padding: 0.4rem 0.55rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  pointer-events: none;
+  transform: translate(0.75rem, -50%);
+  white-space: nowrap;
+}
+
+.codex-usage-rate-limit-tooltip[data-align="end"] {
+  transform: translate(calc(-100% - 0.75rem), -50%);
+}
+
+.codex-usage-rate-limit-tooltip time {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-usage-rate-limit-tooltip b {
+  margin-left: auto;
+  padding-left: 0.5rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- responsive */
+
 @media (max-width: 640px) {
-  .codex-usage-heading,
-  .codex-usage-section-heading {
-    flex-direction: column;
+  .codex-usage-heading {
+    flex-wrap: wrap;
   }
 
-  .codex-usage-heading {
+  .codex-usage-section-heading {
+    flex-direction: column;
     align-items: flex-start;
   }
 
-  .codex-usage-rate-limit-summary {
-    justify-content: flex-start;
-    max-width: 100%;
-  }
-
-  .codex-usage-rate-limit-chart {
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  .codex-usage-rate-limit-chart svg {
-    width: 100%;
-    min-width: 35rem;
-    max-width: none;
+  .codex-usage-toolbar-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .codex-usage-switch {
-    align-self: stretch;
     justify-content: space-between;
   }
 
   .codex-usage-date-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: 1 1 100%;
   }
 
-  .codex-usage-quick-actions button,
+  .codex-usage-date-fields input {
+    flex: 1 1 0;
+  }
+
+  .codex-usage-form-actions {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+
   .codex-usage-form-actions button {
     flex: 1 1 auto;
   }

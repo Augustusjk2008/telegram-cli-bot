@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test, vi } from "vitest";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
@@ -181,6 +181,14 @@ test("缓存检查失败阻止在线准备，不支持的启动器阻止应用",
   expect(screen.getByRole("button", { name: "应用更新" })).toBeDisabled();
 });
 
+function usageHeroValue(text: string) {
+  return screen.queryByText(text, { selector: ".codex-usage-bucket-hero-value" });
+}
+
+function usageStat(article: HTMLElement, term: string) {
+  return within(article).getByText(term, { selector: "dt" }).nextElementSibling;
+}
+
 // Codex is the default provider on the Usage page.
 async function openCodexUsageTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText("用户权限");
@@ -227,8 +235,8 @@ test("Usage 页面合并 Codex 与 Claude，切换后丢弃旧响应并在刷新
   await user.click(screen.getByRole("tab", { name: "Claude" }));
   expect(await screen.findByRole("heading", { name: "Claude 剩余额度趋势" })).toBeInTheDocument();
   await act(async () => resolveStaleCodexStats(codexStats));
-  expect(screen.getByText("当前剩余 88%")).toBeInTheDocument();
-  expect(screen.queryByText("当前剩余 92%")).not.toBeInTheDocument();
+  expect(usageHeroValue("88%")).toBeInTheDocument();
+  expect(usageHeroValue("92%")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "刷新" }));
   await waitFor(() => expect(getClaudeConfig).toHaveBeenCalledTimes(2));
@@ -384,10 +392,10 @@ test("Codex 额度趋势隐藏已下线的次要额度桶", async () => {
   const chart = await screen.findByRole("img", { name: /通用 Codex.*共 3 个样本，当前剩余 92%/ });
   expect(screen.queryByRole("img", { name: /gpt-5\.3-codex-spark.*共 2 个样本/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("img", { name: /gpt-reserve.*共 2 个样本，当前剩余 77%/ })).not.toBeInTheDocument();
-  expect(screen.getByText("当前剩余 92%")).toBeInTheDocument();
-  expect(screen.getByText("剩余时长 7 天")).toBeInTheDocument();
-  expect(screen.getByText("已用 8%")).toBeInTheDocument();
-  expect(chart.closest("article")).toHaveTextContent("7 天窗口");
+  const article = chart.closest("article") as HTMLElement;
+  expect(within(article).getByText("92%", { selector: ".codex-usage-bucket-hero-value" })).toBeInTheDocument();
+  expect(usageStat(article, "剩余时长")).toHaveTextContent("7 天");
+  expect(article).toHaveTextContent("7 天窗口");
 });
 
 test("Codex 额度趋势重复采样时间退回折线且不产生无效坐标", async () => {
@@ -502,7 +510,7 @@ test("Codex Free 额度趋势按 30 天窗口显示剩余时长", async () => {
 
   const chart = await screen.findByRole("img", { name: /通用 Codex · Free.*剩余时长 30 天/ });
   const durationTicks = Array.from(chart.querySelectorAll(".codex-usage-rate-limit-duration-tick"));
-  expect(screen.getByText("剩余时长 30 天")).toBeInTheDocument();
+  expect(usageStat(chart.closest("article") as HTMLElement, "剩余时长")).toHaveTextContent("30 天");
   expect(durationTicks.at(-1)?.textContent?.trim()).toBe("30 天");
 });
 
@@ -517,8 +525,8 @@ test("Codex 额度趋势仅有一个样本时不绘制折线或数据点", async
   const { container } = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await openCodexUsageTab(user);
 
-  await screen.findByRole("img", { name: /共 1 个样本/ });
-  expect(screen.getByText("剩余时长 0 分钟")).toBeInTheDocument();
+  const chart = await screen.findByRole("img", { name: /共 1 个样本/ });
+  expect(usageStat(chart.closest("article") as HTMLElement, "剩余时长")).toHaveTextContent("0 分钟");
   expect(container.querySelector(".codex-usage-rate-limit-chart circle")).not.toBeInTheDocument();
   expect(container.querySelector(".codex-usage-rate-limit-line")).not.toBeInTheDocument();
   expect(container.querySelector(".codex-usage-rate-limit-duration-line")).not.toBeInTheDocument();
@@ -560,6 +568,8 @@ test("Codex 额度趋势纵轴按额度和时长的查询范围同步缩放", as
   expect(durationTicks.map((tick) => tick.textContent?.trim())).toEqual([
     "0.7 天", "1.75 天", "2.8 天", "3.85 天", "4.9 天",
   ]);
+  // 60% quota left with 70% of the window left: slightly ahead of an even pace.
+  expect(within(chart.closest("article") as HTMLElement).getByText("略快于均速")).toBeInTheDocument();
 });
 
 test("Codex 额度趋势没有样本时仍显示已知额度入口", async () => {
