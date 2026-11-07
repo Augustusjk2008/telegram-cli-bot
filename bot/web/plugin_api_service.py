@@ -34,14 +34,18 @@ def _resolve_safe_path(workspace_root: str, base_dir: str, filename: str) -> str
     if not candidate or candidate == "." or "\x00" in candidate:
         _raise(400, "unsafe_path", "文件路径不安全")
     raw_path = Path(candidate).expanduser()
-    if raw_path.is_absolute():
-        _raise(400, "unsafe_path", "插件输入不允许使用绝对路径")
     root = Path(workspace_root).expanduser().resolve()
     base = Path(base_dir).expanduser().resolve()
     if not _is_within_path(root, base):
         _raise(403, "path_outside_workspace", "当前目录不在工作区内")
-    resolved = (base / raw_path).resolve()
-    if not _is_within_path(base, resolved) or not _is_within_path(root, resolved):
+
+    # DirectoryPickerDialog returns the selected directory as an absolute path.
+    # Accept that form only after resolving it inside the bot workspace; relative
+    # plugin inputs remain scoped to the current browser directory.
+    resolved = raw_path.resolve() if raw_path.is_absolute() else (base / raw_path).resolve()
+    if not _is_within_path(root, resolved):
+        _raise(403, "path_outside_workspace", "插件只能访问当前目录或工作区内文件")
+    if not raw_path.is_absolute() and not _is_within_path(base, resolved):
         _raise(403, "path_outside_workspace", "插件只能访问当前目录或工作区内文件")
     return resolved.relative_to(root).as_posix()
 
