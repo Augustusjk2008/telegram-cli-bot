@@ -211,12 +211,6 @@ def _summarize_tool_payload(name: str, payload: Any) -> str:
     return rendered or name
 
 
-def _extract_claude_tool_intent(payload: Any) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    return _stringify_value(payload.get("description"))
-
-
 def _normalize_custom_tool_output(value: Any) -> tuple[str, Any]:
     parsed = _parse_jsonish(value)
     if isinstance(parsed, dict):
@@ -369,6 +363,7 @@ def _new_claude_parser_state() -> dict[str, Any]:
     return {
         "last_tool_use_name_by_id": {},
         "expect_injection_after_skill": False,
+        "pending_assistant_text": [],
     }
 
 
@@ -396,6 +391,37 @@ def _classify_claude_user_text(item: dict[str, Any], parser_state: dict[str, Any
     if _is_claude_system_injection_text(user_text):
         return "system_injection"
     return "real_user_text"
+
+
+def _flush_claude_pending_text(
+    turn: dict[str, Any],
+    parser_state: dict[str, Any],
+    *,
+    as_commentary: bool,
+    include_trace: bool,
+) -> None:
+    pending = parser_state.get("pending_assistant_text")
+    if not isinstance(pending, list):
+        parser_state["pending_assistant_text"] = []
+        return
+    parser_state["pending_assistant_text"] = []
+    for text in pending:
+        value = _stringify_value(text)
+        if not value:
+            continue
+        if as_commentary:
+            _append_trace_event(
+                turn,
+                _trace_event(
+                    "commentary",
+                    raw_type="assistant.text",
+                    summary=value,
+                    payload={"text": value},
+                ),
+                include_trace=include_trace,
+            )
+        else:
+            _append_assistant_text(turn["assistant_messages"], value)
 
 
 def _is_codex_instruction_message(text: Any) -> bool:
@@ -721,10 +747,23 @@ def _consume_claude_line(
 ) -> None:
     parser_state = parser_state or _new_claude_parser_state()
     item_type = str(item.get("type") or "").strip()
-    assistant_messages = turn["assistant_messages"]
     content = _extract_claude_message_blocks(item)
 
     if item_type == "assistant":
+        # Claude emits text and tool_use blocks as separate assistant events;
+        # hold text until the next block tells us whether it is process commentary.
+        has_tool_use = any(
+            str(block.get("type") or "").strip() == "tool_use"
+            for block in content
+            if isinstance(block, dict)
+        )
+        if has_tool_use:
+            _flush_claude_pending_text(
+                turn,
+                parser_state,
+                as_commentary=True,
+                include_trace=include_trace,
+            )
         for block in content:
             if not isinstance(block, dict):
                 continue
@@ -732,29 +771,26 @@ def _consume_claude_line(
             if block_type == "text":
                 text = _stringify_value(block.get("text"))
                 if text:
-                    _append_assistant_text(assistant_messages, text)
+                    if has_tool_use:
+                        _append_trace_event(
+                            turn,
+                            _trace_event(
+                                "commentary",
+                                raw_type="assistant.text",
+                                summary=text,
+                                payload={"text": text},
+                            ),
+                            include_trace=include_trace,
+                        )
+                    else:
+                        pending = parser_state.setdefault("pending_assistant_text", [])
+                        if not pending or pending[-1] != text:
+                            pending.append(text)
                 continue
             if block_type == "tool_use":
                 name = _stringify_value(block.get("name")) or "tool_use"
                 call_id = _stringify_value(block.get("id"))
                 payload = block.get("input")
-                intent = _extract_claude_tool_intent(payload)
-                if intent:
-                    _append_trace_event(
-                        turn,
-                        _trace_event(
-                            "commentary",
-                            raw_type="tool_use.intent",
-                            tool_name=name,
-                            call_id=call_id,
-                            summary=intent,
-                            payload={
-                                "tool_name": name,
-                                "input": payload,
-                            },
-                        ),
-                        include_trace=include_trace,
-                    )
                 _append_trace_event(
                     turn,
                     _trace_event(
@@ -777,6 +813,12 @@ def _consume_claude_line(
         return
 
     if item_type == "user":
+        _flush_claude_pending_text(
+            turn,
+            parser_state,
+            as_commentary=False,
+            include_trace=include_trace,
+        )
         for block in content:
             if not isinstance(block, dict):
                 continue
@@ -856,6 +898,13 @@ def load_native_transcript(
             classification = _classify_claude_user_text(item, claude_parser_state or {})
             user_text = _extract_claude_user_text(item)
             if classification == "real_user_text" and user_text:
+                if current_turn is not None and claude_parser_state is not None:
+                    _flush_claude_pending_text(
+                        current_turn,
+                        claude_parser_state,
+                        as_commentary=False,
+                        include_trace=include_trace,
+                    )
                 finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
                 if finalized is not None:
                     turns.append(finalized)
@@ -880,6 +929,13 @@ def load_native_transcript(
                 parser_state=claude_parser_state,
             )
 
+    if provider == "claude" and current_turn is not None and claude_parser_state is not None:
+        _flush_claude_pending_text(
+            current_turn,
+            claude_parser_state,
+            as_commentary=False,
+            include_trace=include_trace,
+        )
     finalized = _finalize_turn(provider, session_id, turn_index, current_turn or {}, include_trace=include_trace)
     if finalized is not None:
         turns.append(finalized)
@@ -894,6 +950,7 @@ def create_stream_trace_state(provider: str) -> dict[str, Any]:
         "seen": set(),
         "antigravity_pending_response": [],
         "antigravity_terminal_seen": False,
+        "claude_parser_state": _new_claude_parser_state(),
     }
 
 
@@ -996,15 +1053,19 @@ def _consume_live_codex_line(item: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _consume_live_claude_line(item: dict[str, Any]) -> list[dict[str, Any]]:
+def _consume_live_claude_line(item: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
     item_type = str(item.get("type") or "").strip()
     if item_type == "stream_event":
+        return []
+    parser_state = state.setdefault("claude_parser_state", _new_claude_parser_state())
+    if item_type == "result":
+        parser_state["pending_assistant_text"] = []
         return []
     if item_type not in {"assistant", "user"}:
         return []
 
     turn = _new_turn_state()
-    _consume_claude_line(item, turn, include_trace=True)
+    _consume_claude_line(item, turn, include_trace=True, parser_state=parser_state)
     return [dict(event) for event in turn["trace"]]
 
 
@@ -1241,7 +1302,7 @@ def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any])
         if provider == "codex":
             candidate_events = _consume_live_codex_line(item)
         elif provider == "claude":
-            candidate_events = _consume_live_claude_line(item)
+            candidate_events = _consume_live_claude_line(item, state)
         elif provider == "antigravity":
             candidate_events = _consume_live_antigravity_line(item, state)
         elif provider == "deepseek":

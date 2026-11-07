@@ -26,7 +26,11 @@ from bot.cli_params import (
     get_cli_output_limits,
     get_default_params,
 )
-from bot.web.native_history_adapter import create_stream_trace_state, consume_stream_trace_chunk
+from bot.web.native_history_adapter import (
+    consume_stream_trace_chunk,
+    create_stream_trace_state,
+    load_native_transcript,
+)
 
 
 ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
@@ -452,6 +456,110 @@ def test_antigravity_agent_steps_produce_process_trace() -> None:
         events.extend(consume_stream_trace_chunk("antigravity", line, state))
 
     assert [event["kind"] for event in events] == ["process", "process"]
+
+
+def test_claude_assistant_text_before_tool_is_commentary_not_tool_description() -> None:
+    state = create_stream_trace_state("claude")
+    raw = "\n".join([
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": "我先检查当前目录。"}],
+            },
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Bash",
+                    "input": {
+                        "command": "pwd",
+                        "description": "Print current working directory",
+                    },
+                }],
+            },
+        }),
+        json.dumps({
+            "type": "user",
+            "message": {
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "/workspace",
+                }],
+            },
+        }),
+        json.dumps({
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "检查完成。"}]},
+        }),
+    ]) + "\n"
+
+    events = consume_stream_trace_chunk("claude", raw, state)
+
+    assert [event["kind"] for event in events] == ["commentary", "tool_call", "tool_result"]
+    assert events[0]["summary"] == "我先检查当前目录。"
+    assert all(event["summary"] != "Print current working directory" for event in events)
+    assert events[1]["summary"] == "pwd"
+    assert events[2]["summary"] == "/workspace"
+
+
+def test_claude_transcript_keeps_process_text_out_of_final_answer(tmp_path: Path) -> None:
+    transcript_path = tmp_path / "claude.jsonl"
+    transcript_path.write_text(
+        "\n".join([
+            json.dumps({
+                "type": "user",
+                "message": {"content": [{"type": "text", "text": "检查目录"}]},
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "我先检查当前目录。"}],
+                },
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "Bash",
+                        "input": {
+                            "command": "pwd",
+                            "description": "Print current working directory",
+                        },
+                    }],
+                },
+            }),
+            json.dumps({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": "/workspace",
+                    }],
+                },
+            }),
+            json.dumps({
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "检查完成。"}]},
+            }),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    messages = load_native_transcript("claude", transcript_path, session_id="session-1", include_trace=True)
+
+    assert len(messages) == 1
+    assert messages[0]["content"] == "检查完成。"
+    trace = messages[0]["meta"]["trace"]
+    assert [event["kind"] for event in trace] == ["commentary", "tool_call", "tool_result"]
+    assert trace[0]["summary"] == "我先检查当前目录。"
+    assert all(event["summary"] != "Print current working directory" for event in trace)
 
 
 def test_claude_effort_accepts_xhigh_and_passes_it_to_cli() -> None:
