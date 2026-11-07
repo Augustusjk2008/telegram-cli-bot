@@ -5832,9 +5832,6 @@ export function ChatScreen({
           focused={focused}
           onToggleFocus={onToggleFocus}
           onOpenHistoryPanel={() => void handleOpenHistoryPanel("history")}
-          onKillTask={terminateVisible ? () => void handleKillTask() : undefined}
-          killTaskDisabled={killTaskDisabled}
-          killTaskBusy={actionLoading === "kill"}
           mobileLayout={mobileLayout}
           providerOptions={deepSeekProviderOptions}
           selectedProvider={selectedDeepSeekProvider}
@@ -6077,6 +6074,9 @@ export function ChatScreen({
           <ChatComposer
             key={`composer-${composerPulseKey}`}
             onSend={handleSend}
+            onStop={terminateVisible ? () => void handleKillTask() : undefined}
+            stopDisabled={killTaskDisabled}
+            stopBusy={actionLoading === "kill"}
             onAttachFiles={handleAttachFiles}
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}

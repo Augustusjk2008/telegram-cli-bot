@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, Square, X } from "lucide-react";
+import { ChevronDown, ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, X } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type { ChatExecutionMode, DeepSeekProviderOption } from "../services/types";
@@ -21,9 +21,6 @@ type Props = {
   focused?: boolean;
   onToggleFocus?: () => void;
   onOpenHistoryPanel: () => void;
-  onKillTask?: () => void;
-  killTaskDisabled?: boolean;
-  killTaskBusy?: boolean;
   mobileLayout?: boolean;
   modelDescription?: string;
   providerOptions?: DeepSeekProviderOption[];
@@ -66,9 +63,6 @@ export function ChatActionBar({
   focused = false,
   onToggleFocus,
   onOpenHistoryPanel,
-  onKillTask,
-  killTaskDisabled = false,
-  killTaskBusy = false,
   mobileLayout = false,
   modelDescription,
   providerOptions = [],
@@ -165,12 +159,6 @@ export function ChatActionBar({
               className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)]"
             >
               {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-            </button>
-          ) : null}
-          {onKillTask ? (
-            <button type="button" aria-label="终止任务" onClick={onKillTask} disabled={killTaskDisabled} className={toolbarButtonClass("danger", "sm", "h-8 shrink-0 rounded-md px-1.5")}>
-              {killTaskBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
-              {killTaskBusy ? "终止中" : "终止"}
             </button>
           ) : null}
         </div>
@@ -361,22 +349,6 @@ export function ChatActionBar({
               className={iconButtonClassName}
             >
               {focused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-            </button>
-          ) : null}
-          {onKillTask ? (
-            <button
-              type="button"
-              aria-label="终止任务"
-              onClick={onKillTask}
-              disabled={killTaskDisabled}
-              className={toolbarButtonClass("danger", "sm", "h-8 rounded-md px-2.5")}
-            >
-              {killTaskBusy ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <Square className="h-4 w-4" />
-              )}
-              {killTaskBusy ? "终止中" : "终止"}
             </button>
           ) : null}
         </div>

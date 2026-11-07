@@ -361,3 +361,16 @@ select:disabled {
 :where(.shadow-inner, .shadow-xs, .shadow-2xs) {
   --tw-shadow-color: var(--shadow-inset-color);
 }
+
+/* Git panel: reveal row actions on hover/focus for pointer devices; touch keeps them visible. */
+@media (hover: hover) and (pointer: fine) {
+  .git-change-row .git-change-row-actions {
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .git-change-row:hover .git-change-row-actions,
+  .git-change-row:focus-within .git-change-row-actions {
+    opacity: 1;
+  }
+}

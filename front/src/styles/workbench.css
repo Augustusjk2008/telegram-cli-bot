@@ -792,6 +792,16 @@
   color: var(--accent-foreground);
 }
 
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-stop {
+  border-radius: calc(var(--radius-bubble) - 4px);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
 :root[data-style-profile="paper"] .desktop-workbench-root .chat-composer-attachments {
   border-color: transparent;
   background: transparent;

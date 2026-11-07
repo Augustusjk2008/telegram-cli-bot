@@ -250,6 +250,7 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
   render(<GitScreen botAlias="remote" client={client} remote />);
 
   expect(await screen.findByText(/origin\/main/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "展开设置" }));
   expect(await screen.findByLabelText("Git 用户名")).toHaveValue("Remote Dev");
   expect(screen.getByLabelText("Git 用户名")).toBeEnabled();
   expect(screen.getByRole("button", { name: "提交更改" })).toBeDisabled();
@@ -358,6 +359,7 @@ test("identity editing follows account permissions while the identity section st
   const { client } = createGitScreenClient(localGitCapabilities);
   render(<GitScreen botAlias="main" client={client} sessionCapabilities={["git_ops"]} />);
 
+  fireEvent.click(await screen.findByRole("button", { name: "展开设置" }));
   const name = await screen.findByLabelText("Git 用户名");
   expect(name).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存 Git 用户" })).toBeDisabled();
@@ -510,6 +512,7 @@ test("allows git users to manage commit message cli config", async () => {
   const { client } = createGitScreenClient();
   render(<GitScreen botAlias="main" client={client} sessionCapabilities={["git_ops"]} />);
 
+  fireEvent.click(await screen.findByRole("button", { name: "展开设置" }));
   const panel = await screen.findByTestId("git-commit-cli-panel");
   await waitFor(() => {
     expect(within(panel).getByRole("button", { name: /恢复默认/ })).toBeEnabled();

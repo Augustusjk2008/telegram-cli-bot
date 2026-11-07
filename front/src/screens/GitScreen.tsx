@@ -1,13 +1,17 @@
 import { clsx } from "clsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CheckCircle2,
-  DownloadCloud,
+  CloudDownload,
   GitBranch,
+  GitCommitHorizontal,
   GitFork,
   GitPullRequest,
   LoaderCircle,
@@ -16,10 +20,10 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
-  SendHorizontal,
+  Settings2,
   Sparkles,
   Trash2,
-  UploadCloud,
+  Undo2,
   UserRound,
   X,
 } from "lucide-react";
@@ -27,7 +31,6 @@ import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { StateBadge } from "../components/StateBadge";
 import { TouchHint } from "../components/TouchHint";
-import { toolbarButtonClass } from "../components/ToolbarButton";
 import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
@@ -78,10 +81,10 @@ const REMOTE_GIT_ACTION_LABELS: Record<RemoteGitAction, string> = {
 };
 
 const GIT_GRAPH_LIMIT = 50;
-const GIT_GRAPH_ROW_HEIGHT = 44;
-const GIT_GRAPH_LANE_GAP = 14;
+const GIT_GRAPH_ROW_HEIGHT = 38;
+const GIT_GRAPH_LANE_GAP = 12;
 const GIT_GRAPH_LANE_PADDING = 8;
-const GIT_GRAPH_NODE_RADIUS = 4;
+const GIT_GRAPH_NODE_RADIUS = 3.5;
 
 function groupedFiles(overview: GitOverview | null) {
   const changedFiles = overview?.changedFiles || [];
@@ -121,14 +124,16 @@ function gitActionErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-function countLabel(title: string, count: number) {
-  return `${title} (${count})`;
-}
-
 function displayGitPath(path: string) {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
   const parts = normalized.split("/").filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+function gitParentPath(path: string) {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/g, "");
+  const index = normalized.lastIndexOf("/");
+  return index > 0 ? normalized.slice(0, index) : "";
 }
 
 function changeStatsForGroup(item: GitChangedFile, key: GitFileGroupKey) {
@@ -150,59 +155,150 @@ function changeStatsForGroup(item: GitChangedFile, key: GitFileGroupKey) {
   };
 }
 
-function changeGroupTone(key: GitFileGroupKey) {
+function changeStatusLetter(item: GitChangedFile, key: GitFileGroupKey) {
+  if (key === "untracked") {
+    return "U";
+  }
+  const status = item.status || "";
+  const code = (key === "staged" ? status[0] : status[1]) || "";
+  const letter = code.trim() || status.trim()[0] || "M";
+  return letter === "?" ? "U" : letter.toUpperCase();
+}
+
+function changeStatusColor(letter: string) {
+  if (letter === "A" || letter === "U") {
+    return "var(--status-success)";
+  }
+  if (letter === "D") {
+    return "var(--status-danger)";
+  }
+  if (letter === "R" || letter === "C") {
+    return "var(--status-info)";
+  }
+  return "var(--status-warning)";
+}
+
+function changeGroupDotColor(key: GitFileGroupKey) {
   if (key === "staged") {
-    return "success";
+    return "var(--status-success)";
   }
   if (key === "unstaged") {
-    return "warning";
+    return "var(--status-warning)";
   }
-  return "accent";
+  return "var(--status-info)";
 }
 
-function iconButtonClass() {
-  return toolbarButtonClass("ghost", "icon", "h-7 w-7 border-[var(--workbench-hairline)]");
-}
+const gitFocusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]";
 
-function buttonClass(kind: "plain" | "primary" = "plain") {
-  return toolbarButtonClass(kind, "sm");
-}
-
-function sectionClass(extra = "") {
+function gitIconButtonClass(size: "sm" | "md", tone: "default" | "danger" = "default") {
   return clsx(
-    "min-w-0 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] shadow-[var(--shadow-surface)]",
-    extra,
+    "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-control)] text-[var(--muted)] transition-colors",
+    "hover:bg-[var(--workbench-hover-bg)] disabled:pointer-events-none disabled:opacity-40",
+    size === "md" ? "h-7 w-7" : "h-6 w-6",
+    tone === "danger" ? "hover:text-[var(--danger)]" : "hover:text-[var(--text)]",
+    gitFocusRing,
   );
 }
 
-function sectionStackClass(extra = "") {
-  return clsx("min-w-0 space-y-3 bg-[var(--workbench-titlebar-bg)]", extra);
-}
+const gitIconButtonClassName = gitIconButtonClass("sm");
 
-function sectionHeaderClass(extra = "") {
+const gitDangerIconButtonClassName = gitIconButtonClass("sm", "danger");
+
+const gitToolbarIconButtonClassName = clsx(gitIconButtonClass("md"), "relative");
+
+const gitButtonClassName = clsx(
+  "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 text-xs font-medium text-[var(--text)] transition-colors",
+  "hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] disabled:pointer-events-none disabled:opacity-50",
+  gitFocusRing,
+);
+
+const gitSquareButtonClassName = clsx(
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)] transition-colors",
+  "hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:pointer-events-none disabled:opacity-50",
+  gitFocusRing,
+);
+
+const gitDangerSquareButtonClassName = clsx(
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)] transition-colors",
+  "hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--danger)] disabled:pointer-events-none disabled:opacity-50",
+  gitFocusRing,
+);
+
+const gitPrimaryButtonClassName = clsx(
+  "tcb-solid-accent inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-transparent px-2.5 text-xs font-medium transition-opacity",
+  "hover:opacity-90 disabled:pointer-events-none disabled:opacity-50",
+  gitFocusRing,
+);
+
+const gitInputBase = clsx(
+  "h-7 min-w-0 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] outline-none transition-colors",
+  "placeholder:text-[var(--muted)] focus:border-[var(--accent-outline)] focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60",
+);
+
+const gitSelectCompactClassName = clsx(gitInputBase, "w-auto");
+
+const gitInputClassName = clsx(gitInputBase, "w-full");
+
+function gitSegmentClass(active: boolean) {
   return clsx(
-    "flex items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-3 py-1.5",
-    extra,
+    "inline-flex h-5 items-center rounded-[calc(var(--radius-control)-2px)] px-1.5 text-[11px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
+    gitFocusRing,
+    active
+      ? "bg-[var(--workbench-panel-elevated-bg)] text-[var(--accent)] shadow-[var(--shadow-surface)]"
+      : "text-[var(--muted)] hover:text-[var(--text)]",
   );
 }
 
-function sectionBodyClass(extra = "") {
-  return clsx("px-3 py-2.5", extra);
-}
+const gitSegmentGroupClassName = "inline-flex items-center gap-0.5 rounded-[var(--radius-control)] bg-[var(--workbench-active-bg)] p-0.5";
 
-function listClass(extra = "") {
-  return clsx("divide-y divide-[var(--workbench-hairline)]", extra);
-}
+const gitEmptyStateClassName = "px-3 py-1.5 text-xs text-[var(--muted)]";
 
-function listRowClass(extra = "") {
-  return clsx(
-    "flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-2 transition-colors hover:bg-[var(--workbench-hover-bg)]",
-    extra,
+type GitSectionProps = {
+  title: string;
+  icon?: ReactNode;
+  count?: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  actions?: ReactNode;
+  children: ReactNode;
+  testId?: string;
+  contentTestId?: string;
+};
+
+function GitSection({ title, icon, count, collapsed, onToggle, actions, children, testId, contentTestId }: GitSectionProps) {
+  return (
+    <section data-testid={testId} className="min-w-0 border-b border-[var(--workbench-hairline)]">
+      <div className="sticky top-0 z-[2] flex h-8 min-w-0 items-center gap-1 bg-[var(--workbench-titlebar-bg)] pl-1 pr-1.5">
+        <h2 className="min-w-0 flex-1">
+          <button
+            type="button"
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? "展开" : "收起"}${title}`}
+            onClick={onToggle}
+            className={clsx(
+              "flex h-7 w-full min-w-0 items-center gap-1 rounded-[var(--radius-control)] px-1 text-left text-[11px] font-semibold tracking-wide text-[var(--muted)] transition-colors hover:text-[var(--text)]",
+              gitFocusRing,
+            )}
+          >
+            <ChevronRight className={clsx("h-3.5 w-3.5 shrink-0 transition-transform duration-150", collapsed ? "" : "rotate-90")} />
+            {icon}
+            <span className="truncate uppercase">{title}</span>
+            {count !== undefined ? (
+              <span className="ml-0.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--workbench-active-bg)] px-1 text-[10px] font-medium tabular-nums text-[var(--muted)]">
+                {count}
+              </span>
+            ) : null}
+          </button>
+        </h2>
+        {actions ? <div className="flex shrink-0 items-center gap-0.5">{actions}</div> : null}
+      </div>
+      {!collapsed ? (
+        <div data-testid={contentTestId} className="min-w-0 pb-2">
+          {children}
+        </div>
+      ) : null}
+    </section>
   );
-}
-
-function emptyStateClass(extra = "") {
-  return clsx("rounded-md border border-dashed border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2 text-xs text-[var(--muted)]", extra);
 }
 
 function identityForScope(config: GitIdentityConfig | null, scope: GitIdentityScope) {
@@ -338,6 +434,18 @@ type GitCommitGraphLiteProps = {
   onSelect: (hash: string) => void;
 };
 
+const GIT_GRAPH_LANE_COLORS = [
+  "var(--accent)",
+  "var(--status-info)",
+  "var(--status-success)",
+  "var(--status-warning)",
+  "var(--status-danger)",
+];
+
+function laneColor(column: number) {
+  return GIT_GRAPH_LANE_COLORS[column % GIT_GRAPH_LANE_COLORS.length];
+}
+
 function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitCommitGraphLiteProps) {
   const laneCount = graphLaneCount(nodes);
   const laneWidth = GIT_GRAPH_LANE_PADDING * 2 + (laneCount - 1) * GIT_GRAPH_LANE_GAP;
@@ -346,13 +454,14 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
   const incomingEdgesByRow = graphIncomingEdgesByRow(nodes, laneCount);
 
   return (
-    <div className="min-w-0 divide-y divide-[var(--workbench-hairline)]">
+    <div className="min-w-0">
       {nodes.map((node, rowIndex) => {
         const selected = selectedHash === node.hash;
         const nodeColumn = clampGraphColumn(node.graph.column, laneCount);
         const shortHash = node.shortHash || node.hash.slice(0, 7);
         const commitTitle = (node.message || node.subject || "-").trim() || "-";
         const incomingEdges = incomingEdgesByRow[rowIndex] || [];
+        const isHead = node.refs.some((ref) => ref.kind === "head" || ref.current);
         return (
           <TouchHint key={node.hash} content={commitTitle} block>
             <button
@@ -363,9 +472,10 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
               onClick={() => onSelect(node.hash)}
               disabled={disabled}
               className={clsx(
-                "grid w-full min-w-0 items-stretch gap-2 px-2 py-0 text-left transition-colors",
-                "hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-70",
-                selected ? "bg-[var(--workbench-active-bg)]" : "",
+                "relative grid w-full min-w-0 items-stretch gap-1.5 pl-1.5 pr-2 text-left transition-colors",
+                "hover:bg-[var(--workbench-hover-bg)] disabled:cursor-not-allowed disabled:opacity-70",
+                gitFocusRing,
+                selected ? "bg-[var(--workbench-active-bg)] before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--accent)]" : "",
               )}
               style={{ gridTemplateColumns: `${laneWidth}px minmax(0, 1fr)` }}
             >
@@ -377,17 +487,6 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
               viewBox={`0 0 ${laneWidth} ${GIT_GRAPH_ROW_HEIGHT}`}
               className="block overflow-visible"
             >
-              {Array.from({ length: laneCount }, (_, column) => (
-                <line
-                  key={`lane-${column}`}
-                  x1={laneX(column)}
-                  x2={laneX(column)}
-                  y1="0"
-                  y2={GIT_GRAPH_ROW_HEIGHT}
-                  stroke="var(--workbench-hairline)"
-                  strokeWidth="1"
-                />
-              ))}
               {incomingEdges.map((edge, index) => {
                 const to = clampGraphColumn(edge.to, laneCount);
                 const toX = laneX(to);
@@ -398,10 +497,10 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                     data-testid={`git-graph-incoming-${shortHash}-${index}`}
                     d={`M ${toX} 0 L ${toX} ${landsOnNode ? midY : GIT_GRAPH_ROW_HEIGHT}`}
                     fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth="2"
+                    stroke={laneColor(to)}
+                    strokeWidth="1.75"
                     strokeLinecap="round"
-                    opacity={landsOnNode ? 0.95 : 0.58}
+                    opacity={landsOnNode ? 0.9 : 0.55}
                   />
                 );
               })}
@@ -419,37 +518,41 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                     data-testid={`git-graph-edge-${shortHash}-${index}`}
                     d={path}
                     fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth="2"
+                    stroke={laneColor(from === to ? to : Math.max(from, to))}
+                    strokeWidth="1.75"
                     strokeLinecap="round"
-                    opacity={from === nodeColumn ? 0.95 : 0.58}
+                    opacity={from === nodeColumn ? 0.9 : 0.55}
                   />
                 );
               })}
-              <circle
-                cx={laneX(nodeColumn)}
-                cy={midY}
-                r={GIT_GRAPH_NODE_RADIUS + 2}
-                fill="var(--workbench-panel-elevated-bg)"
-                stroke={selected ? "var(--accent)" : "var(--workbench-hairline)"}
-                strokeWidth="1"
-              />
+              {isHead ? (
+                <circle
+                  cx={laneX(nodeColumn)}
+                  cy={midY}
+                  r={GIT_GRAPH_NODE_RADIUS + 3}
+                  fill="none"
+                  stroke={laneColor(nodeColumn)}
+                  strokeWidth="1"
+                  opacity="0.45"
+                />
+              ) : null}
               <circle
                 data-testid={`git-graph-node-${shortHash}`}
                 cx={laneX(nodeColumn)}
                 cy={midY}
                 r={GIT_GRAPH_NODE_RADIUS}
-                fill="var(--accent)"
+                fill={selected || isHead ? laneColor(nodeColumn) : "var(--workbench-titlebar-bg)"}
+                stroke={laneColor(nodeColumn)}
+                strokeWidth="1.75"
               />
             </svg>
-            <div className="flex min-w-0 flex-col justify-center gap-0.5 py-1.5">
-              <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--muted)]">
-                <span className="shrink-0 font-mono font-semibold text-[var(--accent)]" title={node.authorName || "-"}>
-                  {shortHash} - {node.authorName || "-"}
+            <div className="flex min-w-0 flex-col justify-center">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium leading-4 text-[var(--text)]">
+                  {node.subject || "-"}
                 </span>
-                <span className="min-w-0 truncate">{formatCommitGraphDate(node.authoredAt)}</span>
                 {node.refs.length > 0 ? (
-                  <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                  <span className="flex min-w-0 max-w-[55%] shrink items-center justify-end gap-1 overflow-hidden">
                     {node.refs.map((ref) => (
                       <span key={`${node.hash}-${ref.kind}-${ref.name}`} className={compactGraphRefClass(ref)}>
                         <span data-testid={`git-graph-ref-${shortHash}-${ref.name}`} className="block min-w-0 truncate" title={ref.name}>
@@ -460,8 +563,10 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
                   </span>
                 ) : null}
               </div>
-              <div className="min-w-0 truncate text-sm font-medium text-[var(--text)]">
-                {node.subject || "-"}
+              <div className="flex min-w-0 items-center gap-1.5 text-[10.5px] leading-4 text-[var(--muted)]">
+                <span className="shrink-0 font-mono text-[var(--accent)]">{shortHash}</span>
+                <span className="min-w-0 truncate" title={node.authorName || "-"}>{node.authorName || "-"}</span>
+                <span className="ml-auto shrink-0 tabular-nums">{formatCommitGraphDate(node.authoredAt)}</span>
               </div>
             </div>
             </button>
@@ -504,6 +609,9 @@ export function GitScreen({
   const [diffError, setDiffError] = useState("");
   const [changesCollapsed, setChangesCollapsed] = useState(false);
   const [graphCollapsed, setGraphCollapsed] = useState(false);
+  const [branchesCollapsed, setBranchesCollapsed] = useState(false);
+  const [stashCollapsed, setStashCollapsed] = useState(false);
+  const [settingsCollapsed, setSettingsCollapsed] = useState(true);
   const [graphScope, setGraphScope] = useState<GitGraphScope>("all");
   const [graphPayload, setGraphPayload] = useState<GitCommitGraphPayload | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
@@ -1321,11 +1429,17 @@ export function GitScreen({
     const stagedDiff = key === "staged";
     const diffLoadingKey = `${stagedDiff ? "staged" : "worktree"}:${item.path}`;
     const diffLoading = diffLoadingPath === diffLoadingKey;
+    const statusLetter = changeStatusLetter(item, key);
+    const parentPath = gitParentPath(item.path);
+    const selected = selectedDiff?.path === item.path && Boolean(selectedDiff?.staged) === stagedDiff;
     return (
       <div
         data-testid={`git-change-row-${item.path}`}
         data-full-path={item.path}
-        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-[var(--workbench-hairline)] px-2 py-1.5 text-xs transition-colors last:border-b-0 hover:bg-[var(--workbench-hover-bg)]"
+        className={clsx(
+          "git-change-row flex h-7 min-w-0 items-center gap-1.5 pl-3 pr-1.5 text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]",
+          selected ? "bg-[var(--workbench-active-bg)]" : "",
+        )}
       >
         <button
           type="button"
@@ -1335,25 +1449,15 @@ export function GitScreen({
           data-full-path={item.path}
           onClick={() => void openChangedDiff(item.path, stagedDiff)}
           disabled={diffLoading || !isCapabilityAvailable("tree_status")}
-          className="min-w-0 truncate text-left font-medium text-[var(--text)] hover:text-[var(--accent)] disabled:opacity-60"
+          className={clsx("flex h-full min-w-0 flex-1 items-center gap-1.5 text-left disabled:opacity-60", gitFocusRing)}
         >
-          {diffLoading ? (
-            <span className="inline-flex min-w-0 items-center gap-1">
-              <LoaderCircle className="h-3 w-3 shrink-0 animate-spin" />
-              <span className="min-w-0 truncate">{displayGitPath(item.path)}</span>
-            </span>
-          ) : (
-            displayGitPath(item.path)
-          )}
-        </button>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <span className="rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)]">
-            {item.status.trim() || item.status}
+          {diffLoading ? <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-[var(--muted)]" /> : null}
+          <span className={clsx("min-w-[2.5rem] truncate font-medium text-[var(--text)]", statusLetter === "D" ? "line-through decoration-[var(--muted)]" : "")}>
+            {displayGitPath(item.path)}
           </span>
-          <span className="font-mono text-[10px] text-[var(--feedback-success-text-strong)]">+{stats.additions}</span>
-          <span className="font-mono text-[10px] text-[var(--feedback-error-text-strong)]">-{stats.deletions}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
+          {parentPath ? <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--muted)]">{parentPath}</span> : null}
+        </button>
+        <div className="git-change-row-actions flex shrink-0 items-center">
           {(item.untracked || item.unstaged || !item.staged) ? (
             <button
               type="button"
@@ -1362,9 +1466,9 @@ export function GitScreen({
               aria-describedby="git-capability-reason-tree_status"
               onClick={() => void runAction(`stage:${item.path}`, () => client.stageGitPaths(botAlias, [item.path]), { refreshWorkspace: true, capability: "tree_status" })}
               disabled={mutationBusy || !isCapabilityAvailable("tree_status")}
-              className={iconButtonClass()}
+              className={gitIconButtonClassName}
             >
-              <Plus className="h-3 w-3" />
+              <Plus className="h-3.5 w-3.5" />
             </button>
           ) : null}
           {item.staged ? (
@@ -1375,9 +1479,9 @@ export function GitScreen({
               aria-describedby="git-capability-reason-tree_status"
               onClick={() => void runAction(`unstage:${item.path}`, () => client.unstageGitPaths(botAlias, [item.path]), { refreshWorkspace: true, capability: "tree_status" })}
               disabled={mutationBusy || !isCapabilityAvailable("tree_status")}
-              className={iconButtonClass()}
+              className={gitIconButtonClassName}
             >
-              <Minus className="h-3 w-3" />
+              <Minus className="h-3.5 w-3.5" />
             </button>
           ) : null}
           <button
@@ -1390,84 +1494,178 @@ export function GitScreen({
               confirmationMessage: `确定丢弃 ${item.path} 的改动吗？`,
             })}
             disabled={mutationBusy || !isCapabilityAvailable("discard")}
-            className={iconButtonClass()}
+            className={gitDangerIconButtonClassName}
           >
-            <Trash2 className="h-3 w-3" />
+            <Undo2 className="h-3.5 w-3.5" />
           </button>
         </div>
+        {stats.additions > 0 || stats.deletions > 0 ? (
+          <span className="git-change-row-stats flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+            {stats.additions > 0 ? <span className="text-[var(--feedback-success-text-strong)]">+{stats.additions}</span> : null}
+            {stats.deletions > 0 ? <span className="text-[var(--feedback-error-text-strong)]">-{stats.deletions}</span> : null}
+          </span>
+        ) : null}
+        <span
+          title={item.status.trim() || item.status}
+          className="w-3.5 shrink-0 text-center font-mono text-[11px] font-semibold"
+          style={{ color: changeStatusColor(statusLetter) }}
+        >
+          {statusLetter}
+        </span>
       </div>
     );
-  }, [botAlias, client, diffLoadingPath, gitCapabilities, gitCapabilitiesError, gitCapabilitiesLoading, mutationBusy]);
+  }, [botAlias, client, diffLoadingPath, gitCapabilities, gitCapabilitiesError, gitCapabilitiesLoading, mutationBusy, selectedDiff]);
+
+  const repoReady = !loading && Boolean(overview?.repoFound);
+  const canCommit = Boolean(
+    overview
+    && !mutationBusy
+    && !overview.isClean
+    && groups.staged.length > 0
+    && commitMessage.trim()
+    && isCapabilityAvailable("tree_status"),
+  );
+  const canEditIdentity = isCapabilityAvailable("identity") && (identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity);
+
+  function commitChanges() {
+    if (!canCommit) {
+      return;
+    }
+    void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage), { refreshWorkspace: true, capability: "tree_status" });
+  }
 
   return (
-    <main data-ui-density="compact" className={clsx("flex h-full min-h-0 flex-col", embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]")}>
-      {embedded ? null : (
-        <header className="border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <GitBranch className="h-4 w-4 text-[var(--accent)]" />
-                <h1 className="text-lg font-semibold">Git</h1>
-              </div>
-              <p className="truncate text-xs text-[var(--muted)]">{botAlias}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void refreshGitWorkspace()}
-              className={buttonClass()}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              刷新
-            </button>
-          </div>
-        </header>
+    <main
+      data-ui-density="compact"
+      className={clsx(
+        "@container flex h-full min-h-0 flex-col text-[var(--text)]",
+        embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]",
       )}
+    >
+      <header data-testid="git-toolbar" className="shrink-0 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
+        <div className={clsx("flex h-11 min-w-0 items-center gap-2 px-2", embedded ? "" : "mx-auto w-full max-w-3xl")}>
+          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--workbench-active-bg)] text-[var(--accent)]">
+            <GitBranch className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-xs font-semibold leading-4" title={overview?.repoFound ? overview.repoPath : botAlias}>
+              {overview?.repoFound ? overview.repoName : "Git"}
+            </h1>
+            {overview?.repoFound ? (
+              <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-[var(--muted)]">
+                <span className="inline-flex min-w-0 items-center gap-1 font-mono text-[var(--text)]" title="当前分支">
+                  <GitBranch className="h-3 w-3 shrink-0 text-[var(--muted)]" />
+                  <span className="truncate">{overview.currentBranch || "-"}</span>
+                </span>
+                <span
+                  className="inline-flex shrink-0 items-center gap-1"
+                  style={{ color: overview.isClean ? "var(--status-success)" : "var(--status-warning)" }}
+                >
+                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                  <span>{overview.isClean ? "工作区干净" : "存在改动"}</span>
+                </span>
+              </div>
+            ) : (
+              <p className="truncate text-[11px] leading-4 text-[var(--muted)]">{botAlias}</p>
+            )}
+          </div>
+          {overview?.repoFound && !loading ? (
+            <div data-testid="remote-git-actions" role="group" aria-label="远端同步" className="flex shrink-0 items-center">
+              {REMOTE_GIT_ACTIONS.map((operation) => {
+                const capability = getCapability(operation);
+                const unavailable = !capability.available;
+                const label = REMOTE_GIT_ACTION_LABELS[operation];
+                const Icon = operation === "fetch" ? CloudDownload : operation === "pull" ? ArrowDownToLine : ArrowUpFromLine;
+                const badge = operation === "pull" ? overview.behindCount : operation === "push" ? overview.aheadCount : 0;
+                const badgeHint = operation === "pull" ? `落后 ${badge}` : `领先 ${badge}`;
+                return (
+                  <button
+                    key={operation}
+                    type="button"
+                    aria-label={label}
+                    title={!remote && unavailable ? `${label}：${gitCapabilityReason(capability, gitCapabilitiesLoading)}` : badge > 0 ? `${label}（${badgeHint}）` : label}
+                    aria-describedby={!remote ? `git-capability-reason-${operation}` : undefined}
+                    onClick={() => void runRemoteGitAction(operation)}
+                    disabled={mutationBusy || (!remote && unavailable)}
+                    className={gitToolbarIconButtonClassName}
+                  >
+                    {actionLoading === `remote-${operation}` ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+                    {badge > 0 ? (
+                      <span aria-hidden="true" className="tcb-solid-accent absolute -right-0.5 -top-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-semibold tabular-nums leading-none">
+                        {badge > 99 ? "99+" : badge}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            aria-label="刷新 Git 状态"
+            title="刷新 Git 状态"
+            onClick={() => void refreshGitWorkspace()}
+            className={gitToolbarIconButtonClassName}
+          >
+            <RefreshCw className={clsx("h-4 w-4", loading ? "animate-spin" : "")} />
+          </button>
+        </div>
+      </header>
 
       <section
         data-testid="git-scroll-region"
         className={clsx(
           "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto",
-          embedded ? "bg-[var(--workbench-titlebar-bg)] py-0.5" : "bg-[var(--workbench-panel-bg)] p-3",
+          embedded ? "bg-[var(--workbench-titlebar-bg)]" : "bg-[var(--workbench-panel-bg)]",
         )}
       >
-        <div className={sectionStackClass("mx-auto w-full max-w-6xl")}>
-          {loading ? (
-            <div className="rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">
-              加载中...
+        <div className={clsx("min-w-0", embedded ? "" : "mx-auto w-full max-w-3xl border-x border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]")}>
+          {!remote && gitCapabilitiesLoading && overview?.repoFound ? (
+            <p className="px-3 pt-2 text-[11px] text-[var(--muted)]">读取 Git 能力...</p>
+          ) : null}
+          {!remote && gitCapabilitiesError ? (
+            <div role="status" className="mx-2 mt-2 rounded-md border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-2 py-1.5 text-xs text-[var(--status-danger)]">
+              无法读取服务端 Git 能力：{gitCapabilitiesError}。相关操作已禁用，请刷新 Git 状态后重试。
             </div>
           ) : null}
           {error ? (
-            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
+            <div className="mx-2 mt-2 break-words rounded-md border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-2 py-1.5 text-xs text-[var(--status-danger)]">
               {error}
             </div>
           ) : null}
-          {remote && remoteGitMissing ? (
-            <section role="alert" className={sectionClass()}>
-              <div className={sectionBodyClass("space-y-2 text-sm")}>
-                <h2 className="font-semibold">远程 Git 不可用</h2>
-                <p>请在远程主机安装 Git，并确保 SSH 账号的非交互式 PATH 中可以运行 git --version。交互式终端可用并不代表 SSH 命令可用。</p>
-                <div className="flex flex-wrap gap-3">
-                  <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/linux" target="_blank" rel="noreferrer">Linux 官方安装指南</a>
-                  <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/windows" target="_blank" rel="noreferrer">Windows 官方安装指南</a>
-                </div>
-                <p>安装或更新 PATH 后，可重新连接 SSH，再重试检查。</p>
-                <button type="button" onClick={() => void refreshGitWorkspace()} disabled={loading} className={buttonClass()}>重试</button>
-              </div>
-            </section>
-          ) : null}
           {notice ? (
-            <div className="rounded-lg border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-sm text-[var(--status-success)] shadow-[var(--shadow-surface)]">
-              {notice}
+            <div className="mx-2 mt-2 flex items-start gap-1.5 rounded-md border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-2 py-1.5 text-xs text-[var(--status-success)]">
+              <CheckCircle2 className="mt-px h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 break-words">{notice}</span>
             </div>
+          ) : null}
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 px-3 py-10 text-xs text-[var(--muted)]">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              加载中...
+            </div>
+          ) : null}
+          {remote && remoteGitMissing ? (
+            <section role="alert" className="m-2 space-y-2 rounded-md border border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] p-3 text-xs leading-5">
+              <h2 className="text-sm font-semibold">远程 Git 不可用</h2>
+              <p>请在远程主机安装 Git，并确保 SSH 账号的非交互式 PATH 中可以运行 git --version。交互式终端可用并不代表 SSH 命令可用。</p>
+              <div className="flex flex-wrap gap-3">
+                <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/linux" target="_blank" rel="noreferrer">Linux 官方安装指南</a>
+                <a className="text-[var(--accent)] underline" href="https://git-scm.com/install/windows" target="_blank" rel="noreferrer">Windows 官方安装指南</a>
+              </div>
+              <p>安装或更新 PATH 后，可重新连接 SSH，再重试检查。</p>
+              <button type="button" onClick={() => void refreshGitWorkspace()} disabled={loading} className={gitButtonClassName}>重试</button>
+            </section>
           ) : null}
 
           {!loading && overview && !overview.repoFound ? (
-            <section className={sectionClass()}>
-              <div className={sectionBodyClass("space-y-2")}>
-                <h2 className="text-lg font-semibold">当前目录不在 Git 仓库中</h2>
-                <p className="break-all text-sm text-[var(--muted)]">{overview.workingDir}</p>
-              </div>
-              {remote ? <p className={sectionBodyClass("text-sm text-[var(--muted)]")}>远程工作区根目录还没有 Git 仓库。</p> : null}
+            <section className="flex flex-col items-center gap-2 px-4 py-8 text-center">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[var(--workbench-active-bg)] text-[var(--muted)]">
+                <GitBranch className="h-5 w-5" />
+              </span>
+              <h2 className="text-sm font-semibold">当前目录不在 Git 仓库中</h2>
+              <p className="max-w-full break-all font-mono text-[11px] text-[var(--muted)]">{overview.workingDir}</p>
+              {remote ? <p className="text-xs text-[var(--muted)]">远程工作区根目录还没有 Git 仓库。</p> : null}
               {renderCapabilityReason("tree_status")}
               <button
                 type="button"
@@ -1498,183 +1696,374 @@ export function GitScreen({
                 disabled={mutationBusy || !overview.canInit || !isCapabilityAvailable("tree_status")}
                 title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "初始化 Git 仓库"}
                 aria-describedby="git-capability-reason-tree_status"
-                className={clsx("ml-3 mt-4", buttonClass("primary"))}
+                className={clsx("mt-1", gitPrimaryButtonClassName)}
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
               </button>
             </section>
           ) : null}
 
-          {!loading && overview && overview.repoFound ? (
-            <div
-              data-testid="git-desktop-shell"
-              className={sectionStackClass()}
-            >
-              <section
-                data-testid="git-changes-panel"
-                className={sectionClass()}
-              >
-                <div className={sectionHeaderClass()}>
-                  <div>
-                    <h2 className="text-sm font-semibold">变更</h2>
-                    <p className="text-xs text-[var(--muted)]">{countLabel("文件", totalChanges)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      aria-label="刷新 Git 状态"
-                      onClick={() => void refreshGitWorkspace()}
-                      className={iconButtonClass()}
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={changesCollapsed ? "展开变更" : "收起变更"}
-                      onClick={() => setChangesCollapsed((value) => !value)}
-                      className={iconButtonClass()}
-                    >
-                      {changesCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
+          {repoReady && overview ? (
+            <div data-testid="git-desktop-shell" className="min-w-0">
+              <div data-testid="git-commit-panel" className="space-y-1.5 border-b border-[var(--workbench-hairline)] px-2 py-2">
+                <div className="relative">
+                  <textarea
+                    value={commitMessage}
+                    onChange={(event) => setCommitMessage(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        commitChanges();
+                      }
+                    }}
+                    rows={3}
+                    disabled={isSmartCommitRunning || !isCapabilityAvailable("tree_status")}
+                    placeholder="提交说明（Ctrl+Enter 提交）"
+                    aria-label="commit message"
+                    className="block max-h-60 min-h-[4.25rem] w-full resize-y rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--bg)] py-1.5 pl-2 pr-8 text-xs leading-5 text-[var(--text)] outline-none transition-colors placeholder:text-[var(--muted)] focus:border-[var(--accent-outline)] focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    aria-label="生成 commit message"
+                    title={!isCapabilityAvailable("commit_message_generation") ? capabilityReason("commit_message_generation") : "AI 生成提交说明"}
+                    aria-describedby="git-capability-reason-commit_message_generation"
+                    onClick={() => void generateCommitMessage()}
+                    disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("commit_message_generation")}
+                    className={clsx(gitIconButtonClassName, "absolute right-1 top-1")}
+                  >
+                    {isGeneratingCommitMessage ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  </button>
                 </div>
-                {!changesCollapsed ? (
-                  <div data-testid="git-changes-content" className={sectionBodyClass("space-y-2")}>
-                    {changeGroups.map(([key, title, items]) => (
-                      <div key={key} className="space-y-1.5">
-                        <div className="flex items-center justify-between text-xs font-medium text-[var(--muted)]">
-                          <span>{countLabel(title, items.length)}</span>
-                          <StateBadge tone={changeGroupTone(key)}>
-                            {key === "staged" ? "Index" : key === "unstaged" ? "Worktree" : "New"}
-                          </StateBadge>
-                        </div>
-                        {items.length === 0 ? (
-                          <div className={emptyStateClass()}>
-                            无
-                          </div>
-                        ) : (
-                          <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
-                            {items.length > 100 ? (
-                              <DynamicVirtualList
-                                items={items}
-                                getKey={(item) => `${key}-${item.path}`}
-                                renderItem={(item) => renderChangeRow(item, key)}
-                                estimateHeight={36}
-                                overscan={8}
-                                dataTestId={`git-virtual-change-list-${key}`}
-                                className="max-h-[420px] min-h-[240px] overflow-auto"
-                              />
-                            ) : items.map((item) => (
-                              <div key={`${key}-${item.path}`}>
-                                {renderChangeRow(item, key)}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {renderCapabilityReason("tree_status")}
-                    {renderCapabilityReason("discard")}
-                    {diffError ? (
-                      <div className="rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-xs text-[var(--feedback-error-text-deep)]">
-                        {diffError}
-                      </div>
+                {smartCommitJob ? (
+                  <div data-testid="git-smart-commit-status" className="space-y-0.5 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 py-1.5 text-xs">
+                    <div className="flex items-center gap-1.5 font-medium text-[var(--text)]">
+                      {isSmartCommitRunning ? <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-[var(--accent)]" /> : <Sparkles className="h-3 w-3 shrink-0 text-[var(--accent)]" />}
+                      <span className="min-w-0 truncate">{gitSmartCommitStatusText(smartCommitJob, overview)}</span>
+                    </div>
+                    {smartCommitJob.message && smartCommitJob.status !== "succeeded" ? (
+                      <div className="whitespace-pre-wrap text-[var(--muted)]">{smartCommitJob.message}</div>
                     ) : null}
-                    {selectedDiff ? (
-                      <div data-testid="git-diff-panel" className="min-w-0 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
-                        <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] px-2 py-1.5">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <h3 className="min-w-0 truncate text-xs font-semibold text-[var(--text)]" title={selectedDiff.path}>
-                              {selectedDiff.label}
-                            </h3>
-                            <StateBadge tone={selectedDiff.staged ? "success" : "warning"}>
-                              {selectedDiff.staged ? "Index" : "Worktree"}
-                            </StateBadge>
-                          </div>
-                          <button
-                            type="button"
-                            aria-label="关闭 diff"
-                            title="关闭 diff"
-                            onClick={() => {
-                              setSelectedDiff(null);
-                              setDiffError("");
-                            }}
-                            className={iconButtonClass()}
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                        {selectedDiff.truncated ? (
-                          <div className="border-b border-[var(--workbench-hairline)] px-2 py-1 text-[10px] text-[var(--muted)]">
-                            Diff 已截断
-                          </div>
-                        ) : null}
-                        <GitDiffViewer
-                          content={selectedDiff.diff || ""}
-                          testId="git-diff-content"
-                          className="min-h-60 max-h-[min(70vh,720px)] px-2 py-2 text-[11px] leading-5"
-                          ariaLabel={`Git Diff 内容：${selectedDiff.label}`}
-                        />
-                      </div>
+                    {smartCommitJob.error ? (
+                      <div className="text-[var(--feedback-error-text-strong)]">{smartCommitJob.error}</div>
                     ) : null}
                   </div>
                 ) : null}
-              </section>
+                <div className="flex min-w-0 items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="提交更改"
+                    onClick={commitChanges}
+                    disabled={!canCommit}
+                    title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : groups.staged.length === 0 ? "先暂存需要提交的文件" : "提交更改（Ctrl+Enter）"}
+                    aria-describedby="git-capability-reason-tree_status"
+                    className={clsx(gitPrimaryButtonClassName, "min-w-0 flex-1")}
+                  >
+                    {actionLoading === "commit" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    <span className="truncate">{actionLoading === "commit" ? "提交中..." : "提交更改"}</span>
+                    {groups.staged.length > 0 ? (
+                      <span aria-hidden="true" className="rounded-full bg-[color-mix(in_srgb,currentColor_18%,transparent)] px-1.5 text-[10px] tabular-nums leading-4">
+                        {groups.staged.length}
+                      </span>
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void startSmartCommit()}
+                    disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("smart_commit")}
+                    title={!isCapabilityAvailable("smart_commit") ? capabilityReason("smart_commit") : "智能提交：自动暂存并生成说明后提交"}
+                    aria-describedby="git-capability-reason-smart_commit"
+                    className={gitButtonClassName}
+                  >
+                    {isSmartCommitRunning ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-[var(--accent)]" />}
+                    智能提交
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="暂存全部"
+                    onClick={() => void runAction("stage-all", async () => {
+                      const result = await client.stageGitPaths(botAlias, stageAllPaths);
+                      return {
+                        message: "已暂存全部改动",
+                        overview: result.overview,
+                      };
+                    }, { capability: "tree_status" })}
+                    disabled={mutationBusy || stageAllPaths.length === 0 || !isCapabilityAvailable("tree_status")}
+                    title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "暂存全部"}
+                    aria-describedby="git-capability-reason-tree_status"
+                    className={gitSquareButtonClassName}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="丢弃全部"
+                    onClick={() => {
+                      void runAction("discard-all", () => client.discardAllGitChanges(botAlias), {
+                        capability: "discard",
+                        confirmationMessage: `确定丢弃全部 ${totalChanges} 个文件的改动吗？`,
+                      });
+                    }}
+                    disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("discard")}
+                    title={!isCapabilityAvailable("discard") ? capabilityReason("discard") : "丢弃全部"}
+                    aria-describedby="git-capability-reason-discard"
+                    className={gitDangerSquareButtonClassName}
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {renderCapabilityReason("commit_message_generation", "提交说明生成")}
+                {renderCapabilityReason("smart_commit", "智能提交")}
+              </div>
 
-              <div
-                data-testid="git-commit-panel"
-                className={sectionStackClass()}
+              <GitSection
+                title="变更"
+                count={totalChanges}
+                collapsed={changesCollapsed}
+                onToggle={() => setChangesCollapsed((value) => !value)}
+                testId="git-changes-panel"
+                contentTestId="git-changes-content"
               >
-                <section className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <div className="flex min-w-0 items-start gap-2">
-                      <GitBranch className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
-                      <div className="min-w-0">
-                        <h2 className="truncate text-sm font-semibold">{overview.repoName}</h2>
-                        <p className="mt-1 break-all text-xs text-[var(--muted)]">{overview.repoPath}</p>
+                {totalChanges === 0 ? (
+                  <div className={clsx(gitEmptyStateClassName, "flex items-center gap-1.5")}>
+                    <CheckCircle2 className="h-3.5 w-3.5 text-[var(--status-success)]" />
+                    没有待提交的改动
+                  </div>
+                ) : null}
+                {changeGroups.filter(([, , items]) => items.length > 0).map(([key, title, items]) => (
+                  <div key={key} data-testid={`git-change-group-${key}`} className="min-w-0">
+                    <div className="flex h-6 items-center gap-1.5 px-3 text-[11px] font-medium text-[var(--muted)]">
+                      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: changeGroupDotColor(key) }} />
+                      <span>{title}</span>
+                      <span className="tabular-nums opacity-75">{items.length}</span>
+                    </div>
+                    {items.length > 100 ? (
+                      <DynamicVirtualList
+                        items={items}
+                        getKey={(item) => `${key}-${item.path}`}
+                        renderItem={(item) => renderChangeRow(item, key)}
+                        estimateHeight={28}
+                        overscan={8}
+                        dataTestId={`git-virtual-change-list-${key}`}
+                        className="max-h-[420px] min-h-[240px] overflow-auto"
+                      />
+                    ) : items.map((item) => (
+                      <div key={`${key}-${item.path}`}>
+                        {renderChangeRow(item, key)}
                       </div>
-                    </div>
-                    <StateBadge tone={overview.isClean ? "success" : "warning"} className="shrink-0">
-                      {overview.isClean ? "工作区干净" : "存在改动"}
-                    </StateBadge>
+                    ))}
                   </div>
-                  <div className={sectionBodyClass("grid grid-cols-2 gap-2 text-xs")}>
-                    <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
-                      <div className="text-[var(--muted)]">当前分支</div>
-                      <div className="mt-1 truncate font-medium">{overview.currentBranch || "-"}</div>
-                    </div>
-                    <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-3 py-2">
-                      <div className="text-[var(--muted)]">Ahead / Behind</div>
-                      <div className="mt-1 font-medium">{overview.aheadCount} / {overview.behindCount}</div>
-                    </div>
+                ))}
+                <div className="space-y-1 px-3 empty:hidden">
+                  {renderCapabilityReason("tree_status")}
+                  {renderCapabilityReason("discard")}
+                </div>
+                {diffError ? (
+                  <div className="mx-2 mt-1.5 rounded-md border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-2 py-1.5 text-xs text-[var(--feedback-error-text-deep)]">
+                    {diffError}
                   </div>
-                </section>
+                ) : null}
+                {selectedDiff ? (
+                  <div data-testid="git-diff-panel" className="mx-2 mt-1.5 min-w-0 overflow-hidden rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
+                    <div className="flex h-7 min-w-0 items-center justify-between gap-2 border-b border-[var(--workbench-hairline)] pl-2 pr-1">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <h3 className="min-w-0 truncate text-xs font-semibold text-[var(--text)]" title={selectedDiff.path}>
+                          {selectedDiff.label}
+                        </h3>
+                        <StateBadge tone={selectedDiff.staged ? "success" : "warning"} className="shrink-0 px-1 py-0 text-[10px]">
+                          {selectedDiff.staged ? "Index" : "Worktree"}
+                        </StateBadge>
+                        {selectedDiff.truncated ? <span className="shrink-0 text-[10px] text-[var(--muted)]">已截断</span> : null}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="关闭 diff"
+                        title="关闭 diff"
+                        onClick={() => {
+                          setSelectedDiff(null);
+                          setDiffError("");
+                        }}
+                        className={gitIconButtonClassName}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <GitDiffViewer
+                      content={selectedDiff.diff || ""}
+                      testId="git-diff-content"
+                      className="min-h-48 max-h-[min(70vh,720px)] px-2 py-1.5 text-[11px] leading-5"
+                      ariaLabel={`Git Diff 内容：${selectedDiff.label}`}
+                    />
+                  </div>
+                ) : null}
+              </GitSection>
 
-                <>
-                <section className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="text-sm font-semibold">分支</h2>
+              <GitSection
+                title="提交图"
+                count={graphPayload ? graphPayload.nodes.length : undefined}
+                collapsed={graphCollapsed}
+                onToggle={() => setGraphCollapsed((value) => !value)}
+                testId="git-version-tree-panel"
+                contentTestId="git-version-tree-content"
+                actions={(
+                  <>
+                    <div className={gitSegmentGroupClassName} role="group" aria-label="提交图范围">
+                      {([
+                        ["all", "全部"],
+                        ["current", "当前分支"],
+                      ] as const).map(([scope, label]) => (
+                        <button
+                          key={scope}
+                          type="button"
+                          aria-pressed={graphScope === scope}
+                          onClick={() => setGraphScope(scope)}
+                          disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
+                          title={!isCapabilityAvailable("commit_graph") ? capabilityReason("commit_graph") : label}
+                          aria-describedby="git-capability-reason-commit_graph"
+                          className={gitSegmentClass(graphScope === scope)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                     <button
                       type="button"
-                      onClick={() => void loadBranches()}
-                      disabled={!isCapabilityAvailable("branches")}
-                      title={!isCapabilityAvailable("branches") ? capabilityReason("branches") : "刷新分支"}
-                      aria-describedby="git-capability-reason-branches"
-                      className={buttonClass()}
+                      aria-label="刷新提交图"
+                      onClick={() => void loadGitGraph({ scope: graphScope })}
+                      disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
+                      title={!isCapabilityAvailable("commit_graph") ? capabilityReason("commit_graph") : "刷新提交图"}
+                      aria-describedby="git-capability-reason-commit_graph"
+                      className={gitIconButtonClassName}
                     >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      刷新
+                      <RefreshCw className={clsx("h-3.5 w-3.5", graphLoading ? "animate-spin" : "")} />
                     </button>
+                  </>
+                )}
+              >
+                {graphLoading && !graphPayload ? <div className={gitEmptyStateClassName}>加载提交图...</div> : null}
+                {graphPayload && graphPayload.nodes.length === 0 ? <div className={gitEmptyStateClassName}>暂无提交</div> : null}
+                {graphPayload && graphPayload.nodes.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <div
+                      data-testid="git-commit-graph"
+                      aria-disabled={mutationBusy}
+                      className={clsx("git-commit-graph min-w-0", mutationBusy ? "pointer-events-none opacity-70" : "")}
+                    >
+                      <GitCommitGraphLite
+                        nodes={graphPayload.nodes}
+                        selectedHash={selectedGraphHash}
+                        disabled={mutationBusy}
+                        onSelect={setSelectedGraphHash}
+                      />
+                    </div>
                   </div>
-                  {branchesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载分支...</p> : null}
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                    <label className="min-w-[180px] flex-1">
+                ) : null}
+                {graphPayload?.hasMore ? (
+                  <button
+                    type="button"
+                    onClick={() => void loadGitGraph({ scope: graphScope, cursor: graphPayload.nextCursor, append: true })}
+                    disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
+                    className={clsx("flex h-7 w-full items-center justify-center gap-1 text-[11px] text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:opacity-50", gitFocusRing)}
+                  >
+                    {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    加载更多
+                  </button>
+                ) : null}
+                {selectedGraphNode ? (
+                  <div data-testid="git-version-tree-actions" className="mx-2 mt-1.5 flex flex-wrap items-center gap-1 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-1">
+                    <span className="inline-flex h-7 shrink-0 items-center gap-1 px-1 text-xs">
+                      <GitCommitHorizontal className="h-3.5 w-3.5 text-[var(--muted)]" />
+                      <span data-testid="git-selected-commit-hash" className="font-mono font-semibold text-[var(--accent)]">
+                        {(selectedGraphNode.shortHash || selectedGraphNode.hash).slice(0, 7)}
+                      </span>
+                    </span>
+                    <div className="flex min-w-[10rem] flex-1 items-center gap-1">
+                      <label className="min-w-0 flex-1">
+                        <span className="sr-only">从提交图新建分支名</span>
+                        <input
+                          aria-label="从提交图新建分支名"
+                          value={graphBranchDraft}
+                          onChange={(event) => setGraphBranchDraft(event.target.value)}
+                          placeholder="新分支名"
+                          disabled={mutationBusy || !isCapabilityAvailable("branch_mutation")}
+                          className={gitInputClassName}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        aria-label="新建分支"
+                        onClick={() => void createBranchFromGraphNode()}
+                        disabled={mutationBusy || !graphBranchDraft.trim() || !isCapabilityAvailable("branch_mutation")}
+                        title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "从此提交新建分支"}
+                        aria-describedby="git-capability-reason-branch_mutation"
+                        className={gitSquareButtonClassName}
+                      >
+                        {actionLoading === `branch-create:${selectedGraphNode.hash}` ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <GitFork className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <label>
+                        <span className="sr-only">提交图重置模式</span>
+                        <select
+                          aria-label="提交图重置模式"
+                          value={graphResetMode}
+                          onChange={(event) => setGraphResetMode(event.target.value as GitResetMode)}
+                          disabled={mutationBusy || !isCapabilityAvailable("branch_mutation")}
+                          className={gitSelectCompactClassName}
+                        >
+                          <option value="soft">soft</option>
+                          <option value="mixed">mixed</option>
+                          <option value="hard">hard</option>
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => void resetBranchToGraphNode()}
+                        disabled={mutationBusy || selectedGraphNode.canReset === false || !isCapabilityAvailable("branch_mutation")}
+                        title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "将当前分支重置到此提交"}
+                        aria-describedby="git-capability-reason-branch_mutation"
+                        className={gitButtonClassName}
+                      >
+                        {actionLoading === `branch-reset:${selectedGraphNode.hash}` ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                        重置到此提交
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="space-y-1 px-3 pt-1 empty:hidden">
+                  {renderCapabilityReason("commit_graph")}
+                  {renderCapabilityReason("branch_mutation")}
+                </div>
+              </GitSection>
+
+              <GitSection
+                title="分支"
+                count={branches.branches.length}
+                collapsed={branchesCollapsed}
+                onToggle={() => setBranchesCollapsed((value) => !value)}
+                testId="git-branches-panel"
+                actions={(
+                  <button
+                    type="button"
+                    aria-label="刷新分支"
+                    onClick={() => void loadBranches()}
+                    disabled={!isCapabilityAvailable("branches")}
+                    title={!isCapabilityAvailable("branches") ? capabilityReason("branches") : "刷新分支"}
+                    aria-describedby="git-capability-reason-branches"
+                    className={gitIconButtonClassName}
+                  >
+                    <RefreshCw className={clsx("h-3.5 w-3.5", branchesLoading ? "animate-spin" : "")} />
+                  </button>
+                )}
+              >
+                <div className="space-y-1 px-2">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <label className="min-w-0 flex-1">
                       <span className="sr-only">切换分支</span>
                       <select
                         aria-label="切换分支"
                         value={selectedBranch}
                         onChange={(event) => setSelectedBranch(event.target.value)}
-                        className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-xs"
+                        className={gitInputClassName}
                       >
                         {branches.branches.map((branch) => (
                           <option key={branch.name} value={branch.name}>
@@ -1687,555 +2076,270 @@ export function GitScreen({
                       type="button"
                       onClick={() => void switchBranch()}
                       disabled={mutationBusy || !selectedBranch || !isCapabilityAvailable("branch_mutation")}
-                      title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "切换分支"}
+                      title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "切换到所选分支"}
                       aria-describedby="git-capability-reason-branch_mutation"
-                      className={buttonClass()}
+                      className={gitButtonClassName}
                     >
                       <GitPullRequest className="h-3.5 w-3.5" />
                       切换
                     </button>
                   </div>
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                    <label className="min-w-[180px] flex-1">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <label className="min-w-0 flex-1">
                       <span className="sr-only">新建分支名</span>
                       <input
                         aria-label="新建分支名"
                         value={branchDraft}
                         onChange={(event) => setBranchDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.nativeEvent.isComposing && branchDraft.trim() && !mutationBusy && isCapabilityAvailable("branch_mutation")) {
+                            event.preventDefault();
+                            void createBranch();
+                          }
+                        }}
                         placeholder="feature/name"
-                        className="w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-xs"
+                        className={gitInputClassName}
                       />
                     </label>
                     <button
                       type="button"
+                      aria-label="新建分支"
                       onClick={() => void createBranch()}
                       disabled={mutationBusy || !branchDraft.trim() || !isCapabilityAvailable("branch_mutation")}
                       title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "新建分支"}
                       aria-describedby="git-capability-reason-branch_mutation"
-                      className={buttonClass()}
+                      className={gitButtonClassName}
                     >
                       <GitFork className="h-3.5 w-3.5" />
-                      新建分支
+                      新建
                     </button>
                   </div>
+                </div>
+                <div className="space-y-1 px-3 pt-1 empty:hidden">
+                  {branchesLoading && branches.branches.length === 0 ? <p className="text-xs text-[var(--muted)]">加载分支...</p> : null}
                   {renderCapabilityReason("branches")}
-                  {renderCapabilityReason("branch_mutation")}
-                  <div className={sectionBodyClass(listClass())}>
+                </div>
+                {branches.branches.length > 0 ? (
+                  <div className="mt-1 max-h-64 overflow-y-auto">
                     {branches.branches.map((branch) => (
-                      <div
+                      <button
                         key={branch.name}
-                        className={listRowClass(clsx("block text-xs", branch.current ? "bg-[var(--surface-strong)]" : ""))}
+                        type="button"
+                        aria-pressed={selectedBranch === branch.name}
+                        onClick={() => setSelectedBranch(branch.name)}
+                        title={branch.upstream ? `${branch.name} → ${branch.upstream}` : branch.name}
+                        className={clsx(
+                          "flex w-full min-w-0 items-start gap-1.5 py-1 pl-3 pr-2 text-left text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]",
+                          gitFocusRing,
+                          selectedBranch === branch.name ? "bg-[var(--workbench-active-bg)]" : "",
+                        )}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-medium">{branch.name}</span>
-                          <span className="shrink-0 text-[var(--muted)]">{branch.shortHash || "-"}</span>
-                        </div>
-                        <div className="mt-1 truncate text-[var(--muted)]">
-                          {branch.upstream || "无 upstream"} · {branch.subject || "-"}
-                        </div>
-                      </div>
+                        <span className="mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                          {branch.current ? <Check className="h-3.5 w-3.5 text-[var(--accent)]" /> : <GitBranch className="h-3 w-3 text-[var(--muted)]" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className={clsx("min-w-0 flex-1 truncate font-mono", branch.current ? "font-semibold text-[var(--accent)]" : "font-medium text-[var(--text)]")}>{branch.name}</span>
+                            <span className="shrink-0 font-mono text-[10.5px] text-[var(--muted)]">{branch.shortHash || "-"}</span>
+                          </span>
+                          <span className="block truncate text-[10.5px] leading-4 text-[var(--muted)]">
+                            {branch.upstream || "无 upstream"} · {branch.subject || "-"}
+                          </span>
+                        </span>
+                      </button>
                     ))}
                   </div>
-                </section>
+                ) : null}
+              </GitSection>
 
-                <section data-testid="remote-git-actions" className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="text-sm font-semibold">远端同步</h2>
-                  </div>
-                  {!remote && gitCapabilitiesLoading ? (
-                    <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>读取 Git 能力...</p>
-                  ) : null}
-                  {!remote && gitCapabilitiesError ? (
-                    <div role="status" className={sectionBodyClass("text-xs text-[var(--status-danger)]")}>
-                      无法读取服务端 Git 能力：{gitCapabilitiesError}。相关操作已禁用，请刷新 Git 状态后重试。
-                    </div>
-                  ) : null}
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                    {REMOTE_GIT_ACTIONS.map((operation) => {
-                      const capability = getCapability(operation);
-                      const unavailable = !capability.available;
-                      const label = REMOTE_GIT_ACTION_LABELS[operation];
-                      return (
-                        <button
-                          key={operation}
-                          type="button"
-                          aria-label={label}
-                          title={!remote && unavailable ? `${label}：${gitCapabilityReason(capability, gitCapabilitiesLoading)}` : label}
-                          aria-describedby={!remote ? `git-capability-reason-${operation}` : undefined}
-                          onClick={() => void runRemoteGitAction(operation)}
-                          disabled={mutationBusy || (!remote && unavailable)}
-                          className={buttonClass()}
-                        >
-                          {operation === "push" ? <UploadCloud className="h-3.5 w-3.5" /> : <DownloadCloud className="h-3.5 w-3.5" />}
-                          {actionLoading === `remote-${operation}` ? "处理中..." : label}
-                        </button>
-                      );
-                    })}
+              <GitSection
+                title="Stash"
+                count={stashes.items.length}
+                collapsed={stashCollapsed}
+                onToggle={() => setStashCollapsed((value) => !value)}
+                testId="git-stash-panel"
+                actions={(
+                  <>
                     <button
                       type="button"
                       aria-label="Stash Push"
-                      title={!isCapabilityAvailable("stash_create") ? `Stash Push：${capabilityReason("stash_create")}` : "Stash Push"}
+                      title={!isCapabilityAvailable("stash_create") ? `Stash Push：${capabilityReason("stash_create")}` : "Stash Push：暂存当前全部改动"}
                       aria-describedby="git-capability-reason-stash_create"
                       onClick={() => void stashChanges()}
                       disabled={mutationBusy || !isCapabilityAvailable("stash_create")}
-                      className={buttonClass()}
+                      className={gitIconButtonClassName}
                     >
                       <Archive className="h-3.5 w-3.5" />
-                      Stash Push
                     </button>
-                  </div>
-                  {renderCapabilityReason("stash_create", "Stash Push")}
-                </section>
-
-                <section className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="text-sm font-semibold">Stash</h2>
                     <button
                       type="button"
+                      aria-label="刷新 stash"
                       onClick={() => void loadStashes()}
                       disabled={!isCapabilityAvailable("stash")}
                       title={!isCapabilityAvailable("stash") ? capabilityReason("stash") : "刷新 stash"}
                       aria-describedby="git-capability-reason-stash"
-                      className={buttonClass()}
+                      className={gitIconButtonClassName}
                     >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      刷新
+                      <RefreshCw className={clsx("h-3.5 w-3.5", stashesLoading ? "animate-spin" : "")} />
                     </button>
+                  </>
+                )}
+              >
+                {stashes.items.length === 0 ? (
+                  <div className={gitEmptyStateClassName}>{stashesLoading ? "加载 stash..." : "暂无 stash"}</div>
+                ) : (
+                  <div className="min-w-0">
+                    {stashes.items.map((stash) => (
+                      <div key={stash.ref} className="git-change-row flex min-w-0 items-center gap-1.5 py-1 pl-3 pr-1.5 text-xs transition-colors hover:bg-[var(--workbench-hover-bg)]">
+                        <Archive className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[var(--text)]" title={stash.message}>{stash.message}</div>
+                          <div className="flex min-w-0 items-center gap-1.5 text-[10.5px] leading-4 text-[var(--muted)]">
+                            <span className="shrink-0 font-mono text-[var(--accent)]">{stash.ref}</span>
+                            <span className="min-w-0 truncate">{stash.hash || "-"} · {stash.createdAt || "-"}</span>
+                          </div>
+                        </div>
+                        <div className="git-change-row-actions flex shrink-0 items-center">
+                          <button
+                            type="button"
+                            aria-label={`应用 ${stash.ref}`}
+                            title={!isCapabilityAvailable("stash") ? `应用 ${stash.ref}：${capabilityReason("stash")}` : `应用 ${stash.ref}`}
+                            aria-describedby="git-capability-reason-stash"
+                            onClick={() => void applyStash(stash.ref)}
+                            disabled={mutationBusy || !isCapabilityAvailable("stash")}
+                            className={gitIconButtonClassName}
+                          >
+                            <ArchiveRestore className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`删除 ${stash.ref}`}
+                            title={!isCapabilityAvailable("stash") ? `删除 ${stash.ref}：${capabilityReason("stash")}` : `删除 ${stash.ref}`}
+                            aria-describedby="git-capability-reason-stash"
+                            onClick={() => void dropStash(stash.ref)}
+                            disabled={mutationBusy || !isCapabilityAvailable("stash")}
+                            className={gitDangerIconButtonClassName}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  {stashesLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 stash...</p> : null}
+                )}
+                <div className="space-y-1 px-3 pt-1 empty:hidden">
                   {renderCapabilityReason("stash")}
-                  {stashes.items.length === 0 ? (
-                    <div className={sectionBodyClass()}>
-                      <div className={emptyStateClass()}>
-                        暂无 stash
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={sectionBodyClass(listClass())}>
-                      {stashes.items.map((stash) => (
-                        <div key={stash.ref} className={listRowClass("items-start py-2")}>
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="font-mono text-xs font-medium text-[var(--text)]">{stash.ref}</div>
-                              <div className="mt-1 break-all text-xs text-[var(--muted)]">{stash.message}</div>
-                              <div className="mt-1 text-[11px] text-[var(--muted)]">
-                                {stash.hash || "-"} · {stash.createdAt || "-"}
-                              </div>
-                            </div>
-                            <div className="flex shrink-0 gap-1">
-                              <button
-                                type="button"
-                                aria-label={`应用 ${stash.ref}`}
-                                title={!isCapabilityAvailable("stash") ? `应用 ${stash.ref}：${capabilityReason("stash")}` : `应用 ${stash.ref}`}
-                                aria-describedby="git-capability-reason-stash"
-                                onClick={() => void applyStash(stash.ref)}
-                                disabled={mutationBusy || !isCapabilityAvailable("stash")}
-                                className={iconButtonClass()}
-                              >
-                                <ArchiveRestore className="h-3 w-3" />
-                              </button>
-                              <button
-                                type="button"
-                                aria-label={`删除 ${stash.ref}`}
-                                title={!isCapabilityAvailable("stash") ? `删除 ${stash.ref}：${capabilityReason("stash")}` : `删除 ${stash.ref}`}
-                                aria-describedby="git-capability-reason-stash"
-                                onClick={() => void dropStash(stash.ref)}
-                                disabled={mutationBusy || !isCapabilityAvailable("stash")}
-                                className={iconButtonClass()}
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </section>
-
-                </>
-                <section className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass()}>
-                    <h2 className="text-sm font-semibold">提交更改</h2>
-                    <button
-                      type="button"
-                      aria-label="生成 commit message"
-                      title={!isCapabilityAvailable("commit_message_generation") ? capabilityReason("commit_message_generation") : "生成 commit message"}
-                      aria-describedby="git-capability-reason-commit_message_generation"
-                      onClick={() => void generateCommitMessage()}
-                      disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("commit_message_generation")}
-                      className={buttonClass()}
-                    >
-                      {isGeneratingCommitMessage ? (
-                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
-                      )}
-                      生成
-                    </button>
-                  </div>
-                  <div className={sectionBodyClass()}>
-                    <textarea
-                      value={commitMessage}
-                      onChange={(event) => setCommitMessage(event.target.value)}
-                      rows={5}
-                      disabled={isSmartCommitRunning || !isCapabilityAvailable("tree_status")}
-                      placeholder="输入 commit message"
-                      aria-label="commit message"
-                      className="w-full resize-none rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                    />
-                  </div>
-                  {smartCommitJob ? (
-                    <div className={sectionBodyClass("mx-3 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-xs")} data-testid="git-smart-commit-status">
-                      <div className="font-medium text-[var(--text)]">{gitSmartCommitStatusText(smartCommitJob, overview)}</div>
-                      {smartCommitJob.message && smartCommitJob.status !== "succeeded" ? (
-                        <div className="whitespace-pre-wrap text-[var(--muted)]">{smartCommitJob.message}</div>
-                      ) : null}
-                      {smartCommitJob.error ? (
-                        <div className="text-[var(--feedback-error-text-strong)]">{smartCommitJob.error}</div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                    <button
-                      type="button"
-                      onClick={() => void runAction("stage-all", async () => {
-                        const result = await client.stageGitPaths(botAlias, stageAllPaths);
-                        return {
-                          message: "已暂存全部改动",
-                          overview: result.overview,
-                        };
-                      }, { capability: "tree_status" })}
-                      disabled={mutationBusy || stageAllPaths.length === 0 || !isCapabilityAvailable("tree_status")}
-                      title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "暂存全部"}
-                      aria-describedby="git-capability-reason-tree_status"
-                      className={buttonClass()}
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      暂存全部
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void runAction("discard-all", () => client.discardAllGitChanges(botAlias), {
-                          capability: "discard",
-                          confirmationMessage: `确定丢弃全部 ${totalChanges} 个文件的改动吗？`,
-                        });
-                      }}
-                      disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("discard")}
-                      title={!isCapabilityAvailable("discard") ? capabilityReason("discard") : "丢弃全部"}
-                      aria-describedby="git-capability-reason-discard"
-                      className={buttonClass()}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      丢弃全部
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage), { refreshWorkspace: true, capability: "tree_status" })}
-                      disabled={mutationBusy || overview.isClean || !groups.staged.length || !commitMessage.trim() || !isCapabilityAvailable("tree_status")}
-                      title={!isCapabilityAvailable("tree_status") ? capabilityReason("tree_status") : "提交更改"}
-                      aria-describedby="git-capability-reason-tree_status"
-                      className={buttonClass("primary")}
-                    >
-                      <SendHorizontal className="h-3.5 w-3.5" />
-                      {actionLoading === "commit" ? "提交中..." : "提交更改"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void startSmartCommit()}
-                      disabled={mutationBusy || overview.isClean || !isCapabilityAvailable("smart_commit")}
-                      title={!isCapabilityAvailable("smart_commit") ? capabilityReason("smart_commit") : "智能提交"}
-                      aria-describedby="git-capability-reason-smart_commit"
-                      className={buttonClass()}
-                    >
-                      {isSmartCommitRunning ? (
-                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5" />
-                      )}
-                      智能提交
-                    </button>
-                  </div>
-                  {renderCapabilityReason("commit_message_generation", "提交说明生成")}
-                  {renderCapabilityReason("smart_commit", "智能提交")}
-                </section>
-
-                <section data-testid="git-version-tree-panel" className={sectionClass("space-y-2")}>
-                  <div className={sectionHeaderClass("flex-wrap")}>
-                    <div>
-                      <h2 className="text-sm font-semibold">提交图</h2>
-                      <p className="text-xs text-[var(--muted)]">
-                        {graphPayload ? `${graphPayload.nodes.length} 个提交` : "未加载"}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <div className="inline-flex rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-0.5">
-                        {([
-                          ["all", "全部"],
-                          ["current", "当前分支"],
-                        ] as const).map(([scope, label]) => (
-                          <button
-                            key={scope}
-                            type="button"
-                            onClick={() => setGraphScope(scope)}
-                            disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
-                            title={!isCapabilityAvailable("commit_graph") ? capabilityReason("commit_graph") : label}
-                            aria-describedby="git-capability-reason-commit_graph"
-                            className={clsx(
-                              "rounded px-2 py-1 text-xs transition-colors",
-                              graphScope === scope
-                                ? "bg-[var(--workbench-active-bg)] text-[var(--accent)]"
-                                : "text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)]",
-                            )}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void loadGitGraph({ scope: graphScope })}
-                        disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
-                        title={!isCapabilityAvailable("commit_graph") ? capabilityReason("commit_graph") : "刷新提交图"}
-                        aria-describedby="git-capability-reason-commit_graph"
-                        className={buttonClass()}
-                      >
-                        {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                        刷新
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={graphCollapsed ? "展开提交图" : "收起提交图"}
-                        onClick={() => setGraphCollapsed((value) => !value)}
-                        className={iconButtonClass()}
-                      >
-                        {graphCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                      </button>
-                    </div>
-                  </div>
-                  {!graphCollapsed ? (
-                    <div data-testid="git-version-tree-content" className={sectionBodyClass("space-y-3")}>
-                      {graphLoading && !graphPayload ? (
-                        <div className={emptyStateClass()}>加载提交图...</div>
-                      ) : null}
-                      {graphPayload && graphPayload.nodes.length === 0 ? (
-                        <div className={emptyStateClass()}>暂无提交</div>
-                      ) : null}
-                      {graphPayload && graphPayload.nodes.length > 0 ? (
-                        <div className="space-y-2">
-                          <div className="overflow-x-auto rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]">
-                            <div
-                              data-testid="git-commit-graph"
-                              aria-disabled={mutationBusy}
-                              className={clsx("git-commit-graph min-w-0", mutationBusy ? "pointer-events-none opacity-70" : "")}
-                            >
-                              <GitCommitGraphLite
-                                nodes={graphPayload.nodes}
-                                selectedHash={selectedGraphHash}
-                                disabled={mutationBusy}
-                                onSelect={setSelectedGraphHash}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
-                      {selectedGraphNode ? (
-                        <div data-testid="git-version-tree-actions" className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-2">
-                          <div className="min-w-0 flex-1 text-xs">
-                            <div data-testid="git-selected-commit-hash" className="font-mono font-semibold text-[var(--accent)]">
-                              {(selectedGraphNode.shortHash || selectedGraphNode.hash).slice(0, 7)}
-                            </div>
-                          </div>
-                          <label className="min-w-[150px] flex-1 sm:flex-none">
-                            <span className="sr-only">从提交图新建分支名</span>
-                            <input
-                              aria-label="从提交图新建分支名"
-                              value={graphBranchDraft}
-                              onChange={(event) => setGraphBranchDraft(event.target.value)}
-                              placeholder="feature/name"
-                              disabled={mutationBusy || !isCapabilityAvailable("branch_mutation")}
-                              className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
-                            />
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => void createBranchFromGraphNode()}
-                            disabled={mutationBusy || !graphBranchDraft.trim() || !isCapabilityAvailable("branch_mutation")}
-                            title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "新建分支"}
-                            aria-describedby="git-capability-reason-branch_mutation"
-                            className={buttonClass()}
-                          >
-                            {actionLoading === `branch-create:${selectedGraphNode.hash}` ? (
-                              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <GitFork className="h-3.5 w-3.5" />
-                            )}
-                            新建分支
-                          </button>
-                          <label>
-                            <span className="sr-only">提交图重置模式</span>
-                            <select
-                              aria-label="提交图重置模式"
-                              value={graphResetMode}
-                              onChange={(event) => setGraphResetMode(event.target.value as GitResetMode)}
-                              disabled={mutationBusy || !isCapabilityAvailable("branch_mutation")}
-                              className="h-8 rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 text-xs"
-                            >
-                              <option value="soft">soft</option>
-                              <option value="mixed">mixed</option>
-                              <option value="hard">hard</option>
-                            </select>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => void resetBranchToGraphNode()}
-                            disabled={mutationBusy || selectedGraphNode.canReset === false || !isCapabilityAvailable("branch_mutation")}
-                            title={!isCapabilityAvailable("branch_mutation") ? capabilityReason("branch_mutation") : "重置到此提交"}
-                            aria-describedby="git-capability-reason-branch_mutation"
-                            className={buttonClass()}
-                          >
-                            {actionLoading === `branch-reset:${selectedGraphNode.hash}` ? (
-                              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            )}
-                            重置到此提交
-                          </button>
-                        </div>
-                      ) : null}
-                      {renderCapabilityReason("commit_graph")}
-                      {renderCapabilityReason("branch_mutation")}
-                      {graphPayload?.hasMore ? (
-                        <button
-                          type="button"
-                          onClick={() => void loadGitGraph({ scope: graphScope, cursor: graphPayload.nextCursor, append: true })}
-                          disabled={mutationBusy || graphLoading || !isCapabilityAvailable("commit_graph")}
-                          className={buttonClass()}
-                        >
-                          {graphLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                          加载更多
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </section>
-              </div>
+                  {renderCapabilityReason("stash_create", "Stash Push")}
+                </div>
+              </GitSection>
             </div>
           ) : null}
 
           {!loading ? (
-            <div className={sectionStackClass()}>
-              <section
-                data-testid="git-identity-panel"
-                className={sectionClass("space-y-3")}
-              >
-                <div className={sectionHeaderClass("gap-3")}>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <UserRound className="h-4 w-4 text-[var(--accent)]" />
-                      <h2 className="text-sm font-semibold">Git 用户</h2>
-                    </div>
-                    <p className="mt-1 truncate text-xs text-[var(--muted)]">
-                      {identityScope === "local" ? identityConfig?.repoPath || "当前仓库" : "全局配置"}
-                    </p>
+            <GitSection
+              title="设置"
+              icon={<Settings2 className="h-3.5 w-3.5 shrink-0" />}
+              collapsed={settingsCollapsed}
+              onToggle={() => setSettingsCollapsed((value) => !value)}
+              testId="git-settings-panel"
+            >
+              <div data-testid="git-identity-panel" className="space-y-2 px-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <UserRound className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                  <h3 className="shrink-0 text-xs font-semibold">Git 用户</h3>
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--muted)]">
+                    {identityScope === "local" ? identityConfig?.repoPath || "当前仓库" : "全局配置"}
+                  </span>
+                  <div className={gitSegmentGroupClassName} role="group" aria-label="Git 用户配置范围">
+                    <button
+                      type="button"
+                      aria-pressed={identityScope === "global"}
+                      onClick={() => selectIdentityScope("global")}
+                      disabled={!isCapabilityAvailable("identity")}
+                      title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "全局配置"}
+                      className={gitSegmentClass(identityScope === "global")}
+                    >
+                      全局
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={identityScope === "local"}
+                      onClick={() => selectIdentityScope("local")}
+                      disabled={!identityConfig?.repoFound || !isCapabilityAvailable("identity")}
+                      title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "当前仓库配置"}
+                      className={gitSegmentClass(identityScope === "local")}
+                    >
+                      当前仓库
+                    </button>
                   </div>
                   <button
                     type="button"
+                    aria-label="刷新 Git 用户"
                     onClick={() => void loadIdentityConfig(identityScope)}
                     disabled={!isCapabilityAvailable("identity")}
                     title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "刷新 Git 用户"}
                     aria-describedby="git-capability-reason-identity"
-                    className={buttonClass()}
+                    className={gitIconButtonClassName}
                   >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    刷新
+                    <RefreshCw className={clsx("h-3.5 w-3.5", identityLoading ? "animate-spin" : "")} />
                   </button>
                 </div>
-
-                {identityLoading ? <p className={sectionBodyClass("text-xs text-[var(--muted)]")}>加载 Git 用户...</p> : null}
-
-                <div className={sectionBodyClass("flex flex-wrap gap-2")}>
-                  <button
-                    type="button"
-                    onClick={() => selectIdentityScope("global")}
-                    disabled={!isCapabilityAvailable("identity")}
-                    title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "全局配置"}
-                    className={clsx(buttonClass(identityScope === "global" ? "primary" : "plain"), "min-w-20")}
-                  >
-                    全局
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => selectIdentityScope("local")}
-                    disabled={!identityConfig?.repoFound || !isCapabilityAvailable("identity")}
-                    title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : "当前仓库配置"}
-                    className={clsx(buttonClass(identityScope === "local" ? "primary" : "plain"), "min-w-24")}
-                  >
-                    当前仓库
-                  </button>
-                </div>
-
-                <div className={sectionBodyClass("grid gap-2 md:grid-cols-2")}>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium text-[var(--muted)]">用户名</span>
+                <div className="grid gap-1.5 @sm:grid-cols-2">
+                  <label className="min-w-0 space-y-0.5">
+                    <span className="text-[11px] text-[var(--muted)]">用户名</span>
                     <input
                       aria-label="Git 用户名"
                       value={identityName}
                       onChange={(event) => setIdentityName(event.target.value)}
-                      disabled={!isCapabilityAvailable("identity") || !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity)}
+                      disabled={!canEditIdentity}
                       placeholder="Your Name"
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                      className={gitInputClassName}
                     />
                   </label>
-                  <label className="space-y-1">
-                    <span className="text-xs font-medium text-[var(--muted)]">邮箱</span>
+                  <label className="min-w-0 space-y-0.5">
+                    <span className="text-[11px] text-[var(--muted)]">邮箱</span>
                     <input
                       aria-label="Git 邮箱"
                       value={identityEmail}
                       onChange={(event) => setIdentityEmail(event.target.value)}
-                      disabled={!isCapabilityAvailable("identity") || !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity)}
+                      disabled={!canEditIdentity}
                       placeholder="you@example.com"
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
+                      className={gitInputClassName}
                     />
                   </label>
                 </div>
-
-                <div className={sectionBodyClass("flex flex-wrap items-center justify-between gap-2")}>
-                  <p className="text-xs text-[var(--muted)]">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <p className="min-w-0 text-[11px] text-[var(--muted)]">
                     {identityConfig?.repoFound ? "局部配置仅作用于当前仓库" : "当前目录无仓库，仅可保存全局配置"}
                   </p>
                   <button
                     type="button"
                     onClick={() => void saveGitIdentity()}
-                    disabled={mutationBusy || identityLoading || !identityName.trim() || !identityEmail.trim() || !isCapabilityAvailable("identity") || !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity)}
+                    disabled={mutationBusy || identityLoading || !identityName.trim() || !identityEmail.trim() || !canEditIdentity}
                     title={!isCapabilityAvailable("identity") ? capabilityReason("identity") : !(identityScope === "global" ? canManageGlobalGitIdentity : canManageLocalGitIdentity) ? (identityScope === "global" ? "需要 admin_ops 才能保存全局 Git 用户" : "需要 git_ops 才能保存当前仓库 Git 用户") : "保存 Git 用户"}
                     aria-describedby="git-capability-reason-identity"
-                    className={buttonClass("primary")}
+                    className={gitPrimaryButtonClassName}
                   >
                     <Save className="h-3.5 w-3.5" />
                     {actionLoading === "git-identity" ? "保存中..." : "保存 Git 用户"}
                   </button>
                 </div>
                 {!canManageGlobalGitIdentity || !canManageLocalGitIdentity ? (
-                  <p className="text-xs text-[var(--muted)]">全局身份配置需要 admin_ops；当前仓库身份配置需要 git_ops。</p>
+                  <p className="text-[11px] text-[var(--muted)]">全局身份配置需要 admin_ops；当前仓库身份配置需要 git_ops。</p>
                 ) : null}
                 {renderCapabilityReason("identity")}
-              </section>
-
-              <section className={sectionClass("space-y-3")}>
-                <div className={sectionBodyClass("pb-3")}>
-                  <GitCommitCliConfigPanel
-                    botAlias={botAlias}
-                    client={client}
-                    canManage={canManageGitCommitCli && isCapabilityAvailable("commit_message_generation")}
-                    disabledReason={!isCapabilityAvailable("commit_message_generation")
-                      ? capabilityReason("commit_message_generation")
-                      : !canManageGitCommitCli ? "需要 git_ops 或 admin_ops 才能配置本地 Commit Message CLI" : ""}
-                  />
-                </div>
-              </section>
-            </div>
+              </div>
+              <div className="mx-2 mt-3 border-t border-[var(--workbench-hairline)] pt-2">
+                <GitCommitCliConfigPanel
+                  botAlias={botAlias}
+                  client={client}
+                  canManage={canManageGitCommitCli && isCapabilityAvailable("commit_message_generation")}
+                  disabledReason={!isCapabilityAvailable("commit_message_generation")
+                    ? capabilityReason("commit_message_generation")
+                    : !canManageGitCommitCli ? "需要 git_ops 或 admin_ops 才能配置本地 Commit Message CLI" : ""}
+                />
+              </div>
+            </GitSection>
           ) : null}
         </div>
       </section>

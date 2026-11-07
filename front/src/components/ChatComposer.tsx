@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Trash2, X } from "lucide-react";
+import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Square, Trash2, X } from "lucide-react";
 import type { DeepSeekProviderOption, FileUploadProgress, PromptPreset } from "../services/types";
 import { formatTransferDetail } from "../utils/transferProgress";
 import { TransferProgressBar } from "./TransferProgressBar";
@@ -25,6 +25,10 @@ type ComposerAttachment = {
 
 type Props = {
   onSend: (text: string) => void | boolean | Promise<void | boolean>;
+  /** When set, a running task replaces the empty-draft send button with a terminate button. */
+  onStop?: () => void;
+  stopDisabled?: boolean;
+  stopBusy?: boolean;
   onAttachFiles?: (files: File[]) => void;
   onRemoveAttachment: (attachmentId: string) => void;
   attachments: ComposerAttachment[];
@@ -71,6 +75,9 @@ function clonePromptPresetList(presets: PromptPreset[] = []) {
 
 export function ChatComposer({
   onSend,
+  onStop,
+  stopDisabled = false,
+  stopBusy = false,
   onAttachFiles,
   onRemoveAttachment,
   attachments,
@@ -129,6 +136,8 @@ export function ChatComposer({
   const [presetSaving, setPresetSaving] = useState(false);
   const [presetError, setPresetError] = useState("");
   const [draftModel, setDraftModel] = useState(selectedModel);
+  const hasDraft = message.trim().length > 0 || attachments.length > 0;
+  const showStopButton = Boolean(onStop) && !hasDraft && !uploadingAttachments;
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const presetTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -157,6 +166,7 @@ export function ChatComposer({
   const attachmentButtonClassName = "relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)]";
   const actionGroupClassName = "ml-auto flex shrink-0 items-center gap-1";
   const actionButtonClassName = "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50";
+  const stopButtonClassName = "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--danger)] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
   const compactSelectClassName = "chat-compact-select h-8 w-full appearance-none rounded-md border-0 bg-transparent py-0 pl-1.5 pr-4 text-xs font-medium text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:cursor-not-allowed disabled:opacity-50";
   const presetMenuClassName = "absolute bottom-full right-10 z-40 mb-2 w-64 overflow-hidden rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] p-1 shadow-[var(--shadow-card)]";
   const attachmentControl = (
@@ -698,19 +708,36 @@ export function ChatComposer({
                   <ChevronDown className="h-4 w-4" />
                 </button>
               ) : null}
-              <button
-                type="submit"
-                aria-label="发送"
-                title={uploadingAttachments ? "上传中..." : "发送"}
-                disabled={inputDisabled}
-                className={`chat-composer-send ${actionButtonClassName}`}
-              >
-                {uploadingAttachments ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </button>
+              {showStopButton ? (
+                <button
+                  type="button"
+                  aria-label="终止任务"
+                  title={stopBusy ? "终止中..." : "终止任务"}
+                  disabled={stopDisabled}
+                  onClick={onStop}
+                  className={`chat-composer-stop ${stopButtonClassName}`}
+                >
+                  {stopBusy ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  aria-label="发送"
+                  title={uploadingAttachments ? "上传中..." : "发送"}
+                  disabled={inputDisabled}
+                  className={`chat-composer-send ${actionButtonClassName}`}
+                >
+                  {uploadingAttachments ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                </button>
+              )}
             </div>
           </div>
           {presetMenuOpen ? (

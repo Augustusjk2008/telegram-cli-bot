@@ -107,6 +107,7 @@ for (const width of [1280, 390]) {
     await expect(page.getByText(/origin\/main/)).toBeVisible();
     await expect(page.getByText("Remote stash", { exact: true })).toBeVisible();
     await expect(page.getByTestId("git-selected-commit-hash")).toHaveText("abcdef1");
+    await page.getByRole("button", { name: "展开设置", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Git 用户名", exact: true })).toHaveValue("Remote Dev");
     await expect(page.getByTestId("remote-git-credentials-hint")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Fetch", exact: true })).toBeEnabled();
