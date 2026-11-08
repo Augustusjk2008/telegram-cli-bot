@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatStatusUpdate, ChatTranslation, ChatTranslationConfig } from "../services/types";
 
 export const DEFAULT_CHAT_TRANSLATION_CONFIG: ChatTranslationConfig = {
+  method: "llm",
   reasoning_effort: "none",
   user_prompt: "",
   assistant_prompt: "",
@@ -10,6 +11,11 @@ export const DEFAULT_CHAT_TRANSLATION_CONFIG: ChatTranslationConfig = {
   api_key_configured: false,
   model: "",
   request_timeout_seconds: 15,
+  cli_type: "codex",
+  cli_path: "codex",
+  cli_params: {},
+  cli_defaults: {},
+  cli_schema: {},
 };
 
 export function mapChatTranslation(value: unknown): ChatTranslation | null {

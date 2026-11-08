@@ -1285,6 +1285,7 @@ export type BotChatTranslationConfig = {
 };
 
 export type ChatTranslationConfig = {
+  method: "llm" | "cli";
   reasoning_effort: "none" | "low" | "medium" | "high";
   user_prompt: string;
   assistant_prompt: string;
@@ -1294,6 +1295,13 @@ export type ChatTranslationConfig = {
   api_key_configured: boolean;
   model: string;
   request_timeout_seconds: number;
+  cli_type: CliType;
+  cli_path: string;
+  cli_params: Record<string, unknown>;
+  cli_defaults: Record<string, unknown>;
+  cli_schema: Record<string, CliParamField>;
+  cli_configured?: boolean;
+  llm_configured?: boolean;
 };
 
 export type ChatTranslationConfigInput = Partial<Omit<ChatTranslationConfig, "api_key_configured">> & {
@@ -3098,6 +3106,7 @@ export type GitIdentityConfig = {
 };
 
 export type GitCommitMessageCliConfig = {
+  method?: "cli" | "llm";
   cliType: CliType;
   cliPath: string;
   params: Record<string, unknown>;
@@ -3106,6 +3115,7 @@ export type GitCommitMessageCliConfig = {
 };
 
 export type GitCommitMessageCliConfigUpdateInput = Partial<{
+  method: "cli" | "llm";
   cliType: CliType;
   cliPath: string;
   params: Record<string, unknown>;

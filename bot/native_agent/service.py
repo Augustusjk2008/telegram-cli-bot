@@ -828,7 +828,10 @@ class NativeAgentService:
             return context_usage
 
         try:
-            translation_config = translation_snapshot(enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main")
+            translation_config = translation_snapshot(
+                enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main",
+                profile=profile,
+            )
             if not config.NATIVE_AGENT_ENABLED:
                 raise RuntimeError("原生 agent 未启用")
             turn_handle = history_service.start_turn(

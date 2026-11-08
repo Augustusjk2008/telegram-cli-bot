@@ -74,6 +74,7 @@ export function GitCommitCliConfigPanel({
 }: Props) {
   const [config, setConfig] = useState<GitCommitMessageCliConfig | null>(null);
   const [draftValues, setDraftValues] = useState<DraftValues>({});
+  const [methodDraft, setMethodDraft] = useState<"cli" | "llm">("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -100,6 +101,7 @@ export function GitCommitCliConfigPanel({
           return;
         }
         setConfig(payload);
+        setMethodDraft(payload.method || "cli");
         setCliTypeDraft(payload.cliType);
         setCliPathDraft(payload.cliPath);
         setDraftValues(buildDraftValues(payload));
@@ -128,14 +130,17 @@ export function GitCommitCliConfigPanel({
     if (cliTypeDraft !== config.cliType || cliPathDraft !== config.cliPath) {
       return true;
     }
+    if (methodDraft !== (config.method || "cli")) {
+      return true;
+    }
     return entries.some(([key]) => baseDrafts[key] !== (draftValues[key] ?? ""));
-  }, [baseDrafts, cliPathDraft, cliTypeDraft, config, draftValues, entries]);
+  }, [baseDrafts, cliPathDraft, cliTypeDraft, config, draftValues, entries, methodDraft]);
 
   async function save() {
     if (!config || !canManage) {
       return;
     }
-    if (cliTypeDraft === "deepseek") {
+    if (methodDraft === "cli" && cliTypeDraft === "deepseek") {
       setError("DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI");
       return;
     }
@@ -152,11 +157,13 @@ export function GitCommitCliConfigPanel({
         nextParams[key] = toRequestValue(field, draft);
       }
       const next = await client.updateGitCommitMessageConfig(botAlias, {
+        method: methodDraft,
         cliType: cliTypeDraft,
         cliPath: cliPathDraft.trim(),
         ...(Object.keys(nextParams).length > 0 ? { params: nextParams } : {}),
       });
       setConfig(next);
+      setMethodDraft(next.method || "cli");
       setCliTypeDraft(next.cliType);
       setCliPathDraft(next.cliPath);
       setDraftValues(buildDraftValues(next));
@@ -178,6 +185,7 @@ export function GitCommitCliConfigPanel({
     try {
       const next = await client.resetGitCommitMessageConfig(botAlias);
       setConfig(next);
+      setMethodDraft(next.method || "cli");
       setCliTypeDraft(next.cliType);
       setCliPathDraft(next.cliPath);
       setDraftValues(buildDraftValues(next));
@@ -196,9 +204,9 @@ export function GitCommitCliConfigPanel({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">Commit Message CLI</h2>
+          <h2 className="text-sm font-semibold">提交说明生成</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            {disabledReason || (canManage ? "全局生成提交说明配置" : "当前模式只读")}
+            {disabledReason || (canManage ? "可在本地 CLI 与 LLM API 之间选择" : "当前模式只读")}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -226,10 +234,27 @@ export function GitCommitCliConfigPanel({
       {error ? <div className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)]">{error}</div> : null}
       {notice ? <div className="rounded-lg border border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-success-text-deep)]">{notice}</div> : null}
       {loading ? <div className="text-xs text-[var(--muted)]">加载中...</div> : null}
-      {cliTypeDraft === "deepseek" ? <p className="text-xs text-[var(--muted)]">DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI</p> : null}
+      {methodDraft === "cli" && cliTypeDraft === "deepseek" ? <p className="text-xs text-[var(--muted)]">DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI</p> : null}
 
       {!loading ? (
         <>
+          <label className="block max-w-sm space-y-1">
+            <span className="text-xs font-medium text-[var(--muted)]">实现方式</span>
+            <select
+              aria-label="Commit Message 实现方式"
+              value={methodDraft}
+              disabled={!canManage}
+              onChange={(event) => setMethodDraft(event.target.value as "cli" | "llm")}
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
+            >
+              <option value="cli">本地 CLI</option>
+              <option value="llm">LLM API</option>
+            </select>
+            {methodDraft === "llm" ? (
+              <span className="block text-xs text-[var(--muted)]">LLM API 复用管理中心的聊天翻译 API 配置。</span>
+            ) : null}
+          </label>
+          {methodDraft === "cli" ? <>
           <div className="grid gap-2 md:grid-cols-2">
             <label className="space-y-1">
               <span className="text-xs font-medium text-[var(--muted)]">CLI 类型</span>
@@ -329,6 +354,7 @@ export function GitCommitCliConfigPanel({
               );
             })}
           </div>
+          </> : null}
         </>
       ) : null}
     </section>

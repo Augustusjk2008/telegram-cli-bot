@@ -273,6 +273,32 @@ def test_official_child_registers_current_storage_location(installation, monkeyp
                     pytest.fail("the child must keep its host lease")
 
 
+def test_official_host_hides_handoff_from_child_processes(installation, monkeypatch, tmp_path):
+    from bot import config
+    from bot.update_state import begin_host_execution, write_host_handoff
+    root, old_store = installation
+    pointer = tmp_path / "child-handoff.json"
+    monkeypatch.setattr(config, "RESTART_EVENT", None)
+    for name in ("UPDATE_REQUESTED", "UPDATE_DRAINING", "UPDATE_JOB_ID"):
+        monkeypatch.setattr(config, name, getattr(config, name))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_PROTOCOL", "1")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_SUPERVISOR_PID", str(os.getppid()))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_STATE_FILE", str(old_store.state_path))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_JOB_ID", "")
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF", str(pointer))
+    monkeypatch.setenv("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", "child-nonce")
+    with runner.supervisor_lock(old_store):
+        with begin_host_execution(root):
+            assert "CLI_BRIDGE_UPDATE_HANDOFF" not in os.environ
+            assert "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN" not in os.environ
+            config.request_update("job-1", str(old_store.state_path))
+            payload = json.loads(pointer.read_text())
+            assert (payload["job_id"], payload["token"]) == ("job-1", "child-nonce")
+    pointer.unlink()
+    write_host_handoff(tmp_path / "state.json", "after-lease")
+    assert not pointer.exists()
+
+
 def test_official_child_accepts_handoff_when_windows_venv_changes_parent_pid(installation, monkeypatch, tmp_path):
     from bot.update_state import begin_host_execution
     root, old_store = installation

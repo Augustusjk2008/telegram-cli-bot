@@ -6816,7 +6816,10 @@ async def _stream_cli_chat(
     preview_state = None
     stderr_output = ""
     try:
-        translation_config = translation_snapshot(enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main")
+        translation_config = translation_snapshot(
+            enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main",
+            profile=profile,
+        )
         session.touch()
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -7968,7 +7971,8 @@ async def steer_chat(
     )
     text = _normalized_chat_text(user_text, request=request)
     translation_config = translation_snapshot(
-        enabled=bool(getattr(profile, "chat_translation_enabled", False) and session.agent_id == "main")
+        enabled=bool(getattr(profile, "chat_translation_enabled", False) and session.agent_id == "main"),
+        profile=profile,
     )
     try:
         execution_text, user_translation = await translate_chat_input(

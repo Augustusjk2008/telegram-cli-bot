@@ -604,6 +604,7 @@ function cloneCodexUsageStats(stats: CodexUsageStats): CodexUsageStats {
 function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): GitCommitMessageCliConfig {
   const payload = buildMockCliParams(cliType);
   return {
+    method: "cli",
     cliType: payload.cliType,
     cliPath: cliPath?.trim() || defaultCliPathForType(payload.cliType),
     params: { ...payload.params },
@@ -7286,6 +7287,7 @@ export class MockWebBotClient implements WebBotClient {
     const base = buildMockGitCommitMessageConfig(nextCliType, input.cliPath || current.cliPath);
     const next: GitCommitMessageCliConfig = {
       ...base,
+      method: input.method || current.method,
       cliPath: input.cliPath !== undefined ? input.cliPath.trim() || defaultCliPathForType(nextCliType) : base.cliPath,
       params: {
         ...base.params,

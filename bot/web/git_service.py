@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from aiohttp import ClientError
+
 from bot.cli import (
     build_cli_command,
     parse_claude_stream_json_output,
@@ -62,8 +64,10 @@ from .git_commit_message import (
     build_commit_message_prompt,
     build_git_commit_cli_config,
     extract_commit_message,
+    run_llm_commit_message,
     truncate_diff_text,
 )
+from .openai_compatible_client import OpenAICompatibleClientError
 
 GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES = 32
@@ -1846,6 +1850,32 @@ async def _generate_git_commit_message_from_context(
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     cli_config = manager.get_git_commit_cli_config(alias)
+    if str(cli_config.method or "cli").strip().lower() == "llm":
+        prompt_text = build_commit_message_prompt(**context)
+        try:
+            from bot.web.translation_service import get_translation_service
+
+            response_text = await asyncio.wait_for(
+                run_llm_commit_message(
+                    prompt_text=prompt_text,
+                    config=get_translation_service().config_store.get_config(),
+                ),
+                timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
+        except OpenAICompatibleClientError as exc:
+            code = "git_commit_message_auth_failed" if exc.status in (401, 403) else "git_commit_message_api_failed"
+            _raise(400, code, exc.message)
+        except ClientError:
+            _raise(400, "git_commit_message_api_failed", "无法连接 LLM API")
+        except ValueError as exc:
+            _raise(400, "git_commit_message_failed", str(exc))
+        message = extract_commit_message(response_text)
+        if not message:
+            _raise(400, "git_commit_message_parse_failed", "未提取到 commit message")
+        return {"message": message}
+
     cli_type = str(cli_config.cli_type or "").strip().lower()
     if cli_type == "antigravity":
         _raise(400, "git_commit_unsupported_cli", "Antigravity CLI 暂不支持生成 Git commit message")
@@ -1955,6 +1985,7 @@ async def update_git_commit_message_cli_config(
     manager: MultiBotManager,
     alias: str,
     *,
+    method: Any = None,
     cli_type: Any = None,
     cli_path: Any = None,
     params: Any = None,
@@ -1991,6 +2022,7 @@ async def update_git_commit_message_cli_config(
     try:
         await manager.set_git_commit_cli_config(
             alias,
+            method=str(method or current.method or "cli").strip().lower(),
             cli_type=next_cli_type,
             cli_path=next_cli_path,
             cli_params=next_params,

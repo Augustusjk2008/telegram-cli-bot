@@ -21,6 +21,10 @@ TERMINAL_JOB_PHASES = frozenset({"succeeded", "rolled_back", "failed", "cancelle
 # (handoff, application, recovery or an unknown value) suspends pruning.
 PREPARATION_JOB_PHASES = frozenset({"preparing", "ready"})
 JOB_PRUNE_MIN_AGE_SECONDS = 24 * 3600
+HOST_HANDOFF_ENV_NAMES = ("CLI_BRIDGE_UPDATE_HANDOFF", "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN")
+# The official host keeps its one-time handoff target here instead of in
+# os.environ, which every agent, terminal and plugin child inherits.
+_claimed_host_handoff: tuple[str, str] | None = None
 
 
 class UpdateConflict(RuntimeError):
@@ -47,8 +51,28 @@ def execution_lock_root(repo_root):
     return directory
 
 
+def _claim_host_handoff():
+    """Move the handoff target out of the environment inherited by children.
+
+    A child that sees the path and token (for example a test run inside an
+    agent session) can overwrite the live host's report, and the supervisor
+    then rejects the next ordinary restart.
+    """
+    global _claimed_host_handoff
+    path_text, token = (os.environ.pop(name, "") for name in HOST_HANDOFF_ENV_NAMES)
+    _claimed_host_handoff = (path_text, token)
+
+
+def _release_host_handoff():
+    global _claimed_host_handoff
+    _claimed_host_handoff = None
+
+
 def write_host_handoff(state_file, job_id=""):
-    path_text = os.environ.get("CLI_BRIDGE_UPDATE_HANDOFF", "")
+    if _claimed_host_handoff is not None:
+        path_text, token = _claimed_host_handoff
+    else:
+        path_text, token = (os.environ.get(name, "") for name in HOST_HANDOFF_ENV_NAMES)
     if not path_text:
         return
     path = Path(path_text)
@@ -58,7 +82,7 @@ def write_host_handoff(state_file, job_id=""):
         "job_id": job_id,
         "host_pid": os.getpid(),
         "supervisor_pid": os.environ.get("CLI_BRIDGE_UPDATE_SUPERVISOR_PID", ""),
-        "token": os.environ.get("CLI_BRIDGE_UPDATE_HANDOFF_TOKEN", ""),
+        "token": token,
     }
     fd, name = tempfile.mkstemp(prefix="handoff-", suffix=".tmp", dir=path.parent)
     try:
@@ -114,6 +138,8 @@ def begin_host_execution(repo_root):
             stack.enter_context(FileLock(directory / "supervisor.lock", timeout=0))
         stack.enter_context(FileLock(directory / "host.lock", timeout=0))
         if official:
+            _claim_host_handoff()
+            stack.callback(_release_host_handoff)
             # Resolve again in this fresh process: a storage migration may have moved state.
             store = UpdateStore(repo_root)
             os.environ["CLI_BRIDGE_UPDATE_STATE_FILE"] = str(store.state_path)

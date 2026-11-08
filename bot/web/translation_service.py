@@ -14,6 +14,7 @@ from typing import Any, Literal
 from aiohttp import ClientError
 
 from bot.web.openai_compatible_client import OpenAICompatibleClient, OpenAICompatibleClientError
+from bot.web.cli_prompt import CliPromptError, run_cli_prompt
 from bot.web.translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig, TranslationConfigStore
 
 
@@ -157,6 +158,8 @@ class TranslationService:
             )
         except ClientError:
             result["error"] = "network_error"
+        except CliPromptError as exc:
+            result["error"] = exc.code
         except (ValueError, TypeError):
             result["error"] = "invalid_response"
         except Exception:
@@ -174,21 +177,46 @@ class TranslationService:
     async def _request(self, text: str, config: TranslationConfig, prompt: str) -> str:
         async with self._semaphore:
             protected, originals, prefix = _protect(text)
-            raw = await self.client.post_chat_completion(
-                base_url=config.base_url,
-                api_key=config.api_key,
-                body={
-                    "model": config.model,
-                    "reasoning_effort": config.reasoning_effort,
-                    "stream": False,
-                    "messages": [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": protected},
-                    ],
-                },
-                timeout_seconds=config.request_timeout_seconds,
-            )
-            translated = _extract_text(raw)
+            if str(config.method or "llm").strip().lower() == "cli":
+                cli_prompt = (
+                    f"{prompt}\n\n"
+                    "Return exactly one complete tag block and no text outside it:\n"
+                    "<TRANSLATION>\n"
+                    "your translation, or exactly <skip translation> / <translation failed>\n"
+                    "</TRANSLATION>\n\n"
+                    "Input text:\n"
+                    f"{protected}"
+                )
+                raw_text, returncode = await run_cli_prompt(
+                    cli_type=config.cli_type,
+                    cli_path=config.cli_path,
+                    cli_params=config.cli_params,
+                    prompt_text=cli_prompt,
+                    working_dir=config.cli_working_dir,
+                    timeout_seconds=config.request_timeout_seconds,
+                )
+                if returncode != 0:
+                    raise CliPromptError("cli_failed", raw_text.strip() or "CLI 翻译失败")
+                match = re.search(r"<TRANSLATION>\s*([\s\S]*?)\s*</TRANSLATION>", raw_text, re.IGNORECASE)
+                translated = match.group(1).strip() if match else raw_text.strip()
+                if not translated or translated == "(无输出)":
+                    raise _TranslationFailure("empty_response")
+            else:
+                raw = await self.client.post_chat_completion(
+                    base_url=config.base_url,
+                    api_key=config.api_key,
+                    body={
+                        "model": config.model,
+                        "reasoning_effort": config.reasoning_effort,
+                        "stream": False,
+                        "messages": [
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": protected},
+                        ],
+                    },
+                    timeout_seconds=config.request_timeout_seconds,
+                )
+                translated = _extract_text(raw)
             marker = translated.strip()
             if marker == "<skip translation>":
                 raise _TranslationFailure("translation_skipped")

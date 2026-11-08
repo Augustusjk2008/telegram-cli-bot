@@ -556,7 +556,16 @@ type RawChatTranslationConfig = Omit<ChatTranslationConfig, "api_key_configured"
 
 function mapChatTranslationConfig(raw: RawChatTranslationConfig): ChatTranslationConfig {
   const { api_key_set, ...config } = raw;
-  return { ...config, api_key_configured: Boolean(raw.api_key_configured ?? api_key_set) };
+  return {
+    ...config,
+    method: raw.method === "cli" ? "cli" : "llm",
+    cli_type: raw.cli_type || "codex",
+    cli_path: raw.cli_path || "codex",
+    cli_params: raw.cli_params || {},
+    cli_defaults: raw.cli_defaults || {},
+    cli_schema: raw.cli_schema || {},
+    api_key_configured: Boolean(raw.api_key_configured ?? api_key_set),
+  };
 }
 
 type RawHistoryItem = {
@@ -1459,6 +1468,7 @@ type RawGitIdentityConfig = {
 };
 
 type RawGitCommitMessageCliConfig = {
+  method?: "cli" | "llm";
   cli_type?: CliType;
   cli_path?: string;
   params?: Record<string, unknown>;
@@ -3661,6 +3671,7 @@ function defaultCliPathForType(cliType: CliType) {
 function mapGitCommitMessageCliConfig(raw: RawGitCommitMessageCliConfig): GitCommitMessageCliConfig {
   const cliType = mapCliType(raw.cli_type);
   return {
+    method: raw.method === "llm" ? "llm" : "cli",
     cliType,
     cliPath: raw.cli_path || defaultCliPathForType(cliType),
     params: raw.params || {},
@@ -7556,6 +7567,7 @@ export class RealWebBotClient implements WebBotClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          ...(input.method ? { method: input.method } : {}),
           ...(input.cliType ? { cli_type: input.cliType } : {}),
           ...(input.cliPath !== undefined ? { cli_path: input.cliPath } : {}),
           ...(input.params ? { params: input.params } : {}),

@@ -335,7 +335,7 @@ Desktop 模式会临时桥接 Desktop profile 的 `agent-default-model`、`crede
 
 Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否能被 headless profile 加载；当前已验证的 Desktop `0.2.1-rc.3` 不提供该 profile entry，因此 Orbit 会明确拒绝 Desktop 集群任务并保留普通聊天能力，等待包含该 client 的 Desktop 版本。
 
-官方 Desktop CLI 说明：[Terminal command](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md#terminal-command)。原生执行和远程工作区暂不支持。Git 提交说明生成可独立选择 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。
+官方 Desktop CLI 说明：[Terminal command](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md#terminal-command)。原生执行和远程工作区暂不支持。Git 提交说明生成可在本地 CLI 与 LLM API 之间选择；选择 CLI 时可使用 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。聊天翻译也可在 LLM API 与当前 Bot 的 CLI 之间切换。
 
 `cli_params.codex_server` 与 `cli_params.codex` 独立保存，使用相同的参数定义和默认值；切换入口不会覆盖另一入口的参数。
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。

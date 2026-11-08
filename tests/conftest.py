@@ -15,6 +15,24 @@ import pytest
 _SESSION_HOME = Path(tempfile.mkdtemp(prefix="orbit-safe-claw-pytest-home-"))
 Path.home = staticmethod(lambda: _SESSION_HOME)
 
+# Agent sessions and terminals started by a supervised host inherit its update
+# protocol variables.  A test that writes the handoff with them would overwrite
+# the live host's report, so the next restart from the Web UI fails.
+for _name in (
+    "CLI_BRIDGE_SUPERVISOR",
+    "CLI_BRIDGE_UPDATE_PROTOCOL",
+    "CLI_BRIDGE_UPDATE_HANDOFF",
+    "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN",
+    "CLI_BRIDGE_UPDATE_SUPERVISOR_PID",
+    "CLI_BRIDGE_UPDATE_STATE_FILE",
+    "CLI_BRIDGE_UPDATE_JOB_ID",
+    "CLI_BRIDGE_UPDATE_RUNNER_PATH",
+    "TCB_UPDATE_CONTROL_ROOT",
+    "TCB_UPDATE_JOB_ID",
+    "TCB_UPDATE_HEALTH_TOKEN",
+):
+    os.environ.pop(_name, None)
+
 os.environ.setdefault(
     "TCB_DATA_DIR",
     str(Path(tempfile.gettempdir()) / f"orbit-safe-claw-pytest-data-{os.getpid()}"),

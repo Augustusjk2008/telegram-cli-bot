@@ -18,6 +18,7 @@ from bot.cli_params import (
 from bot.config import CLI_MODEL_OPTIONS
 from bot.models import BotProfile, GitCommitMessageCliConfig
 from bot.prompts import render_prompt
+from bot.web.openai_compatible_client import OpenAICompatibleClient
 
 DIFF_CHAR_LIMIT = 40 * 1024
 COMMIT_MESSAGE_RE = re.compile(r"<COMMIT_MESSAGE>\s*(.*?)\s*</COMMIT_MESSAGE>", re.S)
@@ -59,12 +60,61 @@ def build_git_commit_cli_config(profile: BotProfile, config: GitCommitMessageCli
     resolved_cli_type = str(config.cli_type or profile.cli_type or "").strip().lower()
     schema = _apply_cli_model_options(get_params_schema(resolved_cli_type), resolved_cli_type)
     return {
+        "method": str(config.method or "cli").strip().lower() or "cli",
         "cli_type": resolved_cli_type,
         "cli_path": str(config.cli_path or "").strip(),
         "params": copy.deepcopy(config.cli_params.get_params(resolved_cli_type)),
         "defaults": get_default_params(resolved_cli_type),
         "schema": schema,
     }
+
+
+def _extract_chat_completion_text(raw: Any) -> str:
+    if not isinstance(raw, dict) or not isinstance(raw.get("choices"), list) or not raw["choices"]:
+        return ""
+    choice = raw["choices"][0]
+    if not isinstance(choice, dict):
+        return ""
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            item.get("text", "").strip()
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str) and item.get("text", "").strip()
+        ]
+        return "\n".join(parts).strip()
+    return ""
+
+
+async def run_llm_commit_message(*, prompt_text: str, config: Any) -> str:
+    if not getattr(config, "llm_configured", False):
+        raise ValueError("未配置可用的 LLM API，请先在聊天翻译设置中填写 Base URL、API Key 和模型")
+    client = OpenAICompatibleClient()
+    try:
+        raw = await client.post_chat_completion(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            body={
+                "model": config.model,
+                "reasoning_effort": config.reasoning_effort,
+                "stream": False,
+                "messages": [
+                    {"role": "user", "content": prompt_text},
+                ],
+            },
+            timeout_seconds=config.request_timeout_seconds,
+        )
+    finally:
+        await client.close()
+    text = _extract_chat_completion_text(raw)
+    if not text:
+        raise ValueError("LLM API 未返回有效的 commit message")
+    return text
 
 
 def build_commit_message_prompt(

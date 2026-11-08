@@ -27,7 +27,7 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
   const enabled = config.translate_user_enabled || config.translate_assistant_enabled;
   const save = async () => {
     setError("");
-    if (enabled && (!config.base_url.trim() || !config.model.trim()
+    if (enabled && config.method === "llm" && (!config.base_url.trim() || !config.model.trim()
       || !(apiKey.trim() || (config.api_key_configured && !clearApiKey)))) {
       setError("启用翻译时，请填写服务地址、模型和 API 密钥。");
       return;
@@ -37,6 +37,7 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
       return;
     }
     const input: ChatTranslationConfigInput = {
+      method: config.method,
       user_prompt: config.user_prompt,
       assistant_prompt: config.assistant_prompt,
       translate_user_enabled: config.translate_user_enabled,
@@ -68,6 +69,25 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
       {!loaded && !error ? <p className="text-sm text-[var(--muted)]">加载中...</p> : null}
       {error ? <p role="alert" className="text-sm text-[var(--status-danger)]">{error}</p> : null}
       <fieldset disabled={!loaded || saving} className="min-w-0 space-y-3 disabled:opacity-60">
+        <label className="block max-w-sm space-y-1 text-sm">
+          <span>翻译实现方式</span>
+          <select
+            className={inputClass}
+            aria-label="翻译实现方式"
+            value={config.method}
+            onChange={(event) => {
+              setConfig({ ...config, method: event.target.value as typeof config.method });
+              setClearApiKey(false);
+              setApiKey("");
+            }}
+          >
+            <option value="llm">LLM API</option>
+            <option value="cli">本地 CLI</option>
+          </select>
+          <span className="block text-xs text-[var(--muted)]">
+            本地 CLI 会使用当前 Bot 的 CLI 类型、模型和路径配置。
+          </span>
+        </label>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {([
             ["translate_user_enabled", "翻译提问"],
@@ -77,7 +97,7 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
               {label}<input type="checkbox" checked={config[key]} onChange={(event) => setConfig({ ...config, [key]: event.target.checked })} />
             </label>
           ))}
-          {([
+          {config.method === "llm" ? ([
             ["base_url", "翻译服务地址", "https://api.example.com/v1"],
             ["model", "翻译模型", ""],
           ] as const).map(([key, label, placeholder]) => (
@@ -85,18 +105,18 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
               <span>{label}</span>
               <input className={inputClass} value={config[key]} placeholder={placeholder} onChange={(event) => setConfig({ ...config, [key]: event.target.value })} />
             </label>
-          ))}
-          <label className="min-w-0 space-y-1 text-sm">
+          )) : null}
+          {config.method === "llm" ? <label className="min-w-0 space-y-1 text-sm">
             <span>翻译 API 密钥</span>
             <input className={inputClass} type="password" autoComplete="new-password" value={apiKey} disabled={clearApiKey}
               placeholder={config.api_key_configured ? "已保存，留空保留" : "尚未配置"} onChange={(event) => setApiKey(event.target.value)} />
-          </label>
+          </label> : null}
           <label className="min-w-0 space-y-1 text-sm">
             <span>翻译超时（秒）</span>
             <input className={inputClass} type="number" min="0.1" step="any" value={config.request_timeout_seconds || ""}
               onChange={(event) => setConfig({ ...config, request_timeout_seconds: Number(event.target.value) })} />
           </label>
-          <label className="min-w-0 space-y-1 text-sm">
+          {config.method === "llm" ? <label className="min-w-0 space-y-1 text-sm">
             <span>翻译推理深度</span>
             <select className={inputClass} value={config.reasoning_effort}
               onChange={(event) => setConfig({ ...config, reasoning_effort: event.target.value as typeof config.reasoning_effort })}>
@@ -105,7 +125,7 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
               <option value="medium">中（medium）</option>
               <option value="high">高（high）</option>
             </select>
-          </label>
+          </label> : null}
         </div>
         {([
           ["user_prompt", "用户消息翻译提示词"],
@@ -118,10 +138,10 @@ export function ChatTranslationSettingsPanel({ client, onSaved }: { client: WebB
               onChange={(event) => setConfig({ ...config, [key]: event.target.value })} />
           </label>
         ))}
-        <label className="flex items-center gap-2 text-sm">
+        {config.method === "llm" ? <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={clearApiKey} onChange={(event) => { setClearApiKey(event.target.checked); setApiKey(""); }} />
           清除已保存的翻译 API 密钥
-        </label>
+        </label> : null}
         <button type="button" className={toolbarButtonClass("primary", "md")} onClick={() => void save()}>
           {saving ? "保存中..." : "保存聊天翻译配置"}
         </button>

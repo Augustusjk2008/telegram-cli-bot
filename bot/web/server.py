@@ -4396,6 +4396,7 @@ class WebApiServer:
         body = await self._parse_json(request)
         backend = await self._get_git_backend(alias, auth.user_id)
         data = await backend.update_commit_message_config(
+            method=body.get("method", body.get("provider")),
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
             params=body.get("params"),

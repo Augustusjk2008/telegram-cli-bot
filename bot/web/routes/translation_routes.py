@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from dataclasses import replace
 
 from aiohttp import web
 
@@ -66,7 +67,14 @@ def register(app: web.Application, server, *, service: TranslationService | None
         auth = await server._with_capability(request, CAP_CHAT_SEND)
         alias = server._manager_alias(request)
         profile = get_profile_or_raise(server.manager, alias)
-        config = translation_service.config_store.get_config()
+        base_config = translation_service.config_store.get_config()
+        config = replace(
+            base_config,
+            cli_type=str(getattr(profile, "cli_type", base_config.cli_type) or base_config.cli_type),
+            cli_path=str(getattr(profile, "cli_path", base_config.cli_path) or base_config.cli_path),
+            cli_params=getattr(getattr(profile, "cli_params", None), "to_dict", lambda: base_config.cli_params)(),
+            cli_working_dir=str(getattr(profile, "working_dir", base_config.cli_working_dir) or base_config.cli_working_dir),
+        )
         if not profile.chat_translation_enabled or not config.translate_assistant_enabled or not config.configured:
             raise WebApiError(409, "translation_unavailable", "回答翻译当前不可用")
         message_id = request.match_info["message_id"]

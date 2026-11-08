@@ -13,6 +13,8 @@ from threading import RLock
 from typing import Any
 from urllib.parse import urlsplit
 
+from bot.cli import validate_cli_type
+from bot.cli_params import CliParamsConfig, coerce_param_value, get_default_params, get_params_schema
 from bot.runtime_paths import get_translation_config_path
 
 
@@ -54,6 +56,8 @@ class TranslationConfigError(ValueError):
 
 @dataclass(frozen=True)
 class TranslationConfig:
+    # ``llm`` preserves the previous default.  ``cli`` uses the active Bot's
+    # CLI snapshot, which is attached by ``translation_snapshot`` at turn time.
     translate_user_enabled: bool = False
     translate_assistant_enabled: bool = False
     base_url: str = ""
@@ -63,15 +67,35 @@ class TranslationConfig:
     user_prompt: str = DEFAULT_USER_TRANSLATION_PROMPT
     assistant_prompt: str = DEFAULT_ASSISTANT_TRANSLATION_PROMPT
     request_timeout_seconds: float = 15
+    method: str = "llm"
+    cli_type: str = "codex"
+    cli_path: str = "codex"
+    cli_params: dict[str, Any] = field(default_factory=dict)
+    cli_working_dir: str = ""
+
+    @property
+    def llm_configured(self) -> bool:
+        return bool(self.base_url and self.api_key and self.model)
+
+    @property
+    def cli_configured(self) -> bool:
+        return bool(self.cli_type and self.cli_path)
 
     @property
     def configured(self) -> bool:
-        return bool(self.base_url and self.api_key and self.model)
+        return self.llm_configured if self.method == "llm" else self.cli_configured
 
     def to_public_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("api_key")
+        data.pop("cli_working_dir", None)
         data["api_key_set"] = bool(self.api_key)
+        data["api_key_configured"] = bool(self.api_key)
+        data["llm_configured"] = self.llm_configured
+        data["cli_configured"] = self.cli_configured
+        data["cli_params"] = CliParamsConfig.from_dict(self.cli_params).get_params(self.cli_type)
+        data["cli_defaults"] = get_default_params(self.cli_type)
+        data["cli_schema"] = get_params_schema(self.cli_type)
         data["configured"] = self.configured
         return data
 
@@ -80,6 +104,11 @@ def _updated_config(config: TranslationConfig, payload: dict[str, Any]) -> Trans
     if not isinstance(payload, dict):
         raise TranslationConfigError("翻译配置必须是 JSON 对象")
     values: dict[str, Any] = {}
+    method = payload.get("method", payload.get("provider"))
+    if method is not None:
+        if not isinstance(method, str) or method.strip().lower() not in {"llm", "cli"}:
+            raise TranslationConfigError("翻译实现方式必须是 llm 或 cli")
+        values["method"] = method.strip().lower()
     if "reasoning_effort" in payload:
         effort = payload["reasoning_effort"]
         if not isinstance(effort, str) or effort not in ("none", "low", "medium", "high"):
@@ -124,6 +153,37 @@ def _updated_config(config: TranslationConfig, payload: dict[str, Any]) -> Trans
         if not math.isfinite(timeout) or timeout <= 0:
             raise TranslationConfigError("请求超时必须是有限正数")
         values["request_timeout_seconds"] = timeout
+    if "cli_type" in payload:
+        if not isinstance(payload["cli_type"], str):
+            raise TranslationConfigError("翻译 CLI 类型必须是文本")
+        try:
+            values["cli_type"] = validate_cli_type(payload["cli_type"])
+        except ValueError as exc:
+            raise TranslationConfigError(str(exc)) from None
+    if "cli_path" in payload:
+        if not isinstance(payload["cli_path"], str):
+            raise TranslationConfigError("翻译 CLI 路径必须是文本")
+        values["cli_path"] = payload["cli_path"].strip()
+    if "cli_working_dir" in payload:
+        if not isinstance(payload["cli_working_dir"], str):
+            raise TranslationConfigError("翻译 CLI 工作目录必须是文本")
+        values["cli_working_dir"] = payload["cli_working_dir"].strip()
+    if "cli_params" in payload:
+        if not isinstance(payload["cli_params"], dict):
+            raise TranslationConfigError("翻译 CLI 参数必须是 JSON 对象")
+        cli_type = str(values.get("cli_type", config.cli_type) or "codex").strip().lower()
+        next_params = CliParamsConfig.from_dict(config.cli_params)
+        for key, raw_value in payload["cli_params"].items():
+            key_text = str(key or "").strip()
+            if not key_text:
+                continue
+            try:
+                next_params.set_param(cli_type, key_text, coerce_param_value(cli_type, key_text, raw_value))
+            except ValueError as exc:
+                raise TranslationConfigError(str(exc)) from None
+        values["cli_params"] = next_params.to_dict()
+    if "cli_type" in values and "cli_params" not in values:
+        values["cli_params"] = CliParamsConfig.from_dict(config.cli_params).to_dict()
     candidate = replace(config, **values)
     if candidate.base_url:
         try:
@@ -144,7 +204,9 @@ def _updated_config(config: TranslationConfig, payload: dict[str, Any]) -> Trans
             raise TranslationConfigError("Base URL 必须是无凭据、查询参数和片段的 HTTP/HTTPS 地址")
     if candidate.translate_user_enabled or candidate.translate_assistant_enabled:
         if not candidate.configured:
-            raise TranslationConfigError("开启翻译需要填写 Base URL、API Key 和模型")
+            if candidate.method == "llm":
+                raise TranslationConfigError("开启翻译需要填写 Base URL、API Key 和模型")
+            raise TranslationConfigError("开启 CLI 翻译需要配置 CLI 类型和路径")
     return candidate
 
 

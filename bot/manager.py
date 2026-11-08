@@ -818,6 +818,7 @@ class MultiBotManager:
         self,
         alias: str,
         *,
+        method: str | None = None,
         cli_type: str | None = None,
         cli_path: str | None = None,
         cli_params: CliParamsConfig | None = None,
@@ -826,19 +827,23 @@ class MultiBotManager:
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
             current = self.get_git_commit_cli_config(normalized_alias)
+            resolved_method = str(method or current.method or "cli").strip().lower()
+            if resolved_method not in {"cli", "llm"}:
+                raise ValueError("Git commit message 实现方式必须是 cli 或 llm")
             resolved_cli_type = validate_cli_type(cli_type or current.cli_type or profile.cli_type)
-            if resolved_cli_type == "antigravity":
+            if resolved_method == "cli" and resolved_cli_type == "antigravity":
                 raise ValueError("Git commit CLI 不支持 Antigravity CLI")
-            if resolved_cli_type == "deepseek":
+            if resolved_method == "cli" and resolved_cli_type == "deepseek":
                 raise ValueError("Git commit CLI 不支持 DeepSeek Harness")
             next_config = GitCommitMessageCliConfig(
+                method=resolved_method,
                 cli_type=resolved_cli_type,
                 cli_path=str(cli_path if cli_path is not None else current.cli_path or profile.cli_path).strip(),
                 cli_params=cli_params or current.cli_params,
             )
-            if not next_config.cli_path:
+            if resolved_method == "cli" and not next_config.cli_path:
                 raise ValueError("cli_path 不能为空")
-            if resolve_cli_executable(next_config.cli_path, profile.working_dir) is None:
+            if resolved_method == "cli" and resolve_cli_executable(next_config.cli_path, profile.working_dir) is None:
                 raise ValueError(
                     f"未找到 CLI 可执行文件: {next_config.cli_path} "
                     f"(请填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
