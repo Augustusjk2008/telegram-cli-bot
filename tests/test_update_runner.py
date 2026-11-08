@@ -212,8 +212,7 @@ def test_supervisor_follows_authenticated_state_handoff_after_storage_move(insta
     assert not pointer.exists()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows venv launcher behavior")
-def test_supervisor_accepts_windows_venv_launcher_pid_handoff(installation, monkeypatch, tmp_path):
+def test_supervisor_accepts_launcher_pid_handoff_on_all_platforms(installation, monkeypatch, tmp_path):
     from bot.update_state import write_host_handoff
 
     root, store = installation
@@ -224,7 +223,7 @@ def test_supervisor_accepts_windows_venv_launcher_pid_handoff(installation, monk
     write_host_handoff(store.state_path)
 
     child = Child()
-    child.pid = 99999998
+    child.pid = os.getpid() + 1
     child.update_handoff_path = pointer
     child.update_handoff_token = "venv-nonce"
     current = runner._store_after_host_exit(root, store, child, runner.RESTART_EXIT_CODE)
@@ -233,8 +232,7 @@ def test_supervisor_accepts_windows_venv_launcher_pid_handoff(installation, monk
     assert not pointer.exists()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows venv launcher behavior")
-def test_supervisor_rejects_windows_venv_handoff_from_another_supervisor(installation, monkeypatch, tmp_path):
+def test_supervisor_rejects_launcher_handoff_from_another_supervisor(installation, monkeypatch, tmp_path):
     from bot.update_state import write_host_handoff
 
     root, store = installation

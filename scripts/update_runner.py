@@ -211,9 +211,12 @@ def _store_after_host_exit(repo_root: Path, store, child, code: int):
     except (TypeError, ValueError):
         host_pid = 0
     host_pid_matches = host_pid == child.pid
-    if not host_pid_matches and host_pid > 0 and os.name == "nt":
-        # Windows venv\Scripts\python.exe can be a redirector. Popen tracks
-        # that launcher while the handoff is written by the final interpreter.
+    if not host_pid_matches and host_pid > 0:
+        # A platform launcher (for example a Windows venv redirector or a
+        # POSIX wrapper/service entrypoint) can change the PID observed by
+        # Popen while the handoff is written by the final interpreter. The
+        # supervisor PID and one-time token still bind the handoff to this
+        # supervisor and child launch, so accept that authenticated fallback.
         supervisor_pid = str(payload.get("supervisor_pid", "")).strip()
         # Older hosts do not emit supervisor_pid; their per-child token still
         # authenticates this handoff.
