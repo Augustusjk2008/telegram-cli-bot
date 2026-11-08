@@ -81,6 +81,30 @@ def test_source_launchers_do_not_build_frontend_on_startup():
         assert "sync_frontend_assets" not in source
 
 
+def test_service_mode_contract_is_present_in_source_launchers():
+    powershell = (ROOT / "start.ps1").read_text(encoding="utf-8-sig")
+    shell = (ROOT / "start.sh").read_text(encoding="utf-8")
+    assert "ValidateSet(" in powershell and '"service"' in powershell
+    assert "CLI_BRIDGE_SERVICE_MODE" in powershell
+    assert "-Mode service" in powershell or "Mode -eq" in powershell
+    assert "CLI_BRIDGE_SERVICE_MODE" in shell
+    assert "WEB_AUTO_OPEN_BROWSER=false" in shell
+    assert "TCB_KEEP_AWAKE=false" in shell
+
+
+def test_task_scheduler_service_helpers_have_dry_run_and_no_secret_arguments():
+    install = (ROOT / "scripts/install-service.ps1").read_text(encoding="utf-8")
+    uninstall = (ROOT / "scripts/uninstall-service.ps1").read_text(encoding="utf-8")
+    status = (ROOT / "scripts/service-status.ps1").read_text(encoding="utf-8")
+    assert "WhatIf" in install and "WhatIf" in uninstall
+    assert "-ServiceProcess -Mode service" in install
+    assert "MultipleInstances IgnoreNew" in install
+    assert "RestartCount 3" in install
+    assert "Get-ScheduledTaskInfo" in status
+    assert "TCB_SERVICE_LOG_PATH" in status
+    assert "TELEGRAM_BOT_TOKEN" not in install
+
+
 @pytest.mark.parametrize("codes", [[0], [75, 0], [76]])
 @pytest.mark.parametrize("shell", ["powershell", "bash"])
 def test_official_source_entry_runs_simulated_host_and_handoffs(simulated_install, codes, shell, tmp_path):

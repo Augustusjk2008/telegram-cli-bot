@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet("default", "web")]
+    [ValidateSet("default", "web", "service")]
     [string]$Mode = "default",
 
     [Parameter(DontShow = $true)]
@@ -15,6 +15,8 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $scriptPath = $MyInvocation.MyCommand.Definition
 $envPath = Join-Path $scriptDir ".env"
 $restartExitCode = 75
+$updateExitCode = 76
+$recoveryExitCode = 78
 $startupStateDir = Join-Path $scriptDir ".tcb\startup"
 
 function Write-Info {
@@ -356,7 +358,7 @@ function Invoke-PythonStartupStep {
     if ($script:lastPythonExitCode -eq 0) {
         return
     }
-    if ($script:lastPythonExitCode -eq $restartExitCode) {
+    if ($script:lastPythonExitCode -in @($restartExitCode, $updateExitCode)) {
         return
     }
 
@@ -649,7 +651,12 @@ function Invoke-TraySupervisor {
             Start-Sleep -Milliseconds 100
         }
 
-        if ($script:trayExitRequested) {
+        if ($null -ne $serviceProcess -and $serviceProcess.HasExited) {
+            $exitCode = $serviceProcess.ExitCode
+            if ($exitCode -eq -1073741510) {
+                $exitCode = 0
+            }
+        } elseif ($script:trayExitRequested) {
             Stop-TrayServiceProcess -Process $serviceProcess -WindowHandle $serviceWindowHandle
             $exitCode = 0
         } else {
@@ -700,6 +707,22 @@ if (-not $ServiceProcess) {
 try {
     Set-Location $scriptDir
 
+    if ($Mode -eq "service") {
+        $env:CLI_BRIDGE_SERVICE_MODE = "1"
+        if ([string]::IsNullOrWhiteSpace($env:WEB_AUTO_OPEN_BROWSER)) {
+            $dotenvBrowser = Get-DotEnvValue -Path $envPath -Name "WEB_AUTO_OPEN_BROWSER"
+            if ([string]::IsNullOrWhiteSpace($dotenvBrowser)) {
+                $env:WEB_AUTO_OPEN_BROWSER = "false"
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($env:TCB_KEEP_AWAKE)) {
+            $dotenvKeepAwake = Get-DotEnvValue -Path $envPath -Name "TCB_KEEP_AWAKE"
+            if ([string]::IsNullOrWhiteSpace($dotenvKeepAwake)) {
+                $env:TCB_KEEP_AWAKE = "false"
+            }
+        }
+    }
+
     $cachedLauncherPath = Join-Path $scriptDir ".tcb/startup/update-launcher.json"
     if (Test-Path -LiteralPath $cachedLauncherPath) {
         $cachedLauncher = Get-Content -Raw -LiteralPath $cachedLauncherPath | ConvertFrom-Json
@@ -708,6 +731,10 @@ try {
             if ($cachedState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
                 $env:WEB_ENABLED = "true"
                 & $cachedLauncher.control_python_executable $cachedLauncher.runner_path supervise --repo-root $scriptDir --state-file $cachedLauncher.state_file --python $cachedLauncher.python_executable
+                if ($Mode -eq "service" -and $LASTEXITCODE -eq $recoveryExitCode) {
+                    Write-Warn "更新需要人工恢复；已停止服务自动重启。"
+                    exit 0
+                }
                 exit $LASTEXITCODE
             }
         }
@@ -740,6 +767,10 @@ try {
         $updateState = Get-Content -Raw -LiteralPath $launcher.state_file | ConvertFrom-Json
         if ($updateState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
             & $launcher.control_python_executable $launcher.runner_path supervise --repo-root $scriptDir --state-file $launcher.state_file --python $launcher.python_executable
+            if ($Mode -eq "service" -and $LASTEXITCODE -eq $recoveryExitCode) {
+                Write-Warn "更新需要人工恢复；已停止服务自动重启。"
+                exit 0
+            }
             exit $LASTEXITCODE
         }
     }
@@ -772,6 +803,10 @@ try {
     $launcher.python_executable = $script:pythonRuntime.Command
 
     & $launcher.control_python_executable $launcher.runner_path supervise --repo-root $scriptDir --state-file $launcher.state_file --python $launcher.python_executable
+    if ($Mode -eq "service" -and $LASTEXITCODE -eq $recoveryExitCode) {
+        Write-Warn "更新需要人工恢复；已停止服务自动重启。"
+        exit 0
+    }
     exit $LASTEXITCODE
 
 } catch {

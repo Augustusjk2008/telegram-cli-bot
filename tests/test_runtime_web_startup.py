@@ -211,6 +211,38 @@ def test_main_returns_upgrade_exit_after_host_cleanup(monkeypatch):
     assert cleaned == [True]
 
 
+def test_service_mode_defaults_disable_browser_and_sleep_inhibition(monkeypatch):
+    from bot import config
+    monkeypatch.setenv("CLI_BRIDGE_SERVICE_MODE", "1")
+    monkeypatch.delenv("WEB_AUTO_OPEN_BROWSER", raising=False)
+    monkeypatch.delenv("TCB_KEEP_AWAKE", raising=False)
+    config._refresh_environment_config()
+    assert config.is_service_mode() is True
+    assert config.WEB_AUTO_OPEN_BROWSER is False
+    assert config.TCB_KEEP_AWAKE is False
+
+    monkeypatch.setenv("WEB_AUTO_OPEN_BROWSER", "true")
+    monkeypatch.setenv("TCB_KEEP_AWAKE", "true")
+    config._refresh_environment_config()
+    assert config.WEB_AUTO_OPEN_BROWSER is True
+    assert config.TCB_KEEP_AWAKE is True
+    monkeypatch.delenv("CLI_BRIDGE_SERVICE_MODE", raising=False)
+    monkeypatch.delenv("WEB_AUTO_OPEN_BROWSER", raising=False)
+    monkeypatch.delenv("TCB_KEEP_AWAKE", raising=False)
+    config._refresh_environment_config()
+
+
+def test_shutdown_request_is_independent_from_restart(monkeypatch):
+    from bot import config
+    event = SimpleNamespace(set=lambda: None)
+    monkeypatch.setattr(config, "SHUTDOWN_EVENT", event)
+    monkeypatch.setattr(config, "SHUTDOWN_REQUESTED", False)
+    monkeypatch.setattr(config, "RESTART_REQUESTED", False)
+    config.request_shutdown()
+    assert config.SHUTDOWN_REQUESTED is True
+    assert config.RESTART_REQUESTED is False
+
+
 @pytest.mark.asyncio
 async def test_web_base_path_serves_api_and_spa(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "/node/nanjing-laptop")

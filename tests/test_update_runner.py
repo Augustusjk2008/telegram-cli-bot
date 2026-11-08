@@ -403,6 +403,46 @@ def test_supervisor_restart_does_not_rewrite_update_state(installation, monkeypa
     assert store.state_path.read_bytes() == before
 
 
+def test_service_supervisor_restarts_unexpected_host_exit(installation, monkeypatch):
+    root, store = installation
+    monkeypatch.setenv("CLI_BRIDGE_SERVICE_MODE", "1")
+    codes = iter([1, 0])
+    started = []
+
+    def start(*args):
+        child = Child()
+        child.returncode = next(codes)
+        started.append(child)
+        return child
+
+    monkeypatch.setattr(runner, "_start_host", start)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    assert runner.supervise(root, store, sys.executable) == 0
+    assert len(started) == 2
+
+
+def test_supervisor_stop_signal_terminates_host_before_returning_zero(installation, monkeypatch):
+    root, store = installation
+
+    class StopChild(Child):
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                runner.SUPERVISOR_STOP_EVENT.set()
+                raise subprocess.TimeoutExpired("host", timeout)
+            return self.returncode
+
+    child = StopChild()
+    monkeypatch.setattr(runner, "_start_host", lambda *args: child)
+    assert runner.supervise(root, store, sys.executable) == 0
+    assert child.returncode == -15
+
+
+def test_update_runner_job_log_redacts_credentials(monkeypatch):
+    monkeypatch.setenv("WEB_API_TOKEN", "secret-token")
+    assert "secret-token" not in runner._redact_text("authorization: Bearer secret-token")
+    assert "[REDACTED]" in runner._redact_text("authorization: Bearer secret-token")
+
+
 @pytest.mark.parametrize("fail_new", [False, True])
 def test_portable_handoff_with_real_non_listening_host_processes(installation, monkeypatch, fail_new):
     root, store = installation

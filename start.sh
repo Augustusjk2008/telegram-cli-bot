@@ -113,6 +113,18 @@ get_dotenv_value() {
   ' "$SCRIPT_DIR/.env"
 }
 
+if [[ ${CLI_BRIDGE_SERVICE_MODE:-} =~ ^(1|true|yes|on)$ ]]; then
+  export CLI_BRIDGE_SERVICE_MODE=1
+  if [[ -z ${WEB_AUTO_OPEN_BROWSER+x} ]]; then
+    service_browser_default="$(get_dotenv_value "WEB_AUTO_OPEN_BROWSER")"
+    [[ -n "$service_browser_default" ]] || export WEB_AUTO_OPEN_BROWSER=false
+  fi
+  if [[ -z ${TCB_KEEP_AWAKE+x} ]]; then
+    service_keep_awake_default="$(get_dotenv_value "TCB_KEEP_AWAKE")"
+    [[ -n "$service_keep_awake_default" ]] || export TCB_KEEP_AWAKE=false
+  fi
+fi
+
 show_tunnel_hint() {
   local web_public_url web_tunnel_mode fixed_forward_enabled fixed_forward_url
   web_public_url="$(get_dotenv_value "WEB_PUBLIC_URL")"
@@ -310,8 +322,8 @@ run_python_startup_step() {
   if [[ "$last_python_exit_code" -eq 0 ]]; then
     return 0
   fi
-  if [[ "$last_python_exit_code" -eq 75 ]]; then
-    return 75
+  if [[ "$last_python_exit_code" -eq 75 || "$last_python_exit_code" -eq 76 ]]; then
+    return "$last_python_exit_code"
   fi
 
   if [[ "$python_dependency_repair_attempted" -eq 0 ]] && repair_python_dependencies; then

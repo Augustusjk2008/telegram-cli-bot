@@ -113,6 +113,30 @@ Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+；Pi 原生 Agent 还�
 
 源码版 `start.bat`、`start.ps1` 和 `start.sh` 启动时直接使用现有的前端产物，不会自动重建前端。修改前端后请在 `front` 目录手动运行 `npm run build`，再重启服务。
 
+
+### 交互启动与后台服务
+
+默认 start.bat / start.ps1 保留托盘和浏览器行为；python -m bot 仍可直接运行。需要无人值守运行时，Windows 使用任务计划程序：
+
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1 -Repository $PWD -User "$env:USERDOMAIN\$env:USERNAME" -WhatIf
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1 -Repository $PWD -User "$env:USERDOMAIN\$env:USERNAME"
+    powershell -ExecutionPolicy Bypass -File .\scripts\service-status.ps1 -Repository $PWD
+    powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1 -Repository $PWD -WhatIf
+    powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1 -Repository $PWD
+
+任务以拥有 Codex、Claude、Pi、DeepSeek Harness 和 Telegram 凭据的用户运行；LocalSystem 不是默认账户。任务调用 start.ps1 -ServiceProcess -Mode service，同一任务名使用 IgnoreNew，并在崩溃后有限次数重试。服务模式默认不会打开浏览器，也不会阻止系统睡眠，除非显式设置 CLI_BRIDGE_SERVICE_MODE=1、WEB_AUTO_OPEN_BROWSER=true 或 TCB_KEEP_AWAKE=true。TCB_SERVICE_LOG_ENABLED=true 可启用轮转服务日志；默认位置是运行数据目录 logs/orbit-safe-claw-service.log，也可用 TCB_SERVICE_LOG_PATH 指定外部路径。
+
+Linux 使用专用用户安装 deploy/systemd/telegram-cli-bridge.service；它通过 start.sh 和同一个 scripts/update_runner.py 运行，不要另起 watchdog：
+
+    sudo install -m 644 deploy/systemd/telegram-cli-bridge.service /etc/systemd/system/orbit-safe-claw.service
+    sudo systemd-analyze verify /etc/systemd/system/orbit-safe-claw.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now orbit-safe-claw.service
+
+服务入口等待 network-online.target，使用 KillMode=control-group，并把退出 78 标记为需要恢复，避免自动重启循环。/api/health 的 ok 表示进程存活，ready 和 readiness 表示迁移、Web 和前端资源均可用；健康响应继续保留更新任务身份字段，更新探针必须提供临时令牌才会看到令牌值。退出码 0 是人工停止，75 请求普通重启，76 交接已确认的更新，78 保留恢复现场并等待人工处理。崩溃或强制停止时，内存中的 CLI、隧道、终端和 Agent 进程会被宿主进程树一起清理；已持久化的聊天历史仍可在下次启动后使用。
+
+日志和更新任务目录都位于运行数据或安装控制目录之外，并按大小轮转；服务日志过滤授权头、Token、API key、密码和凭据。固定公网转发仍必须保留 /node/<节点 ID>/ 前缀并支持 WebSocket。
+
 <details>
 <summary><strong>从源码快照安装</strong></summary>
 

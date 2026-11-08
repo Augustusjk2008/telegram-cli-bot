@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -229,7 +230,10 @@ def _has_posix_desktop_session() -> bool:
 
 
 def _should_open_local_browser() -> bool:
-    if not _env_flag_enabled("WEB_AUTO_OPEN_BROWSER", True):
+    configured = getattr(config, "WEB_AUTO_OPEN_BROWSER", True)
+    if "WEB_AUTO_OPEN_BROWSER" in os.environ:
+        configured = _env_flag_enabled("WEB_AUTO_OPEN_BROWSER", configured)
+    if not configured:
         return False
     if sys.platform in {"win32", "darwin"}:
         return True
@@ -392,6 +396,9 @@ def _install_asyncio_exception_filter(loop):
 
 def prevent_system_sleep():
     """阻止系统进入睡眠状态"""
+    if not config.is_keep_awake_enabled():
+        logger.debug("当前配置未启用系统睡眠抑制")
+        return
     if sys.platform == "win32":
         # ES_CONTINUOUS | ES_SYSTEM_REQUIRED: 持续阻止系统睡眠
         result = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
@@ -403,6 +410,8 @@ def prevent_system_sleep():
 
 def restore_system_sleep():
     """恢复系统睡眠功能"""
+    if not config.is_keep_awake_enabled():
+        return
     if sys.platform == "win32":
         # ES_CONTINUOUS: 清除之前的设置，恢复默认行为
         result = ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
@@ -410,6 +419,51 @@ def restore_system_sleep():
             logger.debug("已恢复系统睡眠功能")
         else:
             logger.warning("恢复系统睡眠失败")
+
+
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop) -> dict[int, tuple[str, object]]:
+    """Route termination signals into the async lifecycle without raising."""
+    handlers: dict[int, tuple[str, object]] = {}
+
+    def request_from_signal() -> None:
+        if loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(config.request_shutdown)
+        except RuntimeError:
+            return
+
+    def request_from_python_signal(_signum, _frame) -> None:
+        request_from_signal()
+
+    signals = [signal.SIGINT, signal.SIGTERM]
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signals.append(sigbreak)
+    for signum in signals:
+        try:
+            previous = signal.getsignal(signum)
+            try:
+                loop.add_signal_handler(signum, request_from_signal)
+                handlers[signum] = ("loop", previous)
+            except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+                signal.signal(signum, request_from_python_signal)
+                handlers[signum] = ("python", previous)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return handlers
+
+
+def _remove_signal_handlers(loop: asyncio.AbstractEventLoop, handlers: dict[int, tuple[str, object]]) -> None:
+    for signum, (kind, previous) in handlers.items():
+        try:
+            if kind == "loop":
+                loop.remove_signal_handler(signum)
+                signal.signal(signum, previous)
+            else:
+                signal.signal(signum, previous)
+        except (OSError, RuntimeError, ValueError):
+            continue
 
 
 async def _wait_update_acceptance(job_id: str, state_file: str) -> None:
@@ -426,14 +480,18 @@ async def _wait_update_acceptance(job_id: str, state_file: str) -> None:
 
 
 async def run_all_bots():
-    _install_asyncio_exception_filter(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    _install_asyncio_exception_filter(loop)
     config.RESTART_REQUESTED = False
     config.UPDATE_REQUESTED = False
+    config.SHUTDOWN_REQUESTED = False
     startup_update_job = os.environ.get("TCB_UPDATE_JOB_ID", "")
     config.UPDATE_DRAINING = bool(startup_update_job)
-    config.RESTART_EVENT = asyncio.Event()
     if not config.WEB_ENABLED:
         raise RuntimeError("WEB_ENABLED 不能为 false")
+    config.RESTART_EVENT = asyncio.Event()
+    config.SHUTDOWN_EVENT = asyncio.Event()
+    signal_handlers = _install_signal_handlers(loop)
 
     main_profile = BotProfile(
         alias="main",
@@ -482,7 +540,18 @@ async def run_all_bots():
             if not os.environ.get("TCB_UPDATE_JOB_ID"):
                 raise
             logger.exception("升级启动期间 Telegram 暂不可用，核心 Web 已启动")
-        await config.RESTART_EVENT.wait()
+        restart_wait = asyncio.create_task(config.RESTART_EVENT.wait())
+        shutdown_wait = asyncio.create_task(config.SHUTDOWN_EVENT.wait())
+        try:
+            await asyncio.wait(
+                {restart_wait, shutdown_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for waiter in (restart_wait, shutdown_wait):
+                if not waiter.done():
+                    waiter.cancel()
+            await asyncio.gather(restart_wait, shutdown_wait, return_exceptions=True)
     finally:
         if acceptance_task is not None:
             acceptance_task.cancel()
@@ -498,10 +567,8 @@ async def run_all_bots():
             save_all_sessions()
         _clear_web_runtime_state()
         config.RESTART_EVENT = None
-        # 注意：主bot关闭时不恢复睡眠，保持系统阻止睡眠状态
-        # 如需恢复睡眠，请手动重启系统或执行 powercfg 命令
-        # if not config.RESTART_REQUESTED:
-        #     restore_system_sleep()
+        config.SHUTDOWN_EVENT = None
+        _remove_signal_handlers(loop, signal_handlers)
 
 
 def main():
@@ -522,11 +589,12 @@ def main():
     # 禁用 Windows 错误弹窗，避免 CLI 子进程异常时卡住桌面会话
     suppress_windows_error_dialogs()
 
-    # 阻止系统进入睡眠状态
+    # 阻止系统进入睡眠状态（服务模式默认关闭）
     prevent_system_sleep()
 
     while True:
         config.RESTART_REQUESTED = False
+        config.SHUTDOWN_REQUESTED = False
         try:
             asyncio.run(run_all_bots())
         except KeyboardInterrupt:
@@ -541,6 +609,9 @@ def main():
             safe_print(message)
             sys.exit(1)
         except Exception as e:
+            if config.SHUTDOWN_REQUESTED:
+                logger.exception("关闭期间运行异常，停止重试: %s", e)
+                break
             if config.UPDATE_REQUESTED:
                 try:
                     from bot.update_service import get_update_service
@@ -574,14 +645,16 @@ def main():
                 safe_print(f"进程级重启失败: {e}")
                 break
             break
+        if config.SHUTDOWN_REQUESTED:
+            from bot.sessions import save_all_sessions
+            save_all_sessions()
+            break
         # 正常退出前保存会话
         from bot.sessions import save_all_sessions
         save_all_sessions()
         break
 
-    # 注意：程序退出时不恢复系统睡眠，保持系统阻止睡眠状态
-    # 如需恢复睡眠，请手动重启系统或执行 powercfg 命令
-    # restore_system_sleep()
+    restore_system_sleep()
 
 
 if __name__ == "__main__":

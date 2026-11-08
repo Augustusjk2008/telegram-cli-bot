@@ -1,16 +1,22 @@
 [Unit]
 Description=Telegram CLI Bridge
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
 User=telegram-cli-bridge
 Group=telegram-cli-bridge
 WorkingDirectory=/opt/telegram-cli-bridge
-Environment=TELEGRAM_CLI_BRIDGE_SUPERVISOR=1
+Environment=CLI_BRIDGE_SUPERVISOR=1
+Environment=CLI_BRIDGE_SERVICE_MODE=1
+Environment=WEB_AUTO_OPEN_BROWSER=false
+Environment=TCB_KEEP_AWAKE=false
 ExecStart=/opt/telegram-cli-bridge/start.sh
 Restart=on-failure
 RestartSec=2
+RestartPreventExitStatus=78
+TimeoutStopSec=30s
 KillMode=control-group
 
 [Install]

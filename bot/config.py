@@ -3,10 +3,12 @@
 import asyncio
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 import os
 import re
 import sys
+from pathlib import Path
 from typing import Any, List, Optional, Set
 
 from bot.cli_params import CLI_MODEL_OPTION_TYPES, normalize_cli_model_options
@@ -115,6 +117,17 @@ def _get_project_bool(name: str, default: bool = False) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+SERVICE_MODE_ENV = "CLI_BRIDGE_SERVICE_MODE"
+
+
+def is_service_mode() -> bool:
+    """Return whether the host was launched by a background service manager."""
+    raw_value = os.environ.get(SERVICE_MODE_ENV)
+    if raw_value is None:
+        raw_value = _DOTENV_VALUES.get(SERVICE_MODE_ENV, "")
+    return str(raw_value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _get_project_float(name: str, default: float) -> float:
     raw_value = _get_project_config(name, str(default)).strip()
     try:
@@ -214,6 +227,8 @@ def _refresh_environment_config() -> None:
     global TCB_LSP_MAX_RUNTIMES, TCB_LSP_EXTERNAL_SOURCES_ENABLED, CHAT_COMPLETION_NOTIFY_ENABLED
     global PUSHPLUS_ENABLED, PUSHPLUS_TOKEN, PUSHPLUS_TOPIC, PUSHPLUS_TEMPLATE, PUSHPLUS_CHANNEL
     global PUSHPLUS_API_URL, PUSHPLUS_TIMEOUT_SECONDS, PUSHPLUS_PREVIEW_CHARS
+    global WEB_AUTO_OPEN_BROWSER, TCB_KEEP_AWAKE
+    global SERVICE_LOG_ENABLED, SERVICE_LOG_MAX_BYTES, SERVICE_LOG_BACKUP_COUNT
 
     allowed_user_ids: list[int] = []
     allowed_raw = os.environ.get("ALLOWED_USER_IDS", "")
@@ -281,6 +296,15 @@ def _refresh_environment_config() -> None:
     TCB_STORAGE_MIGRATION_WORKERS = min(4, max(1, _get_project_int("TCB_STORAGE_MIGRATION_WORKERS", 2)))
 
     WEB_ENABLED = os.environ.get("WEB_ENABLED", "false").lower() == "true"
+    service_mode = is_service_mode()
+    WEB_AUTO_OPEN_BROWSER = _get_project_bool("WEB_AUTO_OPEN_BROWSER", not service_mode)
+    TCB_KEEP_AWAKE = _get_project_bool("TCB_KEEP_AWAKE", not service_mode)
+    SERVICE_LOG_ENABLED = service_mode and (
+        _get_project_bool("TCB_SERVICE_LOG_ENABLED", False)
+        or bool(_get_project_config("TCB_SERVICE_LOG_PATH", "").strip())
+    )
+    SERVICE_LOG_MAX_BYTES = max(64 * 1024, _get_project_int("TCB_SERVICE_LOG_MAX_BYTES", 5 * 1024 * 1024))
+    SERVICE_LOG_BACKUP_COUNT = min(20, max(1, _get_project_int("TCB_SERVICE_LOG_BACKUP_COUNT", 5)))
     WEB_HOST = _get_project_config("WEB_HOST", "0.0.0.0").strip() or "0.0.0.0"
     WEB_PORT = int(_get_project_config("WEB_PORT", "8765"))
     ENDLESS_CONTINUE_DELAY_SECONDS = max(0.0, _get_project_float("ENDLESS_CONTINUE_DELAY_SECONDS", 120.0))
@@ -557,9 +581,97 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
+
+_SERVICE_LOG_HANDLER_MARKER = "_tcb_service_log_handler"
+_SERVICE_LOG_SECRET_NAMES = (
+    "TELEGRAM_BOT_TOKEN",
+    "WEB_API_TOKEN",
+    "TCB_HUB_NODE_TOKEN",
+    "TCB_HUB_FRPS_TOKEN",
+    "NATIVE_AGENT_API_KEY",
+    "PUSHPLUS_TOKEN",
+    "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN",
+    "TCB_UPDATE_HEALTH_TOKEN",
+)
+
+
+def get_service_log_path() -> Path:
+    """Return the service log path outside the program installation."""
+    configured = _get_project_config("TCB_SERVICE_LOG_PATH", "").strip()
+    if configured:
+        return Path(os.path.expandvars(os.path.expanduser(configured))).absolute()
+    from bot.runtime_paths import get_app_data_root
+    return get_app_data_root() / "logs" / "orbit-safe-claw-service.log"
+
+
+def service_log_status() -> dict[str, Any]:
+    """Return non-sensitive service logging status for diagnostics and launchers."""
+    if not SERVICE_LOG_ENABLED:
+        return {"enabled": False, "path": ""}
+    return {"enabled": True, "path": str(get_service_log_path())}
+
+
+def _redact_log_text(value: str) -> str:
+    text = str(value)
+    for name in _SERVICE_LOG_SECRET_NAMES:
+        secret = os.environ.get(name, "") or _DOTENV_VALUES.get(name, "") or ""
+        if len(str(secret)) >= 4:
+            text = text.replace(str(secret), "[REDACTED]")
+    # Also cover common header and query-string forms that may be assembled at
+    # runtime rather than read directly from the environment.
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)((?:token|api[_-]?key|secret|password)\s*[=:]\s*)[^\s,;]+", r"\1[REDACTED]", text)
+    return text
+
+
+class _SecretRedactingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            record.msg = _redact_log_text(record.getMessage())
+            record.args = ()
+        except Exception:
+            # Logging must never break the host while handling an unusual
+            # object whose string conversion raises.
+            pass
+        return True
+
+
+def configure_service_logging() -> Path | None:
+    """Install an opt-in rotating file handler for service-mode diagnostics."""
+    if not SERVICE_LOG_ENABLED:
+        return None
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if getattr(handler, _SERVICE_LOG_HANDLER_MARKER, False):
+            return get_service_log_path()
+    path = get_service_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        redactor = _SecretRedactingFilter()
+        for existing_handler in root_logger.handlers:
+            if not any(isinstance(item, _SecretRedactingFilter) for item in existing_handler.filters):
+                existing_handler.addFilter(redactor)
+        handler = RotatingFileHandler(
+            path,
+            maxBytes=SERVICE_LOG_MAX_BYTES,
+            backupCount=SERVICE_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        handler.addFilter(redactor)
+        setattr(handler, _SERVICE_LOG_HANDLER_MARKER, True)
+        root_logger.addHandler(handler)
+        logger.info("服务日志已启用: %s", path)
+        return path
+    except OSError as exc:
+        logger.warning("无法启用服务日志 %s: %s", path, exc)
+        return None
+
 # ============ 全局可变状态 ============
 RESTART_REQUESTED = False
 RESTART_EVENT: Optional[asyncio.Event] = None
+SHUTDOWN_REQUESTED = False
+SHUTDOWN_EVENT: Optional[asyncio.Event] = None
 RESTART_EXIT_CODE = 75
 UPDATE_EXIT_CODE = 76
 UPDATE_REQUESTED = False
@@ -567,6 +679,8 @@ UPDATE_DRAINING = False
 UPDATE_JOB_ID = ""
 MIGRATIONS_READY = False
 RESTART_SUPERVISOR_ENV = "CLI_BRIDGE_SUPERVISOR"
+
+configure_service_logging()
 
 
 # ============ 重启相关函数 ============
@@ -608,6 +722,32 @@ def request_restart():
     if RESTART_EVENT is not None:
         RESTART_EVENT.set()
     logger.info("重启请求已发出")
+
+
+def request_shutdown() -> None:
+    """Request a graceful host shutdown without changing restart state."""
+    global SHUTDOWN_REQUESTED
+    if SHUTDOWN_REQUESTED:
+        return
+    SHUTDOWN_REQUESTED = True
+    if SHUTDOWN_EVENT is not None:
+        SHUTDOWN_EVENT.set()
+    logger.info("收到优雅关闭请求")
+
+
+def is_keep_awake_enabled() -> bool:
+    """Return whether this process should inhibit desktop sleep."""
+    return bool(TCB_KEEP_AWAKE)
+
+
+def is_sleep_inhibition_enabled() -> bool:
+    """Compatibility name for callers that describe the power policy directly."""
+    return is_keep_awake_enabled()
+
+
+def should_keep_awake() -> bool:
+    """Return the effective sleep-inhibition setting."""
+    return is_keep_awake_enabled()
 
 
 def request_update(job_id: str, state_file: str) -> None:

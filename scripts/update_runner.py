@@ -13,9 +13,12 @@ import os
 from pathlib import Path
 import secrets
 import runpy
+import signal
+import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import urllib.parse
@@ -25,6 +28,15 @@ RESTART_EXIT_CODE = 75
 UPDATE_EXIT_CODE = 76
 RECOVERY_EXIT_CODE = 78
 RECOVERY_PHASES = {"applying", "awaiting_health", "rolling_back", "recovery_required"}
+SUPERVISOR_POLL_SECONDS = 0.25
+SUPERVISOR_STOP_TIMEOUT_SECONDS = 15.0
+SUPERVISOR_CRASH_RESTART_DELAY_SECONDS = 1.0
+SUPERVISOR_MAX_CRASH_RESTARTS = 5
+SUPERVISOR_STOP_EVENT = threading.Event()
+
+
+class SupervisorStopRequested(RuntimeError):
+    """Raised internally when a manual supervisor stop interrupts an update."""
 
 
 def _load(name: str, path: Path):
@@ -152,6 +164,26 @@ def _job(store, job_id: str) -> dict:
     return job
 
 
+def _redact_text(value: object) -> str:
+    text = str(value or "")
+    for name in (
+        "TELEGRAM_BOT_TOKEN",
+        "WEB_API_TOKEN",
+        "TCB_HUB_NODE_TOKEN",
+        "TCB_HUB_FRPS_TOKEN",
+        "NATIVE_AGENT_API_KEY",
+        "PUSHPLUS_TOKEN",
+        "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN",
+        "TCB_UPDATE_HEALTH_TOKEN",
+    ):
+        secret = os.environ.get(name, "")
+        if len(secret) >= 4:
+            text = text.replace(secret, "[REDACTED]")
+    text = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)((?:token|api[_-]?key|secret|password)\s*[=:]\s*)[^\s,;]+", r"\1[REDACTED]", text)
+    return text
+
+
 def _change(store, job_id: str, phase: str, **fields) -> dict:
     def mutate(state):
         if (state.get("job") or {}).get("job_id") != job_id:
@@ -163,7 +195,7 @@ def _change(store, job_id: str, phase: str, **fields) -> dict:
         log = store.job_dir(job_id) / "runner.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"time": time.time(), "phase": phase, "error": fields.get("error", "")}, ensure_ascii=False) + "\n")
+            handle.write(json.dumps({"time": time.time(), "phase": phase, "error": _redact_text(fields.get("error", ""))}, ensure_ascii=False) + "\n")
     except OSError:
         pass
     return state["job"]
@@ -174,6 +206,201 @@ def _host_command(repo_root: Path, python: str) -> list[str]:
     if bootstrap.is_file():
         return [python, str(bootstrap), "bot", str(repo_root)]
     return [python, "-m", "bot"]
+
+
+def _create_windows_job(process):
+    """Best-effort Job Object containment for a frozen Windows runner."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            wintypes.INT,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        kernel.SetInformationJobObject.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.CreateJobObjectW(None, None)
+        if not handle:
+            return None
+        process_handle = getattr(process, "_handle", None)
+        if not process_handle or not kernel.AssignProcessToJobObject(handle, process_handle):
+            kernel.CloseHandle(handle)
+            return None
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimitInformation),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        limits = _ExtendedLimitInformation()
+        # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: descendants die if the
+        # supervisor is forcibly terminated before its normal cleanup runs.
+        limits.BasicLimitInformation.LimitFlags = 0x00002000
+        if not kernel.SetInformationJobObject(
+            handle,
+            9,  # JobObjectExtendedLimitInformation
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            kernel.CloseHandle(handle)
+            return None
+        return (kernel, handle)
+    except (AttributeError, OSError, TypeError):
+        return None
+
+
+def _close_windows_job(job) -> None:
+    if not job:
+        return
+    kernel, handle = job
+    try:
+        kernel.CloseHandle(handle)
+    except (OSError, TypeError):
+        pass
+
+
+def _terminate_windows_job(job) -> bool:
+    if not job:
+        return False
+    kernel, handle = job
+    try:
+        from ctypes import wintypes
+        kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    except (AttributeError, NameError):
+        pass
+    try:
+        return bool(kernel.TerminateJobObject(handle, 1))
+    except (AttributeError, OSError, TypeError):
+        return False
+
+
+def _attach_process_tree(child):
+    """Attach process-group/Job Object metadata to a supervisor child."""
+    child._tcb_process_group_id = child.pid if os.name != "nt" else None
+    child._tcb_windows_job = _create_windows_job(child)
+    return child
+
+
+def _send_tree_signal(child, *, force: bool = False) -> None:
+    if child is None or child.poll() is not None:
+        return
+    if os.name == "nt":
+        if force and _terminate_windows_job(getattr(child, "_tcb_windows_job", None)):
+            return
+        if not force:
+            try:
+                child.send_signal(getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM))
+                return
+            except (AttributeError, OSError, ValueError):
+                pass
+        taskkill = shutil.which("taskkill") or os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe"
+        )
+        try:
+            subprocess.run(
+                [taskkill, "/PID", str(child.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return
+        except OSError:
+            pass
+    else:
+        process_group_id = getattr(child, "_tcb_process_group_id", None)
+        if process_group_id:
+            try:
+                os.killpg(process_group_id, signal.SIGKILL if force else signal.SIGTERM)
+                return
+            except (AttributeError, OSError, ProcessLookupError):
+                pass
+    try:
+        if force:
+            child.kill()
+        else:
+            child.terminate()
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _close_process_tree(child) -> None:
+    _close_windows_job(getattr(child, "_tcb_windows_job", None))
+    if child is not None:
+        child._tcb_windows_job = None
+
+
+def _cleanup_descendants_after_exit(child) -> None:
+    """Terminate descendants left behind after the host leader has exited."""
+    if child is None:
+        return
+    if os.name == "nt":
+        job = getattr(child, "_tcb_windows_job", None)
+        if job and _terminate_windows_job(job):
+            _close_process_tree(child)
+            return
+        taskkill = shutil.which("taskkill") or os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe"
+        )
+        try:
+            subprocess.run(
+                [taskkill, "/PID", str(child.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError:
+            pass
+        _close_process_tree(child)
+        return
+    process_group_id = getattr(child, "_tcb_process_group_id", None)
+    if process_group_id:
+        try:
+            os.killpg(process_group_id, signal.SIGTERM)
+            time.sleep(0.05)
+            os.killpg(process_group_id, signal.SIGKILL)
+        except (AttributeError, OSError, ProcessLookupError):
+            pass
+    _close_process_tree(child)
 
 
 def _start_host(repo_root: Path, python: str, store, job_id="", token="", legacy=False):
@@ -192,7 +419,13 @@ def _start_host(repo_root: Path, python: str, store, job_id="", token="", legacy
     if legacy:
         command = [python, str(Path(__file__).resolve()), "legacy-host", "--repo-root", str(repo_root),
                    "--state-file", str(store.state_path), "--job-id", job_id]
-    child = subprocess.Popen(command, cwd=repo_root, env=env)
+    popen_kwargs = {"cwd": repo_root, "env": env}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+    child = subprocess.Popen(command, **popen_kwargs)
+    _attach_process_tree(child)
     child.update_handoff_path = handoff_path
     child.update_handoff_token = handoff_token
     # Do not persist the host PID: the store may be a pre-migration source whose
@@ -231,15 +464,36 @@ def _store_after_host_exit(repo_root: Path, store, child, code: int):
     return current
 
 
-def _stop_child(child) -> None:
+def _stop_child(child, *, timeout: float = SUPERVISOR_STOP_TIMEOUT_SECONDS) -> None:
     # Only the child started by this supervisor is eligible for termination.
-    if child is not None and child.poll() is None:
-        child.terminate()
+    if child is None:
+        return
+    if child.poll() is None:
+        _send_tree_signal(child)
         try:
-            child.wait(timeout=15)
+            child.wait(timeout=max(0.1, timeout))
         except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait(timeout=15)
+            _send_tree_signal(child, force=True)
+            try:
+                child.wait(timeout=max(0.1, timeout))
+            except subprocess.TimeoutExpired:
+                pass
+    _cleanup_descendants_after_exit(child)
+
+
+def _wait_for_child(child, stop_event: threading.Event) -> tuple[int, bool]:
+    """Wait in short intervals so a supervisor signal can stop the host."""
+    while True:
+        if stop_event.is_set() or SUPERVISOR_STOP_EVENT.is_set():
+            _stop_child(child)
+            return 0, True
+        try:
+            code = int(child.wait(timeout=SUPERVISOR_POLL_SECONDS))
+            if stop_event.is_set() or SUPERVISOR_STOP_EVENT.is_set():
+                return code, True
+            return code, False
+        except (subprocess.TimeoutExpired, InterruptedError):
+            continue
 
 
 def read_health(url: str, token: str) -> dict:
@@ -340,10 +594,13 @@ def legacy_host(repo_root: Path, store, job_id: str) -> int:
     return 0
 
 
-def wait_for_health(child, job: dict, version: str, token: str, *, legacy=False, recovering=False) -> dict:
+def wait_for_health(child, job: dict, version: str, token: str, *, legacy=False,
+                    recovering=False, stop_event: threading.Event | None = None) -> dict:
     deadline = time.monotonic() + float(job.get("health_timeout", 90))
     error = "Health endpoint did not become ready"
     while time.monotonic() < deadline:
+        if stop_event is not None and stop_event.is_set():
+            raise SupervisorStopRequested("Supervisor stop requested during health confirmation")
         if child.poll() is not None:
             raise RuntimeError(f"Host exited before health confirmation (exit {child.returncode})")
         try:
@@ -433,7 +690,8 @@ def _prune_finished_jobs(store) -> None:
         print(f"[update] job cleanup skipped: {exc}", file=sys.stderr, flush=True)
 
 
-def recover_job(repo_root: Path, store, job_id: str, error: str):
+def recover_job(repo_root: Path, store, job_id: str, error: str,
+                *, stop_event: threading.Event | None = None):
     job = _effective_job(_job(store, job_id))
     if job.get("phase") not in RECOVERY_PHASES:
         raise RuntimeError("Only an interrupted or failed application may be recovered")
@@ -454,11 +712,16 @@ def recover_job(repo_root: Path, store, job_id: str, error: str):
         child = _start_host(repo_root, python, store, job_id, token, legacy)
         _change(store, job_id, "rolling_back", child_pid=child.pid)
         health = wait_for_health(child, job, job["current_version"], token,
-                                 legacy=bool(job.get("bootstrap_legacy")), recovering=True)
+                                 legacy=bool(job.get("bootstrap_legacy")), recovering=True,
+                                 stop_event=stop_event)
         _active_python(store, python)
         _change(store, job_id, "rolled_back", result={"version": job["current_version"], "instance_id": health["instance_id"]})
         _prune_finished_jobs(store)
         return child, python
+    except SupervisorStopRequested:
+        _stop_child(child)
+        _change(store, job_id, "rolling_back", child_pid=0, error="Supervisor stop requested during recovery")
+        raise
     except Exception as exc:
         _stop_child(child)
         _change(store, job_id, "recovery_required", error=f"{error}; recovery failed: {exc}",
@@ -471,7 +734,7 @@ def recovery_command(repo_root: Path, store, job: dict) -> list[str]:
             "recover", "--repo-root", str(repo_root), "--state-file", str(store.state_path), "--job-id", job["job_id"]]
 
 
-def apply_job(repo_root: Path, store, job_id: str):
+def apply_job(repo_root: Path, store, job_id: str, *, stop_event: threading.Event | None = None):
     job = _effective_job(_job(store, job_id))
     if job.get("phase") != "waiting_restart":
         raise RuntimeError("Only an explicitly confirmed waiting_restart job may be applied")
@@ -493,7 +756,7 @@ def apply_job(repo_root: Path, store, job_id: str):
         token = secrets.token_urlsafe(32)
         child = _start_host(repo_root, job["python_executable"], store, job_id, token)
         _change(store, job_id, "awaiting_health", child_pid=child.pid)
-        health = wait_for_health(child, job, job["target_version"], token)
+        health = wait_for_health(child, job, job["target_version"], token, stop_event=stop_event)
         # Keep backups until both health and state persistence have succeeded.
         _active_python(store, job["python_executable"])
         _change(store, job_id, "succeeded", error="", result={"version": job["target_version"], "instance_id": health["instance_id"]})
@@ -505,10 +768,15 @@ def apply_job(repo_root: Path, store, job_id: str):
             _change(store, job_id, "succeeded", error=f"Backup retained: {exc}")
         _prune_finished_jobs(store)
         return child, job["python_executable"]
+    except SupervisorStopRequested:
+        _stop_child(child)
+        _change(store, job_id, "rolling_back", child_pid=0,
+                error="Supervisor stop requested during update health confirmation")
+        raise
     except Exception as exc:
         _stop_child(child)
         _change(store, job_id, "rolling_back", child_pid=0, rejected_instance_ids=job.get("observed_instance_ids", []))
-        return recover_job(repo_root, store, job_id, str(exc))
+        return recover_job(repo_root, store, job_id, str(exc), stop_event=stop_event)
 
 
 def _verify_snapshot(job: dict) -> list[str]:
@@ -519,41 +787,113 @@ def _verify_snapshot(job: dict) -> list[str]:
     return [job["control_python_executable"], str(runner)]
 
 
+@contextmanager
+def _supervisor_signal_context(stop_event: threading.Event):
+    previous_handlers = {}
+
+    def request_stop(_signum, _frame):
+        stop_event.set()
+
+    signals = [signal.SIGINT, signal.SIGTERM]
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signals.append(sigbreak)
+    for signum in signals:
+        try:
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_stop)
+        except (OSError, RuntimeError, ValueError):
+            continue
+    try:
+        yield
+    finally:
+        for signum, handler in previous_handlers.items():
+            try:
+                signal.signal(signum, handler)
+            except (OSError, RuntimeError, ValueError):
+                continue
+
+
+def _service_mode_enabled() -> bool:
+    return os.environ.get("CLI_BRIDGE_SERVICE_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def supervise(repo_root: Path, store, python: str, *, action="supervise", job_id="") -> int:
     next_job = None
-    with supervisor_lock(store):
-        state = store.read()
-        # supervisor_lock already verifies the installation's host.lock. A
-        # host_pid left in older state files is ignored: the PID can be reused
-        # by an unrelated process after the old host exits.
-        job = state.get("job") or {}
-        if action == "apply":
-            child, python = apply_job(repo_root, store, job_id)
-        elif action == "recover" or job.get("phase") in RECOVERY_PHASES:
-            child, python = recover_job(repo_root, store, job_id or job["job_id"], "Interrupted update")
-        elif job.get("phase") == "waiting_restart" and job.get("host_exit_confirmed"):
-            next_job, child = job, None
-        else:
-            if job.get("phase") == "waiting_restart":
-                _change(store, job["job_id"], "ready", error="Shutdown handoff was interrupted; confirm application again")
-            child = _start_host(repo_root, python, store)
-        while child is not None:
-            code = child.wait()
-            store = _store_after_host_exit(repo_root, store, child, code)
-            if code == RESTART_EXIT_CODE:
+    stop_event = threading.Event()
+    global SUPERVISOR_STOP_EVENT
+    SUPERVISOR_STOP_EVENT = stop_event
+    crash_restarts = 0
+    with _supervisor_signal_context(stop_event):
+        with supervisor_lock(store):
+            state = store.read()
+            # supervisor_lock already verifies the installation's host.lock. A
+            # host_pid left in older state files is ignored: the PID can be reused
+            # by an unrelated process after the old host exits.
+            job = state.get("job") or {}
+            if action == "apply":
+                try:
+                    child, python = apply_job(repo_root, store, job_id, stop_event=stop_event)
+                except SupervisorStopRequested:
+                    return 0
+            elif action == "recover" or job.get("phase") in RECOVERY_PHASES:
+                try:
+                    child, python = recover_job(
+                        repo_root,
+                        store,
+                        job_id or job["job_id"],
+                        "Interrupted update",
+                        stop_event=stop_event,
+                    )
+                except SupervisorStopRequested:
+                    return 0
+            elif job.get("phase") == "waiting_restart" and job.get("host_exit_confirmed"):
+                next_job, child = job, None
+            else:
+                if job.get("phase") == "waiting_restart":
+                    _change(store, job["job_id"], "ready", error="Shutdown handoff was interrupted; confirm application again")
+                if stop_event.is_set():
+                    return 0
                 child = _start_host(repo_root, python, store)
-                continue
-            if code == UPDATE_EXIT_CODE:
-                job = store.read().get("job") or {}
-                if job.get("phase") != "waiting_restart" or not job.get("job_id"):
-                    raise RuntimeError("Exit 76 without a confirmed update job")
-                next_job = _change(store, job["job_id"], "waiting_restart", host_exit_confirmed=True, child_pid=0)
-                break
-            return code
-    # Release the lifetime lock before handing control to the immutable job snapshot.
-    command = _verify_snapshot(next_job)
-    return subprocess.call([*command, "apply", "--repo-root", str(repo_root),
-                            "--state-file", str(store.state_path), "--job-id", next_job["job_id"]])
+            while child is not None:
+                code, stopped = _wait_for_child(child, stop_event)
+                try:
+                    store = _store_after_host_exit(repo_root, store, child, code)
+                finally:
+                    _cleanup_descendants_after_exit(child)
+                if stopped:
+                    # A confirmed update handoff is retained for the next
+                    # explicit service start, but a manual stop never applies it.
+                    return 0
+                if code == RESTART_EXIT_CODE:
+                    crash_restarts = 0
+                    child = _start_host(repo_root, python, store)
+                    continue
+                if code == UPDATE_EXIT_CODE:
+                    job = store.read().get("job") or {}
+                    if job.get("phase") != "waiting_restart" or not job.get("job_id"):
+                        raise RuntimeError("Exit 76 without a confirmed update job")
+                    next_job = _change(store, job["job_id"], "waiting_restart", host_exit_confirmed=True, child_pid=0)
+                    break
+                if code == RECOVERY_EXIT_CODE:
+                    return RECOVERY_EXIT_CODE
+                if code == 0:
+                    return 0
+                if _service_mode_enabled() and crash_restarts < SUPERVISOR_MAX_CRASH_RESTARTS:
+                    crash_restarts += 1
+                    time.sleep(SUPERVISOR_CRASH_RESTART_DELAY_SECONDS)
+                    if stop_event.is_set():
+                        return 0
+                    child = _start_host(repo_root, python, store)
+                    continue
+                return code
+        # Release the lifetime lock before handing control to the immutable job
+        # snapshot. A stop request must never start the updater.
+        if stop_event.is_set() or next_job is None:
+            return 0 if stop_event.is_set() else 0
+        command = _verify_snapshot(next_job)
+        return subprocess.call([*command, "apply", "--repo-root", str(repo_root),
+                                "--state-file", str(store.state_path), "--job-id", next_job["job_id"]])
 
 
 def main(argv=None) -> int:

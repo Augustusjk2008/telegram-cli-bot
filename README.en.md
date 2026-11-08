@@ -105,6 +105,30 @@ Linux and macOS require Python 3.10+, Git, and Node.js 22.13+. The native Pi age
 
 The source launchers `start.bat`, `start.ps1`, and `start.sh` use the existing frontend assets and do not rebuild them during startup. After changing the frontend, run `npm run build` manually in `front`, then restart the service.
 
+
+### Interactive and background service modes
+
+The default start.bat / start.ps1 path keeps its tray and browser behavior, and python -m bot remains a supported direct launch. For unattended Windows operation, use the dependency-free Task Scheduler helpers:
+
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1 -Repository $PWD -User "$env:USERDOMAIN\$env:USERNAME" -WhatIf
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1 -Repository $PWD -User "$env:USERDOMAIN\$env:USERNAME"
+    powershell -ExecutionPolicy Bypass -File .\scripts\service-status.ps1 -Repository $PWD
+    powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1 -Repository $PWD -WhatIf
+    powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1 -Repository $PWD
+
+The task must run as the user who owns the Codex, Claude, Pi, DeepSeek Harness, and Telegram credentials; LocalSystem is not the default account. It calls start.ps1 -ServiceProcess -Mode service, ignores duplicate instances, and uses bounded restart attempts. Service mode defaults to no browser launch and no sleep inhibition. Explicit settings CLI_BRIDGE_SERVICE_MODE=1, WEB_AUTO_OPEN_BROWSER=true, or TCB_KEEP_AWAKE=true may override that behavior. Set TCB_SERVICE_LOG_ENABLED=true for a rotating service log; the default is runtime-data/logs/orbit-safe-claw-service.log, with TCB_SERVICE_LOG_PATH available for an external destination.
+
+On Linux, install deploy/systemd/telegram-cli-bridge.service under a dedicated user. It starts start.sh and the same scripts/update_runner.py; do not add a second watchdog:
+
+    sudo install -m 644 deploy/systemd/telegram-cli-bridge.service /etc/systemd/system/orbit-safe-claw.service
+    sudo systemd-analyze verify /etc/systemd/system/orbit-safe-claw.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now orbit-safe-claw.service
+
+The unit waits for network-online.target, uses KillMode=control-group, and marks exit 78 as recovery-required so systemd does not restart in a loop. /api/health keeps ok as the process liveness result and ready/readiness as migration, Web, and frontend readiness; update identity fields remain backward-compatible, while token values require the temporary update probe header. Exit 0 is a manual stop, 75 requests a normal restart, 76 hands off a confirmed update, and 78 preserves recovery state for an operator. A crash or forced stop terminates the host's CLI, tunnel, terminal, and agent descendants; persisted chat history remains available after the next launch.
+
+Service and update logs live outside program files, rotate by size, and redact authorization headers, tokens, API keys, passwords, and credentials. Fixed public forwarding must continue to preserve the /node/<node ID>/ prefix and WebSocket support.
+
 <details>
 <summary><strong>Install from a source snapshot</strong></summary>
 
