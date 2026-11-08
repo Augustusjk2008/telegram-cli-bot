@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Square, Trash2, X } from "lucide-react";
 import type { DeepSeekProviderOption, FileUploadProgress, PromptPreset } from "../services/types";
@@ -68,6 +68,50 @@ type Props = {
 };
 
 type PresetScope = "global" | "bot";
+
+const PASTED_IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/avif": "avif",
+  "image/bmp": "bmp",
+  "image/gif": "gif",
+  "image/heic": "heic",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/svg+xml": "svg",
+  "image/tiff": "tiff",
+  "image/webp": "webp",
+  "image/x-icon": "ico",
+};
+
+function pastedImageExtension(type: string) {
+  const normalizedType = type.trim().toLowerCase().split(";", 1)[0];
+  return PASTED_IMAGE_EXTENSIONS[normalizedType] || "png";
+}
+
+function getPastedImageFiles(event: ClipboardEvent<HTMLTextAreaElement>): File[] {
+  const items = Array.from(event.clipboardData?.items || []);
+  const pastedAt = Date.now();
+  return items.flatMap((item, index) => {
+    if (item.kind !== "file") {
+      return [];
+    }
+    const file = item.getAsFile();
+    if (!file) {
+      return [];
+    }
+    const type = file.type || item.type;
+    if (!/^image\//i.test(type)) {
+      return [];
+    }
+    if (file.name) {
+      return [file];
+    }
+    const extension = pastedImageExtension(type || "image/png");
+    return [new File([file], `pasted-image-${pastedAt}-${index}.${extension}`, {
+      type,
+      lastModified: file.lastModified,
+    })];
+  });
+}
 
 function clonePromptPresetList(presets: PromptPreset[] = []) {
   return presets.map((preset) => ({ ...preset }));
@@ -589,6 +633,17 @@ export function ChatComposer({
               rows={1}
               disabled={inputDisabled}
               onChange={(event) => setMessage(event.currentTarget.value)}
+              onPaste={(event) => {
+                if (!onAttachFiles || inputDisabled) {
+                  return;
+                }
+                const imageFiles = getPastedImageFiles(event);
+                if (imageFiles.length === 0) {
+                  return;
+                }
+                event.preventDefault();
+                onAttachFiles(imageFiles);
+              }}
               onKeyDown={(event) => {
                 if (event.nativeEvent.isComposing) {
                   return;
