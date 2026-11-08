@@ -126,9 +126,8 @@ Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+；Pi 原生 Agent 还�
 
 任务以拥有 Codex、Claude、Pi、DeepSeek Harness 和 Telegram 凭据的用户运行；LocalSystem 不是默认账户。任务调用 start.ps1 -ServiceProcess -Mode service，同一任务名使用 IgnoreNew，并在崩溃后有限次数重试。服务模式默认不会打开浏览器，也不会阻止系统睡眠，除非显式设置 CLI_BRIDGE_SERVICE_MODE=1、WEB_AUTO_OPEN_BROWSER=true 或 TCB_KEEP_AWAKE=true。TCB_SERVICE_LOG_ENABLED=true 可启用轮转服务日志；默认位置是运行数据目录 logs/orbit-safe-claw-service.log，也可用 TCB_SERVICE_LOG_PATH 指定外部路径。
 
-Linux 使用专用用户安装 deploy/systemd/telegram-cli-bridge.service；它通过 start.sh 和同一个 scripts/update_runner.py 运行，不要另起 watchdog：
+Linux 安装阶段会根据当前 checkout 路径和执行账户，自动生成并安装 `/etc/systemd/system/orbit-safe-claw.service`；它通过 `start.sh` 和同一个 `scripts/update_runner.py` 运行，不要另起 watchdog。安装脚本只写入 unit，不会自动启动服务；`--check-only` 不会写入。若需要手动维护 unit，再把 `User`、`Group`、`WorkingDirectory` 和 `ExecStart` 改为目标用户及 checkout 路径：
 
-    sudo install -m 644 deploy/systemd/telegram-cli-bridge.service /etc/systemd/system/orbit-safe-claw.service
     sudo systemd-analyze verify /etc/systemd/system/orbit-safe-claw.service
     sudo systemctl daemon-reload
     sudo systemctl enable --now orbit-safe-claw.service

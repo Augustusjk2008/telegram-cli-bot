@@ -118,9 +118,8 @@ The default start.bat / start.ps1 path keeps its tray and browser behavior, and 
 
 The task must run as the user who owns the Codex, Claude, Pi, DeepSeek Harness, and Telegram credentials; LocalSystem is not the default account. It calls start.ps1 -ServiceProcess -Mode service, ignores duplicate instances, and uses bounded restart attempts. Service mode defaults to no browser launch and no sleep inhibition. Explicit settings CLI_BRIDGE_SERVICE_MODE=1, WEB_AUTO_OPEN_BROWSER=true, or TCB_KEEP_AWAKE=true may override that behavior. Set TCB_SERVICE_LOG_ENABLED=true for a rotating service log; the default is runtime-data/logs/orbit-safe-claw-service.log, with TCB_SERVICE_LOG_PATH available for an external destination.
 
-On Linux, install deploy/systemd/telegram-cli-bridge.service under a dedicated user. It starts start.sh and the same scripts/update_runner.py; do not add a second watchdog:
+On Linux, the installer now renders and installs /etc/systemd/system/orbit-safe-claw.service from the current checkout path and account. It starts start.sh and the same scripts/update_runner.py; do not add a second watchdog. The installer writes the unit but does not start the service, and --check-only skips it. If you maintain the unit manually, change User, Group, WorkingDirectory, and ExecStart to match the target account and checkout path:
 
-    sudo install -m 644 deploy/systemd/telegram-cli-bridge.service /etc/systemd/system/orbit-safe-claw.service
     sudo systemd-analyze verify /etc/systemd/system/orbit-safe-claw.service
     sudo systemctl daemon-reload
     sudo systemctl enable --now orbit-safe-claw.service

@@ -475,6 +475,8 @@ install_example_plugins() {
 
 run_install_user_phase() {
   local user_home="${1:-}"
+  local service_user="${TCB_SERVICE_USER:-$SUDO_USER}"
+  local service_home="${TCB_SERVICE_HOME:-$user_home}"
   shift || true
   local user_path="/opt/homebrew/bin:/usr/local/bin"
   if [[ -n "$user_home" ]]; then
@@ -482,7 +484,10 @@ run_install_user_phase() {
   else
     user_path="$user_path:$PATH"
   fi
-  exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 TCB_ADMIN_USERNAME="$ADMIN_USERNAME" TCB_ADMIN_PASSWORD="$ADMIN_PASSWORD" PATH="$user_path" bash "$0" "${ORIGINAL_ARGS[@]}"
+  exec sudo -u "$SUDO_USER" -H env INSTALL_USER_PHASE=1 \
+    TCB_SERVICE_USER="$service_user" TCB_SERVICE_HOME="$service_home" \
+    TCB_ADMIN_USERNAME="$ADMIN_USERNAME" TCB_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+    PATH="$user_path" bash "$0" "${ORIGINAL_ARGS[@]}"
 }
 
 install_linux_system_dependencies() {
@@ -497,6 +502,116 @@ install_linux_system_dependencies() {
     info "NodeSource 软件源配置完成"
     run_command "安装 Node.js LTS" $SUDO apt-get install -y nodejs
   fi
+}
+
+resolve_service_user() {
+  if [[ -n "${TCB_SERVICE_USER:-}" ]]; then
+    printf '%s\n' "$TCB_SERVICE_USER"
+    return 0
+  fi
+  if [[ ${EUID:-0} -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    printf '%s\n' "$SUDO_USER"
+    return 0
+  fi
+  id -un
+}
+
+resolve_service_home() {
+  local service_user="$1"
+  if [[ -n "${TCB_SERVICE_HOME:-}" ]]; then
+    printf '%s\n' "$TCB_SERVICE_HOME"
+    return 0
+  fi
+  if [[ "$service_user" == "$(id -un)" && -n "${HOME:-}" ]]; then
+    printf '%s\n' "$HOME"
+    return 0
+  fi
+  if command -v getent >/dev/null 2>&1; then
+    getent passwd "$service_user" | awk -F: 'NR == 1 { print $6; exit }'
+    return 0
+  fi
+  printf '/home/%s\n' "$service_user"
+}
+
+install_linux_systemd_unit() {
+  local template_path="$SCRIPT_DIR/deploy/systemd/telegram-cli-bridge.service"
+  local unit_path="${TCB_SYSTEMD_UNIT_PATH:-/etc/systemd/system/orbit-safe-claw.service}"
+  local service_user service_group service_home input_path temporary_path
+
+  if [[ ! -f "$template_path" ]]; then
+    warn "未找到 systemd unit 模板，跳过后台服务安装: $template_path"
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "当前 Linux 没有 systemctl，跳过 systemd unit 安装。"
+    return 0
+  fi
+
+  service_user="$(resolve_service_user)"
+  if ! id "$service_user" >/dev/null 2>&1; then
+    fail "systemd 服务账户不存在: $service_user；可设置 TCB_SERVICE_USER 后重试。"
+    return 1
+  fi
+  service_group="${TCB_SERVICE_GROUP:-$(id -gn "$service_user")}"
+  service_home="$(resolve_service_home "$service_user")"
+  if [[ -z "$service_home" ]]; then
+    fail "无法确定 systemd 服务账户的 HOME: $service_user"
+    return 1
+  fi
+
+  input_path="$template_path"
+  if [[ -f "$unit_path" ]]; then
+    input_path="$unit_path"
+  fi
+  temporary_path="$(mktemp)"
+  if ! TCB_RENDER_USER="$service_user" \
+    TCB_RENDER_GROUP="$service_group" \
+    TCB_RENDER_HOME="$service_home" \
+    TCB_RENDER_ROOT="$SCRIPT_DIR" \
+    awk '
+      /^User=/ { print "User=" ENVIRON["TCB_RENDER_USER"]; next }
+      /^Group=/ { print "Group=" ENVIRON["TCB_RENDER_GROUP"]; next }
+      /^WorkingDirectory=/ { print "WorkingDirectory=" ENVIRON["TCB_RENDER_ROOT"]; next }
+      /^Environment=HOME=/ { print "Environment=HOME=" ENVIRON["TCB_RENDER_HOME"]; next }
+      /^ExecStart=/ { print "ExecStart=/bin/bash " ENVIRON["TCB_RENDER_ROOT"] "/start.sh"; next }
+      { print }
+    ' "$input_path" > "$temporary_path"; then
+    rm -f "$temporary_path"
+    fail "生成 systemd unit 失败。"
+    return 1
+  fi
+
+  if ! grep -q '^Environment=HOME=' "$temporary_path"; then
+    local with_home_path
+    with_home_path="$(mktemp)"
+    if ! TCB_RENDER_HOME="$service_home" awk '
+      /^WorkingDirectory=/ {
+        print
+        print "Environment=HOME=" ENVIRON["TCB_RENDER_HOME"]
+        next
+      }
+      { print }
+    ' "$temporary_path" > "$with_home_path"; then
+      rm -f "$temporary_path" "$with_home_path"
+      fail "写入 systemd 服务 HOME 失败。"
+      return 1
+    fi
+    mv "$with_home_path" "$temporary_path"
+  fi
+
+  local install_exit=0
+  if [[ -n "$SUDO" ]]; then
+    run_command "安装 systemd unit" "$SUDO" install -D -m 644 "$temporary_path" "$unit_path" || install_exit=$?
+  else
+    run_command "安装 systemd unit" install -D -m 644 "$temporary_path" "$unit_path" || install_exit=$?
+  fi
+  rm -f "$temporary_path"
+  if [[ "$install_exit" -ne 0 ]]; then
+    return "$install_exit"
+  fi
+
+  info "已根据当前路径和账户安装 systemd unit: $unit_path"
+  info "启用服务前请执行: sudo systemctl daemon-reload && sudo systemctl enable --now orbit-safe-claw.service"
 }
 
 install_macos_system_dependencies() {
@@ -644,6 +759,10 @@ initialize_register_code "$PYTHON_BIN"
 
 step "初始化管理员账号"
 initialize_admin_user "$PYTHON_BIN"
+
+if [[ "$RUNTIME_PLATFORM" == "linux" ]]; then
+  install_linux_systemd_unit
+fi
 
 if [[ -z "${WEB_PUBLIC_URL:-}" && ( -z "${WEB_TUNNEL_MODE:-}" || "${WEB_TUNNEL_MODE:-disabled}" == "disabled" ) ]]; then
   info "如需外网访问，可在 .env 中设置 WEB_TUNNEL_MODE=cloudflare_quick，或配置反向代理后填写 WEB_PUBLIC_URL。"
