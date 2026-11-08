@@ -44,7 +44,7 @@
 - Antigravity 通过 `bot/cluster/setup.py` 管理工作区 `.agents/mcp_config.json` 的 `tcb-cluster` 条目，并用同目录的 `.tcb-cluster-mcp-state.json` 记录管理状态；保留其他 server，遇到用户已有条目或后续修改时报告冲突，关闭集群时仅清理由宿主管理且未被改动的条目。
 - DeepSeek 在集群轮次追加 `--patch`，由 `@deepseek-ai/dsh-mcp-client` 调用项目 `mcp_stdio.py --config ...`。管理页准备该 patch，安装、验证、移除命令列表为空；不向用户 Harness 全局配置写入注册项。
 - Pi 不使用 stdio launcher 注册工具，而由 `bot/cluster/pi_extension/tcb-cluster.ts` 作为宿主适配层，直接调用同一 bridge API。
-- 两种适配层都暴露 `configure_team`、`cluster_status`、`list_agents`、`new_agent_session`、`ask_agent`、`poll_agent_tasks`、`wait_agent_messages`。
+- 两种适配层都暴露 `configure_team`、`cluster_status`、`list_agents`、`new_agent_session`、`ask_agent`、`cancel_agent_task`、`poll_agent_tasks`、`wait_agent_messages`。
 - `bot/data/prompts/cluster_mode.md` 在底层 agent 会话首轮或集群状态/写入策略变化时拼到用户消息前；连续启用轮次改用 `cluster_turn.md` 提醒继续使用当前 `run_id`，连续关闭轮次不重复提示。MCP tool description 只描述具体工具和参数。
 - `run_id` 由主会话 `conversation_id + cluster_team_revision` 稳定推导；同一主会话与编组在普通轮次和宿主重启后得到同一个 ID，不新增数据库 ID 字段。
 - 只有 `configure_team` 实际新增、删除、修改或重新分配角色时才递增编组版本并轮换 `run_id`。无变化请求返回 `changed=false` 和原 ID；普通轮次结束、异常、停止、集群开关切换及宿主重启均不轮换。
@@ -63,7 +63,7 @@
 - 管理页各执行后端共用集群配置面板。CLI 模型和思考深度选项来自各自参数 schema；Pi 模型来自原生模型列表，每档思考深度选项跟随该档实际选择的模型。
 - `conflict_policy` 以及物理槽位的 `enabled`、`allow_cluster`、`allow_write`、`session_policy`、`timeout_seconds` 当前只被解析、保存或回显，不驱动动态任务执行。
 - `ask_agent.allow_write` 当前只按 Bot `write_policy` 校验并记录，不是文件系统或 CLI sandbox 的权限边界。
-- `ask_agent.timeout_seconds` 未传时使用 Bot `default_timeout_seconds`；超时是软期限，只在任务状态标记 `deadline_exceeded`，不会强制终止子 agent。
+- `ask_agent.timeout_seconds` 未传时使用 Bot `default_timeout_seconds`；超时是软期限，只在任务状态标记 `deadline_exceeded`，不会强制终止子 agent。主 agent 可通过 `cancel_agent_task(task_id)` 精确停止一个排队或运行中的子任务，不影响同一 run 的其他任务。
 
 ## Pi 扩展和环境
 

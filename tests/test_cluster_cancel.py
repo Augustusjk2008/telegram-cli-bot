@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -9,6 +10,7 @@ from bot.cluster.runtime import (
     AskAgentRequest,
     ClusterRuntime,
     ClusterRunRequest,
+    ClusterToolError,
     derive_cluster_run_id,
 )
 from bot.models import AgentProfile, BotProfile, UserSession
@@ -60,6 +62,34 @@ def test_complete_and_fail_keep_cancelled_task_status() -> None:
     assert saved.error == "stop"
     assert saved.output == ""
     assert [message.kind for message in saved.messages].count("final") == 1
+
+
+def test_cancel_agent_task_only_cancels_selected_task() -> None:
+    runtime = ClusterRuntime()
+    run, first = _run_with_task(runtime)
+    second = runtime.create_agent_task(
+        run.run_id,
+        runtime.validate_ask_agent(run.run_id, {"agent_id": "worker", "message": "second"}),
+    )
+    runtime.mark_agent_task_running(run.run_id, first.task_id)
+
+    cancelled = runtime.cancel_agent_task(run.run_id, first.task_id, "主 agent 不再需要")
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.error == "主 agent 不再需要"
+    assert runtime.get_run(run.run_id).tasks[second.task_id].status == "queued"  # type: ignore[union-attr]
+    assert runtime.build_task_status(run.run_id)["pending_count"] == 1
+    assert runtime.cancel_agent_task(run.run_id, first.task_id).status == "cancelled"
+
+
+def test_cancel_agent_task_rejects_unknown_task() -> None:
+    runtime = ClusterRuntime()
+    run, _task = _run_with_task(runtime)
+
+    with pytest.raises(ClusterToolError) as exc_info:
+        runtime.cancel_agent_task(run.run_id, "missing")
+
+    assert exc_info.value.code == "cluster_task_not_found"
 
 
 def test_finish_run_keeps_cancelled_run_status() -> None:
@@ -118,6 +148,106 @@ async def test_cancel_cluster_run_cancels_running_background_tasks(monkeypatch) 
     finally:
         background_task.cancel()
         await asyncio.gather(background_task, return_exceptions=True)
+        api_service._CLUSTER_RUN_CONTROLS.clear()
+
+
+@pytest.mark.asyncio
+async def test_cancel_agent_task_tool_only_stops_selected_background_task(monkeypatch) -> None:
+    import bot.web.api_service as api_service
+
+    runtime = ClusterRuntime()
+    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
+    api_service._CLUSTER_RUN_CONTROLS.clear()
+    run, task = _run_with_task(runtime)
+    other_task = runtime.create_agent_task(
+        run.run_id,
+        runtime.validate_ask_agent(run.run_id, {"agent_id": "worker", "message": "other"}),
+    )
+    runtime.mark_agent_task_running(run.run_id, task.task_id)
+    profile = run.profile
+    monkeypatch.setattr(api_service, "get_profile_or_raise", lambda *_args: profile)
+
+    background_task = asyncio.create_task(asyncio.sleep(60))
+    control = api_service._cluster_run_control(run.run_id, 1)
+    control.tasks.add(background_task)
+    control.task_handles[task.task_id] = background_task
+    background_task.add_done_callback(control.tasks.discard)
+
+    try:
+        profile.cluster = replace(profile.cluster, enabled=False)
+        result = await api_service.handle_cluster_mcp_tool(
+            object(),
+            run.run_id,
+            "cancel_agent_task",
+            {"task_id": task.task_id, "message": "主 agent 收回任务"},
+        )
+
+        assert result["data"]["cancelled"] is True
+        assert result["data"]["status"] == "cancelled"
+        assert result["data"]["agent_id"] == "worker"
+        assert background_task.cancelled()
+        assert run.tasks[task.task_id].status == "cancelled"
+        assert run.tasks[other_task.task_id].status == "queued"
+    finally:
+        background_task.cancel()
+        await asyncio.gather(background_task, return_exceptions=True)
+        api_service._CLUSTER_RUN_CONTROLS.clear()
+
+
+@pytest.mark.asyncio
+async def test_cancel_agent_task_interrupts_child_stream(monkeypatch) -> None:
+    import bot.web.api_service as api_service
+
+    runtime = ClusterRuntime()
+    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
+    api_service._CLUSTER_RUN_CONTROLS.clear()
+    run = runtime.start_run(
+        ClusterRunRequest(
+            bot_alias="main",
+            user_id=1,
+            profile=_profile(),
+            execution_mode="cli",
+        )
+    )
+    profile = run.profile
+    started = asyncio.Event()
+    interrupted = asyncio.Event()
+
+    async def blocking_stream(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            interrupted.set()
+            raise
+        if False:
+            yield {}
+
+    monkeypatch.setattr(api_service, "get_profile_or_raise", lambda *_args: profile)
+    monkeypatch.setattr(api_service, "_stream_cli_chat", blocking_stream)
+
+    try:
+        created = await api_service.handle_cluster_mcp_tool(
+            object(),
+            run.run_id,
+            "ask_agent",
+            {"agent_id": "worker", "message": "long work"},
+        )
+        task_id = created["data"]["task_id"]
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert runtime.get_run(run.run_id).tasks[task_id].status == "running"  # type: ignore[union-attr]
+
+        result = await api_service.handle_cluster_mcp_tool(
+            object(),
+            run.run_id,
+            "cancel_agent_task",
+            {"task_id": task_id},
+        )
+
+        assert result["data"]["status"] == "cancelled"
+        assert interrupted.is_set()
+        assert runtime.get_run(run.run_id).tasks[task_id].status == "cancelled"  # type: ignore[union-attr]
+    finally:
         api_service._CLUSTER_RUN_CONTROLS.clear()
 
 

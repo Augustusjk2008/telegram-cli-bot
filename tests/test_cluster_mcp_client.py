@@ -60,7 +60,7 @@ def test_post_mcp_tool_reports_context_when_bad_gateway_persists(monkeypatch) ->
     assert "poll_agent_tasks" in str(result["error"])
 
 
-@pytest.mark.parametrize("tool_name", ["configure_team", "ask_agent", "new_agent_session"])
+@pytest.mark.parametrize("tool_name", ["configure_team", "ask_agent", "cancel_agent_task", "new_agent_session"])
 def test_post_mcp_tool_does_not_retry_side_effecting_tools(monkeypatch, tool_name: str) -> None:
     config = McpBridgeConfig(bridge_url="http://bridge.test", token="token")
     attempts: list[str] = []

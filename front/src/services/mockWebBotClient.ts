@@ -4317,7 +4317,7 @@ export class MockWebBotClient implements WebBotClient {
         message: "Antigravity 工作区 MCP 已配置",
         configPath: "C:\\workspace\\.agents\\mcp_config.json",
         scope: "workspace",
-        allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
+        allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "cancel_agent_task", "poll_agent_tasks", "wait_agent_messages"],
       };
       if (cliType === "pi") return { state: "installed", message: "Pi 集群扩展已配置" };
       return { state: "runtime_ready", message: "运行态可用" };
@@ -4331,7 +4331,7 @@ export class MockWebBotClient implements WebBotClient {
       mcp: {
         serverName: "tcb-cluster",
         activeCliType,
-        tools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
+        tools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "cancel_agent_task", "poll_agent_tasks", "wait_agent_messages"],
         runtime: { state: "runtime_ready", message: "运行态可用" },
         codex: targets.codex || { state: "not_checked", message: "未使用" },
         claude: targets.claude || { state: "not_checked", message: "未使用" },
@@ -4406,7 +4406,7 @@ export class MockWebBotClient implements WebBotClient {
         removeCommand: [],
         workspaceMcpConfigPath: "C:\\workspace\\.agents\\mcp_config.json",
         workspaceMcpScope: "workspace",
-        mcpAllowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "poll_agent_tasks", "wait_agent_messages"],
+        mcpAllowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "cancel_agent_task", "poll_agent_tasks", "wait_agent_messages"],
         mcpSetupState: "installed",
         statuslineCommand: ["python", "bot\\antigravity_statusline.py"],
         message: "Antigravity 工作区 MCP 已配置",

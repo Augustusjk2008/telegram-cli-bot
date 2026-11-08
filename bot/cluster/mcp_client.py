@@ -18,7 +18,7 @@ class McpBridgeConfig:
 _TRANSIENT_HTTP_STATUSES = {502, 503, 504}
 _MAX_TRANSIENT_HTTP_ATTEMPTS = 3
 _TRANSIENT_RETRY_DELAY_SECONDS = 0.2
-_SIDE_EFFECTING_TOOLS = {"configure_team", "ask_agent", "new_agent_session"}
+_SIDE_EFFECTING_TOOLS = {"configure_team", "ask_agent", "cancel_agent_task", "new_agent_session"}
 
 
 def load_mcp_bridge_config(path: Path) -> McpBridgeConfig:

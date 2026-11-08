@@ -157,6 +157,8 @@ def _cluster_async_tool_fallback(trace_events: list[dict[str, Any]]) -> str:
             return "已启动子 agent 任务。"
         if tool_name == "poll_agent_tasks":
             return "已获取子 agent 任务状态。"
+        if tool_name == "cancel_agent_task":
+            return "已请求停止子 agent 任务。"
         if tool_name == "wait_agent_messages":
             return "已收到子 agent 回告。"
     return ""
@@ -164,12 +166,17 @@ def _cluster_async_tool_fallback(trace_events: list[dict[str, Any]]) -> str:
 
 def _is_cluster_async_tool_result(trace: dict[str, Any]) -> bool:
     tool_name = _trace_tool_name(trace)
-    if _cluster_tool_name(tool_name) not in {"ask_agent", "poll_agent_tasks", "wait_agent_messages"}:
+    if _cluster_tool_name(tool_name) not in {"ask_agent", "cancel_agent_task", "poll_agent_tasks", "wait_agent_messages"}:
         return False
     payload = trace.get("payload") if isinstance(trace.get("payload"), dict) else {}
     text = _trace_text(payload) or _trace_text(trace.get("summary"))
     normalized = text.strip()
-    return "\"task_id\"" in normalized or "\"tasks\"" in normalized or "\"messages\"" in normalized
+    return (
+        "\"task_id\"" in normalized
+        or "\"tasks\"" in normalized
+        or "\"messages\"" in normalized
+        or "\"cancelled\"" in normalized
+    )
 
 
 def _trace_tool_name(trace: dict[str, Any]) -> str:

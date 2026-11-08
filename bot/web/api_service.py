@@ -274,6 +274,7 @@ class _ClusterRunControl:
     semaphore: asyncio.Semaphore
     agent_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    task_handles: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
     cancel_requested: bool = False
     stop_holds: int = 0
 
@@ -1476,12 +1477,12 @@ async def handle_cluster_mcp_tool(
         if run is None:
             _raise(404, "cluster_run_not_found", "未找到集群任务")
         current_profile = get_profile_or_raise(manager, run.bot_alias)
-        if not current_profile.cluster.enabled:
+        if not current_profile.cluster.enabled and tool_name != "cancel_agent_task":
             _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
         requested_run_id = str(run_id or "").strip()
         if run.run_id != requested_run_id:
             # extend re-keyed this run; reads follow it, side effects need the current run_id.
-            if tool_name in {"ask_agent", "new_agent_session"}:
+            if tool_name in {"ask_agent", "cancel_agent_task", "new_agent_session"}:
                 _raise(409, "cluster_run_changed", "编组已更新，请改用当前 run_id 后重试", {"run_id": run.run_id})
             if tool_name != "configure_team":
                 run_id = run.run_id
@@ -1557,6 +1558,16 @@ async def handle_cluster_mcp_tool(
                     message_limit=_cluster_task_message_limit(payload),
                 ),
             }
+        if tool_name == "cancel_agent_task":
+            _require_current_cluster_team(manager, run)
+            task_id = str(payload.get("task_id", payload.get("taskId", "")) or "").strip()
+            message = str(payload.get("message") or "主 agent 已取消子 agent 任务").strip()
+            result = await _cancel_cluster_agent_task(
+                run_id,
+                task_id,
+                message or "主 agent 已取消子 agent 任务",
+            )
+            return {"ok": True, "data": result}
         if tool_name == "wait_agent_messages":
             uses_managed_cursor = "after_sequence" not in payload and "afterSequence" not in payload
             result = await _CLUSTER_RUNTIME.wait_agent_messages(
@@ -1606,7 +1617,14 @@ async def handle_cluster_mcp_tool(
         control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
         background_task = asyncio.create_task(_run_cluster_agent_task(manager, run_id, task.task_id))
         control.tasks.add(background_task)
+        control.task_handles[task.task_id] = background_task
         background_task.add_done_callback(control.tasks.discard)
+        background_task.add_done_callback(
+            lambda _task, current_control=control, current_task_id=task.task_id: current_control.task_handles.pop(
+                current_task_id,
+                None,
+            )
+        )
         background_task.add_done_callback(lambda _task, current_run_id=run_id: _cleanup_cluster_run_control_if_idle(current_run_id))
         return {
             "ok": True,
@@ -4654,6 +4672,49 @@ def _schedule_cluster_parent_wakeup(
             _schedule_cluster_parent_wakeup(manager, run.run_id)
 
     wakeup_task.add_done_callback(finish_wakeup)
+
+
+async def _cancel_cluster_agent_task(
+    run_id: str,
+    task_id: str,
+    message: str = "已取消",
+) -> dict[str, Any]:
+    """Cancel one child task and its actual background execution."""
+    normalized_run_id = _CLUSTER_RUNTIME.resolve_run_id(run_id)
+    if not normalized_run_id:
+        raise ClusterToolError("cluster_run_not_found", "未找到集群任务")
+    run = _CLUSTER_RUNTIME.get_run(normalized_run_id)
+    if run is None:
+        raise ClusterToolError("cluster_run_not_found", "未找到集群任务")
+    normalized_task_id = str(task_id or "").strip()
+    if not normalized_task_id:
+        raise ClusterToolError("cluster_task_required", "缺少子 agent task_id")
+    task = run.tasks.get(normalized_task_id)
+    if task is None:
+        raise ClusterToolError("cluster_task_not_found", "未找到子 agent 任务")
+
+    was_pending = task.status in {"queued", "running"}
+    if was_pending:
+        _CLUSTER_RUNTIME.cancel_agent_task(normalized_run_id, normalized_task_id, message)
+        control = _CLUSTER_RUN_CONTROLS.get(normalized_run_id)
+        background_task = control.task_handles.get(normalized_task_id) if control is not None else None
+        current_task = asyncio.current_task()
+        if background_task is not None and not background_task.done() and background_task is not current_task:
+            background_task.cancel()
+            await asyncio.gather(background_task, return_exceptions=True)
+        if control is not None:
+            control.task_handles.pop(normalized_task_id, None)
+            if background_task is not None:
+                control.tasks.discard(background_task)
+        await _CLUSTER_RUNTIME.notify_agent_task_message(normalized_run_id)
+        _cleanup_cluster_run_control_if_idle(normalized_run_id)
+
+    return {
+        "task_id": normalized_task_id,
+        "agent_id": task.agent_id,
+        "status": task.status,
+        "cancelled": was_pending,
+    }
 
 
 def _finish_cluster_parent_turn(manager: MultiBotManager, run_id: str) -> None:

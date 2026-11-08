@@ -620,21 +620,44 @@ class ClusterRuntime:
         run = self.get_run(run_id)
         if run is None:
             return []
-        now = self._now_iso()
         cancelled: list[ClusterAgentTask] = []
         for task in run.tasks.values():
             if task.status not in {"queued", "running"}:
                 continue
-            task.status = "cancelled"
-            task.completed_at = now
-            task.error = str(message or "已取消")
-            self.append_agent_task_message(run_id, task.task_id, kind="final", content=task.error)
-            self.append_event(
-                run_id,
-                {"kind": "agent_task_cancelled", "task_id": task.task_id, "agent_id": task.agent_id, "error": task.error[:200]},
-            )
-            cancelled.append(task)
+            cancelled.append(self.cancel_agent_task(run_id, task.task_id, message))
         return cancelled
+
+    def cancel_agent_task(
+        self,
+        run_id: str,
+        task_id: str,
+        message: str = "已取消",
+    ) -> ClusterAgentTask:
+        """Cancel one queued or running child task without changing the run."""
+        run = self._run(run_id)
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            raise ClusterToolError("cluster_task_required", "缺少子 agent task_id")
+        task = run.tasks.get(normalized_task_id)
+        if task is None:
+            raise ClusterToolError("cluster_task_not_found", "未找到子 agent 任务")
+        if task.status not in {"queued", "running"}:
+            return task
+        now = self._now_iso()
+        task.status = "cancelled"
+        task.completed_at = now
+        task.error = (str(message or "已取消").strip() or "已取消")[:1000]
+        self.append_agent_task_message(run_id, task.task_id, kind="final", content=task.error)
+        self.append_event(
+            run_id,
+            {
+                "kind": "agent_task_cancelled",
+                "task_id": task.task_id,
+                "agent_id": task.agent_id,
+                "error": task.error[:200],
+            },
+        )
+        return task
 
     def _task_deadline_exceeded(self, task: ClusterAgentTask) -> bool:
         if task.status != "running" or not task.started_at:

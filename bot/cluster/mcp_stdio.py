@@ -105,6 +105,20 @@ def _tools_for_environment() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "cancel_agent_task",
+            "annotations": _tool_annotations(read_only=False, idempotent=True),
+            "description": "Cancel one queued or running child agent task by task_id without stopping other tasks in the current run. Always pass run_id. The cancellation terminates the child agent execution and returns its final cancelled status; canceling an already finished task is idempotent.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["run_id", "task_id"],
+                "properties": {
+                    "run_id": {"type": "string", "description": "TCB cluster run id."},
+                    "task_id": {"type": "string", "description": "The task_id returned by ask_agent."},
+                    "message": {"type": "string", "description": "Optional cancellation reason shown in task status."},
+                },
+            },
+        },
+        {
             "name": "poll_agent_tasks",
             "annotations": _tool_annotations(read_only=True, idempotent=True),
             "description": "Poll asynchronous child agent task status, progress messages, and results in the current TCB cluster. Always pass run_id. Empty task_ids returns all tasks in the current run. Optional wait_seconds waits for task completion within this tool call; it defaults to 0 for an immediate return. include_messages defaults to true; messages[].kind is progress or final, and messages exclude events/tool calls.",

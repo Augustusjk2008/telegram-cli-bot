@@ -166,6 +166,17 @@ export default function (pi: ExtensionAPI) {
 		(params) => withoutRunId(params),
 	));
 	pi.registerTool(clusterTool(
+		"cancel_agent_task",
+		"Cancel Agent Task",
+		"Cancel one queued or running child agent task by task_id without stopping other tasks in the current run. The cancellation terminates the child agent execution and is idempotent for finished tasks.",
+		Type.Object({
+			run_id: runIdParam,
+			task_id: Type.String({ description: "The task_id returned by ask_agent." }),
+			message: Type.Optional(Type.String({ description: "Optional cancellation reason shown in task status." })),
+		}),
+		(params) => withoutRunId(params),
+	));
+	pi.registerTool(clusterTool(
 		"poll_agent_tasks",
 		"Poll Agent Tasks",
 		"Poll asynchronous child agent task status, progress messages, and results in the current TCB cluster.",

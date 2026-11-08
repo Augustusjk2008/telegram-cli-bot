@@ -25,6 +25,7 @@ CLUSTER_MCP_TOOL_NAMES = (
     "list_agents",
     "new_agent_session",
     "ask_agent",
+    "cancel_agent_task",
     "poll_agent_tasks",
     "wait_agent_messages",
 )
