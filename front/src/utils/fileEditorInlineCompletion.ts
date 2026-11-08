@@ -1,4 +1,5 @@
 import {
+  Prec,
   StateEffect,
   StateField,
   type Extension,
@@ -265,7 +266,7 @@ export function createFileEditorInlineCompletion(options: FileEditorInlineComple
   return [
     inlineSuggestionField,
     controllerPlugin,
-    keymap.of([
+    Prec.highest(keymap.of([
       { key: "Tab", run: acceptInlineSuggestion },
       { key: "Escape", run: clearInlineSuggestion },
       {
@@ -275,7 +276,7 @@ export function createFileEditorInlineCompletion(options: FileEditorInlineComple
           return controller?.requestManual() ?? false;
         },
       },
-    ]),
+    ])),
     EditorView.baseTheme({
       ".cm-ai-inline-ghost": {
         color: "var(--muted)",
