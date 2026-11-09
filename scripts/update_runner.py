@@ -33,6 +33,11 @@ SUPERVISOR_STOP_TIMEOUT_SECONDS = 15.0
 SUPERVISOR_CRASH_RESTART_DELAY_SECONDS = 1.0
 SUPERVISOR_MAX_CRASH_RESTARTS = 5
 SUPERVISOR_STOP_EVENT = threading.Event()
+# A first start after an update recompiles every rewritten module; slow Windows
+# hosts need more than a minute. A job may carry its own health_timeout.
+DEFAULT_HEALTH_TIMEOUT_SECONDS = 180.0
+CONTROL_SNAPSHOT_MIN_AGE_SECONDS = 24 * 3600
+_CONTROL_SNAPSHOT_NAME = re.compile(r"launcher-[0-9a-f]{16}|[0-9a-f]{20}")
 
 
 class SupervisorStopRequested(RuntimeError):
@@ -90,7 +95,7 @@ def freeze_runner(repo_root: Path, snapshot_dir: Path, *, source_root: Path | No
     for name, source in sources.items():
         target = snapshot_dir / name
         if target.exists() and _hash(target) != _hash(source):
-            raise RuntimeError(f"Recovery snapshot is immutable: {target}")
+            raise RuntimeError(f"恢复执行器快照不可修改: {target}")
         if not target.exists():
             shutil.copy2(source, target)
         hashes[name] = _hash(target)
@@ -99,13 +104,83 @@ def freeze_runner(repo_root: Path, snapshot_dir: Path, *, source_root: Path | No
         identity = hashlib.sha256(str(snapshot_dir).encode()).hexdigest()[:20]
         destination = control_root(repo_root) / identity / "python"
         if destination.exists():
-            raise RuntimeError(f"Control runtime already exists: {destination}")
+            raise RuntimeError(f"控制用 Python 运行时已存在: {destination}")
         shutil.copytree(control_python.parent, destination, ignore=shutil.ignore_patterns("site-packages", "__pycache__"))
         control_python = destination / control_python.name
     if control_python.is_relative_to(repo_root):
-        raise RuntimeError("Control Python cannot be inside the installation")
+        raise RuntimeError("控制用 Python 不能位于安装目录内")
     return {"runner_path": str(snapshot_dir / "update_runner.py"),
             "control_python_executable": str(control_python), "runner_hashes": hashes}
+
+
+def _string_values(value, depth=0):
+    if depth > 16:
+        return
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _string_values(child, depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _string_values(child, depth + 1)
+
+
+def _control_entry_name(root: Path, value) -> str:
+    """Return the top-level control-root entry containing an absolute path value."""
+    if not isinstance(value, str) or not value or not os.path.isabs(value):
+        return ""
+    candidate = os.path.normcase(os.path.abspath(value))
+    for base in {os.path.abspath(root), os.path.realpath(root)}:
+        try:
+            relative = os.path.relpath(candidate, os.path.normcase(base))
+        except ValueError:
+            continue
+        first = relative.split(os.sep, 1)[0]
+        if first not in {"", ".", ".."} and not os.path.isabs(relative):
+            return first
+    return ""
+
+
+def prune_control_snapshots(repo_root: Path, store, keep=(), *,
+                            min_age_seconds=CONTROL_SNAPSHOT_MIN_AGE_SECONDS) -> list[str]:
+    """Delete launcher and control-Python snapshots nothing references; never raises.
+
+    Runs only while no supervisor and no host hold this installation's locks, so
+    no process can be executing from a snapshot being removed. Anything named in
+    the update state (including recovery commands), in ``keep`` or used by this
+    process is retained, as is every snapshot modified within ``min_age_seconds``.
+    """
+    try:
+        root = control_root(repo_root)
+        if not root.is_dir():
+            return []
+        state_module = sys.modules[store.__class__.__module__]
+        with state_module.FileLock(root / "supervisor.lock", timeout=0), \
+                state_module.FileLock(root / "host.lock", timeout=0):
+            values = [*_string_values(store.read()), *_string_values(list(keep)),
+                      sys.executable, str(Path(__file__).resolve())]
+            referenced = {os.path.normcase(name) for name in (_control_entry_name(root, value) for value in values) if name}
+            deleted, now = [], time.time()
+            for entry in sorted(os.scandir(root), key=lambda item: item.name):
+                path = Path(entry.path)
+                if (not _CONTROL_SNAPSHOT_NAME.fullmatch(entry.name) or os.path.normcase(entry.name) in referenced
+                        or not entry.is_dir(follow_symlinks=False) or path.is_symlink()
+                        or (hasattr(path, "is_junction") and path.is_junction())):
+                    continue
+                try:
+                    latest = max([path.lstat().st_mtime,
+                                  *(child.stat(follow_symlinks=False).st_mtime for child in os.scandir(path))])
+                    if now - latest < min_age_seconds:
+                        continue
+                    shutil.rmtree(path)
+                    deleted.append(entry.name)
+                except OSError as exc:
+                    print(f"[update] 无法清理旧的恢复执行器快照 {path}: {exc}", file=sys.stderr, flush=True)
+            return deleted
+    except Exception as exc:
+        print(f"[update] 跳过恢复执行器快照清理: {exc}", file=sys.stderr, flush=True)
+        return []
 
 
 def open_store(repo_root: Path, state_file: str = ""):
@@ -511,14 +586,14 @@ def verify_legacy_files(repo_root: Path, job: dict) -> None:
     package = _load("update_package", package_path)
     actual = package.normalize_version((repo_root / "VERSION").read_text(encoding="utf-8-sig"))
     if actual != package.normalize_version(job["current_version"]):
-        raise RuntimeError("Recovered VERSION does not match the previous release")
+        raise RuntimeError("恢复后的 VERSION 与旧版本不一致")
     hashes = job.get("previous_frontend_hashes") or {}
     if "front/dist/index.html" not in hashes:
-        raise RuntimeError("No verified previous frontend entry is available")
+        raise RuntimeError("缺少可核验的旧版前端入口")
     for relative, expected in hashes.items():
         path = (repo_root / relative).resolve()
         if not path.is_relative_to((repo_root / "front/dist").resolve()) or _hash(path) != expected:
-            raise RuntimeError(f"Recovered frontend resource does not match: {relative}")
+            raise RuntimeError(f"恢复后的前端资源不一致: {relative}")
     base = job.get("frontend_base_path", job.get("health_base_path", ""))
     if "front/dist/build-info.json" in hashes:
         base = str(json.loads((repo_root / "front/dist/build-info.json").read_text(encoding="utf-8-sig")).get("base_path", base)).rstrip("/")
@@ -537,7 +612,7 @@ def verify_legacy_files(repo_root: Path, job: dict) -> None:
                 relative = relative[len(base):]
             path = (repo_root / "front/dist" / relative.lstrip("/")).resolve()
             if not path.is_relative_to((repo_root / "front/dist").resolve()) or not path.is_file():
-                raise RuntimeError(f"Recovered frontend entry references a missing resource: {reference}")
+                raise RuntimeError(f"恢复后的前端入口引用了缺失资源: {reference}")
     EntryAssets().feed((repo_root / "front/dist/index.html").read_text(encoding="utf-8"))
 
 
@@ -597,13 +672,14 @@ def legacy_host(repo_root: Path, store, job_id: str) -> int:
 
 def wait_for_health(child, job: dict, version: str, token: str, *, legacy=False,
                     recovering=False, stop_event: threading.Event | None = None) -> dict:
-    deadline = time.monotonic() + float(job.get("health_timeout", 90))
-    error = "Health endpoint did not become ready"
+    timeout = float(job.get("health_timeout") or DEFAULT_HEALTH_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + timeout
+    error = "健康检查端点尚未就绪"
     while time.monotonic() < deadline:
         if stop_event is not None and stop_event.is_set():
-            raise SupervisorStopRequested("Supervisor stop requested during health confirmation")
+            raise SupervisorStopRequested("健康确认期间收到停止请求")
         if child.poll() is not None:
-            raise RuntimeError(f"Host exited before health confirmation (exit {child.returncode})")
+            raise RuntimeError(f"新宿主在健康确认前退出（退出码 {child.returncode}）")
         try:
             health = read_health(job["health_url"], token)
             instance = health.get("instance_id")
@@ -629,11 +705,11 @@ def wait_for_health(child, job: dict, version: str, token: str, *, legacy=False,
                            and (not expected_build or health.get("build_id") == expected_build))
             if matches:
                 return health
-            error = "Health identity, version or readiness did not match the update"
+            error = "健康检查返回的实例、版本或就绪状态与本次升级不一致"
         except (OSError, ValueError) as exc:
             error = str(exc)
         time.sleep(0.25)
-    raise RuntimeError(f"Health confirmation timed out: {error}")
+    raise RuntimeError(f"健康确认超时（{timeout:g} 秒）: {error}")
 
 
 def _active_python(store, python: str) -> None:
@@ -691,6 +767,24 @@ def _prune_finished_jobs(store) -> None:
         print(f"[update] job cleanup skipped: {exc}", file=sys.stderr, flush=True)
 
 
+def _require_no_running_host(store, job: dict) -> None:
+    """Refuse recovery while a host for this installation is still alive.
+
+    Official hosts hold host.lock for their whole lifetime, which, unlike a
+    recorded PID, cannot be confused with an unrelated process after a reboot.
+    Legacy (pre-protocol) hosts take no lock, so only they fall back to the PID.
+    """
+    message = "本安装仍有宿主进程在运行，请先退出该进程再恢复"
+    if job.get("bootstrap_legacy") and _pid_alive(int(job.get("child_pid") or 0)):
+        raise RuntimeError(message)
+    state_module = sys.modules[store.__class__.__module__]
+    try:
+        with state_module.FileLock(store.execution_lock_root / "host.lock", timeout=0):
+            pass
+    except state_module.UpdateConflict as exc:
+        raise RuntimeError(message) from exc
+
+
 def recover_job(repo_root: Path, store, job_id: str, error: str,
                 *, stop_event: threading.Event | None = None):
     job = _effective_job(_job(store, job_id))
@@ -699,8 +793,7 @@ def recover_job(repo_root: Path, store, job_id: str, error: str,
     child = None
     _change(store, job_id, "rolling_back", error=error)
     try:
-        if _pid_alive(int(job.get("child_pid") or 0)):
-            raise RuntimeError("A previously launched host is still running; exit it before recovery")
+        _require_no_running_host(store, job)
         _, transaction_type = _helpers(repo_root)
         transaction = transaction_type(repo_root, Path(job["backup_dir"]))
         if (Path(job["backup_dir"]) / "journal.jsonl").exists() or job.get("transaction_started") is not False:
@@ -721,12 +814,14 @@ def recover_job(repo_root: Path, store, job_id: str, error: str,
         return child, python
     except SupervisorStopRequested:
         _stop_child(child)
-        _change(store, job_id, "rolling_back", child_pid=0, error="Supervisor stop requested during recovery")
+        _change(store, job_id, "rolling_back", child_pid=0, error="恢复期间收到停止请求")
         raise
     except Exception as exc:
         _stop_child(child)
-        _change(store, job_id, "recovery_required", error=f"{error}; recovery failed: {exc}",
-                result={"recovery_command": recovery_command(repo_root, store, job)})
+        # A child this call started has been stopped; never leave its PID behind.
+        stopped = {"child_pid": 0} if child is not None else {}
+        _change(store, job_id, "recovery_required", error=f"{error}；恢复失败: {exc}",
+                result={"recovery_command": recovery_command(repo_root, store, job)}, **stopped)
         raise
 
 
@@ -747,10 +842,10 @@ def apply_job(repo_root: Path, store, job_id: str, *, stop_event: threading.Even
     _change(store, job_id, "applying", transaction_started=False)
     try:
         if not isinstance(job.get("original_hashes"), dict):
-            raise RuntimeError("Update job has no original file hashes; prepare the update again")
+            raise RuntimeError("升级任务缺少原文件校验快照，请重新准备")
         for relative, expected in job.get("prepared_hashes", {}).items():
             if _hash(Path(job["staging_dir"]) / relative) != expected:
-                raise RuntimeError(f"Prepared file changed: {relative}")
+                raise RuntimeError(f"暂存文件发生变化: {relative}")
         transaction.apply(Path(job["staging_dir"]), job["files"], job.get("delete_paths", []),
                           expected_hashes=job["original_hashes"])
         _change(store, job_id, "awaiting_health", transaction_started=True)
@@ -766,13 +861,13 @@ def apply_job(repo_root: Path, store, job_id: str, *, stop_event: threading.Even
         except Exception as exc:
             # Health and durable success already agree. Retain the backup if final
             # journal bookkeeping fails; the running new host remains authoritative.
-            _change(store, job_id, "succeeded", error=f"Backup retained: {exc}")
+            _change(store, job_id, "succeeded", error=f"已保留升级备份: {exc}")
         _prune_finished_jobs(store)
         return child, job["python_executable"]
     except SupervisorStopRequested:
         _stop_child(child)
         _change(store, job_id, "rolling_back", child_pid=0,
-                error="Supervisor stop requested during update health confirmation")
+                error="升级健康确认期间收到停止请求")
         raise
     except Exception as exc:
         _stop_child(child)
@@ -843,7 +938,7 @@ def supervise(repo_root: Path, store, python: str, *, action="supervise", job_id
                         repo_root,
                         store,
                         job_id or job["job_id"],
-                        "Interrupted update",
+                        "升级过程被中断",
                         stop_event=stop_event,
                     )
                 except SupervisorStopRequested:
@@ -852,7 +947,7 @@ def supervise(repo_root: Path, store, python: str, *, action="supervise", job_id
                 next_job, child = job, None
             else:
                 if job.get("phase") == "waiting_restart":
-                    _change(store, job["job_id"], "ready", error="Shutdown handoff was interrupted; confirm application again")
+                    _change(store, job["job_id"], "ready", error="宿主退出交接被中断，请重新确认应用")
                 if stop_event.is_set():
                     return 0
                 child = _start_host(repo_root, python, store)
@@ -934,6 +1029,8 @@ def main(argv=None) -> int:
             temporary.write_text(json.dumps(info), encoding="utf-8")
             os.replace(temporary, pointer)
             (pointer_dir / "update-control-python").write_text(info["control_python_executable"], encoding="utf-8")
+            # Launchers parse stdout as JSON; cleanup reports only on stderr.
+            prune_control_snapshots(root, store, keep=[info])
             print(json.dumps(info))
             return 0
         return supervise(root, store, python, action=args.action, job_id=args.job_id)

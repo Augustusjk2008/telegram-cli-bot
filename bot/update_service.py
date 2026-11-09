@@ -19,6 +19,11 @@ ACTIVE_PHASES = frozenset({"preparing", "ready", "waiting_restart", "applying", 
 APPLY_PHASES = ACTIVE_PHASES - {"preparing", "ready"}
 UPLOAD_LIMIT = 4 * 1024**3
 DISK_RESERVE = 64 * 1024**2
+PROGRESS_INTERVAL_SECONDS = 0.1
+UPLOAD_PROGRESS_INTERVAL_SECONDS = 0.5
+# Finished predecessors whose downloaded package files a new job may adopt.
+RESUMABLE_PHASES = frozenset({"failed", "cancelled", "ready"})
+HEALTH_TIMEOUT_ENV = "TCB_UPDATE_HEALTH_TIMEOUT_SECONDS"
 _EXECUTION_FIELDS = frozenset({"manifest", "files", "delete_paths", "prepared_hashes", "original_hashes",
                                "host_environment", "runner_hashes", "previous_frontend_hashes", "source"})
 
@@ -35,6 +40,41 @@ class PreparationCancelled(RuntimeError):
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _release_tag(source):
+    release = source.get("release") if isinstance(source, dict) else None
+    return str(release.get("tag_name") or "") if isinstance(release, dict) else ""
+
+
+def _resumable_predecessor(old, source):
+    """Return the finished job of the same release whose download a new job may reuse."""
+    tag = _release_tag(source)
+    if tag and old.get("job_id") and old.get("phase") in RESUMABLE_PHASES and _release_tag(old.get("source")) == tag:
+        return old["job_id"]
+    return ""
+
+
+def _health_timeout():
+    """Optional per-installation health confirmation timeout for the runner."""
+    try:
+        value = float(os.environ.get(HEALTH_TIMEOUT_ENV, "") or 0)
+    except ValueError:
+        return None
+    return min(max(value, 30.0), 1800.0) if value > 0 else None
+
+
+def _sync_file(handle):
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+def _is_newer(candidate, current):
+    from scripts.update_package import compare_versions
+    try:
+        return bool(candidate) and compare_versions(candidate, current) > 0
+    except ValueError:
+        return False
 
 
 def launcher_capability(repo_root):
@@ -90,6 +130,15 @@ class UpdateService:
                 "result": None, "job_dir": str(self.store.job_dir(job_id)), "source": source,
                 "created_at": _now()}
 
+    def _log_paths(self, job):
+        """Existing preparation and executor logs of a job, for failure diagnostics."""
+        try:
+            directory = self.store.job_dir(job.get("job_id"))
+        except (ValueError, UpdateConflict):
+            return {"preparation_log": "", "runner_log": ""}
+        return {key: str(directory / name) if (directory / name).is_file() else ""
+                for key, name in (("preparation_log", "preparation.log"), ("runner_log", "runner.log"))}
+
     def status(self):
         from bot import updater
         from bot.version import APP_VERSION
@@ -110,10 +159,15 @@ class UpdateService:
         release = check.get("release") or {}
         pending = job.get("phase") in ACTIVE_PHASES
         public_job = {key: value for key, value in job.items() if key not in _EXECUTION_FIELDS} if job else None
+        if public_job is not None:
+            public_job.update(self._log_paths(job))
+        latest = str(release.get("tag_name") or "").lstrip("v")
         return {**state, "job": public_job, "launcher": launcher_capability(self.repo_root), "current_version": APP_VERSION,
                 "current_package_kind": updater.detect_update_package_kind(self.repo_root), "update_channel": "release",
+                # Recomputed on every read: the stored check result goes stale after an upgrade.
+                "update_available": _is_newer(latest, APP_VERSION),
                 "last_checked_at": check.get("checked_at", ""),
-                "last_available_version": str(release.get("tag_name") or "").lstrip("v"),
+                "last_available_version": latest,
                 "last_available_release_url": release.get("html_url", ""), "last_available_notes": release.get("body", ""),
                 "pending_update_version": job.get("target_version", "") if pending else "",
                 "pending_update_path": job.get("package_path", "") if pending else "",
@@ -156,8 +210,12 @@ class UpdateService:
             lease.__enter__()
         except UpdateConflict as exc:
             current = self.status()
-            if (self.store.read().get("job") or {}).get("source") == source and retry_job_id is None:
+            active = self.store.read().get("job") or {}
+            if retry_job_id is None and active.get("phase") in ACTIVE_PHASES and active.get("source") == source:
                 return None, current
+            if active.get("phase") in {"cancelled", "failed"}:
+                # The worker of a just-cancelled job is still stopping its commands.
+                raise UpdateServiceError("上一个准备任务仍在停止，请稍候几秒再试") from exc
             raise UpdateServiceError("本安装已有准备任务正在执行") from exc
         try:
             def reserve(state):
@@ -172,6 +230,9 @@ class UpdateService:
                 job_id = uuid.uuid4().hex
                 state.pop("legacy_notice", None)
                 state["job"] = self._new_job(job_id, source)
+                predecessor = _resumable_predecessor(old, source)
+                if predecessor:
+                    state["job"]["resumed_from"] = predecessor
             before = self.store.read().get("job") or {}
             result = self.store.mutate(reserve, expected_revision=expected_revision)
             if (result.get("job") or {}).get("job_id") == before.get("job_id"):
@@ -196,11 +257,28 @@ class UpdateService:
                 raise UpdateServiceError(status["last_check"]["error"], status=502, code="update_check_failed")
             release = status["last_check"]["release"]
         try:
-            if compare_versions(release.get("tag_name", ""), status["current_version"]) < 0:
-                raise ValueError("目标版本低于当前版本")
+            order = compare_versions(release.get("tag_name", ""), status["current_version"])
         except ValueError as exc:
             raise UpdateServiceError(str(exc), status=400, code="invalid_update_version") from exc
+        if order < 0:
+            raise UpdateServiceError("目标版本低于当前版本", status=400, code="invalid_update_version")
+        if order == 0:
+            # Re-preparing the running release would only cost a download and a restart.
+            raise UpdateServiceError("当前已是最新版本，无需准备更新", status=409, code="update_not_available")
         return self._start({"release": release})
+
+    def declined_release(self, version):
+        """True when automatic checks must not prepare this release again.
+
+        An administrator's cancellation stands. A failure after the package was
+        downloaded (conflicts, migrations, dependencies) needs an explicit retry;
+        an interrupted download is retried automatically and resumes.
+        """
+        job = self.store.read().get("job") or {}
+        tag = _release_tag(job.get("source")).lstrip("vV")
+        if not tag or tag != str(version).lstrip("vV"):
+            return False
+        return job.get("phase") == "cancelled" or (job.get("phase") == "failed" and bool(job.get("package_path")))
 
     def start_offline(self, path, version=""):
         if not str(path).strip():
@@ -227,25 +305,59 @@ class UpdateService:
             state["job"].update(values)
         return self.store.mutate(patch)
 
+    def _adopt_predecessor_download(self, job, job_dir):
+        """Move a retried job's partial or complete download into the new job.
+
+        Best effort: the downloader still validates ETag/range continuity and the
+        published SHA-256, so an unusable file only means starting over.
+        """
+        from bot import updater
+        release = (job.get("source") or {}).get("release")
+        if not job.get("resumed_from") or not isinstance(release, dict):
+            return
+        try:
+            previous = self.store.job_dir(job["resumed_from"])
+            asset = updater._select_release_asset(release.get("assets", []),
+                                                  updater.detect_update_package_kind(self.repo_root))
+            name = str(asset.get("name") or "")
+            if not name or Path(name).name != name or "\\" in name:
+                return
+            for suffix in ("", ".part", ".resume.json"):
+                source, target = previous / (name + suffix), job_dir / (name + suffix)
+                if source.is_file() and not source.is_symlink() and not target.exists():
+                    os.replace(source, target)
+        except (OSError, RuntimeError, ValueError, UpdateConflict):
+            return
+
     def _prepare(self, job, lease):
         from bot import updater
         job_id, source = job["job_id"], job["source"]
         job_dir = self.store.job_dir(job_id)
-        last_progress = 0.0
+        last_progress = last_check = 0.0
 
-        def progress(value):
-            nonlocal last_progress
+        def ensure_active(force=False):
+            nonlocal last_check
+            if not force and time.monotonic() - last_check < PROGRESS_INTERVAL_SECONDS:
+                return
+            last_check = time.monotonic()
             current = self.store.read().get("job") or {}
             if current.get("job_id") != job_id or current.get("phase") == "cancelled":
                 raise PreparationCancelled("准备任务已取消")
+
+        def progress(value):
+            nonlocal last_progress
+            ensure_active()
             payload = dict(value) if isinstance(value, dict) else {"message": str(value)}
-            if time.monotonic() - last_progress >= 0.1:
+            # Download notices and preparation stage changes are rare; never drop them.
+            if (payload.get("phase") == "log" or "stage" in payload
+                    or time.monotonic() - last_progress >= PROGRESS_INTERVAL_SECONDS):
                 self._patch_job(job_id, progress=payload)
                 last_progress = time.monotonic()
 
         try:
             progress({"phase": "preparing", "message": "正在准备更新包"})
             if "release" in source:
+                self._adopt_predecessor_download(job, job_dir)
                 package = updater._download_release_package(self.repo_root, job_dir, source["release"], progress_callback=progress)
                 expected = str(source["release"].get("tag_name") or "").lstrip("v")
             else:
@@ -256,7 +368,8 @@ class UpdateService:
             from bot.update_migration_gate import validate_update_migrations
             validate_update_migrations(self.repo_root, prepared)
             from bot.update_preparation import prepare_runtime
-            runtime = prepare_runtime(self.repo_root, job_dir, prepared, progress_callback=progress)
+            runtime = prepare_runtime(self.repo_root, job_dir, prepared, progress_callback=progress,
+                                      cancel_check=ensure_active)
             prepared = {**prepared, **runtime}
             originals = dict(prepared.get("original_hashes") or {})
             for name in [*prepared["files"], *prepared.get("delete_paths", [])]:
@@ -279,13 +392,19 @@ class UpdateService:
         finally:
             lease.__exit__()
 
-    def cancel(self, job_id, revision):
+    def cancel(self, job_id, revision=None):
+        """Cancel a preparing or ready job, identified by ID and phase only.
+
+        Preparation progress advances the revision several times per second, so
+        requiring the caller's revision would reject nearly every cancellation
+        during a download. ``revision`` is accepted for API compatibility.
+        """
         def cancel(state):
             job = self._require_job(state, job_id)
             if job["phase"] not in {"preparing", "ready"}:
                 raise UpdateServiceError("应用或恢复期间不能取消任务")
             job.update(phase="cancelled", error="", result="cancelled")
-        self.store.mutate(cancel, expected_revision=revision)
+        self.store.mutate(cancel)
         return self.status()
 
     def retry(self, job_id, revision):
@@ -301,20 +420,36 @@ class UpdateService:
             raise UpdateServiceError("更新任务不存在", status=404, code="update_job_not_found")
         return job
 
-    def request_apply(self, job_id, revision, *, idle_check, request_exit, health=None):
+    def _ready_job(self, job_id, revision):
+        snapshot = self.store.read()
+        job = self._require_job(snapshot, job_id)
+        if type(revision) is not int or snapshot["revision"] != revision:
+            raise UpdateConflict("更新状态已变化，请刷新后重试")
+        if job["phase"] != "ready" or job.get("requires_preparation"):
+            raise UpdateServiceError("任务尚未完成准备，请先重试准备")
+        return job
+
+    def verify_apply(self, job_id, revision):
+        """Hash-check every original and staged file of a ready job.
+
+        This reads the whole program tree, so the web host runs it in a worker
+        thread before closing admission; the executor re-verifies all hashes.
+        """
+        from bot.update_migration_gate import validate_update_migrations
+        job = self._ready_job(job_id, revision)
+        validate_update_migrations(self.repo_root, job)
+        self._verify_apply_files(job)
+
+    def request_apply(self, job_id, revision, *, idle_check, request_exit, health=None, verify_files=True):
         capability = launcher_capability(self.repo_root)
         if not capability["supported"]:
             raise UpdateServiceError(capability["reason"], code="update_launcher_unsupported")
-        from bot.update_migration_gate import validate_update_migrations
         with FileLock(self.store.root / "preparation.lock", timeout=0):
-            snapshot = self.store.read()
-            job = self._require_job(snapshot, job_id)
-            if type(revision) is not int or snapshot["revision"] != revision:
-                raise UpdateConflict("更新状态已变化，请刷新后重试")
-            if job["phase"] != "ready" or job.get("requires_preparation"):
-                raise UpdateServiceError("任务尚未完成准备，请先重试准备")
-            validate_update_migrations(self.repo_root, job)
-            self._verify_apply_files(job)
+            job = self._ready_job(job_id, revision)
+            if verify_files:
+                from bot.update_migration_gate import validate_update_migrations
+                validate_update_migrations(self.repo_root, job)
+                self._verify_apply_files(job)
             # The callback may read this store; never call it inside state.mutate.
             reason = idle_check()
             if reason:
@@ -328,6 +463,9 @@ class UpdateService:
                         raise UpdateServiceError(f"任务缺少执行器字段: {field}")
                 job.update(phase="waiting_restart", launcher=capability, health=dict(health or {}),
                            previous_instance_id=(health or {}).get("instance_id", ""))
+                timeout = _health_timeout()
+                if timeout:
+                    job["health_timeout"] = timeout
                 if health:
                     host = health["host"]
                     host = "127.0.0.1" if host in {"0.0.0.0", ""} else "::1" if host == "::" else host
@@ -442,44 +580,68 @@ class UpdateService:
                     return
             await asyncio.sleep(0.1)
 
-    async def upload(self, filename, chunks, *, max_bytes=UPLOAD_LIMIT):
+    async def upload(self, filename, chunks, *, max_bytes=UPLOAD_LIMIT, expected_bytes=None):
+        """Stream an uploaded package into a new job; state I/O stays off the event loop.
+
+        ``expected_bytes`` is the client's declared file size: it rejects
+        oversized uploads before any byte is stored and drives progress percent.
+        """
         name = Path(str(filename).replace("\\", "/")).name
         if not name.lower().endswith((".zip", ".tar.gz", ".tgz")):
             raise UpdateServiceError("只支持 zip、tar.gz 或 tgz 更新包", status=400, code="invalid_update_package")
-        lease, status = self._reserve({"upload": name, "nonce": uuid.uuid4().hex})
-        job = status["job"]
-        destination = self.store.job_dir(job["job_id"]) / name
+        declared = expected_bytes if isinstance(expected_bytes, int) and expected_bytes > 0 else None
+        if declared is not None and declared > max_bytes:
+            raise UpdateServiceError("上传超过更新包大小限制", status=413, code="update_upload_too_large")
+        lease, status = await asyncio.to_thread(self._reserve, {"upload": name, "nonce": uuid.uuid4().hex})
+        job_id = status["job"]["job_id"]
+        destination = self.store.job_dir(job_id) / name
         partial = destination.with_name(destination.name + ".part")
-        total = 0
+        total, last_report = 0, 0.0
+
+        def require_space(needed):
+            if shutil.disk_usage(partial.parent).free < needed + DISK_RESERVE:
+                raise UpdateServiceError("更新缓存磁盘空间不足", status=507, code="update_disk_full")
+
+        def report():
+            progress = {"phase": "uploading", "downloaded_bytes": total, "message": "正在上传更新包"}
+            if declared:
+                progress.update(total_bytes=declared, percent=min(100, int(total * 100 / declared)))
+            self._patch_job(job_id, progress=progress)
+
         try:
+            if declared is not None:
+                require_space(declared)
             with partial.open("xb") as handle:
                 async for chunk in chunks:
                     total += len(chunk)
                     if total > max_bytes:
                         raise UpdateServiceError("上传超过更新包大小限制", status=413, code="update_upload_too_large")
-                    if shutil.disk_usage(partial.parent).free < len(chunk) + DISK_RESERVE:
-                        raise UpdateServiceError("更新缓存磁盘空间不足", status=507, code="update_disk_full")
-                    self._patch_job(job["job_id"], progress={"phase": "uploading", "downloaded_bytes": total})
+                    # Each report is a locked, fsynced state write: throttle it.
+                    if time.monotonic() - last_report >= UPLOAD_PROGRESS_INTERVAL_SECONDS:
+                        require_space(len(chunk))
+                        await asyncio.to_thread(report)
+                        last_report = time.monotonic()
                     await asyncio.to_thread(handle.write, chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
+                await asyncio.to_thread(_sync_file, handle)
             if not total:
                 raise UpdateServiceError("上传的更新包为空", status=400, code="invalid_update_package")
             partial.replace(destination)
-            updated = self._patch_job(job["job_id"], source={"path": str(destination), "version": ""})
+            updated = await asyncio.to_thread(self._patch_job, job_id, source={"path": str(destination), "version": ""})
             self._launch_worker(updated["job"], lease)
             lease = None
-            return self.status()
         except BaseException as exc:
             partial.unlink(missing_ok=True)
             try:
-                self._patch_job(job["job_id"], phase="failed", error=str(exc) or "上传中断")
+                await asyncio.to_thread(self._patch_job, job_id, phase="failed", error=str(exc) or "上传中断")
             except PreparationCancelled:
                 pass
+            if isinstance(exc, PreparationCancelled):
+                raise UpdateServiceError("上传已被取消", code="update_cancelled") from exc
             raise
         finally:
             if lease is not None:
                 lease.__exit__()
+        return await asyncio.to_thread(self.status)
 
 
 _services = {}

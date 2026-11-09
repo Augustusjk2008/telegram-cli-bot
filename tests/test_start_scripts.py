@@ -313,3 +313,19 @@ if (-not $rejected) {{ throw 'Pi configuration entered the release' }}
     assert arguments[1] == "create"
     assert [arguments[i + 1] for i, value in enumerate(arguments) if value == "--managed-data-file"] == [
         "data/pi-home/.pi/agent/extensions/workspace-history.ts", "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"]
+
+
+def test_windows_launchers_read_state_as_utf8_and_survive_self_replacement():
+    # Windows PowerShell 5.1 decodes BOM-less files with the ANSI code page (GBK on
+    # Chinese Windows); the update state and runtime files are UTF-8 JSON.
+    for relative in ("start.ps1", "scripts/service-status.ps1"):
+        text = (ROOT / relative).read_text(encoding="utf-8-sig")
+        reads = [line for line in text.splitlines() if "Get-Content" in line and "ConvertFrom-Json" in line]
+        assert reads and all("-Encoding UTF8" in line for line in reads), relative
+    # cmd.exe re-reads a running batch file by byte offset and an update may replace
+    # it: the launch and every later command must sit in one pre-parsed block.
+    lines = (ROOT / "start.bat").read_text(encoding="utf-8").splitlines()
+    block = lines[max(index for index, line in enumerate(lines) if line.strip() == "("):]
+    # The block runs to the end of the file, so nothing is read after the service exits.
+    assert block[1].startswith('"%PS_EXE%"') and block[-1].strip() == ")"
+    assert any(line.strip().startswith("exit /b") for line in block)

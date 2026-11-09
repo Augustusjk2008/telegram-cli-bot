@@ -2349,6 +2349,7 @@ export class MockWebBotClient implements WebBotClient {
     updateChannel: "release",
     lastCheckedAt: "",
     latestVersion: APP_VERSION,
+    updateAvailable: false,
     latestReleaseUrl: MOCK_RELEASE_URL,
     latestNotes: "Bugfixes",
     pendingUpdateVersion: "",
@@ -6703,7 +6704,8 @@ export class MockWebBotClient implements WebBotClient {
         packageKind: this.updateStatus.pendingUpdatePackageKind,
         packageSha256: "mock-sha256",
         progress: { phase, downloadedBytes: 1024, totalBytes: 1024, percent: 100, message: "准备完成" },
-        error: "", launcher: this.updateStatus.launcher, backupDir: "", jobDir: "mock-update", result: null,
+        error: "", launcher: this.updateStatus.launcher, backupDir: "", jobDir: "mock-update",
+        preparationLog: "", runnerLog: "", result: null,
       },
     };
     return { ...this.updateStatus };
@@ -6760,6 +6762,7 @@ export class MockWebBotClient implements WebBotClient {
       lastCheckedAt: "2026-04-15T10:00:00+08:00",
       lastCheck: { checkedAt: "2026-04-15T10:00:00+08:00", ok: true, cached: false, error: "" },
       latestVersion: APP_VERSION,
+      updateAvailable: false,
       latestReleaseUrl: MOCK_RELEASE_URL,
       latestNotes: "Bugfixes",
       lastError: "",

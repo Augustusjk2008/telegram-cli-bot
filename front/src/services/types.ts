@@ -3269,6 +3269,8 @@ export type AppUpdateJob = {
   launcher: AppUpdateLauncher;
   backupDir: string;
   jobDir: string;
+  preparationLog: string;
+  runnerLog: string;
   result: unknown;
   requiresPreparation?: boolean;
 };
@@ -3284,6 +3286,7 @@ export type AppUpdateStatus = {
   updateChannel: "release";
   lastCheckedAt: string;
   latestVersion: string;
+  updateAvailable: boolean;
   latestReleaseUrl: string;
   latestNotes: string;
   pendingUpdateVersion: string;

@@ -33,7 +33,7 @@ test("管理中心可以直接请求重启后端", async () => {
 async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdateStatus> {
   const client = createAdminClient();
   const status = await client.downloadUpdate();
-  return { ...status, revision: 10, currentVersion: "1.0.0", latestVersion: "2.0.0", job: {
+  return { ...status, revision: 10, currentVersion: "1.0.0", latestVersion: "2.0.0", updateAvailable: true, job: {
     ...status.job!, jobId: "persisted-job", revision: 10, phase, currentVersion: "1.0.0", targetVersion: "2.0.0",
     progress: { phase: "download", percent: 42, downloadedBytes: 42, totalBytes: 100, message: "校验更新包" },
   } };
@@ -86,11 +86,11 @@ test("保存自动下载开关不会清除正在提交的准备操作或接受�
   vi.spyOn(client, "setUpdateEnabled").mockResolvedValue({ ...idle, revision: 11, updateEnabled: false });
   await openUpdates(client, user);
   await user.click(await screen.findByRole("button", { name: "准备更新" }));
-  await user.click(screen.getByRole("checkbox", { name: "自动下载更新" }));
+  await user.click(screen.getByRole("checkbox", { name: "自动检查并准备更新" }));
   expect(screen.getByRole("button", { name: "提交准备中..." })).toBeDisabled();
   resolvePrepare({ ...ready, revision: 12, updateEnabled: false, job: { ...ready.job!, revision: 12, phase: "preparing" } });
   expect(await screen.findByTestId("update-job")).toHaveTextContent("正在准备");
-  expect(screen.getByRole("checkbox", { name: "自动下载更新" })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "自动检查并准备更新" })).not.toBeChecked();
 });
 
 test("应用断线只查询后台，成功必须匹配运行版本", async () => {
@@ -116,6 +116,8 @@ test("应用断线只查询后台，成功必须匹配运行版本", async () =>
   current.mockResolvedValue({ ...reportedSuccess, currentVersion: "2.0.0" });
   await user.click(screen.getByRole("button", { name: "查询后台状态" }));
   expect(await screen.findByText(/任务阶段: 升级成功/)).toBeInTheDocument();
+  expect(screen.getByText("新版本已运行，当前页面仍是旧版本界面，请刷新页面以加载新版本。")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "刷新页面" })).toBeEnabled();
   expect(apply).toHaveBeenCalledTimes(1);
 });
 
@@ -179,6 +181,27 @@ test("缓存检查失败阻止在线准备，不支持的启动器阻止应用",
   await user.click(screen.getByRole("button", { name: "查询后台状态" }));
   expect(await screen.findByRole("button", { name: "重试" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "应用更新" })).toBeDisabled();
+});
+
+test("检查成功后仅在有新版本时允许准备更新", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const ready = await updateFixture();
+  const lastCheck = { checkedAt: "2026-10-24T12:00:00Z", ok: true, cached: false, error: "" };
+  const current = vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue({ ...ready, job: null, lastCheck, latestVersion: "1.0.0", updateAvailable: false });
+  await openUpdates(client, user);
+  expect(await screen.findByText("已是最新版本（v1.0.0）")).toBeInTheDocument();
+  expect(screen.getByText("目标版本: 暂无")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "准备更新" })).toBeDisabled();
+  current.mockResolvedValue({ ...ready, job: null, lastCheck });
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  expect(await screen.findByText("发现新版本 v2.0.0")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "准备更新" })).toBeEnabled();
+  // A prepared offline package newer than the last online check is not "up to date".
+  current.mockResolvedValue({ ...ready, lastCheck, latestVersion: "1.0.0", updateAvailable: false });
+  await user.click(screen.getByRole("button", { name: "查询后台状态" }));
+  expect(await screen.findByText("目标版本: 2.0.0")).toBeInTheDocument();
+  expect(screen.queryByText(/已是最新版本/)).not.toBeInTheDocument();
 });
 
 function usageHeroValue(text: string) {

@@ -19,7 +19,7 @@ function Get-AppDataRoot {
     $locator = Join-Path (Join-Path $HOME ".tcb") "storage.json"
     if (Test-Path -LiteralPath $locator) {
         try {
-            $payload = Get-Content -Raw -LiteralPath $locator | ConvertFrom-Json
+            $payload = Get-Content -Raw -Encoding UTF8 -LiteralPath $locator | ConvertFrom-Json
             if ($payload.appDataRoot) { return [string]$payload.appDataRoot }
             if ($payload.targetRoot) { return (Join-Path ([string]$payload.targetRoot) "orbit-safe-claw") }
         } catch {
@@ -43,9 +43,9 @@ $updatePhase = ""
 $launcherPath = Join-Path $repositoryPath ".tcb\startup\update-launcher.json"
 if (Test-Path -LiteralPath $launcherPath) {
     try {
-        $launcher = Get-Content -Raw -LiteralPath $launcherPath | ConvertFrom-Json
+        $launcher = Get-Content -Raw -Encoding UTF8 -LiteralPath $launcherPath | ConvertFrom-Json
         if ($launcher.state_file -and (Test-Path -LiteralPath $launcher.state_file)) {
-            $state = Get-Content -Raw -LiteralPath $launcher.state_file | ConvertFrom-Json
+            $state = Get-Content -Raw -Encoding UTF8 -LiteralPath $launcher.state_file | ConvertFrom-Json
             $updatePhase = [string]$state.job.phase
         }
     } catch {
@@ -59,7 +59,7 @@ $healthUrl = ""
 $runtimeState = Join-Path (Join-Path (Get-AppDataRoot) "web") "runtime_state.json"
 if (Test-Path -LiteralPath $runtimeState) {
     try {
-        $runtime = Get-Content -Raw -LiteralPath $runtimeState | ConvertFrom-Json
+        $runtime = Get-Content -Raw -Encoding UTF8 -LiteralPath $runtimeState | ConvertFrom-Json
         $healthHost = if ($runtime.host -eq "0.0.0.0") { "127.0.0.1" } elseif ($runtime.host -eq "::") { "::1" } else { [string]$runtime.host }
         if ($healthHost.Contains(":") -and -not $healthHost.StartsWith("[")) {
             $healthHost = "[$healthHost]"

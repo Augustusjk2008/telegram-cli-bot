@@ -324,6 +324,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_TERMINAL_OWNER_ID = "default"
 # 给浏览器留出响应落地时间，避免服务重启过快导致前端请求悬挂。
 RESTART_RESPONSE_DELAY_SECONDS = 1.0
+# Automatic update checks run at startup and then at this interval.
+UPDATE_AUTO_CHECK_INTERVAL_SECONDS = 6 * 3600
 _LOOP_LAG_WATCH_INTERVAL_SECONDS = 1.0
 _TUNNEL_STATUS_REFRESH_TIMEOUT = 1.0
 _LANGUAGE_SERVER_PROVIDER_LABELS = {
@@ -5189,6 +5191,14 @@ class WebApiServer:
             raise WebApiError(400, "invalid_update_revision", "revision 必须是非负整数")
         job_id, action = request.match_info["job_id"], request.match_info["action"]
         if action == "apply":
+            # Hashing every original and staged file is slow: do it in a worker
+            # thread while the host still serves requests. The executor re-verifies.
+            try:
+                await asyncio.to_thread(self.update_service.verify_apply, job_id, revision)
+            except UpdateServiceError as exc:
+                raise WebApiError(exc.status, exc.code, str(exc)) from exc
+            except (UpdateConflict, ValueError) as exc:
+                raise WebApiError(409, "update_conflict", str(exc)) from exc
             async with self.storage_migration_api._lock:
                 if config.UPDATE_DRAINING or config.UPDATE_REQUESTED:
                     raise WebApiError(409, "update_restarting", "宿主正在进行升级交接")
@@ -5197,7 +5207,7 @@ class WebApiServer:
                 try:
                     data = self.update_service.request_apply(
                         job_id, revision, idle_check=self._update_idle_reason,
-                        request_exit=self._schedule_update_exit,
+                        request_exit=self._schedule_update_exit, verify_files=False,
                         health={"host": self._host, "port": self._port, "base_path": self._web_base_path(),
                                 "instance_id": self._instance_id, "node_id": TCB_NODE_ID})
                 except UpdateServiceError as exc:
@@ -5239,6 +5249,13 @@ class WebApiServer:
         await self._with_capability(request, CAP_ADMIN_OPS)
         if self.storage_migration_api.maintenance:
             raise WebApiError(409, "storage_migration_busy", "存储迁移正在进行中")
+        # Optional declared file size: early 413/507 and upload progress percent.
+        size_text = request.query.get("size", "").strip()
+        expected_bytes = None
+        if size_text:
+            if not size_text.isdigit():
+                raise WebApiError(400, "invalid_update_size", "size 必须是非负整数")
+            expected_bytes = int(size_text)
         reader = await request.multipart()
         field = await reader.next()
         if field is None or field.name != "file" or not field.filename:
@@ -5249,7 +5266,7 @@ class WebApiServer:
         try:
             async with self.storage_migration_api._lock:
                 self._ensure_update_preparation_allowed()
-                data = await self.update_service.upload(field.filename, chunks())
+                data = await self.update_service.upload(field.filename, chunks(), expected_bytes=expected_bytes)
         except UpdateServiceError as exc:
             raise WebApiError(exc.status, exc.code, str(exc)) from exc
         except UpdateConflict as exc:
@@ -5581,11 +5598,19 @@ class WebApiServer:
                 return
             latest = checked.get("last_available_version")
             if latest and compare_versions(latest, checked.get("current_version", "")) > 0:
+                if await asyncio.to_thread(self.update_service.declined_release, latest):
+                    return
                 async with self.storage_migration_api._lock:
                     self._ensure_update_preparation_allowed()
                     await asyncio.to_thread(self.update_service.start_online, release=checked["last_check"]["release"])
         except Exception as exc:
             logger.warning("自动后台准备更新失败: %s", exc)
+
+    async def _auto_update_loop(self) -> None:
+        """Check (and prepare, never apply) updates at startup and then periodically."""
+        while True:
+            await self._auto_refresh_update_status()
+            await asyncio.sleep(UPDATE_AUTO_CHECK_INTERVAL_SECONDS)
 
     def _update_maintenance_middleware(self):
         @web.middleware
@@ -5832,7 +5857,7 @@ class WebApiServer:
         await self._site.start()
         self._start_loop_stall_watchdog()
         self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
-        self._update_task = asyncio.create_task(self._auto_refresh_update_status())
+        self._update_task = asyncio.create_task(self._auto_update_loop())
         try:
             if self._fixed_forward_service.should_autostart():
                 fixed_snapshot = await self._fixed_forward_service.start()

@@ -117,3 +117,42 @@ def test_transaction_rejects_overlapping_write_and_delete(tmp_path):
     with pytest.raises(transaction.RecoveryRequired, match="重叠"):
         tx.apply(stage, ["one"], delete_paths=["one"])
     assert (root / "one").read_text() == "old one"
+
+
+def test_unchanged_targets_are_neither_backed_up_nor_rewritten(tmp_path):
+    root, stage, tx = make_transaction(tmp_path)
+    (root / "same").write_text("identical")
+    (stage / "same").write_text("identical")
+    (root / "tool").write_text("identical")
+    (stage / "tool").write_text("identical")
+    (stage / "tool").chmod(0o755)
+    (root / "tool").chmod(0o644)
+    untouched = (root / "same").stat().st_mtime_ns
+    files = ["one", "same", "tool"]
+    tx.apply(stage, files, expected_hashes={name: transaction.sha256(root / name) for name in files})
+    assert (root / "same").stat().st_mtime_ns == untouched
+    assert (root / "one").read_text() == "new one"
+    assert (root / "tool").stat().st_mode & 0o111  # an executable-bit change is still applied
+    records = transaction.read_journal(tx.journal)
+    assert {r.get("relative_path") for r in records if r["event"] == "backup_done"} == {"one", "tool"}
+    assert [r["count"] for r in records if r["event"] == "unchanged_skipped"] == [1]
+    tx.recover()
+    assert (root / "one").read_text() == "old one"
+    assert (root / "same").read_text() == "identical"
+
+
+def test_transient_windows_lock_is_retried_but_real_denials_are_not(monkeypatch, tmp_path):
+    monkeypatch.setattr(transaction, "TRANSIENT_LOCK_RETRY_DELAYS", (0, 0))
+    calls = []
+
+    def locked_twice():
+        calls.append(1)
+        if len(calls) < 3:
+            error = PermissionError(13, "in use")
+            error.winerror = 32
+            raise error
+        return "done"
+
+    assert transaction.retry_transient_lock(locked_twice) == "done"
+    with pytest.raises(PermissionError):
+        transaction.retry_transient_lock(lambda: (_ for _ in ()).throw(PermissionError(13, "denied")))

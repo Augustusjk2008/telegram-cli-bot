@@ -46,18 +46,18 @@ describe("RealWebBotClient", () => {
   test("maps persisted update jobs and check failures without dropping legacy fields", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       current_version: "1.0.0", update_enabled: true, revision: 7,
-      last_available_version: "2.0.0", pending_update_notes: "Release notes",
+      last_available_version: "2.0.0", update_available: true, pending_update_notes: "Release notes",
       last_check: { checked_at: "2026-10-24", ok: false, cached: true, error: "Release unavailable" },
       launcher: { supported: true, protocol: 1, command: "start.bat", reason: "" },
       job: { job_id: "job-1", revision: 7, phase: "failed", current_version: "1.0.0", target_version: "2.0.0",
         package_kind: "portable", package_sha256: "abc", progress: { phase: "verify", downloaded_bytes: 50, total_bytes: 100, percent: 50, message: "校验中" },
-        error: "Hash mismatch", backup_dir: "D:/backup", job_dir: "D:/job", result: { recovered: true }, requires_preparation: true },
+        error: "Hash mismatch", backup_dir: "D:/backup", job_dir: "D:/job", preparation_log: "D:/job/prepare.log", runner_log: "", result: { recovered: true }, requires_preparation: true },
     }));
     const status = await new RealWebBotClient().getCurrentUpdateJob();
-    expect(status).toMatchObject({ currentVersion: "1.0.0", pendingUpdateNotes: "Release notes", revision: 7,
+    expect(status).toMatchObject({ currentVersion: "1.0.0", updateAvailable: true, pendingUpdateNotes: "Release notes", revision: 7,
       lastCheck: { checkedAt: "2026-10-24", ok: false, cached: true, error: "Release unavailable" },
       job: { jobId: "job-1", revision: 7, phase: "failed", targetVersion: "2.0.0", packageKind: "portable", packageSha256: "abc",
-        progress: { downloadedBytes: 50, totalBytes: 100, percent: 50 }, error: "Hash mismatch", backupDir: "D:/backup", jobDir: "D:/job", result: { recovered: true }, requiresPreparation: true },
+        progress: { downloadedBytes: 50, totalBytes: 100, percent: 50 }, error: "Hash mismatch", backupDir: "D:/backup", jobDir: "D:/job", preparationLog: "D:/job/prepare.log", runnerLog: "", result: { recovered: true }, requiresPreparation: true },
     });
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/update/jobs/current");
   });
@@ -78,7 +78,7 @@ describe("RealWebBotClient", () => {
     const file = new File(["zip"], "update.zip");
     await client.uploadOfflineUpdate(file);
     const [url, request] = fetchMock.mock.calls[3];
-    expect(url).toBe("/node/update-host/api/admin/update/offline/upload");
+    expect(url).toBe(`/node/update-host/api/admin/update/offline/upload?size=${file.size}`);
     expect(request.body.get("file")).toBe(file);
     expect(request.headers["Content-Type"]).toBeUndefined();
   });

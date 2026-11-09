@@ -151,6 +151,11 @@ def _download_release_package(repo_root: Path, job_dir: Path, release: dict,
     checksum_path = Path(job_dir) / checksum["name"]
     _download_text_file(checksum["browser_download_url"], checksum_path)
     expected = _read_sha256_file(checksum_path, asset["name"])
+    # A retried job may inherit the complete package of its predecessor.
+    if target.is_file() and _file_sha256(target) == expected:
+        _emit_download_log(progress_callback, f"已复用校验通过的更新包: {target.name}",
+                           downloaded_bytes=target.stat().st_size, total_bytes=target.stat().st_size)
+        return target
     _download_file(asset["browser_download_url"], target, progress_callback)
     _verify_file_sha256(target, expected)
     return target
@@ -340,8 +345,15 @@ def _download_text_file(url: str, target: Path) -> None:
         },
     )
     opener = _build_url_opener()
-    with opener.open(request, timeout=30) as response:
-        target.write_bytes(response.read())
+    for attempt in range(3):
+        try:
+            with opener.open(request, timeout=30) as response:
+                target.write_bytes(response.read())
+            return
+        except (urllib.error.URLError, OSError):
+            if attempt == 2:
+                raise
+            time.sleep(0.5 * 2 ** attempt)
 
 
 def _read_sha256_file(path: Path, package_name: str) -> str:
@@ -547,7 +559,7 @@ def _download_file(url: str, target: Path, progress_callback: Any | None = None)
             if attempt < 2:
                 _emit_download_log(progress_callback, f"下载暂时失败，稍后重试: {exc}")
                 time.sleep(0.25 * 2 ** attempt)
-    raise RuntimeError(f"下载失败，已保留可校验的断点文件: {last_error}")
+    raise RuntimeError(f"下载失败，已保留断点文件，点击重试可继续下载: {last_error}")
 
 
 def _parse_content_length(raw_value: Any) -> int | None:
@@ -580,6 +592,7 @@ def _emit_download_progress(
             "downloaded_bytes": downloaded_bytes,
             "total_bytes": total_bytes,
             "percent": percent,
+            "message": "正在下载更新包",
         }
     )
 

@@ -475,6 +475,10 @@ async def _wait_update_acceptance(job_id: str, state_file: str) -> None:
         job = state.get("job") or {}
         if job.get("job_id") == job_id and job.get("phase") in {"succeeded", "rolled_back"}:
             config.UPDATE_DRAINING = False
+            # The handoff is over: later failures take the ordinary retry path, and
+            # agents, terminals and plugins must not inherit the health token.
+            for name in ("TCB_UPDATE_JOB_ID", "TCB_UPDATE_HEALTH_TOKEN"):
+                os.environ.pop(name, None)
             return
         await asyncio.sleep(0.1)
 

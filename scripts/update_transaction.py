@@ -7,10 +7,30 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
+
+# Windows access-denied, sharing and lock violations raised while a scanner or
+# indexer briefly holds a file; other permission errors are never retried.
+TRANSIENT_LOCK_WINERRORS = frozenset({5, 32, 33})
+TRANSIENT_LOCK_RETRY_DELAYS = (0.1, 0.25, 0.5, 1.0, 2.0)
 
 
 class RecoveryRequired(RuntimeError):
     """Recovery material is incomplete or a target changed outside the transaction."""
+
+
+def retry_transient_lock(operation, *args):
+    for delay in (*TRANSIENT_LOCK_RETRY_DELAYS, None):
+        try:
+            return operation(*args)
+        except PermissionError as exc:
+            if delay is None or getattr(exc, "winerror", None) not in TRANSIENT_LOCK_WINERRORS:
+                raise
+            time.sleep(delay)
+
+
+def _executable(path: Path) -> bool:
+    return bool(path.stat().st_mode & 0o111)
 
 
 def sha256(path: Path) -> str:
@@ -113,7 +133,7 @@ def atomic_copy(source: Path, destination: Path) -> None:
     staged = Path(name)
     try:
         durable_copy(source, staged)
-        os.replace(staged, destination)
+        retry_transient_lock(os.replace, staged, destination)
         sync_directory(destination.parent)
     finally:
         staged.unlink(missing_ok=True)
@@ -186,9 +206,15 @@ class Transaction:
         delete_keys = {os.path.normcase(str(safe_target(self.root, path))) for path in delete_paths}
         if len(write_keys) != len(files) or write_keys & delete_keys:
             raise RecoveryRequired("更新计划含重复目标或写入/删除重叠")
-        paths = list(dict.fromkeys([*files, *delete_paths]))
         hashes = {relative: sha256(safe_target(staging, relative)) for relative in files}
+        # A target that already holds the staged bytes needs neither a backup nor
+        # a write, so downtime and backup size follow the changed files only.
+        unchanged = {relative for relative in files
+                     if self._already_current(relative, staging, hashes[relative], expected_hashes)}
+        paths = [relative for relative in dict.fromkeys([*files, *delete_paths]) if relative not in unchanged]
         records = self.backup(paths, hashes, expected_hashes)
+        if unchanged:
+            self._log("unchanged_skipped", count=len(unchanged))
         for relative in paths:
             record = records[relative]
             target = safe_target(self.root, relative)
@@ -205,10 +231,18 @@ class Transaction:
                     raise RecoveryRequired(f"暂存文件发生变化: {relative}")
                 atomic_copy(source, target)
             elif target.exists():
-                target.unlink()
+                retry_transient_lock(target.unlink)
                 sync_directory(target.parent)
             self._log("applied", **record)
         self._log("applied_all")
+
+    def _already_current(self, relative: str, staging: Path, new_hash: str, expected_hashes) -> bool:
+        target = safe_target(self.root, relative)
+        if not target.is_file() or _executable(target) != _executable(safe_target(staging, relative)):
+            return False
+        current = sha256(target)
+        # A target changed after preparation still reaches backup(), which rejects it.
+        return current == new_hash and (expected_hashes is None or expected_hashes.get(relative, "") == current)
 
     def rollback(self) -> None:
         records, phase = self._records()
@@ -237,7 +271,7 @@ class Transaction:
                 if current_hash != record.get("new_sha256"):
                     raise RecoveryRequired(f"新增目标发生变化，保留现场: {relative}")
                 self._log("restore_intent", **{k: v for k, v in record.items() if k != "event"})
-                target.unlink()
+                retry_transient_lock(target.unlink)
                 sync_directory(target.parent)
             self._log("restored", **{k: v for k, v in record.items() if k != "event"})
         self._log("rolled_back")

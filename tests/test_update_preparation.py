@@ -245,3 +245,26 @@ def test_reused_virtual_environment_keeps_its_interpreter_symlink(payload, monke
     assert result["previous_python_executable"] == str(interpreter)
     assert result["python_executable"] == str(interpreter)
     assert checked == [interpreter]
+
+
+def test_cancelled_preparation_stops_the_running_command(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setattr(preparation, "CANCEL_POLL_SECONDS", 0.05)
+    marker = tmp_path / "child.pid"
+    script = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
+
+    def cancel_check():
+        if marker.exists():
+            raise RuntimeError("cancelled by administrator")
+
+    preparation._hooks.cancel_check = cancel_check
+    started = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="cancelled by administrator"):
+            preparation._run([sys.executable, "-c", script, marker], tmp_path, tmp_path / "preparation.log")
+    finally:
+        preparation._hooks.cancel_check = None
+    assert time.monotonic() - started < 20
+    if os.name != "nt":
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(marker.read_text()), 0)

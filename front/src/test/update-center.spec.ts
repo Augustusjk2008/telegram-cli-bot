@@ -7,7 +7,7 @@ for (const width of [1280, 390]) {
     const launcher = { supported: true, protocol: 1, command: "start.bat", reason: "" };
     const status = {
       current_version: "1.0.0", current_package_kind: "installer", update_enabled: true, revision: 5,
-      last_available_version: "2.0.0", pending_update_notes: "升级恢复能力验证", launcher,
+      last_available_version: "2.0.0", update_available: true, pending_update_notes: "升级恢复能力验证", launcher,
       last_check: { ok: true, cached: false, error: "", checked_at: "2026-10-24T12:00:00Z" },
       job: { job_id: "browser-update", revision: 5, phase: "ready", current_version: "1.0.0", target_version: "2.0.0",
         package_kind: "installer", error: "", progress: { percent: 100, message: "准备完成" }, launcher },

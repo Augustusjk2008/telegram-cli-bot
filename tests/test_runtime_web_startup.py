@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import sys
 from pathlib import Path
@@ -158,6 +159,8 @@ async def test_health_acceptance_keeps_new_work_paused_until_executor_confirmati
     from bot.update_state import UpdateStore
     monkeypatch.setattr(main_module, "_package_root", str(tmp_path))
     monkeypatch.setattr(config, "UPDATE_DRAINING", True)
+    monkeypatch.setenv("TCB_UPDATE_JOB_ID", "current")
+    monkeypatch.setenv("TCB_UPDATE_HEALTH_TOKEN", "secret-health-token")
     store = UpdateStore(tmp_path, state_root=tmp_path / "state")
     store.mutate(lambda state: state.update(job={"job_id": "current", "phase": "awaiting_health"}))
     watcher = asyncio.create_task(main_module._wait_update_acceptance("current", str(store.state_path)))
@@ -167,6 +170,8 @@ async def test_health_acceptance_keeps_new_work_paused_until_executor_confirmati
         store.mutate(lambda state: state["job"].update(phase="succeeded"))
         await asyncio.wait_for(watcher, 2)
         assert config.UPDATE_DRAINING is False
+        # Accepted hosts use the ordinary crash retry and children never see the token.
+        assert "TCB_UPDATE_JOB_ID" not in os.environ and "TCB_UPDATE_HEALTH_TOKEN" not in os.environ
     finally:
         watcher.cancel()
         await asyncio.gather(watcher, return_exceptions=True)

@@ -242,7 +242,9 @@ class UpdateStore:
             fd, name = tempfile.mkstemp(prefix="state-", suffix=".tmp", dir=self.root)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(state, handle, ensure_ascii=False, indent=2)
+                    # ASCII-only JSON: Windows PowerShell 5.1 launchers may read
+                    # this file with the ANSI code page (e.g. GBK).
+                    json.dump(state, handle, ensure_ascii=True, indent=2)
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(name, self.state_path)

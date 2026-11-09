@@ -725,9 +725,9 @@ try {
 
     $cachedLauncherPath = Join-Path $scriptDir ".tcb/startup/update-launcher.json"
     if (Test-Path -LiteralPath $cachedLauncherPath) {
-        $cachedLauncher = Get-Content -Raw -LiteralPath $cachedLauncherPath | ConvertFrom-Json
+        $cachedLauncher = Get-Content -Raw -Encoding UTF8 -LiteralPath $cachedLauncherPath | ConvertFrom-Json
         if (Test-Path -LiteralPath $cachedLauncher.state_file) {
-            $cachedState = Get-Content -Raw -LiteralPath $cachedLauncher.state_file | ConvertFrom-Json
+            $cachedState = Get-Content -Raw -Encoding UTF8 -LiteralPath $cachedLauncher.state_file | ConvertFrom-Json
             if ($cachedState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
                 $env:WEB_ENABLED = "true"
                 & $cachedLauncher.control_python_executable $cachedLauncher.runner_path supervise --repo-root $scriptDir --state-file $cachedLauncher.state_file --python $cachedLauncher.python_executable
@@ -764,7 +764,7 @@ try {
     $env:CLI_BRIDGE_UPDATE_STATE_FILE = $launcher.state_file
     $script:pythonRuntime = New-PythonRuntime -Command $launcher.python_executable
     if ($env:CLI_BRIDGE_UPDATE_STATE_FILE -and (Test-Path -LiteralPath $launcher.state_file)) {
-        $updateState = Get-Content -Raw -LiteralPath $launcher.state_file | ConvertFrom-Json
+        $updateState = Get-Content -Raw -Encoding UTF8 -LiteralPath $launcher.state_file | ConvertFrom-Json
         if ($updateState.job.phase -in @("applying", "awaiting_health", "rolling_back", "recovery_required")) {
             & $launcher.control_python_executable $launcher.runner_path supervise --repo-root $scriptDir --state-file $launcher.state_file --python $launcher.python_executable
             if ($Mode -eq "service" -and $LASTEXITCODE -eq $recoveryExitCode) {

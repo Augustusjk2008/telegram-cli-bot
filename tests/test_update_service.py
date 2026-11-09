@@ -440,3 +440,129 @@ async def test_storage_migration_rejects_update_before_stopping_agents(service, 
         await server.storage_migration_api.begin("plan", confirm_stop_all_agents=True)
     assert error.value.code == "update_busy"
     stop.assert_not_called()
+
+
+def test_cancel_succeeds_while_preparation_progress_advances_the_revision(service):
+    service.status()
+    seen = service.store.mutate(lambda s: s.update(job=service._new_job("busy", {"path": "one.zip"})))["revision"]
+    for value in range(5):
+        service._patch_job("busy", progress={"downloaded_bytes": value})
+    assert service.cancel("busy", seen)["job"]["phase"] == "cancelled"
+
+
+def test_new_preparation_reports_a_cancelled_worker_that_is_still_stopping(service):
+    from bot.update_state import FileLock
+    service.status()
+    job = {**service._new_job("old", {"path": "one.zip"}), "phase": "cancelled"}
+    service.store.mutate(lambda s: s.update(job=job))
+    with FileLock(service.store.root / "preparation.lock", timeout=0):
+        with pytest.raises(UpdateServiceError, match="仍在停止"):
+            service.start_offline("one.zip")
+
+
+def test_running_release_is_not_offered_or_prepared_again(service, monkeypatch):
+    from bot.version import APP_VERSION
+    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: {"tag_name": "v99.0.0", "assets": []})
+    assert service.check()["update_available"] is True
+    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: {"tag_name": f"v{APP_VERSION}", "assets": []})
+    assert service.check()["update_available"] is False
+    with pytest.raises(UpdateServiceError) as error:
+        service.start_online()
+    assert error.value.code == "update_not_available"
+    assert service.status()["job"] is None
+
+
+def test_status_points_to_existing_job_logs(service):
+    service.status()
+    service.store.mutate(lambda s: s.update(job={**service._new_job("logs", {"path": "one.zip"}), "phase": "failed"}))
+    directory = service.store.job_dir("logs")
+    directory.mkdir(parents=True)
+    (directory / "preparation.log").write_text("pip output")
+    public = service.status()["job"]
+    assert public["preparation_log"] == str(directory / "preparation.log")
+    assert public["runner_log"] == ""
+
+
+@pytest.mark.asyncio
+async def test_retry_resumes_the_interrupted_download_of_the_same_release(service, monkeypatch):
+    _fake_preparation(monkeypatch, service)
+    asset = "orbit-linux-x64-99.0.0.tar.gz"
+    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: {"tag_name": "v99.0.0", "assets": [{"name": asset}]})
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda root=None: "linux")
+
+    def interrupted(root, directory, selected, progress_callback=None):
+        (directory / (asset + ".part")).write_bytes(b"first half")
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(updater, "_download_release_package", interrupted)
+    first = await asyncio.to_thread(service.start_online)
+    await asyncio.to_thread(service._worker.join, 5)
+    assert service.status()["job"]["phase"] == "failed"
+    resumed = []
+
+    def resume(root, directory, selected, progress_callback=None):
+        resumed.append((directory / (asset + ".part")).read_bytes())
+        return directory / asset
+
+    monkeypatch.setattr(updater, "_download_release_package", resume)
+    retried = service.retry(first["job"]["job_id"], service.status()["revision"])
+    await asyncio.to_thread(service._worker.join, 5)
+    assert retried["job"]["job_id"] != first["job"]["job_id"]
+    assert resumed == [b"first half"]
+    assert service.status()["job"]["phase"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_upload_declared_size_rejects_early_and_reports_throttled_percent(service, monkeypatch):
+    async def unread():
+        pytest.fail("an oversized upload must be rejected before its body is read")
+        yield b""
+
+    with pytest.raises(UpdateServiceError) as error:
+        await service.upload("update.zip", unread(), max_bytes=10, expected_bytes=11)
+    assert error.value.status == 413
+    assert service.status()["job"] is None
+    _fake_preparation(monkeypatch, service)
+    writes, original = [], service._patch_job
+    monkeypatch.setattr(service, "_patch_job", lambda job_id, **values: writes.append(values) or original(job_id, **values))
+
+    async def chunks():
+        for _ in range(20):
+            yield b"x" * 10
+
+    await service.upload("update.zip", chunks(), expected_bytes=200)
+    await asyncio.to_thread(service._worker.join, 5)
+    uploads = [values["progress"] for values in writes if (values.get("progress") or {}).get("phase") == "uploading"]
+    assert uploads[0] == {"phase": "uploading", "downloaded_bytes": 10, "message": "正在上传更新包",
+                          "total_bytes": 200, "percent": 5}
+    assert len(uploads) < 20
+
+
+@pytest.mark.asyncio
+async def test_periodic_check_leaves_a_cancelled_release_alone(service, monkeypatch):
+    from bot.web.server import WebApiServer
+    server = WebApiServer(object())
+    server._update_service = service
+    service.status()
+    job = {**service._new_job("old", {"release": {"tag_name": "v9.0.0"}}), "phase": "cancelled"}
+    service.store.mutate(lambda s: s.update(job=job))
+    snapshot = {"update_enabled": True, "current_version": "3.0.0", "last_available_version": "9.0.0",
+                "last_check": {"ok": True, "cached": False, "release": {"tag_name": "v9.0.0"}}}
+    monkeypatch.setattr(service, "check", lambda: snapshot)
+    monkeypatch.setattr(service, "start_online", lambda **kwargs: pytest.fail("a cancelled release stays cancelled"))
+    await server._auto_refresh_update_status()
+    # An interrupted download (no package yet) is retried; a later failure is not.
+    service.store.mutate(lambda s: s["job"].update(phase="failed"))
+    assert service.declined_release("9.0.0") is False
+    service.store.mutate(lambda s: s["job"].update(package_path="/tmp/package.zip"))
+    assert service.declined_release("v9.0.0") is True
+
+
+def test_state_file_is_ascii_for_ansi_code_page_launchers(service):
+    # Windows PowerShell 5.1 reads BOM-less files with the ANSI code page (GBK on
+    # Chinese Windows); a CJK path segment before "\\" broke ConvertFrom-Json.
+    detail = {"error": "离线包缓存空间不足", "path": "D:\\软件\\王小明\\\"orbit\""}
+    service.store.mutate(lambda s: s.update(job={"job_id": "ascii", "phase": "failed", **detail}))
+    raw = service.store.state_path.read_bytes()
+    assert raw.isascii()
+    assert {key: json.loads(raw.decode("gbk"))["job"][key] for key in detail} == detail

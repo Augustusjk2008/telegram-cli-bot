@@ -52,6 +52,10 @@ set "CLI_BRIDGE_PS_EXE=%PS_EXE%"
 :START_SERVICE
 echo [INFO] Starting service with %PS_EXE%...
 
+rem An update can replace this file while the service runs, and cmd.exe re-reads
+rem batch files by byte offset. Keep the launch and everything after it in one
+rem block that is parsed before the service starts.
+(
 "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference = 'Stop';" ^
   "$hostExe = $env:CLI_BRIDGE_PS_EXE;" ^
@@ -70,11 +74,11 @@ echo [INFO] Starting service with %PS_EXE%...
   "$proc = Start-Process -FilePath $hostExe -Verb RunAs -WorkingDirectory (Split-Path -Parent $scriptPath) -ArgumentList $argumentList -Wait -PassThru;" ^
   "if ($null -eq $proc) { exit 1 }" ^
   "exit $proc.ExitCode"
-
-set "EXIT_CODE=%ERRORLEVEL%"
-if not "%EXIT_CODE%"=="0" (
-    echo [ERROR] Service exited with code: %EXIT_CODE%
-    echo [INFO] Recovery details are recorded in the update task.
+set "EXIT_CODE=!ERRORLEVEL!"
+if not "!EXIT_CODE!"=="0" (
+    echo [ERROR] Service exited with code: !EXIT_CODE!
+    if "!EXIT_CODE!"=="78" echo [INFO] The update needs manual recovery. Details are recorded in the update task.
     pause >nul
 )
-exit /b %EXIT_CODE%
+exit /b !EXIT_CODE!
+)

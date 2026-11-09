@@ -1606,6 +1606,8 @@ type RawAppUpdateStatus = {
     launcher?: Partial<AppUpdateLauncher>;
     backup_dir?: string;
     job_dir?: string;
+    preparation_log?: string;
+    runner_log?: string;
     result?: unknown;
     requires_preparation?: boolean;
   } | null;
@@ -1617,6 +1619,7 @@ type RawAppUpdateStatus = {
   update_channel: "release";
   last_checked_at?: string;
   last_available_version?: string;
+  update_available?: boolean;
   last_available_release_url?: string;
   last_available_notes?: string;
   pending_update_version?: string;
@@ -3929,6 +3932,8 @@ function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
       launcher: mapUpdateLauncher(raw.job.launcher ?? raw.launcher),
       backupDir: raw.job.backup_dir || "",
       jobDir: raw.job.job_dir || "",
+      preparationLog: raw.job.preparation_log || "",
+      runnerLog: raw.job.runner_log || "",
       result: raw.job.result ?? null,
       requiresPreparation: raw.job.requires_preparation === true,
     } : null,
@@ -3938,6 +3943,7 @@ function mapAppUpdateStatus(raw: RawAppUpdateStatus): AppUpdateStatus {
     updateChannel: raw.update_channel || "release",
     lastCheckedAt: raw.last_checked_at || "",
     latestVersion: raw.last_available_version || "",
+    updateAvailable: raw.update_available === true,
     latestReleaseUrl: raw.last_available_release_url || "",
     latestNotes: raw.last_available_notes || "",
     pendingUpdateVersion: raw.pending_update_version || "",
@@ -7504,7 +7510,7 @@ export class RealWebBotClient implements WebBotClient {
   async uploadOfflineUpdate(file: File): Promise<AppUpdateStatus> {
     const body = new FormData();
     body.append("file", file);
-    return mapAppUpdateStatus(await this.requestJson<RawAppUpdateStatus>("/api/admin/update/offline/upload", {
+    return mapAppUpdateStatus(await this.requestJson<RawAppUpdateStatus>(`/api/admin/update/offline/upload?size=${file.size}`, {
       method: "POST", body,
     }));
   }

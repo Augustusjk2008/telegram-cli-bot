@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 
 import pytest
@@ -147,7 +148,7 @@ def test_failed_old_health_requires_manual_recovery(installation, monkeypatch):
     children = []
     monkeypatch.setattr(runner, "_start_host", lambda *args: children.append(Child()) or children[-1])
     monkeypatch.setattr(runner, "read_health", lambda *args: {})
-    with pytest.raises(RuntimeError, match="timed out"):
+    with pytest.raises(RuntimeError, match="健康确认超时"):
         runner.apply_job(root, store, "job-1")
     job = store.read()["job"]
     assert job["phase"] == "recovery_required"
@@ -169,7 +170,7 @@ def test_prepared_job_and_changed_staging_are_not_applied(installation, monkeypa
     assert (root / "VERSION").read_text() == "1.0.0"
     assert len(started) == 1
     assert store.read()["job"]["phase"] == "rolled_back"
-    assert "changed" in store.read()["job"]["error"]
+    assert "暂存文件发生变化" in store.read()["job"]["error"]
 
 
 def test_recovery_does_not_reopen_a_successful_transaction(installation):
@@ -339,13 +340,33 @@ def test_same_version_recovery_verifies_the_previous_build(installation, monkeyp
 
 
 def test_interrupted_executor_refuses_live_orphan(installation, monkeypatch):
+    from bot.update_state import FileLock
     root, store = installation
     store.mutate(lambda state: state["job"].update(phase="awaiting_health", child_pid=123))
-    monkeypatch.setattr(runner, "_pid_alive", lambda pid: True)
-    with pytest.raises(RuntimeError, match="still running"):
-        runner.recover_job(root, store, "job-1", "Interrupted")
+    monkeypatch.setattr(runner, "_start_host", lambda *args: pytest.fail("a live host must block recovery"))
+    with FileLock(store.execution_lock_root / "host.lock", timeout=0):
+        with pytest.raises(RuntimeError, match="仍有宿主进程在运行"):
+            runner.recover_job(root, store, "job-1", "Interrupted")
     assert store.read()["job"]["phase"] == "recovery_required"
     assert (root / "VERSION").read_text() == "1.0.0"
+    # A legacy host takes no lock, so its recorded PID still guards recovery.
+    store.mutate(lambda state: state["job"].update(bootstrap_legacy=True))
+    monkeypatch.setattr(runner, "_pid_alive", lambda pid: True)
+    with pytest.raises(RuntimeError, match="仍有宿主进程在运行"):
+        runner.recover_job(root, store, "job-1", "Interrupted")
+
+
+def test_recovery_after_reboot_ignores_a_reused_child_pid(installation, monkeypatch):
+    root, store = installation
+    store.mutate(lambda state: state["job"].update(phase="awaiting_health", child_pid=123, transaction_started=False))
+    monkeypatch.setattr(runner, "_pid_alive", lambda pid: True)
+    tokens, child = [], Child()
+    monkeypatch.setattr(runner, "_start_host", lambda *args: tokens.append(args[4]) or child)
+    monkeypatch.setattr(runner, "read_health",
+                        lambda url, token: health(store.read()["job"], "1.0.0", token, instance="restarted"))
+    runner.recover_job(root, store, "job-1", "Interrupted")
+    assert store.read()["job"]["phase"] == "rolled_back"
+    assert tokens
 
 
 def test_snapshot_works_without_bot_imports_and_portable_python_is_external(tmp_path, monkeypatch):
@@ -574,7 +595,7 @@ def test_legacy_health_rejects_unrelated_or_stale_service(installation, monkeypa
                     "failed_instance": {"instance_id": "failed-new-instance"},
                     "token": {"update_health_token": "unrelated"}}[wrong])
     monkeypatch.setattr(runner, "read_health", lambda *args: payload)
-    with pytest.raises(RuntimeError, match="timed out"):
+    with pytest.raises(RuntimeError, match="健康确认超时"):
         runner.wait_for_health(child, job, "1.0.0", "token", legacy=True)
 
 
@@ -757,3 +778,27 @@ def test_bootstrap_rejects_unproven_baseline_without_writing_ownership(tmp_path,
     with pytest.raises((RuntimeError, ValueError)):
         bootstrap.establish_baseline(root, package, checksum, tmp_path / "work")
     assert not (root / ".update-baseline.json").exists()
+
+
+def test_control_snapshot_pruning_keeps_referenced_recent_and_locked_material(installation, tmp_path):
+    from bot.update_state import FileLock
+    root, store = installation
+    control = runner.control_root(root)
+    old = time.time() - 3 * 24 * 3600
+    entries = {name: control / name for name in (
+        "launcher-aaaaaaaaaaaaaaaa", "launcher-bbbbbbbbbbbbbbbb", "c" * 20, "d" * 20, "e" * 20, "other")}
+    for name, path in entries.items():
+        (path / "python").mkdir(parents=True)
+        (path / "python" / "python.exe").write_text("runtime")
+        if name != "e" * 20:
+            for item in (path / "python" / "python.exe", path / "python", path):
+                os.utime(item, (old, old))
+    store.mutate(lambda state: state["job"].update(
+        control_python_executable=str(entries["c" * 20] / "python" / "python.exe")))
+    keep = [{"runner_path": str(entries["launcher-aaaaaaaaaaaaaaaa"] / "update_runner.py")}]
+    with FileLock(store.execution_lock_root / "supervisor.lock", timeout=0):
+        assert runner.prune_control_snapshots(root, store, keep=keep) == []
+    deleted = runner.prune_control_snapshots(root, store, keep=keep)
+    assert sorted(deleted) == ["d" * 20, "launcher-bbbbbbbbbbbbbbbb"]
+    assert {path.name for path in control.iterdir() if path.is_dir()} == {
+        "launcher-aaaaaaaaaaaaaaaa", "c" * 20, "e" * 20, "other"}
