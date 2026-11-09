@@ -51,6 +51,7 @@ class Connection:
         self.calls = []
         self.overrides = {}
         self.readonly_outputs = {}
+        self.remote_urls = {}
 
     def execute(self, command, root, *, timeout, max_output):
         tokens = shlex.split(command)
@@ -73,6 +74,21 @@ class Connection:
             return result(root + "\n")
         if args == ["remote"]:
             return result("".join(remote_name + "\n" for remote_name in self.remotes))
+        if args == ["remote", "-v"]:
+            return result("".join(
+                f"{name}\t{self.remote_urls.get(name, 'https://github.com/octo/project.git')} ({kind})\n"
+                for name in self.remotes for kind in ("fetch", "push")
+            ))
+        if args[0] == "remote":
+            action, name = args[1], args[3]
+            if action == "add":
+                self.remotes.append(name)
+                self.remote_urls[name] = args[4]
+            elif action == "set-url":
+                self.remote_urls[name] = args[4]
+            elif action == "remove":
+                self.remotes.remove(name)
+            return result()
         if args == ["symbolic-ref", "--quiet", "--short", "HEAD"]:
             return result(self.branch + "\n", returncode=0 if self.branch else 1)
         if args == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]:
@@ -99,6 +115,8 @@ class Connection:
             return result(self.readonly_outputs.get("stashes", ""))
         if args[0] == "stash":
             return result()
+        if args[:2] == ["config", "--unset-all"]:
+            return result(returncode=5)
         if args[0] == "config":
             if "--get" not in args:
                 scope, key, value = args[1:4]
@@ -156,7 +174,7 @@ def test_capabilities_probe_local_remote_config_and_mark_sync_features():
     assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
     readable = {
         "tree_status", "commit_graph", "branches", "branch_mutation", "discard", "stash", "identity",
-        "fetch", "pull", "push", "commit_message_generation", "smart_commit",
+        "fetch", "pull", "push", "remotes", "publish", "commit_message_generation", "smart_commit",
     }
     assert all(
         item["available"] is (name in readable)
@@ -1019,3 +1037,106 @@ def test_powershell_missing_executable_returns_missing_git_sentinel(tmp_path):
                                input=windows.command_script(command, "/" + tmp_path.as_posix()).encode("utf-8"),
                                capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
     assert completed.returncode == 127, completed.stderr
+
+
+def test_remote_remotes_view_redacts_urls_and_keeps_host_credentials():
+    connection = Connection(remotes=("origin", "backup"))
+    connection.remote_urls = {
+        "origin": "https://alice:s3cret@github.com/octo/project.git",
+        "backup": "git@example.com:team/project.git",
+    }
+    connection.readonly_outputs["head"] = OID + "\n"
+
+    payload = remote.RemoteGitService(connection, ROOT).remotes()
+
+    assert payload["github_account_auth"] is False
+    assert (payload["repo_found"], payload["current_branch"], payload["upstream"], payload["has_commits"]) == (
+        True, "main", "origin/main", True,
+    )
+    origin, backup = payload["remotes"]
+    assert origin["fetch_url"] == "https://github.com/octo/project.git"
+    assert origin["has_embedded_credentials"] is True
+    assert origin["github"]["full_name"] == "octo/project"
+    assert (backup["protocol"], backup["github"]) == ("ssh", None)
+    assert "s3cret" not in json.dumps(payload)
+    assert all(call[2] == remote.READ_TIMEOUT for call in connection.calls)
+
+
+def test_remote_remote_mutations_validate_before_ssh_and_end_options():
+    connection = Connection()
+    service = remote.RemoteGitService(connection, ROOT)
+
+    for name, url, code in (
+        ("-upload-pack=x", "https://github.com/octo/project.git", "invalid_git_remote_name"),
+        ("upstream", "ext::sh -c id", "invalid_git_remote_url"),
+        ("upstream", "https://bob:token@github.com/octo/project.git", "git_remote_url_has_credentials"),
+    ):
+        with pytest.raises(RemoteWorkspaceError) as exc:
+            service.remote_add(name, url)
+        assert exc.value.code == code
+    assert connection.calls == []
+
+    service.remote_add("upstream", "git@github.com:octo/project.git")
+    service.remote_set_url("upstream", "https://github.com/octo/project.git")
+    service.remote_remove("upstream")
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        service.remote_remove("upstream")
+    assert exc.value.code == "git_remote_not_found"
+
+    mutations = [call for call in connection.calls if call[2] == remote.MUTATION_TIMEOUT]
+    assert [call[0] for call in mutations] == [
+        ["remote", "add", "--", "upstream", "git@github.com:octo/project.git"],
+        ["remote", "set-url", "--", "upstream", "https://github.com/octo/project.git"],
+        ["config", "--unset-all", "remote.upstream.pushurl"],
+        ["remote", "remove", "--", "upstream"],
+    ]
+
+
+def test_remote_publish_pushes_current_branch_once_with_upstream():
+    connection = Connection(files={}, upstream="")
+    connection.readonly_outputs["head"] = OID + "\n"
+
+    overview = remote.RemoteGitService(connection, ROOT).publish("origin")
+
+    assert overview["repo_path"] == ROOT
+    pushes = [call for call in connection.calls if call[0][0] == "push"]
+    assert [call[0] for call in pushes] == [
+        ["push", "--set-upstream", "--", "origin", "refs/heads/main:refs/heads/main"],
+    ]
+    assert pushes[0][2] == remote.MUTATION_TIMEOUT
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "head", "target", "expected_code"),
+    [
+        ({"branch": ""}, OID, "origin", "git_detached_head"),
+        ({}, "", "origin", "git_no_commits"),
+        ({}, OID, "missing", "git_remote_not_found"),
+    ],
+)
+def test_remote_publish_prechecks_do_not_push(kwargs, head, target, expected_code):
+    connection = Connection(**kwargs)
+    connection.readonly_outputs["head"] = head
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).publish(target)
+
+    assert exc.value.code == expected_code
+    assert exc.value.data == {"operation": "publish", "outcome": "not_started", "refresh_required": False}
+    assert not any(call[0][0] == "push" for call in connection.calls)
+
+
+def test_remote_publish_rejection_is_classified_and_redacted():
+    connection = Connection(files={})
+    connection.readonly_outputs["head"] = OID
+    connection.overrides["push"] = result(
+        stderr="To https://carol:hunter2@github.com/octo/project.git\n ! [rejected] main -> main (fetch first)",
+        returncode=1,
+    )
+
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(connection, ROOT).publish("origin")
+
+    assert exc.value.code == "git_push_rejected"
+    assert exc.value.data == {"operation": "publish", "outcome": "rejected", "refresh_required": True}
+    assert "hunter2" not in exc.value.message

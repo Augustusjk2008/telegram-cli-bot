@@ -431,6 +431,8 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         ("PUT", "git/identity"), ("POST", "git/discard"), ("POST", "git/discard-all"),
         ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit"),
         ("POST", "git/fetch"), ("POST", "git/pull"), ("POST", "git/push"),
+        ("GET", "git/remotes"), ("POST", "git/remotes"), ("POST", "git/remotes/update"),
+        ("POST", "git/remotes/remove"), ("POST", "git/publish"),
         ("POST", "git/stash/pop"),
         ("POST", "git/smart-commit"), ("GET", "git/smart-commit/active"),
         ("GET", "git/smart-commit/{job_id}"),

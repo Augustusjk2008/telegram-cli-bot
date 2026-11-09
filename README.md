@@ -185,9 +185,9 @@ Agent 仍在运行 Orbit 的电脑上执行。本地控制目录默认位于 `~/
 
 密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
 
-远程 Git 面板支持 Linux 和 Windows 上的仓库，所选远程目录必须是仓库顶层目录。Git 页面与本地使用相同的工作台入口和 API 语义，可查看状态、文件树 Git 状态、当前分支、提交图、近期提交、文件差异（包括未跟踪文件），逐文件暂存、取消暂存并手动提交；也支持初始化、丢弃改动、分支创建 / 切换 / 重置、Stash 列表 / 应用 / 删除 / 弹出、Fetch、Pull、Push、Git 身份配置、提交说明生成和智能提交。Stash 创建当前通过能力矩阵标记为不可用。提交和智能提交使用远程仓库的状态与 Diff，实际 Git 操作在远程 SSH 主机执行；提交身份来自远程 Git 配置，请在远程端配置 `user.name` 和 `user.email`。
+远程 Git 面板支持 Linux 和 Windows 上的仓库，所选远程目录必须是仓库顶层目录。Git 页面与本地使用相同的工作台入口和 API 语义，可查看状态、文件树 Git 状态、当前分支、提交图、近期提交、文件差异（包括未跟踪文件），逐文件暂存、取消暂存并手动提交；也支持初始化、丢弃改动、分支创建 / 切换 / 重置、Stash 列表 / 应用 / 删除 / 弹出、Fetch、Pull、Push、远端添加 / 修改 / 移除、分支发布、Git 身份配置、提交说明生成和智能提交。Stash 创建当前通过能力矩阵标记为不可用。提交和智能提交使用远程仓库的状态与 Diff，实际 Git 操作在远程 SSH 主机执行；提交身份来自远程 Git 配置，请在远程端配置 `user.name` 和 `user.email`。
 
-远程仓库、upstream 或 Git 凭据不可用时，操作返回诊断信息；Fetch、Pull、Push 禁止交互式凭据提示。远程 Agent 不提供 shadow Git 工作区历史和回滚，远程项目继续使用自身真实仓库历史。
+远程仓库、upstream 或 Git 凭据不可用时，操作返回诊断信息；Fetch、Pull、Push 和分支发布禁止交互式凭据提示。远程 Agent 不提供 shadow Git 工作区历史和回滚，远程项目继续使用自身真实仓库历史。
 
 Git 必须在远程 SSH 账号的**非交互会话 PATH** 中可用；本地安装 Git 不会提供远程 Git 能力。缺少 Git 时，面板显示安装 / PATH 指引和重试入口，应用不会通过 SSH 安装软件。请按官方 [Linux 安装指引](https://git-scm.com/install/linux) 或 [Windows 安装指引](https://git-scm.com/install/windows) 准备与远程系统兼容的 Git，确认该账号通过 SSH 能执行 `git --version`，再重试。写操作超时或断线后应先刷新状态核对结果，再决定是否重试。
 
@@ -201,10 +201,23 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 
 - **Chat**：普通 CLI 与原生 Agent 对话、历史恢复、过程详情和上下文状态。
 - **Files**：文件树、编辑器、预览、多标签和语言服务导航。
-- **Git**：状态、diff、提交历史与工作区操作。
+- **Git**：状态、diff、提交历史、工作区操作、远端管理与 GitHub 关联。
 - **Terminal**：持久化多标签 Web 终端，每个标签使用独立 shell 和 owner。
 - **Debug**：面向 Python、C/C++、Godot 和通用 DAP 的调试入口。
 - **Plugins**：PDF、DOCX、PPTX、CSV、Vivado waveform 等可扩展视图。
+
+### GitHub 账号与远端仓库
+
+Git 页面「远端」分区可查看、添加、修改和移除远端，并把当前分支发布（推送并设置 upstream）到指定远端。修改地址会同时更新 fetch 与 push 地址。新建远端只接受 https、http、ssh、git、file 地址或 `user@host:path`，地址中不能包含密码或令牌；已有地址中的凭据在界面中隐藏。
+
+GitHub 账号按 Orbit 登录账号分别连接，可在「远端 → 关联 GitHub 仓库」或「设置 → GitHub 账号」中操作：
+
+- **浏览器授权**：在 `.env` 或管理中心设置 `GITHUB_OAUTH_CLIENT_ID`（已勾选 Enable Device Flow 的 GitHub OAuth App 客户端 ID，无需 client secret），页面显示授权码，在 github.com 确认即可。
+- **个人访问令牌**：经典令牌需要 `repo` 和 `read:org`；细粒度令牌需要目标仓库的 Contents 读写，创建仓库还需要 Administration 写权限。
+
+连接后可在自己或所属组织下创建空仓库（默认私有，不初始化 README，以保留本地历史），也可选择已有仓库；关联时可选 HTTPS 或 SSH 地址，并可在关联后直接发布当前分支。
+
+令牌使用安装级密钥加密保存在应用数据目录的 `github/` 下，不会返回浏览器。本地工作区对 `https://github.com/` 的 Fetch、Pull、Push 和发布通过 Git 子进程环境变量使用当前账号的令牌，不出现在命令行参数中，并对该主机停用其他凭据助手和交互提示；SSH 地址继续使用本机 SSH 密钥。SSH 远程工作区的 GitHub API 操作在 Orbit 宿主执行，Git 同步仍使用远程主机自己的凭据，Orbit 不会把令牌发送到远程主机。断开账号只删除本地保存的令牌；彻底撤销请在 GitHub 设置中操作。GitHub API 请求使用管理中心配置的 Git 代理，未配置时遵循系统代理环境变量。
 
 ### 本地 HTML 预览
 

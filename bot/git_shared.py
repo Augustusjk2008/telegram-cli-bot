@@ -7,11 +7,226 @@ import binascii
 import json
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 
 GIT_OVERVIEW_CHANGED_FILES_LIMIT = 2000
 GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 100
 GIT_COMMIT_GRAPH_MAX_LIMIT = 300
+GIT_REMOTE_NAME_MAX_LENGTH = 64
+GIT_REMOTE_URL_MAX_LENGTH = 2048
+GITHUB_HOST = "github.com"
+
+_GIT_REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_GIT_REMOTE_URL_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
+_GIT_REMOTE_URL_SCHEMES = frozenset({"https", "http", "ssh", "git", "file"})
+# scp-like syntax requires an explicit user so it cannot be confused with a
+# Windows drive path such as ``C:\repo``.
+_GIT_SCP_URL_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._~-]*@[A-Za-z0-9][A-Za-z0-9.-]*:(?!//)\S+$")
+_GITHUB_TOKEN_TEXT_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b")
+_GITHUB_OWNER_PATTERN = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})"
+_GITHUB_REPO_PATTERN = r"[A-Za-z0-9._-]+?"
+_GITHUB_HTTPS_REMOTE_RE = re.compile(
+    rf"^https?://(?:[^/@\s]+@)?(?:www\.)?github\.com(?::443)?/({_GITHUB_OWNER_PATTERN})/({_GITHUB_REPO_PATTERN})(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+_GITHUB_SSH_REMOTE_RE = re.compile(
+    rf"^ssh://git@(?:ssh\.)?github\.com(?::(?:22|443))?/({_GITHUB_OWNER_PATTERN})/({_GITHUB_REPO_PATTERN})(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+_GITHUB_SCP_REMOTE_RE = re.compile(
+    rf"^git@github\.com:({_GITHUB_OWNER_PATTERN})/({_GITHUB_REPO_PATTERN})(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+
+
+class GitRemoteInputError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def redact_git_secret_text(value: object) -> str:
+    """Remove credentials that Git or a remote may echo into diagnostics."""
+    text = str(value or "")
+    text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1", text)
+    text = re.sub(
+        r"(?i)(?<![\w])[^@\s/:]+@(?=[A-Za-z0-9._-]+(?::\d+)?[:/])",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"(?i)([?&](?:access[_-]?token|auth[_-]?token|password|passwd|secret|token)\s*=\s*)[^&\s]+",
+        r"\1<redacted>",
+        text,
+    )
+    text = re.sub(r"(?i)(\bauthorization\s*:\s*(?:basic|bearer|token)\s+)[^\s\r\n]+", r"\1<redacted>", text)
+    text = re.sub(
+        r"(?i)(\b(?:authorization\s*:\s*bearer|(?:git|ssh)_askpass|askpass(?:_command)?|password|passwd|secret|token)\s*(?:[:=]|\s)\s*)[^\s\r\n]+",
+        r"\1<redacted>",
+        text,
+    )
+    return _GITHUB_TOKEN_TEXT_RE.sub("<redacted>", text)
+
+
+def _looks_like_token(value: str) -> bool:
+    return bool(_GITHUB_TOKEN_TEXT_RE.fullmatch(value or ""))
+
+
+def normalize_git_remote_name(name: Any) -> str:
+    """Validate a remote name chosen in Orbit.
+
+    Git itself accepts names such as ``-origin``; Orbit restricts new names to
+    a conservative set so they can never be parsed as command options.
+    """
+    value = str(name or "").strip()
+    if not value:
+        raise GitRemoteInputError("invalid_git_remote_name", "远端名称不能为空")
+    if (
+        len(value) > GIT_REMOTE_NAME_MAX_LENGTH
+        or not _GIT_REMOTE_NAME_RE.fullmatch(value)
+        or ".." in value
+        or value.endswith((".", ".lock"))
+    ):
+        raise GitRemoteInputError(
+            "invalid_git_remote_name",
+            "远端名称只能包含字母、数字、点、下划线和连字符，并以字母或数字开头",
+        )
+    return value
+
+
+def normalize_existing_git_remote_name(name: Any) -> str:
+    """Validate the name of a remote that may have been created outside Orbit."""
+    value = str(name or "").strip()
+    if not value or len(value) > 255:
+        raise GitRemoteInputError("invalid_git_remote_name", "远端名称不合法")
+    if value.startswith("-") or any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise GitRemoteInputError("invalid_git_remote_name", "远端名称不合法")
+    return value
+
+
+def normalize_git_remote_url(url: Any) -> str:
+    value = str(url or "").strip()
+    if not value:
+        raise GitRemoteInputError("invalid_git_remote_url", "远端地址不能为空")
+    if len(value) > GIT_REMOTE_URL_MAX_LENGTH:
+        raise GitRemoteInputError("invalid_git_remote_url", "远端地址过长")
+    if value.startswith("-") or any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise GitRemoteInputError("invalid_git_remote_url", "远端地址不能以 - 开头，也不能包含空白或控制字符")
+
+    scheme_match = _GIT_REMOTE_URL_SCHEME_RE.match(value)
+    if scheme_match:
+        scheme = scheme_match.group(1).lower()
+        if scheme not in _GIT_REMOTE_URL_SCHEMES:
+            raise GitRemoteInputError(
+                "invalid_git_remote_url",
+                "仅支持 https、http、ssh、git、file 地址或 user@host:path 形式",
+            )
+        try:
+            parsed = urlsplit(value)
+            parsed.port  # noqa: B018 - validates the port range
+        except ValueError as exc:
+            raise GitRemoteInputError("invalid_git_remote_url", "远端地址格式不正确") from exc
+        if scheme != "file" and not parsed.hostname:
+            raise GitRemoteInputError("invalid_git_remote_url", "远端地址缺少主机名")
+        # A leading dash could be read as an ssh option by older transports.
+        if (parsed.hostname or "").startswith("-") or (parsed.username or "").startswith("-"):
+            raise GitRemoteInputError("invalid_git_remote_url", "远端地址的主机名或用户名不能以 - 开头")
+        if parsed.password is not None or _looks_like_token(parsed.username or ""):
+            raise GitRemoteInputError(
+                "git_remote_url_has_credentials",
+                "远端地址不能包含密码或令牌；请连接 GitHub 账号或使用系统 Git 凭据",
+            )
+        return value
+
+    if _GIT_SCP_URL_RE.fullmatch(value):
+        return value
+    raise GitRemoteInputError(
+        "invalid_git_remote_url",
+        "仅支持 https、http、ssh、git、file 地址或 user@host:path 形式",
+    )
+
+
+def redact_git_url(url: str) -> tuple[str, bool]:
+    """Return a URL safe for display and whether it carried credentials."""
+    value = str(url or "")
+    scheme_match = _GIT_REMOTE_URL_SCHEME_RE.match(value)
+    if not scheme_match:
+        return value, False
+    prefix = scheme_match.group(0)
+    rest = value[len(prefix):]
+    authority, slash, path = rest.partition("/")
+    userinfo, at, host = authority.rpartition("@")
+    if not at:
+        return value, False
+    username, colon, _password = userinfo.partition(":")
+    if not colon and not _looks_like_token(username):
+        return value, False
+    return f"{prefix}{host}{slash}{path}", True
+
+
+def git_url_protocol(url: str) -> str:
+    value = str(url or "")
+    scheme_match = _GIT_REMOTE_URL_SCHEME_RE.match(value)
+    if scheme_match:
+        scheme = scheme_match.group(1).lower()
+        return scheme if scheme in _GIT_REMOTE_URL_SCHEMES else "other"
+    if _GIT_SCP_URL_RE.fullmatch(value):
+        return "ssh"
+    return "other"
+
+
+def parse_github_remote(url: str) -> dict[str, str] | None:
+    value = str(url or "").strip()
+    for pattern, protocol in (
+        (_GITHUB_HTTPS_REMOTE_RE, "https"),
+        (_GITHUB_SSH_REMOTE_RE, "ssh"),
+        (_GITHUB_SCP_REMOTE_RE, "ssh"),
+    ):
+        match = pattern.fullmatch(value)
+        if match:
+            owner, repo = match.group(1), match.group(2)
+            return {
+                "owner": owner,
+                "repo": repo,
+                "full_name": f"{owner}/{repo}",
+                "html_url": f"https://{GITHUB_HOST}/{owner}/{repo}",
+                "protocol": protocol,
+            }
+    return None
+
+
+def parse_git_remote_verbose(text: str) -> list[dict[str, Any]]:
+    """Parse ``git remote -v`` while keeping the configured order."""
+    remotes: dict[str, dict[str, Any]] = {}
+    for line in str(text or "").splitlines():
+        name, tab, rest = line.partition("\t")
+        if not tab or not name:
+            continue
+        if rest.endswith(" (fetch)"):
+            kind, url = "fetch_urls", rest[: -len(" (fetch)")]
+        elif rest.endswith(" (push)"):
+            kind, url = "push_urls", rest[: -len(" (push)")]
+        else:
+            continue
+        entry = remotes.setdefault(name, {"name": name, "fetch_urls": [], "push_urls": []})
+        entry[kind].append(url)
+    return list(remotes.values())
+
+
+def build_git_remote_entry(name: str, fetch_urls: list[str], push_urls: list[str]) -> dict[str, Any]:
+    fetch_url = fetch_urls[0] if fetch_urls else ""
+    push_url = push_urls[0] if push_urls else fetch_url
+    display_fetch, fetch_credentials = redact_git_url(fetch_url)
+    display_push, push_credentials = redact_git_url(push_url)
+    return {
+        "name": name,
+        "fetch_url": display_fetch,
+        "push_url": display_push,
+        "protocol": git_url_protocol(push_url or fetch_url),
+        "has_embedded_credentials": fetch_credentials or push_credentials,
+        "github": parse_github_remote(fetch_url) or parse_github_remote(push_url),
+    }
 
 
 def _parse_status_header(header: str) -> tuple[str, int, int]:

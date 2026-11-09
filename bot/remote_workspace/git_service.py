@@ -22,6 +22,13 @@ from bot.git_shared import (
     _parse_status_header,
     _parse_tree_status_kind,
     _zero_changed_file_stats,
+    GitRemoteInputError,
+    build_git_remote_entry,
+    normalize_existing_git_remote_name,
+    normalize_git_remote_name,
+    normalize_git_remote_url,
+    parse_git_remote_verbose,
+    redact_git_secret_text,
 )
 
 from . import windows
@@ -538,6 +545,8 @@ class RemoteGitService:
                     "stash": True,
                     "stash_create": False,
                     "identity": True,
+                    "remotes": True,
+                    "publish": True,
                     "commit_message_generation": True,
                     "smart_commit": True,
                 },
@@ -551,24 +560,7 @@ class RemoteGitService:
 
     @staticmethod
     def _redact_remote_text(value: object) -> str:
-        text = str(value or "")
-        text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1", text)
-        text = re.sub(
-            r"(?i)(?<![\w])[^@\s/:]+@(?=[A-Za-z0-9._-]+(?::\d+)?[:/])",
-            "",
-            text,
-        )
-        text = re.sub(
-            r"(?i)([?&](?:access[_-]?token|auth[_-]?token|password|passwd|secret|token)\s*=\s*)[^&\s]+",
-            r"\1<redacted>",
-            text,
-        )
-        text = re.sub(
-            r"(?i)(\b(?:authorization\s*:\s*bearer|(?:git|ssh)_askpass|askpass(?:_command)?|password|passwd|secret|token)\s*(?:[:=]|\s)\s*)[^\s\r\n]+",
-            r"\1<redacted>",
-            text,
-        )
-        return text
+        return redact_git_secret_text(value)
 
     @classmethod
     def _redact_remote_data(cls, value: object) -> object:
@@ -587,6 +579,10 @@ class RemoteGitService:
             "git_remote_not_configured",
             "git_upstream_not_configured",
             "git_pull_requires_manual_resolution",
+            "git_remote_not_found",
+            "invalid_git_remote_name",
+            "git_detached_head",
+            "git_no_commits",
         }:
             return exc.code
         text = cls._redact_remote_text(
@@ -620,7 +616,7 @@ class RemoteGitService:
             "please commit your changes",
         )):
             return "git_pull_requires_manual_resolution"
-        if operation == "push" and any(marker in text for marker in (
+        if operation in {"push", "publish"} and any(marker in text for marker in (
             "[rejected]", "rejected", "non-fast-forward", "failed to push some refs",
             "remote rejected", "hook declined", "pre-receive hook declined",
             "protected branch", "deny updating a hidden ref",
@@ -718,6 +714,141 @@ class RemoteGitService:
 
     def push(self) -> dict:
         return self._run_remote_sync("push", ["push"], require_upstream=True)
+
+    @staticmethod
+    def _remote_input_error(exc: GitRemoteInputError) -> RemoteWorkspaceError:
+        return RemoteWorkspaceError(400, exc.code, str(exc))
+
+    def _current_branch_and_upstream(self) -> tuple[str, str]:
+        head = self._git(
+            ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            allowed=(0, 1),
+            error="git_upstream_probe_failed",
+        )
+        branch = head["stdout"].strip() if not head["returncode"] else ""
+        if not branch or "\n" in branch or "\r" in branch:
+            return "", ""
+        upstream = self._git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            allowed=(0, 128),
+            error="git_upstream_probe_failed",
+        )
+        upstream_name = upstream["stdout"].strip() if not upstream["returncode"] else ""
+        return branch, "" if "\n" in upstream_name or "\r" in upstream_name else upstream_name
+
+    def _has_head_commit(self) -> bool:
+        return not self._git(
+            ["rev-parse", "--verify", "HEAD"],
+            allowed=(0, 128),
+            error="git_head_probe_failed",
+        )["returncode"]
+
+    def _existing_remote_name(self, name: object) -> str:
+        try:
+            remote_name = normalize_existing_git_remote_name(name)
+        except GitRemoteInputError as exc:
+            raise self._remote_input_error(exc) from exc
+        if remote_name not in self._remote_names():
+            raise RemoteWorkspaceError(404, "git_remote_not_found", f"Remote {remote_name} does not exist")
+        return remote_name
+
+    def remotes(self) -> dict:
+        with self._lock:
+            payload = {
+                "repo_found": False,
+                "working_dir": self.root,
+                "repo_path": "",
+                "current_branch": "",
+                "upstream": "",
+                "has_commits": False,
+                "remotes": [],
+                # Remote hosts keep using their own Git credentials; Orbit never
+                # forwards a GitHub account token over SSH.
+                "github_account_auth": False,
+            }
+            if self._repo_root() is None:
+                return payload
+            raw = self._git(["remote", "-v"], error="git_remote_list_failed")["stdout"]
+            branch, upstream = self._current_branch_and_upstream()
+            payload.update({
+                "repo_found": True,
+                "repo_path": self.root,
+                "current_branch": branch,
+                "upstream": upstream,
+                "has_commits": self._has_head_commit(),
+                "remotes": [
+                    build_git_remote_entry(item["name"], item["fetch_urls"], item["push_urls"])
+                    for item in parse_git_remote_verbose(raw)
+                ],
+            })
+            return payload
+
+    def remote_add(self, name: object, url: object) -> dict:
+        try:
+            remote_name = normalize_git_remote_name(name)
+            remote_url = normalize_git_remote_url(url)
+        except GitRemoteInputError as exc:
+            raise self._remote_input_error(exc) from exc
+        with self._lock:
+            self._require_repo()
+            if remote_name in self._remote_names():
+                raise RemoteWorkspaceError(409, "git_remote_exists", f"Remote {remote_name} already exists")
+            self._git(["remote", "add", "--", remote_name, remote_url], error="git_remote_add_failed", mutation=True)
+            return self.remotes()
+
+    def remote_set_url(self, name: object, url: object) -> dict:
+        try:
+            remote_url = normalize_git_remote_url(url)
+        except GitRemoteInputError as exc:
+            raise self._remote_input_error(exc) from exc
+        with self._lock:
+            self._require_repo()
+            remote_name = self._existing_remote_name(name)
+            self._git(["remote", "set-url", "--", remote_name, remote_url], error="git_remote_update_failed", mutation=True)
+            self._git(
+                ["config", "--unset-all", f"remote.{remote_name}.pushurl"],
+                error="git_remote_update_failed",
+                allowed=(0, 5),
+                mutation=True,
+            )
+            return self.remotes()
+
+    def remote_remove(self, name: object) -> dict:
+        with self._lock:
+            self._require_repo()
+            remote_name = self._existing_remote_name(name)
+            self._git(["remote", "remove", "--", remote_name], error="git_remote_remove_failed", mutation=True)
+            return self.remotes()
+
+    def publish(self, remote_name: object) -> dict:
+        with self._lock:
+            try:
+                self._require_repo()
+                name = self._existing_remote_name(remote_name)
+                branch, _upstream = self._current_branch_and_upstream()
+                if not branch:
+                    raise RemoteWorkspaceError(409, "git_detached_head", "HEAD is detached; switch to a branch before publishing")
+                if not self._has_head_commit():
+                    raise RemoteWorkspaceError(409, "git_no_commits", "The current branch has no commits to publish")
+            except RemoteWorkspaceError as exc:
+                raise self._sync_error("publish", exc, executed=False) from exc
+            refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+            try:
+                result = self._git(
+                    ["push", "--set-upstream", "--", name, refspec],
+                    error="git_publish_failed",
+                    allowed=tuple(range(256)),
+                    truncated=True,
+                    mutation=True,
+                )
+                if result["returncode"]:
+                    message = (result["stderr"] or result["stdout"] or "Remote Git command failed").strip()
+                    if result["output_truncated"]:
+                        message += "\n[Remote Git output truncated]"
+                    raise RemoteWorkspaceError(400, "git_publish_failed", message)
+                return self._overview()
+            except RemoteWorkspaceError as exc:
+                raise self._sync_error("publish", exc, executed=True) from exc
 
     @staticmethod
     def _status_items(raw: str) -> dict[str, str]:

@@ -14,6 +14,7 @@ import {
   GitCommitHorizontal,
   GitFork,
   GitPullRequest,
+  Github,
   LoaderCircle,
   Minus,
   Plus,
@@ -29,6 +30,8 @@ import {
 } from "lucide-react";
 import { GitCommitCliConfigPanel } from "../components/GitCommitCliConfigPanel";
 import { GitDiffViewer } from "../components/GitDiffViewer";
+import { GitHubAccountPanel } from "../components/GitHubAccountPanel";
+import { GitRemotesPanel } from "../components/GitRemotesPanel";
 import { StateBadge } from "../components/StateBadge";
 import { TouchHint } from "../components/TouchHint";
 import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
@@ -49,12 +52,28 @@ import type {
   GitIdentityScope,
   GitOverview,
   GitDiffPayload,
+  GitHubAccountStatus,
   GitResetMode,
   GitSmartCommitJob,
   GitStashList,
   GitWorkspaceIdentity,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import {
+  gitFocusRing,
+  gitIconButtonClassName,
+  gitDangerIconButtonClassName,
+  gitToolbarIconButtonClassName,
+  gitButtonClassName,
+  gitSquareButtonClassName,
+  gitDangerSquareButtonClassName,
+  gitPrimaryButtonClassName,
+  gitSelectCompactClassName,
+  gitInputClassName,
+  gitSegmentClass,
+  gitSegmentGroupClassName,
+  gitEmptyStateClassName,
+} from "./gitStyles";
 
 type Props = {
   botAlias: string;
@@ -116,6 +135,8 @@ const GIT_CAPABILITY_LABELS: Partial<Record<GitCapabilityName, string>> = {
   fetch: "Fetch",
   pull: "Pull",
   push: "Push",
+  remotes: "远端管理",
+  publish: "发布分支",
   commit_message_generation: "提交说明生成",
   smart_commit: "智能提交",
 };
@@ -187,71 +208,6 @@ function changeGroupDotColor(key: GitFileGroupKey) {
   }
   return "var(--status-info)";
 }
-
-const gitFocusRing = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]";
-
-function gitIconButtonClass(size: "sm" | "md", tone: "default" | "danger" = "default") {
-  return clsx(
-    "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-control)] text-[var(--muted)] transition-colors",
-    "hover:bg-[var(--workbench-hover-bg)] disabled:pointer-events-none disabled:opacity-40",
-    size === "md" ? "h-7 w-7" : "h-6 w-6",
-    tone === "danger" ? "hover:text-[var(--danger)]" : "hover:text-[var(--text)]",
-    gitFocusRing,
-  );
-}
-
-const gitIconButtonClassName = gitIconButtonClass("sm");
-
-const gitDangerIconButtonClassName = gitIconButtonClass("sm", "danger");
-
-const gitToolbarIconButtonClassName = clsx(gitIconButtonClass("md"), "relative");
-
-const gitButtonClassName = clsx(
-  "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2 text-xs font-medium text-[var(--text)] transition-colors",
-  "hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] disabled:pointer-events-none disabled:opacity-50",
-  gitFocusRing,
-);
-
-const gitSquareButtonClassName = clsx(
-  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)] transition-colors",
-  "hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] disabled:pointer-events-none disabled:opacity-50",
-  gitFocusRing,
-);
-
-const gitDangerSquareButtonClassName = clsx(
-  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] text-[var(--muted)] transition-colors",
-  "hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--danger)] disabled:pointer-events-none disabled:opacity-50",
-  gitFocusRing,
-);
-
-const gitPrimaryButtonClassName = clsx(
-  "tcb-solid-accent inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-control)] border border-transparent px-2.5 text-xs font-medium transition-opacity",
-  "hover:opacity-90 disabled:pointer-events-none disabled:opacity-50",
-  gitFocusRing,
-);
-
-const gitInputBase = clsx(
-  "h-7 min-w-0 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] outline-none transition-colors",
-  "placeholder:text-[var(--muted)] focus:border-[var(--accent-outline)] focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60",
-);
-
-const gitSelectCompactClassName = clsx(gitInputBase, "w-auto");
-
-const gitInputClassName = clsx(gitInputBase, "w-full");
-
-function gitSegmentClass(active: boolean) {
-  return clsx(
-    "inline-flex h-5 items-center rounded-[calc(var(--radius-control)-2px)] px-1.5 text-[11px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-50",
-    gitFocusRing,
-    active
-      ? "bg-[var(--workbench-panel-elevated-bg)] text-[var(--accent)] shadow-[var(--shadow-surface)]"
-      : "text-[var(--muted)] hover:text-[var(--text)]",
-  );
-}
-
-const gitSegmentGroupClassName = "inline-flex items-center gap-0.5 rounded-[var(--radius-control)] bg-[var(--workbench-active-bg)] p-0.5";
-
-const gitEmptyStateClassName = "px-3 py-1.5 text-xs text-[var(--muted)]";
 
 type GitSectionProps = {
   title: string;
@@ -624,6 +580,12 @@ export function GitScreen({
   const [identityEmail, setIdentityEmail] = useState("");
   const [identityLoading, setIdentityLoading] = useState(false);
   const [smartCommitJob, setSmartCommitJob] = useState<GitSmartCommitJob | null>(null);
+  const [remotesCollapsed, setRemotesCollapsed] = useState(false);
+  const [remotesBusy, setRemotesBusy] = useState(false);
+  const [githubAccount, setGithubAccount] = useState<GitHubAccountStatus | null>(null);
+  const [githubAccountLoading, setGithubAccountLoading] = useState(false);
+  const [githubAccountError, setGithubAccountError] = useState("");
+  const githubAccountRequestedRef = useRef(false);
   const workspaceEpochRef = useRef(0);
   const workspaceKey = useMemo(() => [
     workspaceIdentity?.accountId || "",
@@ -638,7 +600,8 @@ export function GitScreen({
   const canManageLocalGitIdentity = sessionCapabilities.length === 0 || sessionCapabilities.includes("git_ops");
   const isGeneratingCommitMessage = actionLoading === "generate-commit-message";
   const isSmartCommitRunning = isGitSmartCommitRunning(smartCommitJob);
-  const mutationBusy = actionLoading !== "" || isSmartCommitRunning;
+  const parentMutationBusy = actionLoading !== "" || isSmartCommitRunning;
+  const mutationBusy = parentMutationBusy || remotesBusy;
   const groups = useMemo(() => groupedFiles(overview), [overview]);
   const changeGroups = useMemo(
     () => ([
@@ -1409,6 +1372,26 @@ export function GitScreen({
     });
   }
 
+  async function loadGitHubAccount() {
+    githubAccountRequestedRef.current = true;
+    setGithubAccountLoading(true);
+    setGithubAccountError("");
+    try {
+      setGithubAccount(await client.getGitHubAccount());
+    } catch (err) {
+      setGithubAccountError(err instanceof Error ? err.message : "读取 GitHub 账号失败");
+    } finally {
+      setGithubAccountLoading(false);
+    }
+  }
+
+  async function handleRemotesChanged() {
+    const epoch = workspaceEpochRef.current;
+    await refreshOverviewQuietly(epoch);
+    // Capabilities drive the effect that reloads branches, graph and stashes.
+    await loadGitCapabilities(epoch);
+  }
+
   function renderCapabilityReason(name: GitCapabilityName, label = GIT_CAPABILITY_LABELS[name] || name) {
     if (isCapabilityAvailable(name)) {
       return null;
@@ -1517,6 +1500,14 @@ export function GitScreen({
   }, [botAlias, client, diffLoadingPath, gitCapabilities, gitCapabilitiesError, gitCapabilitiesLoading, mutationBusy, selectedDiff]);
 
   const repoReady = !loading && Boolean(overview?.repoFound);
+  // The GitHub identity belongs to the Web account, so it is loaded once and
+  // only when a panel that shows it is open.
+  const githubAccountWanted = (repoReady && !remotesCollapsed && isCapabilityAvailable("remotes")) || !settingsCollapsed;
+  useEffect(() => {
+    if (githubAccountWanted && !githubAccountRequestedRef.current) {
+      void loadGitHubAccount();
+    }
+  }, [githubAccountWanted]);
   const canCommit = Boolean(
     overview
     && !mutationBusy
@@ -2153,6 +2144,31 @@ export function GitScreen({
               </GitSection>
 
               <GitSection
+                title="远端"
+                collapsed={remotesCollapsed}
+                onToggle={() => setRemotesCollapsed((value) => !value)}
+                testId="git-remotes-section"
+              >
+                <GitRemotesPanel
+                  key={workspaceKey}
+                  botAlias={botAlias}
+                  client={client}
+                  remoteWorkspace={remote}
+                  repoName={overview.repoName}
+                  remotesCapability={getCapability("remotes")}
+                  publishCapability={getCapability("publish")}
+                  disabled={parentMutationBusy}
+                  githubAccount={githubAccount}
+                  githubAccountLoading={githubAccountLoading}
+                  githubAccountError={githubAccountError}
+                  onGitHubAccountChange={setGithubAccount}
+                  onReloadGitHubAccount={() => void loadGitHubAccount()}
+                  onBusyChange={setRemotesBusy}
+                  onRepositoryChanged={handleRemotesChanged}
+                />
+              </GitSection>
+
+              <GitSection
                 title="Stash"
                 count={stashes.items.length}
                 collapsed={stashCollapsed}
@@ -2328,6 +2344,24 @@ export function GitScreen({
                   <p className="text-[11px] text-[var(--muted)]">全局身份配置需要 admin_ops；当前仓库身份配置需要 git_ops。</p>
                 ) : null}
                 {renderCapabilityReason("identity")}
+              </div>
+              <div data-testid="git-github-account-settings" className="mx-2 mt-3 space-y-1.5 border-t border-[var(--workbench-hairline)] pt-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Github className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                  <h3 className="shrink-0 text-xs font-semibold">GitHub 账号</h3>
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--muted)]">
+                    {remote ? "用于 GitHub API；远程工作区同步使用远程主机凭据" : "用于 GitHub API 与本地 HTTPS 同步"}
+                  </span>
+                </div>
+                <GitHubAccountPanel
+                  client={client}
+                  account={githubAccount}
+                  loading={githubAccountLoading}
+                  loadError={githubAccountError}
+                  disabled={parentMutationBusy}
+                  onAccountChange={setGithubAccount}
+                  onReload={() => void loadGitHubAccount()}
+                />
               </div>
               <div className="mx-2 mt-3 border-t border-[var(--workbench-hairline)] pt-2">
                 <GitCommitCliConfigPanel

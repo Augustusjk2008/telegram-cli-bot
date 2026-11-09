@@ -11,6 +11,7 @@ from . import (
     debug_routes,
     files_routes,
     git_routes,
+    github_routes,
     lan_chat_routes,
     plugin_routes,
     terminal_routes,

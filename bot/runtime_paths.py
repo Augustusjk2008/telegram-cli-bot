@@ -268,6 +268,11 @@ def get_theme_assets_dir() -> Path:
     return get_app_data_root() / "themes" / "assets"
 
 
+def get_github_data_dir() -> Path:
+    """Per-account GitHub connections; tokens are encrypted at rest."""
+    return get_app_data_root() / "github"
+
+
 def get_auth_username_index_path() -> Path:
     return get_app_data_root() / "auth" / "username_index.json"
 

@@ -502,6 +502,41 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("maps Git remotes and GitHub account endpoints without exposing tokens", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonOk({
+        repo_found: true,
+        current_branch: "main",
+        upstream: "origin/main",
+        has_commits: true,
+        github_account_auth: true,
+        remotes: [{
+          name: "origin",
+          fetch_url: "https://github.com/acme/demo.git",
+          protocol: "https",
+          has_embedded_credentials: false,
+          github: { owner: "acme", repo: "demo", full_name: "acme/demo", html_url: "https://github.com/acme/demo", protocol: "https" },
+        }],
+      }))
+      .mockResolvedValueOnce(jsonOk({ connected: true, login: "octocat", auth_method: "token", scopes: ["repo"], device_flow_available: false }))
+      .mockResolvedValueOnce(jsonOk({ status: "connected", interval: 5, account: { connected: true, login: "octocat", auth_method: "device" } }));
+    const client = new RealWebBotClient();
+
+    const remotes = await client.listGitRemotes("main bot");
+    const account = await client.connectGitHubWithToken("ghp_secret");
+    const poll = await client.pollGitHubDeviceLogin("flow/1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/bots/main%20bot/git/remotes");
+    expect(remotes.remotes[0]).toMatchObject({ name: "origin", pushUrl: "https://github.com/acme/demo.git", github: { fullName: "acme/demo" } });
+    expect(remotes.githubAccountAuth).toBe(true);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/github/account/token");
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST", body: JSON.stringify({ token: "ghp_secret" }) });
+    expect(account).toMatchObject({ connected: true, login: "octocat", authMethod: "token", deviceFlowAvailable: false });
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/github/device/flow%2F1/poll");
+    expect(poll.status).toBe("connected");
+    expect(poll.account?.authMethod).toBe("device");
+  });
+
   test("maps the latest notifiable answer timestamp from bot summaries", async () => {
     fetchMock.mockResolvedValue(jsonOk([{
       alias: "main",

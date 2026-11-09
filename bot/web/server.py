@@ -200,6 +200,7 @@ from .routes import (
     files_routes,
     html_preview_routes,
     git_routes,
+    github_routes,
     lan_chat_routes,
     plugin_routes,
     terminal_routes,
@@ -310,6 +311,7 @@ from .api_service import (
 )
 from bot.migrations.runner import migration_diagnostics
 from .git_backend import resolve_git_backend
+from .github_service import get_github_service
 from .git_service import git_service_diagnostics
 from .workspace_search_service import (
     build_file_outline,
@@ -1112,6 +1114,7 @@ class WebApiServer:
             update_guard=self._guard_storage_update,
         )
         self._update_service = None
+        self._github_service = None
         self._update_readiness = None
         self._update_exit_pending = False
         self._update_active_requests = 0
@@ -1412,8 +1415,21 @@ class WebApiServer:
             raise WebApiError(400, "missing_alias", "缺少 Bot 别名")
         return alias
 
-    async def _get_git_backend(self, alias: str, user_id: int):
-        return await asyncio.to_thread(resolve_git_backend, self.manager, alias, user_id)
+    @property
+    def github_service(self):
+        if self._github_service is None:
+            self._github_service = get_github_service()
+        return self._github_service
+
+    async def _get_git_backend(self, alias: str, user_id: int, *, account_id: str = ""):
+        provider = None
+        if account_id:
+            service = self.github_service
+
+            def provider():
+                return service.git_auth_config(account_id)
+
+        return await asyncio.to_thread(resolve_git_backend, self.manager, alias, user_id, provider)
 
     def _normalize_bot_alias(self, alias: str) -> str:
         return str(alias or "").strip().lower()
@@ -4536,23 +4552,62 @@ class WebApiServer:
     async def post_git_fetch(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
         overview = await asyncio.to_thread(backend.fetch)
         return _json({"ok": True, "data": {"message": "已抓取远端更新", "overview": overview}})
 
     async def post_git_pull(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
         overview = await asyncio.to_thread(backend.pull)
         return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
 
     async def post_git_push(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id)
+        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
         overview = await asyncio.to_thread(backend.push)
         return _json({"ok": True, "data": {"message": "已推送本地提交", "overview": overview}})
+
+    async def get_git_remotes_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.remotes)
+        return _json({"ok": True, "data": data})
+
+    async def post_git_remote_add(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.remote_add, body.get("name", ""), body.get("url", ""))
+        return _json({"ok": True, "data": data})
+
+    async def post_git_remote_update(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.remote_set_url, body.get("name", ""), body.get("url", ""))
+        return _json({"ok": True, "data": data})
+
+    async def post_git_remote_remove(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id)
+        data = await asyncio.to_thread(backend.remote_remove, body.get("name", ""))
+        return _json({"ok": True, "data": data})
+
+    async def post_git_publish(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
+        overview = await asyncio.to_thread(backend.publish, body.get("remote", ""))
+        return _json({"ok": True, "data": {"message": "已发布当前分支并设置 upstream", "overview": overview}})
 
     async def post_git_stash(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
@@ -5587,6 +5642,7 @@ class WebApiServer:
             html_preview_routes,
             plugin_routes,
             git_routes,
+            github_routes,
             admin_routes,
             bot_settings_routes,
             lan_chat_routes,

@@ -3003,6 +3003,8 @@ export const GIT_CAPABILITY_NAMES = [
   "fetch",
   "pull",
   "push",
+  "remotes",
+  "publish",
   "commit_message_generation",
   "smart_commit",
 ] as const;
@@ -3146,6 +3148,100 @@ export type GitCommitMessageGenerateResult = {
 export type GitProxySettings = {
   address: string;
   port: string;
+};
+
+export type GitRemoteGitHubInfo = {
+  owner: string;
+  repo: string;
+  fullName: string;
+  htmlUrl: string;
+  protocol: string;
+};
+
+export type GitRemoteEntry = {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+  protocol: string;
+  hasEmbeddedCredentials: boolean;
+  github: GitRemoteGitHubInfo | null;
+};
+
+export type GitRemoteList = {
+  repoFound: boolean;
+  workingDir: string;
+  repoPath: string;
+  currentBranch: string;
+  upstream: string;
+  hasCommits: boolean;
+  remotes: GitRemoteEntry[];
+  /** Local workspaces use the signed-in account's GitHub token for HTTPS github.com remotes. */
+  githubAccountAuth: boolean;
+};
+
+export type GitHubAccountStatus = {
+  connected: boolean;
+  login: string;
+  name: string;
+  avatarUrl: string;
+  htmlUrl: string;
+  authMethod: "device" | "token" | "";
+  tokenKind: string;
+  scopes: string[];
+  connectedAt: string;
+  deviceFlowAvailable: boolean;
+  tokenCreateUrl: string;
+  requiredScopes: string[];
+};
+
+export type GitHubDeviceFlow = {
+  flowId: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type GitHubDevicePollResult = {
+  status: "pending" | "connected" | "expired" | "denied";
+  interval: number;
+  expiresIn: number;
+  account: GitHubAccountStatus | null;
+};
+
+export type GitHubRepository = {
+  id: number;
+  name: string;
+  fullName: string;
+  owner: string;
+  private: boolean;
+  archived: boolean;
+  description: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  sshUrl: string;
+  defaultBranch: string;
+  pushedAt: string;
+  canPush: boolean;
+};
+
+export type GitHubRepositoryPage = {
+  items: GitHubRepository[];
+  page: number;
+  hasMore: boolean;
+};
+
+export type GitHubOwner = {
+  login: string;
+  type: "user" | "org";
+  avatarUrl: string;
+};
+
+export type GitHubCreateRepositoryInput = {
+  owner: string;
+  name: string;
+  description: string;
+  private: boolean;
 };
 
 export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "macos" | "unknown" | "";

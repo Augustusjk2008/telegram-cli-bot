@@ -52,9 +52,16 @@ from bot.git_shared import (
     _parse_porcelain_v2_z,
     _parse_status_header,
     _zero_changed_file_stats,
+    GitRemoteInputError,
+    build_git_remote_entry,
+    normalize_existing_git_remote_name,
+    normalize_git_remote_name,
+    normalize_git_remote_url,
+    parse_git_remote_verbose,
+    redact_git_secret_text,
 )
 from bot.git_contract import build_git_capabilities
-from bot.git_runtime import apply_git_fsmonitor_disabled_env
+from bot.git_runtime import append_git_config_env, apply_git_fsmonitor_disabled_env
 from bot.manager import MultiBotManager
 from bot.platform.processes import attach_process_tree_job, build_hidden_process_kwargs, terminate_process_tree_sync
 from bot.platform.subprocess_streams import close_process_streams
@@ -573,7 +580,10 @@ def _ssh_command_sets_strict_host_key_checking(ssh_command: str) -> bool:
     return bool(_SSH_STRICT_HOST_KEY_OPTION_RE.search(ssh_command))
 
 
-def _build_git_remote_env(repo_root: str) -> dict[str, str]:
+def _build_git_remote_env(
+    repo_root: str,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, str]:
     env = os.environ.copy()
     ssh_command = str(env.get("GIT_SSH_COMMAND") or "").strip()
     if not ssh_command:
@@ -583,10 +593,14 @@ def _build_git_remote_env(repo_root: str) -> dict[str, str]:
             env["GIT_SSH_COMMAND"] = f"{ssh_command} -o StrictHostKeyChecking=accept-new"
         else:
             env["GIT_SSH_COMMAND"] = ssh_command
-        return env
-
-    if "GIT_SSH" not in env:
+    elif "GIT_SSH" not in env:
         env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=accept-new"
+    if auth_config:
+        # Account credentials travel through command-scope config in the
+        # environment, never through argv. Prompts would only hide a rejected
+        # account token behind an interactive credential window.
+        append_git_config_env(env, auth_config)
+        env["GIT_TERMINAL_PROMPT"] = "0"
     return env
 
 
@@ -1345,20 +1359,29 @@ def get_git_overview(manager: MultiBotManager, alias: str, user_id: int) -> dict
     return _build_git_overview(working_dir, repo_root)
 
 
-def _local_git_sync_capabilities(repo_root: Optional[str]) -> tuple[dict[str, bool], str]:
+def _list_git_remote_names(repo_root: str) -> list[str]:
+    result = _run_git(repo_root, ["remote"], check=False)
+    return [
+        line.strip()
+        for line in str(getattr(result, "stdout", "") or "").splitlines()
+        if line.strip()
+    ]
+
+
+def _local_git_sync_capabilities(repo_root: Optional[str]) -> dict[str, tuple[bool, str]]:
     if not repo_root:
-        return {"fetch": False, "pull": False, "push": False}, "git_not_repository"
+        return {
+            name: (False, "git_not_repository")
+            for name in ("fetch", "pull", "push", "remotes", "publish")
+        }
 
     try:
-        remotes = [
-            line.strip()
-            for line in str(getattr(_run_git(repo_root, ["remote"], check=False), "stdout", "") or "").splitlines()
-            if line.strip()
-        ]
+        remotes = _list_git_remote_names(repo_root)
     except GitCommandError:
         remotes = []
     if not remotes:
-        return {"fetch": False, "pull": False, "push": False}, "git_remote_not_configured"
+        missing = (False, "git_remote_not_configured")
+        return {"fetch": missing, "pull": missing, "push": missing, "remotes": (True, ""), "publish": missing}
 
     try:
         upstream = _run_git(
@@ -1368,9 +1391,11 @@ def _local_git_sync_capabilities(repo_root: Optional[str]) -> tuple[dict[str, bo
         )
     except GitCommandError:
         upstream = None
+    ready = (True, "")
     if upstream is not None and upstream.returncode == 0 and (getattr(upstream, "stdout", "") or "").strip():
-        return {"fetch": True, "pull": True, "push": True}, ""
-    return {"fetch": True, "pull": False, "push": False}, "git_upstream_not_configured"
+        return {"fetch": ready, "pull": ready, "push": ready, "remotes": ready, "publish": ready}
+    no_upstream = (False, "git_upstream_not_configured")
+    return {"fetch": ready, "pull": no_upstream, "push": no_upstream, "remotes": ready, "publish": ready}
 
 
 def get_git_capabilities(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -1384,10 +1409,9 @@ def get_git_capabilities(manager: MultiBotManager, alias: str, user_id: int) -> 
     if result.returncode != 0:
         return build_git_capabilities(available=False, reason="git_not_found")
     payload = build_git_capabilities(available=True)
-    sync_available, sync_reason = _local_git_sync_capabilities(_resolve_repo_root(working_dir))
-    for name, available in sync_available.items():
+    for name, (available, reason) in _local_git_sync_capabilities(_resolve_repo_root(working_dir)).items():
         payload["capabilities"][name]["available"] = available
-        payload["capabilities"][name]["reason"] = "" if available else sync_reason
+        payload["capabilities"][name]["reason"] = "" if available else reason
     return payload
 
 
@@ -2435,6 +2459,25 @@ def commit_git_changes(manager: MultiBotManager, alias: str, user_id: int, messa
     return _build_git_overview(working_dir, repo_root)
 
 
+_GITHUB_AUTH_FAILURE_MARKERS = (
+    "could not read username",
+    "authentication failed",
+    "invalid username or password",
+    "terminal prompts disabled",
+    "repository not found",
+    "permission to",
+    "returned error: 403",
+)
+
+
+def _git_network_error_message(exc: BaseException, auth_config: tuple[tuple[str, str], ...]) -> str:
+    message = redact_git_secret_text(exc)
+    lowered = message.lower()
+    if auth_config and "github.com" in lowered and any(marker in lowered for marker in _GITHUB_AUTH_FAILURE_MARKERS):
+        message += "\n已对 github.com 使用 Orbit 中连接的 GitHub 账号；请确认令牌未失效或被撤销，并拥有该仓库的读写权限。"
+    return message
+
+
 def _run_git_action(
     manager: MultiBotManager,
     alias: str,
@@ -2444,22 +2487,29 @@ def _run_git_action(
     error_code: str,
     error_message: str,
     remote: bool = False,
+    auth_config: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, Any]:
     working_dir, repo_root = _require_repo_root(manager, alias, user_id)
     try:
         _run_git(
             repo_root,
             args,
-            env=_build_git_remote_env(repo_root) if remote else None,
+            env=_build_git_remote_env(repo_root, auth_config) if remote else None,
             remote=remote,
         )
     except GitCommandError as exc:
-        _raise(400, error_code, str(exc))
+        _raise(400, error_code, _git_network_error_message(exc, auth_config) if remote else str(exc))
     _invalidate_git_status_cache(repo_root)
     return _build_git_overview(working_dir, repo_root)
 
 
-def fetch_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+def fetch_git_remote(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
     return _run_git_action(
         manager,
         alias,
@@ -2468,10 +2518,17 @@ def fetch_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict
         error_code="git_fetch_failed",
         error_message="抓取远端失败",
         remote=True,
+        auth_config=auth_config,
     )
 
 
-def pull_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+def pull_git_remote(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
     return _run_git_action(
         manager,
         alias,
@@ -2480,10 +2537,17 @@ def pull_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[
         error_code="git_pull_failed",
         error_message="拉取远端失败",
         remote=True,
+        auth_config=auth_config,
     )
 
 
-def push_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+def push_git_remote(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
     return _run_git_action(
         manager,
         alias,
@@ -2492,7 +2556,147 @@ def push_git_remote(manager: MultiBotManager, alias: str, user_id: int) -> dict[
         error_code="git_push_failed",
         error_message="推送远端失败",
         remote=True,
+        auth_config=auth_config,
     )
+
+
+def _git_remote_input_error(exc: GitRemoteInputError):
+    _raise(400, exc.code, str(exc))
+
+
+def _current_git_branch_and_upstream(repo_root: str) -> tuple[str, str]:
+    head = _run_git(repo_root, ["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)
+    branch = (head.stdout or "").strip() if head.returncode == 0 else ""
+    if not branch:
+        return "", ""
+    upstream = _run_git(
+        repo_root,
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        check=False,
+    )
+    return branch, (upstream.stdout or "").strip() if upstream.returncode == 0 else ""
+
+
+def _build_git_remotes_payload(working_dir: str, repo_root: Optional[str]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "repo_found": bool(repo_root),
+        "working_dir": working_dir,
+        "repo_path": repo_root or "",
+        "current_branch": "",
+        "upstream": "",
+        "has_commits": False,
+        "remotes": [],
+        # Local Git can use the requester's connected GitHub account.
+        "github_account_auth": True,
+    }
+    if not repo_root:
+        return payload
+    try:
+        result = _run_git(repo_root, ["remote", "-v"])
+        branch, upstream = _current_git_branch_and_upstream(repo_root)
+    except GitCommandError as exc:
+        _raise(400, "git_remote_list_failed", redact_git_secret_text(exc))
+    payload.update({
+        "current_branch": branch,
+        "upstream": upstream,
+        "has_commits": _repo_has_head_commit(repo_root),
+        "remotes": [
+            build_git_remote_entry(item["name"], item["fetch_urls"], item["push_urls"])
+            for item in parse_git_remote_verbose(result.stdout or "")
+        ],
+    })
+    return payload
+
+
+def _require_existing_git_remote(repo_root: str, name: Any) -> str:
+    try:
+        remote_name = normalize_existing_git_remote_name(name)
+    except GitRemoteInputError as exc:
+        _git_remote_input_error(exc)
+    if remote_name not in _list_git_remote_names(repo_root):
+        _raise(404, "git_remote_not_found", f"远端 {remote_name} 不存在")
+    return remote_name
+
+
+def list_git_remotes(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
+    working_dir = _get_git_working_dir(manager, alias)
+    return _build_git_remotes_payload(working_dir, _resolve_repo_root(working_dir))
+
+
+def add_git_remote(manager: MultiBotManager, alias: str, user_id: int, name: Any, url: Any) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    try:
+        remote_name = normalize_git_remote_name(name)
+        remote_url = normalize_git_remote_url(url)
+    except GitRemoteInputError as exc:
+        _git_remote_input_error(exc)
+    if remote_name in _list_git_remote_names(repo_root):
+        _raise(409, "git_remote_exists", f"远端 {remote_name} 已存在")
+    try:
+        _run_git(repo_root, ["remote", "add", "--", remote_name, remote_url])
+    except GitCommandError as exc:
+        _raise(400, "git_remote_add_failed", redact_git_secret_text(exc))
+    _invalidate_git_status_cache(repo_root)
+    return _build_git_remotes_payload(working_dir, repo_root)
+
+
+def update_git_remote_url(manager: MultiBotManager, alias: str, user_id: int, name: Any, url: Any) -> dict[str, Any]:
+    """Point both fetch and push of an existing remote at one URL."""
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    remote_name = _require_existing_git_remote(repo_root, name)
+    try:
+        remote_url = normalize_git_remote_url(url)
+    except GitRemoteInputError as exc:
+        _git_remote_input_error(exc)
+    try:
+        _run_git(repo_root, ["remote", "set-url", "--", remote_name, remote_url])
+        # A leftover pushurl would silently keep pushing to the old target.
+        _run_git(repo_root, ["config", "--unset-all", f"remote.{remote_name}.pushurl"], check=False)
+    except GitCommandError as exc:
+        _raise(400, "git_remote_update_failed", redact_git_secret_text(exc))
+    _invalidate_git_status_cache(repo_root)
+    return _build_git_remotes_payload(working_dir, repo_root)
+
+
+def remove_git_remote(manager: MultiBotManager, alias: str, user_id: int, name: Any) -> dict[str, Any]:
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    remote_name = _require_existing_git_remote(repo_root, name)
+    try:
+        _run_git(repo_root, ["remote", "remove", "--", remote_name])
+    except GitCommandError as exc:
+        _raise(400, "git_remote_remove_failed", redact_git_secret_text(exc))
+    _invalidate_git_status_cache(repo_root)
+    return _build_git_remotes_payload(working_dir, repo_root)
+
+
+def publish_git_branch(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    remote: Any,
+    *,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
+    """Push the current branch to a remote and make it the upstream."""
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    remote_name = _require_existing_git_remote(repo_root, remote)
+    branch, _upstream = _current_git_branch_and_upstream(repo_root)
+    if not branch:
+        _raise(409, "git_detached_head", "当前不在分支上，无法发布")
+    if not _repo_has_head_commit(repo_root):
+        _raise(409, "git_no_commits", "当前分支还没有提交，请先提交后再发布")
+    refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+    try:
+        _run_git(
+            repo_root,
+            ["push", "--set-upstream", "--", remote_name, refspec],
+            env=_build_git_remote_env(repo_root, auth_config),
+            remote=True,
+        )
+    except GitCommandError as exc:
+        _raise(400, "git_publish_failed", _git_network_error_message(exc, auth_config))
+    _invalidate_git_status_cache(repo_root)
+    return _build_git_overview(working_dir, repo_root)
 
 
 def stash_git_changes(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:

@@ -172,9 +172,9 @@ Uploads from the file panel write to the remote workspace. Chat attachments are 
 
 Passwords and key passphrases remain in service memory; use **SSH sign in again** after restarting the service. Private key paths refer to the Orbit host. Text files are limited to 2 MiB. Remote workspaces currently omit language services, plugins, debugging, and workspace rollback. Create another agent to use a different remote directory. File APIs stay within the selected root; commands and terminals use the SSH account's permissions, and local CLI tools retain their existing permission settings.
 
-The remote Git panel supports Linux and Windows repositories when the selected directory is the repository root. It provides status, diffs including untracked files, branches, commit graphs and history, staging, commits, initialization, discard, branch creation/switch/reset, stash listing/apply/drop/pop, fetch/pull/push, identity settings, commit-message generation, and smart commits. Stash creation is currently unavailable. Git operations run on the remote host and use its Git identity and credentials. Remote agents use the project's real Git history; shadow Git history and workspace rollback are unavailable.
+The remote Git panel supports Linux and Windows repositories when the selected directory is the repository root. It provides status, diffs including untracked files, branches, commit graphs and history, staging, commits, initialization, discard, branch creation/switch/reset, stash listing/apply/drop/pop, fetch/pull/push, remote add/edit/remove, branch publishing, identity settings, commit-message generation, and smart commits. Stash creation is currently unavailable. Git operations run on the remote host and use its Git identity and credentials. Remote agents use the project's real Git history; shadow Git history and workspace rollback are unavailable.
 
-Git must be available in the SSH account's non-interactive PATH. Missing Git, upstream configuration, or credentials produce diagnostics; Orbit does not install remote software. Fetch, pull, and push disable interactive credential prompts. After a write times out or loses its connection, refresh the state before retrying.
+Git must be available in the SSH account's non-interactive PATH. Missing Git, upstream configuration, or credentials produce diagnostics; Orbit does not install remote software. Fetch, pull, push, and publish disable interactive credential prompts. After a write times out or loses its connection, refresh the state before retrying.
 
 Windows targets need SSH/SFTP and `powershell.exe` (Windows PowerShell 5.1). Project tools such as Git, rg, and compilers must be on the remote account's PATH. Drive paths such as `C:\Projects\demo`, `C:/Projects/demo`, and `/C:/Projects/demo` are normalized to `/C:/Projects/demo`. File APIs reject UNC/device paths, alternate data streams, and junctions/symlinks. Windows 7 SP1 targets require compatible SSH/SFTP and PowerShell 5.1 installations; their terminal behavior and process cleanup still need verification on the actual machine. This compatibility scope applies to the remote target; the Orbit host requires a supported current runtime.
 
@@ -184,10 +184,23 @@ Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and r
 
 - **Chat**: regular CLI and native-agent conversations, history recovery, execution details, and context status.
 - **Files**: file tree, editor, previews, tabs, and language-service navigation.
-- **Git**: repository status, diffs, commit history, and workspace operations.
+- **Git**: repository status, diffs, commit history, workspace operations, remote management, and GitHub linking.
 - **Terminal**: persistent multi-tab web terminals, with an independent shell and owner for every tab.
 - **Debug**: debugging entry points for Python, C/C++, Godot, and generic DAP adapters.
 - **Plugins**: extensible viewers for PDF, DOCX, PPTX, CSV, Vivado waveforms, and more.
+
+### GitHub Accounts and Remote Repositories
+
+The Git panel's **Remotes** section lists, adds, edits, and removes remotes, and publishes the current branch (push and set upstream) to a chosen remote. Editing a URL updates both fetch and push. New remotes accept https, http, ssh, git, and file URLs or `user@host:path`; URLs must not contain passwords or tokens, and credentials stored in existing URLs are hidden.
+
+Each Orbit account connects its own GitHub identity from **Remotes → Link GitHub repository** or **Settings → GitHub account**:
+
+- **Browser sign-in**: set `GITHUB_OAUTH_CLIENT_ID` in `.env` or the Admin Center to the client ID of a GitHub OAuth App with *Enable Device Flow* checked (no client secret is needed). Orbit shows a code to confirm on github.com.
+- **Personal access token**: classic tokens need `repo` and `read:org`; fine-grained tokens need Contents read/write on the target repositories, plus Administration write to create repositories.
+
+Once connected, you can create an empty repository under your account or an organization (private by default, without a README so the local history is preserved) or pick an existing one, link it over HTTPS or SSH, and optionally publish the current branch right away.
+
+Tokens are encrypted with an installation key under the application data `github/` directory and are never returned to the browser. In local workspaces, fetch, pull, push, and publish against `https://github.com/` use the account's token through the Git child-process environment, never the command line, and disable other credential helpers and interactive prompts for that host; SSH URLs keep using local SSH keys. In SSH remote workspaces, GitHub API calls run on the Orbit host while Git sync keeps using the remote host's own credentials; Orbit never sends the token to the remote host. Disconnecting deletes only the stored token; revoke it in GitHub settings for full removal. GitHub API requests use the Git proxy configured in the Admin Center, or the system proxy environment when none is set.
 
 ### Local HTML Preview
 

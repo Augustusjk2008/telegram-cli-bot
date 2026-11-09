@@ -76,10 +76,18 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitProxySettings,
+  GitRemoteList,
   GitResetMode,
   GitOverview,
   GitStashList,
   GitTreeStatus,
+  GitHubAccountStatus,
+  GitHubCreateRepositoryInput,
+  GitHubDeviceFlow,
+  GitHubDevicePollResult,
+  GitHubOwner,
+  GitHubRepository,
+  GitHubRepositoryPage,
   LanChatConfig,
   LanChatConfigInput,
   LanChatConversation,
@@ -439,6 +447,19 @@ export interface WebBotClient {
   fetchGitRemote(botAlias: string): Promise<GitActionResult>;
   pullGitRemote(botAlias: string): Promise<GitActionResult>;
   pushGitRemote(botAlias: string): Promise<GitActionResult>;
+  listGitRemotes(botAlias: string): Promise<GitRemoteList>;
+  addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList>;
+  updateGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList>;
+  removeGitRemote(botAlias: string, name: string): Promise<GitRemoteList>;
+  publishGitBranch(botAlias: string, remote: string): Promise<GitActionResult>;
+  getGitHubAccount(): Promise<GitHubAccountStatus>;
+  connectGitHubWithToken(token: string): Promise<GitHubAccountStatus>;
+  startGitHubDeviceLogin(): Promise<GitHubDeviceFlow>;
+  pollGitHubDeviceLogin(flowId: string): Promise<GitHubDevicePollResult>;
+  disconnectGitHub(): Promise<GitHubAccountStatus>;
+  listGitHubOwners(): Promise<GitHubOwner[]>;
+  listGitHubRepositories(page?: number): Promise<GitHubRepositoryPage>;
+  createGitHubRepository(input: GitHubCreateRepositoryInput): Promise<GitHubRepository>;
   stashGitChanges(botAlias: string): Promise<GitActionResult>;
   popGitStash(botAlias: string): Promise<GitActionResult>;
   listGitBranches(botAlias: string): Promise<GitBranchList>;

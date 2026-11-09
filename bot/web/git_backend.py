@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from bot.remote_workspace.git_service import RemoteGitService
 from bot.remote_workspace.transport import get_remote_workspace_service
 from bot.web.api_common import WebApiError, get_profile_or_raise
 from bot.web import git_service as local_git
+
+GitAuthConfigProvider = Callable[[], tuple[tuple[str, str], ...]]
 
 
 class GitBackend(Protocol):
@@ -38,6 +41,11 @@ class GitBackend(Protocol):
     def fetch(self) -> dict[str, Any]: ...
     def pull(self) -> dict[str, Any]: ...
     def push(self) -> dict[str, Any]: ...
+    def remotes(self) -> dict[str, Any]: ...
+    def remote_add(self, name: Any, url: Any) -> dict[str, Any]: ...
+    def remote_set_url(self, name: Any, url: Any) -> dict[str, Any]: ...
+    def remote_remove(self, name: Any) -> dict[str, Any]: ...
+    def publish(self, remote: Any) -> dict[str, Any]: ...
     def stash_create(self) -> dict[str, Any]: ...
     def stash(self) -> dict[str, Any]: ...
     def stash_pop(self) -> dict[str, Any]: ...
@@ -56,10 +64,20 @@ class GitBackend(Protocol):
 
 
 class LocalGitBackend:
-    def __init__(self, manager, alias: str, user_id: int):
+    def __init__(
+        self,
+        manager,
+        alias: str,
+        user_id: int,
+        auth_config_provider: GitAuthConfigProvider | None = None,
+    ):
         self.manager = manager
         self.alias = alias
         self.user_id = user_id
+        self.auth_config_provider = auth_config_provider
+
+    def _auth_config(self) -> tuple[tuple[str, str], ...]:
+        return self.auth_config_provider() if self.auth_config_provider is not None else ()
 
     def overview(self) -> dict[str, Any]:
         return local_git.get_git_overview(self.manager, self.alias, self.user_id)
@@ -124,13 +142,30 @@ class LocalGitBackend:
         return local_git.discard_all_git_changes(self.manager, self.alias, self.user_id)
 
     def fetch(self) -> dict[str, Any]:
-        return local_git.fetch_git_remote(self.manager, self.alias, self.user_id)
+        return local_git.fetch_git_remote(self.manager, self.alias, self.user_id, auth_config=self._auth_config())
 
     def pull(self) -> dict[str, Any]:
-        return local_git.pull_git_remote(self.manager, self.alias, self.user_id)
+        return local_git.pull_git_remote(self.manager, self.alias, self.user_id, auth_config=self._auth_config())
 
     def push(self) -> dict[str, Any]:
-        return local_git.push_git_remote(self.manager, self.alias, self.user_id)
+        return local_git.push_git_remote(self.manager, self.alias, self.user_id, auth_config=self._auth_config())
+
+    def remotes(self) -> dict[str, Any]:
+        return local_git.list_git_remotes(self.manager, self.alias, self.user_id)
+
+    def remote_add(self, name: Any, url: Any) -> dict[str, Any]:
+        return local_git.add_git_remote(self.manager, self.alias, self.user_id, name, url)
+
+    def remote_set_url(self, name: Any, url: Any) -> dict[str, Any]:
+        return local_git.update_git_remote_url(self.manager, self.alias, self.user_id, name, url)
+
+    def remote_remove(self, name: Any) -> dict[str, Any]:
+        return local_git.remove_git_remote(self.manager, self.alias, self.user_id, name)
+
+    def publish(self, remote: Any) -> dict[str, Any]:
+        return local_git.publish_git_branch(
+            self.manager, self.alias, self.user_id, remote, auth_config=self._auth_config(),
+        )
 
     def stash(self) -> dict[str, Any]:
         return local_git.stash_git_changes(self.manager, self.alias, self.user_id)
@@ -252,6 +287,21 @@ class RemoteGitBackend:
     def push(self) -> dict[str, Any]:
         return self.service.push()
 
+    def remotes(self) -> dict[str, Any]:
+        return self.service.remotes()
+
+    def remote_add(self, name: Any, url: Any) -> dict[str, Any]:
+        return self.service.remote_add(name, url)
+
+    def remote_set_url(self, name: Any, url: Any) -> dict[str, Any]:
+        return self.service.remote_set_url(name, url)
+
+    def remote_remove(self, name: Any) -> dict[str, Any]:
+        return self.service.remote_remove(name)
+
+    def publish(self, remote: Any) -> dict[str, Any]:
+        return self.service.publish(remote)
+
     def smart_commit_repo_hint(self) -> tuple[str, str]:
         return self.root, self.root
 
@@ -315,13 +365,24 @@ class RemoteGitBackend:
     stash = _unsupported
 
 
-def resolve_git_backend(manager, alias: str, user_id: int) -> GitBackend:
+def resolve_git_backend(
+    manager,
+    alias: str,
+    user_id: int,
+    auth_config_provider: GitAuthConfigProvider | None = None,
+) -> GitBackend:
+    """Resolve the Git backend for a profile.
+
+    ``auth_config_provider`` supplies the requester's account credentials for
+    local network operations only; remote workspaces use the SSH host's own
+    Git credentials and never receive them.
+    """
     profile = get_profile_or_raise(manager, alias)
     if profile.remote_workspace:
         config = dict(profile.remote_workspace)
         connection = get_remote_workspace_service().get(config)
         return RemoteGitBackend(connection, str(config["root"]), manager, alias, user_id)
-    return LocalGitBackend(manager, alias, user_id)
+    return LocalGitBackend(manager, alias, user_id, auth_config_provider)
 
 
 get_git_backend = resolve_git_backend

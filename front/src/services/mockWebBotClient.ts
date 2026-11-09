@@ -125,6 +125,14 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitProxySettings,
+  GitRemoteList,
+  GitHubAccountStatus,
+  GitHubCreateRepositoryInput,
+  GitHubDeviceFlow,
+  GitHubDevicePollResult,
+  GitHubOwner,
+  GitHubRepository,
+  GitHubRepositoryPage,
   GitResetMode,
   GitOverview,
   GitSmartCommitJob,
@@ -2092,6 +2100,39 @@ export class MockWebBotClient implements WebBotClient {
   private gitSmartCommitActiveJobs = new Map<string, string>();
   private gitSmartCommitJobSeq = 1;
   private gitProxySettings: GitProxySettings = { address: "", port: "" };
+  private gitRemoteLists = new Map<string, GitRemoteList>();
+  private githubAccount: GitHubAccountStatus = {
+    connected: false,
+    login: "",
+    name: "",
+    avatarUrl: "",
+    htmlUrl: "",
+    authMethod: "",
+    tokenKind: "",
+    scopes: [],
+    connectedAt: "",
+    deviceFlowAvailable: true,
+    tokenCreateUrl: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Orbit%20Safe%20Claw",
+    requiredScopes: ["repo", "read:org"],
+  };
+  private githubDevicePolls = new Map<string, number>();
+  private githubRepositories: GitHubRepository[] = [
+    {
+      id: 1,
+      name: "orbit-notes",
+      fullName: "orbit-demo/orbit-notes",
+      owner: "orbit-demo",
+      private: true,
+      archived: false,
+      description: "Demo repository",
+      htmlUrl: "https://github.com/orbit-demo/orbit-notes",
+      cloneUrl: "https://github.com/orbit-demo/orbit-notes.git",
+      sshUrl: "git@github.com:orbit-demo/orbit-notes.git",
+      defaultBranch: "main",
+      pushedAt: "2026-11-01T08:00:00Z",
+      canPush: true,
+    },
+  ];
   private storageMigration: StorageMigrationSnapshot = {
     state: "completed",
     phase: "completed",
@@ -6851,7 +6892,7 @@ export class MockWebBotClient implements WebBotClient {
       capabilities: Object.fromEntries(GIT_CAPABILITY_NAMES.map((name) => [name, {
         available: true,
         reason: "",
-        requiresConfirmation: ["discard", "branch_mutation", "stash", "stash_create", "pull", "push"].includes(name),
+        requiresConfirmation: ["discard", "branch_mutation", "stash", "stash_create", "pull", "push", "publish"].includes(name),
       }])) as GitCapabilities["capabilities"],
     };
   }
@@ -7104,6 +7145,170 @@ export class MockWebBotClient implements WebBotClient {
 
   async pushGitRemote(botAlias: string): Promise<GitActionResult> {
     return this.actionWithOverview(botAlias, "已推送本地提交");
+  }
+
+  private async mockGitRemoteList(botAlias: string): Promise<GitRemoteList> {
+    const existing = this.gitRemoteLists.get(botAlias);
+    if (existing) {
+      return existing;
+    }
+    const overview = await this.getGitOverview(botAlias);
+    const list: GitRemoteList = {
+      repoFound: overview.repoFound,
+      workingDir: overview.workingDir,
+      repoPath: overview.repoPath,
+      currentBranch: overview.currentBranch,
+      upstream: "",
+      hasCommits: overview.repoFound,
+      remotes: [],
+      githubAccountAuth: true,
+    };
+    this.gitRemoteLists.set(botAlias, list);
+    return list;
+  }
+
+  private mockRemoteEntry(name: string, url: string): GitRemoteList["remotes"][number] {
+    const match = url.match(/github\.com[/:]([^/]+)\/(.+?)(?:\.git)?$/i);
+    return {
+      name,
+      fetchUrl: url,
+      pushUrl: url,
+      protocol: url.startsWith("https://") ? "https" : url.startsWith("http://") ? "http" : "ssh",
+      hasEmbeddedCredentials: false,
+      github: match
+        ? { owner: match[1], repo: match[2], fullName: `${match[1]}/${match[2]}`, htmlUrl: `https://github.com/${match[1]}/${match[2]}`, protocol: url.startsWith("https://") ? "https" : "ssh" }
+        : null,
+    };
+  }
+
+  async listGitRemotes(botAlias: string): Promise<GitRemoteList> {
+    const list = await this.mockGitRemoteList(botAlias);
+    return { ...list, remotes: list.remotes.map((item) => ({ ...item })) };
+  }
+
+  async addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList> {
+    const list = await this.mockGitRemoteList(botAlias);
+    if (list.remotes.some((item) => item.name === name)) {
+      throw new WebApiClientError(`远端 ${name} 已存在`, { status: 409, code: "git_remote_exists" });
+    }
+    list.remotes = [...list.remotes, this.mockRemoteEntry(name, url)];
+    return this.listGitRemotes(botAlias);
+  }
+
+  async updateGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList> {
+    const list = await this.mockGitRemoteList(botAlias);
+    list.remotes = list.remotes.map((item) => (item.name === name ? this.mockRemoteEntry(name, url) : item));
+    return this.listGitRemotes(botAlias);
+  }
+
+  async removeGitRemote(botAlias: string, name: string): Promise<GitRemoteList> {
+    const list = await this.mockGitRemoteList(botAlias);
+    list.remotes = list.remotes.filter((item) => item.name !== name);
+    if (list.upstream.startsWith(`${name}/`)) {
+      list.upstream = "";
+    }
+    return this.listGitRemotes(botAlias);
+  }
+
+  async publishGitBranch(botAlias: string, remote: string): Promise<GitActionResult> {
+    const list = await this.mockGitRemoteList(botAlias);
+    list.upstream = `${remote}/${list.currentBranch || "main"}`;
+    return this.actionWithOverview(botAlias, "已发布当前分支并设置 upstream", (overview) => ({ ...overview, aheadCount: 0 }));
+  }
+
+  async getGitHubAccount(): Promise<GitHubAccountStatus> {
+    return { ...this.githubAccount, scopes: [...this.githubAccount.scopes] };
+  }
+
+  private connectMockGitHub(authMethod: GitHubAccountStatus["authMethod"]): GitHubAccountStatus {
+    this.githubAccount = {
+      ...this.githubAccount,
+      connected: true,
+      login: "orbit-demo",
+      name: "Orbit Demo",
+      htmlUrl: "https://github.com/orbit-demo",
+      authMethod,
+      tokenKind: authMethod === "device" ? "oauth" : "classic",
+      scopes: ["repo", "read:org"],
+      connectedAt: new Date().toISOString(),
+    };
+    return this.getGitHubAccountSnapshot();
+  }
+
+  private getGitHubAccountSnapshot(): GitHubAccountStatus {
+    return { ...this.githubAccount, scopes: [...this.githubAccount.scopes] };
+  }
+
+  async connectGitHubWithToken(token: string): Promise<GitHubAccountStatus> {
+    if (token.trim().length < 20) {
+      throw new WebApiClientError("GitHub 令牌格式不正确", { status: 400, code: "invalid_github_token" });
+    }
+    return this.connectMockGitHub("token");
+  }
+
+  async startGitHubDeviceLogin(): Promise<GitHubDeviceFlow> {
+    const flowId = `mock-flow-${this.githubDevicePolls.size + 1}`;
+    this.githubDevicePolls.set(flowId, 0);
+    return { flowId, userCode: "ORBT-2026", verificationUri: "https://github.com/login/device", expiresIn: 900, interval: 1 };
+  }
+
+  async pollGitHubDeviceLogin(flowId: string): Promise<GitHubDevicePollResult> {
+    const polls = (this.githubDevicePolls.get(flowId) || 0) + 1;
+    this.githubDevicePolls.set(flowId, polls);
+    if (polls < 2) {
+      return { status: "pending", interval: 1, expiresIn: 900, account: null };
+    }
+    this.githubDevicePolls.delete(flowId);
+    return { status: "connected", interval: 1, expiresIn: 0, account: this.connectMockGitHub("device") };
+  }
+
+  async disconnectGitHub(): Promise<GitHubAccountStatus> {
+    this.githubAccount = { ...this.githubAccount, connected: false, login: "", name: "", htmlUrl: "", authMethod: "", tokenKind: "", scopes: [], connectedAt: "" };
+    return this.getGitHubAccountSnapshot();
+  }
+
+  private requireMockGitHub() {
+    if (!this.githubAccount.connected) {
+      throw new WebApiClientError("请先连接 GitHub 账号", { status: 409, code: "github_not_connected" });
+    }
+  }
+
+  async listGitHubOwners(): Promise<GitHubOwner[]> {
+    this.requireMockGitHub();
+    return [
+      { login: this.githubAccount.login, type: "user", avatarUrl: "" },
+      { login: "orbit-labs", type: "org", avatarUrl: "" },
+    ];
+  }
+
+  async listGitHubRepositories(page = 1): Promise<GitHubRepositoryPage> {
+    this.requireMockGitHub();
+    return { items: page === 1 ? this.githubRepositories.map((item) => ({ ...item })) : [], page, hasMore: false };
+  }
+
+  async createGitHubRepository(input: GitHubCreateRepositoryInput): Promise<GitHubRepository> {
+    this.requireMockGitHub();
+    const owner = input.owner || this.githubAccount.login;
+    if (this.githubRepositories.some((item) => item.fullName === `${owner}/${input.name}`)) {
+      throw new WebApiClientError("该所有者下已存在同名仓库", { status: 409, code: "github_repo_exists" });
+    }
+    const repository: GitHubRepository = {
+      id: this.githubRepositories.length + 1,
+      name: input.name,
+      fullName: `${owner}/${input.name}`,
+      owner,
+      private: input.private,
+      archived: false,
+      description: input.description,
+      htmlUrl: `https://github.com/${owner}/${input.name}`,
+      cloneUrl: `https://github.com/${owner}/${input.name}.git`,
+      sshUrl: `git@github.com:${owner}/${input.name}.git`,
+      defaultBranch: "",
+      pushedAt: new Date().toISOString(),
+      canPush: true,
+    };
+    this.githubRepositories = [repository, ...this.githubRepositories];
+    return { ...repository };
   }
 
   async stashGitChanges(botAlias: string): Promise<GitActionResult> {

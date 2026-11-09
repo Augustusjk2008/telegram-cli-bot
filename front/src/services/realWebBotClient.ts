@@ -51,6 +51,15 @@ import type {
   GitIdentityConfig,
   GitIdentityScope,
   GitProxySettings,
+  GitRemoteEntry,
+  GitRemoteList,
+  GitHubAccountStatus,
+  GitHubCreateRepositoryInput,
+  GitHubDeviceFlow,
+  GitHubDevicePollResult,
+  GitHubOwner,
+  GitHubRepository,
+  GitHubRepositoryPage,
   GitResetMode,
   GitGraphScope,
   GitOverview,
@@ -1496,6 +1505,90 @@ type RawGitSmartCommitJob = {
 type RawGitProxySettings = {
   address?: string;
   port?: string;
+};
+
+type RawGitRemoteEntry = {
+  name?: string;
+  fetch_url?: string;
+  push_url?: string;
+  protocol?: string;
+  has_embedded_credentials?: boolean;
+  github?: {
+    owner?: string;
+    repo?: string;
+    full_name?: string;
+    html_url?: string;
+    protocol?: string;
+  } | null;
+};
+
+type RawGitRemoteList = {
+  repo_found?: boolean;
+  working_dir?: string;
+  repo_path?: string;
+  current_branch?: string;
+  upstream?: string;
+  has_commits?: boolean;
+  remotes?: RawGitRemoteEntry[];
+  github_account_auth?: boolean;
+};
+
+type RawGitHubAccountStatus = {
+  connected?: boolean;
+  login?: string;
+  name?: string;
+  avatar_url?: string;
+  html_url?: string;
+  auth_method?: string;
+  token_kind?: string;
+  scopes?: string[];
+  connected_at?: string;
+  device_flow_available?: boolean;
+  token_create_url?: string;
+  required_scopes?: string[];
+};
+
+type RawGitHubDeviceFlow = {
+  flow_id?: string;
+  user_code?: string;
+  verification_uri?: string;
+  expires_in?: number;
+  interval?: number;
+};
+
+type RawGitHubDevicePollResult = {
+  status?: string;
+  interval?: number;
+  expires_in?: number;
+  account?: RawGitHubAccountStatus | null;
+};
+
+type RawGitHubRepository = {
+  id?: number;
+  name?: string;
+  full_name?: string;
+  owner?: string;
+  private?: boolean;
+  archived?: boolean;
+  description?: string;
+  html_url?: string;
+  clone_url?: string;
+  ssh_url?: string;
+  default_branch?: string;
+  pushed_at?: string;
+  can_push?: boolean;
+};
+
+type RawGitHubRepositoryPage = {
+  items?: RawGitHubRepository[];
+  page?: number;
+  has_more?: boolean;
+};
+
+type RawGitHubOwner = {
+  login?: string;
+  type?: string;
+  avatar_url?: string;
 };
 
 type RawAppUpdateStatus = {
@@ -3721,6 +3814,79 @@ function mapGitSmartCommitJob(raw: RawGitSmartCommitJob): GitSmartCommitJob {
     error: raw.error || "",
     overview: hasRawGitOverview(raw.overview) ? mapGitOverview(raw.overview) : null,
   };
+}
+
+function mapGitRemoteEntry(raw: RawGitRemoteEntry): GitRemoteEntry {
+  const github = raw.github && raw.github.full_name
+    ? {
+      owner: raw.github.owner || "",
+      repo: raw.github.repo || "",
+      fullName: raw.github.full_name || "",
+      htmlUrl: raw.github.html_url || "",
+      protocol: raw.github.protocol || "",
+    }
+    : null;
+  return {
+    name: raw.name || "",
+    fetchUrl: raw.fetch_url || "",
+    pushUrl: raw.push_url || raw.fetch_url || "",
+    protocol: raw.protocol || "other",
+    hasEmbeddedCredentials: Boolean(raw.has_embedded_credentials),
+    github,
+  };
+}
+
+function mapGitRemoteList(raw: RawGitRemoteList): GitRemoteList {
+  return {
+    repoFound: Boolean(raw.repo_found),
+    workingDir: raw.working_dir || "",
+    repoPath: raw.repo_path || "",
+    currentBranch: raw.current_branch || "",
+    upstream: raw.upstream || "",
+    hasCommits: Boolean(raw.has_commits),
+    remotes: (raw.remotes || []).map(mapGitRemoteEntry),
+    githubAccountAuth: Boolean(raw.github_account_auth),
+  };
+}
+
+function mapGitHubAccountStatus(raw: RawGitHubAccountStatus): GitHubAccountStatus {
+  const authMethod = raw.auth_method === "device" || raw.auth_method === "token" ? raw.auth_method : "";
+  return {
+    connected: Boolean(raw.connected),
+    login: raw.login || "",
+    name: raw.name || "",
+    avatarUrl: raw.avatar_url || "",
+    htmlUrl: raw.html_url || "",
+    authMethod,
+    tokenKind: raw.token_kind || "",
+    scopes: Array.isArray(raw.scopes) ? raw.scopes.map(String) : [],
+    connectedAt: raw.connected_at || "",
+    deviceFlowAvailable: Boolean(raw.device_flow_available),
+    tokenCreateUrl: raw.token_create_url || "",
+    requiredScopes: Array.isArray(raw.required_scopes) ? raw.required_scopes.map(String) : [],
+  };
+}
+
+function mapGitHubRepository(raw: RawGitHubRepository): GitHubRepository {
+  return {
+    id: Number(raw.id || 0),
+    name: raw.name || "",
+    fullName: raw.full_name || "",
+    owner: raw.owner || "",
+    private: Boolean(raw.private),
+    archived: Boolean(raw.archived),
+    description: raw.description || "",
+    htmlUrl: raw.html_url || "",
+    cloneUrl: raw.clone_url || "",
+    sshUrl: raw.ssh_url || "",
+    defaultBranch: raw.default_branch || "",
+    pushedAt: raw.pushed_at || "",
+    canPush: Boolean(raw.can_push),
+  };
+}
+
+function mapGitHubDevicePollStatus(status: string | undefined): GitHubDevicePollResult["status"] {
+  return status === "connected" || status === "expired" || status === "denied" ? status : "pending";
 }
 
 function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
@@ -7528,6 +7694,109 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapGitActionResult(data);
+  }
+
+  async listGitRemotes(botAlias: string): Promise<GitRemoteList> {
+    const data = await this.requestJson<RawGitRemoteList>(`/api/bots/${encodeURIComponent(botAlias)}/git/remotes`);
+    return mapGitRemoteList(data);
+  }
+
+  private async postGitRemoteMutation(botAlias: string, suffix: string, body: Record<string, string>): Promise<GitRemoteList> {
+    const data = await this.requestJson<RawGitRemoteList>(`/api/bots/${encodeURIComponent(botAlias)}/git/remotes${suffix}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return mapGitRemoteList(data);
+  }
+
+  async addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList> {
+    return this.postGitRemoteMutation(botAlias, "", { name, url });
+  }
+
+  async updateGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList> {
+    return this.postGitRemoteMutation(botAlias, "/update", { name, url });
+  }
+
+  async removeGitRemote(botAlias: string, name: string): Promise<GitRemoteList> {
+    return this.postGitRemoteMutation(botAlias, "/remove", { name });
+  }
+
+  async publishGitBranch(botAlias: string, remote: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remote }),
+    });
+    return mapGitActionResult(data);
+  }
+
+  async getGitHubAccount(): Promise<GitHubAccountStatus> {
+    return mapGitHubAccountStatus(await this.requestJson<RawGitHubAccountStatus>("/api/github/account"));
+  }
+
+  async connectGitHubWithToken(token: string): Promise<GitHubAccountStatus> {
+    const data = await this.requestJson<RawGitHubAccountStatus>("/api/github/account/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    return mapGitHubAccountStatus(data);
+  }
+
+  async startGitHubDeviceLogin(): Promise<GitHubDeviceFlow> {
+    const data = await this.requestJson<RawGitHubDeviceFlow>("/api/github/device", { method: "POST" });
+    return {
+      flowId: data.flow_id || "",
+      userCode: data.user_code || "",
+      verificationUri: data.verification_uri || "https://github.com/login/device",
+      expiresIn: Number(data.expires_in || 0),
+      interval: Number(data.interval || 5),
+    };
+  }
+
+  async pollGitHubDeviceLogin(flowId: string): Promise<GitHubDevicePollResult> {
+    const data = await this.requestJson<RawGitHubDevicePollResult>(
+      `/api/github/device/${encodeURIComponent(flowId)}/poll`,
+      { method: "POST" },
+    );
+    return {
+      status: mapGitHubDevicePollStatus(data.status),
+      interval: Number(data.interval || 5),
+      expiresIn: Number(data.expires_in || 0),
+      account: data.account ? mapGitHubAccountStatus(data.account) : null,
+    };
+  }
+
+  async disconnectGitHub(): Promise<GitHubAccountStatus> {
+    return mapGitHubAccountStatus(await this.requestJson<RawGitHubAccountStatus>("/api/github/account", { method: "DELETE" }));
+  }
+
+  async listGitHubOwners(): Promise<GitHubOwner[]> {
+    const data = await this.requestJson<{ items?: RawGitHubOwner[] }>("/api/github/owners");
+    return (data.items || []).map((item) => ({
+      login: item.login || "",
+      type: item.type === "org" ? "org" : "user",
+      avatarUrl: item.avatar_url || "",
+    }));
+  }
+
+  async listGitHubRepositories(page = 1): Promise<GitHubRepositoryPage> {
+    const data = await this.requestJson<RawGitHubRepositoryPage>(`/api/github/repos?page=${encodeURIComponent(String(page))}`);
+    return {
+      items: (data.items || []).map(mapGitHubRepository),
+      page: Number(data.page || page),
+      hasMore: Boolean(data.has_more),
+    };
+  }
+
+  async createGitHubRepository(input: GitHubCreateRepositoryInput): Promise<GitHubRepository> {
+    const data = await this.requestJson<RawGitHubRepository>("/api/github/repos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return mapGitHubRepository(data);
   }
 
   async stashGitChanges(botAlias: string): Promise<GitActionResult> {

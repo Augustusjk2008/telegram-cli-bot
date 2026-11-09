@@ -17,8 +17,8 @@
 - Codex（含 `codex_server`）和 Claude 通过启动参数注入 stdio MCP；Pi 使用 `TCB_REMOTE_MCP_CONFIG` 和 `--no-builtin-tools --extension`。仅 Antigravity 写入控制目录的 `.agents/mcp_config.json`，配套 ownership state、跨进程锁和原子写入；保留用户服务器与用户修改过的 `tcb-remote` 条目，冲突时报错，撤销只清理本 profile 仍拥有的条目。DeepSeek Harness 只支持本地工作区；远程 Antigravity 暂不支持 Cluster 编排。
 - Pi 扩展提供 `remote_*` 工具以及兼容别名 `read`、`write`、`ls`、`edit`、`bash`。项目读取、编辑、搜索和测试在远端完成；聊天附件存放在本地控制目录 `attachments/`，Pi 的 `local_read`、`local_bash` 用于处理这些附件，输出留在附件旁。
 - `exec.commands` 支持批量命令；`edit` 要求 `old_text` 恰好匹配一次，并按读取到的文件版本做乐观并发校验。
-- 远程 Git 使用远端 workspace root 和对应 Web capability；支持状态、diff、分支、图、暂存、提交、身份配置、已有 stash 操作和 fetch/pull/push，具体可用性以 capabilities 为准，当前不支持创建 stash。智能提交把远端 diff 交给本地 agent 生成提交信息，Git 操作仍在远端执行。
-- Git 同步错误保留 `operation`、`outcome`、`refresh_required`；网络中断可能返回 `outcome=unknown`，mutation 不自动重试。`pull` 使用 `--ff-only` 并要求干净工作区和 upstream。
+- 远程 Git 使用远端 workspace root 和对应 Web capability；支持状态、diff、分支、图、暂存、提交、身份配置、已有 stash 操作、fetch/pull/push、远端添加/修改/移除和分支发布（`push --set-upstream`），具体可用性以 capabilities 为准，当前不支持创建 stash。GitHub 账号令牌只用于宿主侧 GitHub API 和本地 Git，不经 SSH 发送到远程主机；远程同步与发布使用远程主机自己的凭据，远端列表的 `github_account_auth` 为 `false`。智能提交把远端 diff 交给本地 agent 生成提交信息，Git 操作仍在远端执行。
+- Git 同步和发布错误保留 `operation`、`outcome`、`refresh_required`；网络中断可能返回 `outcome=unknown`，mutation 不自动重试。`pull` 使用 `--ff-only` 并要求干净工作区和 upstream。
 - Terminal session 按 `(user_id, owner_id)` 隔离；每个 tab 使用独立 `owner_id`，关闭 tab 必须关闭对应 shell，WebSocket detach 只移除客户端并保留会话以便重连。远程 tab 使用独立 SSH channel。`/api/bots/{alias}/terminal/session/rebuild` 和无 alias 的 rebuild 路由保留为兼容创建入口。
 
 ## 验证

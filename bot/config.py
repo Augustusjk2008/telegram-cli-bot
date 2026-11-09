@@ -220,7 +220,7 @@ def _refresh_environment_config() -> None:
     global EFFECTIVE_VITE_API_BASE_URL, WEB_FIXED_PUBLIC_FORWARD_ENABLED, WEB_FIXED_PUBLIC_FORWARD_URL
     global TCB_HUB_FRPS_PORT, TCB_HUB_NODE_TOKEN, TCB_HUB_FRPS_TOKEN, TCB_HUB_FRPC_PATH
     global TCB_HUB_FRPC_AUTOSTART, WEB_TUNNEL_MODE, WEB_TUNNEL_AUTOSTART
-    global WEB_TUNNEL_CLOUDFLARED_PATH, WEB_TUNNEL_STATE_FILE, APP_UPDATE_REPOSITORY
+    global WEB_TUNNEL_CLOUDFLARED_PATH, WEB_TUNNEL_STATE_FILE, APP_UPDATE_REPOSITORY, GITHUB_OAUTH_CLIENT_ID
     global TCB_STORAGE_MIGRATION_WORKERS
     global TCB_LSP_ENABLED, TCB_LSP_PYRIGHT_COMMAND, TCB_LSP_TYPESCRIPT_COMMAND
     global TCB_LSP_CLANGD_COMMAND, TCB_LSP_REQUEST_TIMEOUT_SECONDS, TCB_LSP_IDLE_TIMEOUT_SECONDS
@@ -329,6 +329,9 @@ def _refresh_environment_config() -> None:
     WEB_TUNNEL_CLOUDFLARED_PATH = os.environ.get("WEB_TUNNEL_CLOUDFLARED_PATH", "").strip()
     WEB_TUNNEL_STATE_FILE = os.environ.get("WEB_TUNNEL_STATE_FILE", ".web_tunnel_state.json").strip() or ".web_tunnel_state.json"
     APP_UPDATE_REPOSITORY = _get_project_config("APP_UPDATE_REPOSITORY", DEFAULT_APP_UPDATE_REPOSITORY).strip()
+    # Public client ID of a GitHub OAuth App with device flow enabled; empty
+    # keeps GitHub sign-in to personal access tokens.
+    GITHUB_OAUTH_CLIENT_ID = _get_project_config("GITHUB_OAUTH_CLIENT_ID", "").strip()
 
     TCB_LSP_ENABLED = _get_project_bool("TCB_LSP_ENABLED", False)
     TCB_LSP_PYRIGHT_COMMAND = _get_project_config("TCB_LSP_PYRIGHT_COMMAND", "").strip()
