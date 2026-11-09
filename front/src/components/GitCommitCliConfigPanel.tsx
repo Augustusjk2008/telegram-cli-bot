@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Save } from "lucide-react";
+import { clsx } from "clsx";
+import { LoaderCircle, RotateCcw, Save, Sparkles } from "lucide-react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   CliParamField,
@@ -7,8 +8,27 @@ import type {
   GitCommitMessageCliConfig,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import {
+  gitIconButtonClassName,
+  gitInputClassName,
+  gitPrimaryButtonClassName,
+  gitSegmentClass,
+  gitSegmentGroupClassName,
+} from "../screens/gitStyles";
 import { defaultCliPathForType } from "../screens/useBotManager";
 import { getErrorMessage } from "../utils/errorMessage";
+
+const METHOD_OPTIONS: Array<{ value: "cli" | "llm"; label: string }> = [
+  { value: "cli", label: "本地 CLI" },
+  { value: "llm", label: "LLM API" },
+];
+
+const fieldLabelClassName = "block truncate text-[11px] text-[var(--muted)]";
+
+const textareaClassName = clsx(
+  "block min-h-[3.25rem] w-full resize-y rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2 py-1 font-mono text-xs leading-5 text-[var(--text)] outline-none transition-colors",
+  "placeholder:font-sans placeholder:text-[var(--muted)] focus:border-[var(--accent-outline)] focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60",
+);
 
 type Props = {
   botAlias: string;
@@ -197,166 +217,220 @@ export function GitCommitCliConfigPanel({
     }
   }
 
+  const fieldEntries = entries.filter(([, field]) => field.type !== "boolean" && field.type !== "string_list");
+  const booleanEntries = entries.filter(([, field]) => field.type === "boolean");
+  const listEntries = entries.filter(([, field]) => field.type === "string_list");
+  const deepseekUnsupported = methodDraft === "cli" && cliTypeDraft === "deepseek";
+  const ready = Boolean(config) && !loading;
+  const statusMessage = error
+    ? { tone: "error" as const, text: error }
+    : notice
+      ? { tone: "success" as const, text: notice }
+      : deepseekUnsupported
+        ? { tone: "warning" as const, text: "DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI" }
+        : null;
+  const statusNode = statusMessage ? (
+    <p
+      role={statusMessage.tone === "error" ? "alert" : undefined}
+      className={clsx(
+        "min-w-0 flex-1 break-words text-[11px] leading-4",
+        statusMessage.tone === "error" && "text-[var(--status-danger)]",
+        statusMessage.tone === "success" && "text-[var(--status-success)]",
+        statusMessage.tone === "warning" && "text-[var(--status-warning)]",
+      )}
+    >
+      {statusMessage.text}
+    </p>
+  ) : null;
+
+  function updateDraft(key: string, value: string | boolean) {
+    setDraftValues((prev) => ({ ...prev, [key]: value }));
+  }
+
   return (
     <section
       data-testid="git-commit-cli-panel"
-      className={`space-y-3 ${className}`}
+      className={clsx("space-y-2 text-xs", className)}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">提交说明生成</h2>
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            {disabledReason || (canManage ? "可在本地 CLI 与 LLM API 之间选择" : "当前模式只读")}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={!canManage || !hasChanges || saving || loading}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-2.5 text-xs font-medium text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-50"
-          >
-            <Save className="h-3.5 w-3.5" />
-            {saving ? "保存中..." : "保存"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void reset()}
-            disabled={!canManage || resetting || loading}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-xs font-medium hover:bg-[var(--surface-strong)] disabled:opacity-50"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            {resetting ? "重置中..." : "恢复默认"}
-          </button>
-        </div>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+        <h3 className="min-w-0 flex-1 truncate text-xs font-semibold">提交说明生成</h3>
+        {ready ? (
+          <div className={gitSegmentGroupClassName} role="group" aria-label="Commit Message 实现方式">
+            {METHOD_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={methodDraft === option.value}
+                onClick={() => setMethodDraft(option.value)}
+                disabled={!canManage}
+                className={gitSegmentClass(methodDraft === option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <button
+          type="button"
+          aria-label="恢复默认"
+          title="恢复默认"
+          onClick={() => void reset()}
+          disabled={!canManage || resetting || loading}
+          className={gitIconButtonClassName}
+        >
+          {resetting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+        </button>
       </div>
 
-      {error ? <div className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)]">{error}</div> : null}
-      {notice ? <div className="rounded-lg border border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-success-text-deep)]">{notice}</div> : null}
-      {loading ? <div className="text-xs text-[var(--muted)]">加载中...</div> : null}
-      {methodDraft === "cli" && cliTypeDraft === "deepseek" ? <p className="text-xs text-[var(--muted)]">DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI</p> : null}
+      {disabledReason || !canManage ? (
+        <p className="text-[11px] leading-4 text-[var(--muted)]">{disabledReason || "当前模式只读"}</p>
+      ) : null}
 
-      {!loading ? (
+      {loading ? (
+        <p className="flex items-center gap-1.5 text-[11px] text-[var(--muted)]">
+          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+          加载中...
+        </p>
+      ) : null}
+
+      {ready ? (
         <>
-          <label className="block max-w-sm space-y-1">
-            <span className="text-xs font-medium text-[var(--muted)]">实现方式</span>
-            <select
-              aria-label="Commit Message 实现方式"
-              value={methodDraft}
-              disabled={!canManage}
-              onChange={(event) => setMethodDraft(event.target.value as "cli" | "llm")}
-              className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
-            >
-              <option value="cli">本地 CLI</option>
-              <option value="llm">LLM API</option>
-            </select>
-            {methodDraft === "llm" ? (
-              <span className="block text-xs text-[var(--muted)]">LLM API 复用管理中心的聊天翻译 API 配置。</span>
-            ) : null}
-          </label>
-          {methodDraft === "cli" ? <>
-          <div className="grid gap-2 md:grid-cols-2">
-            <label className="space-y-1">
-              <span className="text-xs font-medium text-[var(--muted)]">CLI 类型</span>
-              <select
-                aria-label="Commit Message CLI 类型"
-                value={cliTypeDraft}
-                disabled={!canManage}
-                onChange={(event) => {
-                  const nextCliType = event.target.value as CliType;
-                  setCliTypeDraft(nextCliType);
-                  setCliPathDraft(defaultCliPathForType(nextCliType));
-                }}
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
-              >
-                <option value="codex">codex</option>
-                <option value="codex_server">codex server</option>
-                <option value="claude">claude</option>
-                {cliTypeDraft === "deepseek" ? <option value="deepseek" disabled>DeepSeek Harness（暂不支持）</option> : null}
-              </select>
-            </label>
-            <label className="space-y-1">
-              <span className="text-xs font-medium text-[var(--muted)]">CLI 路径</span>
-              <input
-                aria-label="Commit Message CLI 路径"
-                value={cliPathDraft}
-                disabled={!canManage}
-                onChange={(event) => setCliPathDraft(event.target.value)}
-                placeholder={defaultCliPathForType(cliTypeDraft)}
-                className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
-              />
-            </label>
-          </div>
-
-          <div className="grid gap-2 md:grid-cols-2">
-            {entries.map(([key, field]) => {
-              const label = field.description || key;
-              const value = draftValues[key] ?? "";
-              const inputId = `git-commit-cli-param-${botAlias}-${key}`;
-              if (field.type === "boolean") {
-                return (
-                  <label
-                    key={key}
-                    htmlFor={inputId}
-                    className="flex items-center justify-between gap-4 rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+          {methodDraft === "llm" ? (
+            <p className="text-[11px] leading-4 text-[var(--muted)]">LLM API 复用管理中心的聊天翻译 API 配置。</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-1.5">
+                <label className="min-w-0 space-y-0.5">
+                  <span className={fieldLabelClassName}>CLI 类型</span>
+                  <select
+                    aria-label="Commit Message CLI 类型"
+                    value={cliTypeDraft}
+                    disabled={!canManage}
+                    onChange={(event) => {
+                      const nextCliType = event.target.value as CliType;
+                      setCliTypeDraft(nextCliType);
+                      setCliPathDraft(defaultCliPathForType(nextCliType));
+                    }}
+                    className={gitInputClassName}
                   >
-                    <span>{label}</span>
-                    <input
-                      id={inputId}
-                      aria-label={label}
-                      type="checkbox"
-                      checked={Boolean(value)}
-                      disabled={!canManage}
-                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.checked }))}
-                      className="h-4 w-4"
-                    />
-                  </label>
-                );
-              }
-              return (
-                <label key={key} className="space-y-1">
-                  <span className="text-xs font-medium text-[var(--muted)]">{label}</span>
-                  {field.enum ? (
-                    <select
-                      id={inputId}
-                      aria-label={label}
-                      value={String(value)}
-                      disabled={!canManage}
-                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
-                    >
-                      {field.enum.map((item) => (
-                        <option key={item} value={item}>{item}</option>
-                      ))}
-                    </select>
-                  ) : field.type === "string_list" ? (
+                    <option value="codex">codex</option>
+                    <option value="codex_server">codex server</option>
+                    <option value="claude">claude</option>
+                    {cliTypeDraft === "deepseek" ? <option value="deepseek" disabled>DeepSeek Harness（暂不支持）</option> : null}
+                  </select>
+                </label>
+                <label className="min-w-0 space-y-0.5">
+                  <span className={fieldLabelClassName}>CLI 路径</span>
+                  <input
+                    aria-label="Commit Message CLI 路径"
+                    value={cliPathDraft}
+                    disabled={!canManage}
+                    onChange={(event) => setCliPathDraft(event.target.value)}
+                    placeholder={defaultCliPathForType(cliTypeDraft)}
+                    className={clsx(gitInputClassName, "font-mono")}
+                  />
+                </label>
+              </div>
+
+              {fieldEntries.length > 0 ? (
+                <div className="grid grid-cols-2 gap-1.5">
+                  {fieldEntries.map(([key, field]) => {
+                    const label = field.description || key;
+                    const value = String(draftValues[key] ?? "");
+                    const inputId = `git-commit-cli-param-${botAlias}-${key}`;
+                    return (
+                      <label key={key} htmlFor={inputId} className="min-w-0 space-y-0.5">
+                        <span className={fieldLabelClassName} title={label}>{label}</span>
+                        {field.enum ? (
+                          <select
+                            id={inputId}
+                            aria-label={label}
+                            value={value}
+                            disabled={!canManage}
+                            onChange={(event) => updateDraft(key, event.target.value)}
+                            className={gitInputClassName}
+                          >
+                            {field.enum.map((item) => (
+                              <option key={item} value={item}>{item}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            id={inputId}
+                            aria-label={label}
+                            type={field.type === "number" ? "number" : "text"}
+                            value={value}
+                            disabled={!canManage}
+                            onChange={(event) => updateDraft(key, event.target.value)}
+                            className={gitInputClassName}
+                          />
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {booleanEntries.length > 0 ? (
+                <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                  {booleanEntries.map(([key, field]) => {
+                    const label = field.description || key;
+                    const inputId = `git-commit-cli-param-${botAlias}-${key}`;
+                    return (
+                      <label key={key} htmlFor={inputId} className="flex min-w-0 items-start gap-1.5 leading-4">
+                        <input
+                          id={inputId}
+                          aria-label={label}
+                          type="checkbox"
+                          checked={Boolean(draftValues[key])}
+                          disabled={!canManage}
+                          onChange={(event) => updateDraft(key, event.target.checked)}
+                          className="mt-px h-3.5 w-3.5 shrink-0 accent-[var(--accent)] disabled:opacity-60"
+                        />
+                        <span className="min-w-0 break-words">{label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {listEntries.map(([key, field]) => {
+                const label = field.description || key;
+                const inputId = `git-commit-cli-param-${botAlias}-${key}`;
+                return (
+                  <label key={key} htmlFor={inputId} className="block min-w-0 space-y-0.5">
+                    <span className={fieldLabelClassName}>{label}</span>
                     <textarea
                       id={inputId}
                       aria-label={label}
-                      rows={3}
-                      value={String(value)}
+                      rows={2}
+                      value={String(draftValues[key] ?? "")}
                       disabled={!canManage}
-                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
+                      placeholder="每行一个参数"
+                      onChange={(event) => updateDraft(key, event.target.value)}
+                      className={textareaClassName}
                     />
-                  ) : (
-                    <input
-                      id={inputId}
-                      aria-label={label}
-                      type={field.type === "number" ? "number" : "text"}
-                      value={String(value)}
-                      disabled={!canManage}
-                      onChange={(event) => setDraftValues((prev) => ({ ...prev, [key]: event.target.value }))}
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm disabled:opacity-60"
-                    />
-                  )}
-                </label>
-              );
-            })}
+                  </label>
+                );
+              })}
+            </>
+          )}
+
+          <div className="flex min-w-0 items-center gap-1.5">
+            {statusNode ?? <span className="flex-1" />}
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={!canManage || !hasChanges || saving}
+              className={gitPrimaryButtonClassName}
+            >
+              {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saving ? "保存中..." : "保存"}
+            </button>
           </div>
-          </> : null}
         </>
-      ) : null}
+      ) : statusNode}
     </section>
   );
 }
