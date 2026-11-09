@@ -75,9 +75,9 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
         <label className="block text-sm">私钥文件路径（服务所在电脑）<input className={remoteInputClass} value={keyFilename} onChange={(e) => setKeyFilename(e.target.value)} readOnly={Boolean(botAlias)} required /></label>
         <label className="block text-sm">私钥口令（可选）<input type="password" autoComplete="new-password" className={remoteInputClass} value={passphrase} onChange={(e) => setPassphrase(e.target.value)} /></label>
       </>}
-      <button className={remoteButtonClass} type="submit">{busy ? "正在连接…" : "测试并连接 SSH"}</button>
+      <button className={`${remoteButtonClass} remote-primary-action`} type="submit">{busy ? "正在连接…" : "测试并连接 SSH"}</button>
     </fieldset>
-    {fingerprint && <div role="alert" className="space-y-2 rounded-md border border-[var(--border)] p-3 text-sm">
+    {fingerprint && <div role="alert" className="remote-fingerprint space-y-2 rounded-md border border-[var(--border)] p-3 text-sm">
       <p>首次连接 {username}@{host}:{port}。请核对服务器主机密钥指纹：</p>
       <code className="block break-all">{fingerprint}</code>
       <div className="flex flex-wrap gap-2">

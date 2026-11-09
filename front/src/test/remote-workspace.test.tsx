@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { BotListScreen } from "../screens/BotListScreen";
 import { draftFromBot } from "../screens/botManagerModel";
@@ -89,7 +89,7 @@ test("remote create requires explicit host key trust and a chosen directory, wit
   const add = vi.spyOn(client, "addBot").mockResolvedValue({ alias: "remote", cliType: "codex", status: "running", workingDir: "C:/control", remoteWorkspace: remote, lastActiveText: "" });
   render(<BotListScreen client={client} onSelect={vi.fn()} />);
   fireEvent.change(screen.getByLabelText("新智能体别名"), { target: { value: "remote" } });
-  fireEvent.change(screen.getByLabelText("工作区位置"), { target: { value: "remote" } });
+  fireEvent.click(within(screen.getByRole("group", { name: "工作区位置" })).getByRole("button", { name: "远程 SSH" }));
   expect(screen.getByLabelText("目标系统")).toHaveValue("posix");
   expect(screen.queryByLabelText("新智能体工作目录")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "创建智能体" })).toBeDisabled();
@@ -109,6 +109,8 @@ test("remote create requires explicit host key trust and a chosen directory, wit
   await waitFor(() => expect(browse).toHaveBeenLastCalledWith("ssh-1", selectedRoot));
   await waitFor(() => expect(screen.getByRole("button", { name: "选择此远程工作目录" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "选择此远程工作目录" }));
+  // Re-pressing the active location keeps the chosen directory.
+  fireEvent.click(within(screen.getByRole("group", { name: "工作区位置" })).getByRole("button", { name: "远程 SSH" }));
   fireEvent.click(screen.getByRole("button", { name: "创建智能体" }));
   await waitFor(() => expect(add).toHaveBeenCalledWith(expect.objectContaining({ remoteWorkspace: { connectionId: "ssh-1", root: selectedRoot }, workingDir: undefined })));
   expect(JSON.stringify(add.mock.calls)).not.toContain("secret-value");

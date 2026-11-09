@@ -1,25 +1,18 @@
 import { cliTypeLabel } from "../utils/cliType";
-import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { BotActivitySummary } from "../components/BotActivitySummary";
-import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { getBotIdentityTextStyle } from "../utils/botVisual";
+import { AgentCreateForm } from "./AgentCreateForm";
 import { FleetAvatar, FleetStats, FleetStatusChip } from "./AgentManagerParts";
 import "../styles/agent-manager.css";
-import type { BotSummary, CliType, CreateBotInput } from "../services/types";
+import type { BotSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
-import {
-  buildCreateDraft,
-  defaultCliPathForType,
-  useBotManager,
-  type CreateDraft,
-} from "./useBotManager";
-import { countBotManagerStats, DEFAULT_NATIVE_AGENT_DRAFT, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { useBotManager } from "./useBotManager";
+import { countBotManagerStats, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
@@ -145,7 +138,6 @@ export function BotListScreen({
 }: Props) {
   const [renamingAlias, setRenamingAlias] = useState("");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
-  const [showWorkdirPicker, setShowWorkdirPicker] = useState(false);
   const [pendingDeleteAlias, setPendingDeleteAlias] = useState("");
   const [deleteHistory, setDeleteHistory] = useState(false);
   const [deleteWorkspace, setDeleteWorkspace] = useState(false);
@@ -167,23 +159,6 @@ export function BotListScreen({
     renameBot,
     deleteBot,
   } = useBotManager({ client, onBotsChange, includeArchived: canManage });
-  const [remoteCreate, setRemoteCreate] = useState(false);
-  const [createDraft, setCreateDraft] = useState<CreateDraft>(() => buildCreateDraft());
-
-  const directoryBrowserAlias = bots.find((bot) => bot.isMain || bot.alias === "main")?.alias || bots[0]?.alias || "main";
-
-  useEffect(() => {
-    if (bots.length === 0) {
-      return;
-    }
-    setCreateDraft((prev) => {
-      const userEditedPath = prev.cliPath.trim() && prev.cliPath.trim() !== defaultCliPathForType(prev.cliType);
-      if (prev.alias.trim() || prev.workingDir.trim() || userEditedPath) {
-        return prev;
-      }
-      return { ...prev, cliPath: buildCreateDraft(prev.cliType, bots).cliPath };
-    });
-  }, [bots]);
 
   useEffect(() => {
     const available = new Set(bots.filter((bot) => canManage && !isMainBot(bot) && !isBotArchived(bot)).map((bot) => bot.alias));
@@ -205,32 +180,6 @@ export function BotListScreen({
       cancelled = true;
     };
   }, [client]);
-
-  useEffect(() => {
-    if (nativeAgentFeatureEnabled === false && createDraft.runtimeBackend === "native_agent") {
-      setCreateDraft((prev) => ({
-        ...prev,
-        runtimeBackend: "cli",
-        supportedExecutionModes: ["cli"],
-        defaultExecutionMode: "cli",
-      }));
-    }
-  }, [createDraft.runtimeBackend, nativeAgentFeatureEnabled]);
-
-  useEffect(() => {
-    if (!canRunUnsafeCli && createDraft.bypassApprovalAndSandbox) {
-      setCreateDraft((prev) => ({ ...prev, bypassApprovalAndSandbox: false }));
-    }
-  }, [canRunUnsafeCli, createDraft.bypassApprovalAndSandbox]);
-
-  async function handleCreateBot() {
-    const created = await createBot(createDraft);
-    if (created) {
-      setCreateDraft(buildCreateDraft(createDraft.cliType, bots));
-      setRemoteCreate(false);
-      onBotCreated?.(created.alias);
-    }
-  }
 
   async function saveRename(bot: BotSummary) {
     const renamed = await renameBot(bot, renameDrafts[bot.alias] || "");
@@ -270,8 +219,6 @@ export function BotListScreen({
       setDeleteWorkspaceConfirmText("");
     }
   }
-
-  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || createDraft.runtimeBackend === "native_agent";
 
   return (
     <main data-ui-density="compact" className="am-screen am-mobile orbit-shell">
@@ -485,155 +432,22 @@ export function BotListScreen({
 
       {canManage ? (
         <section className="am-mobile-section orbit-island orbit-island--reading">
-        <h2>新增智能体</h2>
-        <div className="space-y-3">
-          <input
-            aria-label="新智能体别名"
-            type="text"
-            value={createDraft.alias}
-            onChange={(event) => setCreateDraft((prev) => ({ ...prev, alias: event.target.value }))}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-            placeholder="team3"
+          <AgentCreateForm
+            layout="card"
+            description="配置运行方式与工作区后即可创建。"
+            client={client}
+            bots={bots}
+            savingAction={savingAction}
+            onCreate={createBot}
+            canManage={canManage}
+            canCreateWorkdirDirectory={canCreateWorkdirDirectory}
+            canRunUnsafeCli={canRunUnsafeCli}
+            nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
+            onCreated={onBotCreated}
           />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-sm">
-              <span className="text-[var(--muted)]">运行后端</span>
-              <select
-                aria-label="运行后端"
-                value={createDraft.runtimeBackend}
-                onChange={(event) => {
-                  const runtimeBackend = event.target.value as CreateDraft["runtimeBackend"];
-                  setCreateDraft((prev) => ({
-                    ...prev,
-                    runtimeBackend,
-                    supportedExecutionModes: [runtimeBackend],
-                    defaultExecutionMode: runtimeBackend,
-                  }));
-                }}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
-              >
-                <option value="cli">CLI</option>
-                {nativeAgentOptionVisible && createDraft.cliType !== "deepseek" ? <option value="native_agent">原生 agent</option> : null}
-              </select>
-              {nativeAgentFeatureEnabled === false ? (
-                <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
-              ) : null}
-            </label>
-          </div>
-          {createDraft.runtimeBackend === "cli" ? (
-            <div className="grid grid-cols-2 gap-3">
-              <label className="space-y-1 text-sm">
-                <span className="text-[var(--muted)]">新智能体 CLI 类型</span>
-                <select
-                  aria-label="新智能体 CLI 类型"
-                  value={createDraft.cliType}
-                  onChange={(event) => {
-                    const cliType = event.target.value as CliType;
-                    if (cliType === "deepseek") setRemoteCreate(false);
-                    setCreateDraft((prev) => ({ ...prev, cliType, cliPath: buildCreateDraft(cliType, bots).cliPath, ...(cliType === "deepseek" ? { remoteWorkspace: undefined, bypassApprovalAndSandbox: false } : {}) }));
-                  }}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
-                >
-                  <option value="codex">codex</option>
-                  <option value="codex_server">codex server</option>
-                  <option value="claude">claude</option>
-                  <option value="antigravity">Antigravity CLI</option>
-                  <option value="deepseek">DeepSeek Harness</option>
-                </select>
-              </label>
-            </div>
-          ) : null}
-          {createDraft.runtimeBackend === "cli" ? (
-            <input
-              aria-label="新智能体 CLI 路径"
-              type="text"
-              value={createDraft.cliPath}
-              onChange={(event) => setCreateDraft((prev) => ({ ...prev, cliPath: event.target.value }))}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-              placeholder={defaultCliPathForType(createDraft.cliType)}
-            />
-          ) : null}
-          {createDraft.runtimeBackend === "cli" && createDraft.cliType !== "deepseek" ? (
-            <label className="flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm">
-              <input
-                type="checkbox"
-                aria-label="新智能体默认绕过审批和沙箱"
-                checked={canRunUnsafeCli ? Boolean(createDraft.bypassApprovalAndSandbox) : false}
-                onChange={(event) => setCreateDraft((prev) => ({
-                  ...prev,
-                  bypassApprovalAndSandbox: canRunUnsafeCli ? event.target.checked : false,
-                }))}
-                disabled={!canManage || !canRunUnsafeCli || savingAction !== ""}
-                className="mt-0.5 h-4 w-4 rounded border-[var(--border)]"
-              />
-              <span>默认绕过审批和沙箱</span>
-            </label>
-          ) : null}
-          {createDraft.runtimeBackend === "native_agent" ? (
-            <NativeAgentConfigFields
-              provider={createDraft.nativeAgent?.provider || DEFAULT_NATIVE_AGENT_DRAFT.provider}
-              model={createDraft.nativeAgent?.model || DEFAULT_NATIVE_AGENT_DRAFT.model}
-              piAgent={createDraft.nativeAgent?.piAgent || DEFAULT_NATIVE_AGENT_DRAFT.piAgent}
-              baseUrl={createDraft.nativeAgent?.baseUrl || DEFAULT_NATIVE_AGENT_DRAFT.baseUrl}
-              apiKey={createDraft.nativeAgent?.apiKey || ""}
-              disabled={!canManage || savingAction !== ""}
-              onNativeAgentChange={(patch) => setCreateDraft((prev) => ({
-                ...prev,
-                nativeAgent: {
-                  ...DEFAULT_NATIVE_AGENT_DRAFT,
-                  ...(prev.nativeAgent || {}),
-                  ...patch,
-                },
-              }))}
-            />
-          ) : null}
-          <label className="block text-sm">工作区位置<select aria-label="工作区位置" className="ml-2 rounded border border-[var(--border)] bg-[var(--surface)] p-2" value={remoteCreate ? "remote" : "local"} onChange={(e) => { setRemoteCreate(e.target.value === "remote"); setCreateDraft((prev) => ({ ...prev, remoteWorkspace: undefined })); }}><option value="local">本地</option><option value="remote" disabled={createDraft.cliType === "deepseek"}>远程 SSH（Linux / Windows）</option></select></label>
-          {remoteCreate ? <RemoteWorkspacePicker client={client} onPick={(remote) => setCreateDraft((prev) => ({ ...prev, remoteWorkspace: { connectionId: remote.connectionId, root: remote.root } }))} /> : (
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              aria-label="新智能体工作目录"
-              type="text"
-              value={createDraft.workingDir}
-              onChange={(event) => setCreateDraft((prev) => ({ ...prev, workingDir: event.target.value }))}
-              className="w-full flex-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
-              placeholder="/srv/telegram-cli-bridge/team3"
-            />
-            <button
-              type="button"
-              aria-label="浏览新智能体工作目录"
-              onClick={() => setShowWorkdirPicker(true)}
-              disabled={savingAction !== ""}
-              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-            >
-              浏览目录
-            </button>
-          </div>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => void handleCreateBot()}
-          disabled={savingAction !== "" || (remoteCreate && !createDraft.remoteWorkspace)}
-          className="orbit-btn orbit-btn--primary justify-self-start"
-        >
-          {savingAction === "create" ? "创建中..." : "创建智能体"}
-        </button>
         </section>
       ) : null}
       </div>
-      {showWorkdirPicker ? (
-        <DirectoryPickerDialog
-          title="选择工作目录"
-          botAlias={directoryBrowserAlias}
-          client={client}
-          initialPath={createDraft.workingDir}
-          mutateBrowseState={false}
-          mode="workdir"
-          canCreateDirectory={canCreateWorkdirDirectory}
-          onPick={(workingDir) => setCreateDraft((prev) => ({ ...prev, workingDir }))}
-          onClose={() => setShowWorkdirPicker(false)}
-        />
-      ) : null}
       {pendingDeleteAlias ? (
         <DeleteBotDialog
           botAlias={pendingDeleteAlias}
