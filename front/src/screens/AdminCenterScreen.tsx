@@ -1,4 +1,10 @@
 import { AppUpdatePanel } from "../components/admin/AppUpdatePanel";
+import {
+  AnnouncementAdminPanel,
+  announcementDraftToInput,
+  createAnnouncementDraft,
+  type AnnouncementDraft,
+} from "../components/admin/AnnouncementAdminPanel";
 import { cliTypeLabel } from "../utils/cliType";
 import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
 import { GlobalPromptPresetsPanel } from "../components/GlobalPromptPresetsPanel";
@@ -14,7 +20,6 @@ import type {
   BotSummary,
   Capability,
   CliErrorStatsResult,
-  CreateAnnouncementInput,
   EnvConfigItem,
   EnvConfigPatchInput,
   EnvConfigPatchResult,
@@ -134,19 +139,6 @@ const ENV_CATEGORY_ORDER = [
   "advanced",
   "frontend",
 ];
-
-const DEFAULT_ANNOUNCEMENT_DRAFT: CreateAnnouncementInput = {
-  publisher: "CLI Bridge",
-  title: "管理中心更新",
-  category: "feature",
-  severity: "info",
-  summary: "管理中心权限、插件和更新能力已合并。",
-  sections: [
-    { label: "新增", items: ["新增权限管理入口"] },
-    { label: "影响", items: ["所有用户登录后会看到新公告"] },
-    { label: "操作", items: ["点关闭后不再重复弹出"] },
-  ],
-};
 
 const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "chat_send", label: "聊天" },
@@ -459,7 +451,7 @@ export function AdminCenterScreen({
   const [usagePanelKey, setUsagePanelKey] = useState(0);
   const [usageProvider, setUsageProvider] = useState<UsagePanelProvider>("codex");
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
-  const [announcementDraft, setAnnouncementDraft] = useState<CreateAnnouncementInput>(DEFAULT_ANNOUNCEMENT_DRAFT);
+  const [announcementDraft, setAnnouncementDraft] = useState<AnnouncementDraft>(() => createAnnouncementDraft());
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
   const [gitProxySettings, setGitProxySettings] = useState<GitProxySettings | null>(null);
@@ -1098,30 +1090,13 @@ export function AdminCenterScreen({
     }
   };
 
-  const updateAnnouncementDraft = <K extends keyof CreateAnnouncementInput>(key: K, value: CreateAnnouncementInput[K]) => {
-    setAnnouncementDraft((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const updateAnnouncementSection = (index: number, key: "label" | "items", value: string) => {
-    setAnnouncementDraft((prev) => ({
-      ...prev,
-      sections: prev.sections.map((section, sectionIndex) => {
-        if (sectionIndex !== index) {
-          return section;
-        }
-        return key === "label"
-          ? { ...section, label: value }
-          : { ...section, items: value.split("\n").map((item) => item.trim()).filter(Boolean) };
-      }),
-    }));
-  };
-
   const saveAnnouncement = async () => {
     setAnnouncementSaving(true);
     setError("");
     setNotice("");
     try {
-      await client.upsertAnnouncement(announcementDraft);
+      await client.upsertAnnouncement(announcementDraftToInput(announcementDraft));
+      setAnnouncementDraft((prev) => createAnnouncementDraft(prev));
       await loadAnnouncements("公告已发布", true);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "发布公告失败"));
@@ -2795,129 +2770,15 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {!loading && activeTab === "announcements" ? (
-          <div className="admin-stack">
-            <section className="admin-island orbit-island orbit-island--reading space-y-4">
-              <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">发布公告</h2>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">发布者</span>
-                  <input
-                    aria-label="公告发布者"
-                    value={announcementDraft.publisher}
-                    onChange={(event) => updateAnnouncementDraft("publisher", event.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">标题</span>
-                  <input
-                    aria-label="公告标题"
-                    value={announcementDraft.title}
-                    onChange={(event) => updateAnnouncementDraft("title", event.target.value)}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">分类</span>
-                  <select
-                    aria-label="公告分类"
-                    value={announcementDraft.category}
-                    onChange={(event) => updateAnnouncementDraft("category", event.target.value as AnnouncementItem["category"])}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  >
-                    {["release", "feature", "fix", "maintenance", "notice"].map((item) => (
-                      <option key={item} value={item}>{item}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-sm text-[var(--text)]">级别</span>
-                  <select
-                    aria-label="公告级别"
-                    value={announcementDraft.severity}
-                    onChange={(event) => updateAnnouncementDraft("severity", event.target.value as AnnouncementItem["severity"])}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                  >
-                    {["info", "success", "warning", "danger"].map((item) => (
-                      <option key={item} value={item}>{item}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <label className="space-y-1">
-                <span className="text-sm text-[var(--text)]">摘要</span>
-                <textarea
-                  aria-label="公告摘要"
-                  value={announcementDraft.summary}
-                  onChange={(event) => updateAnnouncementDraft("summary", event.target.value)}
-                  rows={2}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                />
-              </label>
-
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-                {announcementDraft.sections.map((section, index) => (
-                  <div key={index} className="space-y-2 admin-well p-3">
-                    <input
-                      aria-label={`公告段落 ${index + 1} 标题`}
-                      value={section.label}
-                      onChange={(event) => updateAnnouncementSection(index, "label", event.target.value)}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                    />
-                    <textarea
-                      aria-label={`公告段落 ${index + 1} 条目`}
-                      value={section.items.join("\n")}
-                      onChange={(event) => updateAnnouncementSection(index, "items", event.target.value)}
-                      rows={4}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"
-                    />
-                  </div>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => void saveAnnouncement()}
-                disabled={announcementSaving}
-                className="orbit-btn orbit-btn--primary"
-              >
-                <Save className="h-4 w-4" />
-                {announcementSaving ? "发布中..." : "发布公告"}
-              </button>
-            </section>
-
-            <section className="admin-island orbit-island orbit-island--reading space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-base font-semibold text-[var(--text)]">公告列表</h2>
-                <span className="text-xs text-[var(--muted)]">共 {announcements.length} 条</span>
-              </div>
-              {announcements.length ? announcements.map((item) => (
-                <article key={item.id} className="admin-well p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 space-y-1">
-                      <p className="font-medium text-[var(--text)]">{item.title}</p>
-                      <p className="break-all text-xs text-[var(--muted)]">{item.id}</p>
-                      <p className="text-sm text-[var(--muted)]">{item.summary}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void removeAnnouncement(item.id)}
-                      disabled={announcementDeletingId === item.id}
-                      className="orbit-btn admin-btn--danger-quiet"
-                    >
-                      {announcementDeletingId === item.id ? "删除中..." : "删除"}
-                    </button>
-                  </div>
-                </article>
-              )) : (
-                <p className="text-sm text-[var(--muted)]">暂无公告</p>
-              )}
-            </section>
-          </div>
+          <AnnouncementAdminPanel
+            items={announcements}
+            draft={announcementDraft}
+            onDraftChange={setAnnouncementDraft}
+            saving={announcementSaving}
+            deletingId={announcementDeletingId}
+            onPublish={() => void saveAnnouncement()}
+            onDelete={(id) => void removeAnnouncement(id)}
+          />
         ) : null}
 
         {activeTab === "updates" ? (

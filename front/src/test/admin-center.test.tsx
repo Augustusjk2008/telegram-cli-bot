@@ -630,3 +630,36 @@ test("Codex 额度趋势没有样本时仍显示已知额度入口", async () =>
   expect(screen.queryByRole("heading", { name: "gpt-reserve", level: 4 })).not.toBeInTheDocument();
   expect(screen.queryByRole("img", { name: /Codex 剩余额度与剩余时长趋势/ })).not.toBeInTheDocument();
 });
+
+test("公告条目保留换行与空格，发布时忽略空段落并重置草稿", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const upsert = vi.spyOn(client, "upsertAnnouncement").mockImplementation(async (input) => ({
+    ...input, id: "ann-new", publishedAt: "2026-11-10T09:00:00+08:00",
+  }));
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "公告" }));
+
+  const publish = await screen.findByRole("button", { name: "发布公告" });
+  expect(publish).toBeDisabled();
+  await user.type(screen.getByLabelText("公告标题"), "Cluster upgrade");
+  await user.type(screen.getByLabelText("公告摘要"), "Two items");
+  const items = screen.getByLabelText("公告段落 1 条目");
+  await user.type(items, "first item {Enter}second item");
+  expect(items).toHaveValue("first item \nsecond item");
+  await user.click(screen.getByRole("button", { name: "移除公告段落 3" }));
+  expect(screen.queryByLabelText("公告段落 3 标题")).not.toBeInTheDocument();
+
+  await user.click(publish);
+  expect(upsert).toHaveBeenCalledWith({
+    publisher: "CLI Bridge",
+    title: "Cluster upgrade",
+    category: "feature",
+    severity: "info",
+    summary: "Two items",
+    sections: [{ label: "新增", items: ["first item", "second item"] }],
+  });
+  await waitFor(() => expect(screen.getByLabelText("公告标题")).toHaveValue(""));
+  expect(screen.getByLabelText("公告发布者")).toHaveValue("CLI Bridge");
+});
