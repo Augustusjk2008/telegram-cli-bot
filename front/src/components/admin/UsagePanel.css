@@ -115,9 +115,55 @@
 .codex-usage-segmented button:focus-visible,
 .codex-usage-chart-toggle button:focus-visible,
 .codex-usage-form-actions button:focus-visible,
+.codex-usage-transfer button:focus-visible,
 .codex-usage-date-fields input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.codex-usage-heading-actions,
+.codex-usage-transfer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+
+.codex-usage-heading {
+  flex-wrap: wrap;
+}
+
+.codex-usage-heading-actions {
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.codex-usage-transfer {
+  gap: 0.35rem;
+}
+
+.codex-usage-transfer button {
+  height: 1.75rem;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius-control, 0.3rem);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 0.6rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.codex-usage-transfer button:hover:not(:disabled) {
+  background: var(--fill-hover, var(--surface-strong));
+}
+
+.codex-usage-transfer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .codex-usage-time-basis {
@@ -740,11 +786,30 @@
   font-variant-numeric: tabular-nums;
 }
 
+.codex-usage-rate-limit-tooltip-origin b {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ------------------------------------------------------------- responsive */
 
 @media (max-width: 640px) {
   .codex-usage-heading {
     flex-wrap: wrap;
+  }
+
+  .codex-usage-heading-actions {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+
+  .codex-usage-transfer {
+    flex: 1 1 auto;
+  }
+
+  .codex-usage-transfer button {
+    flex: 1 1 auto;
   }
 
   .codex-usage-section-heading {

@@ -16,15 +16,23 @@ from .claude_rate_limits import (
     samples_from_rate_limit_info,
 )
 from .models import (
+    KNOWN_USAGE_PROVIDERS,
     CodexRateLimitSample,
     DayLike,
     ProviderInfo,
     UsageProvider,
+    normalize_origin_label,
     normalize_usage_provider,
 )
 from .provider import CodexProviderResolver
 from .rollout import TurnRateLimitResolution, resolve_turn_rate_limit_resolution
 from .store import CodexUsageStore
+from .transfer import (
+    build_export_document,
+    export_filename,
+    local_origin_label,
+    parse_import_document,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -427,6 +435,51 @@ class CodexUsageService:
             "rate_limit_samples": [_rate_limit_payload(sample) for sample in samples],
         }
 
+    async def export_samples(
+        self,
+        *,
+        origin_label: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Build a portable file of every stored Codex and Claude sample."""
+
+        source = normalize_origin_label(origin_label) or await asyncio.to_thread(local_origin_label)
+        exported_at = now or datetime.now(timezone.utc)
+        samples = await asyncio.to_thread(self._store.export_rate_limit_samples)
+        document = await asyncio.to_thread(
+            build_export_document,
+            samples,
+            source=source,
+            exported_at=exported_at,
+        )
+        return {
+            "filename": export_filename(source, exported_at),
+            "sample_count": len(samples),
+            "document": document,
+        }
+
+    async def import_samples(self, document: object) -> dict[str, Any]:
+        """Merge another machine's export; raises ``SampleDocumentError`` for unusable files."""
+
+        return await asyncio.to_thread(self._import_samples_sync, document)
+
+    def _import_samples_sync(self, document: object) -> dict[str, Any]:
+        parsed = parse_import_document(document)
+        counts = self._store.import_rate_limit_samples(parsed.samples)
+        return {
+            "total": parsed.total,
+            "inserted": counts.inserted,
+            "duplicates": counts.duplicates,
+            "invalid": parsed.invalid,
+            "inserted_by_provider": {
+                provider: counts.inserted_by_provider.get(provider, 0)
+                for provider in KNOWN_USAGE_PROVIDERS
+            },
+        }
+
+    async def delete_imported_samples(self) -> dict[str, int]:
+        return {"deleted": await asyncio.to_thread(self._store.delete_imported_samples)}
+
     async def _safe_current_provider(
         self,
         *,
@@ -549,6 +602,7 @@ def _rate_limit_payload(sample: CodexRateLimitSample) -> dict[str, Any]:
         "resets_at": sample.resets_at.astimezone().isoformat(),
         "plan_type": sample.plan_type,
         "credits_balance": sample.credits_balance,
+        "origin": sample.origin,
     }
 
 

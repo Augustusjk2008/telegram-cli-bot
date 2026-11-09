@@ -2,23 +2,44 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import date, datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Iterable
 
 from .models import (
+    KNOWN_USAGE_PROVIDERS,
     CodexRateLimitSample,
     DayLike,
     UsageProvider,
+    datetime_from_epoch_milliseconds,
+    datetime_from_epoch_seconds,
     day_from_number,
     day_number,
+    epoch_milliseconds,
+    epoch_seconds,
     normalize_usage_provider,
 )
 
 
+# The nullable ``origin`` column is added in place without a version bump, so
+# an older build can still open the database after a program rollback.
 SCHEMA_VERSION = 8
 _SETTING_ENABLED = "enabled"
 _LONG_TERM_LIMIT_WINDOW_MINUTES = 7 * 24 * 60
+IMPORTED_ORIGIN_FALLBACK = "imported"
+
+
+@dataclass(frozen=True, slots=True)
+class SampleImportCounts:
+    inserted_by_provider: dict[str, int]
+    duplicates: int
+
+    @property
+    def inserted(self) -> int:
+        return sum(self.inserted_by_provider.values())
+
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -41,7 +62,8 @@ CREATE TABLE IF NOT EXISTS rate_limit_samples (
     resets_at INTEGER NOT NULL
         CHECK (resets_at >= 0),
     plan_type TEXT,
-    credits_balance TEXT
+    credits_balance TEXT,
+    origin TEXT CHECK (origin IS NULL OR trim(origin) <> '')
 );
 
 CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_day_time
@@ -161,6 +183,15 @@ class CodexUsageStore:
                 connection.execute(
                     "ALTER TABLE rate_limit_samples ADD COLUMN credits_balance TEXT"
                 )
+        if "origin" not in columns:
+            with connection:
+                connection.execute(
+                    """
+                    ALTER TABLE rate_limit_samples
+                    ADD COLUMN origin TEXT
+                    CHECK (origin IS NULL OR trim(origin) <> '')
+                    """
+                )
         connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_rate_limit_samples_provider_bucket_time
@@ -179,15 +210,15 @@ class CodexUsageStore:
 
     @staticmethod
     def _rate_limit_from_row(row: sqlite3.Row) -> CodexRateLimitSample:
-        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
         return CodexRateLimitSample(
-            sampled_at=epoch + timedelta(milliseconds=int(row["sampled_at_ms"])),
+            sampled_at=datetime_from_epoch_milliseconds(int(row["sampled_at_ms"])),
             used_percent=float(row["used_percent"]),
             window_minutes=int(row["window_minutes"]),
-            resets_at=epoch + timedelta(seconds=int(row["resets_at"])),
+            resets_at=datetime_from_epoch_seconds(int(row["resets_at"])),
             plan_type=row["plan_type"],
             limit_id=str(row["limit_id"]),
             credits_balance=row["credits_balance"],
+            origin=row["origin"],
         )
 
     @staticmethod
@@ -242,15 +273,8 @@ class CodexUsageStore:
         if not isinstance(sample, CodexRateLimitSample):
             raise ValueError("sample 必须是 CodexRateLimitSample")
         normalized_provider = normalize_usage_provider(provider)
-        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-        sampled_delta = sample.sampled_at.astimezone(timezone.utc) - epoch
-        reset_delta = sample.resets_at.astimezone(timezone.utc) - epoch
-        sampled_at_ms = (
-            sampled_delta.days * 86_400_000
-            + sampled_delta.seconds * 1_000
-            + sampled_delta.microseconds // 1_000
-        )
-        resets_at = reset_delta.days * 86_400 + reset_delta.seconds
+        sampled_at_ms = epoch_milliseconds(sample.sampled_at)
+        resets_at = epoch_seconds(sample.resets_at)
         sample_day = day_number(sample.sampled_at)
         with self._lock:
             connection = self._get_connection(create=True)
@@ -275,11 +299,14 @@ class CodexUsageStore:
                         sample.credits_balance,
                     ),
                 )
+                # Collapse only this machine's samples: imported rows stay
+                # immutable so re-importing a file is a no-op.
                 rows = connection.execute(
                     """
                     SELECT sample_id, used_percent, credits_balance, resets_at, plan_type
                     FROM rate_limit_samples
                     WHERE provider = ? AND limit_id = ? AND window_minutes = ?
+                      AND origin IS NULL
                     ORDER BY sampled_at_ms DESC, sample_id DESC
                     LIMIT 3
                     """,
@@ -322,7 +349,7 @@ class CodexUsageStore:
                 rows = connection.execute(
                     """
                     SELECT limit_id, sampled_at_ms, used_percent, window_minutes,
-                           resets_at, plan_type, credits_balance
+                           resets_at, plan_type, credits_balance, origin
                     FROM rate_limit_samples
                     WHERE provider = ? AND day >= ? AND day <= ?
                       AND window_minutes >= ?
@@ -355,6 +382,101 @@ class CodexUsageStore:
                 return day_from_number(int(row[0])), day_from_number(int(row[1]))
 
             return self._read_with_recovery(read)
+
+    def export_rate_limit_samples(self) -> tuple[tuple[UsageProvider, CodexRateLimitSample], ...]:
+        """Return every stored sample of every window, local and imported."""
+
+        placeholders = ", ".join("?" for _ in KNOWN_USAGE_PROVIDERS)
+        with self._lock:
+            def read() -> tuple[tuple[UsageProvider, CodexRateLimitSample], ...]:
+                connection = self._get_connection(create=False)
+                if connection is None:
+                    return ()
+                rows = connection.execute(
+                    f"""
+                    SELECT provider, limit_id, sampled_at_ms, used_percent, window_minutes,
+                           resets_at, plan_type, credits_balance, origin
+                    FROM rate_limit_samples
+                    WHERE provider IN ({placeholders})
+                    ORDER BY provider, sampled_at_ms ASC, sample_id ASC
+                    """,
+                    KNOWN_USAGE_PROVIDERS,
+                ).fetchall()
+                return tuple(
+                    (normalize_usage_provider(row["provider"]), self._rate_limit_from_row(row))
+                    for row in rows
+                )
+
+            return self._read_with_recovery(read)
+
+    def import_rate_limit_samples(
+        self,
+        samples: Iterable[tuple[UsageProvider, CodexRateLimitSample]],
+    ) -> SampleImportCounts:
+        """Insert samples taken on other machines in one transaction.
+
+        Quota is account-wide, so a sample is identified by its series and
+        millisecond timestamp: importing a file twice, or receiving this
+        machine's own samples back through another machine, adds nothing.
+        The ``day`` key is recomputed in this server's local calendar.
+        """
+
+        inserted_by_provider = {provider: 0 for provider in KNOWN_USAGE_PROVIDERS}
+        duplicates = 0
+        with self._lock:
+            connection = self._get_connection(create=True)
+            assert connection is not None
+            with connection:
+                for provider, sample in samples:
+                    normalized_provider = normalize_usage_provider(provider)
+                    sampled_at_ms = epoch_milliseconds(sample.sampled_at)
+                    existing = connection.execute(
+                        """
+                        SELECT 1 FROM rate_limit_samples
+                        WHERE provider = ? AND limit_id = ? AND window_minutes = ?
+                          AND sampled_at_ms = ?
+                        LIMIT 1
+                        """,
+                        (normalized_provider, sample.limit_id, sample.window_minutes, sampled_at_ms),
+                    ).fetchone()
+                    if existing is not None:
+                        duplicates += 1
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO rate_limit_samples(
+                            provider, day, limit_id, sampled_at_ms, used_percent,
+                            window_minutes, resets_at, plan_type, credits_balance, origin
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            normalized_provider,
+                            day_number(sample.sampled_at),
+                            sample.limit_id,
+                            sampled_at_ms,
+                            sample.used_percent,
+                            sample.window_minutes,
+                            epoch_seconds(sample.resets_at),
+                            sample.plan_type,
+                            sample.credits_balance,
+                            sample.origin or IMPORTED_ORIGIN_FALLBACK,
+                        ),
+                    )
+                    inserted_by_provider[normalized_provider] += 1
+        return SampleImportCounts(inserted_by_provider=inserted_by_provider, duplicates=duplicates)
+
+    def delete_imported_samples(self) -> int:
+        """Remove every imported sample, leaving this machine's own history intact."""
+
+        with self._lock:
+            connection = self._get_connection(create=False)
+            if connection is None:
+                return 0
+            with connection:
+                cursor = connection.execute(
+                    "DELETE FROM rate_limit_samples WHERE origin IS NOT NULL"
+                )
+            return max(0, cursor.rowcount)
 
     def diagnostics(self) -> dict[str, int | bool | str]:
         with self._lock:

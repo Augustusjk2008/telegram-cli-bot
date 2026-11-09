@@ -248,6 +248,49 @@ test("Usage 页面合并 Codex 与 Claude，切换后丢弃旧响应并在刷新
   expect(await screen.findByRole("heading", { name: "Codex 剩余额度趋势" })).toBeInTheDocument();
 });
 
+test("Usage 页面导入其他设备的额度样本后重载曲线，并可移除导入样本", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const getCodexStats = vi.spyOn(client, "getCodexUsageStats");
+  const importSamples = vi.spyOn(client, "importUsageSamples")
+    .mockRejectedValueOnce(new Error("不是 Orbit 额度样本导出文件"))
+    .mockResolvedValueOnce({
+      total: 4,
+      inserted: 3,
+      duplicates: 1,
+      invalid: 0,
+      insertedByProvider: { codex: 2, claude: 1 },
+    });
+  const exportSamples = vi.spyOn(client, "exportUsageSamples");
+  const deleteImported = vi.spyOn(client, "deleteImportedUsageSamples").mockResolvedValue({ deleted: 3 });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+  await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(1));
+
+  const file = new File(["{}"], "laptop.json", { type: "application/json" });
+  const input = screen.getByLabelText("选择额度样本文件");
+  await user.upload(input, file);
+  expect(await screen.findByText("不是 Orbit 额度样本导出文件")).toBeInTheDocument();
+  expect(getCodexStats).toHaveBeenCalledTimes(1);
+
+  await user.upload(input, file);
+  expect(await screen.findByText("已合并 3 条额度样本（Codex 2，Claude 1）；跳过 1 条已存在。")).toBeInTheDocument();
+  expect(importSamples).toHaveBeenLastCalledWith(file);
+  await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(2));
+
+  await user.click(screen.getByRole("button", { name: "导出样本" }));
+  expect(await screen.findByText("已导出 6 条额度样本：orbit-quota-samples-mock.json")).toBeInTheDocument();
+  expect(exportSamples).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole("button", { name: "移除导入" }));
+  expect(await screen.findByText("已移除 3 条导入的额度样本。")).toBeInTheDocument();
+  expect(deleteImported).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(3));
+  confirm.mockRestore();
+});
+
 test("全局配置保存全局提示词预设", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();

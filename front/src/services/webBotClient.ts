@@ -32,6 +32,8 @@ import type {
   ClaudeUsageConfig,
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
+  UsageSamplesExportResult,
+  UsageSamplesImportResult,
   BotExecutionConfigInput,
   CliParamsPayload,
   DeepSeekSelectionRequest,
@@ -222,6 +224,10 @@ export interface WebBotClient {
   getClaudeUsageConfig(): Promise<ClaudeUsageConfig>;
   updateClaudeUsageConfig(input: { enabled: boolean }): Promise<ClaudeUsageConfig>;
   getClaudeUsageStats(query?: ClaudeUsageStatsQuery): Promise<ClaudeUsageStats>;
+  /** Downloads every Codex and Claude quota sample as one portable file. */
+  exportUsageSamples(): Promise<UsageSamplesExportResult>;
+  importUsageSamples(file: File): Promise<UsageSamplesImportResult>;
+  deleteImportedUsageSamples(): Promise<{ deleted: number }>;
   listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;

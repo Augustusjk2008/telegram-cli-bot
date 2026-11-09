@@ -11,6 +11,7 @@ import type {
   CodexUsageConfig,
   CodexUsageProvider,
   CodexUsageStats,
+  UsageSamplesImportResult,
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { getErrorMessage } from "../../utils/errorMessage";
@@ -83,6 +84,21 @@ function defaultRange(today: string) {
     startDate: subtractDays(endDate, 29) || endDate,
     endDate,
   };
+}
+
+function formatImportNotice(result: UsageSamplesImportResult) {
+  const skipped = [
+    result.duplicates ? `${numberFormat.format(result.duplicates)} 条已存在` : "",
+    result.invalid ? `${numberFormat.format(result.invalid)} 条无效` : "",
+  ].filter(Boolean).join("，");
+  if (!result.inserted) {
+    return `没有新的额度样本${skipped ? `（${skipped}）` : ""}。`;
+  }
+  const inserted = USAGE_PROVIDERS
+    .filter((id) => result.insertedByProvider[id] > 0)
+    .map((id) => `${USAGE_PROVIDER_LABELS[id]} ${numberFormat.format(result.insertedByProvider[id])}`)
+    .join("，");
+  return `已合并 ${numberFormat.format(result.inserted)} 条额度样本（${inserted}）${skipped ? `；跳过 ${skipped}` : ""}。`;
 }
 
 function providerLabel(provider: CodexUsageProvider) {
@@ -889,6 +905,8 @@ function CodexRateLimitBucketChart({
   const hovered = hoverIndex === null ? null : orderedSamples[hoverIndex] ?? null;
   const hoveredPoint = hoverIndex === null ? null : points[hoverIndex] ?? null;
   const hoveredCredits = hovered ? creditsValue(hovered) : null;
+  // Name the source machine only once the curve merges imported samples.
+  const showSampleOrigin = orderedSamples.some((sample) => sample.origin);
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => {
     if (points.length < 2) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1104,6 +1122,9 @@ function CodexRateLimitBucketChart({
               <span><i className="codex-usage-swatch-time" />剩余时长 <b>{formatRemainingDuration(remainingDurationMs(hovered))}</b></span>
               {hoveredCredits !== null && hovered.windowMinutes === WEEKLY_WINDOW_MINUTES ? (
                 <span><i className="codex-usage-swatch-time" />Credits <b>{formatCreditsValue(hoveredCredits)}</b></span>
+              ) : null}
+              {showSampleOrigin ? (
+                <span className="codex-usage-rate-limit-tooltip-origin">来源 <b>{hovered.origin || "本机"}</b></span>
               ) : null}
             </div>
           ) : null}
@@ -1521,6 +1542,58 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
   // The server-local offset is shared by both providers, so keep the last one
   // visible while the next provider view loads.
   const [utcOffset, setUtcOffset] = useState("");
+  // Sample files cover both providers, so transfers live above the tabs and
+  // reload the visible view only when its data changed.
+  const [transferAction, setTransferAction] = useState<"export" | "import" | "delete" | null>(null);
+  const [transferNotice, setTransferNotice] = useState("");
+  const [transferError, setTransferError] = useState("");
+  const [samplesRevision, setSamplesRevision] = useState(0);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  const runTransfer = async (
+    action: "export" | "import" | "delete",
+    run: () => Promise<{ notice: string; changed: boolean }>,
+    failure: string,
+  ) => {
+    setTransferAction(action);
+    setTransferNotice("");
+    setTransferError("");
+    try {
+      const { notice, changed } = await run();
+      setTransferNotice(notice);
+      if (changed) setSamplesRevision((current) => current + 1);
+    } catch (nextError) {
+      setTransferError(getErrorMessage(nextError, failure));
+    } finally {
+      setTransferAction(null);
+    }
+  };
+
+  const exportSamples = () => runTransfer("export", async () => {
+    const result = await client.exportUsageSamples();
+    return {
+      notice: `已导出 ${numberFormat.format(result.sampleCount)} 条额度样本：${result.filename}`,
+      changed: false,
+    };
+  }, "导出额度样本失败");
+
+  const importSamples = (file: File) => runTransfer("import", async () => {
+    const result = await client.importUsageSamples(file);
+    return { notice: formatImportNotice(result), changed: result.inserted > 0 };
+  }, "导入额度样本失败");
+
+  const deleteImportedSamples = () => {
+    if (!window.confirm("移除所有从其他设备导入的额度样本？本机采集的样本不受影响。")) return;
+    void runTransfer("delete", async () => {
+      const { deleted } = await client.deleteImportedUsageSamples();
+      return {
+        notice: deleted
+          ? `已移除 ${numberFormat.format(deleted)} 条导入的额度样本。`
+          : "没有从其他设备导入的额度样本。",
+        changed: deleted > 0,
+      };
+    }, "移除导入的额度样本失败");
+  };
 
   const handleProviderTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const lastIndex = USAGE_PROVIDERS.length - 1;
@@ -1564,8 +1637,53 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
             })}
           </div>
         </div>
-        <span className="codex-usage-time-basis">服务端本地时间 {utcOffset || "—"}</span>
+        <div className="codex-usage-heading-actions">
+          <div className="codex-usage-transfer" role="group" aria-label="多设备额度样本">
+            <button
+              type="button"
+              disabled={transferAction !== null}
+              title="导出本机全部 Codex 与 Claude 额度样本，在其他设备导入后合并为同一条曲线"
+              onClick={() => void exportSamples()}
+            >
+              {transferAction === "export" ? "导出中…" : "导出样本"}
+            </button>
+            <button
+              type="button"
+              disabled={transferAction !== null}
+              title="导入其他设备导出的额度样本；已有样本会自动跳过"
+              onClick={() => importInputRef.current?.click()}
+            >
+              {transferAction === "import" ? "导入中…" : "导入样本"}
+            </button>
+            <button
+              type="button"
+              disabled={transferAction !== null}
+              title="移除所有从其他设备导入的额度样本，保留本机采集的样本"
+              onClick={deleteImportedSamples}
+            >
+              {transferAction === "delete" ? "移除中…" : "移除导入"}
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              aria-label="选择额度样本文件"
+              aria-hidden="true"
+              className="codex-usage-visually-hidden"
+              tabIndex={-1}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.currentTarget.value = "";
+                if (file) void importSamples(file);
+              }}
+            />
+          </div>
+          <span className="codex-usage-time-basis">服务端本地时间 {utcOffset || "—"}</span>
+        </div>
       </div>
+
+      {transferError ? <div role="alert" className="codex-usage-alert codex-usage-alert-error">{transferError}</div> : null}
+      {transferNotice ? <div role="status" className="codex-usage-alert codex-usage-alert-success">{transferNotice}</div> : null}
 
       <div
         role="tabpanel"
@@ -1574,7 +1692,7 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
         className="codex-usage-provider-panel"
       >
         <ProviderUsageView
-          key={`${provider}:${refreshKey}`}
+          key={`${provider}:${refreshKey}:${samplesRevision}`}
           client={client}
           provider={provider}
           onTimeBasisChange={setUtcOffset}

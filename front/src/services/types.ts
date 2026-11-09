@@ -409,6 +409,24 @@ export type CodexRateLimitSample = {
   resetsAt: string;
   planType: string | null;
   creditsBalance?: string | null;
+  /** Machine label of an imported sample; absent for samples taken on this host. */
+  origin?: string;
+};
+
+export type UsageSamplesExportResult = {
+  filename: string;
+  sampleCount: number;
+};
+
+export type UsageSamplesImportResult = {
+  total: number;
+  inserted: number;
+  duplicates: number;
+  invalid: number;
+  insertedByProvider: {
+    codex: number;
+    claude: number;
+  };
 };
 
 export type CodexUsageConfig = {

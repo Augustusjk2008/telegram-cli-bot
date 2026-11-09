@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import date
@@ -9,6 +10,7 @@ from typing import Any
 
 from aiohttp import web
 
+from bot.codex_usage.transfer import SampleDocumentError
 from bot.web.api_common import WebApiError
 from bot.web.auth_store import CAP_ADMIN_OPS
 from bot.web.routes.app_keys import SERVER_APP_KEY
@@ -114,6 +116,44 @@ async def get_claude_stats(request: web.Request) -> web.Response:
     return await _get_stats(request, "claude")
 
 
+async def export_samples(request: web.Request) -> web.Response:
+    server = _server(request)
+    await server._with_capability(request, CAP_ADMIN_OPS)
+    data = await server.codex_usage_service.export_samples()
+    # A long history serializes to megabytes; keep that off the event loop.
+    body = await asyncio.to_thread(
+        json.dumps,
+        {"ok": True, "data": data},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    response = web.Response(text=body, content_type="application/json")
+    response.enable_compression()
+    return response
+
+
+async def import_samples(request: web.Request) -> web.Response:
+    server = _server(request)
+    await server._with_capability(request, CAP_ADMIN_OPS)
+    body = await request.read()
+    try:
+        document = await asyncio.to_thread(json.loads, body)
+    except (RecursionError, ValueError) as exc:
+        raise WebApiError(400, "invalid_json", "导入文件不是合法 JSON") from exc
+    try:
+        data = await server.codex_usage_service.import_samples(document)
+    except SampleDocumentError as exc:
+        raise WebApiError(400, "invalid_usage_samples", str(exc)) from exc
+    return _json({"ok": True, "data": data})
+
+
+async def delete_imported_samples(request: web.Request) -> web.Response:
+    server = _server(request)
+    await server._with_capability(request, CAP_ADMIN_OPS)
+    data = await server.codex_usage_service.delete_imported_samples()
+    return _json({"ok": True, "data": data})
+
+
 def register(app: web.Application, server) -> None:
     app[SERVER_APP_KEY] = server
     app.router.add_get("/api/admin/codex-usage/config", get_config)
@@ -122,3 +162,6 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/admin/claude-usage/config", get_claude_config)
     app.router.add_patch("/api/admin/claude-usage/config", patch_claude_config)
     app.router.add_get("/api/admin/claude-usage/stats", get_claude_stats)
+    app.router.add_get("/api/admin/usage-samples/export", export_samples)
+    app.router.add_post("/api/admin/usage-samples/import", import_samples)
+    app.router.add_delete("/api/admin/usage-samples/imported", delete_imported_samples)

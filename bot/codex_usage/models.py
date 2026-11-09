@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import unicodedata
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Literal, cast
 
@@ -21,6 +22,38 @@ KNOWN_CODEX_RATE_LIMIT_IDS = (
 GENERAL_CLAUDE_RATE_LIMIT_ID = "claude"
 CLAUDE_OVERAGE_RATE_LIMIT_ID = "claude_overage_included"
 SQLITE_INT64_MAX = 2**63 - 1
+MAX_ORIGIN_LABEL_LENGTH = 64
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def epoch_milliseconds(value: datetime) -> int:
+    """Exact integer milliseconds; float timestamps could shift a sample by 1 ms."""
+
+    delta = value.astimezone(timezone.utc) - _EPOCH
+    return delta.days * 86_400_000 + delta.seconds * 1_000 + delta.microseconds // 1_000
+
+
+def epoch_seconds(value: datetime) -> int:
+    delta = value.astimezone(timezone.utc) - _EPOCH
+    return delta.days * 86_400 + delta.seconds
+
+
+def datetime_from_epoch_milliseconds(value: int) -> datetime:
+    return _EPOCH + timedelta(milliseconds=value)
+
+
+def datetime_from_epoch_seconds(value: int) -> datetime:
+    return _EPOCH + timedelta(seconds=value)
+
+
+def normalize_origin_label(value: object) -> str | None:
+    """Return a short printable machine label, or ``None`` for a local sample."""
+
+    if not isinstance(value, str):
+        return None
+    printable = "".join(char for char in value if unicodedata.category(char)[0] != "C")
+    label = " ".join(printable.split())[:MAX_ORIGIN_LABEL_LENGTH].rstrip()
+    return label or None
 
 
 def normalize_usage_provider(value: object) -> UsageProvider:
@@ -54,6 +87,8 @@ class CodexRateLimitSample:
     plan_type: str | None = None
     limit_id: str = GENERAL_CODEX_RATE_LIMIT_ID
     credits_balance: str | None = None
+    # Machine label of an imported sample; ``None`` marks a sample taken here.
+    origin: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("sampled_at", "resets_at"):
@@ -99,6 +134,9 @@ class CodexRateLimitSample:
         if not normalized_limit_id:
             raise ValueError("limit_id 不能为空")
         object.__setattr__(self, "limit_id", normalized_limit_id)
+        if self.origin is not None and not isinstance(self.origin, str):
+            raise ValueError("origin 必须是字符串或空值")
+        object.__setattr__(self, "origin", normalize_origin_label(self.origin))
 
 
 @dataclass(frozen=True, slots=True)

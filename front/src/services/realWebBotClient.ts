@@ -109,6 +109,8 @@ import type {
   ClaudeUsageConfig,
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
+  UsageSamplesExportResult,
+  UsageSamplesImportResult,
   CliParamsPayload,
   DeepSeekModelOption,
   DeepSeekProviderOption,
@@ -1602,6 +1604,24 @@ type RawCodexRateLimitSample = {
   resets_at?: unknown;
   plan_type?: unknown;
   credits_balance?: unknown;
+  origin?: unknown;
+};
+
+type RawUsageSamplesExport = {
+  filename?: unknown;
+  sample_count?: unknown;
+  document?: unknown;
+};
+
+type RawUsageSamplesImport = {
+  total?: unknown;
+  inserted?: unknown;
+  duplicates?: unknown;
+  invalid?: unknown;
+  inserted_by_provider?: {
+    codex?: unknown;
+    claude?: unknown;
+  };
 };
 
 type RawCodexUsageConfig = {
@@ -4047,6 +4067,7 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
   if (!limitId) {
     return null;
   }
+  const origin = typeof raw.origin === "string" ? raw.origin.trim() : "";
   return {
     limitId,
     sampledAt,
@@ -4055,8 +4076,30 @@ function mapCodexRateLimitSample(raw: RawCodexRateLimitSample): CodexRateLimitSa
     resetsAt,
     planType,
     ...(creditsBalance ? { creditsBalance } : {}),
+    ...(origin ? { origin } : {}),
   };
 }
+
+function countValue(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function mapUsageSamplesImport(raw: RawUsageSamplesImport): UsageSamplesImportResult {
+  return {
+    total: countValue(raw.total),
+    inserted: countValue(raw.inserted),
+    duplicates: countValue(raw.duplicates),
+    invalid: countValue(raw.invalid),
+    insertedByProvider: {
+      codex: countValue(raw.inserted_by_provider?.codex),
+      claude: countValue(raw.inserted_by_provider?.claude),
+    },
+  };
+}
+
+// Stay under the host's 25 MiB request limit, whose plain-text 413 reply
+// would otherwise surface as an unreadable response.
+const MAX_USAGE_SAMPLES_IMPORT_BYTES = 24 * 1024 * 1024;
 
 function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
   return {
@@ -5342,6 +5385,47 @@ export class RealWebBotClient implements WebBotClient {
       `/api/admin/claude-usage/stats${query ? `?${query}` : ""}`,
     );
     return mapCodexUsageStats(data);
+  }
+
+  async exportUsageSamples(): Promise<UsageSamplesExportResult> {
+    const data = await this.requestJson<RawUsageSamplesExport>("/api/admin/usage-samples/export");
+    if (!data.document || typeof data.document !== "object") {
+      throw new Error("服务返回的额度样本内容无效");
+    }
+    const filename = typeof data.filename === "string" && data.filename.trim()
+      ? data.filename.trim()
+      : "orbit-quota-samples.json";
+    const blob = new Blob([JSON.stringify(data.document)], { type: "application/json" });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(downloadUrl);
+    return { filename, sampleCount: countValue(data.sample_count) };
+  }
+
+  async importUsageSamples(file: File): Promise<UsageSamplesImportResult> {
+    if (file.size > MAX_USAGE_SAMPLES_IMPORT_BYTES) {
+      throw new Error("额度样本文件超过 24 MB，无法导入");
+    }
+    const data = await this.requestJson<RawUsageSamplesImport>("/api/admin/usage-samples/import", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: await file.text(),
+    });
+    return mapUsageSamplesImport(data);
+  }
+
+  async deleteImportedUsageSamples(): Promise<{ deleted: number }> {
+    const data = await this.requestJson<{ deleted?: unknown }>("/api/admin/usage-samples/imported", {
+      method: "DELETE",
+    });
+    return { deleted: countValue(data.deleted) };
   }
 
   async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {

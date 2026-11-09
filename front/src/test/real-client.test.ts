@@ -657,6 +657,7 @@ describe("RealWebBotClient", () => {
           resets_at: "2026-08-18T08:01:25+08:00",
           plan_type: "pro",
           credits_balance: "1234.50",
+          origin: "laptop",
         },
         {
           limit_id: "codex",
@@ -664,6 +665,7 @@ describe("RealWebBotClient", () => {
           used_percent: 100,
           window_minutes: 60,
           resets_at: "1970-01-01T00:00:00Z",
+          origin: null,
         },
         { sampled_at: "invalid", used_percent: 8, window_minutes: 60, resets_at: "2026-08-18T08:01:25+08:00" },
         { sampled_at: "2026-08-11T13:01:00+08:00", used_percent: -1, window_minutes: 60, resets_at: "2026-08-18T08:01:25+08:00" },
@@ -688,6 +690,7 @@ describe("RealWebBotClient", () => {
         resetsAt: "2026-08-18T08:01:25+08:00",
         planType: "pro",
         creditsBalance: "1234.50",
+        origin: "laptop",
       },
       {
         limitId: "codex",
@@ -698,6 +701,53 @@ describe("RealWebBotClient", () => {
         planType: null,
       },
     ]);
+  });
+
+  test("exports the sample document itself and imports files as raw JSON", async () => {
+    const sampleDocument = { format: "orbit-quota-samples", version: 1, source: "laptop", samples: [] };
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      filename: "orbit-quota-samples-laptop.json",
+      sample_count: 0,
+      document: sampleDocument,
+    }));
+    const originalObjectUrls = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+    const createObjectURL = vi.fn((_blob: Blob) => "blob:usage-samples");
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    try {
+      const client = new RealWebBotClient();
+      await expect(client.exportUsageSamples()).resolves.toEqual({
+        filename: "orbit-quota-samples-laptop.json",
+        sampleCount: 0,
+      });
+      // The saved file must be importable on another machine, so it holds
+      // the document rather than the API envelope.
+      expect(JSON.parse(await createObjectURL.mock.calls[0][0].text())).toEqual(sampleDocument);
+      expect(click).toHaveBeenCalledTimes(1);
+
+      fetchMock.mockResolvedValueOnce(jsonOk({
+        total: 4,
+        inserted: 3,
+        duplicates: 1,
+        invalid: 0,
+        inserted_by_provider: { codex: 2, claude: 1 },
+      }));
+      const fileText = JSON.stringify(sampleDocument);
+      await expect(client.importUsageSamples(new File([fileText], "laptop.json"))).resolves.toEqual({
+        total: 4,
+        inserted: 3,
+        duplicates: 1,
+        invalid: 0,
+        insertedByProvider: { codex: 2, claude: 1 },
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith("/api/admin/usage-samples/import", expect.objectContaining({
+        method: "POST",
+        body: fileText,
+      }));
+    } finally {
+      click.mockRestore();
+      Object.assign(URL, originalObjectUrls);
+    }
   });
 
   test("omits cluster task output only when requested", async () => {

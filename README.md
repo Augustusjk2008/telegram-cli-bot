@@ -468,6 +468,8 @@ Pi runtime 和持久化 session 按 Bot、共享用户、Agent 和 conversation 
 
 Claude 额度与 Codex 共用 Usage 页面，可在页内切换查看；Claude 采集开关独立，同样默认关闭，与 Codex 共用数据库但数据隔离。它记录普通 Claude CLI 进程每轮 stream-json 输出中的最后一条 `rate_limit_event`，包括 5 小时、每周和含超额的每周窗口，并展示每周趋势。套餐类型来自 `claude auth status --json`，只保留登录方式、API Provider 和订阅类型。没有 stream-json 输出的轮次、API Key 或 Bedrock/Vertex 登录，以及自定义 `ANTHROPIC_BASE_URL`，都不会被记录。
 
+多台机器登录同一账号时，可以合并额度曲线：在 Usage 页面点击“导出样本”，把本机保存的全部 Codex 与 Claude 额度样本下载为一个 JSON 文件，再到另一台机器点击“导入样本”，即可合并到同一条曲线。样本按额度窗口和毫秒级采样时间识别，重复导入同一文件，或本机样本经其他机器导回，都不会产生重复点。导入的样本保留采样机器的标签（优先 `TCB_NODE_ID`，否则为主机名），并显示在曲线悬浮提示中；“移除导入”只删除导入的样本，不影响本机采集的数据。不同账号的额度百分比无法合并，请只导入同一账号机器导出的文件。
+
 </details>
 
 <details>

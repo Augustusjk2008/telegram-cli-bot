@@ -78,6 +78,8 @@ import type {
   ClaudeUsageConfig,
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
+  UsageSamplesExportResult,
+  UsageSamplesImportResult,
   CliType,
   CliParamsPayload,
   DeepSeekModelOption,
@@ -6585,6 +6587,51 @@ export class MockWebBotClient implements WebBotClient {
       result.rateLimitSamples = result.rateLimitSamples.filter((sample) => inRange(sample.sampledAt.slice(0, 10)));
     }
     return result;
+  }
+
+  async exportUsageSamples(): Promise<UsageSamplesExportResult> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权导出额度样本", { status: 403, code: "forbidden" });
+    }
+    return {
+      filename: "orbit-quota-samples-mock.json",
+      sampleCount: this.codexUsageStats.rateLimitSamples.length + this.claudeUsageStats.rateLimitSamples.length,
+    };
+  }
+
+  async importUsageSamples(file: File): Promise<UsageSamplesImportResult> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权导入额度样本", { status: 403, code: "forbidden" });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      throw new WebApiClientError("导入文件不是合法 JSON", { status: 400, code: "invalid_json" });
+    }
+    const payload = parsed as { format?: unknown; samples?: unknown } | null;
+    if (!payload || payload.format !== "orbit-quota-samples" || !Array.isArray(payload.samples)) {
+      throw new WebApiClientError("不是 Orbit 额度样本导出文件", { status: 400, code: "invalid_usage_samples" });
+    }
+    const insertedByProvider = { codex: 0, claude: 0 };
+    for (const sample of payload.samples as { provider?: unknown }[]) {
+      if (sample?.provider === "codex" || sample?.provider === "claude") insertedByProvider[sample.provider] += 1;
+    }
+    const inserted = insertedByProvider.codex + insertedByProvider.claude;
+    return {
+      total: payload.samples.length,
+      inserted,
+      duplicates: 0,
+      invalid: payload.samples.length - inserted,
+      insertedByProvider,
+    };
+  }
+
+  async deleteImportedUsageSamples(): Promise<{ deleted: number }> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权移除额度样本", { status: 403, code: "forbidden" });
+    }
+    return { deleted: 0 };
   }
 
   async updateGitProxySettings(address: string): Promise<GitProxySettings> {
