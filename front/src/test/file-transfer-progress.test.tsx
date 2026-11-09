@@ -49,6 +49,22 @@ test("mobile files screen shows upload progress, blocks another upload and cance
   expect(list).not.toHaveBeenCalled();
 });
 
+test("asks for Chinese confirmation before uploading a file larger than 20MB", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: "C:\\workspace", entries: [] });
+  const upload = vi.spyOn(client, "uploadFile").mockResolvedValue(undefined);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<FilesScreen botAlias="main" client={client} />);
+  await waitFor(() => expect(screen.getByLabelText("上传文件")).toBeEnabled());
+
+  const file = new File(["x"], "large.bin");
+  Object.defineProperty(file, "size", { configurable: true, value: 20 * 1024 * 1024 + 1 });
+  fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
+
+  expect(confirm).toHaveBeenCalledWith("文件“large.bin”大于 20MB，是否继续上传？");
+  expect(upload).not.toHaveBeenCalled();
+});
+
 test("desktop status bar shows progress bars for file-tree downloads and uploads", async () => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "listFiles").mockResolvedValue({

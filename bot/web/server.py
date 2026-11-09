@@ -5605,7 +5605,7 @@ class WebApiServer:
     def _build_app(self) -> web.Application:
         app = web.Application(
             middlewares=[cors_middleware, diag_slow_request_middleware, error_middleware, self._update_maintenance_middleware(), remote_routes.middleware(self)],
-            client_max_size=25 * 1024 * 1024,
+            client_max_size=0,
         )
         self._register_app_routes(app)
         immutable_assets = self._load_vite_immutable_assets()
@@ -5618,7 +5618,7 @@ class WebApiServer:
             mount_paths.append(public_mount_path)
         for mount_path in mount_paths:
             subapp = web.Application(
-                client_max_size=25 * 1024 * 1024,
+                client_max_size=0,
             )
             self._register_app_routes(subapp)
             self._register_static_routes(subapp, immutable_assets=immutable_assets)

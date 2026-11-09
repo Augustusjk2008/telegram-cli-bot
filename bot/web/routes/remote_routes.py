@@ -20,7 +20,7 @@ from bot.web.auth_store import (
     CAP_TERMINAL_EXEC, CAP_VIEW_FILE_TREE, CAP_WRITE_FILES,
 )
 from bot.web.files_service import (
-    UPLOAD_MAX_FILE_SIZE_BYTES, is_remote_chat_attachment_path,
+    is_remote_chat_attachment_path,
     resolve_chat_attachment_path, sanitize_uploaded_filename,
 )
 
@@ -155,8 +155,6 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         filename = sanitize_uploaded_filename(field.filename or "")
         data = bytearray()
         while chunk := await field.read_chunk(size=64 * 1024):
-            if len(data) + len(chunk) > UPLOAD_MAX_FILE_SIZE_BYTES:
-                raise WebApiError(413, "file_too_large", "上传文件不能超过 20MB")
             data.extend(chunk)
         if not data:
             raise WebApiError(400, "empty_file", "文件内容不能为空")

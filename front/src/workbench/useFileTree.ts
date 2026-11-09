@@ -3,6 +3,7 @@ import type { FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadP
 import { joinRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage, isAbortError } from "../utils/errorMessage";
+import { confirmLargeFileUploads } from "../utils/fileUploadConfirmation";
 import { WORKBENCH_EXPANDED_PATH_RESTORE_LIMIT, WORKBENCH_HIGHLIGHT_DURATION_MS } from "./workbenchTypes";
 
 export type FileTreeNode = {
@@ -705,6 +706,9 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     }
     if (uploadAbortControllerRef.current) {
       throw new Error(FILE_TREE_UPLOAD_BUSY_MESSAGE);
+    }
+    if (!confirmLargeFileUploads(files)) {
+      return false;
     }
     const controller = new AbortController();
     uploadAbortControllerRef.current = controller;

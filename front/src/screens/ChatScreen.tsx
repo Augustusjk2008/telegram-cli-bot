@@ -74,6 +74,7 @@ import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import { copyText } from "../utils/clipboard";
 import { isAbortError } from "../utils/errorMessage";
+import { confirmLargeFileUploads } from "../utils/fileUploadConfirmation";
 import {
   getFilePreviewStatusText,
   isFilePreviewFullyLoaded,
@@ -4171,6 +4172,9 @@ export function ChatScreen({
       return;
     }
     if (attachmentUploadAbortControllerRef.current) {
+      return;
+    }
+    if (!confirmLargeFileUploads(files)) {
       return;
     }
     setError("");

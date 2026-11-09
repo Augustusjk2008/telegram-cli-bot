@@ -19,7 +19,7 @@ DEFAULT_MESSAGES: Dict[str, Any] = {
         "error": "❌ 终止进程时出错: {error}",
     },
     "upload": {
-        "file_too_large": "❌ 文件太大，请发送小于 20MB 的文件",
+        "file_too_large": "❌ 文件上传失败",
     },
     "shell": {
         "usage": "用法: /exec <命令>",

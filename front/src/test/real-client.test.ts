@@ -169,10 +169,10 @@ describe("RealWebBotClient", () => {
     const client = new RealWebBotClient();
     const file = new File(["x"], "large.bin");
 
-    const tooLarge = client.uploadChatAttachment("main", file);
+    const apiFailure = client.uploadChatAttachment("main", file);
     expect(FakeUploadXhr.instances[0].url).toBe("/api/bots/main/chat/attachments");
-    FakeUploadXhr.instances[0].respond(413, { ok: false, error: { code: "file_too_large", message: "上传文件不能超过 20MB" } });
-    await expect(tooLarge).rejects.toMatchObject({ status: 413, code: "file_too_large", message: "上传文件不能超过 20MB" });
+    FakeUploadXhr.instances[0].respond(413, { ok: false, error: { code: "upload_failed", message: "文件上传失败" } });
+    await expect(apiFailure).rejects.toMatchObject({ status: 413, code: "upload_failed", message: "文件上传失败" });
 
     const proxyFailure = client.uploadFile("main", file);
     FakeUploadXhr.instances[1].respond(502, "<html>Bad Gateway</html>", "text/html");

@@ -256,16 +256,24 @@ async def test_remote_upload_uses_current_remote_directory_and_preserves_bytes(t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload,status", [(b"", 400), (b"123456789", 413)])
-async def test_remote_upload_rejects_empty_and_oversized_files_before_writing(tmp_path, monkeypatch, payload, status):
+@pytest.mark.parametrize("payload_size,status", [(0, 400), (20 * 1024 * 1024 + 1, 200)])
+async def test_remote_upload_accepts_files_over_20mb(tmp_path, monkeypatch, payload_size, status):
     server, _auth = _server(tmp_path, monkeypatch)
     connection = Mock()
+    payload = b"x" * payload_size
+    connection.upload_file.return_value = {"size": len(payload)}
     monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: Mock(get=Mock(return_value=connection)))
-    monkeypatch.setattr(remote_routes, "UPLOAD_MAX_FILE_SIZE_BYTES", 8)
     async with TestClient(TestServer(server._build_app())) as client:
         response = await client.post("/api/bots/main/files/upload", data=_upload_form("a.bin", payload))
         assert response.status == status
-    connection.upload_file.assert_not_called()
+    if status == 200:
+        connection.upload_file.assert_called_once()
+        uploaded_target, uploaded_payload = connection.upload_file.call_args.args
+        assert uploaded_target == CONFIG["root"] + "/a.bin"
+        assert uploaded_payload == payload
+        assert connection.upload_file.call_args.kwargs == {"root": CONFIG["root"]}
+    else:
+        connection.upload_file.assert_not_called()
 
 
 @pytest.mark.asyncio

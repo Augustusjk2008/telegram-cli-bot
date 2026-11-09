@@ -34,6 +34,7 @@ import { isAbortError } from "../utils/errorMessage";
 import { isAbsolutePathInput } from "../utils/pathInput";
 import { deletePathWithReadonlyConfirmation } from "../utils/deletePath";
 import { formatTransferDetail } from "../utils/transferProgress";
+import { confirmLargeFileUpload } from "../utils/fileUploadConfirmation";
 import { useLanguageServerStatus } from "../workbench/useLanguageServerStatus";
 
 type Props = {
@@ -705,6 +706,9 @@ export function FilesScreen({
 
   const handleUploadEntry = async (file: File) => {
     if (!canMutateFiles || uploadAbortControllerRef.current) {
+      return;
+    }
+    if (!confirmLargeFileUpload(file)) {
       return;
     }
     const controller = new AbortController();

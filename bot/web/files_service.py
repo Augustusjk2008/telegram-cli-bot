@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from bot.manager import MultiBotManager
-from bot.messages import msg
 from bot.models import BotProfile, UserSession
 from bot.runtime_paths import get_chat_attachments_dir
 from bot.web import workspace_index_service
@@ -25,7 +24,6 @@ _WINDOWS_DRIVES_VIRTUAL_ROOT = "::windows-drives::"
 _WINDOWS_DRIVES_DISPLAY_ROOT = "盘符列表"
 _WINDOWS_DRIVE_ROOT_RE = re.compile(r"^[A-Za-z]:[\\/]*$")
 _WINDOWS_STYLE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-UPLOAD_MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 _RASTER_IMAGE_CONTENT_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -35,7 +33,7 @@ _RASTER_IMAGE_CONTENT_TYPES = {
 }
 
 
-async def _write_limited_chunks(target_path: str | Path, chunks: AsyncIterator[bytes], *, replace_existing: bool) -> int:
+async def _write_chunks(target_path: str | Path, chunks: AsyncIterator[bytes], *, replace_existing: bool) -> int:
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     total = 0
@@ -47,8 +45,6 @@ async def _write_limited_chunks(target_path: str | Path, chunks: AsyncIterator[b
                 if not chunk:
                     continue
                 total += len(chunk)
-                if total > UPLOAD_MAX_FILE_SIZE_BYTES:
-                    _raise(413, "file_too_large", msg("upload", "file_too_large"))
                 handle.write(chunk)
         if total <= 0:
             _raise(400, "empty_file", "文件内容不能为空")
@@ -871,9 +867,6 @@ def save_chat_attachment(manager: MultiBotManager, alias: str, user_id: int, fil
     profile = ensure_file_browser_supported(manager, alias)
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
-    if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
-        _raise(400, "file_too_large", msg("upload", "file_too_large"))
-
     attachment_dir = build_chat_attachment_dir(alias, user_id, profile=profile)
     os.makedirs(attachment_dir, exist_ok=True)
     file_path, stored_filename = resolve_unique_upload_path(attachment_dir, filename)
@@ -897,7 +890,7 @@ async def save_chat_attachment_from_chunks(
     attachment_dir = build_chat_attachment_dir(alias, user_id, profile=profile)
     os.makedirs(attachment_dir, exist_ok=True)
     file_path, stored_filename = resolve_unique_upload_path(attachment_dir, filename)
-    size = await _write_limited_chunks(file_path, chunks, replace_existing=False)
+    size = await _write_chunks(file_path, chunks, replace_existing=False)
     return {
         "filename": stored_filename,
         "saved_path": file_path,
@@ -946,9 +939,6 @@ def save_uploaded_file(
     ensure_file_browser_supported(manager, alias)
     if not data:
         _raise(400, "empty_file", "文件内容不能为空")
-    if len(data) > UPLOAD_MAX_FILE_SIZE_BYTES:
-        _raise(400, "file_too_large", msg("upload", "file_too_large"))
-
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
     file_path = resolve_safe_write_path(browser_dir, filename, allow_external_paths=allow_external_paths)
@@ -975,7 +965,7 @@ async def save_uploaded_file_from_chunks(
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
     file_path = resolve_safe_write_path(browser_dir, filename, allow_external_paths=allow_external_paths)
-    size = await _write_limited_chunks(file_path, chunks, replace_existing=True)
+    size = await _write_chunks(file_path, chunks, replace_existing=True)
     invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {
         "filename": filename,
