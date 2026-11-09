@@ -1,0 +1,905 @@
+/*
+ * Admin Center → 升级: version overview, the current job and offline packages as glass islands,
+ * plus the apply confirmation. The islands sit inside .admin-content, so fields and switches inherit
+ * the Orbit look from admin-center.css; the dialog is portalled to <body> and relies on the global
+ * orbit-dialog / orbit-btn primitives. Everything here reads theme variables only.
+ */
+
+/* --------------------------------------------------------------- tones */
+
+.update-head-icon,
+.update-job {
+  --update-tone: var(--accent);
+  --update-tone-soft: var(--accent-soft);
+  --update-tone-ring: var(--accent-outline);
+}
+
+:is(.update-head-icon, .update-job)[data-tone="info"] {
+  --update-tone: var(--status-info);
+  --update-tone-soft: var(--status-info-bg);
+  --update-tone-ring: color-mix(in srgb, var(--status-info) 26%, transparent);
+}
+
+:is(.update-head-icon, .update-job)[data-tone="success"] {
+  --update-tone: var(--status-success);
+  --update-tone-soft: var(--status-success-bg);
+  --update-tone-ring: color-mix(in srgb, var(--status-success) 26%, transparent);
+}
+
+:is(.update-head-icon, .update-job)[data-tone="warning"] {
+  --update-tone: var(--status-warning);
+  --update-tone-soft: var(--status-warning-bg);
+  --update-tone-ring: color-mix(in srgb, var(--status-warning) 28%, transparent);
+}
+
+:is(.update-head-icon, .update-job)[data-tone="danger"] {
+  --update-tone: var(--status-danger);
+  --update-tone-soft: var(--status-danger-bg);
+  --update-tone-ring: color-mix(in srgb, var(--status-danger) 28%, transparent);
+}
+
+:is(.update-head-icon, .update-job)[data-tone="neutral"] {
+  --update-tone: var(--muted);
+  --update-tone-soft: var(--fill-pressed);
+  --update-tone-ring: var(--hairline-strong);
+}
+
+/* ------------------------------------------------------------- islands */
+
+.update-island {
+  container: update-island / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.update-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  min-width: 0;
+}
+
+.update-head-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-card);
+  background: var(--update-tone-soft);
+  color: var(--update-tone);
+  box-shadow: inset 0 0 0 1px var(--update-tone-ring);
+  transition: background-color 200ms var(--ease-out), color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+.update-head-copy {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.update-head-copy h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.update-head-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.update-head > .orbit-chip {
+  flex: none;
+  margin-left: auto;
+}
+
+.update-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.update-dot[data-running] {
+  animation: var(--breathe-animation);
+}
+
+/* ------------------------------------------------------------ callouts */
+
+.update-callout-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-callout-body > p {
+  margin: 0;
+}
+
+.update-callout-body > * + * {
+  margin-top: 6px;
+}
+
+.update-callout-title {
+  font-weight: 600;
+}
+
+.update-callout:has(> .orbit-btn) {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.update-callout > .orbit-btn {
+  flex: none;
+  margin-left: auto;
+}
+
+.update-code {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  color: var(--text);
+  font-family: var(--code-font-family);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------- version route */
+
+.update-versions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.update-versions-arrow {
+  align-self: center;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.update-versions[data-pending] .update-versions-arrow {
+  color: var(--accent);
+  opacity: 1;
+  filter: drop-shadow(0 0 calc(var(--glow-strength) * 6px) color-mix(in srgb, var(--accent) 70%, transparent));
+}
+
+.update-version {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  transition: border-color 200ms var(--ease-out), background-color 200ms var(--ease-out);
+}
+
+.update-version dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.update-version dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.update-version-value {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.update-version-meta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.update-version-meta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-chip);
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.update-version-meta a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.update-version-meta a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.update-version[data-emphasis] {
+  border-color: var(--accent-outline);
+  background:
+    radial-gradient(120% 120% at 100% 0%, color-mix(in srgb, var(--accent) calc(var(--glow-strength) * 14%), transparent), transparent 70%),
+    var(--accent-soft);
+}
+
+.update-version[data-emphasis] .update-version-value {
+  color: var(--accent);
+}
+
+.update-version[data-empty] .update-version-value {
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+/* ---------------------------------------------- launcher, notes, setting */
+
+.update-launcher {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.update-launcher > svg {
+  margin-top: 1px;
+  color: var(--status-success);
+}
+
+.update-launcher-copy {
+  min-width: 0;
+}
+
+.update-launcher-copy p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.update-launcher-reason {
+  font-size: 12px;
+}
+
+.update-notes {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+}
+
+.update-notes > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-radius: inherit;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+  transition: background-color 140ms var(--ease-out);
+}
+
+.update-notes > summary::-webkit-details-marker {
+  display: none;
+}
+
+.update-notes > summary:hover {
+  background: var(--fill-hover);
+}
+
+.update-notes > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.update-notes[open] > summary {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.update-notes-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: rotate 160ms var(--ease-out);
+}
+
+.update-notes[open] .update-notes-chevron {
+  rotate: 90deg;
+}
+
+.update-notes-body {
+  max-height: 280px;
+  padding: 2px 14px 14px 34px;
+  overflow-y: auto;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+}
+
+.update-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+}
+
+.update-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.update-setting-row:has(> input:disabled) {
+  cursor: default;
+}
+
+.update-setting-hint,
+.update-inline-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.update-setting-hint {
+  color: var(--muted);
+}
+
+.update-inline-error {
+  color: var(--status-danger);
+}
+
+/* -------------------------------------------------------------- footer */
+
+.update-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.update-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------------------- job */
+
+/* A faint wash in the phase color; a running job also gets the workbench's running glow and sweep. */
+.orbit-island.update-job {
+  background:
+    radial-gradient(110% 90% at 100% 0%, color-mix(in srgb, var(--update-tone) 9%, transparent), transparent 60%),
+    var(--island-bg-strong);
+  transition: border-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+:root[data-material-glass="none"] .orbit-island.update-job {
+  background:
+    radial-gradient(110% 90% at 100% 0%, color-mix(in srgb, var(--update-tone) 9%, transparent), transparent 60%),
+    var(--island-solid);
+}
+
+.update-job[data-running] {
+  border-color: color-mix(in srgb, var(--glow-color) 38%, var(--hairline));
+  box-shadow:
+    var(--shadow-island),
+    inset 0 1px 0 var(--rim-light),
+    0 0 calc(var(--glow-strength) * 28px) -6px color-mix(in srgb, var(--glow-color) calc(var(--glow-strength) * 60%), transparent);
+}
+
+/* Keep the streak on the straight part of the top edge. */
+.update-job > .orbit-sweep {
+  inset: 0 var(--radius-panel) auto;
+}
+
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.update-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.update-progress-message {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-progress-percent {
+  flex: none;
+  margin-left: auto;
+  color: var(--update-tone);
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--fill-pressed);
+}
+
+.update-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  overflow: hidden;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--update-tone) 62%, transparent), var(--update-tone));
+  box-shadow: 0 0 calc(var(--glow-strength) * 12px) color-mix(in srgb, var(--update-tone) 55%, transparent);
+  transition: width 320ms var(--ease-out);
+}
+
+/* Runtime sheen: switched off with glow "none" and reduced motion through the shared variable. */
+.update-job[data-running] .update-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, #ffffff 38%, transparent), transparent);
+  transform: translateX(-100%);
+  animation: var(--runtime-sheen-animation);
+}
+
+.update-progress-bytes,
+.update-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-note {
+  font-size: 12.5px;
+}
+
+.update-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.update-facts > div {
+  display: contents;
+}
+
+.update-facts dt {
+  color: var(--muted);
+}
+
+.update-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-family: var(--code-font-family);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- offline */
+
+.update-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.update-field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.update-label {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.update-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--code-font-family);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.update-muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.update-packages {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  list-style: none;
+}
+
+.update-package {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.update-package + .update-package {
+  border-top: 1px solid var(--hairline);
+}
+
+.update-package-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.update-package[data-invalid] .update-package-icon {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.update-package-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-package-name {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.update-package[data-invalid] .update-package-name {
+  color: var(--muted);
+}
+
+.update-package-meta {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-package-meta > * + *::before {
+  content: "·";
+  margin-inline: 6px;
+  color: var(--hairline-strong);
+}
+
+.update-package-error {
+  margin: 0;
+  color: var(--status-danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.update-package > :is(.orbit-btn, .orbit-chip) {
+  flex: none;
+}
+
+.update-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 18px 16px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-card);
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.update-empty > strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* A field and its button share one row and wrap the button under the field when narrow. */
+.update-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-inline > :first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.update-inline > :is(.orbit-field, .update-file, .orbit-btn) {
+  height: 36px;
+}
+
+.update-inline > .orbit-btn {
+  flex: none;
+  margin-left: auto;
+}
+
+.update-file {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-glass);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 140ms var(--ease-out), box-shadow 180ms var(--ease-out), color 140ms var(--ease-out);
+}
+
+/* Transparent but hit-testable, so a click opens the picker and a dropped file lands natively. */
+.update-file > input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.update-file:not([data-disabled]):hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.update-file:has(> input:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: var(--focus-halo);
+}
+
+.update-file[data-selected] {
+  border-style: solid;
+  color: var(--text);
+}
+
+.update-file[data-selected] > svg {
+  color: var(--accent);
+}
+
+.update-file[data-disabled] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.update-file[data-disabled] > input {
+  cursor: default;
+}
+
+.update-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-file-hint {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--code-font-family);
+  font-size: 11.5px;
+}
+
+/* -------------------------------------------------------------- dialog */
+
+.update-confirm {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 88dvh;
+  overflow: hidden;
+}
+
+.update-confirm-head {
+  flex-wrap: nowrap;
+  padding: 18px 20px 4px;
+}
+
+.update-confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 20px 18px;
+  overflow-y: auto;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.update-confirm-body > p {
+  margin: 0;
+}
+
+.update-confirm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  list-style: none;
+}
+
+.update-confirm-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.update-confirm-list svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--accent);
+}
+
+.update-confirm-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--hairline);
+}
+
+@media (min-width: 640px) {
+  .update-confirm {
+    width: min(480px, calc(100vw - 32px));
+  }
+
+  .update-confirm-foot {
+    padding-bottom: 12px;
+  }
+}
+
+/* ------------------------------------------------------ narrow islands */
+
+@container update-island (max-width: 520px) {
+  /* A chip that wraps under the title lines up with the title text, not the far edge. */
+  .update-head > .orbit-chip {
+    margin-left: 44px;
+  }
+
+  .update-version {
+    padding: 12px;
+  }
+
+  .update-version-value {
+    font-size: 19px;
+  }
+
+  /* The action sits beside the name so the meta line keeps the full width instead of wrapping. */
+  .update-package {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 2px 10px;
+  }
+
+  .update-package-icon {
+    grid-row: span 2;
+  }
+
+  .update-package-body {
+    display: contents;
+  }
+
+  .update-package-name {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .update-package > :is(.orbit-btn, .orbit-chip) {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .update-package-meta,
+  .update-package-error {
+    grid-column: 2 / -1;
+  }
+}
+
+@container update-island (max-width: 300px) {
+  .update-versions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .update-versions-arrow {
+    justify-self: center;
+    rotate: 90deg;
+  }
+}

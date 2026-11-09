@@ -73,7 +73,7 @@ for (const width of [1280, 390]) {
     await test.info().attach(`update-confirm-${width}`, { path: screenshot, contentType: "image/png" });
     await dialog.getByRole("button", { name: "确认应用并重启服务" }).click();
     await expect(panel.getByText(/正在确认后台状态/)).toBeVisible();
-    await expect(panel.getByText(/任务阶段: 升级成功/)).toHaveCount(0);
+    await expect(panel.getByTestId("update-job")).not.toContainText("升级成功");
     disconnected = false;
     status.job.phase = "awaiting_health";
     status.revision = status.job.revision = 7;

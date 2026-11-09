@@ -46,6 +46,10 @@ async function openUpdates(client: MockWebBotClient, user: ReturnType<typeof use
   return view;
 }
 
+function updateVersion(term: "当前运行版本" | "目标版本") {
+  return screen.getByText(term, { selector: "dt" }).nextElementSibling;
+}
+
 test("升级任务重新进入后恢复，离线列表失败仍保留在线任务", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
@@ -108,14 +112,15 @@ test("应用断线只查询后台，成功必须匹配运行版本", async () =>
   await user.click(screen.getByRole("button", { name: "确认应用并重启服务" }));
   expect(apply).toHaveBeenCalledWith("persisted-job", 10);
   await screen.findByText(/正在确认后台状态/);
-  expect(screen.queryByText(/任务阶段: 升级成功/)).not.toBeInTheDocument();
+  expect(screen.getByTestId("update-job")).not.toHaveTextContent("升级成功");
   const reportedSuccess = { ...ready, revision: 11, job: { ...ready.job!, revision: 11, phase: "succeeded" as const } };
   current.mockResolvedValue(reportedSuccess);
   await user.click(screen.getByRole("button", { name: "查询后台状态" }));
-  expect(await screen.findByText(/任务阶段: 正在核对运行版本/)).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByTestId("update-job")).toHaveTextContent("正在核对运行版本"));
+  expect(screen.getByTestId("update-job")).not.toHaveTextContent("升级成功");
   current.mockResolvedValue({ ...reportedSuccess, currentVersion: "2.0.0" });
   await user.click(screen.getByRole("button", { name: "查询后台状态" }));
-  expect(await screen.findByText(/任务阶段: 升级成功/)).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByTestId("update-job")).toHaveTextContent("升级成功"));
   expect(screen.getByText("新版本已运行，当前页面仍是旧版本界面，请刷新页面以加载新版本。")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新页面" })).toBeEnabled();
   expect(apply).toHaveBeenCalledTimes(1);
@@ -191,7 +196,7 @@ test("检查成功后仅在有新版本时允许准备更新", async () => {
   const current = vi.spyOn(client, "getCurrentUpdateJob").mockResolvedValue({ ...ready, job: null, lastCheck, latestVersion: "1.0.0", updateAvailable: false });
   await openUpdates(client, user);
   expect(await screen.findByText("已是最新版本（v1.0.0）")).toBeInTheDocument();
-  expect(screen.getByText("目标版本: 暂无")).toBeInTheDocument();
+  expect(updateVersion("目标版本")).toHaveTextContent("暂无");
   expect(screen.getByRole("button", { name: "准备更新" })).toBeDisabled();
   current.mockResolvedValue({ ...ready, job: null, lastCheck });
   await user.click(screen.getByRole("button", { name: "查询后台状态" }));
@@ -200,7 +205,7 @@ test("检查成功后仅在有新版本时允许准备更新", async () => {
   // A prepared offline package newer than the last online check is not "up to date".
   current.mockResolvedValue({ ...ready, lastCheck, latestVersion: "1.0.0", updateAvailable: false });
   await user.click(screen.getByRole("button", { name: "查询后台状态" }));
-  expect(await screen.findByText("目标版本: 2.0.0")).toBeInTheDocument();
+  await waitFor(() => expect(updateVersion("目标版本")).toHaveTextContent("v2.0.0"));
   expect(screen.queryByText(/已是最新版本/)).not.toBeInTheDocument();
 });
 

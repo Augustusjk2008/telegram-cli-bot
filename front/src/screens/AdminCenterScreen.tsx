@@ -2781,11 +2781,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           />
         ) : null}
 
-        {activeTab === "updates" ? (
-          <div className="admin-embed">
-            <AppUpdatePanel client={client} refreshKey={updateRefreshKey} />
-          </div>
-        ) : null}
+        {activeTab === "updates" ? <AppUpdatePanel client={client} refreshKey={updateRefreshKey} /> : null}
 
         {!loading && activeTab === "cli-errors" ? (
           <section aria-labelledby="cli-error-stats-title" className="admin-island orbit-island orbit-island--reading space-y-4">
