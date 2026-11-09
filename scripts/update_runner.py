@@ -335,14 +335,15 @@ def _send_tree_signal(child, *, force: bool = False) -> None:
             os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe"
         )
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [taskkill, "/PID", str(child.pid), "/T", "/F"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
-            return
+            if result.returncode == 0:
+                return
         except OSError:
             pass
     else:
