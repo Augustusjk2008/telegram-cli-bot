@@ -497,8 +497,11 @@ function Write-PortableScripts {
     Write-Step "写入绿色版启动脚本"
     $startPs1 = @'
 param(
-    [ValidateSet("default", "web")]
-    [string]$Mode = "default"
+    [ValidateSet("default", "web", "service")]
+    [string]$Mode = "default",
+
+    [Parameter(DontShow = $true)]
+    [switch]$ServiceProcess
 )
 
 $ErrorActionPreference = "Stop"
@@ -513,7 +516,7 @@ function Test-IsAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-if (-not (Test-IsAdministrator) -and $env:TCB_PORTABLE_SKIP_ELEVATE -ne "1") {
+if (-not (Test-IsAdministrator) -and -not $ServiceProcess -and $env:TCB_PORTABLE_SKIP_ELEVATE -ne "1") {
     Write-Host "[INFO] Requesting administrator privileges..."
     $arguments = @(
         "-NoProfile",
@@ -720,6 +723,15 @@ if ($migrationExitCode -ne 0) {
 }
 Ensure-PortableWebToken -Path $envPath
 Import-DotEnv -Path $envPath
+if ($Mode -eq "service") {
+    $env:CLI_BRIDGE_SERVICE_MODE = "1"
+    if ([string]::IsNullOrWhiteSpace($env:WEB_AUTO_OPEN_BROWSER)) {
+        $env:WEB_AUTO_OPEN_BROWSER = "false"
+    }
+    if ([string]::IsNullOrWhiteSpace($env:TCB_KEEP_AWAKE)) {
+        $env:TCB_KEEP_AWAKE = "false"
+    }
+}
 Set-PortablePiShellPath -PackageRoot $scriptDir
 Set-PortableRuntimeEnv -PackageRoot $scriptDir
 

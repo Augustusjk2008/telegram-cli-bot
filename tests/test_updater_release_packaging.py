@@ -201,6 +201,11 @@ def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_
     assert "WriteAllText((Join-Path $PackageRoot \"install.ps1\"), $installPs1, $script:Utf8BomEncoding)" in portable
     assert "WriteAllText((Join-Path $PackageRoot \".env\"), $content, $script:Utf8NoBomEncoding)" in portable
     assert "WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)" in portable
+    assert '[ValidateSet("default", "web", "service")]' in portable
+    assert "[switch]$ServiceProcess" in portable
+    assert '$env:CLI_BRIDGE_SERVICE_MODE = "1"' in portable
+    assert '$env:WEB_AUTO_OPEN_BROWSER = "false"' in portable
+    assert '$env:TCB_KEEP_AWAKE = "false"' in portable
     assert 'print(f"{key}={value}")' not in portable
     assert "print(f'{key}={value}')" in portable
 
