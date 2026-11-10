@@ -385,14 +385,20 @@ test("Usage 页面导入其他设备的额度样本后重载曲线，并可移�
   expect(importSamples).toHaveBeenLastCalledWith(file);
   await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(2));
 
+  // The export follows the displayed query range rather than the whole history.
+  await user.click(screen.getByRole("button", { name: "今天" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "导出样本" })).toHaveAttribute(
+    "title",
+    expect.stringContaining("2026-07-26 至 2026-07-26"),
+  ));
   await user.click(screen.getByRole("button", { name: "导出样本" }));
-  expect(await screen.findByText("已导出 6 条额度样本：orbit-quota-samples-mock.json")).toBeInTheDocument();
-  expect(exportSamples).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText("已导出 2026-07-26 至 2026-07-26 的 2 条额度样本：orbit-quota-samples-mock.json")).toBeInTheDocument();
+  expect(exportSamples).toHaveBeenCalledExactlyOnceWith({ startDate: "2026-07-26", endDate: "2026-07-26" });
 
   await user.click(screen.getByRole("button", { name: "移除导入" }));
   expect(await screen.findByText("已移除 3 条导入的额度样本。")).toBeInTheDocument();
   expect(deleteImported).toHaveBeenCalledTimes(1);
-  await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(getCodexStats).toHaveBeenCalledTimes(4));
   confirm.mockRestore();
 });
 

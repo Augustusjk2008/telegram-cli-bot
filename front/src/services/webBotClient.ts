@@ -29,6 +29,7 @@ import type {
   CodexUsageConfig,
   CodexUsageStats,
   CodexUsageStatsQuery,
+  CodexUsageStatsRange,
   ClaudeUsageConfig,
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
@@ -231,8 +232,8 @@ export interface WebBotClient {
   getClaudeUsageConfig(): Promise<ClaudeUsageConfig>;
   updateClaudeUsageConfig(input: { enabled: boolean }): Promise<ClaudeUsageConfig>;
   getClaudeUsageStats(query?: ClaudeUsageStatsQuery): Promise<ClaudeUsageStats>;
-  /** Downloads every Codex and Claude quota sample as one portable file. */
-  exportUsageSamples(): Promise<UsageSamplesExportResult>;
+  /** Downloads the Codex and Claude quota samples of a queried date range as one portable file. */
+  exportUsageSamples(range: CodexUsageStatsRange): Promise<UsageSamplesExportResult>;
   importUsageSamples(file: File): Promise<UsageSamplesImportResult>;
   deleteImportedUsageSamples(): Promise<{ deleted: number }>;
   listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]>;

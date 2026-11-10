@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -23,11 +23,12 @@ from bot.web.server import error_middleware
 
 WEEK_MINUTES = 7 * 24 * 60
 RESETS_AT = datetime(2026, 11, 10, 9, tzinfo=timezone.utc)
+NOVEMBER = {"start_date": date(2026, 11, 1), "end_date": date(2026, 11, 30)}
 
 
-def _sample(minute: int, used_percent: float, *, millisecond: int = 0) -> CodexRateLimitSample:
+def _sample(minute: int, used_percent: float, *, millisecond: int = 0, day: int = 5) -> CodexRateLimitSample:
     return CodexRateLimitSample(
-        sampled_at=datetime(2026, 11, 5, 9, minute, 0, millisecond * 1_000, tzinfo=timezone.utc),
+        sampled_at=datetime(2026, 11, day, 9, minute, 0, millisecond * 1_000, tzinfo=timezone.utc),
         used_percent=used_percent,
         window_minutes=WEEK_MINUTES,
         resets_at=RESETS_AT,
@@ -53,6 +54,7 @@ async def test_samples_merge_across_machines_without_duplicates(tmp_path):
     await desktop.record_rate_limit_sample(_sample(10, 15))
 
     exported = await laptop.export_samples(
+        **NOVEMBER,
         origin_label="laptop",
         now=datetime(2026, 11, 9, 4, 5, 6, tzinfo=timezone.utc),
     )
@@ -79,7 +81,7 @@ async def test_samples_merge_across_machines_without_duplicates(tmp_path):
     again = await desktop.import_samples(exported["document"])
     assert (again["inserted"], again["duplicates"]) == (0, 4)
 
-    returned = await desktop.export_samples(origin_label="desktop")
+    returned = await desktop.export_samples(**NOVEMBER, origin_label="desktop")
     result = await laptop.import_samples(returned["document"])
     assert (result["inserted"], result["duplicates"]) == (2, 4)
     assert _curve(laptop) == [
@@ -95,6 +97,26 @@ async def test_samples_merge_across_machines_without_duplicates(tmp_path):
     assert _curve(desktop, "claude") == []
     laptop.close()
     desktop.close()
+
+
+@pytest.mark.asyncio
+async def test_export_keeps_only_samples_of_the_queried_days(tmp_path):
+    service = CodexUsageService(db_path=tmp_path / "usage.sqlite3")
+    for day, provider in ((2, "codex"), (5, "codex"), (5, "claude"), (8, "claude")):
+        await service.record_rate_limit_sample(_sample(0, day, day=day), provider)
+    # Days use the server-local calendar, like the chart query.
+    queried_day = _sample(0, 0).sampled_at.astimezone().date()
+
+    exported = await service.export_samples(start_date=queried_day, end_date=queried_day, origin_label="laptop")
+
+    assert exported["sample_count"] == 2
+    assert [(item["provider"], item["used_percent"]) for item in exported["document"]["samples"]] == [
+        ("claude", 5),
+        ("codex", 5),
+    ]
+    with pytest.raises(ValueError):
+        await service.export_samples(start_date=date(2026, 11, 6), end_date=date(2026, 11, 5))
+    service.close()
 
 
 def test_import_rejects_foreign_files_and_skips_malformed_rows():
@@ -181,13 +203,26 @@ async def test_sample_transfer_routes_require_admin_and_report_bad_files(tmp_pat
         assert [item["origin"] for item in (await response.json())["data"]["rate_limit_samples"]] == ["laptop"]
 
         response = await client.get("/api/admin/usage-samples/export")
+        assert response.status == 400
+        assert (await response.json())["error"]["code"] == "invalid_date_range"
+
+        response = await client.get(
+            "/api/admin/usage-samples/export",
+            params={"start_date": "2026-11-01", "end_date": "2026-11-30"},
+        )
         exported = (await response.json())["data"]
         assert exported["filename"].endswith(".json")
         assert [item["origin"] for item in exported["document"]["samples"]] == ["laptop"]
 
+        response = await client.get(
+            "/api/admin/usage-samples/export",
+            params={"start_date": "2026-12-01", "end_date": "2026-12-31"},
+        )
+        assert (await response.json())["data"]["sample_count"] == 0
+
         response = await client.delete("/api/admin/usage-samples/imported")
         assert (await response.json())["data"] == {"deleted": 1}
 
-    assert server._with_capability.await_count == 6
+    assert server._with_capability.await_count == 8
     assert all(call.args[1] == CAP_ADMIN_OPS for call in server._with_capability.await_args_list)
     service.close()

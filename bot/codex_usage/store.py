@@ -383,9 +383,21 @@ class CodexUsageStore:
 
             return self._read_with_recovery(read)
 
-    def export_rate_limit_samples(self) -> tuple[tuple[UsageProvider, CodexRateLimitSample], ...]:
-        """Return every stored sample of every window, local and imported."""
+    def export_rate_limit_samples(
+        self,
+        start_day: DayLike,
+        end_day: DayLike,
+    ) -> tuple[tuple[UsageProvider, CodexRateLimitSample], ...]:
+        """Return samples of every window, local and imported, taken in a day range.
 
+        Days use the same local-calendar key as ``query``, so an export covers
+        the samples of the queried range.
+        """
+
+        start = day_number(start_day)
+        end = day_number(end_day)
+        if start > end:
+            raise ValueError("起始日期不能晚于结束日期")
         placeholders = ", ".join("?" for _ in KNOWN_USAGE_PROVIDERS)
         with self._lock:
             def read() -> tuple[tuple[UsageProvider, CodexRateLimitSample], ...]:
@@ -397,10 +409,10 @@ class CodexUsageStore:
                     SELECT provider, limit_id, sampled_at_ms, used_percent, window_minutes,
                            resets_at, plan_type, credits_balance, origin
                     FROM rate_limit_samples
-                    WHERE provider IN ({placeholders})
+                    WHERE provider IN ({placeholders}) AND day >= ? AND day <= ?
                     ORDER BY provider, sampled_at_ms ASC, sample_id ASC
                     """,
-                    KNOWN_USAGE_PROVIDERS,
+                    (*KNOWN_USAGE_PROVIDERS, start, end),
                 ).fetchall()
                 return tuple(
                     (normalize_usage_provider(row["provider"]), self._rate_limit_from_row(row))

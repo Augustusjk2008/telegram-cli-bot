@@ -119,7 +119,11 @@ async def get_claude_stats(request: web.Request) -> web.Response:
 async def export_samples(request: web.Request) -> web.Response:
     server = _server(request)
     await server._with_capability(request, CAP_ADMIN_OPS)
-    data = await server.codex_usage_service.export_samples()
+    # Exports follow the queried range instead of dumping the whole history.
+    start_date, end_date = _date_range(request)
+    if start_date is None or end_date is None:
+        raise WebApiError(400, "invalid_date_range", "导出额度样本必须提供开始日期和结束日期")
+    data = await server.codex_usage_service.export_samples(start_date=start_date, end_date=end_date)
     # A long history serializes to megabytes; keep that off the event loop.
     body = await asyncio.to_thread(
         json.dumps,

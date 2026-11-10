@@ -11,6 +11,7 @@ import type {
   CodexUsageConfig,
   CodexUsageProvider,
   CodexUsageStats,
+  CodexUsageStatsRange,
   UsageSamplesImportResult,
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
@@ -38,6 +39,8 @@ type ProviderUsageViewProps = {
   client: WebBotClient;
   provider: UsagePanelProvider;
   onTimeBasisChange: (utcOffset: string) => void;
+  /** Reports the range of the displayed stats, or null until a query succeeds. */
+  onQueryRangeChange: (range: CodexUsageStatsRange | null) => void;
 };
 
 const numberFormat = new Intl.NumberFormat("zh-CN");
@@ -1273,7 +1276,7 @@ function CodexRateLimitChart({
 
 // Keyed by provider and refresh generation, so each switch starts from a clean
 // state and late responses for the previous provider land on an unmounted view.
-function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsageViewProps) {
+function ProviderUsageView({ client, provider, onTimeBasisChange, onQueryRangeChange }: ProviderUsageViewProps) {
   const displayName = USAGE_PROVIDER_LABELS[provider];
   const [config, setConfig] = useState<CodexUsageConfig | null>(null);
   const [stats, setStats] = useState<CodexUsageStats | null>(null);
@@ -1329,6 +1332,15 @@ function ProviderUsageView({ client, provider, onTimeBasisChange }: ProviderUsag
   useEffect(() => {
     if (utcOffset) onTimeBasisChange(utcOffset);
   }, [onTimeBasisChange, utcOffset]);
+
+  // Exports follow the range of the displayed curve, not unapplied date edits.
+  const queriedStartDate = stats?.range.startDate || "";
+  const queriedEndDate = stats?.range.endDate || "";
+  useEffect(() => {
+    onQueryRangeChange(queriedStartDate && queriedEndDate
+      ? { startDate: queriedStartDate, endDate: queriedEndDate }
+      : null);
+  }, [onQueryRangeChange, queriedEndDate, queriedStartDate]);
 
   const runStatsQuery = async (
     nextStartDate = startDate,
@@ -1548,6 +1560,7 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
   const [transferNotice, setTransferNotice] = useState("");
   const [transferError, setTransferError] = useState("");
   const [samplesRevision, setSamplesRevision] = useState(0);
+  const [exportRange, setExportRange] = useState<CodexUsageStatsRange | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const runTransfer = async (
@@ -1569,10 +1582,10 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
     }
   };
 
-  const exportSamples = () => runTransfer("export", async () => {
-    const result = await client.exportUsageSamples();
+  const exportSamples = (range: CodexUsageStatsRange) => runTransfer("export", async () => {
+    const result = await client.exportUsageSamples(range);
     return {
-      notice: `已导出 ${numberFormat.format(result.sampleCount)} 条额度样本：${result.filename}`,
+      notice: `已导出 ${range.startDate} 至 ${range.endDate} 的 ${numberFormat.format(result.sampleCount)} 条额度样本：${result.filename}`,
       changed: false,
     };
   }, "导出额度样本失败");
@@ -1641,9 +1654,13 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
           <div className="codex-usage-transfer" role="group" aria-label="多设备额度样本">
             <button
               type="button"
-              disabled={transferAction !== null}
-              title="导出本机全部 Codex 与 Claude 额度样本，在其他设备导入后合并为同一条曲线"
-              onClick={() => void exportSamples()}
+              disabled={transferAction !== null || !exportRange}
+              title={exportRange
+                ? `导出当前查询范围（${exportRange.startDate} 至 ${exportRange.endDate}）内的 Codex 与 Claude 额度样本，在其他设备导入后合并为同一条曲线`
+                : "查询完成后可导出当前时间范围内的额度样本"}
+              onClick={() => {
+                if (exportRange) void exportSamples(exportRange);
+              }}
             >
               {transferAction === "export" ? "导出中…" : "导出样本"}
             </button>
@@ -1696,6 +1713,7 @@ export function UsagePanel({ client, provider, onProviderChange, refreshKey = 0 
           client={client}
           provider={provider}
           onTimeBasisChange={setUtcOffset}
+          onQueryRangeChange={setExportRange}
         />
       </div>
     </section>

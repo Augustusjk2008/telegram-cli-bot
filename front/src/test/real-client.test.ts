@@ -751,10 +751,14 @@ describe("RealWebBotClient", () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     try {
       const client = new RealWebBotClient();
-      await expect(client.exportUsageSamples()).resolves.toEqual({
+      await expect(client.exportUsageSamples({ startDate: "2026-11-01", endDate: "2026-11-30" })).resolves.toEqual({
         filename: "orbit-quota-samples-laptop.json",
         sampleCount: 0,
       });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/api/admin/usage-samples/export?start_date=2026-11-01&end_date=2026-11-30",
+        expect.objectContaining({ cache: "no-store" }),
+      );
       // The saved file must be importable on another machine, so it holds
       // the document rather than the API envelope.
       expect(JSON.parse(await createObjectURL.mock.calls[0][0].text())).toEqual(sampleDocument);

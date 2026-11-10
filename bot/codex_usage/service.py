@@ -438,14 +438,25 @@ class CodexUsageService:
     async def export_samples(
         self,
         *,
+        start_date: date,
+        end_date: date,
         origin_label: str | None = None,
         now: datetime | None = None,
     ) -> dict[str, Any]:
-        """Build a portable file of every stored Codex and Claude sample."""
+        """Build a portable file of the Codex and Claude samples in a queried date range.
 
+        Dates follow the server-local calendar used by ``query_stats``.
+        """
+
+        if start_date > end_date:
+            raise ValueError("开始日期不能晚于结束日期")
         source = normalize_origin_label(origin_label) or await asyncio.to_thread(local_origin_label)
         exported_at = now or datetime.now(timezone.utc)
-        samples = await asyncio.to_thread(self._store.export_rate_limit_samples)
+        samples = await asyncio.to_thread(
+            self._store.export_rate_limit_samples,
+            start_date,
+            end_date,
+        )
         document = await asyncio.to_thread(
             build_export_document,
             samples,

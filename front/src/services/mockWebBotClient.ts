@@ -75,6 +75,7 @@ import type {
   CodexUsageConfig,
   CodexUsageStats,
   CodexUsageStatsQuery,
+  CodexUsageStatsRange,
   ClaudeUsageConfig,
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
@@ -6625,13 +6626,17 @@ export class MockWebBotClient implements WebBotClient {
     return result;
   }
 
-  async exportUsageSamples(): Promise<UsageSamplesExportResult> {
+  async exportUsageSamples(range: CodexUsageStatsRange): Promise<UsageSamplesExportResult> {
     if (!this.hasAdminOps()) {
       throw new WebApiClientError("无权导出额度样本", { status: 403, code: "forbidden" });
     }
+    const samples = [...this.codexUsageStats.rateLimitSamples, ...this.claudeUsageStats.rateLimitSamples];
     return {
       filename: "orbit-quota-samples-mock.json",
-      sampleCount: this.codexUsageStats.rateLimitSamples.length + this.claudeUsageStats.rateLimitSamples.length,
+      sampleCount: samples.filter(({ sampledAt }) => {
+        const day = sampledAt.slice(0, 10);
+        return day >= range.startDate && day <= range.endDate;
+      }).length,
     };
   }
 

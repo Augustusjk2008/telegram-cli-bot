@@ -113,6 +113,7 @@ import type {
   CodexUsageProviderResolution,
   CodexUsageStats,
   CodexUsageStatsQuery,
+  CodexUsageStatsRange,
   CodexUsageTimeBasis,
   ClaudeUsageConfig,
   ClaudeUsageStats,
@@ -5545,8 +5546,9 @@ export class RealWebBotClient implements WebBotClient {
     return mapCodexUsageStats(data);
   }
 
-  async exportUsageSamples(): Promise<UsageSamplesExportResult> {
-    const data = await this.requestJson<RawUsageSamplesExport>("/api/admin/usage-samples/export");
+  async exportUsageSamples(range: CodexUsageStatsRange): Promise<UsageSamplesExportResult> {
+    const params = new URLSearchParams({ start_date: range.startDate, end_date: range.endDate });
+    const data = await this.requestJson<RawUsageSamplesExport>(`/api/admin/usage-samples/export?${params}`);
     if (!data.document || typeof data.document !== "object") {
       throw new Error("服务返回的额度样本内容无效");
     }
