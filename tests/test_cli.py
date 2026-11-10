@@ -277,6 +277,21 @@ class TestIncrementalCliParsers:
         assert parser.result().terminal_usage == final_usage
         assert len(parser.result().raw_tail.encode("utf-8")) <= 96
 
+    def test_claude_parser_reads_reported_context_windows(self):
+        parser = ClaudeJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+        parser.consume_line(json.dumps({
+            "type": "result",
+            "result": "done",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+            "modelUsage": {
+                "claude-fable-5-2": {"inputTokens": 1, "contextWindow": 1_000_000},
+                "claude-haiku-5-5": {"inputTokens": 1, "contextWindow": True},
+                "claude-sonnet-5-5": {"inputTokens": 1},
+            },
+        }))
+
+        assert parser.result().context_windows == {"claude-fable-5-2": 1_000_000}
+
     def test_codex_parser_keeps_final_text_and_bounded_raw_tail(self):
         parser = CodexJsonStreamParser(raw_tail_max_bytes=96, final_text_max_bytes=1024)
 

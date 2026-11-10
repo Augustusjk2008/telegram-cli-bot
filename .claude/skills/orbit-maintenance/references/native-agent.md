@@ -6,6 +6,7 @@
 - `UserSession` 跟踪工作目录、processing state、active subprocess、conversation id，以及 Codex、Claude、Antigravity、DeepSeek 和 native agent 的会话绑定。
 - 会话快照默认持久化到应用数据目录的 `sessions/session_store.sqlite3`；`session_store.json` 同时用于旧数据迁移、显式 JSON 后端和 SQLite 初始化失败后的回退。后端选择见 `bot/session_store.py`。
 - chat history 由 `bot/web/chat_store.py` 的 SQLite store 保存；conversation 保存 `native_session_id`、`native_session_meta`，turn 保存 `context_usage`，运行态 overlay 留在内存。
+- Claude CLI 的 `context_usage` 由 `bot/web/cli_context_usage.py` 按 transcript 最近 assistant usage 估算；窗口优先采用 `result.modelUsage[model].contextWindow`，turn 结束时按 Claude session 与模型记入内存（宿主重启后丢失）。未报告时按模型族回退：Fable/Mythos、Opus/Sonnet 4.6+、Haiku 5+ 为 1M，更早型号 200K，无法识别的模型 256K。
 - Pi 另外通过 `pi_session_store.py` 保存 `native-agent/pi_sessions.json`，包括 session metadata、workspace history head、线性索引和 turn 记录；修改绑定时同时检查 ChatStore、PiSessionStore 和内存 runtime。
 
 ## CLI 与原生链路

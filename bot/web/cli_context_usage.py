@@ -10,16 +10,29 @@ import time
 from decimal import Decimal, ROUND_HALF_UP
 from io import SEEK_END
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from bot.cli import normalize_cli_type, parse_antigravity_statusline_json
 from bot.web.native_history_locator import locate_claude_transcript, locate_codex_transcript
 from bot.runtime_paths import get_tcb_home_root
 
 _CODEX_CONTEXT_BASELINE_TOKENS = 12_000
+# Fallbacks used until Claude Code reports ``modelUsage[model].contextWindow``.
 _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 256_000
-_CLAUDE_OPUS_CONTEXT_WINDOW_TOKENS = 1_000_000
-_CLAUDE_OPUS_MODEL_RE = re.compile(r"(?:^|[-_/])opus(?:$|[-_/])")
+_CLAUDE_LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
+_CLAUDE_LEGACY_CONTEXT_WINDOW_TOKENS = 200_000
+_CLAUDE_FAMILY_MODEL_RE = re.compile(
+    r"(?:^|[-_/.])(?P<family>fable|mythos|opus|sonnet|haiku)"
+    r"(?:-(?P<major>\d{1,2})(?:-(?P<minor>\d{1,2}))?)?(?=$|[-_/.@:])"
+)
+_CLAUDE_LEGACY_NAMING_RE = re.compile(r"claude-(?:instant-)?\d(?:[-.]\d)?-(?:opus|sonnet|haiku)(?:$|[-_/.@:])")
+# First version of each family whose default window is 1M; Fable/Mythos are always 1M.
+_CLAUDE_LONG_CONTEXT_MIN_VERSION = {
+    "opus": (4, 6),
+    "sonnet": (4, 6),
+    "haiku": (5, 0),
+}
+_CLAUDE_REPORTED_WINDOW_SESSION_LIMIT = 256
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CLAUDE_TOKENS_RE = re.compile(
     r"(?:Tokens\s*:\s*)?(?P<used>\d+(?:\.\d+)?\s*[kKmM]?)\s*/\s*"
@@ -38,6 +51,8 @@ _CONTEXT_USAGE_CACHE: dict[_ContextCacheKey, dict[str, Any] | None] = {}
 _CONTEXT_USAGE_CACHE_ORDER: list[_ContextCacheKey] = []
 _CONTEXT_USAGE_CACHE_LIMIT = 128
 _TRANSCRIPT_STATE: dict[tuple[str, str, str], dict[str, Any]] = {}
+# Claude session id -> normalized model -> context window reported by Claude Code.
+_CLAUDE_REPORTED_WINDOWS: dict[str, dict[str, int]] = {}
 _TAIL_WINDOW_BYTES = 256 * 1024
 ANTIGRAVITY_STATUSLINE_TTL_SECONDS = 30.0
 _ANTIGRAVITY_STATUSLINE_ROOT_NAME = "antigravity-statusline"
@@ -49,6 +64,7 @@ def clear_context_usage_cache() -> None:
         _CONTEXT_USAGE_CACHE.clear()
         _CONTEXT_USAGE_CACHE_ORDER.clear()
         _TRANSCRIPT_STATE.clear()
+        _CLAUDE_REPORTED_WINDOWS.clear()
 
 
 def _antigravity_statusline_root() -> Path:
@@ -518,11 +534,67 @@ def _normalize_claude_model_name(model: str | None) -> str:
     return text
 
 
-def _lookup_claude_context_window(model: str | None) -> int | None:
+def _lookup_claude_context_window(model: str | None) -> int:
     normalized = _normalize_claude_model_name(model)
-    if normalized and _CLAUDE_OPUS_MODEL_RE.search(normalized):
-        return _CLAUDE_OPUS_CONTEXT_WINDOW_TOKENS
-    return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
+    if not normalized:
+        return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
+    if _CLAUDE_LEGACY_NAMING_RE.search(normalized):
+        return _CLAUDE_LEGACY_CONTEXT_WINDOW_TOKENS
+    match = _CLAUDE_FAMILY_MODEL_RE.search(normalized)
+    if match is None:
+        return _CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS
+    minimum = _CLAUDE_LONG_CONTEXT_MIN_VERSION.get(match.group("family"))
+    major = match.group("major")
+    # Unversioned aliases resolve to the current release of the family.
+    if minimum is None or major is None:
+        return _CLAUDE_LONG_CONTEXT_WINDOW_TOKENS
+    version = (int(major), int(match.group("minor") or 0))
+    if version >= minimum:
+        return _CLAUDE_LONG_CONTEXT_WINDOW_TOKENS
+    return _CLAUDE_LEGACY_CONTEXT_WINDOW_TOKENS
+
+
+def _invalidate_session_usage_locked(provider: str, session_id: str) -> None:
+    stale_keys = [key for key in _CONTEXT_USAGE_CACHE if key[0] == provider and key[1] == session_id]
+    for key in stale_keys:
+        _CONTEXT_USAGE_CACHE.pop(key, None)
+    if stale_keys:
+        stale = set(stale_keys)
+        _CONTEXT_USAGE_CACHE_ORDER[:] = [key for key in _CONTEXT_USAGE_CACHE_ORDER if key not in stale]
+    for key in [key for key in _TRANSCRIPT_STATE if key[0] == provider and key[1] == session_id]:
+        _TRANSCRIPT_STATE.pop(key, None)
+
+
+def record_claude_context_windows(session_id: str | None, windows: Mapping[str, Any] | None) -> None:
+    """Remember the per-model windows Claude Code reported for one session."""
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id or not isinstance(windows, Mapping):
+        return
+    reported: dict[str, int] = {}
+    for model, window in windows.items():
+        name = _normalize_claude_model_name(model)
+        if name and type(window) is int and window > 0:
+            reported[name] = window
+    if not reported:
+        return
+    with _CACHE_LOCK:
+        previous = _CLAUDE_REPORTED_WINDOWS.pop(normalized_session_id, {})
+        merged = {**previous, **reported}
+        _CLAUDE_REPORTED_WINDOWS[normalized_session_id] = merged
+        while len(_CLAUDE_REPORTED_WINDOWS) > _CLAUDE_REPORTED_WINDOW_SESSION_LIMIT:
+            _CLAUDE_REPORTED_WINDOWS.pop(next(iter(_CLAUDE_REPORTED_WINDOWS)))
+        if merged != previous:
+            _invalidate_session_usage_locked("claude", normalized_session_id)
+
+
+def _resolve_claude_context_window(session_id: str, model: str | None) -> int:
+    normalized = _normalize_claude_model_name(model)
+    if normalized:
+        with _CACHE_LOCK:
+            reported = (_CLAUDE_REPORTED_WINDOWS.get(session_id) or {}).get(normalized)
+        if reported:
+            return reported
+    return _lookup_claude_context_window(model)
 
 
 def _extract_claude_message_usage(line: str) -> tuple[int, str, dict[str, int]] | None:
@@ -583,7 +655,7 @@ def _build_claude_usage_estimate(
     token_breakdown: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     used_display = _format_tokens_claude(used_tokens)
-    context_window = _lookup_claude_context_window(model)
+    context_window = _resolve_claude_context_window(session_id, model)
     result = {
         "provider": "claude",
         "source": "claude_message_usage_estimate",
