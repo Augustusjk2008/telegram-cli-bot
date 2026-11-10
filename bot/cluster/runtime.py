@@ -3,19 +3,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from bot.cluster.config import MODEL_TIER_KEYS, ClusterExecutionSnapshot, resolve_cluster_execution
 from bot.models import BotProfile
-
-# A child that finishes this soon after the main agent ends its turn counts as
-# finishing together with it, so no completion notice wakes the main agent.
-CLUSTER_PARENT_WAKEUP_GRACE_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -83,6 +78,8 @@ class ClusterAgentTask:
     parent_generation: int = 0
     wakeup_pending: bool = False
     wakeup_sent: bool = False
+    # The main agent already read this terminal result, so no completion notice is needed.
+    result_observed: bool = False
 
     @property
     def execution_snapshot(self) -> ClusterExecutionSnapshot | None:
@@ -95,7 +92,6 @@ class ClusterParentState:
 
     generation: int = 0
     request_id: str = ""
-    finished_at: float | None = None
 
 
 @dataclass
@@ -158,12 +154,11 @@ def _model_tier(value: Any) -> str:
 
 
 class ClusterRuntime:
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self) -> None:
         self._runs: dict[str, ClusterRun] = {}
         # run_ids re-keyed in place by a team extend map to their live successor.
         self._run_aliases: dict[str, str] = {}
         self._parents: dict[str, ClusterParentState] = {}
-        self._clock = clock
 
     @staticmethod
     def _now_iso() -> str:
@@ -419,24 +414,23 @@ class ClusterRuntime:
         state.request_id = normalized_request_id
         return state.generation
 
-    def finish_parent_turn(self, main_conversation_id: str) -> None:
-        """Record that the main agent ended a turn; this starts the wakeup grace window."""
-        conversation_id = str(main_conversation_id or "").strip()
-        if not conversation_id:
+    def mark_results_observed(self, run_id: str, task_ids: Iterable[str]) -> None:
+        """Record terminal results the main agent has read; they no longer need a completion notice."""
+        run = self.get_run(run_id)
+        if run is None:
             return
-        self._parents.setdefault(conversation_id, ClusterParentState()).finished_at = self._clock()
-
-    def parent_turn_finished_recently(self, main_conversation_id: str) -> bool:
-        state = self._parents.get(str(main_conversation_id or "").strip())
-        if state is None or state.finished_at is None:
-            return False
-        return self._clock() - state.finished_at <= CLUSTER_PARENT_WAKEUP_GRACE_SECONDS
+        for task_id in task_ids:
+            task = run.tasks.get(str(task_id or "").strip())
+            if task is not None and task.status in {"completed", "failed", "cancelled"}:
+                task.result_observed = True
 
     def parent_wakeup_eligible(self, run: ClusterRun, task: ClusterAgentTask) -> bool:
+        """A finished child of the latest request wakes the main agent until its result is read."""
         conversation_id = str(run.main_conversation_id or "").strip()
         return bool(
             conversation_id
             and not task.wakeup_sent
+            and not task.result_observed
             and task.status in {"completed", "failed"}
             and str(task.parent_conversation_id or "").strip() == conversation_id
             and task.parent_generation == self.parent_generation(conversation_id)

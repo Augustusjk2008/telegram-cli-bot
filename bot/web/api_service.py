@@ -1553,16 +1553,15 @@ async def handle_cluster_mcp_tool(
             include_messages = payload.get("include_messages", payload.get("includeMessages", True)) is not False
             await _wait_for_cluster_tasks_if_requested(run_id, task_ids, _cluster_task_wait_seconds(payload))
             _CLUSTER_RUNTIME.adopt_unfinished_tasks(run_id, task_ids)
-            return {
-                "ok": True,
-                "data": _CLUSTER_RUNTIME.build_task_status(
-                    run_id,
-                    task_ids,
-                    include_output=include_output,
-                    include_messages=include_messages,
-                    message_limit=_cluster_task_message_limit(payload),
-                ),
-            }
+            status = _CLUSTER_RUNTIME.build_task_status(
+                run_id,
+                task_ids,
+                include_output=include_output,
+                include_messages=include_messages,
+                message_limit=_cluster_task_message_limit(payload),
+            )
+            _CLUSTER_RUNTIME.mark_results_observed(run_id, (item["task_id"] for item in status["tasks"]))
+            return {"ok": True, "data": status}
         if tool_name == "cancel_agent_task":
             _require_current_cluster_team(manager, run)
             task_id = str(payload.get("task_id", payload.get("taskId", "")) or "").strip()
@@ -1585,6 +1584,10 @@ async def handle_cluster_mcp_tool(
             )
             if uses_managed_cursor and result.get("messages"):
                 _CLUSTER_RUNTIME.mark_agent_messages_read(run_id, result.get("cursor", 0))
+            _CLUSTER_RUNTIME.mark_results_observed(
+                run_id,
+                (message["task_id"] for message in result.get("messages") or [] if message.get("kind") == "final"),
+            )
             return {"ok": True, "data": result}
         if tool_name != "ask_agent":
             _raise(404, "cluster_tool_not_found", "未知集群工具")
@@ -4490,24 +4493,14 @@ def _cluster_parent_wakeup_tasks(run: Any) -> list[Any]:
     return tasks
 
 
-def _cluster_parent_turn_active(manager: MultiBotManager, run: Any) -> bool:
-    try:
-        _profile, _agent, session = get_chat_session_for_alias(manager, run.bot_alias, run.user_id, "main")
-    except Exception:
-        return True
-    with session._lock:
-        return bool(session.is_processing or session._execution_id)
+def _queue_cluster_parent_wakeup(run: Any, task_id: str) -> bool:
+    """Queue a completion notice for a finished child, whenever it finished.
 
-
-def _queue_cluster_parent_wakeup(manager: MultiBotManager, run: Any, task_id: str) -> bool:
-    """Queue a completion notice only for a child that finished well after the main agent."""
+    Delivery waits until the main session is idle, so a child finishing during the
+    main turn is announced after that turn unless the main agent read its result first.
+    """
     task = run.tasks.get(str(task_id or ""))
     if task is None or not _CLUSTER_RUNTIME.parent_wakeup_eligible(run, task):
-        return False
-    if (
-        _CLUSTER_RUNTIME.parent_turn_finished_recently(run.main_conversation_id)
-        or _cluster_parent_turn_active(manager, run)
-    ):
         return False
     task.wakeup_pending = True
     run.pending_parent_wakeup_task_ids.add(task.task_id)
@@ -4522,10 +4515,10 @@ def _cluster_parent_wakeup_message(tasks: list[Any]) -> str:
         outcome, detail = ("completed", "result") if task.status == "completed" else ("failed", "error details")
         return (
             "[TCB cluster completion]\n"
-            f'Child agent "{role_name}" {outcome} after your last turn ended (task_id={task.task_id}).\n'
+            f'Child agent "{role_name}" {outcome} and you have not read its {detail} yet (task_id={task.task_id}).\n'
             f"Call poll_agent_tasks with task_ids={task_ids} to read its {detail}, then continue."
         )
-    lines = ["[TCB cluster completion]", "These child agents finished after your last turn ended:"]
+    lines = ["[TCB cluster completion]", "These child agents finished and you have not read their results yet:"]
     for task in tasks:
         role_name = str(task.role_name or task.agent_id or "child agent").strip()
         outcome = "completed" if task.status == "completed" else "failed"
@@ -4645,7 +4638,7 @@ def _schedule_cluster_parent_wakeup(
     if run is None:
         return
     if task_id:
-        _queue_cluster_parent_wakeup(manager, run, task_id)
+        _queue_cluster_parent_wakeup(run, task_id)
     if not run.pending_parent_wakeup_task_ids:
         return
     existing = run.parent_wakeup_task
@@ -4723,14 +4716,13 @@ async def _cancel_cluster_agent_task(
 
 
 def _finish_cluster_parent_turn(manager: MultiBotManager, run_id: str) -> None:
-    """Start the grace window after a main-agent turn, then retry deferred notices.
+    """Deliver completion notices deferred while a main-agent turn was running.
 
     The conversation may hold a newer run_id when configure_team rotated it mid-turn.
     """
     run = _CLUSTER_RUNTIME.get_run(str(run_id or "").strip())
     if run is None or not str(run.main_conversation_id or "").strip():
         return
-    _CLUSTER_RUNTIME.finish_parent_turn(run.main_conversation_id)
     for conversation_run in _CLUSTER_RUNTIME.conversation_runs(run.main_conversation_id):
         _schedule_cluster_parent_wakeup(manager, conversation_run.run_id)
 

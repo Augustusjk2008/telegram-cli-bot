@@ -7,7 +7,6 @@ import pytest
 
 from bot.cluster.config import BotClusterConfig
 from bot.cluster.runtime import (
-    CLUSTER_PARENT_WAKEUP_GRACE_SECONDS,
     AskAgentRequest,
     ClusterRunRequest,
     ClusterRuntime,
@@ -16,14 +15,14 @@ from bot.cluster.runtime import (
 from bot.models import AgentProfile, BotProfile, UserSession
 
 
-def _cluster_fixture(clock=None):
+def _cluster_fixture():
     profile = BotProfile(
         alias="main",
         working_dir=".",
         agents=[AgentProfile(id="worker", name="Worker")],
         cluster=BotClusterConfig(enabled=True, max_parallel_agents=1),
     )
-    runtime = ClusterRuntime(clock=clock) if clock is not None else ClusterRuntime()
+    runtime = ClusterRuntime()
     run_id = derive_cluster_run_id("conv_main", 1)
     run = runtime.ensure_run(
         ClusterRunRequest(
@@ -143,11 +142,13 @@ async def test_ask_agent_snapshots_parent_conversation_and_turn(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_completed_child_wakes_idle_parent_without_child_output(monkeypatch) -> None:
+async def test_child_finishing_right_after_parent_turn_wakes_parent_without_output(monkeypatch) -> None:
     import bot.web.api_service as api_service
 
     profile, runtime, run, session = _cluster_fixture()
     calls = _patch_parent(monkeypatch, api_service, profile, runtime, session)
+    # The main agent has just ended its turn, promising the user a completion notice.
+    api_service._finish_cluster_parent_turn(object(), run.run_id)
 
     task = _complete_task(runtime, run.run_id)
     api_service._schedule_cluster_parent_wakeup(object(), run.run_id, task.task_id)
@@ -169,7 +170,37 @@ async def test_completed_child_wakes_idle_parent_without_child_output(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_child_finishing_before_parent_turn_ends_never_wakes_parent(monkeypatch) -> None:
+async def test_unread_child_finishing_during_parent_turn_wakes_parent_after_turn(monkeypatch) -> None:
+    import bot.web.api_service as api_service
+
+    profile, runtime, run, session = _cluster_fixture()
+    calls = _patch_parent(monkeypatch, api_service, profile, runtime, session)
+
+    session.is_processing = True
+    task = _start_task(runtime, run.run_id)
+    # Seeing the child still running is not reading its result.
+    await api_service.handle_cluster_mcp_tool(
+        object(), run.run_id, "poll_agent_tasks", {"task_ids": [task.task_id]},
+    )
+    runtime.complete_agent_task(run.run_id, task.task_id, "done")
+    api_service._schedule_cluster_parent_wakeup(object(), run.run_id, task.task_id)
+    await _drain_wakeup(run)
+    assert calls == []
+    assert run.pending_parent_wakeup_task_ids == {task.task_id}
+
+    session.is_processing = False
+    api_service._finish_cluster_parent_turn(object(), run.run_id)
+    await _drain_wakeup(run)
+
+    assert len(calls) == 1
+    assert task.task_id in calls[0][0]
+    assert task.wakeup_sent is True
+    api_service._CLUSTER_RUN_CONTROLS.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["poll_agent_tasks", "wait_agent_messages"])
+async def test_child_result_read_during_parent_turn_does_not_wake_parent(monkeypatch, tool_name) -> None:
     import bot.web.api_service as api_service
 
     profile, runtime, run, session = _cluster_fixture()
@@ -178,38 +209,17 @@ async def test_child_finishing_before_parent_turn_ends_never_wakes_parent(monkey
     session.is_processing = True
     task = _complete_task(runtime, run.run_id)
     api_service._schedule_cluster_parent_wakeup(object(), run.run_id, task.task_id)
+    await _drain_wakeup(run)
+    payload = {"task_ids": [task.task_id]} if tool_name == "poll_agent_tasks" else {}
+    await api_service.handle_cluster_mcp_tool(object(), run.run_id, tool_name, payload)
     session.is_processing = False
     api_service._finish_cluster_parent_turn(object(), run.run_id)
     await _drain_wakeup(run)
 
     assert calls == []
     assert run.pending_parent_wakeup_task_ids == set()
+    assert task.wakeup_pending is False
     assert task.wakeup_sent is False
-    api_service._CLUSTER_RUN_CONTROLS.clear()
-
-
-@pytest.mark.asyncio
-async def test_child_finishing_within_grace_window_does_not_wake_parent(monkeypatch) -> None:
-    import bot.web.api_service as api_service
-
-    now = [1000.0]
-    profile, runtime, run, session = _cluster_fixture(clock=lambda: now[0])
-    calls = _patch_parent(monkeypatch, api_service, profile, runtime, session)
-    api_service._finish_cluster_parent_turn(object(), run.run_id)
-
-    now[0] += CLUSTER_PARENT_WAKEUP_GRACE_SECONDS
-    close_finish = _complete_task(runtime, run.run_id)
-    api_service._schedule_cluster_parent_wakeup(object(), run.run_id, close_finish.task_id)
-    assert run.parent_wakeup_task is None
-
-    now[0] += 1
-    late_finish = _complete_task(runtime, run.run_id)
-    api_service._schedule_cluster_parent_wakeup(object(), run.run_id, late_finish.task_id)
-    await _drain_wakeup(run)
-
-    assert len(calls) == 1
-    assert late_finish.task_id in calls[0][0]
-    assert close_finish.task_id not in calls[0][0]
     api_service._CLUSTER_RUN_CONTROLS.clear()
 
 
@@ -217,8 +227,7 @@ async def test_child_finishing_within_grace_window_does_not_wake_parent(monkeypa
 async def test_only_children_of_latest_request_wake_parent(monkeypatch) -> None:
     import bot.web.api_service as api_service
 
-    now = [1000.0]
-    profile, runtime, run, session = _cluster_fixture(clock=lambda: now[0])
+    profile, runtime, run, session = _cluster_fixture()
     calls = _patch_parent(monkeypatch, api_service, profile, runtime, session)
 
     runtime.begin_parent_request("conv_main", "exec_first")
@@ -237,7 +246,6 @@ async def test_only_children_of_latest_request_wake_parent(monkeypatch) -> None:
     )
     api_service._finish_cluster_parent_turn(object(), run.run_id)
 
-    now[0] += CLUSTER_PARENT_WAKEUP_GRACE_SECONDS + 30
     for task in (previous, checked_again):
         runtime.complete_agent_task(run.run_id, task.task_id, "done")
         api_service._schedule_cluster_parent_wakeup(object(), run.run_id, task.task_id)

@@ -52,7 +52,7 @@
 - `extend` 只占用空闲槽位、不改动已有分配，子任务运行中也允许；`ClusterRuntime.rekey_run()` 把同一个运行态对象（任务、消息游标、`_ClusterRunControl`）迁到新 `run_id`，旧 ID 仅作内部别名，供在途子任务继续上报。旧 ID 可读，`ask_agent`/`new_agent_session`/`configure_team` 返回 `cluster_run_changed`/`cluster_team_changed` 及当前 ID。`replace` 可能重新分配忙碌槽位，仍需等主会话子任务结束（`cluster_team_busy`）。
 - 每次工具调用必须显式传入当前 `run_id`；stdio MCP 和 Pi 适配层不缓存或自动切换 ID，只把本次工具参数通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，也不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
 - Cluster task、进度消息和后台任务仍是内存态，不跨宿主重启持久化。
-- 子任务结束后唤醒主会话的通知为英文，只列 task_id 并要求主 agent 用 `poll_agent_tasks(task_ids=...)` 读取结果，不内联子 agent 输出。只有晚于主 agent 结束的子任务才发通知：主 agent 轮次执行中结束的不通知，轮次结束后 `CLUSTER_PARENT_WAKEUP_GRACE_SECONDS`（30 秒）内结束的也不通知。
+- 子任务结束后唤醒主会话的通知为英文，只列 task_id 并要求主 agent 用 `poll_agent_tasks(task_ids=...)` 读取结果，不内联子 agent 输出。是否通知只看主 agent 是否已读到结果，不设时间窗口：`poll_agent_tasks` 返回终态任务或 `wait_agent_messages` 返回其 `final` 消息即记为已读（`result_observed`）。未读的子任务无论在主 agent 轮次中还是轮次结束后结束都会通知；轮次中结束的先挂起，由 `_finish_cluster_parent_turn()` 在主会话空闲后投递，投递前已读的不再通知。bridge 不区分调用方；与 `adopt_unfinished_tasks()` 和 `wait_agent_messages` 的托管游标相同，这两个工具的读取都按主 agent 读取处理。
 - 通知只覆盖最近一次用户请求：`_start_cluster_run_if_requested()` 按 `session._execution_id` 递增主会话的请求代数（无尽模式各次尝试共用同一代），内部续接轮次不递增；旧请求的子任务只有在最新请求中被 `poll_agent_tasks` 查询且仍未结束时才转入当前请求。主 agent 状态按主会话保存在 `ClusterRuntime`，`configure_team` 轮换 `run_id` 后仍然有效。
 - Pi runtime 通过 `TCB_CLUSTER_MCP_CONFIG` 定位 bridge 配置；其余 CLI 的 stdio launcher 或 DeepSeek patch 向 `mcp_stdio.py` 传入 `--config`，读取同一 bridge 配置文件。
 - `profile.cluster.enabled` 是当前 Bot 级集群开关；请求体旧 `cluster` 字段仅为兼容输入，不决定是否启动 cluster run。
