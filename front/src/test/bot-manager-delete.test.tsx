@@ -74,3 +74,30 @@ test("cluster model tiers select a CLI and expose its parameter namespace", asyn
   }));
   expect(screen.getByLabelText("低档模型")).toHaveValue("");
 });
+
+test("bot manager cluster edits wait for the save button and survive the enable toggle", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
+  render(<DesktopBotManagerScreen client={client} currentAlias="main" onSelect={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "配置" }));
+  const size = await screen.findByLabelText("集群规模");
+  const saveButton = screen.getByRole("button", { name: "保存集群配置" });
+  expect(saveButton).toBeDisabled();
+  await user.selectOptions(size, "7");
+  await user.selectOptions(screen.getByLabelText("子 Agent 写入策略"), "main_only");
+  expect(updateCluster).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("checkbox", { name: "启用集群模式" }));
+  await waitFor(() => expect(updateCluster).toHaveBeenCalledTimes(1));
+  expect(updateCluster.mock.calls[0][1]).toMatchObject({ enabled: true, maxParallelAgents: 3, writePolicy: "all_agents" });
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "启用集群模式" })).toBeChecked());
+  expect(screen.getByLabelText("集群规模")).toHaveValue("7");
+
+  await user.click(saveButton);
+  await waitFor(() => expect(updateCluster).toHaveBeenCalledTimes(2));
+  expect(updateCluster.mock.calls[1][1]).toMatchObject({ enabled: true, maxParallelAgents: 7, writePolicy: "main_only" });
+  await waitFor(() => expect(saveButton).toBeDisabled());
+  expect(screen.queryByRole("button", { name: "还原集群配置" })).not.toBeInTheDocument();
+});

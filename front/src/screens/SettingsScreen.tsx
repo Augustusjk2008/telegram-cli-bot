@@ -123,6 +123,7 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [copiedRemoteMcpItem, setCopiedRemoteMcpItem] = useState("");
+  const [clusterDirty, setClusterDirty] = useState(false);
   const [activeSection, setActiveSection] = useState("settings-section-runtime");
   const scrollRegionRef = useRef<HTMLElement | null>(null);
   const navLockUntilRef = useRef(0);
@@ -438,7 +439,7 @@ export function SettingsScreen({
                 >
                   <Icon aria-hidden="true" className="hidden h-3 w-3 @xs:block" />
                   {label}
-                  {(id === "settings-section-runtime" && runtimeDirty) || (id === "settings-section-workdir" && workdirDirty) ? (
+                  {(id === "settings-section-runtime" && runtimeDirty) || (id === "settings-section-workdir" && workdirDirty) || (id === "settings-section-cluster" && clusterDirty) ? (
                     <span aria-label="有未保存更改" className="h-1.5 w-1.5 rounded-full bg-[var(--status-warning)]" />
                   ) : null}
                 </button>
@@ -786,7 +787,7 @@ export function SettingsScreen({
             />
           ) : null}
 
-          {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} /> : null}
+          {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} onDirtyChange={setClusterDirty} /> : null}
 
           {overview && !nativeRuntime ? (
             <BotCliParamsPanel
