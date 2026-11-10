@@ -1,4 +1,5 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliTypeLabel, suggestCliPath } from "../utils/cliType";
+import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
@@ -23,6 +24,7 @@ import { WebApiClientError } from "../services/types";
 import { copyText } from "../utils/clipboard";
 import type {
   BotOverview,
+  BotSummary,
   ChatExecutionMode,
   CliType,
   NativeAgentDraft,
@@ -51,6 +53,8 @@ type Props = {
   prefilledWorkdir?: string;
   onWorkdirUpdated?: (workingDir: string) => void;
   onRemoteConnected?: () => void;
+  /** Called after a saved CLI type switch has started a new conversation, so the host can show the chat. */
+  onCliSwitched?: (botAlias: string) => void;
   sessionCapabilities?: string[];
 };
 
@@ -106,9 +110,11 @@ export function SettingsScreen({
   prefilledWorkdir,
   onWorkdirUpdated,
   onRemoteConnected,
+  onCliSwitched,
   sessionCapabilities = [],
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
+  const [peerBots, setPeerBots] = useState<BotSummary[]>([]);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
@@ -180,6 +186,20 @@ export function SettingsScreen({
       cancelled = true;
     };
   }, [botAlias, client, prefilledWorkdir]);
+
+  useEffect(() => {
+    // Only feeds CLI path suggestions, so a failed list leaves the default commands in place.
+    let cancelled = false;
+    void Promise.resolve()
+      .then(() => client.listBots())
+      .then((bots) => {
+        if (!cancelled) setPeerBots(bots);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   useEffect(() => {
     if (!nativeRuntime && !draftNativeRuntime) {
@@ -262,6 +282,15 @@ export function SettingsScreen({
       setRuntimeBackendDraft(getRuntimeBackend(nextBot));
       setNativeAgentDraft(nativeAgentDraftFromOverview(nextBot));
       setNotice(runtimeBackendDraft === "native_agent" ? "原生 agent 配置已更新" : "CLI 配置已更新");
+      if (runtimeBackendDraft === "cli" && overview && nextBot.cliType !== overview.cliType) {
+        try {
+          await startConversationAfterCliSwitch(client, botAlias);
+          setNotice(`已切换到 ${cliTypeLabel(nextBot.cliType)}，并开启新会话`);
+          onCliSwitched?.(botAlias);
+        } catch (err) {
+          setError(`CLI 配置已更新，但新建会话失败：${getErrorMessage(err, "未知错误")}`);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新运行配置失败");
     } finally {
@@ -507,7 +536,11 @@ export function SettingsScreen({
                         disabled={!canManageBotRuntime}
                         onChange={(event) => {
                           const cliType = event.target.value as CliType;
-                          if (cliType === "deepseek" || cliTypeDraft === "deepseek") setCliPathDraft(defaultCliPathForType(cliType));
+                          setCliPathDraft(suggestCliPath(cliType, peerBots, overview ? {
+                            alias: overview.alias || botAlias,
+                            cliType: overview.cliType,
+                            cliPath: overview.cliPath,
+                          } : undefined));
                           setCliTypeDraft(cliType);
                         }}
                         className={settingsControlClassName}

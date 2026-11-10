@@ -1,4 +1,5 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliTypeLabel, suggestCliPath } from "../utils/cliType";
+import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -352,9 +353,19 @@ function EditPanel({
     if (clusterDirty && !(await saveClusterDraft())) {
       return;
     }
+    const previousCliType = bot.cliType;
     const result = await manager.saveBotEdits(bot, draft, options);
     if (result.ok) {
       setPendingWorkdirConflict(null);
+      if (draft.runtimeBackend === "cli" && result.bot.cliType !== previousCliType) {
+        try {
+          await startConversationAfterCliSwitch(manager.client, result.bot.alias);
+          onOpenConversation(result.bot.alias);
+          return;
+        } catch (err) {
+          manager.setError(`CLI 配置已更新，但新建会话失败：${err instanceof Error ? err.message : "未知错误"}`);
+        }
+      }
       onSaved(result.bot.alias);
       return;
     }
@@ -522,7 +533,11 @@ function EditPanel({
             disabled={!canManage}
             onChange={(event) => {
               const cliType = event.target.value as CliType;
-              setDraft((prev) => ({ ...prev, cliType, cliPath: cliType === "deepseek" || prev.cliType === "deepseek" ? defaultCliPathForType(cliType) : prev.cliPath }));
+              setDraft((prev) => ({
+                ...prev,
+                cliType,
+                cliPath: suggestCliPath(cliType, manager.bots, { ...bot, cliPath: bot.cliPath || defaultCliPathForType(bot.cliType) }),
+              }));
             }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           >

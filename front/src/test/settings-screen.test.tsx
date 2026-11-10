@@ -214,3 +214,42 @@ test("cluster settings revert discards the draft and invalid timeouts are not sa
   expect(timeout).toHaveValue(Number(original));
   expect(screen.getByRole("button", { name: "保存集群配置" })).toBeDisabled();
 });
+
+test("switching CLI type fills another agent's path and saving it opens a new conversation", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+  await client.addBot({ alias: "reviewer", cliType: "claude", cliPath: "/opt/claude/bin/claude", workingDir: "C:\\workspace\\reviewer" });
+  const createConversation = vi.spyOn(client, "createConversation");
+  const onCliSwitched = vi.fn();
+  render(<SettingsScreen botAlias="main" client={client} onCliSwitched={onCliSwitched} />);
+
+  const cliType = await screen.findByLabelText("CLI 类型");
+  await user.selectOptions(cliType, "antigravity");
+  expect(screen.getByLabelText("CLI 路径")).toHaveValue("agy");
+  await user.selectOptions(cliType, "claude");
+  expect(screen.getByLabelText("CLI 路径")).toHaveValue("/opt/claude/bin/claude");
+
+  await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+  await waitFor(() => expect(onCliSwitched).toHaveBeenCalledWith("main"));
+  expect(createConversation).toHaveBeenCalledWith("main");
+  expect(await client.getBotOverview("main")).toMatchObject({ cliType: "claude", cliPath: "/opt/claude/bin/claude" });
+  expect(screen.getByText("已切换到 claude，并开启新会话")).toBeInTheDocument();
+});
+
+test("saving only a new CLI path keeps the current conversation", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+  const createConversation = vi.spyOn(client, "createConversation");
+  const onCliSwitched = vi.fn();
+  render(<SettingsScreen botAlias="main" client={client} onCliSwitched={onCliSwitched} />);
+
+  const cliPath = await screen.findByLabelText("CLI 路径");
+  await user.clear(cliPath);
+  await user.type(cliPath, "/opt/codex/bin/codex");
+  await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+  expect(await screen.findByText("CLI 配置已更新")).toBeInTheDocument();
+  expect(createConversation).not.toHaveBeenCalled();
+  expect(onCliSwitched).not.toHaveBeenCalled();
+});

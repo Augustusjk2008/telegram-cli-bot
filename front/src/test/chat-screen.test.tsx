@@ -8,6 +8,7 @@ import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ConversationListResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { CONVERSATION_CREATED_EVENT } from "../utils/conversationEvents";
 
 function createClient(overrides: Partial<WebBotClient> = {}): WebBotClient {
   return Object.assign(new MockWebBotClient(), {
@@ -1861,4 +1862,46 @@ test("chat attachment uploads show progress and cancelling keeps files that alre
   expect(pendingSignal?.aborted).toBe(true);
   expect(screen.getByRole("button", { name: "移除附件 notes.txt" })).toBeEnabled();
   expect(screen.queryByText("上传已取消")).not.toBeInTheDocument();
+});
+
+test("follows a conversation created by a saved CLI switch for the same bot", async () => {
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "old-cli-answer",
+      role: "assistant",
+      text: "旧 CLI 的回答",
+      createdAt: "2026-11-11T00:00:00Z",
+      state: "done",
+    }] }),
+  });
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("旧 CLI 的回答")).toBeInTheDocument();
+
+  const announce = (botAlias: string) => act(() => {
+    window.dispatchEvent(new CustomEvent(CONVERSATION_CREATED_EVENT, {
+      detail: {
+        botAlias,
+        result: {
+          conversation: {
+            id: `conv-${botAlias}`,
+            title: "新会话",
+            lastMessagePreview: "",
+            messageCount: 0,
+            pinned: false,
+            active: true,
+            status: "active",
+            botAlias,
+            cliType: "claude",
+            workingDir: "C:\\workspace",
+          },
+          messages: [],
+        },
+      },
+    }));
+  });
+
+  announce("other");
+  expect(screen.getByText("旧 CLI 的回答")).toBeInTheDocument();
+  announce("main");
+  await waitFor(() => expect(screen.queryByText("旧 CLI 的回答")).not.toBeInTheDocument());
 });

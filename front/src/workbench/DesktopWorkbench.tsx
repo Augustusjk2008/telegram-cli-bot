@@ -211,6 +211,7 @@ export function DesktopWorkbench({
     toggleEditor,
     toggleTerminal,
     toggleChat,
+    showChat,
     setSidebarView,
     restoreSidebarView,
     resizeLayout,
@@ -1416,6 +1417,7 @@ export function DesktopWorkbench({
             void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: nextWorkdir });
           }}
           onRemoteConnected={remoteWorkspace ? handleRemoteConnected : undefined}
+          onCliSwitched={showChat}
           sessionCapabilities={sessionCapabilities}
         />
         </Suspense>
