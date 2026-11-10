@@ -31,6 +31,7 @@ from .ui import (
     format_plain_text,
     format_result,
     help_text,
+    host_status_text,
     parse_config_text,
     parse_target_text,
     reply_keyboard,
@@ -43,6 +44,11 @@ _UNBOUND = object()
 _REFRESH = "此操作已失效，请通过底部“智能体”刷新面板后重试。"
 _POLL_MAX_BACKOFF = 30.0
 _DELIVERY_MAX_BACKOFF = 60.0
+# Host controls act on the whole process, not on an agent alias.
+_HOST_ACTIONS = frozenset({"host_refresh", "host_exposure_restart", "host_restart", "host_restart_confirm"})
+_HOST_REFRESH = "此操作已失效，请发送 /host 刷新后重试。"
+_HOST_UNAVAILABLE = "当前宿主未提供远程运维控制。"
+_EXPOSURE_RESTART_LABELS = {"fixed_public_forward": "🔁 重连 frp", "cloudflare_quick": "🔁 重启隧道"}
 
 
 class TelegramGateway:
@@ -50,12 +56,16 @@ class TelegramGateway:
         self, manager: MultiBotManager, client: TelegramClient, state: TelegramState,
         allowed_user_ids: set[int],
         *, chat_url: Callable[[str, str], str] | None = None,
+        host: Any | None = None,
     ):
         self.manager = manager
         self.client = client
         self.state = state
         self.allowed_user_ids = frozenset(allowed_user_ids)
         self.chat_url = chat_url
+        # Provides host_status(), restart_public_exposure(), host_restart_refusal()
+        # and request_host_restart(); the Web server implements them.
+        self.host = host
         self._poll_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
         self._delivery_retry_tasks: dict[str, asyncio.Task] = {}
@@ -143,10 +153,27 @@ class TelegramGateway:
                     str(delivery["delivery_id"]),
                     max(0.0, float(delivery.get("retry_at") or 0) - time.time()),
                 )
+            for record in self.state.list_restart_notices():
+                await self._send_restart_notice(record)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning("Telegram 状态恢复失败 (%s)", type(exc).__name__)
+
+    async def _send_restart_notice(self, record: dict[str, Any]) -> None:
+        update_id, chat_id, user_id = record["update_id"], record["chat_id"], record["user_id"]
+        text, markup = "✅ 后端已重启并恢复在线。", None
+        if self.host is not None and type(user_id) is int:
+            try:
+                status = await self.host.host_status()
+            except Exception as exc:
+                logger.warning("Telegram 宿主状态读取失败 (%s)", type(exc).__name__)
+            else:
+                text = f"{text}\n\n{host_status_text(status)}"
+                markup = self._host_markup(user_id, chat_id, status)
+        delivery_id = self._prepare_delivery(update_id, chat_id, [text], markup)
+        self.state.update(update_id, status="completed")
+        await self._deliver_persisted(delivery_id)
 
     def receive_update(self, update: dict[str, Any]) -> asyncio.Task | None:
         update_id = update.get("update_id")
@@ -589,12 +616,78 @@ class TelegramGateway:
             self.state.finish_interaction(token, "回复提示投递失败，请刷新面板。", status="failed")
 
     def _check_interaction(self, record: dict[str, Any] | None, user_id: int, chat_id: int) -> dict[str, Any]:
+        host_action = record is not None and record["action"] in _HOST_ACTIONS
         if (record is None or record["user_id"] != user_id or record["chat_id"] != chat_id
                 or record["expires_at"] <= time.time()):
-            raise WebApiError(409, "telegram_interaction_expired", _REFRESH)
-        if record["action"] != "expand":
+            raise WebApiError(409, "telegram_interaction_expired", _HOST_REFRESH if host_action else _REFRESH)
+        if record["action"] != "expand" and not host_action:
             self._require_target(record["alias"])
         return record
+
+    def _host_markup(self, user_id: int, chat_id: int, status: dict[str, Any]) -> dict[str, Any]:
+        exposure = status.get("exposure") if isinstance(status.get("exposure"), dict) else {}
+        label = _EXPOSURE_RESTART_LABELS.get(str(exposure.get("mode") or ""))
+        rows = [[self._button(label, "host_exposure_restart", user_id, chat_id, "", None, ttl=CONFIRM_TTL)]] if label else []
+        rows.append([self._button("♻️ 重启后端", "host_restart", user_id, chat_id, "", None)])
+        rows.append([self._button("🔄 刷新", "host_refresh", user_id, chat_id, "", None)])
+        return {"inline_keyboard": rows}
+
+    async def _host_panel(self, update_id: int, user_id: int, chat_id: int, *, headline: str = "") -> None:
+        if self.host is None:
+            raise WebApiError(503, "telegram_host_unavailable", _HOST_UNAVAILABLE)
+        status = await self.host.host_status()
+        text = host_status_text(status)
+        await self._deliver(update_id, chat_id, [f"{headline}\n\n{text}" if headline else text],
+                            self._host_markup(user_id, chat_id, status))
+
+    async def _host_action(self, update_id: int, record: dict[str, Any], user_id: int, chat_id: int) -> None:
+        action, token = record["action"], record["token"]
+        if self.host is None:
+            raise WebApiError(503, "telegram_host_unavailable", _HOST_UNAVAILABLE)
+        if action == "host_refresh":
+            await self._host_panel(update_id, user_id, chat_id)
+        elif action == "host_restart":
+            busy = str((await self.host.host_status()).get("busy_reason") or "")
+            impact = f"当前：{busy}。重启会中断这些任务。" if busy else "当前没有运行中的任务。"
+            confirm = self._button("确认重启后端", "host_restart_confirm", user_id, chat_id, "", None, ttl=CONFIRM_TTL)
+            await self._deliver(update_id, chat_id, [
+                f"确认重启后端？\n{impact}\n重启期间 Web 和 Telegram 会短暂离线，恢复后会在此通知。本确认 5 分钟内有效。"
+            ], {"inline_keyboard": [[confirm]]})
+        elif not self.state.claim_interaction(token, user_id, chat_id):
+            previous = self.state.get_interaction(token) or {}
+            await self._deliver(update_id, chat_id, [previous.get("result") or "操作正在处理中，请稍候。"])
+        elif action == "host_restart_confirm":
+            await self._restart_host(update_id, token, chat_id)
+            return
+        else:
+            try:
+                await self.host.restart_public_exposure()
+            except asyncio.CancelledError:
+                self.state.finish_interaction(token, "操作已中断，请发送 /host 查看状态。", status="interrupted")
+                raise
+            except Exception:
+                self.state.finish_interaction(token, "重连失败，请发送 /host 查看状态。", status="failed")
+                raise
+            self.state.finish_interaction(token, "已执行重连，请发送 /host 查看最新状态。")
+            await self._host_panel(update_id, user_id, chat_id, headline="🔁 已执行重连，最新状态如下。")
+        self.state.update(update_id, status="handled")
+
+    async def _restart_host(self, update_id: int, token: str, chat_id: int) -> None:
+        refusal = self.host.host_restart_refusal()
+        if not refusal:
+            result = "已请求重启后端，恢复在线后会在此通知。"
+            self.state.finish_interaction(token, result)
+            # The next host process reads this marker and sends the back-online notice.
+            self.state.update(update_id, status="restart_requested")
+            # Reply before requesting: the restart stops this gateway shortly afterwards.
+            await self._deliver(update_id, chat_id, [f"♻️ {result}"])
+            refusal = self.host.request_host_restart()
+            if not refusal:
+                return
+        detail = f"重启未执行：{refusal}。"
+        self.state.finish_interaction(token, detail, status="failed")
+        self.state.update(update_id, status="rejected")
+        await self._deliver(update_id, chat_id, [detail])
 
     async def _expand_notification(
         self, update_id: int, user_id: int, chat_id: int, *,
@@ -745,6 +838,9 @@ class TelegramGateway:
                 record = self._check_interaction(self.state.get_interaction(token) if isinstance(token, str) else None, user_id, chat_id)
                 alias = record["alias"]
                 action = record["action"]
+                if action in _HOST_ACTIONS:
+                    await self._host_action(update_id, record, user_id, chat_id)
+                    return
                 if action == "expand":
                     await self._expand_notification(update_id, user_id, chat_id, token=record["token"])
                     return
@@ -787,6 +883,13 @@ class TelegramGateway:
                     token=command[1] if len(command) == 2 else "",
                     message_id=reply_id if type(reply_id) is int else None,
                 )
+                return
+            shortcut = SHORTCUTS.get(text) if isinstance(text, str) else None
+            if reply_record is None and (
+                shortcut == "host" or (command and command[0].lower().split("@", 1)[0] == "/host")
+            ):
+                await self._host_panel(update_id, user_id, chat_id)
+                self.state.update(update_id, status="handled")
                 return
             if type(reply.get("message_id")) is int:
                 record = self._check_interaction(reply_record, user_id, chat_id)
@@ -877,7 +980,7 @@ class TelegramGateway:
             detail = exc.message if isinstance(exc, WebApiError) else "执行失败，请在 Web 查看任务和历史。"
             if claimed_token:
                 self.state.finish_interaction(claimed_token, detail, status="failed")
-            await self._deliver(update_id, chat_id, split_text(f"[{alias}] {detail}"))
+            await self._deliver(update_id, chat_id, split_text(f"[{alias}] {detail}" if alias else detail))
 
     async def _send_text(
         self, update_id: int, chat_id: int, alias: str, body: str, sender: dict[str, Any],
@@ -977,6 +1080,7 @@ class TelegramGateway:
 
 async def start_telegram_gateway(
     manager: MultiBotManager, *, chat_url: Callable[[str, str], str] | None = None,
+    host: Any | None = None,
 ) -> TelegramGateway | None:
     if not config.TELEGRAM_ENABLED:
         return None
@@ -986,7 +1090,9 @@ async def start_telegram_gateway(
     try:
         client = TelegramClient(config.TELEGRAM_BOT_TOKEN)
         state = TelegramState(get_app_data_root() / "telegram" / "state.sqlite3", client.bot_id)
-        gateway = TelegramGateway(manager, client, state, set(config.TELEGRAM_ALLOWED_USER_IDS), chat_url=chat_url)
+        gateway = TelegramGateway(
+            manager, client, state, set(config.TELEGRAM_ALLOWED_USER_IDS), chat_url=chat_url, host=host,
+        )
         gateway.start()
         return gateway
     except Exception as exc:

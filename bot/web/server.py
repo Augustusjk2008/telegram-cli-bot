@@ -1125,6 +1125,8 @@ class WebApiServer:
         self._restart_task: asyncio.Task[None] | None = None
         self._update_task: asyncio.Task[None] | None = None
         self._tunnel_ready_task: asyncio.Task[None] | None = None
+        self._exposure_restart_lock = asyncio.Lock()
+        self._started_monotonic = time.monotonic()
         self._terminal_sockets: set[web.WebSocketResponse] = set()
         self._terminal_tasks: set[asyncio.Task[Any]] = set()
         self._terminal_manager = TerminalSessionManager()
@@ -1409,6 +1411,54 @@ class WebApiServer:
                 return
 
         self._restart_task = asyncio.create_task(delayed_restart())
+
+    def host_restart_refusal(self) -> str:
+        """Return why an ordinary restart must not start now, or an empty string."""
+        # Exit 75 during an update handoff would break the executor's health check.
+        if config.UPDATE_DRAINING or config.UPDATE_REQUESTED or self._update_exit_pending:
+            return "升级交接进行中，暂不能重启"
+        return ""
+
+    def request_host_restart(self) -> str:
+        """Schedule an ordinary restart (idempotent while one is pending); return a refusal reason instead."""
+        refusal = self.host_restart_refusal()
+        if not refusal and not config.RESTART_REQUESTED:
+            self._schedule_restart_request()
+        return refusal
+
+    async def host_status(self) -> dict[str, Any]:
+        """Summarize host health for out-of-band controls such as Telegram."""
+        from bot.version import APP_VERSION
+        try:
+            busy_reason = self._update_idle_reason()
+        except Exception:
+            logger.warning("无法确认宿主任务状态", exc_info=True)
+            busy_reason = "无法确认任务状态"
+        return {
+            "version": APP_VERSION,
+            "pid": os.getpid(),
+            "uptime_seconds": max(0, int(time.monotonic() - self._started_monotonic)),
+            "busy_reason": busy_reason,
+            "exposure": await self._fresh_tunnel_snapshot(),
+        }
+
+    async def restart_public_exposure(self) -> dict[str, Any]:
+        """Restart frpc or the Cloudflare tunnel; Admin Center and Telegram share this path."""
+        async with self._exposure_restart_lock:
+            if self._exposure_service.is_fixed_public_forward():
+                return await self._fixed_forward_service.restart()
+            started_at = time.perf_counter()
+            diag_log_event(logger, "tunnel_restart_stage", stage="request")
+            snapshot = await self._tunnel_service.restart()
+            diag_log_slow(
+                logger,
+                "tunnel_restart",
+                int(round((time.perf_counter() - started_at) * 1000)),
+                stage=str(snapshot.get("status") or ""),
+                public_url=str(snapshot.get("public_url") or ""),
+            )
+            await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
+            return snapshot
 
     def _manager_alias(self, request: web.Request) -> str:
         alias = request.match_info.get("alias", "").strip().lower()
@@ -5505,20 +5555,7 @@ class WebApiServer:
 
     async def admin_tunnel_restart(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
-        if self._exposure_service.is_fixed_public_forward():
-            return _json({"ok": True, "data": await self._fixed_forward_service.restart()})
-        started_at = time.perf_counter()
-        diag_log_event(logger, "tunnel_restart_stage", stage="request")
-        snapshot = await self._tunnel_service.restart()
-        diag_log_slow(
-            logger,
-            "tunnel_restart",
-            int(round((time.perf_counter() - started_at) * 1000)),
-            stage=str(snapshot.get("status") or ""),
-            public_url=str(snapshot.get("public_url") or ""),
-        )
-        await self._notify_or_schedule_tunnel_public_url(snapshot, reason="manual_tunnel_restart")
-        return _json({"ok": True, "data": snapshot})
+        return _json({"ok": True, "data": await self.restart_public_exposure()})
 
     @staticmethod
     def _storage_migration_error(exc: StorageMigrationApiError) -> WebApiError:

@@ -249,8 +249,11 @@ Replies render Markdown headings, emphasis, strikethrough, lists, quotes, links,
 | `/config dev reasoning <value>` | Set reasoning effort |
 | `/config dev cluster on\|off` | Toggle bot-level clustering |
 | `/expand` | Expand the replied-to preview, or the latest preview when sent alone |
+| `/host` | Show backend and public-entry (frp/tunnel) status; reconnect frp/tunnel or restart the backend after confirmation |
 
-The keyboard also provides status, stop, configuration, and help actions. Model choices follow the active CLI or Pi configuration. Changes apply to the next turn; active tasks keep their initial configuration. Telegram and Web share `(Bot, shared user, agent)` sessions and history, and Telegram cancellation uses the Web task and cluster cancellation flow. Open-Web actions require `WEB_PUBLIC_URL` or fixed public forwarding with the `/node/<node-id>/` prefix preserved. Check the token, allowlist, application restart, competing `getUpdates` clients, public URL, and WebSocket proxy when troubleshooting.
+Use `/host` (or the Host key) when the public entry fails. Telegram long-polls `api.telegram.org` over outbound HTTPS and does not depend on frp or the tunnel. The panel shows version, PID, running work, public-entry state, Hub heartbeat, and the latest error. Reconnect matches Admin Center's tunnel restart. Restart asks for confirmation, interrupts running tasks, is refused during an update handoff, and notifies the requester once the backend is back. The gateway runs inside the host process, so it cannot recover a hung or exited host.
+
+The keyboard also provides status, stop, configuration, host, and help actions. Model choices follow the active CLI or Pi configuration. Changes apply to the next turn; active tasks keep their initial configuration. Telegram and Web share `(Bot, shared user, agent)` sessions and history, and Telegram cancellation uses the Web task and cluster cancellation flow. Open-Web actions require `WEB_PUBLIC_URL` or fixed public forwarding with the `/node/<node-id>/` prefix preserved. Check the token, allowlist, application restart, competing `getUpdates` clients, public URL, and WebSocket proxy when troubleshooting.
 
 ### Administration and Extensions
 

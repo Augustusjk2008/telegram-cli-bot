@@ -502,6 +502,14 @@ class TelegramState:
             )
         return recovered
 
+    def list_restart_notices(self) -> list[dict[str, Any]]:
+        """Confirmed host restarts that still owe the requester a back-online notice."""
+        rows = self._db.execute(
+            "SELECT * FROM updates WHERE bot_id = ? AND status = 'restart_requested' ORDER BY update_id",
+            (self.bot_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def mark_delivery_part_sent(self, delivery_id: str, part_index: int, message_id: int) -> None:
         """Record one Telegram message ID without changing an already sent part."""
         with self._db:

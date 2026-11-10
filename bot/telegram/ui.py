@@ -13,8 +13,16 @@ MESSAGE_LIMIT = 4096
 BROADCAST_PREVIEW_CHARS = 300
 SHORTCUTS = {
     "🤖 智能体": "targets", "✉️ 发消息": "prompt", "🆕 新会话": "new",
-    "📊 状态": "status", "⏹ 停止任务": "stop", "⚙️ 配置": "config", "❓ 帮助": "help",
+    "📊 状态": "status", "⏹ 停止任务": "stop", "⚙️ 配置": "config", "🖥 宿主": "host", "❓ 帮助": "help",
 }
+_EXPOSURE_LABELS = {
+    "fixed_public_forward": "固定公网转发（frp）",
+    "cloudflare_quick": "Cloudflare 快速隧道",
+    "manual": "手动公网地址",
+    "disabled": "未启用",
+}
+_EXPOSURE_STATES = {"running": "运行中", "starting": "启动中", "stopped": "已停止", "error": "异常"}
+_LOG_LINE_CHARS = 200
 _ROUTE = re.compile(r"\Ato[ \t]+(\S+)(?:[ \t]*\r?\n|[ \t]+)([\s\S]*)\Z", re.IGNORECASE)
 _CONFIG_SETTINGS = {"model", "reasoning", "cluster"}
 
@@ -64,6 +72,7 @@ def help_text(aliases: list[str]) -> str:
         "回复提示中的全部文字会作为正文发送到提示标注的目标和会话。\n"
         "消息使用对应智能体的当前 Web 会话；完成后回复最终结果和 context left。\n"
         "广播摘要可点击“展开全文”，或回复该通知发送 /expand；单独发送 /expand 展开最近一条摘要。\n"
+        "/host 或底部“宿主”查看后端和公网转发状态，可重连 frp/隧道或重启后端。\n"
         "人工审批请在 Web 中处理。"
     )
 
@@ -113,6 +122,52 @@ def configuration_text(alias: str, configuration: dict[str, Any]) -> str:
         f"思考强度：{reasoning}",
         f"集群：{cluster}",
     ])
+
+
+def duration_text(seconds: Any) -> str:
+    if type(seconds) is not int or seconds < 0:
+        return "未知"
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    if days:
+        return f"{days} 天 {hours} 小时"
+    if hours:
+        return f"{hours} 小时 {minutes} 分"
+    return f"{minutes} 分" if minutes else f"{seconds} 秒"
+
+
+def host_status_text(status: dict[str, Any]) -> str:
+    exposure = status.get("exposure") if isinstance(status.get("exposure"), dict) else {}
+    mode = str(exposure.get("mode") or "disabled")
+    state = str(exposure.get("status") or "")
+    entry = f"公网入口：{_EXPOSURE_LABELS.get(mode, mode)}"
+    if mode != "disabled" and state:
+        entry += f"，{_EXPOSURE_STATES.get(state, state)}"
+    lines = [
+        "🖥 宿主状态",
+        f"版本：{status.get('version') or '未知'}，PID：{status.get('pid') or '未知'}，"
+        f"已运行：{duration_text(status.get('uptime_seconds'))}",
+        f"任务：{status.get('busy_reason') or '空闲'}",
+        entry,
+    ]
+    if exposure.get("public_url"):
+        lines.append(f"地址：{exposure['public_url']}")
+    heartbeat = str(exposure.get("heartbeat_status") or "")
+    if mode == "fixed_public_forward":
+        if exposure.get("frpc_external"):
+            lines.append("frpc：复用已有进程")
+        elif exposure.get("frpc_pid"):
+            lines.append(f"frpc PID：{exposure['frpc_pid']}")
+        detail = exposure.get("heartbeat_last_error") or exposure.get("heartbeat_last_at") or ""
+        label = {"online": "在线", "error": "失败"}.get(heartbeat, "未上报")
+        lines.append(f"Hub 心跳：{label}" + (f"（{detail}）" if detail else ""))
+    if exposure.get("last_error"):
+        lines.append(f"最近错误：{exposure['last_error']}")
+    tail = [str(line)[:_LOG_LINE_CHARS] for line in (exposure.get("log_tail") or [])[-3:] if str(line).strip()]
+    if tail and (state != "running" or heartbeat == "error"):
+        lines.append("最近日志：\n" + "\n".join(tail))
+    return "\n".join(lines)
 
 
 def context_left(usage: dict[str, Any] | None) -> str:
