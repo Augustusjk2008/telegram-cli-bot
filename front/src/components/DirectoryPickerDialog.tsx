@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, FolderOpen, FolderPlus, House } from "lucide-react";
+import { ArrowUp, Check, ChevronRight, Folder, FolderOpen, FolderPlus, HardDrive, House, LoaderCircle, TriangleAlert, X } from "lucide-react";
 import type { DirectoryListing } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
 import { normalizePathInput } from "../utils/pathInput";
+import "./DirectoryPickerDialog.css";
 
 type Props = {
   title: string;
@@ -78,12 +79,18 @@ export function DirectoryPickerDialog({
   const originPathRef = useRef("");
   const originWasVirtualRootRef = useRef(false);
   const restoredRef = useRef(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const ids = useId();
 
   function applyListing(listing: DirectoryListing) {
     currentPathRef.current = listing.workingDir;
     setCurrentPath(listing.workingDir);
     setEntries(listing.entries);
     setIsVirtualRoot(Boolean(listing.isVirtualRoot));
+    if (listRef.current) {
+      listRef.current.scrollTop = 0;
+    }
   }
 
   async function restoreOriginalPath() {
@@ -256,129 +263,174 @@ export function DirectoryPickerDialog({
     };
   }, [botAlias, client, initialPath, mutateBrowseState]);
 
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    return () => opener?.focus();
+  }, []);
+
   const directories = entries.filter((entry) => entry.isDir);
+  // The first listing shows a spinner; later navigations keep the old rows, dimmed, until the next arrive.
+  const initialLoading = loading && !currentPath;
 
   const dialog = (
-    <div
-      className="workbench-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-backdrop-50)] p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-    >
-      <div className="workbench-dialog-panel flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-[var(--surface)] shadow-[var(--shadow-card)]">
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
-          <div>
-            <h2 className="text-lg font-semibold text-[var(--text)]">{title}</h2>
-            <p className="mt-1 text-sm text-[var(--muted)]">浏览目录后直接使用当前目录。</p>
+    <div className="orbit-backdrop dirpick-backdrop fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
+      <section
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${ids}-title`}
+        aria-describedby={`${ids}-description`}
+        tabIndex={-1}
+        className="orbit-dialog dirpick"
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || busy) {
+            return;
+          }
+          event.stopPropagation();
+          void closeDialog();
+        }}
+      >
+        <header className="dirpick-head">
+          <span className="dirpick-head-icon" aria-hidden="true">
+            <FolderOpen className="h-4 w-4" />
+          </span>
+          <div className="dirpick-head-copy">
+            <h2 id={`${ids}-title`}>{title}</h2>
+            <p id={`${ids}-description`}>进入目标目录后，点击「使用当前目录」。</p>
           </div>
           <button
             type="button"
+            aria-label="关闭"
+            title="关闭"
             onClick={() => void closeDialog()}
             disabled={busy}
-            className="rounded-lg border border-[var(--border)] px-3 py-1 text-sm disabled:opacity-60"
+            className="orbit-btn orbit-btn--ghost orbit-btn--icon orbit-btn--sm"
           >
-            取消
+            <X aria-hidden="true" className="h-4 w-4" />
           </button>
-        </div>
+        </header>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-5 py-3">
+        <div className="dirpick-bar">
           <button
             type="button"
+            aria-label="上一级"
+            title="上一级"
             onClick={() => void navigate("..", "返回上级目录失败")}
             disabled={busy || loading}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            className="orbit-btn orbit-btn--secondary orbit-btn--icon"
           >
-            <ChevronLeft className="h-4 w-4" />
-            上一级
+            <ArrowUp aria-hidden="true" className="h-4 w-4" />
           </button>
           <button
             type="button"
+            aria-label="回到起点"
+            title="回到起点"
             onClick={() => void navigate(startPathRef.current, "返回起始目录失败")}
             disabled={busy || loading || !startPathRef.current}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+            className="orbit-btn orbit-btn--secondary orbit-btn--icon"
           >
-            <House className="h-4 w-4" />
-            回到起点
+            <House aria-hidden="true" className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            onClick={() => void handleCreateDirectory()}
-            disabled={busy || loading || isVirtualRoot || !canCreateDirectory}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-          >
-            <FolderPlus className="h-4 w-4" />
-            新增文件夹
-          </button>
-          <button
-            type="button"
-            onClick={() => void closeDialog(normalizePathInput(currentPath))}
-            disabled={busy || loading || !currentPath || isVirtualRoot}
-            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] hover:opacity-90 disabled:opacity-60"
-          >
-            使用当前目录
-          </button>
+          <p className="dirpick-path" title={currentPath || undefined} aria-live="polite">
+            <span className="sr-only">当前目录：</span>
+            <span className="dirpick-path-value">{currentPath || "加载中..."}</span>
+            {loading ? <LoaderCircle aria-hidden="true" className="dirpick-path-spinner h-3.5 w-3.5 animate-spin" /> : null}
+          </p>
         </div>
+        {isVirtualRoot ? <p className="dirpick-note">请先选择具体目录或卷。</p> : null}
+        {error ? (
+          <p role="alert" className="dirpick-error">
+            <TriangleAlert aria-hidden="true" className="h-4 w-4" />
+            <span>{error}</span>
+          </p>
+        ) : null}
 
-        <div className="border-b border-[var(--border)] px-5 py-3">
-          <p className="text-xs text-[var(--muted)]">当前目录</p>
-          <p className="mt-1 break-all text-sm text-[var(--text)]">{currentPath || "加载中..."}</p>
-          {isVirtualRoot ? <p className="mt-2 text-xs text-[var(--muted)]">请先选择具体目录或卷。</p> : null}
-          {!isVirtualRoot && canCreateDirectory ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              <input
-                aria-label="新文件夹名称"
-                value={newFolderName}
-                onChange={(event) => setNewFolderName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleCreateDirectory();
-                  }
-                }}
-                disabled={busy || loading}
-                className="min-w-[220px] flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm disabled:opacity-60"
-                placeholder="输入新文件夹名"
-              />
-              <button
-                type="button"
-                onClick={() => void handleCreateDirectory()}
-                disabled={busy || loading || !newFolderName.trim()}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
-              >
-                创建
-              </button>
+        <div ref={listRef} className="dirpick-body" aria-busy={loading || undefined}>
+          {initialLoading ? (
+            <div className="dirpick-state">
+              <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin" />
+              <span>目录加载中...</span>
             </div>
-          ) : null}
-          {error ? <p className="mt-2 text-sm text-[var(--feedback-error-text-strong)]">{error}</p> : null}
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading ? (
-            <div className="py-8 text-center text-sm text-[var(--muted)]">目录加载中...</div>
           ) : directories.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-6 text-center text-sm text-[var(--muted)]">
-              当前目录没有子文件夹，可直接选择当前目录。
+            <div className="dirpick-state dirpick-empty">
+              <FolderOpen aria-hidden="true" className="h-6 w-6" />
+              <p>当前目录没有子文件夹</p>
+              <span>{!isVirtualRoot && canCreateDirectory ? "可直接使用当前目录，或在下方新建文件夹" : "可直接使用当前目录"}</span>
             </div>
           ) : (
-            <ul className="space-y-2">
+            <ul className="dirpick-list" aria-label="子目录">
               {directories.map((entry) => (
                 <li key={entry.name}>
                   <button
                     type="button"
                     aria-label={`进入目录 ${entry.name}`}
+                    title={entry.name}
                     onClick={() => void navigate(entry.name, "切换目录失败")}
                     disabled={busy}
-                    className="flex w-full items-center gap-3 rounded-xl border border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                    className="dirpick-row"
                   >
-                    <FolderOpen className="h-5 w-5 shrink-0 text-[var(--accent)]" />
-                    <span className="min-w-0 flex-1 truncate text-sm text-[var(--text)]">{entry.name}</span>
+                    {isVirtualRoot
+                      ? <HardDrive aria-hidden="true" className="dirpick-row-icon h-4 w-4" />
+                      : <Folder aria-hidden="true" className="dirpick-row-icon h-4 w-4" />}
+                    <span className="dirpick-row-name">{entry.name}</span>
+                    <ChevronRight aria-hidden="true" className="dirpick-row-go h-4 w-4" />
                   </button>
                 </li>
               ))}
             </ul>
           )}
         </div>
-      </div>
+
+        {!isVirtualRoot && canCreateDirectory ? (
+          <div className="dirpick-create">
+            <div className="dirpick-create-field">
+              <FolderPlus aria-hidden="true" className="h-4 w-4" />
+              <input
+                aria-label="新文件夹名称"
+                value={newFolderName}
+                onChange={(event) => setNewFolderName(event.target.value)}
+                onKeyDown={(event) => {
+                  // Enter that commits an IME composition must not create a half-typed folder.
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229) {
+                    return;
+                  }
+                  event.preventDefault();
+                  void handleCreateDirectory();
+                }}
+                disabled={busy || loading}
+                className="orbit-field"
+                placeholder="在当前目录新建文件夹"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleCreateDirectory()}
+              disabled={busy || loading || !newFolderName.trim()}
+              className="orbit-btn orbit-btn--secondary"
+            >
+              创建
+            </button>
+          </div>
+        ) : null}
+
+        <footer className="dirpick-foot">
+          <button type="button" onClick={() => void closeDialog()} disabled={busy} className="orbit-btn orbit-btn--ghost">
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void closeDialog(normalizePathInput(currentPath))}
+            disabled={busy || loading || !currentPath || isVirtualRoot}
+            className="orbit-btn orbit-btn--primary"
+          >
+            <Check aria-hidden="true" className="h-4 w-4" />
+            使用当前目录
+          </button>
+        </footer>
+      </section>
     </div>
   );
   // Render at the viewport level so ancestors with transforms, filters or overflow clipping cannot trap the overlay.

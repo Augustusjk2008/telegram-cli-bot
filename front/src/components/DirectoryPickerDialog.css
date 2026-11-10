@@ -1,0 +1,311 @@
+/*
+ * DirectoryPickerDialog: an Orbit dialog (orbit-backdrop + orbit-dialog) portalled to <body>, so it
+ * cannot rely on any screen's scoped styles. A bottom sheet below 640px and a fixed-height window
+ * above it, so the controls stay put while browsing. Everything reads theme variables only.
+ */
+
+.dirpick {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: min(86dvh, 640px);
+  overflow: hidden;
+  color: var(--text);
+}
+
+/* The panel only takes focus so Escape works at once; it is not a control. */
+.dirpick:focus-visible {
+  outline: none;
+}
+
+/* ------------------------------------------------------------------ head */
+
+.dirpick-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px 14px;
+}
+
+.dirpick-head-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-outline);
+}
+
+.dirpick-head-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.dirpick-head-copy h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.dirpick-head-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.dirpick-head > .orbit-btn {
+  flex: none;
+  align-self: flex-start;
+  margin: -2px -6px 0 0;
+}
+
+/* ------------------------------------------------------------- path bar */
+
+.dirpick-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 20px 12px;
+}
+
+.dirpick-bar > .orbit-btn {
+  flex: none;
+}
+
+.dirpick-path {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-control);
+  background: var(--fill-subtle);
+  font: 12.5px/1.5 var(--code-font-family);
+}
+
+.dirpick-path-value {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dirpick-path-spinner {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.dirpick-note {
+  margin: -4px 20px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dirpick-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px 12px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--status-danger) 20%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  animation: orbitRise 200ms var(--ease-out);
+}
+
+.dirpick-error > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* ----------------------------------------------------------------- list */
+
+.dirpick-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 12px;
+  border-top: 1px solid var(--hairline);
+  scrollbar-width: thin;
+}
+
+.dirpick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  transition: opacity 140ms var(--ease-out);
+}
+
+/* Rows of the previous folder stay, dimmed, until the next listing arrives. */
+.dirpick-body[aria-busy="true"] .dirpick-list {
+  opacity: 0.5;
+}
+
+.dirpick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  transition: background-color 120ms var(--ease-out);
+}
+
+.dirpick-row:not(:disabled):hover {
+  background: var(--fill-hover);
+}
+
+.dirpick-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.dirpick-row-icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.dirpick-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dirpick-row-go {
+  flex: none;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms var(--ease-out);
+}
+
+.dirpick-row:not(:disabled):hover .dirpick-row-go,
+.dirpick-row:focus-visible .dirpick-row-go {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .dirpick-row-go {
+    opacity: 0.6;
+  }
+}
+
+.dirpick-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 160px;
+  padding: 24px 16px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.dirpick-empty {
+  margin: 6px 0;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-card);
+}
+
+.dirpick-empty > svg {
+  margin-bottom: 4px;
+  opacity: 0.7;
+}
+
+.dirpick-empty > p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------- create + footer */
+
+.dirpick-create {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--hairline);
+}
+
+.dirpick-create-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.dirpick-create-field > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  z-index: 1;
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.dirpick-create-field > .orbit-field {
+  height: 34px;
+  padding-left: 32px;
+  font-size: 13px;
+}
+
+.dirpick-create-field > .orbit-field:disabled {
+  opacity: 0.6;
+}
+
+.dirpick-create > .orbit-btn {
+  flex: none;
+  height: 34px;
+}
+
+.dirpick-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--hairline);
+}
+
+@media (min-width: 640px) {
+  .dirpick {
+    width: min(600px, calc(100vw - 32px));
+    height: min(80dvh, 620px);
+  }
+
+  .dirpick-foot {
+    padding-bottom: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dirpick-backdrop,
+  .dirpick,
+  .dirpick-error {
+    animation: none;
+  }
+}
