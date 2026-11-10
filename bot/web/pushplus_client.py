@@ -17,6 +17,13 @@ def _mask_token(token: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
+def _describe_error(exc: BaseException) -> str:
+    # Timeouts raise TimeoutError with an empty message; keep the type visible.
+    message = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {message}" if message else name
+
+
 class PushPlusClient:
     def __init__(
         self,
@@ -68,5 +75,10 @@ class PushPlusClient:
                     )
                     return False
         except (ClientError, TimeoutError, OSError, ValueError) as exc:
-            logger.warning("PushPlus 推送异常 token=%s error=%s", _mask_token(self.token), exc)
+            logger.warning(
+                "PushPlus 推送异常 token=%s timeout=%ss error=%s",
+                _mask_token(self.token),
+                self.timeout_seconds,
+                _describe_error(exc),
+            )
             return False
