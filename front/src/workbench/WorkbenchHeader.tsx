@@ -9,19 +9,13 @@ import {
   GitBranch,
   LogOut,
   MonitorSmartphone,
-  PanelBottom,
-  PanelBottomDashed,
-  PanelLeft,
-  PanelLeftDashed,
-  PanelRight,
-  PanelRightDashed,
-  PanelTop,
-  PanelTopDashed,
   Search,
+  type LucideIcon,
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { AppLogo } from "../components/AppLogo";
+import { WORKBENCH_PANE_ICONS } from "./workbenchPaneIcons";
 import type { WorkbenchProductMode } from "./workbenchTypes";
 
 type LayoutControlId = "sidebar" | "editor" | "terminal" | "chat";
@@ -40,6 +34,8 @@ type Props = {
   hasUnreadOtherBots?: boolean;
   announcementAction?: ReactNode;
   workspaceAction?: ReactNode;
+  /** Rendered right after the layout toggle group (the desktop layout menu). */
+  layoutAction?: ReactNode;
   sidebarVisible: boolean;
   editorVisible: boolean;
   terminalVisible: boolean;
@@ -66,6 +62,7 @@ export function WorkbenchHeader({
   hasUnreadOtherBots = false,
   announcementAction,
   workspaceAction,
+  layoutAction,
   sidebarVisible,
   editorVisible,
   terminalVisible,
@@ -85,39 +82,40 @@ export function WorkbenchHeader({
 }: Props) {
   const reduceMotion = useReducedMotion();
   const botLabelMotion = resolveMotionProps(premiumMotion.statusSettle, reduceMotion);
+  // Panes can sit anywhere in the layout presets, so the toggles name content instead of positions.
   const layoutControls: Array<{
     id: LayoutControlId;
     visible: boolean;
-    Icon: typeof PanelLeft;
+    Icon: LucideIcon;
     label: string;
     onToggle: () => void;
   }> = [
     {
       id: "sidebar" as const,
       visible: sidebarVisible,
-      Icon: sidebarVisible ? PanelLeft : PanelLeftDashed,
-      label: sidebarVisible ? "隐藏左侧栏" : "显示左侧栏",
+      Icon: WORKBENCH_PANE_ICONS.sidebar,
+      label: sidebarVisible ? "隐藏侧边栏" : "显示侧边栏",
       onToggle: onToggleSidebar,
     },
     {
       id: "editor" as const,
       visible: editorVisible,
-      Icon: editorVisible ? PanelTop : PanelTopDashed,
+      Icon: WORKBENCH_PANE_ICONS.editor,
       label: editorVisible ? "隐藏编辑/预览区" : "显示编辑/预览区",
       onToggle: onToggleEditor,
     },
     {
       id: "terminal" as const,
       visible: terminalVisible,
-      Icon: terminalVisible ? PanelBottom : PanelBottomDashed,
-      label: terminalVisible ? "隐藏底部终端" : "显示底部终端",
+      Icon: WORKBENCH_PANE_ICONS.terminal,
+      label: terminalVisible ? "隐藏终端" : "显示终端",
       onToggle: onToggleTerminal,
     },
     {
       id: "chat" as const,
       visible: chatVisible,
-      Icon: chatVisible ? PanelRight : PanelRightDashed,
-      label: chatVisible ? "隐藏右侧聊天" : "显示右侧聊天",
+      Icon: WORKBENCH_PANE_ICONS.chat,
+      label: chatVisible ? "隐藏聊天" : "显示聊天",
       onToggle: onToggleChat,
     },
   ].filter((item) => !availableLayoutControls || availableLayoutControls.includes(item.id));
@@ -188,7 +186,7 @@ export function WorkbenchHeader({
           <kbd className="orbit-kbd">Ctrl P</kbd>
         </button>
       ) : null}
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5">
+      <div className="flex min-w-fit flex-1 items-center justify-end gap-1.5">
         {productMode && onProductModeChange ? (
           <div
             aria-label="产品模式"
@@ -255,6 +253,7 @@ export function WorkbenchHeader({
             ))}
           </div>
         ) : null}
+        {layoutAction}
         <div aria-label="视图模式" className="workbench-segmented inline-flex">
           <span className="hidden h-7 items-center px-1.5 text-[var(--muted)] xl:inline-flex" aria-hidden="true">
             <MonitorSmartphone className="h-3.5 w-3.5" />

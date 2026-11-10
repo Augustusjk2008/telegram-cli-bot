@@ -71,18 +71,13 @@
   position: relative;
   transition:
     grid-template-columns 220ms cubic-bezier(0.2, 0, 0, 1),
+    grid-template-rows 220ms cubic-bezier(0.2, 0, 0, 1),
     gap 180ms ease;
 }
 
 .solo-workbench-root [data-testid="solo-workbench-shell"] > .grid {
   transition:
     grid-template-columns 220ms cubic-bezier(0.2, 0, 0, 1),
-    gap 180ms ease;
-}
-
-.desktop-workbench-root [data-testid="desktop-workbench-center-rows"] {
-  transition:
-    grid-template-rows 220ms cubic-bezier(0.2, 0, 0, 1),
     gap 180ms ease;
 }
 
@@ -103,13 +98,8 @@
   gap: 0;
 }
 
-.desktop-workbench-root[data-has-focus="true"] [data-testid="desktop-workbench-center-rows"] {
-  gap: 0;
-}
-
 .desktop-workbench-root[data-resizing="true"] [data-testid="desktop-workbench-columns"],
 .solo-workbench-root[data-resizing="true"] [data-testid="solo-workbench-shell"] > .grid,
-.desktop-workbench-root[data-resizing="true"] [data-testid="desktop-workbench-center-rows"],
 .desktop-workbench-root[data-resizing="true"] .desktop-workbench-pane {
   transition: none !important;
 }
@@ -296,6 +286,171 @@
   border-radius: 999px;
   background: var(--accent);
   animation: workbenchActivityGlide 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* A rail in the right-most layout slot sits on the sidebar's right edge. */
+.workbench-activity-rail[data-rail-side="end"] .workbench-activity-button[data-active="true"]::after {
+  inset: 7px -6px 7px auto;
+}
+
+/* Rearrange mode: overlays are grid items stacked above the panes (z 1) and separators (z 12). */
+.workbench-layout-slot-overlay {
+  position: relative;
+  z-index: 25;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px dashed var(--accent-outline);
+  border-radius: var(--desktop-workbench-pane-radius);
+  background: color-mix(in srgb, var(--workbench-panel-bg) 82%, transparent);
+  /* Glass panel colours can be translucent; blur keeps pane text underneath from competing with the labels. */
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  animation: workbenchOverlayFadeIn 120ms ease-out;
+  transition:
+    border-color 140ms var(--ease-out),
+    box-shadow 160ms var(--ease-out),
+    opacity 140ms var(--ease-out);
+}
+
+.workbench-layout-slot-overlay[data-placeholder="true"] {
+  background: color-mix(in srgb, var(--workbench-panel-bg) 55%, transparent);
+  color: var(--muted);
+}
+
+.workbench-layout-slot-overlay[data-drag-source="true"] {
+  cursor: grabbing;
+  opacity: 0.6;
+}
+
+.workbench-layout-slot-overlay[data-drop-target="true"] {
+  border-style: solid;
+  border-color: var(--accent);
+  box-shadow: var(--glow-halo);
+}
+
+.workbench-layout-slot-body {
+  display: flex;
+  max-width: 100%;
+  max-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px;
+  text-align: center;
+}
+
+.workbench-layout-slot-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.workbench-layout-slot-note {
+  border: 1px solid var(--border);
+  border-radius: var(--desktop-workbench-chip-radius);
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.workbench-layout-slot-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workbench-layout-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  cursor: auto;
+}
+
+.workbench-layout-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 26;
+  display: flex;
+  max-width: calc(100% - 24px);
+  align-items: center;
+  gap: 8px;
+  transform: translateX(-50%);
+  border: 1px solid var(--accent-outline);
+  border-radius: var(--desktop-workbench-control-radius);
+  background: var(--workbench-panel-bg);
+  padding: 4px 4px 4px 12px;
+  box-shadow: var(--shadow-card);
+  animation: workbenchOverlayFadeIn 120ms ease-out;
+}
+
+.workbench-layout-banner-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.workbench-layout-empty-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.workbench-layout-empty-hint > span {
+  border: 1px solid var(--border);
+  border-radius: var(--desktop-workbench-control-radius);
+  background: color-mix(in srgb, var(--workbench-panel-bg) 82%, transparent);
+  padding: 8px 14px;
+}
+
+/* The layout menu is portalled to <body>, so these selectors are not scoped to the workbench root. */
+.workbench-layout-diagram {
+  display: grid;
+  width: 72px;
+  height: 40px;
+  flex-shrink: 0;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--workbench-panel-bg) 60%, transparent);
+  padding: 2px;
+}
+
+.workbench-layout-diagram-cell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--muted);
+}
+
+.workbench-layout-option[aria-pressed="true"] .workbench-layout-diagram-cell {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--accent);
 }
 
 .workbench-pane-chrome,
@@ -620,6 +775,10 @@
   border-color: transparent;
   background: var(--accent-soft-strong);
   color: var(--accent);
+}
+
+:root[data-style-profile="paper"] .desktop-workbench-root .workbench-activity-rail[data-rail-side="end"] .workbench-activity-button[data-active="true"]::after {
+  inset: 8px -6px 8px auto;
 }
 
 :root[data-style-profile="paper"] .desktop-workbench-root .workbench-activity-button[data-active="true"]::after {
@@ -1016,7 +1175,6 @@
 @media (prefers-reduced-motion: reduce) {
   .desktop-workbench-root,
   .desktop-workbench-root [data-testid="desktop-workbench-columns"],
-  .desktop-workbench-root [data-testid="desktop-workbench-center-rows"],
   .desktop-workbench-pane,
   .desktop-workbench-pane[data-focused="true"],
   .desktop-workbench-statusbar [data-workbench-status="active"]::after,
@@ -1026,6 +1184,9 @@
   [data-runtime-status-settle="true"],
   [data-testid="bot-switcher-unread-indicator"][data-unread-bump="true"],
   .workbench-activity-button[data-active="true"]::after,
+  .workbench-layout-slot-overlay,
+  .workbench-layout-banner,
+  .workbench-layout-option,
   .workbench-dialog-backdrop,
   .workbench-dialog-panel,
   .workbench-sheet-panel,

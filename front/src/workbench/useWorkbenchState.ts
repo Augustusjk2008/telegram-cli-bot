@@ -1,16 +1,23 @@
 import { useEffect, useState } from "react";
 import {
-  clampPaneState,
   DEFAULT_DESKTOP_PANE_STATE,
   type DesktopPaneState,
   type DesktopSidebarView,
 } from "./workbenchTypes";
+import {
+  applyLayoutResize,
+  normalizeWorkbenchLayout,
+  resetLayoutTemplate as resetTemplateLayout,
+  selectLayoutTemplate as selectTemplateLayout,
+  serializeWorkbenchLayout,
+  swapLayoutPanes as swapTemplatePanes,
+  type LayoutTemplateId,
+  type ResolvedLayoutResizer,
+  type WorkbenchLayoutState,
+  type WorkbenchPaneId,
+} from "./workbenchLayout";
 
 export const WORKBENCH_PANE_STATE_STORAGE_KEY = "web-workbench-pane-state";
-
-function toNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
 
 function normalizeStoredPaneState(raw: unknown): DesktopPaneState {
   if (!raw || typeof raw !== "object") {
@@ -34,9 +41,7 @@ function normalizeStoredPaneState(raw: unknown): DesktopPaneState {
       ? candidate.chatCollapsed
       : DEFAULT_DESKTOP_PANE_STATE.chatCollapsed,
     sidebarView: DEFAULT_DESKTOP_PANE_STATE.sidebarView,
-    sidebarWidthPx: toNumber(candidate.sidebarWidthPx, toNumber(candidate.filesWidthPx, DEFAULT_DESKTOP_PANE_STATE.sidebarWidthPx)),
-    chatWidthPx: toNumber(candidate.chatWidthPx, DEFAULT_DESKTOP_PANE_STATE.chatWidthPx),
-    editorHeightPx: toNumber(candidate.editorHeightPx, DEFAULT_DESKTOP_PANE_STATE.editorHeightPx),
+    layout: normalizeWorkbenchLayout(candidate),
   };
 }
 
@@ -57,12 +62,22 @@ export function useWorkbenchState() {
 
   useEffect(() => {
     try {
-      const { sidebarView: _sidebarView, ...persistedPaneState } = paneState;
-      localStorage.setItem(WORKBENCH_PANE_STATE_STORAGE_KEY, JSON.stringify(persistedPaneState));
+      const { sidebarView: _sidebarView, layout, ...collapsedFlags } = paneState;
+      localStorage.setItem(
+        WORKBENCH_PANE_STATE_STORAGE_KEY,
+        JSON.stringify({ ...collapsedFlags, ...serializeWorkbenchLayout(layout) }),
+      );
     } catch {
       // Ignore storage failures and keep the in-memory state.
     }
   }, [paneState]);
+
+  function updateLayout(update: (layout: WorkbenchLayoutState) => WorkbenchLayoutState) {
+    setPaneState((current) => {
+      const layout = update(current.layout);
+      return layout === current.layout ? current : { ...current, layout };
+    });
+  }
 
   function toggleSidebar() {
     setPaneState((current) => ({
@@ -107,20 +122,21 @@ export function useWorkbenchState() {
     }));
   }
 
-  function resizePane(
-    key: "sidebarWidthPx" | "chatWidthPx" | "editorHeightPx",
-    nextValue: number,
-    options?: { containerWidthPx?: number; containerHeightPx?: number },
-  ) {
-    setPaneState((current) => ({
-      ...clampPaneState(
-        {
-          ...current,
-          [key]: nextValue,
-        },
-        options,
-      ),
-    }));
+  /** `resizer` is the descriptor captured at drag start and `deltaPx` is measured from there. */
+  function resizeLayout(resizer: ResolvedLayoutResizer, deltaPx: number) {
+    updateLayout((layout) => applyLayoutResize(layout, resizer, deltaPx));
+  }
+
+  function selectLayoutTemplate(id: LayoutTemplateId) {
+    updateLayout((layout) => selectTemplateLayout(layout, id));
+  }
+
+  function swapLayoutPanes(a: WorkbenchPaneId, b: WorkbenchPaneId) {
+    updateLayout((layout) => swapTemplatePanes(layout, a, b));
+  }
+
+  function resetLayoutTemplate() {
+    updateLayout(resetTemplateLayout);
   }
 
   return {
@@ -131,6 +147,9 @@ export function useWorkbenchState() {
     toggleChat,
     setSidebarView,
     restoreSidebarView,
-    resizePane,
+    resizeLayout,
+    selectLayoutTemplate,
+    swapLayoutPanes,
+    resetLayoutTemplate,
   };
 }

@@ -1,7 +1,7 @@
 import { relativeRemotePath } from "../services/remoteWorkspace";
 import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
 import { clsx } from "clsx";
-import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -40,6 +40,8 @@ import { PaneResizer } from "./PaneResizer";
 import { SearchPane } from "./SearchPane";
 import { WorkbenchActivityRail } from "./WorkbenchActivityRail";
 import { WorkbenchHeader } from "./WorkbenchHeader";
+import { WorkbenchLayoutEditor } from "./WorkbenchLayoutEditor";
+import { WorkbenchLayoutMenu } from "./WorkbenchLayoutMenu";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import { WorkbenchStatusBar } from "./WorkbenchStatusBar";
 import { WorkbenchTransferStatus } from "./WorkbenchTransferStatus";
@@ -63,10 +65,11 @@ import { useWorkbenchSession } from "./useWorkbenchSession";
 import { useWorkbenchState } from "./useWorkbenchState";
 import { toWorkspaceRelativeSourcePath } from "./debugSourcePath";
 import {
-  clampPaneState,
-  COLLAPSED_SIDEBAR_SIZE_PX,
-  MIN_TERMINAL_HEIGHT_PX,
-  PANE_RESIZER_SIZE_PX,
+  resolveWorkbenchLayout,
+  type ResolvedLayoutResizer,
+  type WorkbenchPaneId,
+} from "./workbenchLayout";
+import {
   type ChatWorkbenchStatus,
   type EditorRevealLocation,
   type FocusedWorkbenchPane,
@@ -202,21 +205,38 @@ export function DesktopWorkbench({
   onChatPaneVisibilityChange,
   onRemoteReconnect,
 }: Props) {
-  const { paneState, toggleSidebar, toggleEditor, toggleTerminal, toggleChat, setSidebarView, restoreSidebarView, resizePane } = useWorkbenchState();
+  const {
+    paneState,
+    toggleSidebar,
+    toggleEditor,
+    toggleTerminal,
+    toggleChat,
+    setSidebarView,
+    restoreSidebarView,
+    resizeLayout,
+    selectLayoutTemplate,
+    swapLayoutPanes,
+    resetLayoutTemplate,
+  } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace), platform: remoteWorkspace?.platform });
   const workspaceUserScope = `${accountId || ""}\n${fileTree.rootPath}`;
   const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
   const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles, enableDocumentSync: !remoteWorkspace, remoteWorkspace });
-  const columnsRef = useRef<HTMLDivElement | null>(null);
-  const centerRowsRef = useRef<HTMLDivElement | null>(null);
+  const layoutGridRef = useRef<HTMLDivElement | null>(null);
+  const layoutMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusToLayoutMenuRef = useRef(false);
+  /** Divider descriptor captured at drag start; `moved` ignores zero deltas until the pointer really moves. */
+  const resizeDragRef = useRef<{ resizer: ResolvedLayoutResizer; moved: boolean } | null>(null);
   const restoringRef = useRef<{ scopeIdentity: string; requestSeq: number } | null>(null);
   const restoreRequestSerialRef = useRef(0);
   const previousBotAliasRef = useRef(botAlias);
   const previousWorkspaceRootRef = useRef("");
+  // Content box of the layout grid; jsdom has no layout, so the 1440×900 fallback stays in tests.
   const [layoutBounds, setLayoutBounds] = useState({
-    columnsWidthPx: 1440,
-    centerHeightPx: 900,
+    widthPx: 1440,
+    heightPx: 900,
   });
+  const [layoutEditing, setLayoutEditing] = useState(false);
   const [pendingSidebarWorkdir, setPendingSidebarWorkdir] = useState("");
   const previewRequestSeqRef = useRef(new Map<string, number>());
   const previewRequestSerialRef = useRef(0);
@@ -370,10 +390,7 @@ export function DesktopWorkbench({
     },
   });
 
-  const layoutState = clampPaneState(paneState, {
-    containerWidthPx: layoutBounds.columnsWidthPx,
-    containerHeightPx: layoutBounds.centerHeightPx,
-  });
+  const layoutState = paneState;
   const canViewPlugins = sessionCapabilities.includes("view_plugins");
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
@@ -414,50 +431,40 @@ export function DesktopWorkbench({
       : null,
   });
 
-  const showEditorPane = !structureOnly && (focusedPane === "editor" || (!focusedPane && !layoutState.editorCollapsed));
+  const paneAvailability = useMemo<Record<WorkbenchPaneId, boolean>>(() => ({
+    sidebar: true,
+    editor: !structureOnly,
+    terminal: !structureOnly,
+    chat: true,
+  }), [structureOnly]);
+  const paneCollapsed = useMemo<Record<WorkbenchPaneId, boolean>>(() => ({
+    sidebar: layoutState.sidebarCollapsed,
+    editor: layoutState.editorCollapsed,
+    terminal: layoutState.terminalCollapsed,
+    chat: layoutState.chatCollapsed,
+  }), [layoutState.chatCollapsed, layoutState.editorCollapsed, layoutState.sidebarCollapsed, layoutState.terminalCollapsed]);
+  // Layout changes only edit grid templates and placements; the pane sections never move in the DOM.
+  const resolvedLayout = useMemo(() => resolveWorkbenchLayout({
+    layout: layoutState.layout,
+    available: paneAvailability,
+    collapsed: paneCollapsed,
+    focusedPane,
+    editing: layoutEditing,
+    container: { width: layoutBounds.widthPx, height: layoutBounds.heightPx },
+  }), [focusedPane, layoutBounds, layoutEditing, layoutState.layout, paneAvailability, paneCollapsed]);
+  const sidebarPlacement = resolvedLayout.panes.sidebar;
+  const editorPlacement = resolvedLayout.panes.editor;
+  const terminalPlacement = resolvedLayout.panes.terminal;
+  const chatPlacement = resolvedLayout.panes.chat;
+  const showEditorPane = editorPlacement.displayed;
   useEffect(() => {
     previewLoader.reconcile(tabs.tabs.filter((tab) => tab.kind === "file-preview").map((tab) => tab.sourcePath || ""), showEditorPane && tabs.activeTab?.kind === "file-preview" ? tabs.activeTab.sourcePath || "" : "");
   }, [previewLoader, tabs.tabs, tabs.activeTab, showEditorPane]);
-  const showTerminalPane = !structureOnly && (focusedPane === "terminal" || (!focusedPane && !layoutState.terminalCollapsed));
-  const showCenterPane = showEditorPane || showTerminalPane;
-  const showChatPane = focusedPane === "chat" || (!focusedPane && !layoutState.chatCollapsed);
-  const showSidebarResizer = structureOnly
-    || (!focusedPane && (showCenterPane || (!layoutState.sidebarCollapsed && showChatPane)));
-  const showChatResizer = !focusedPane && showChatPane && (structureOnly || showCenterPane);
-  const columnTemplate = structureOnly
-    ? focusedPane === "sidebar"
-      ? "minmax(0, 1fr) 0px 0px 0px 0px"
-      : focusedPane === "chat"
-        ? "0px 0px 0px 0px minmax(0, 1fr)"
-        : `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px 0px ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`
-    : focusedPane === "sidebar"
-      ? "minmax(0, 1fr) 0px 0px 0px 0px"
-      : focusedPane === "chat"
-        ? "0px 0px 0px 0px minmax(0, 1fr)"
-        : focusedPane === "editor" || focusedPane === "terminal"
-          ? "0px 0px minmax(0, 1fr) 0px 0px"
-          : showCenterPane
-            ? `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${PANE_RESIZER_SIZE_PX}px minmax(0, 1fr) ${layoutState.chatCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px ${layoutState.chatCollapsed ? 0 : layoutState.chatWidthPx}px`
-            : showChatPane
-              ? `${layoutState.sidebarCollapsed ? COLLAPSED_SIDEBAR_SIZE_PX : layoutState.sidebarWidthPx}px ${layoutState.sidebarCollapsed ? 0 : PANE_RESIZER_SIZE_PX}px 0px 0px minmax(0, 1fr)`
-              : layoutState.sidebarCollapsed
-                ? `${COLLAPSED_SIDEBAR_SIZE_PX}px 0px 0px 0px 0px`
-                : "minmax(0, 1fr) 0px 0px 0px 0px";
-  const centerRowTemplate = structureOnly
-    ? "0px 0px 0px"
-    : focusedPane === "editor"
-      ? "minmax(0, 1fr) 0px 0px"
-      : focusedPane === "terminal"
-        ? `0px 0px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`
-        : layoutState.editorCollapsed
-          ? layoutState.terminalCollapsed
-            ? "0px 0px 0px"
-            : `0px 0px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`
-          : layoutState.terminalCollapsed
-            ? "minmax(0, 1fr) 0px 0px"
-            : `${layoutState.editorHeightPx}px ${PANE_RESIZER_SIZE_PX}px minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`;
+  const showTerminalPane = terminalPlacement.displayed;
+  const showChatPane = chatPlacement.displayed;
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
+  const sidebarRailAtEnd = sidebarPlacement.railSide === "end";
   const sidebarContentMotion = resolveMotionProps(premiumMotion.sidebarContent, reduceMotion);
   const dialogPanelMotion = resolveMotionProps(premiumMotion.dialogPanel, reduceMotion);
   const availableActivityItems: WorkbenchActivityId[] = structureOnly
@@ -531,33 +538,38 @@ export function DesktopWorkbench({
     onChatPaneVisibilityChange?.(showChatPane);
   }, [onChatPaneVisibilityChange, showChatPane]);
 
+  useEffect(() => {
+    // The layout menu trigger is disabled while rearranging, so focus can only return after this render.
+    if (!layoutEditing && returnFocusToLayoutMenuRef.current) {
+      returnFocusToLayoutMenuRef.current = false;
+      layoutMenuTriggerRef.current?.focus();
+    }
+  }, [layoutEditing]);
+
   useLayoutEffect(() => {
     const updateLayoutBounds = () => {
-      const columns = columnsRef.current;
-      const centerRows = centerRowsRef.current;
-      const columnsStyle = columns ? window.getComputedStyle(columns) : null;
-      const centerStyle = centerRows ? window.getComputedStyle(centerRows) : null;
+      const grid = layoutGridRef.current;
+      const gridStyle = grid ? window.getComputedStyle(grid) : null;
       // Client dimensions exclude borders; grid tracks also exclude the container padding.
-      const nextColumnsWidthPx = columns
-        ? columns.clientWidth - (parseFloat(columnsStyle?.paddingLeft || "0") || 0) - (parseFloat(columnsStyle?.paddingRight || "0") || 0)
+      const nextWidthPx = grid
+        ? grid.clientWidth - (parseFloat(gridStyle?.paddingLeft || "0") || 0) - (parseFloat(gridStyle?.paddingRight || "0") || 0)
         : 0;
-      const nextCenterHeightPx = centerRows
-        ? centerRows.clientHeight - (parseFloat(centerStyle?.paddingTop || "0") || 0) - (parseFloat(centerStyle?.paddingBottom || "0") || 0)
+      const nextHeightPx = grid
+        ? grid.clientHeight - (parseFloat(gridStyle?.paddingTop || "0") || 0) - (parseFloat(gridStyle?.paddingBottom || "0") || 0)
         : 0;
 
       setLayoutBounds((current) => {
-        const columnsWidthPx = nextColumnsWidthPx > 0 ? nextColumnsWidthPx : current.columnsWidthPx;
-        const centerHeightPx = nextCenterHeightPx > 0 ? nextCenterHeightPx : current.centerHeightPx;
-        return columnsWidthPx === current.columnsWidthPx && centerHeightPx === current.centerHeightPx
+        const widthPx = nextWidthPx > 0 ? nextWidthPx : current.widthPx;
+        const heightPx = nextHeightPx > 0 ? nextHeightPx : current.heightPx;
+        return widthPx === current.widthPx && heightPx === current.heightPx
           ? current
-          : { columnsWidthPx, centerHeightPx };
+          : { widthPx, heightPx };
       });
     };
 
     updateLayoutBounds();
     const observer = window.ResizeObserver ? new window.ResizeObserver(updateLayoutBounds) : null;
-    if (columnsRef.current) observer?.observe(columnsRef.current);
-    if (centerRowsRef.current) observer?.observe(centerRowsRef.current);
+    if (layoutGridRef.current) observer?.observe(layoutGridRef.current);
     window.addEventListener("resize", updateLayoutBounds);
     return () => {
       observer?.disconnect();
@@ -572,6 +584,7 @@ export function DesktopWorkbench({
     previousBotAliasRef.current = botAlias;
     restoreSidebarView("files");
     setFocusedPane(null);
+    setLayoutEditing(false);
     setTerminalOverride(null);
     setPendingTerminalOverride(null);
     setPendingSidebarWorkdir("");
@@ -588,6 +601,7 @@ export function DesktopWorkbench({
     }
     restoreSidebarView("files");
     setFocusedPane(null);
+    setLayoutEditing(false);
     setTerminalOverride(null);
     setPendingTerminalOverride(null);
     setPendingSidebarWorkdir("");
@@ -737,6 +751,16 @@ export function DesktopWorkbench({
 
   function toggleFocusedPane(nextPane: Exclude<FocusedWorkbenchPane, null>) {
     setFocusedPane((current) => current === nextPane ? null : nextPane);
+  }
+
+  function startLayoutEditing() {
+    setFocusedPane(null);
+    setLayoutEditing(true);
+  }
+
+  function finishLayoutEditing() {
+    returnFocusToLayoutMenuRef.current = true;
+    setLayoutEditing(false);
   }
 
   function selectActivityItem(item: WorkbenchActivityId) {
@@ -1431,6 +1455,17 @@ export function DesktopWorkbench({
         terminalVisible={!structureOnly && !layoutState.terminalCollapsed}
         chatVisible={!layoutState.chatCollapsed}
         availableLayoutControls={structureOnly ? ["sidebar", "chat"] : undefined}
+        layoutAction={(
+          <WorkbenchLayoutMenu
+            activeTemplate={layoutState.layout.activeTemplate}
+            layout={layoutState.layout}
+            disabled={layoutEditing}
+            triggerRef={layoutMenuTriggerRef}
+            onSelectTemplate={selectLayoutTemplate}
+            onStartRearrange={startLayoutEditing}
+            onResetTemplate={resetLayoutTemplate}
+          />
+        )}
         productMode={productMode}
         soloAvailable={soloAvailable}
         onProductModeChange={onProductModeChange}
@@ -1445,33 +1480,51 @@ export function DesktopWorkbench({
       />
 
       <div data-testid="desktop-workbench-shell" className="desktop-workbench-shell relative min-h-0 overflow-hidden">
+        {/* Children stay flat and in this fixed order; layout changes only edit grid templates and placements. */}
         <div
           data-testid="desktop-workbench-columns"
-          ref={columnsRef}
+          data-layout-template={resolvedLayout.templateId}
+          data-layout-editing={layoutEditing ? "true" : "false"}
+          ref={layoutGridRef}
           className="grid h-full min-h-0"
-          style={{ gridTemplateColumns: columnTemplate }}
+          style={{ gridTemplateColumns: resolvedLayout.gridTemplateColumns, gridTemplateRows: resolvedLayout.gridTemplateRows }}
         >
-
           <section
+            key="pane-sidebar"
             data-testid="desktop-pane-files"
+            data-layout-slot={sidebarPlacement.slot}
             data-collapsed={layoutState.sidebarCollapsed ? "true" : "false"}
             data-focused={focusedPane === "sidebar" ? "true" : "false"}
-            className="desktop-workbench-pane orbit-island grid min-h-0 overflow-hidden"
+            inert={layoutEditing || undefined}
+            className={clsx(
+              "desktop-workbench-pane orbit-island grid min-h-0 overflow-hidden",
+              // Never `hidden`: a sidebar without space stays in its 0-size track so the tree keeps its scroll position.
+              !sidebarPlacement.displayed && "invisible",
+            )}
+            style={{ gridColumn: sidebarPlacement.gridColumn, gridRow: sidebarPlacement.gridRow }}
           >
             <div
               className={clsx(
                 "theme-illustration-content grid min-h-0",
-                showSidebarContent ? "grid-cols-[48px_minmax(0,1fr)]" : "grid-cols-[48px]",
+                !showSidebarContent
+                  ? "grid-cols-[48px]"
+                  : sidebarRailAtEnd
+                    ? "grid-cols-[minmax(0,1fr)_48px]"
+                    : "grid-cols-[48px_minmax(0,1fr)]",
               )}
             >
               <div
                 data-testid="desktop-workbench-activity-rail-illustration-host"
-                className="workbench-activity-rail-illustration-host relative min-h-0 min-w-0 overflow-hidden"
+                className={clsx(
+                  "workbench-activity-rail-illustration-host relative min-h-0 min-w-0 overflow-hidden",
+                  showSidebarContent && sidebarRailAtEnd && "col-start-2 row-start-1",
+                )}
               >
                 <WorkbenchActivityRail
                   activeItem={activeActivityItem}
                   sidebarCollapsed={layoutState.sidebarCollapsed}
                   availableItems={availableActivityItems}
+                  side={sidebarPlacement.railSide}
                   onToggleSidebar={toggleSidebar}
                   onSelectItem={selectActivityItem}
                 />
@@ -1481,7 +1534,10 @@ export function DesktopWorkbench({
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
                     key={activeSidebarView}
-                    className="flex min-h-0 min-w-0 flex-1 flex-col"
+                    className={clsx(
+                      "flex min-h-0 min-w-0 flex-1 flex-col",
+                      sidebarRailAtEnd && "col-start-1 row-start-1",
+                    )}
                     {...sidebarContentMotion}
                   >
                     {activeSidebarView === "files" ? (
@@ -1497,194 +1553,151 @@ export function DesktopWorkbench({
             </div>
           </section>
 
-          {showSidebarResizer ? (
-            <PaneResizer
-              ariaLabel="调整文件区宽度"
-              axis="x"
-              onResizeStart={() => setIsResizingPane(true)}
-              onResizeEnd={() => setIsResizingPane(false)}
-              onResizeDelta={(deltaPx) =>
-                resizePane("sidebarWidthPx", layoutState.sidebarWidthPx + deltaPx, {
-                  containerWidthPx: layoutBounds.columnsWidthPx,
-                  containerHeightPx: layoutBounds.centerHeightPx,
-                })}
-            />
-          ) : (
-            <div aria-hidden="true" />
-          )}
+          {!structureOnly ? (
+            <section
+              key="pane-editor"
+              data-testid="desktop-pane-editor"
+              data-layout-slot={editorPlacement.slot}
+              data-collapsed={layoutState.editorCollapsed ? "true" : "false"}
+              data-focused={focusedPane === "editor" ? "true" : "false"}
+              inert={layoutEditing || undefined}
+              className={clsx(
+                "desktop-workbench-pane orbit-island orbit-island--solid min-h-0 overflow-hidden",
+                !showEditorPane && "hidden",
+              )}
+              style={{ gridColumn: editorPlacement.gridColumn, gridRow: editorPlacement.gridRow }}
+            >
+              <div className="theme-illustration-content h-full min-h-0">
+                <Suspense fallback={paneFallback}>
+                  <EditorPane
+                  previewVisible={showEditorPane}
+                  remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
+                  botAlias={botAlias}
+                  client={client}
+                  tabs={tabs.tabs}
+                  activeTab={tabs.activeTab}
+                  activeTabPath={tabs.activeTabPath}
+                  breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
+                  currentLine={activeEditorLine}
+                  editorReveal={editorReveal}
+                  navigationCommand={editorNavigationCommand}
+                  canNavigateBack={codeNavigationHistory.canGoBack}
+                  canNavigateForward={codeNavigationHistory.canGoForward}
+                  allowCodeJump={allowCodeJump}
+                  canNavigateImplementation={canNavigateImplementation}
+                  canUseInlineCompletion={canUseInlineCompletion}
+                  onResolveCodeNavigation={(input) => {
+                    setEditorNavigationCommand(null);
+                    void handleResolveCodeNavigation(input);
+                  }}
+                  onNavigateBack={() => {
+                    void codeNavigationHistory.goBack();
+                  }}
+                  onNavigateForward={() => {
+                    void codeNavigationHistory.goForward();
+                  }}
+                  onToggleBreakpoint={!remoteWorkspace && tabs.activeTab
+                    ? (line) => {
+                        void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
+                      }
+                    : undefined}
+                  onActivateTab={(path) => {
+                    setEditorReveal(null);
+                    void tabs.activateTab(path);
+                  }}
+                  onCloseTab={tabs.closeTab}
+                  onChangeActiveContent={tabs.updateActiveContent}
+                  onSaveActiveTab={() => void tabs.saveActiveTab()}
+                  onCloseAll={tabs.closeAllTabs}
+                  onCloseOthers={tabs.closeOtherTabs}
+                  onCloseTabsToRight={tabs.closeTabsToRight}
+                  onReopenLastClosed={() => {
+                    void tabs.reopenLastClosedTab();
+                  }}
+                  onRevealInTree={(path) => {
+                    setSidebarView("files");
+                    void fileTree.revealPath(path);
+                  }}
+                  onSwitchFileView={(path, view) => {
+                    if (view === "preview") {
+                      void loadPreview(path, "preview");
+                      return;
+                    }
+                    void tabs.openFile(path);
+                  }}
+                  onApplyHostEffects={runPluginHostEffects}
+                  onClosePluginTab={(path) => {
+                    tabs.closePath(path);
+                  }}
+                  onReopenPluginView={(target) => {
+                    void openPluginViewTab(target);
+                  }}
+                  onLoadFullPreview={(path) => void loadPreview(path, "full")}
+                  focused={focusedPane === "editor"}
+                  onToggleFocus={() => toggleFocusedPane("editor")}
+                  />
+                </Suspense>
+              </div>
+            </section>
+          ) : null}
 
-          <div
-            data-testid="desktop-workbench-center-rows"
-            ref={centerRowsRef}
-            className="grid min-h-0 overflow-hidden"
-            style={{ gridTemplateRows: centerRowTemplate }}
-          >
-            {!structureOnly ? (
-              <section
-                data-testid="desktop-pane-editor"
-                data-collapsed={layoutState.editorCollapsed ? "true" : "false"}
-                data-focused={focusedPane === "editor" ? "true" : "false"}
-                className={clsx(
-                  "desktop-workbench-pane orbit-island orbit-island--solid min-h-0 overflow-hidden",
-                  !showEditorPane && "hidden",
-                )}
-              >
-                <div className="theme-illustration-content h-full min-h-0">
-                  <Suspense fallback={paneFallback}>
-                    <EditorPane
-                    previewVisible={showEditorPane}
-                    remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
+          {!structureOnly ? (
+            <section
+              key="pane-terminal"
+              data-testid="desktop-pane-terminal"
+              data-layout-slot={terminalPlacement.slot}
+              data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
+              data-focused={focusedPane === "terminal" ? "true" : "false"}
+              inert={layoutEditing || undefined}
+              className={clsx(
+                "desktop-workbench-pane orbit-island orbit-island--solid min-h-0 overflow-hidden",
+                !showTerminalPane && "hidden",
+              )}
+              style={{ gridColumn: terminalPlacement.gridColumn, gridRow: terminalPlacement.gridRow }}
+            >
+              <div className="theme-illustration-content h-full min-h-0">
+                <Suspense fallback={paneFallback}>
+                  <TerminalPane
+                    authToken={authToken}
                     botAlias={botAlias}
                     client={client}
-                    tabs={tabs.tabs}
-                    activeTab={tabs.activeTab}
-                    activeTabPath={tabs.activeTabPath}
-                    breakpointLines={tabs.activeTab ? debug.breakpointLinesForPath(tabs.activeTab.path) : []}
-                    currentLine={activeEditorLine}
-                    editorReveal={editorReveal}
-                    navigationCommand={editorNavigationCommand}
-                    canNavigateBack={codeNavigationHistory.canGoBack}
-                    canNavigateForward={codeNavigationHistory.canGoForward}
-                    allowCodeJump={allowCodeJump}
-                    canNavigateImplementation={canNavigateImplementation}
-                    canUseInlineCompletion={canUseInlineCompletion}
-                    onResolveCodeNavigation={(input) => {
-                      setEditorNavigationCommand(null);
-                      void handleResolveCodeNavigation(input);
-                    }}
-                    onNavigateBack={() => {
-                      void codeNavigationHistory.goBack();
-                    }}
-                    onNavigateForward={() => {
-                      void codeNavigationHistory.goForward();
-                    }}
-                    onToggleBreakpoint={!remoteWorkspace && tabs.activeTab
-                      ? (line) => {
-                          void debug.toggleBreakpoint(tabs.activeTab?.path || "", line);
-                        }
-                      : undefined}
-                    onActivateTab={(path) => {
-                      setEditorReveal(null);
-                      void tabs.activateTab(path);
-                    }}
-                    onCloseTab={tabs.closeTab}
-                    onChangeActiveContent={tabs.updateActiveContent}
-                    onSaveActiveTab={() => void tabs.saveActiveTab()}
-                    onCloseAll={tabs.closeAllTabs}
-                    onCloseOthers={tabs.closeOtherTabs}
-                    onCloseTabsToRight={tabs.closeTabsToRight}
-                    onReopenLastClosed={() => {
-                      void tabs.reopenLastClosedTab();
-                    }}
-                    onRevealInTree={(path) => {
-                      setSidebarView("files");
-                      void fileTree.revealPath(path);
-                    }}
-                    onSwitchFileView={(path, view) => {
-                      if (view === "preview") {
-                        void loadPreview(path, "preview");
-                        return;
+                    preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
+                    pendingWorkingDir={pendingTerminalOverride?.cwd}
+                    themeName={themeName}
+                    disabledReason={terminalDisabledReason}
+                    remote={Boolean(remoteWorkspace)}
+                    visible={showTerminalPane}
+                    focused={focusedPane === "terminal"}
+                    onToggleFocus={() => toggleFocusedPane("terminal")}
+                    onWorkbenchStatusChange={setTerminalStatus}
+                    onAcceptPendingWorkingDir={() => {
+                      if (pendingTerminalOverride) {
+                        setTerminalOverride(pendingTerminalOverride);
                       }
-                      void tabs.openFile(path);
+                      setPendingTerminalOverride(null);
                     }}
-                    onApplyHostEffects={runPluginHostEffects}
-                    onClosePluginTab={(path) => {
-                      tabs.closePath(path);
+                    onCancelPendingWorkingDir={() => {
+                      setPendingTerminalOverride(null);
                     }}
-                    onReopenPluginView={(target) => {
-                      void openPluginViewTab(target);
-                    }}
-                    onLoadFullPreview={(path) => void loadPreview(path, "full")}
-                    focused={focusedPane === "editor"}
-                    onToggleFocus={() => toggleFocusedPane("editor")}
-                    />
-                  </Suspense>
-                </div>
-              </section>
-            ) : null}
-
-            {!structureOnly && !focusedPane && showEditorPane && showTerminalPane ? (
-              <PaneResizer
-                ariaLabel="调整编辑器高度"
-                axis="y"
-                onResizeStart={() => setIsResizingPane(true)}
-                onResizeEnd={() => setIsResizingPane(false)}
-                onResizeDelta={(deltaPx) =>
-                  resizePane("editorHeightPx", layoutState.editorHeightPx + deltaPx, {
-                    containerWidthPx: layoutBounds.columnsWidthPx,
-                    containerHeightPx: layoutBounds.centerHeightPx,
-                  })}
-              />
-            ) : (
-              <div aria-hidden="true" />
-            )}
-
-            {!structureOnly ? (
-              <section
-                data-testid="desktop-pane-terminal"
-                data-collapsed={layoutState.terminalCollapsed ? "true" : "false"}
-                data-focused={focusedPane === "terminal" ? "true" : "false"}
-                className={clsx(
-                  "desktop-workbench-pane orbit-island orbit-island--solid row-start-3 min-h-0 overflow-hidden",
-                  !showTerminalPane && "hidden",
-                )}
-              >
-                <div className="theme-illustration-content h-full min-h-0">
-                  <Suspense fallback={paneFallback}>
-                    <TerminalPane
-                      authToken={authToken}
-                      botAlias={botAlias}
-                      client={client}
-                      preferredWorkingDir={terminalOverride?.cwd || fileTree.rootPath}
-                      pendingWorkingDir={pendingTerminalOverride?.cwd}
-                      themeName={themeName}
-                      disabledReason={terminalDisabledReason}
-                      remote={Boolean(remoteWorkspace)}
-                      visible={showTerminalPane}
-                      focused={focusedPane === "terminal"}
-                      onToggleFocus={() => toggleFocusedPane("terminal")}
-                      onWorkbenchStatusChange={setTerminalStatus}
-                      onAcceptPendingWorkingDir={() => {
-                        if (pendingTerminalOverride) {
-                          setTerminalOverride(pendingTerminalOverride);
-                        }
-                        setPendingTerminalOverride(null);
-                      }}
-                      onCancelPendingWorkingDir={() => {
-                        setPendingTerminalOverride(null);
-                      }}
-                    />
-                  </Suspense>
-                </div>
-              </section>
-            ) : null}
-          </div>
-
-          {showChatResizer ? (
-            <PaneResizer
-              ariaLabel="调整聊天区宽度"
-              axis="x"
-              onResizeStart={() => setIsResizingPane(true)}
-              onResizeEnd={() => setIsResizingPane(false)}
-              onResizeDelta={(deltaPx) =>
-                resizePane("chatWidthPx", layoutState.chatWidthPx - deltaPx, {
-                  containerWidthPx: layoutBounds.columnsWidthPx,
-                  containerHeightPx: layoutBounds.centerHeightPx,
-                })}
-            />
-          ) : (
-            <div aria-hidden="true" />
-          )}
+                  />
+                </Suspense>
+              </div>
+            </section>
+          ) : null}
 
           <section
+            key="pane-chat"
             data-testid="desktop-pane-chat"
+            data-layout-slot={chatPlacement.slot}
             data-collapsed={layoutState.chatCollapsed ? "true" : "false"}
             data-focused={focusedPane === "chat" ? "true" : "false"}
             data-running={chatRunning ? "true" : "false"}
+            inert={layoutEditing || undefined}
             className={clsx(
               "desktop-workbench-pane orbit-island orbit-island--reading min-h-0 overflow-hidden",
               !showChatPane && "hidden",
             )}
+            style={{ gridColumn: chatPlacement.gridColumn, gridRow: chatPlacement.gridRow }}
           >
             {chatRunning ? <div className="orbit-sweep chat-pane-sweep" aria-hidden="true" /> : null}
             <div className="theme-illustration-content h-full min-h-0">
@@ -1707,6 +1720,48 @@ export function DesktopWorkbench({
               )}
             </div>
           </section>
+
+          {resolvedLayout.resizers.map((resizer) => (
+            <PaneResizer
+              key={resizer.id}
+              ariaLabel={resizer.ariaLabel}
+              axis={resizer.axis}
+              style={{ gridColumn: resizer.gridColumn, gridRow: resizer.gridRow }}
+              onResizeStart={() => {
+                resizeDragRef.current = { resizer, moved: false };
+                setIsResizingPane(true);
+              }}
+              onResizeDelta={(deltaPx) => {
+                const drag = resizeDragRef.current;
+                if (!drag || (!drag.moved && deltaPx === 0)) {
+                  return;
+                }
+                drag.moved = true;
+                resizeLayout(drag.resizer, deltaPx);
+              }}
+              onResizeEnd={() => {
+                resizeDragRef.current = null;
+                setIsResizingPane(false);
+              }}
+            />
+          ))}
+
+          {layoutEditing ? (
+            <WorkbenchLayoutEditor
+              resolved={resolvedLayout}
+              available={paneAvailability}
+              collapsed={paneCollapsed}
+              onSwap={swapLayoutPanes}
+              onReset={resetLayoutTemplate}
+              onDone={finishLayoutEditing}
+            />
+          ) : null}
+
+          {!resolvedLayout.hasShownPane ? (
+            <div data-testid="desktop-workbench-empty-hint" className="workbench-layout-empty-hint">
+              <span>所有窗口都已隐藏，可通过顶部布局开关重新显示。</span>
+            </div>
+          ) : null}
         </div>
       </div>
 

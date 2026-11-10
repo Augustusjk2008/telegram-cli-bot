@@ -1,11 +1,13 @@
 import { clsx } from "clsx";
-import { Bug, Files, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, Puzzle, Search, Settings2 } from "lucide-react";
+import { Bug, Files, GitBranch, ListTree, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Puzzle, Search, Settings2 } from "lucide-react";
 import type { WorkbenchActivityId } from "./workbenchTypes";
 
 type Props = {
   activeItem: WorkbenchActivityId;
   sidebarCollapsed: boolean;
   availableItems?: WorkbenchActivityId[];
+  /** `end` draws the rail on the sidebar's right side (right-most layout slot) with mirrored icons. */
+  side?: "start" | "end";
   onToggleSidebar: () => void;
   onSelectItem: (item: WorkbenchActivityId) => void;
 };
@@ -24,16 +26,23 @@ export function WorkbenchActivityRail({
   activeItem,
   sidebarCollapsed,
   availableItems,
+  side = "start",
   onToggleSidebar,
   onSelectItem,
 }: Props) {
   const items = availableItems?.length
     ? ITEMS.filter((item) => availableItems.includes(item.id))
     : ITEMS;
+  const OpenIcon = side === "end" ? PanelRightOpen : PanelLeftOpen;
+  const CloseIcon = side === "end" ? PanelRightClose : PanelLeftClose;
   return (
     <aside
       data-testid="desktop-workbench-activity-rail"
-      className="workbench-activity-rail flex h-full min-h-0 flex-col items-center gap-1 border-r border-[var(--workbench-hairline)] bg-[var(--workbench-sidebar-bg)] px-1 py-1.5"
+      data-rail-side={side}
+      className={clsx(
+        "workbench-activity-rail flex h-full min-h-0 flex-col items-center gap-1 border-[var(--workbench-hairline)] bg-[var(--workbench-sidebar-bg)] px-1 py-1.5",
+        side === "end" ? "border-l" : "border-r",
+      )}
     >
       <button
         type="button"
@@ -41,7 +50,7 @@ export function WorkbenchActivityRail({
         onClick={onToggleSidebar}
         className="workbench-rail-toggle inline-flex h-9 w-9 items-center justify-center border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text)] transition-colors hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)]"
       >
-        {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        {sidebarCollapsed ? <OpenIcon className="h-4 w-4" /> : <CloseIcon className="h-4 w-4" />}
       </button>
       <div className="my-1 h-px w-6 bg-[var(--workbench-hairline)]" aria-hidden="true" />
       {items.map(({ id, label, icon: Icon }) => (

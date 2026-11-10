@@ -205,6 +205,7 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 - **Terminal**：持久化多标签 Web 终端，每个标签使用独立 shell 和 owner。
 - **Debug**：面向 Python、C/C++、Godot 和通用 DAP 的调试入口。
 - **Plugins**：PDF、DOCX、PPTX、CSV、Vivado waveform 等可扩展视图。
+- **布局**：顶部「窗口布局」提供经典、底部通栏、四列并排、右侧堆叠预设，可拖动交换窗口位置，设置按浏览器保存。
 
 ### GitHub 账号与远端仓库
 

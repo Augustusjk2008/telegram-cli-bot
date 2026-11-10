@@ -188,6 +188,7 @@ Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and r
 - **Terminal**: persistent multi-tab web terminals, with an independent shell and owner for every tab.
 - **Debug**: debugging entry points for Python, C/C++, Godot, and generic DAP adapters.
 - **Plugins**: extensible viewers for PDF, DOCX, PPTX, CSV, Vivado waveforms, and more.
+- **Layout**: the header's layout menu offers Classic, Bottom panel, Four columns and Side stack presets; panes can be swapped by dragging, and the arrangement is saved per browser.
 
 ### GitHub Accounts and Remote Repositories
 

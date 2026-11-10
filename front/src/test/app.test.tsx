@@ -270,7 +270,7 @@ test("opening the desktop chat pane acknowledges that bot unread", async () => {
   if (closeAnnouncement) {
     await user.click(closeAnnouncement);
   }
-  await user.click(await screen.findByRole("button", { name: "隐藏右侧聊天" }));
+  await user.click(await screen.findByRole("button", { name: "隐藏聊天" }));
   await waitFor(() => expect(emitNotification).toBeTruthy());
 
   act(() => emitNotification?.({
@@ -288,7 +288,7 @@ test("opening the desktop chat pane acknowledges that bot unread", async () => {
   }));
   expect(await screen.findByTestId("bot-switcher-unread-indicator")).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "显示右侧聊天" }));
+  await user.click(screen.getByRole("button", { name: "显示聊天" }));
   await waitFor(() => expect(screen.queryByTestId("bot-switcher-unread-indicator")).not.toBeInTheDocument());
 });
 

@@ -1,17 +1,22 @@
+import type { CSSProperties } from "react";
+
 type PaneResizerProps = {
   ariaLabel: string;
   axis: "x" | "y";
+  style?: CSSProperties;
+  /** Receives the pointer delta from drag start; the handler from pointerdown stays in use for the whole drag. */
   onResizeDelta: (deltaPx: number) => void;
   onResizeStart?: () => void;
   onResizeEnd?: () => void;
 };
 
-export function PaneResizer({ ariaLabel, axis, onResizeDelta, onResizeStart, onResizeEnd }: PaneResizerProps) {
+export function PaneResizer({ ariaLabel, axis, style, onResizeDelta, onResizeStart, onResizeEnd }: PaneResizerProps) {
   return (
     <div
       role="separator"
       aria-label={ariaLabel}
       aria-orientation={axis === "x" ? "vertical" : "horizontal"}
+      style={style}
       className={
         axis === "x"
           ? "flex items-center justify-center bg-transparent cursor-col-resize"
