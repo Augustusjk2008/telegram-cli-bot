@@ -307,8 +307,15 @@ export function EditorPane({
         ) : null}
         <div className="orbit-window-card">
           <p className="text-[13px] font-semibold text-[var(--text)]">未打开文件</p>
-          <p className="flex items-center justify-between gap-6"><span>快速打开文件</span><kbd className="orbit-kbd">Ctrl+P</kbd></p>
-          <p className="flex items-center justify-between gap-6"><span>全文搜索</span><kbd className="orbit-kbd">Ctrl+Shift+F</kbd></p>
+          {remotePlatform ? (
+            // The workbench disables both shortcuts in remote workspaces.
+            <p>快速打开文件和全文搜索在远程工作区中不可用</p>
+          ) : (
+            <>
+              <p className="flex items-center justify-between gap-6"><span>快速打开文件</span><kbd className="orbit-kbd">Ctrl+P</kbd></p>
+              <p className="flex items-center justify-between gap-6"><span>全文搜索</span><kbd className="orbit-kbd">Ctrl+Shift+F</kbd></p>
+            </>
+          )}
         </div>
       </div>
     );

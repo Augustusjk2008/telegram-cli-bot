@@ -502,6 +502,26 @@ describe("RealWebBotClient", () => {
     });
   });
 
+  test("normalizes malformed terminal quick-action configs before the toolbar renders them", async () => {
+    const client = new RealWebBotClient();
+    const action = { id: "build", label: "构建", icon: "hammer", windowsCommand: "npm run build", linuxCommand: "npm run build", macosCommand: "", cwd: "", confirm: false, enabled: true };
+    const config = { schemaVersion: 1, configPath: "/repo/.tcb/terminal-actions.json", exists: true, mtimeNs: "42", editable: true, errors: [], runtimePlatform: "linux", actions: [action] };
+
+    fetchMock.mockResolvedValueOnce(jsonOk({}));
+    await expect(client.getTerminalActionsConfig("main")).resolves.toEqual({
+      schemaVersion: 1, configPath: "", exists: false, mtimeNs: "", editable: false,
+      errors: ["快捷命令配置格式无效"], runtimePlatform: "windows", actions: [],
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonOk({ ...config, errors: ["第 2 项缺少命令"], actions: [action, { id: "broken" }] }));
+    await expect(client.getTerminalActionsConfig("main")).resolves.toEqual({
+      ...config, editable: false, errors: ["快捷命令配置格式无效", "第 2 项缺少命令"], actions: [action],
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonOk(config));
+    await expect(client.saveTerminalActionsConfig("main", { schemaVersion: 1, actions: [action] }, "41")).resolves.toEqual(config);
+  });
+
   test("maps Git remotes and GitHub account endpoints without exposing tokens", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({

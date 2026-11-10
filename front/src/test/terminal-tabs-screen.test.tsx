@@ -82,6 +82,36 @@ test("没有活动终端时仍保留配置、新建和聚焦入口", async () =>
   expect(onToggleFocus).toHaveBeenCalledTimes(1);
 });
 
+test("远程工作区终端不请求快捷命令，也不显示快捷命令工具栏", async () => {
+  const getTerminalActionsConfig = vi.fn(async () => ({ ...actionsConfig, editable: true }));
+  const client = {
+    getTerminalSession: vi.fn(async () => snapshot()),
+    getTerminalActionsConfig,
+    createTerminalSession: vi.fn(async () => snapshot()),
+    closeTerminalSession: vi.fn(async () => ({ ...snapshot(), closed: true, connectionText: "终端已关闭" })),
+  } as unknown as WebBotClient;
+
+  render(
+    <PersistentTerminalProvider client={client}>
+      <TerminalTabsScreen
+        authToken="token"
+        botAlias="ssh-repo"
+        client={client}
+        isVisible
+        preferredWorkingDir="/srv/project"
+        remote
+        embedded
+      />
+    </PersistentTerminalProvider>,
+  );
+
+  expect(await screen.findByText("点击 + 新建 SSH 终端")).toBeInTheDocument();
+  expect(getTerminalActionsConfig).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("terminal-tabs-toolbar")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "编辑快捷命令" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 test("重复执行同一快捷命令会复用原终端", async () => {
   const runTerminalAction = vi.fn(async (_botAlias: string, actionId: string, input: { ownerId: string }) => ({
     actionId,

@@ -128,6 +128,10 @@ export function TerminalTabsScreen({
     let cancelled = false;
     setActionsConfig(EMPTY_TERMINAL_ACTIONS_CONFIG);
     setActionsError("");
+    // Remote workspaces have no quick actions: the backend rejects them with remote_feature_unavailable.
+    if (remote) {
+      return;
+    }
     client.getTerminalActionsConfig(botAlias)
       .then((next) => {
         if (cancelled) return;
@@ -141,7 +145,7 @@ export function TerminalTabsScreen({
     return () => {
       cancelled = true;
     };
-  }, [botAlias, client]);
+  }, [botAlias, client, remote]);
 
   useEffect(() => {
     if (activeTab || !onWorkbenchStatusChange) {
@@ -239,7 +243,7 @@ export function TerminalTabsScreen({
       <TerminalActionsBar
         actions={visibleActions}
         runtimePlatform={runtimePlatform}
-        canEdit={Boolean(actionsConfig)}
+        canEdit={!remote}
         disabled={Boolean(actionDisabledReason)}
         disabledReason={actionDisabledReason}
         disableEdit={!actionsConfig?.editable || Boolean(disabledReason)}
@@ -336,9 +340,10 @@ export function TerminalTabsScreen({
             /> : <div className="p-4 text-sm text-[var(--muted)]">{remote ? "点击 + 新建 SSH 终端" : "点击 + 新建终端"}</div>}
           </Suspense>
         </div>
-        {embedded ? toolbar : null}
+        {/* The embedded toolbar only holds quick actions, which remote workspaces do not have. */}
+        {embedded && !remote ? toolbar : null}
       </main>
-      {showActionsConfig && actionsConfig && !disabledReason ? (
+      {showActionsConfig && actionsConfig && !disabledReason && !remote ? (
         <TerminalActionsConfigDialog
           config={actionsConfig}
           saving={savingActionsConfig}

@@ -220,10 +220,12 @@ import type {
   RegisterCodeItem,
   RunningReply,
   SessionState,
+  TerminalAction,
   TerminalActionRunInput,
   TerminalActionRunResult,
   TerminalActionsConfig,
   TerminalActionsEditableConfig,
+  TerminalRuntimePlatform,
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
@@ -2475,6 +2477,54 @@ function mapFileEntry(raw: RawFileEntry): FileEntry {
     ...(typeof raw.child_count === "number" ? { childCount: raw.child_count } : {}),
     ...(typeof raw.size === "number" ? { size: raw.size } : {}),
     ...(raw.updated_at ? { updatedAt: raw.updated_at } : {}),
+  };
+}
+
+const INVALID_TERMINAL_ACTIONS_CONFIG_MESSAGE = "快捷命令配置格式无效";
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mapTerminalAction(raw: unknown): TerminalAction | null {
+  if (!isPlainRecord(raw)) return null;
+  const { id, label, icon, windowsCommand, linuxCommand, macosCommand, cwd, confirm, enabled } = raw;
+  if (typeof id !== "string" || !id || typeof label !== "string" || typeof icon !== "string"
+    || typeof windowsCommand !== "string" || typeof linuxCommand !== "string" || typeof macosCommand !== "string"
+    || typeof cwd !== "string" || typeof confirm !== "boolean" || typeof enabled !== "boolean") {
+    return null;
+  }
+  return { id, label, icon, windowsCommand, linuxCommand, macosCommand, cwd, confirm, enabled };
+}
+
+function isTerminalRuntimePlatform(value: unknown): value is TerminalRuntimePlatform {
+  return value === "windows" || value === "linux" || value === "macos";
+}
+
+/**
+ * The terminal toolbar renders this config directly, so a malformed response must not reach it.
+ * Invalid actions are dropped, and a config that was not fully understood is reported and never editable,
+ * so the dialog cannot save it back over the file.
+ */
+function mapTerminalActionsConfig(raw: unknown): TerminalActionsConfig {
+  const value = isPlainRecord(raw) ? raw : {};
+  const rawActions = Array.isArray(value.actions) ? value.actions : [];
+  const actions = rawActions.map(mapTerminalAction).filter((action): action is TerminalAction => action !== null);
+  const errors = Array.isArray(value.errors) ? value.errors.filter((error): error is string => typeof error === "string") : [];
+  const understood = isPlainRecord(raw)
+    && value.schemaVersion === 1
+    && Array.isArray(value.actions)
+    && actions.length === rawActions.length
+    && isTerminalRuntimePlatform(value.runtimePlatform);
+  return {
+    schemaVersion: 1,
+    actions,
+    configPath: typeof value.configPath === "string" ? value.configPath : "",
+    exists: value.exists === true,
+    mtimeNs: typeof value.mtimeNs === "string" || typeof value.mtimeNs === "number" ? String(value.mtimeNs) : "",
+    editable: understood && value.editable === true,
+    errors: understood ? errors : [INVALID_TERMINAL_ACTIONS_CONFIG_MESSAGE, ...errors],
+    runtimePlatform: isTerminalRuntimePlatform(value.runtimePlatform) ? value.runtimePlatform : "windows",
   };
 }
 
@@ -6732,10 +6782,10 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async getTerminalActionsConfig(botAlias: string): Promise<TerminalActionsConfig> {
-    return this.requestJson<TerminalActionsConfig>(
+    return mapTerminalActionsConfig(await this.requestJson<unknown>(
       `/api/bots/${encodeURIComponent(botAlias)}/terminal-actions/config`,
       { method: "GET" },
-    );
+    ));
   }
 
   async saveTerminalActionsConfig(
@@ -6743,7 +6793,7 @@ export class RealWebBotClient implements WebBotClient {
     config: TerminalActionsEditableConfig,
     expectedMtimeNs: string,
   ): Promise<TerminalActionsConfig> {
-    return this.requestJson<TerminalActionsConfig>(
+    return mapTerminalActionsConfig(await this.requestJson<unknown>(
       `/api/bots/${encodeURIComponent(botAlias)}/terminal-actions/config`,
       {
         method: "PUT",
@@ -6752,7 +6802,7 @@ export class RealWebBotClient implements WebBotClient {
         },
         body: JSON.stringify({ config, expectedMtimeNs }),
       },
-    );
+    ));
   }
 
   async runTerminalAction(

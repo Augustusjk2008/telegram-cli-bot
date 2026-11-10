@@ -27,6 +27,11 @@ for (const width of [1280, 390]) {
       const url = new URL(request.url());
       const path = url.pathname.split("/api/")[1];
       let data: unknown = {};
+      // Like the backend (remote_routes.py), remote workspaces reject terminal quick actions.
+      if (path.startsWith("bots/remote/terminal-actions/")) {
+        await route.fulfill({ status: 409, json: { ok: false, error: { code: "remote_feature_unavailable", message: "远程工作区暂不支持此操作" } } });
+        return;
+      }
       if (path === "auth/me") data = { is_logged_in: true, username: "remote-qa", account_id: "remote-qa", role: "member", current_bot_alias: "remote", capabilities: ["view_bots", "view_bot_status", "view_file_tree", "read_file_content", "write_files", "view_chat_history", "chat_send", "git_ops"] };
       else if (path === "bots") data = [bot];
       else if (path === "bots/remote") data = { bot, session: { working_dir: "C:/control", is_processing: false, history_count: 0 }, agents: [{ id: "main", name: "main" }] };
@@ -92,7 +97,6 @@ for (const width of [1280, 390]) {
       else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
       else if (path.endsWith("/agents")) data = { items: [{ id: "main", name: "main" }], active_agent_id: "main" };
       else if (path === "announcements" || path.endsWith("/favorites")) data = { items: [] };
-      else if (path === "bots/remote/terminal-actions/config") data = { schemaVersion: 1, configPath: "", exists: false, mtimeNs: "", editable: false, errors: [], runtimePlatform: "linux", actions: [] };
       if (path.includes("rollback")) unsupportedRequests.push(path);
       await route.fulfill({ json: { ok: true, data } });
     });
