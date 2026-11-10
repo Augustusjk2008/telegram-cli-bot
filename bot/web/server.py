@@ -2609,6 +2609,7 @@ class WebApiServer:
         endless_parent_message_id = raw_endless_parent_message_id.strip()
         if len(endless_group_id) > 128 or len(endless_parent_message_id) > 128:
             raise WebApiError(400, "invalid_endless_binding", "无尽模式绑定字段过长")
+        skip_input_translation = bool(body.get("skip_input_translation") or body.get("skipInputTranslation"))
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
@@ -2692,6 +2693,8 @@ class WebApiServer:
                 stream_kwargs["endless_group_id"] = endless_group_id
             if endless_parent_message_id:
                 stream_kwargs["endless_parent_message_id"] = endless_parent_message_id
+        if skip_input_translation:
+            stream_kwargs["skip_input_translation"] = True
         event_stream = stream_chat(
             self.manager,
             alias,

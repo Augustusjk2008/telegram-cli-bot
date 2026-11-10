@@ -312,6 +312,9 @@ class _ChatRunRequest:
     endless_mode: bool = False
     endless_group_id: str = ""
     endless_parent_message_id: str = ""
+    # Set by the Continue button: the fixed control word goes to the agent
+    # untranslated, while answer translation keeps the normal settings.
+    skip_input_translation: bool = False
     actor_user_id: int | None = None
     actor_account_id: str | None = None
     actor_username: str | None = None
@@ -358,6 +361,7 @@ def _build_chat_run_request(
     endless_mode: bool = False,
     endless_group_id: str = "",
     endless_parent_message_id: str = "",
+    skip_input_translation: bool = False,
     visible_text: str | None = None,
     actor: dict[str, Any] | None = None,
 ) -> _ChatRunRequest:
@@ -376,6 +380,7 @@ def _build_chat_run_request(
         endless_mode=bool(endless_mode),
         endless_group_id=str(endless_group_id or "").strip(),
         endless_parent_message_id=str(endless_parent_message_id or "").strip(),
+        skip_input_translation=bool(skip_input_translation),
         actor_user_id=_optional_int(actor_data.get("user_id")),
         actor_account_id=str(actor_data.get("account_id") or "").strip() or None,
         actor_username=str(actor_data.get("username") or "").strip() or None,
@@ -6820,6 +6825,9 @@ async def _stream_cli_chat(
             enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main",
             profile=profile,
         )
+        input_translation_config = (
+            None if request is not None and request.skip_input_translation else translation_config
+        )
         session.touch()
         loop = asyncio.get_running_loop()
         started_at = loop.time()
@@ -6847,7 +6855,7 @@ async def _stream_cli_chat(
             if binding_changed:
                 session.persist()
         persist_input = not bool(getattr(turn_handle, "reused", False))
-        pending_translation = input_translation_pending(text, translation_config) if persist_input else None
+        pending_translation = input_translation_pending(text, input_translation_config) if persist_input else None
         if pending_translation is not None:
             yield {"type": "status", "turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
                    "user_message_id": turn_handle.user_message_id, "user_translation": pending_translation, "status": "正在翻译提问"}
@@ -6856,7 +6864,7 @@ async def _stream_cli_chat(
             session=session,
             history=service,
             turn=turn_handle,
-            config=translation_config,
+            config=input_translation_config,
             persist_input=persist_input,
         )
         if not persist_input:
@@ -8676,6 +8684,7 @@ async def _stream_endless_attempts(
             visible_text=current_text,
             endless_mode=True,
             endless_group_id=endless_group_id,
+            skip_input_translation=initial_request.skip_input_translation,
             actor=_actor_from_request(initial_request),
         )
 
@@ -8808,6 +8817,7 @@ async def _stream_native_agent_chat(
                         cluster_run_id=effective_cluster_run_id,
                     ),
                     translate_chat=translate_chat,
+                    skip_input_translation=request_obj.skip_input_translation,
                     history_service=_history_service_for_execution_mode(session, NATIVE_AGENT_PROVIDER),
                     endless_group_id=request_obj.endless_group_id,
                     actor=_actor_from_request(request_obj),
@@ -9000,6 +9010,7 @@ async def stream_chat(
     endless_mode: bool = False,
     endless_group_id: str = "",
     endless_parent_message_id: str = "",
+    skip_input_translation: bool = False,
     internal_continuation: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     endless_requested = bool(endless_mode and not str(resume_stream_id or "").strip())
@@ -9037,6 +9048,7 @@ async def stream_chat(
                     endless_mode=endless_mode,
                     endless_group_id=endless_group_id,
                     endless_parent_message_id=endless_parent_message_id,
+                    skip_input_translation=skip_input_translation,
                     visible_text=visible_text,
                     actor=actor,
                 )
@@ -9130,6 +9142,7 @@ async def stream_chat(
                 endless_mode=endless_mode,
                 endless_group_id=endless_group_id,
                 endless_parent_message_id=endless_parent_message_id,
+                skip_input_translation=skip_input_translation,
                 visible_text=visible_text,
                 actor=actor,
             )

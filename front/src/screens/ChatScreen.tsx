@@ -5000,6 +5000,7 @@ export function ChatScreen({
       reuseAssistant: options.reuseAssistant,
       sendOptions: {
         taskMode: "standard",
+        skipInputTranslation: true,
         ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
         ...(soloMode && nativeSend ? { soloMode: true } : {}),
         ...(endlessMode ? { endlessMode: true } : {}),

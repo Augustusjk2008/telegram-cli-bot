@@ -6198,6 +6198,7 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.endlessMode ? { endless_mode: true } : {}),
         ...(options?.endlessGroupId ? { endless_group_id: options.endlessGroupId } : {}),
         ...(options?.endlessParentMessageId ? { endless_parent_message_id: options.endlessParentMessageId } : {}),
+        ...(options?.skipInputTranslation ? { skip_input_translation: true } : {}),
         ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
       }),
     });

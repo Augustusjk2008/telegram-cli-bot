@@ -1544,6 +1544,8 @@ export type ChatSendOptions = {
   endlessMode?: boolean;
   endlessGroupId?: string;
   endlessParentMessageId?: string;
+  /** Send the text to the agent as-is; answer translation still follows the settings. */
+  skipInputTranslation?: boolean;
   signal?: AbortSignal;
   conversationId?: string;
   sessionEpoch?: number;

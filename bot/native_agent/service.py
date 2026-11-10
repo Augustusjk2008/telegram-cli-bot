@@ -760,6 +760,7 @@ class NativeAgentService:
         suppress_agent_prompt: bool = False,
         prompt_factory: Callable[[str], tuple[str, str]] | None = None,
         translate_chat: bool = False,
+        skip_input_translation: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         self._ensure_runtime_eviction_task()
         loop = asyncio.get_running_loop()
@@ -832,6 +833,8 @@ class NativeAgentService:
                 enabled=translate_chat and profile.chat_translation_enabled and session.agent_id == "main",
                 profile=profile,
             )
+            # Continue-button turns send the agent their text verbatim; answers still translate.
+            input_translation_config = None if skip_input_translation else translation_config
             if not config.NATIVE_AGENT_ENABLED:
                 raise RuntimeError("原生 agent 未启用")
             turn_handle = history_service.start_turn(
@@ -845,7 +848,7 @@ class NativeAgentService:
             with session._lock:
                 session._execution_turn_id = turn_handle.turn_id
             persist_input = not bool(getattr(turn_handle, "reused", False))
-            pending_translation = input_translation_pending(user_text, translation_config) if persist_input else None
+            pending_translation = input_translation_pending(user_text, input_translation_config) if persist_input else None
             if pending_translation is not None:
                 fields = {"turn_id": turn_handle.turn_id, "assistant_message_id": turn_handle.assistant_message_id,
                           "user_message_id": turn_handle.user_message_id, "user_translation": pending_translation}
@@ -858,7 +861,7 @@ class NativeAgentService:
                 session=session,
                 history=history_service,
                 turn=turn_handle,
-                config=translation_config,
+                config=input_translation_config,
                 persist_input=persist_input,
             )
             if not persist_input:

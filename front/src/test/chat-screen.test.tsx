@@ -173,6 +173,34 @@ test("does not show endless mode after a normal answer", async () => {
   expect(screen.queryByRole("button", { name: "无尽模式" })).not.toBeInTheDocument();
 });
 
+test("sends Continue from the Continue button without input translation", async () => {
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => ({
+    id: "assistant-continued",
+    role: "assistant",
+    text: "继续后的回答",
+    createdAt: "2026-11-10T00:00:01Z",
+    state: "done",
+  }));
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "assistant-normal",
+      role: "assistant",
+      text: "正常完成的回答",
+      createdAt: "2026-11-10T00:00:00Z",
+      state: "done",
+    }] }),
+    sendMessage,
+  });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "继续" }));
+
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+  expect(sendMessage.mock.calls[0][1]).toBe("Continue");
+  expect(sendMessage.mock.calls[0][5]).toMatchObject({ skipInputTranslation: true });
+});
+
 test("restores backend endless mode after the chat screen is rebuilt", async () => {
   const client = createClient({
     getBotOverview: async () => ({

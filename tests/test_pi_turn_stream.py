@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from ag_ui import core
 
+from bot.manager import MultiBotManager
+from bot.models import BotProfile
+from bot.native_agent import service as native_service
+from bot.native_agent.pi_rpc_client import PiRpcClient
+from bot.native_agent.pi_session_store import PiSessionStore
 from bot.native_agent.pi_turn_stream import PiTurnChannel
-from bot.web import api_service
+from bot.web import api_service, chat_translation
+from bot.web.translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig
+from bot.web.translation_service import source_digest
 
 
 @pytest.mark.asyncio
@@ -239,6 +247,74 @@ async def test_native_stream_compacts_replay_per_consumer_without_mutating_canon
     assert compact_events[0]["event"].result["message"]["content"] == "最终答复"
     assert legacy_events[0]["event"].result["content"] == "最终答复"
     assert canonical.result["content"] == "最终答复"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skip_input_translation", [False, True])
+async def test_native_continue_button_skips_input_translation(tmp_path, monkeypatch, skip_input_translation) -> None:
+    prompts: list[str] = []
+    translated: list[str] = []
+
+    class FakePiClient:
+        process = SimpleNamespace(poll=lambda: None)
+
+        async def close(self):
+            return None
+
+        async def kill(self):
+            return None
+
+        async def get_state(self):
+            return {"sessionId": "pi-session"}
+
+        async def prompt(self, text, **_kwargs):
+            prompts.append(text)
+
+        async def events(self):
+            yield {"type": "agent_end"}
+
+    class FakeTranslator:
+        async def translate(self, text, *, config, direction):
+            translated.append(text)
+            return {"status": "completed", "text": "Translated", "target_language": PROMPT_TARGET_LANGUAGE,
+                    "source_digest": source_digest(text)}
+
+        def submit_answer(self, **_kwargs):
+            return False
+
+    profile = BotProfile(alias="main", working_dir=str(tmp_path), supported_execution_modes=["cli", "native_agent"])
+    manager = MultiBotManager(profile, str(tmp_path / "managed_bots.json"))
+    api_service.get_session_for_alias(manager, "main", 42).disable_persistence()
+    service = native_service.NativeAgentService()
+    service._pi_session_store = PiSessionStore(tmp_path / "pi-sessions.json")
+    translation = TranslationConfig(translate_user_enabled=True, base_url="http://translator.invalid",
+                                    api_key="key", model="model")
+    monkeypatch.setattr(native_service.config, "NATIVE_AGENT_ENABLED", True)
+    monkeypatch.setattr(native_service.config, "NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(native_service, "effective_native_agent_config",
+                        lambda _fallback=None: {"workspace_history_enabled": False})
+    monkeypatch.setattr(native_service, "run_pi_windows_preflight", lambda _request: {"ok": True})
+    monkeypatch.setattr(native_service, "translation_snapshot",
+                        lambda *, enabled, profile=None: translation if enabled else None)
+    monkeypatch.setattr(chat_translation, "get_translation_service", lambda: FakeTranslator())
+    monkeypatch.setattr(service, "_ensure_runtime_eviction_task", lambda: None)
+    monkeypatch.setattr(service, "_prompt_options", lambda _profile: ("provider/model", "", "", ""))
+    monkeypatch.setattr(PiRpcClient, "start", AsyncMock(return_value=FakePiClient()))
+    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: service)
+    monkeypatch.setattr(api_service, "pi_turn_reconnect_enabled", lambda: False)
+
+    try:
+        events = [event async for event in api_service.stream_chat(
+            manager, "main", 42, "Continue",
+            execution_mode="native_agent", skip_input_translation=skip_input_translation,
+        )]
+    finally:
+        await service._runtime_registry.shutdown()
+
+    assert events[-1]["type"] == "done", events[-1]
+    assert any(event.get("user_translation") for event in events) is not skip_input_translation
+    assert translated == ([] if skip_input_translation else ["Continue"])
+    assert prompts == ["Continue" if skip_input_translation else "Translated"]
 
 
 @pytest.mark.asyncio

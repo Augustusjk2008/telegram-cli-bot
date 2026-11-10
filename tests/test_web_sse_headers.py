@@ -104,7 +104,7 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
         async with TestClient(test_server) as client:
             response = await client.post(
                 "/api/bots/main/chat/stream",
-                json={"message": "hello", "endless_mode": True, **protocol_fields},
+                json={"message": "hello", "endless_mode": True, "skip_input_translation": True, **protocol_fields},
             )
             body = await response.text()
 
@@ -118,6 +118,7 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     assert captured_kwargs["include_trace"] is expected_include_trace
     assert captured_kwargs["stream_protocol_version"] == expected_stream_protocol_version
     assert captured_kwargs["endless_mode"] is True
+    assert captured_kwargs["skip_input_translation"] is True
     assert body.startswith(": ready\n\n")
     assert 'event: done\ndata: {"type": "done", "output": "ok", "elapsed_seconds": 0}' in body
 

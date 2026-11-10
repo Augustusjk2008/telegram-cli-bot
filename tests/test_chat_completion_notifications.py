@@ -273,3 +273,38 @@ async def test_endless_retry_stream_notifies_only_final_done_with_fallback_ident
     assert captured[0].content == "final answer"
     assert captured[0].endless_group_id == "endless-1"
     assert captured[0].endless_completion_token.startswith("endless_completion_")
+
+
+@pytest.mark.asyncio
+async def test_endless_retries_keep_continue_button_translation_skip(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_service.config, "ENDLESS_CONTINUE_DELAY_SECONDS", 0)
+    session = UserSession(bot_id=1, bot_alias="dev", user_id=42, working_dir=str(tmp_path))
+    request = api_service._build_chat_run_request(
+        "dev", 42, "Continue", endless_mode=True, skip_input_translation=True,
+    )
+    outcomes = iter([
+        {"state": "error", "meta": {"completion_state": "error"}},
+        {"state": "done", "meta": {"completion_state": "completed"}},
+    ])
+    attempts: list[tuple[str, bool]] = []
+
+    def attempt_factory(text, attempt_request):
+        attempts.append((text, attempt_request.skip_input_translation))
+        message = {"id": "assistant-1", "turn_id": "turn-1", "content": "answer", **next(outcomes)}
+
+        async def events():
+            yield {"type": "done", "turn_id": "turn-1", "assistant_message_id": "assistant-1", "message": message}
+
+        return events()
+
+    events = [event async for event in api_service._stream_endless_attempts(
+        session=session,
+        alias="dev",
+        shared_user_id=42,
+        initial_text="Continue",
+        initial_request=request,
+        attempt_factory=attempt_factory,
+    )]
+
+    assert [event["type"] for event in events] == ["endless_error", "endless_continue", "done"]
+    assert attempts == [("Continue", True), ("Continue", True)]

@@ -16,7 +16,9 @@ import pytest
 
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
-from bot.web import api_service
+from bot.web import api_service, chat_translation
+from bot.web.translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig
+from bot.web.translation_service import source_digest
 from bot.web.api_service import (
     CliOutputLimitError,
     _PROCESS_STDOUT_EOF,
@@ -1575,6 +1577,76 @@ async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_
         trace = next(event for event in events if event["type"] == "trace")
         assert trace["turn_id"] == meta["turn_id"]
         assert trace["assistant_message_id"] == meta["assistant_message_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skip_input_translation", [False, True])
+async def test_stream_cli_chat_continue_button_skips_only_input_translation(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_input_translation: bool,
+):
+    translation_config = TranslationConfig(
+        translate_user_enabled=True,
+        translate_assistant_enabled=True,
+        base_url="http://translator.invalid",
+        api_key="key",
+        model="model",
+    )
+    translated: list[tuple[str, str]] = []
+    answers: list[str] = []
+    prompts: list[str] = []
+
+    class _Translator:
+        async def translate(self, text, *, config, direction):
+            translated.append((direction, text))
+            return {
+                "status": "completed",
+                "text": "Translated",
+                "target_language": PROMPT_TARGET_LANGUAGE,
+                "source_digest": source_digest(text),
+            }
+
+        def submit_answer(self, *, text, **_kwargs):
+            answers.append(text)
+            return True
+
+    async def start_capture(*, env, command):
+        return _UsageCapture()
+
+    def build_command(**kwargs):
+        prompts.append(str(kwargs["user_text"]))
+        return ["codex"], False
+
+    monkeypatch.setattr(
+        api_service,
+        "translation_snapshot",
+        lambda *, enabled, profile=None: translation_config if enabled else None,
+    )
+    monkeypatch.setattr(chat_translation, "get_translation_service", lambda: _Translator())
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", build_command)
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: _UsageProcess())
+
+    request = api_service._build_chat_run_request(
+        "main", 1001, "Continue", skip_input_translation=skip_input_translation,
+    )
+    events = await _collect_stream_events(
+        api_service._stream_cli_chat(usage_manager, "main", 1001, "Continue", request=request)
+    )
+
+    translating_events = [event for event in events if event.get("user_translation")]
+    if skip_input_translation:
+        assert translated == []
+        assert translating_events == []
+        assert prompts == ["Continue"]
+    else:
+        assert translated == [("user", "Continue")]
+        assert translating_events
+        assert prompts == ["Translated"]
+    assert answers == ["done"]
 
 
 @pytest.mark.asyncio

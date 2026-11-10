@@ -1062,7 +1062,7 @@ describe("RealWebBotClient", () => {
       () => undefined,
       undefined,
       undefined,
-      { endlessMode: true },
+      { endlessMode: true, skipInputTranslation: true },
       undefined,
       (error, attempt, nextDelayMs) => errors.push({ text: error.text, attempt, nextDelayMs }),
       (attempt) => continues.push({ text: "Continue", attempt }),
@@ -1071,6 +1071,7 @@ describe("RealWebBotClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({
       message: "Continue",
       endless_mode: true,
+      skip_input_translation: true,
     });
     expect(errors).toEqual([{ text: "Continue 失败", attempt: 1, nextDelayMs: 2000 }]);
     expect(continues).toEqual([{ text: "Continue", attempt: 1 }]);
