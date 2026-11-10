@@ -50,6 +50,7 @@ type Props = {
   embedded?: boolean;
   prefilledWorkdir?: string;
   onWorkdirUpdated?: (workingDir: string) => void;
+  onRemoteConnected?: () => void;
   sessionCapabilities?: string[];
 };
 
@@ -104,6 +105,7 @@ export function SettingsScreen({
   embedded = false,
   prefilledWorkdir,
   onWorkdirUpdated,
+  onRemoteConnected,
   sessionCapabilities = [],
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
@@ -613,7 +615,7 @@ export function SettingsScreen({
               description={overview.remoteWorkspace ? "远程工作区目录由 SSH 连接决定。" : "智能体执行命令与读写文件的根目录。"}
               badge={workdirDirty ? <SettingsDirtyBadge /> : null}
               actions={overview.remoteWorkspace ? (
-                <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} />
+                <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} onConnected={() => onRemoteConnected?.()} />
               ) : null}
             >
               <div className="flex min-w-0 items-center gap-1">

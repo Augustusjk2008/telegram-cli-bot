@@ -395,9 +395,13 @@ export function DesktopWorkbench({
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
   const canUseRemoteGit = sessionCapabilities.length === 0 || sessionCapabilities.includes("git_ops");
+  const remoteActivityItems: WorkbenchActivityId[] = [
+    "files",
+    ...(canUseRemoteGit ? ["git" as const] : []),
+    "settings",
+  ];
   const remoteSidebarUnavailable = Boolean(remoteWorkspace)
-    && layoutState.sidebarView !== "files"
-    && (layoutState.sidebarView !== "git" || !canUseRemoteGit);
+    && !remoteActivityItems.includes(layoutState.sidebarView);
   const activeSidebarView = remoteSidebarUnavailable || (!canViewPlugins && layoutState.sidebarView === "plugins")
     ? "files"
     : layoutState.sidebarView;
@@ -470,7 +474,7 @@ export function DesktopWorkbench({
   const availableActivityItems: WorkbenchActivityId[] = structureOnly
     ? ["files"]
     : remoteWorkspace
-      ? ["files", ...(canUseRemoteGit ? ["git" as const] : [])]
+      ? remoteActivityItems
     : [
         "files",
         "search",
@@ -763,8 +767,14 @@ export function DesktopWorkbench({
     setLayoutEditing(false);
   }
 
+  function handleRemoteConnected() {
+    if (!remoteWorkspace) return;
+    onRemoteReconnect?.();
+    void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root });
+  }
+
   function selectActivityItem(item: WorkbenchActivityId) {
-    if (remoteWorkspace && item !== "files" && (item !== "git" || !canUseRemoteGit)) return;
+    if (remoteWorkspace && !remoteActivityItems.includes(item)) return;
     setSidebarView(item);
   }
 
@@ -1400,11 +1410,12 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           embedded
-          prefilledWorkdir={pendingSidebarWorkdir || fileTree.rootPath}
+          prefilledWorkdir={remoteWorkspace ? undefined : pendingSidebarWorkdir || fileTree.rootPath}
           onWorkdirUpdated={(nextWorkdir) => {
             setPendingSidebarWorkdir(nextWorkdir);
             void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: nextWorkdir });
           }}
+          onRemoteConnected={remoteWorkspace ? handleRemoteConnected : undefined}
           sessionCapabilities={sessionCapabilities}
         />
         </Suspense>
@@ -1449,7 +1460,7 @@ export function DesktopWorkbench({
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
         announcementAction={announcementAction}
-        workspaceAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate || !canManageRemoteConnection} onConnected={() => { onRemoteReconnect?.(); void refreshWorkspaceChrome({ preserveExpandedPaths: true, rootPath: remoteWorkspace.root }); }} /> : undefined}
+        workspaceAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate || !canManageRemoteConnection} onConnected={handleRemoteConnected} /> : undefined}
         sidebarVisible={!layoutState.sidebarCollapsed}
         editorVisible={!structureOnly && !layoutState.editorCollapsed}
         terminalVisible={!structureOnly && !layoutState.terminalCollapsed}

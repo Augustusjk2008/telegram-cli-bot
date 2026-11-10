@@ -317,6 +317,29 @@ test("shared desktop workbench opens remote files without local-only APIs", asyn
   await waitFor(() => expect(createDirectory).toHaveBeenCalledWith("remote", "docs", remote.root));
 });
 
+test("remote desktop sidebar opens settings and refreshes the workspace after SSH re-login", async () => {
+  const client = new MockWebBotClient();
+  const baseOverview = await client.getBotOverview("main");
+  vi.spyOn(client, "getBotOverview").mockResolvedValue({ ...baseOverview, alias: "remote", remoteWorkspace: remote });
+  const list = vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries: [{ name: "README.md", isDir: false }] });
+  vi.spyOn(client, "connectRemote").mockResolvedValue(remote);
+  const onRemoteReconnect = vi.fn();
+  render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} sessionCapabilities={[]} onRemoteReconnect={onRemoteReconnect} /></PersistentTerminalProvider>);
+  await screen.findByRole("button", { name: "打开 README.md" });
+  const rail = screen.getByTestId("desktop-workbench-activity-rail");
+  expect(within(rail).queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
+  fireEvent.click(within(rail).getByRole("button", { name: "设置" }));
+  const workdir = await screen.findByRole("textbox", { name: "工作目录" });
+  expect(workdir).toHaveValue("dev@linux.test:/home/dev");
+  expect(workdir).toHaveAttribute("readonly");
+  list.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "SSH 重新登录" }));
+  fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh" } });
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(onRemoteReconnect).toHaveBeenCalledOnce());
+  await waitFor(() => expect(list).toHaveBeenCalled());
+});
+
 test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the file tree", async (entrypoint) => {
   const client = new MockWebBotClient();
   let uploaded = false;
