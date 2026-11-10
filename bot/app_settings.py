@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
-import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -26,8 +24,6 @@ from bot.runtime_paths import get_app_settings_path
 APP_SETTINGS_FILE = get_app_settings_path()
 _SETTINGS_LOCK = threading.Lock()
 _DEFAULT_SETTINGS = {
-    "git_proxy_address": "",
-    "git_proxy_port": "",
     "main_bot_profile": {},
     "global_prompt_presets": [],
     "update_enabled": True,
@@ -44,9 +40,6 @@ _DEFAULT_SETTINGS = {
     "pending_update_sha256": "",
     "update_last_error": "",
 }
-_PORT_ERROR_MESSAGE = "代理端口必须是 1 到 65535 之间的整数"
-_PROXY_ADDRESS_ERROR_MESSAGE = "代理地址必须是 host:port，或 1 到 65535 之间的端口"
-_PROXY_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 
 _UPDATE_TEXT_FIELDS = (
     "update_channel",
@@ -66,65 +59,6 @@ _UPDATE_TEXT_FIELDS = (
 
 def _resolve_settings_file(settings_file: str | Path | None = None) -> Path:
     return Path(settings_file).expanduser().resolve() if settings_file is not None else APP_SETTINGS_FILE
-
-
-def _normalize_git_proxy_port(value: Any) -> str:
-    port = str(value or "").strip()
-    if not port:
-        return ""
-    if not port.isdigit():
-        raise ValueError(_PORT_ERROR_MESSAGE)
-
-    port_number = int(port)
-    if not 1 <= port_number <= 65535:
-        raise ValueError(_PORT_ERROR_MESSAGE)
-    return str(port_number)
-
-
-def _normalize_git_proxy_host(host: Any) -> str:
-    normalized = str(host or "").strip()
-    if not normalized:
-        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
-    if any(char.isspace() for char in normalized):
-        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
-    if not _PROXY_HOST_RE.fullmatch(normalized):
-        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
-    return normalized
-
-
-def _normalize_git_proxy_address(value: Any) -> str:
-    address = str(value or "").strip()
-    if not address:
-        return ""
-    if address.isdigit():
-        return f"127.0.0.1:{_normalize_git_proxy_port(address)}"
-    if address.startswith("["):
-        bracket_end = address.find("]")
-        if bracket_end <= 1 or address[bracket_end + 1: bracket_end + 2] != ":":
-            raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
-        host = address[1:bracket_end].strip()
-        port = _normalize_git_proxy_port(address[bracket_end + 2:])
-        if not host or any(char.isspace() for char in host):
-            raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
-        return f"[{host}]:{port}"
-    if address.count(":") != 1:
-        raise ValueError(_PROXY_ADDRESS_ERROR_MESSAGE)
-    host, port = address.rsplit(":", 1)
-    return f"{_normalize_git_proxy_host(host)}:{_normalize_git_proxy_port(port)}"
-
-
-def _git_proxy_port_from_address(address: str) -> str:
-    normalized = str(address or "").strip()
-    if not normalized:
-        return ""
-    if normalized.startswith("["):
-        bracket_end = normalized.find("]")
-        if bracket_end > 0 and normalized[bracket_end + 1: bracket_end + 2] == ":":
-            return normalized[bracket_end + 2:]
-        return ""
-    if ":" not in normalized:
-        return ""
-    return normalized.rsplit(":", 1)[1]
 
 
 def _normalize_bool(value: Any, default: bool) -> bool:
@@ -226,15 +160,6 @@ def _sanitize_settings(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return settings
 
-    try:
-        if "git_proxy_address" in raw:
-            settings["git_proxy_address"] = _normalize_git_proxy_address(raw.get("git_proxy_address", ""))
-        else:
-            settings["git_proxy_address"] = _normalize_git_proxy_address(raw.get("git_proxy_port", ""))
-        settings["git_proxy_port"] = _git_proxy_port_from_address(settings["git_proxy_address"])
-    except ValueError:
-        settings["git_proxy_address"] = ""
-        settings["git_proxy_port"] = ""
     settings["main_bot_profile"] = _normalize_main_bot_profile(raw.get("main_bot_profile", {}))
     settings["global_prompt_presets"] = normalize_prompt_presets(
         raw.get("global_prompt_presets", raw.get("globalPromptPresets"))
@@ -262,12 +187,6 @@ def _load_settings(settings_file: str | Path | None = None) -> dict[str, Any]:
 
 def _serialize_settings(settings: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
-    git_proxy_address = _normalize_git_proxy_address(
-        settings.get("git_proxy_address", "") or settings.get("git_proxy_port", "")
-    )
-    if git_proxy_address:
-        payload["git_proxy_address"] = git_proxy_address
-
     main_bot_profile = _normalize_main_bot_profile(settings.get("main_bot_profile", {}))
     if main_bot_profile:
         payload["main_bot_profile"] = main_bot_profile
@@ -303,25 +222,6 @@ def _save_settings(settings: dict[str, Any], settings_file: str | Path | None = 
         )
 
 
-def get_git_proxy_settings() -> dict[str, str]:
-    settings = _load_settings()
-    address = settings["git_proxy_address"]
-    return {"address": address, "port": _git_proxy_port_from_address(address)}
-
-
-def update_git_proxy_address(address: Any) -> dict[str, str]:
-    normalized = _normalize_git_proxy_address(address)
-    settings = _load_settings()
-    settings["git_proxy_address"] = normalized
-    settings["git_proxy_port"] = _git_proxy_port_from_address(normalized)
-    _save_settings(settings)
-    return {"address": normalized, "port": settings["git_proxy_port"]}
-
-
-def update_git_proxy_port(port: Any) -> dict[str, str]:
-    return update_git_proxy_address(port)
-
-
 def get_main_bot_profile(settings_file: str | Path | None = None) -> dict[str, Any]:
     settings = _load_settings(settings_file)
     return copy.deepcopy(settings["main_bot_profile"])
@@ -349,35 +249,3 @@ def update_global_prompt_presets(
     settings["global_prompt_presets"] = normalized
     _save_settings(settings, settings_file)
     return [dict(item) for item in normalized]
-
-
-def get_git_proxy_url() -> str:
-    address = get_git_proxy_settings()["address"]
-    if not address:
-        return ""
-    return f"http://{address}"
-
-
-def get_git_proxy_config_args() -> list[str]:
-    proxy_url = get_git_proxy_url()
-    return [
-        "-c",
-        f"http.proxy={proxy_url}",
-        "-c",
-        f"https.proxy={proxy_url}",
-    ]
-
-
-def build_git_proxy_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
-    env = dict(base_env or os.environ.copy())
-    proxy_url = get_git_proxy_url()
-    env.update(
-        {
-            "GIT_CONFIG_COUNT": "2",
-            "GIT_CONFIG_KEY_0": "http.proxy",
-            "GIT_CONFIG_VALUE_0": proxy_url,
-            "GIT_CONFIG_KEY_1": "https.proxy",
-            "GIT_CONFIG_VALUE_1": proxy_url,
-        }
-    )
-    return env

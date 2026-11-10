@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from bot import app_settings
 from bot.config import APP_UPDATE_REPOSITORY
 from bot.runtime_paths import get_announcements_content_path
 from bot.version import APP_VERSION
@@ -72,16 +71,7 @@ def check_for_updates(repo_root: Path | None = None) -> dict[str, Any]:
     return get_update_service(repo_root).check()
 
 def _build_url_opener():
-    proxy_url = app_settings.get_git_proxy_url()
-    if proxy_url:
-        return urllib.request.build_opener(
-            urllib.request.ProxyHandler(
-                {
-                    "http": proxy_url,
-                    "https": proxy_url,
-                }
-            )
-        )
+    # The default opener follows the system proxy environment (HTTP(S)_PROXY / NO_PROXY).
     return urllib.request.build_opener()
 
 

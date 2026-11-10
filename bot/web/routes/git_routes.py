@@ -41,5 +41,3 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/git/publish", server.post_git_publish)
     app.router.add_post("/api/bots/{alias}/git/stash", server.post_git_stash)
     app.router.add_post("/api/bots/{alias}/git/stash/pop", server.post_git_stash_pop)
-    app.router.add_get("/api/admin/git-proxy", server.admin_get_git_proxy)
-    app.router.add_patch("/api/admin/git-proxy", server.admin_patch_git_proxy)

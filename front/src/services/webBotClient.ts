@@ -75,7 +75,6 @@ import type {
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
-  GitProxySettings,
   GitRemoteList,
   GitResetMode,
   GitOverview,
@@ -414,8 +413,6 @@ export interface WebBotClient {
   resetSession(botAlias: string): Promise<void>;
   killTask(botAlias: string, options?: AgentScopedOptions): Promise<string>;
   restartService(): Promise<void>;
-  getGitProxySettings(): Promise<GitProxySettings>;
-  updateGitProxySettings(address: string): Promise<GitProxySettings>;
   getUpdateStatus(): Promise<AppUpdateStatus>;
   getCurrentUpdateJob(): Promise<AppUpdateStatus>;
   applyUpdateJob(jobId: string, revision: number): Promise<AppUpdateStatus>;

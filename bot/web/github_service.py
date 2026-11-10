@@ -29,7 +29,6 @@ from aiohttp import ClientError, ClientSession, ClientTimeout
 from cryptography.fernet import Fernet, InvalidToken
 
 from bot import config
-from bot.app_settings import get_git_proxy_url
 from bot.runtime_paths import get_github_data_dir
 from bot.web.api_common import WebApiError
 
@@ -79,11 +78,10 @@ async def aiohttp_github_transport(
     form: Mapping[str, str] | None = None,
     params: Mapping[str, str] | None = None,
 ) -> GitHubResponse:
-    """Send one GitHub request through the configured Git proxy, if any."""
-    proxy = get_git_proxy_url() or None
+    """Send one GitHub request, following the system proxy environment."""
     timeout = ClientTimeout(total=GITHUB_REQUEST_TIMEOUT_SECONDS)
     try:
-        async with ClientSession(timeout=timeout, trust_env=proxy is None) as session:
+        async with ClientSession(timeout=timeout, trust_env=True) as session:
             async with session.request(
                 method,
                 url,
@@ -91,7 +89,6 @@ async def aiohttp_github_transport(
                 json=json_body,
                 data=form,
                 params=params,
-                proxy=proxy,
             ) as response:
                 text = await response.text()
                 try:
@@ -104,7 +101,7 @@ async def aiohttp_github_transport(
                     {key.lower(): value for key, value in response.headers.items()},
                 )
     except asyncio.TimeoutError as exc:
-        raise WebApiError(504, "github_network_failed", "连接 GitHub 超时，请检查网络或 Git 代理设置") from exc
+        raise WebApiError(504, "github_network_failed", "连接 GitHub 超时，请检查网络或系统代理设置") from exc
     except ClientError as exc:
         detail = str(exc)[:200] or exc.__class__.__name__
         raise WebApiError(502, "github_network_failed", f"无法连接 GitHub：{detail}") from exc

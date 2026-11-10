@@ -91,11 +91,11 @@ def test_legacy_claim_requires_install_owned_path(service, tmp_path):
 
 def test_check_does_not_overwrite_settings_and_failure_marks_cache(service, monkeypatch):
     def fetch():
-        app_settings.update_git_proxy_address("localhost:9123")
+        app_settings.update_main_bot_profile({"cli_type": "deepseek"})
         return {"tag_name": "v9.0.0", "body": "release"}
     monkeypatch.setattr(updater, "_fetch_latest_release", fetch)
     assert service.check()["last_check"]["ok"] is True
-    assert app_settings.get_git_proxy_settings()["address"] == "localhost:9123"
+    assert app_settings.get_main_bot_profile()["cli_type"] == "deepseek"
     monkeypatch.setattr(updater, "_fetch_latest_release", lambda: (_ for _ in ()).throw(OSError("network down")))
     state = service.check()
     assert state["last_check"]["ok"] is False

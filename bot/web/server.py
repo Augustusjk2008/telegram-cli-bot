@@ -32,7 +32,6 @@ from aiohttp.http import WSCloseCode, WSMsgType
 from aiohttp import web
 from ag_ui.encoder import EventEncoder
 
-from bot.app_settings import get_git_proxy_settings, update_git_proxy_address
 from bot import config
 from bot.chat_identity import chat_session_user_id
 from bot.codex_usage import close_codex_usage_service_sync, get_codex_usage_service
@@ -5101,19 +5100,6 @@ class WebApiServer:
         else:
             raise WebApiError(400, "invalid_prompt_presets", "缺少 prompt_presets")
         data = await update_global_prompt_presets(self.manager, presets)
-        return _json({"ok": True, "data": data})
-
-    async def admin_get_git_proxy(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": get_git_proxy_settings()})
-
-    async def admin_patch_git_proxy(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        body = await self._parse_json(request)
-        try:
-            data = update_git_proxy_address(body["address"] if "address" in body else body.get("port", ""))
-        except ValueError as exc:
-            raise WebApiError(400, "invalid_git_proxy_port", str(exc)) from exc
         return _json({"ok": True, "data": data})
 
     async def admin_get_update(self, request: web.Request) -> web.Response:

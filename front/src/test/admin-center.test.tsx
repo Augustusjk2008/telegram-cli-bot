@@ -1,13 +1,18 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { PublicAccessPanel } from "../components/admin/PublicAccessPanel";
 import { AdminCenterScreen } from "../screens/AdminCenterScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import {
   GENERAL_CODEX_RATE_LIMIT_ID,
   GPT_RESERVE_RATE_LIMIT_ID,
 } from "../services/types";
-import type { AppUpdatePhase, AppUpdateStatus, CodexUsageStats } from "../services/types";
+import type { AppUpdatePhase, AppUpdateStatus, CodexUsageStats, TunnelSnapshot } from "../services/types";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createAdminClient() {
   const client = new MockWebBotClient();
@@ -42,13 +47,85 @@ async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdate
 async function openUpdates(client: MockWebBotClient, user: ReturnType<typeof userEvent.setup>) {
   const view = render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("tab", { name: "升级" }));
+  await user.click(screen.getByRole("tab", { name: "网络与升级" }));
   return view;
 }
 
 function updateVersion(term: "当前运行版本" | "目标版本") {
   return screen.getByText(term, { selector: "dt" }).nextElementSibling;
 }
+
+const LOCAL_URL = "http://127.0.0.1:8765";
+
+test("网络与升级同页展示公网访问和升级，未启用的公网访问可直达 Tunnel 环境配置", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  vi.spyOn(client, "getTunnelStatus").mockResolvedValue({
+    mode: "disabled", status: "stopped", source: "disabled", publicUrl: "", localUrl: LOCAL_URL, lastError: "",
+  });
+  await openUpdates(client, user);
+  const access = screen.getByRole("region", { name: "公网访问" });
+  expect(screen.getByRole("region", { name: "升级" })).toBeInTheDocument();
+  await waitFor(() => expect(within(access).getByRole("status")).toHaveTextContent("未启用"));
+  expect(access).not.toHaveTextContent("Quick Tunnel");
+  expect(access).not.toHaveTextContent("WEB_PUBLIC_URL");
+  await user.click(within(access).getByRole("button", { name: "打开环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  expect(screen.getByRole("button", { name: "Tunnel" })).toHaveAttribute("data-active", "true");
+});
+
+test("Quick Tunnel 启动后持续刷新过渡状态直到可访问，并可复制公网地址", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  const client = createAdminClient();
+  const publicUrl = "https://orbit-demo.trycloudflare.com";
+  const quick: TunnelSnapshot = {
+    mode: "cloudflare_quick", status: "stopped", source: "quick_tunnel", publicUrl: "", localUrl: LOCAL_URL, lastError: "",
+  };
+  const read = vi.spyOn(client, "getTunnelStatus")
+    .mockResolvedValueOnce(quick)
+    .mockResolvedValue({ ...quick, status: "running", publicUrl, verified: true });
+  const start = vi.spyOn(client, "startTunnel").mockResolvedValue({ ...quick, status: "waiting_url" });
+  render(<PublicAccessPanel client={client} />);
+  const access = screen.getByRole("region", { name: "公网访问" });
+  await user.click(await within(access).findByRole("button", { name: "启动 Tunnel" }));
+  expect(start).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(within(access).getByRole("status")).toHaveTextContent("等待公网地址"));
+  await vi.advanceTimersByTimeAsync(2_000);
+  await waitFor(() => expect(within(access).getByRole("status")).toHaveTextContent("运行中"));
+  expect(within(access).getByText(publicUrl)).toBeInTheDocument();
+  await user.click(within(access).getByRole("button", { name: "复制公网地址" }));
+  expect(await navigator.clipboard.readText()).toBe(publicUrl);
+  expect(within(access).getByRole("button", { name: "已复制公网地址" })).toBeInTheDocument();
+  // A settled tunnel is not polled any further.
+  await vi.advanceTimersByTimeAsync(6_000);
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+test("固定公网转发的 frpc 错误只显示一次并提示可能原因，尝试恢复后更新状态", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const failure = "login to server failed: token mismatch";
+  const fixed: TunnelSnapshot = {
+    mode: "fixed_public_forward", status: "error", source: "fixed_public_forward",
+    publicUrl: "https://hub.example.com/node/lab/", localUrl: LOCAL_URL, lastError: failure,
+    nodeId: "lab", basePath: "/node/lab", frpcStatus: "error", frpcPid: null, frpcLastError: failure,
+    heartbeatStatus: "online", heartbeatLastAt: "", heartbeatLastError: "",
+  };
+  vi.spyOn(client, "getTunnelStatus").mockResolvedValue(fixed);
+  const restart = vi.spyOn(client, "restartTunnel").mockResolvedValue({
+    ...fixed, status: "running", lastError: "", frpcStatus: "running", frpcPid: 4321, frpcLastError: "",
+  });
+  render(<PublicAccessPanel client={client} />);
+  const access = screen.getByRole("region", { name: "公网访问" });
+  expect(await within(access).findAllByText(failure)).toHaveLength(1);
+  expect(within(access).getByText("可能原因：frps token 错")).toBeInTheDocument();
+  await user.click(within(access).getByRole("button", { name: "尝试恢复" }));
+  expect(restart).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(within(access).getByRole("status")).toHaveTextContent("运行中"));
+  expect(within(access).queryByText(failure)).not.toBeInTheDocument();
+  expect(within(access).getByText("4321")).toBeInTheDocument();
+});
 
 test("升级任务重新进入后恢复，离线列表失败仍保留在线任务", async () => {
   const user = userEvent.setup();

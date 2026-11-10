@@ -32,7 +32,6 @@ from bot.codex_usage import (
     record_codex_rate_limit_capture,
     start_codex_rate_limit_capture,
 )
-from bot.app_settings import get_git_proxy_config_args
 from bot.git_shared import (
     GIT_OVERVIEW_CHANGED_FILES_LIMIT,
     GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
@@ -410,7 +409,7 @@ def _normalize_git_identity_value(value: Any, *, field: str) -> str:
 
 def _build_git_command(args: list[str]) -> list[str]:
     # H:/ 等非系统盘上的 fsmonitor 可能让 status/diff 长时间卡住，Web Git 统一禁用。
-    return ["git", "-c", "core.fsmonitor=false", *get_git_proxy_config_args(), *args]
+    return ["git", "-c", "core.fsmonitor=false", *args]
 
 
 def _git_command_name(args: list[str]) -> str:

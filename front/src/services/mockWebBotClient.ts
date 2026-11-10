@@ -124,7 +124,6 @@ import type {
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
-  GitProxySettings,
   GitRemoteList,
   GitHubAccountStatus,
   GitHubCreateRepositoryInput,
@@ -2099,7 +2098,6 @@ export class MockWebBotClient implements WebBotClient {
   private gitSmartCommitJobs = new Map<string, GitSmartCommitJob>();
   private gitSmartCommitActiveJobs = new Map<string, string>();
   private gitSmartCommitJobSeq = 1;
-  private gitProxySettings: GitProxySettings = { address: "", port: "" };
   private gitRemoteLists = new Map<string, GitRemoteList>();
   private githubAccount: GitHubAccountStatus = {
     connected: false,
@@ -6515,10 +6513,6 @@ export class MockWebBotClient implements WebBotClient {
     return;
   }
 
-  async getGitProxySettings(): Promise<GitProxySettings> {
-    return { ...this.gitProxySettings };
-  }
-
   async getCliErrorStats(filters: CliErrorStatsFilters = {}): Promise<CliErrorStatsResult> {
     const items = this.cliErrorStats.items.filter((item) => {
       if (filters.alias && item.botAlias !== filters.alias) return false;
@@ -6674,16 +6668,6 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("无权移除额度样本", { status: 403, code: "forbidden" });
     }
     return { deleted: 0 };
-  }
-
-  async updateGitProxySettings(address: string): Promise<GitProxySettings> {
-    const trimmed = (address || "").trim();
-    const normalizedAddress = /^\d+$/.test(trimmed) ? `127.0.0.1:${trimmed}` : trimmed;
-    this.gitProxySettings = {
-      address: normalizedAddress,
-      port: normalizedAddress ? normalizedAddress.split(":").pop() || "" : "",
-    };
-    return { ...this.gitProxySettings };
   }
 
   async getUpdateStatus(): Promise<AppUpdateStatus> {

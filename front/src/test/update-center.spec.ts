@@ -41,6 +41,10 @@ for (const width of [1280, 390]) {
       else if (path === "admin/users") data = [];
       else if (path === "admin/update" || path === "admin/update/jobs/current") data = status;
       else if (path === "admin/update/offline/packages") data = { artifacts_dir: "C:/packages", items: [] };
+      else if (path === "admin/tunnel") data = {
+        mode: "cloudflare_quick", status: "running", source: "quick_tunnel", verified: true, last_error: "",
+        public_url: "https://orbit-update-center-browser-check.trycloudflare.com", local_url: "http://127.0.0.1:8765",
+      };
       else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 1, reset: false };
       else if (path.endsWith("/ls")) data = { working_dir: "C:/workspace", entries: [] };
       else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
@@ -52,7 +56,7 @@ for (const width of [1280, 390]) {
     async function openUpdates() {
       await page.getByRole("button", { name: width < 768 ? "main" : "切换 Bot: main", exact: true }).click();
       await page.getByRole("button", { name: "管理中心", exact: true }).click();
-      await page.getByRole("tab", { name: "升级", exact: true }).click();
+      await page.getByRole("tab", { name: "网络与升级", exact: true }).click();
     }
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/");

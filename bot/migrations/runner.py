@@ -43,8 +43,6 @@ MIGRATION_REPO_STATE_TO_USER_HOME = "001_repo_state_to_user_home"
 MIGRATION_PLUGIN_MANIFEST_V2 = "002_plugin_manifest_v2"
 MIGRATION_IDS = (MIGRATION_REPO_STATE_TO_USER_HOME, MIGRATION_PLUGIN_MANIFEST_V2)
 _LEGACY_APP_SETTING_KEYS = (
-    "git_proxy_address",
-    "git_proxy_port",
     "main_bot_profile",
     "global_prompt_presets",
     "update_enabled",

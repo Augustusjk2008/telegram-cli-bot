@@ -1,0 +1,404 @@
+/*
+ * Admin Center → 网络与升级 → 公网访问: the forwarding route (local service → public address), the
+ * fixed-forward service tiles and the tunnel controls as one glass island above the upgrade islands.
+ * Proportions follow AppUpdatePanel.css so the merged page reads as one surface; fields and switches
+ * inherit the Orbit look from admin-center.css. Everything here reads theme variables only.
+ */
+
+/* --------------------------------------------------------------- tones */
+
+.access-island,
+.access-service {
+  --access-tone: var(--muted);
+  --access-tone-soft: var(--fill-pressed);
+  --access-tone-ring: var(--hairline-strong);
+}
+
+:is(.access-island, .access-service)[data-tone="accent"] {
+  --access-tone: var(--accent);
+  --access-tone-soft: var(--accent-soft);
+  --access-tone-ring: var(--accent-outline);
+}
+
+:is(.access-island, .access-service)[data-tone="success"] {
+  --access-tone: var(--status-success);
+  --access-tone-soft: var(--status-success-bg);
+  --access-tone-ring: color-mix(in srgb, var(--status-success) 26%, transparent);
+}
+
+:is(.access-island, .access-service)[data-tone="warning"] {
+  --access-tone: var(--status-warning);
+  --access-tone-soft: var(--status-warning-bg);
+  --access-tone-ring: color-mix(in srgb, var(--status-warning) 28%, transparent);
+}
+
+:is(.access-island, .access-service)[data-tone="danger"] {
+  --access-tone: var(--status-danger);
+  --access-tone-soft: var(--status-danger-bg);
+  --access-tone-ring: color-mix(in srgb, var(--status-danger) 28%, transparent);
+}
+
+/* -------------------------------------------------------------- island */
+
+.access-island {
+  container: access-island / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* While the tunnel settles it gets the workbench's running streak; keep it on the straight top edge. */
+.access-island > .orbit-sweep {
+  inset: 0 var(--radius-panel) auto;
+}
+
+.access-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  min-width: 0;
+}
+
+.access-head-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-card);
+  background: var(--access-tone-soft);
+  color: var(--access-tone);
+  box-shadow: inset 0 0 0 1px var(--access-tone-ring);
+  transition: background-color 200ms var(--ease-out), color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+.access-head-copy {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.access-head-copy h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.access-head-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.access-head > .orbit-chip {
+  flex: none;
+  margin-left: auto;
+}
+
+.access-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.access-dot[data-running] {
+  animation: var(--breathe-animation);
+}
+
+/* ------------------------------------------------------------ callouts */
+
+.access-callout-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.access-callout:has(> .orbit-btn) {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.access-callout > .orbit-btn {
+  flex: none;
+  margin-left: auto;
+}
+
+/* --------------------------------------------------------------- route */
+
+/* Local service → public address, the same shape as the version route of the upgrade islands. */
+.access-route {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) auto minmax(0, 3fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.access-route-arrow {
+  align-self: center;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.access-route[data-live] .access-route-arrow {
+  color: var(--accent);
+  opacity: 1;
+  filter: drop-shadow(0 0 calc(var(--glow-strength) * 6px) color-mix(in srgb, var(--accent) 70%, transparent));
+}
+
+.access-endpoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: 4px 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  transition: border-color 200ms var(--ease-out), background-color 200ms var(--ease-out);
+}
+
+.access-endpoint > dt {
+  align-self: center;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.access-endpoint > dd {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+}
+
+.access-endpoint-value {
+  color: var(--text);
+  font-family: var(--code-font-family);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.access-endpoint-meta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* Copy / open sit beside the label so a long address keeps the full card width. */
+.access-endpoint > .access-endpoint-actions {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: -6px;
+}
+
+.access-endpoint[data-emphasis] {
+  border-color: var(--accent-outline);
+  background:
+    radial-gradient(120% 120% at 100% 0%, color-mix(in srgb, var(--accent) calc(var(--glow-strength) * 14%), transparent), transparent 70%),
+    var(--accent-soft);
+}
+
+.access-endpoint[data-emphasis] .access-endpoint-value {
+  color: var(--accent);
+}
+
+.access-endpoint[data-empty] {
+  border-style: dashed;
+  border-color: var(--hairline-strong);
+  background: transparent;
+}
+
+.access-endpoint[data-empty] .access-endpoint-value {
+  color: var(--muted);
+  font-family: inherit;
+}
+
+/* ------------------------------------------------------- service tiles */
+
+.access-services {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.access-service {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+}
+
+.access-service-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.access-service-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-control);
+  background: var(--access-tone-soft);
+  color: var(--access-tone);
+}
+
+.access-service-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.access-service-head > .orbit-chip {
+  flex: none;
+}
+
+.access-service-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.access-service-facts > div {
+  display: contents;
+}
+
+.access-service-facts dt {
+  color: var(--muted);
+}
+
+.access-service-facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.access-service-error,
+.access-service-note,
+.access-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.access-service-error {
+  color: var(--status-danger);
+  white-space: pre-wrap;
+}
+
+.access-service-note {
+  color: var(--muted);
+}
+
+.access-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--status-warning);
+  font-weight: 500;
+}
+
+.access-hint > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* -------------------------------------------------------------- footer */
+
+.access-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.access-foot-note {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.access-foot-note > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* Wrapped rows stay on the right edge, where the primary action sits. */
+.access-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.access-foot-actions:empty {
+  display: none;
+}
+
+/* ------------------------------------------------------ narrow islands */
+
+@container access-island (max-width: 560px) {
+  /* A chip that wraps under the title lines up with the title text, not the far edge. */
+  .access-head > .orbit-chip {
+    margin-left: 44px;
+  }
+
+  .access-route,
+  .access-services {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .access-route-arrow {
+    justify-self: center;
+    rotate: 90deg;
+  }
+
+  .access-endpoint {
+    padding: 12px;
+  }
+}

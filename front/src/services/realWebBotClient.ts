@@ -50,7 +50,6 @@ import type {
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
-  GitProxySettings,
   GitRemoteEntry,
   GitRemoteList,
   GitHubAccountStatus,
@@ -1500,11 +1499,6 @@ type RawGitSmartCommitJob = {
   message?: string;
   error?: string;
   overview?: RawGitOverview | null;
-};
-
-type RawGitProxySettings = {
-  address?: string;
-  port?: string;
 };
 
 type RawGitRemoteEntry = {
@@ -3890,14 +3884,6 @@ function mapGitHubRepository(raw: RawGitHubRepository): GitHubRepository {
 
 function mapGitHubDevicePollStatus(status: string | undefined): GitHubDevicePollResult["status"] {
   return status === "connected" || status === "expired" || status === "denied" ? status : "pending";
-}
-
-function mapGitProxySettings(raw: RawGitProxySettings): GitProxySettings {
-  const address = raw.address || (raw.port ? `127.0.0.1:${raw.port}` : "");
-  return {
-    address,
-    port: raw.port || "",
-  };
 }
 
 function mapUpdateLauncher(raw?: Partial<AppUpdateLauncher>): AppUpdateLauncher {
@@ -7459,22 +7445,6 @@ export class RealWebBotClient implements WebBotClient {
         window.clearTimeout(timeoutId);
       }
     }
-  }
-
-  async getGitProxySettings(): Promise<GitProxySettings> {
-    const data = await this.requestJson<RawGitProxySettings>("/api/admin/git-proxy");
-    return mapGitProxySettings(data);
-  }
-
-  async updateGitProxySettings(address: string): Promise<GitProxySettings> {
-    const data = await this.requestJson<RawGitProxySettings>("/api/admin/git-proxy", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ address }),
-    });
-    return mapGitProxySettings(data);
   }
 
   async getUpdateStatus(): Promise<AppUpdateStatus> {

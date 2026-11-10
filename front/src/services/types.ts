@@ -3145,11 +3145,6 @@ export type GitCommitMessageGenerateResult = {
   message: string;
 };
 
-export type GitProxySettings = {
-  address: string;
-  port: string;
-};
-
 export type GitRemoteGitHubInfo = {
   owner: string;
   repo: string;
