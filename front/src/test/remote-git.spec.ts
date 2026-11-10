@@ -60,8 +60,9 @@ for (const width of [1280, 390]) {
           await route.fulfill({ status: 501, json: { ok: false, error: { code: "remote_feature_unavailable", message: "Unsupported remote Git operation" } } });
           return;
         }
+        // Git stays missing until the test "installs" it and retries. A one-shot 503 is not enough:
+        // the desktop header also reads the overview on load, before the Git panel opens.
         if (!operation && gitMissing) {
-          gitMissing = false;
           await route.fulfill({ status: 503, json: { ok: false, error: { code: "remote_git_not_found", message: "Git unavailable" } } });
           return;
         }
@@ -91,6 +92,7 @@ for (const width of [1280, 390]) {
       else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
       else if (path.endsWith("/agents")) data = { items: [{ id: "main", name: "main" }], active_agent_id: "main" };
       else if (path === "announcements" || path.endsWith("/favorites")) data = { items: [] };
+      else if (path === "bots/remote/terminal-actions/config") data = { schemaVersion: 1, configPath: "", exists: false, mtimeNs: "", editable: false, errors: [], runtimePlatform: "linux", actions: [] };
       if (path.includes("rollback")) unsupportedRequests.push(path);
       await route.fulfill({ json: { ok: true, data } });
     });
@@ -98,12 +100,14 @@ for (const width of [1280, 390]) {
     await page.goto("./");
     await expect(page.getByRole("button", { name: "SSH 连接", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Git", exact: true }).click();
-    const guidance = page.getByRole("alert");
+    const guidance = page.getByRole("alert").filter({ hasText: "远程 Git 不可用" });
     await expect(guidance).toContainText("非交互式 PATH");
     await expect(guidance.getByRole("link", { name: "Linux 官方安装指南" })).toBeVisible();
     await expect(guidance.getByRole("link", { name: "Windows 官方安装指南" })).toBeVisible();
+    gitMissing = false;
     await guidance.getByRole("button", { name: "重试" }).click();
-    await expect(page.getByText("Remote initial commit", { exact: true })).toBeVisible();
+    await expect(guidance).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "打开 diff tracked.txt", exact: true })).toBeVisible();
     await expect(page.getByText(/origin\/main/)).toBeVisible();
     await expect(page.getByText("Remote stash", { exact: true })).toBeVisible();
     await expect(page.getByTestId("git-selected-commit-hash")).toHaveText("abcdef1");
@@ -138,7 +142,9 @@ for (const width of [1280, 390]) {
     await expect(page.getByRole("button", { name: "暂存 tracked.txt", exact: true })).toBeEnabled();
     await page.getByRole("textbox", { name: "commit message", exact: true }).fill("Manual remote commit");
     await page.getByRole("button", { name: "提交更改", exact: true }).click();
-    await expect(page.getByText("Manual remote commit", { exact: true })).toBeVisible();
+    await expect(page.getByText("Committed", { exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "commit message", exact: true })).toHaveValue("");
+    expect(subject).toBe("Manual remote commit");
     await expect(page.getByRole("button", { name: "Stash Push", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "智能提交", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "生成 commit message", exact: true })).toBeDisabled();
@@ -147,7 +153,9 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: test.info().outputPath(`remote-git-${width}.png`) });
     await page.getByRole("button", { name: "文件", exact: true }).click();
     await expect(page.getByRole("button", { name: "打开 tracked.txt", exact: true })).toBeVisible();
-    expect(gitRequests).toEqual(expect.arrayContaining(["GET /capabilities", "GET /", "GET /tree-status", "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /commit-message/config", "GET /smart-commit/active", "GET /diff", "POST /stage", "POST /unstage", "POST /commit", "POST /fetch", "POST /pull", "POST /push", "POST /commit-message/generate"]));
+    // Only the desktop file tree reads Git decorations (tree-status); the mobile Git screen never requests them.
+    const desktopOnlyRequests = width === 1280 ? ["GET /tree-status"] : [];
+    expect(gitRequests).toEqual(expect.arrayContaining(["GET /capabilities", "GET /", ...desktopOnlyRequests, "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /commit-message/config", "GET /smart-commit/active", "GET /diff", "POST /stage", "POST /unstage", "POST /commit", "POST /fetch", "POST /pull", "POST /push", "POST /commit-message/generate"]));
     expect(unsupportedRequests).toEqual([]);
   });
 }

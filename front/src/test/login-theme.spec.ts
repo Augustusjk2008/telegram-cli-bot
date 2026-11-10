@@ -5,11 +5,11 @@ test.skip(!process.env.PLAYWRIGHT_BASE_URL, "Requires a user-started application
 
 const BUILTIN_THEME: UiTheme = {
   schemaVersion: 1, id: "paper-daylight", name: "钢铁核心", baseId: "paper-daylight",
-  appearance: { colors: { scheme: "light", overrides: {} } }, readonly: false, version: 1, updatedAt: "",
+  appearance: { colors: { scheme: "light", overrides: {} } }, readonly: true, version: 1, updatedAt: "",
 };
 
 const night: UiTheme = {
-  ...BUILTIN_THEME, id: "theme_login_preview", name: "登录夜间", readonly: false,
+  ...BUILTIN_THEME, id: "theme_login_preview", name: "登录夜间",
   appearance: { colors: { scheme: "dark", overrides: {
     canvas: "#101820", "surface.base": "#18232E", "surface.muted": "#202F3D", "surface.strong": "#223446",
     "text.primary": "#EAF0F6", "text.muted": "#B3C3D1", accent: "#80CBE4", "accent.foreground": "#101820",

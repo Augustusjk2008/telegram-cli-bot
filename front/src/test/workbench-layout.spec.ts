@@ -32,7 +32,7 @@ async function openWorkbench(page: Page, viewport = { width: 1440, height: 900 }
     else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };
     else if (path.endsWith("/agents")) data = { items: [{ id: "main", name: "main" }], active_agent_id: "main" };
     else if (path === "announcements" || path.endsWith("/favorites")) data = { items: [] };
-    else if (path.endsWith("/terminal-actions/config")) data = { actions: [] };
+    else if (path.endsWith("/terminal-actions/config")) data = { schemaVersion: 1, configPath: "", exists: false, mtimeNs: "", editable: false, errors: [], runtimePlatform: "linux", actions: [] };
     await route.fulfill({ json: { ok: true, data } });
   });
   await page.setViewportSize(viewport);
