@@ -6,6 +6,7 @@
 - `UserSession` 跟踪工作目录、processing state、active subprocess、conversation id，以及 Codex、Claude、Antigravity、DeepSeek 和 native agent 的会话绑定。
 - 会话快照默认持久化到应用数据目录的 `sessions/session_store.sqlite3`；`session_store.json` 同时用于旧数据迁移、显式 JSON 后端和 SQLite 初始化失败后的回退。后端选择见 `bot/session_store.py`。
 - chat history 由 `bot/web/chat_store.py` 的 SQLite store 保存；conversation 保存 `native_session_id`、`native_session_meta`，turn 保存 `context_usage`，运行态 overlay 留在内存。
+- Claude CLI 的 `context_usage` 由 `bot/web/cli_context_usage.py` 按 transcript 最近 assistant usage 估算；窗口优先采用 `result.modelUsage[model].contextWindow`，turn 结束时按 Claude session 与模型记入内存（宿主重启后丢失）。未报告时按模型族回退：Fable/Mythos、Opus/Sonnet 4.6+、Haiku 5+ 为 1M，更早型号 200K，无法识别的模型 256K。
 - Pi 另外通过 `pi_session_store.py` 保存 `native-agent/pi_sessions.json`，包括 session metadata、workspace history head、线性索引和 turn 记录；修改绑定时同时检查 ChatStore、PiSessionStore 和内存 runtime。
 
 ## CLI 与原生链路
@@ -49,6 +50,7 @@
 - `run_id` 由主会话 `conversation_id + cluster_team_revision` 稳定推导；同一主会话与编组在普通轮次和宿主重启后得到同一个 ID，不新增数据库 ID 字段。
 - 只有 `configure_team` 实际新增、删除、修改或重新分配角色时才递增编组版本并轮换 `run_id`。无变化请求返回 `changed=false` 和原 ID；普通轮次结束、异常、停止、集群开关切换及宿主重启均不轮换。
 - `configure_team` 成功后主 agent 必须查看 `changed`：`changed=true` 时同一轮所有后续工具立即使用响应中的新 `run_id`，`changed=false` 时继续使用原 ID。
+- `extend` 只占用空闲槽位、不改动已有分配，子任务运行中也允许；`ClusterRuntime.rekey_run()` 保留同一个运行态对象及其任务、消息游标，Web API 同步把 `_ClusterRunControl` 迁到新 `run_id`，旧 ID 作为内部别名供在途子任务继续上报。旧 ID 可读；`ask_agent`、`cancel_agent_task`、`new_agent_session` 拒绝旧 ID 并返回 `cluster_run_changed` 及当前 ID，`configure_team` 返回 `cluster_team_changed` 及当前 ID。`replace` 可能重新分配忙碌槽位，仍需等主会话子任务结束（`cluster_team_busy`）。
 - 每次工具调用必须显式传入当前 `run_id`；stdio MCP 和 Pi 适配层不缓存或自动切换 ID，只把本次工具参数通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，也不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
 - Cluster task、进度消息和后台任务仍是内存态，不跨宿主重启持久化。
 - 子任务结束后唤醒主会话的通知为英文，只列 task_id 并要求主 agent 用 `poll_agent_tasks(task_ids=...)` 读取结果，不内联子 agent 输出。是否通知只看主 agent 是否已读到结果，不设时间窗口：`poll_agent_tasks` 返回终态任务或 `wait_agent_messages` 返回其 `final` 消息即记为已读（`result_observed`）。未读的子任务无论在主 agent 轮次中还是轮次结束后结束都会通知；轮次中结束的先挂起，由 `_finish_cluster_parent_turn()` 在主会话空闲后投递，投递前已读的不再通知。bridge 不区分调用方；与 `adopt_unfinished_tasks()` 和 `wait_agent_messages` 的托管游标相同，这两个工具的读取都按主 agent 读取处理。

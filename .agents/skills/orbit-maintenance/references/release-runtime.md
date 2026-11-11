@@ -14,7 +14,7 @@
 ## 升级事务
 
 - `bot/update_state.py` 通过运行态路径定位安装专属状态，使用规范化根目录身份、修订号、原子写入和 OS 文件锁。`bot/update_service.py` 统一自动/手动/离线/上传准备；SSE 只订阅任务，断线不会重复下载。自动检查在 Web 宿主启动时及每 6 小时（`UPDATE_AUTO_CHECK_INTERVAL_SECONDS`）运行，只准备不应用，不会重新准备当前任务已取消、或下载完成后才失败的同一版本（只自动重试下载中断）；在线准备拒绝与运行版本相同的 Release（`update_not_available`）。状态每次读取都重新计算 `update_available`，并给出任务目录中已存在的 `preparation_log` / `runner_log`。上传可带 `?size=`：超限提前拒绝并提供进度百分比，上传期间的状态写入节流且在线程中执行。`state.json` 以纯 ASCII JSON 写入。旧状态只认领可证明属于当前安装的包，并要求重新准备。
-- 宿主与启动器的安装锁位于独立控制目录，数据目录迁移不会改变锁身份；直接 `python -m bot` 也参与互斥。新宿主通过带进程身份的交接文件报告当前状态路径，启动器在普通重启和升级退出后重新读取，避免消费迁移前的状态。健康确认前暂停新任务，成功或安全恢复后开放，被接受的宿主随即移除 `TCB_UPDATE_JOB_ID` 与 `TCB_UPDATE_HEALTH_TOKEN`。
+- 宿主与启动器的安装锁位于独立控制目录，数据目录迁移不会改变锁身份；直接 `python -m bot` 也参与互斥。新宿主通过带进程身份的交接文件报告当前状态路径，启动器在普通重启和升级退出后重新读取，避免消费迁移前的状态。官方宿主启动后把交接路径与令牌从 `os.environ` 移入 `bot/update_state.py` 进程内状态，Agent、终端和插件子进程不会继承；`tests/conftest.py` 同时清除继承的更新协议变量，防止在 Agent 会话里跑测试时覆盖在线宿主的交接文件。健康确认前暂停新任务，成功或安全恢复后开放，被接受的宿主随即移除 `TCB_UPDATE_JOB_ID` 与 `TCB_UPDATE_HEALTH_TOKEN`。
 - 阶段为 `preparing → ready → waiting_restart → applying → awaiting_health → succeeded`；准备可取消/重试：取消只核对任务 ID 与阶段（准备进度每秒多次推进修订号），并终止正在运行的 pip/npm 进程树；新任务遇到同一 Release 的已失败、已取消或就绪前任务时接管其下载断点或已校验的完整包。应用失败进入 `rolling_back → rolled_back / recovery_required`。应用绑定任务 ID 与修订号，并阻止运行中的 Agent、集群任务和存储迁移；Web 宿主先在线程中核验全部原文件与暂存文件哈希，再在事件循环内关闭准入并做空闲检查。
 - `scripts/update_transaction.py` 跳过内容与可执行位都已与暂存文件一致的目标（不备份、不改写，日志记 `unchanged_skipped`），其余目标在替换前复制并验证全部备份，落盘记录操作意图；Windows 瞬时占用（winerror 5/32/33）的替换与删除会短暂重试；恢复复制备份且可重复执行。中断时保留事务目录；旧 `.update-apply-*` 材料不全时报告人工恢复要求。
 - `scripts/update_package.py` 统一清单、版本、归档路径、平台架构、包类型及文件哈希验证。保护配置和实际存储路径；源码本地修改、未知文件所有权及修改过的托管扩展作为冲突保留。废弃文件必须有旧清单证明归属。
