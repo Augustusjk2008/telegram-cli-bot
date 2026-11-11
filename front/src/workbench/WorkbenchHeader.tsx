@@ -32,6 +32,7 @@ type Props = {
   viewMode: ViewMode;
   branchName?: string;
   hasUnreadOtherBots?: boolean;
+  clearUnreadAction?: ReactNode;
   announcementAction?: ReactNode;
   workspaceAction?: ReactNode;
   /** Rendered right after the layout toggle group (the desktop layout menu). */
@@ -57,6 +58,7 @@ export function WorkbenchHeader({
   viewMode,
   branchName = "",
   hasUnreadOtherBots = false,
+  clearUnreadAction,
   announcementAction,
   workspaceAction,
   layoutAction,
@@ -181,6 +183,7 @@ export function WorkbenchHeader({
         </button>
       ) : null}
       <div className="flex min-w-fit flex-1 items-center justify-end gap-1.5">
+        {clearUnreadAction}
         {announcementAction ? (
           <div className="flex items-center">{announcementAction}</div>
         ) : null}

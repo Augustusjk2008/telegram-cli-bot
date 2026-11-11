@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   chatUnreadStoragePrefix,
+  markAllStoredChatsRead,
   markStoredChatRead,
+  markStoredChatUnread,
   reconcileStoredChatUnread,
   recordStoredChatCompletion,
 } from "../app/chatUnreadState";
@@ -156,4 +158,21 @@ test("opening a bot acknowledges its persisted unread state without affecting an
   expect(reconcileStoredChatUnread("account-2", [
     { alias: "worker", lastAnswerCompletedAt: "2026-08-27T01:11:00Z" },
   ]).unreadBots).toEqual(["worker"]);
+});
+
+test("clearing all unread persists per account and still allows later completions", () => {
+  const terminalAt = "2026-08-27T01:10:00Z";
+  recordStoredChatCompletion("account-1", "main", terminalAt, true);
+  recordStoredChatCompletion("account-1", "worker", terminalAt, true);
+  markStoredChatUnread("account-1", "pending-worker");
+  recordStoredChatCompletion("account-2", "worker", terminalAt, true);
+
+  expect(markAllStoredChatsRead("account-1").unreadBots).toEqual([]);
+  expect(reconcileStoredChatUnread("account-1", [
+    { alias: "main", lastAnswerTerminalAt: terminalAt },
+    { alias: "worker", lastAnswerTerminalAt: terminalAt },
+  ]).unreadBots).toEqual([]);
+  expect(reconcileStoredChatUnread("account-2", []).unreadBots).toEqual(["worker"]);
+  expect(recordStoredChatCompletion("account-1", "worker", terminalAt, true).unreadBots).toEqual([]);
+  expect(recordStoredChatCompletion("account-1", "worker", "2026-08-27T01:20:00Z", true).unreadBots).toEqual(["worker"]);
 });

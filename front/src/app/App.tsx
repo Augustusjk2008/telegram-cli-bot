@@ -10,6 +10,7 @@ import { MobileShell, type AppTab } from "./MobileShell";
 import { NotificationCenter } from "./NotificationCenter";
 import {
   chatUnreadStoragePrefix,
+  markAllStoredChatsRead,
   markStoredChatRead,
   markStoredChatUnread,
   reconcileStoredChatUnread,
@@ -32,6 +33,7 @@ import {
 import { BotSwitcherSheet } from "../components/BotSwitcherSheet";
 import { DesktopBotSwitcherPopover } from "../components/DesktopBotSwitcherPopover";
 import { AnnouncementButton } from "../components/AnnouncementButton";
+import { ClearUnreadButton } from "../components/ClearUnreadButton";
 import { AnnouncementDialog } from "../components/AnnouncementDialog";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
@@ -266,6 +268,7 @@ function AppContent() {
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
   const [announcementOpen, setAnnouncementOpen] = useState(false);
+  const [lanChatReadRevision, setLanChatReadRevision] = useState(0);
   const announcementAutoOpenedRef = useRef(false);
   const visibleChatBotAliasRef = useRef<string | null>(null);
   const desktopChatPaneVisibleRef = useRef(desktopChatPaneVisible);
@@ -787,6 +790,29 @@ function AppContent() {
     }
   }
 
+  async function clearAllUnread() {
+    updateUnreadBotsState(setUnreadBots, markAllStoredChatsRead(accountKey));
+    const results = await Promise.allSettled([
+      announcementState.hasUnseen && announcementState.latestId
+        ? client.markAnnouncementsSeen(announcementState.latestId).then(setAnnouncementState)
+        : Promise.resolve(),
+      hasCapability(session, "view_chat_history")
+        ? client.listLanChatConversations().then(async (conversations) => {
+            const reads = await Promise.allSettled(conversations
+              .filter((conversation) => conversation.unreadCount > 0 && conversation.lastMessage)
+              .map((conversation) => client.markLanChatRead(conversation.id, conversation.lastMessage!.seq)));
+            setLanChatReadRevision((revision) => revision + 1);
+            if (reads.some((result) => result.status === "rejected")) {
+              throw new Error("成员聊天未读未能全部清除");
+            }
+          })
+        : Promise.resolve(),
+    ]);
+    if (results.some((result) => result.status === "rejected")) {
+      throw new Error("部分未读未能清除");
+    }
+  }
+
   function handleDesktopChatPaneVisibilityChange(visible: boolean) {
     const wasVisible = desktopChatPaneVisibleRef.current;
     desktopChatPaneVisibleRef.current = visible;
@@ -809,6 +835,7 @@ function AppContent() {
       }}
     />
   );
+  const clearUnreadButton = <ClearUnreadButton key={accountKey} onClear={clearAllUnread} />;
   const announcementDialog = (
     <AnnouncementDialog
       open={announcementOpen}
@@ -1153,6 +1180,8 @@ function AppContent() {
               sessionCapabilities={session?.capabilities}
               viewMode={viewMode}
               hasUnreadOtherBots={hasUnreadOtherBots}
+              clearUnreadAction={clearUnreadButton}
+              lanChatReadRevision={lanChatReadRevision}
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
               chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
@@ -1197,6 +1226,7 @@ function AppContent() {
           activeScreen={<Suspense fallback={lazyFallback}>{activeScreen}</Suspense>}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
+          clearUnreadAction={clearUnreadButton}
           announcementAction={announcementButton}
           remoteAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={currentBot} remote={remoteWorkspace} compact disabled={!canManageBots || !canOperateCurrentBot} onConnected={() => setRemoteReconnectRevision((revision) => revision + 1)} /> : undefined}
           onOpenBotSwitcher={() => {

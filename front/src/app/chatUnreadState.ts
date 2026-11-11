@@ -321,3 +321,23 @@ export function markStoredChatRead(accountKey: string, alias: string): ChatUnrea
   watermarks.pendingUnreadBots.delete(normalizedAlias);
   return toPublicState(watermarks);
 }
+
+export function markAllStoredChatsRead(accountKey: string): ChatUnreadState {
+  markInitialized(accountKey);
+  const watermarks = readWatermarks(accountKey);
+  const aliases = new Set([
+    ...Object.keys(watermarks.latestTerminalAt),
+    ...watermarks.pendingUnreadBots,
+  ]);
+  for (const alias of aliases) {
+    const latest = watermarks.latestTerminalAt[alias];
+    if (latest) {
+      storeMarker(accountKey, "read", alias, latest);
+      setLatest(watermarks.readThroughAt, alias, latest);
+    }
+    clearPendingMarkers(accountKey, alias);
+    compactMarkers(accountKey, alias);
+  }
+  watermarks.pendingUnreadBots.clear();
+  return toPublicState(watermarks);
+}

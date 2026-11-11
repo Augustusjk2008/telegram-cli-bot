@@ -8,6 +8,7 @@ import { useLanChat } from "./useLanChat";
 type Props = {
   client: WebBotClient;
   visible: boolean;
+  readRevision?: number;
 };
 
 const FALLBACK_GROUP: LanChatConversation = {
@@ -20,11 +21,11 @@ const FALLBACK_GROUP: LanChatConversation = {
   updatedAt: "",
 };
 
-export function LanChatDock({ client, visible }: Props) {
+export function LanChatDock({ client, visible, readRevision = 0 }: Props) {
   const [listOpen, setListOpen] = useState(false);
   const [activeConversation, setActiveConversation] = useState<LanChatConversation | null>(null);
   const [toastText, setToastText] = useState("");
-  const chat = useLanChat(client, visible);
+  const chat = useLanChat(client, visible, readRevision);
 
   const openConversation = useCallback(async (conversation: LanChatConversation) => {
     setActiveConversation(conversation);

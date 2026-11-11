@@ -35,6 +35,7 @@ type Props = {
   activeScreen: ReactNode;
   viewMode: ViewMode;
   hasUnreadOtherBots?: boolean;
+  clearUnreadAction?: ReactNode;
   announcementAction?: ReactNode;
   remoteAction?: ReactNode;
   onOpenBotSwitcher: () => void;
@@ -51,6 +52,7 @@ export function MobileShell({
   activeScreen,
   viewMode,
   hasUnreadOtherBots = false,
+  clearUnreadAction,
   announcementAction,
   remoteAction,
   onOpenBotSwitcher,
@@ -128,6 +130,7 @@ export function MobileShell({
           </button>
           <div ref={viewModeRootRef} className="mobile-shell-actions">
             {remoteAction}
+            {clearUnreadAction}
             {announcementAction}
             <button
               ref={viewModeTriggerRef}

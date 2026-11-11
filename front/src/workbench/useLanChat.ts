@@ -15,7 +15,7 @@ function appendUniqueMessage(items: LanChatMessage[], message: LanChatMessage) {
   return [...items, message].sort((left, right) => left.seq - right.seq);
 }
 
-export function useLanChat(client: WebBotClient, visible: boolean) {
+export function useLanChat(client: WebBotClient, visible: boolean, readRevision = 0) {
   const [status, setStatus] = useState<LanChatStatus | null>(null);
   const [conversations, setConversations] = useState<LanChatConversation[]>([]);
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, LanChatMessage[]>>({});
@@ -93,7 +93,7 @@ export function useLanChat(client: WebBotClient, visible: boolean) {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, readRevision]);
 
   useEffect(() => {
     if (!visible || !client.openLanChatSocket) {

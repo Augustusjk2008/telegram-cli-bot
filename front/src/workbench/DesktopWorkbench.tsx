@@ -150,6 +150,8 @@ type Props = {
   sessionCapabilities?: string[];
   viewMode?: ViewMode;
   hasUnreadOtherBots?: boolean;
+  clearUnreadAction?: ReactNode;
+  lanChatReadRevision?: number;
   announcementAction?: ReactNode;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
@@ -189,6 +191,8 @@ export function DesktopWorkbench({
   sessionCapabilities = [],
   viewMode = "desktop",
   hasUnreadOtherBots = false,
+  clearUnreadAction,
+  lanChatReadRevision = 0,
   announcementAction,
   chatPaneContent,
   chatStatus: externalChatStatus,
@@ -1443,6 +1447,7 @@ export function DesktopWorkbench({
     <LanChatDock
       client={client}
       visible={!structureOnly && !Boolean(focusedPane)}
+      readRevision={lanChatReadRevision}
     />
   );
 
@@ -1475,6 +1480,7 @@ export function DesktopWorkbench({
         branchName={gitBranchName}
         viewMode={viewMode}
         hasUnreadOtherBots={hasUnreadOtherBots}
+        clearUnreadAction={clearUnreadAction}
         announcementAction={announcementAction}
         workspaceAction={remoteWorkspace ? <RemoteSshMenu client={client} botAlias={botAlias} remote={remoteWorkspace} disabled={!botCanOperate || !canManageRemoteConnection} onConnected={handleRemoteConnected} /> : undefined}
         sidebarVisible={!layoutState.sidebarCollapsed}
