@@ -158,3 +158,98 @@ test("switches a local bot to DeepSeek with its own command and parameter schema
   expect(screen.queryByText("安装命令", { exact: true })).not.toBeInTheDocument();
   expect(screen.queryByText("验证命令", { exact: true })).not.toBeInTheDocument();
 });
+
+test("cluster settings stay local until saved together, and the enable switch keeps unsaved edits", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  const size = await screen.findByLabelText("集群规模");
+  const saveButton = screen.getByRole("button", { name: "保存集群配置" });
+  expect(saveButton).toBeDisabled();
+  await waitFor(() => expect(screen.getByLabelText("启用集群模式")).toBeEnabled());
+
+  await user.selectOptions(size, "5");
+  await user.selectOptions(screen.getByLabelText("子 Agent 写入策略"), "main_only");
+  const timeout = screen.getByLabelText("任务超时（秒）");
+  await user.clear(timeout);
+  await user.type(timeout, "900");
+  await user.type(screen.getByLabelText("低档 CLI 路径"), "/opt/codex");
+  expect(updateCluster).not.toHaveBeenCalled();
+  expect(within(screen.getByRole("navigation", { name: "设置分区" })).getByRole("button", { name: /集群/ })).toContainElement(screen.getAllByLabelText("有未保存更改")[0]);
+
+  await user.click(screen.getByLabelText("启用集群模式"));
+  await waitFor(() => expect(updateCluster).toHaveBeenCalledTimes(1));
+  expect(updateCluster.mock.calls[0][1]).toMatchObject({ enabled: true, maxParallelAgents: 3, writePolicy: "all_agents" });
+  expect(screen.getByLabelText("集群规模")).toHaveValue("5");
+
+  await user.click(saveButton);
+  await waitFor(() => expect(updateCluster).toHaveBeenCalledTimes(2));
+  expect(updateCluster.mock.calls[1][1]).toMatchObject({
+    enabled: true,
+    maxParallelAgents: 5,
+    writePolicy: "main_only",
+    defaultTimeoutSeconds: 900,
+    tierConfigs: { low: expect.objectContaining({ cliPath: "/opt/codex" }) },
+  });
+  await waitFor(() => expect(saveButton).toBeDisabled());
+  expect(screen.queryByLabelText("有未保存更改")).not.toBeInTheDocument();
+});
+
+test("cluster settings revert discards the draft and invalid timeouts are not saved", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  const updateCluster = vi.spyOn(client, "updateClusterConfig");
+  render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
+
+  const timeout = await screen.findByLabelText("任务超时（秒）");
+  const original = (timeout as HTMLInputElement).value;
+  await user.clear(timeout);
+  await user.type(timeout, "30{Enter}");
+  expect(await screen.findByText("任务超时必须是 60 到 3600 之间的整数")).toBeInTheDocument();
+  expect(updateCluster).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "还原" }));
+  expect(timeout).toHaveValue(Number(original));
+  expect(screen.getByRole("button", { name: "保存集群配置" })).toBeDisabled();
+});
+
+test("switching CLI type fills another agent's path and saving it opens a new conversation", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+  await client.addBot({ alias: "reviewer", cliType: "claude", cliPath: "/opt/claude/bin/claude", workingDir: "C:\\workspace\\reviewer" });
+  const createConversation = vi.spyOn(client, "createConversation");
+  const onCliSwitched = vi.fn();
+  render(<SettingsScreen botAlias="main" client={client} onCliSwitched={onCliSwitched} />);
+
+  const cliType = await screen.findByLabelText("CLI 类型");
+  await user.selectOptions(cliType, "antigravity");
+  expect(screen.getByLabelText("CLI 路径")).toHaveValue("agy");
+  await user.selectOptions(cliType, "claude");
+  expect(screen.getByLabelText("CLI 路径")).toHaveValue("/opt/claude/bin/claude");
+
+  await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+  await waitFor(() => expect(onCliSwitched).toHaveBeenCalledWith("main"));
+  expect(createConversation).toHaveBeenCalledWith("main");
+  expect(await client.getBotOverview("main")).toMatchObject({ cliType: "claude", cliPath: "/opt/claude/bin/claude" });
+  expect(screen.getByText("已切换到 claude，并开启新会话")).toBeInTheDocument();
+});
+
+test("saving only a new CLI path keeps the current conversation", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+  const createConversation = vi.spyOn(client, "createConversation");
+  const onCliSwitched = vi.fn();
+  render(<SettingsScreen botAlias="main" client={client} onCliSwitched={onCliSwitched} />);
+
+  const cliPath = await screen.findByLabelText("CLI 路径");
+  await user.clear(cliPath);
+  await user.type(cliPath, "/opt/codex/bin/codex");
+  await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+  expect(await screen.findByText("CLI 配置已更新")).toBeInTheDocument();
+  expect(createConversation).not.toHaveBeenCalled();
+  expect(onCliSwitched).not.toHaveBeenCalled();
+});

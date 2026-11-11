@@ -1,4 +1,5 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliTypeLabel, suggestCliPath } from "../utils/cliType";
+import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { clsx } from "clsx";
@@ -23,6 +24,7 @@ import { WebApiClientError } from "../services/types";
 import { copyText } from "../utils/clipboard";
 import type {
   BotOverview,
+  BotSummary,
   ChatExecutionMode,
   CliType,
   NativeAgentDraft,
@@ -50,6 +52,9 @@ type Props = {
   embedded?: boolean;
   prefilledWorkdir?: string;
   onWorkdirUpdated?: (workingDir: string) => void;
+  onRemoteConnected?: () => void;
+  /** Called after a saved CLI type switch has started a new conversation, so the host can show the chat. */
+  onCliSwitched?: (botAlias: string) => void;
   sessionCapabilities?: string[];
 };
 
@@ -104,9 +109,12 @@ export function SettingsScreen({
   embedded = false,
   prefilledWorkdir,
   onWorkdirUpdated,
+  onRemoteConnected,
+  onCliSwitched,
   sessionCapabilities = [],
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
+  const [peerBots, setPeerBots] = useState<BotSummary[]>([]);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
@@ -121,6 +129,7 @@ export function SettingsScreen({
   const [savingCliConfig, setSavingCliConfig] = useState(false);
   const [savingWorkdir, setSavingWorkdir] = useState(false);
   const [copiedRemoteMcpItem, setCopiedRemoteMcpItem] = useState("");
+  const [clusterDirty, setClusterDirty] = useState(false);
   const [activeSection, setActiveSection] = useState("settings-section-runtime");
   const scrollRegionRef = useRef<HTMLElement | null>(null);
   const navLockUntilRef = useRef(0);
@@ -177,6 +186,20 @@ export function SettingsScreen({
       cancelled = true;
     };
   }, [botAlias, client, prefilledWorkdir]);
+
+  useEffect(() => {
+    // Only feeds CLI path suggestions, so a failed list leaves the default commands in place.
+    let cancelled = false;
+    void Promise.resolve()
+      .then(() => client.listBots())
+      .then((bots) => {
+        if (!cancelled) setPeerBots(bots);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   useEffect(() => {
     if (!nativeRuntime && !draftNativeRuntime) {
@@ -259,6 +282,15 @@ export function SettingsScreen({
       setRuntimeBackendDraft(getRuntimeBackend(nextBot));
       setNativeAgentDraft(nativeAgentDraftFromOverview(nextBot));
       setNotice(runtimeBackendDraft === "native_agent" ? "原生 agent 配置已更新" : "CLI 配置已更新");
+      if (runtimeBackendDraft === "cli" && overview && nextBot.cliType !== overview.cliType) {
+        try {
+          await startConversationAfterCliSwitch(client, botAlias);
+          setNotice(`已切换到 ${cliTypeLabel(nextBot.cliType)}，并开启新会话`);
+          onCliSwitched?.(botAlias);
+        } catch (err) {
+          setError(`CLI 配置已更新，但新建会话失败：${getErrorMessage(err, "未知错误")}`);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新运行配置失败");
     } finally {
@@ -436,7 +468,7 @@ export function SettingsScreen({
                 >
                   <Icon aria-hidden="true" className="hidden h-3 w-3 @xs:block" />
                   {label}
-                  {(id === "settings-section-runtime" && runtimeDirty) || (id === "settings-section-workdir" && workdirDirty) ? (
+                  {(id === "settings-section-runtime" && runtimeDirty) || (id === "settings-section-workdir" && workdirDirty) || (id === "settings-section-cluster" && clusterDirty) ? (
                     <span aria-label="有未保存更改" className="h-1.5 w-1.5 rounded-full bg-[var(--status-warning)]" />
                   ) : null}
                 </button>
@@ -504,7 +536,11 @@ export function SettingsScreen({
                         disabled={!canManageBotRuntime}
                         onChange={(event) => {
                           const cliType = event.target.value as CliType;
-                          if (cliType === "deepseek" || cliTypeDraft === "deepseek") setCliPathDraft(defaultCliPathForType(cliType));
+                          setCliPathDraft(suggestCliPath(cliType, peerBots, overview ? {
+                            alias: overview.alias || botAlias,
+                            cliType: overview.cliType,
+                            cliPath: overview.cliPath,
+                          } : undefined));
                           setCliTypeDraft(cliType);
                         }}
                         className={settingsControlClassName}
@@ -613,7 +649,7 @@ export function SettingsScreen({
               description={overview.remoteWorkspace ? "远程工作区目录由 SSH 连接决定。" : "智能体执行命令与读写文件的根目录。"}
               badge={workdirDirty ? <SettingsDirtyBadge /> : null}
               actions={overview.remoteWorkspace ? (
-                <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} />
+                <RemoteReconnectButton client={client} botAlias={botAlias} remote={overview.remoteWorkspace} disabled={!canConfigureBot} onConnected={() => onRemoteConnected?.()} />
               ) : null}
             >
               <div className="flex min-w-0 items-center gap-1">
@@ -784,7 +820,7 @@ export function SettingsScreen({
             />
           ) : null}
 
-          {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} /> : null}
+          {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} onDirtyChange={setClusterDirty} /> : null}
 
           {overview && !nativeRuntime ? (
             <BotCliParamsPanel

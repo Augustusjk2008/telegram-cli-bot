@@ -107,6 +107,10 @@ export function useWorkbenchState() {
     }));
   }
 
+  function showChat() {
+    setPaneState((current) => (current.chatCollapsed ? { ...current, chatCollapsed: false } : current));
+  }
+
   function setSidebarView(sidebarView: DesktopSidebarView) {
     setPaneState((current) => ({
       ...current,
@@ -145,6 +149,7 @@ export function useWorkbenchState() {
     toggleEditor,
     toggleTerminal,
     toggleChat,
+    showChat,
     setSidebarView,
     restoreSidebarView,
     resizeLayout,

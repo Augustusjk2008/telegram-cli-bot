@@ -1,4 +1,5 @@
-import { cliTypeLabel } from "../utils/cliType";
+import { cliTypeLabel, suggestCliPath } from "../utils/cliType";
+import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { workspaceLabel } from "../services/remoteWorkspace";
@@ -28,6 +29,7 @@ import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
 import { MockWebBotClient } from "../services/mockWebBotClient";
+import { clusterDraftEquals } from "../utils/clusterDraft";
 import { WebApiClientError } from "../services/types";
 import { getBotIdentityTextStyle } from "../utils/botVisual";
 import { AgentCreateForm } from "./AgentCreateForm";
@@ -255,15 +257,20 @@ function EditPanel({
   const [showRemotePicker, setShowRemotePicker] = useState(false);
   const [pendingWorkdirConflict, setPendingWorkdirConflict] = useState<WorkdirChangeConflict | null>(null);
   const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null);
+  // `clusterConfig` mirrors the persisted config; edits stay in `clusterDraft` until saved together.
   const [clusterConfig, setClusterConfig] = useState<BotClusterConfig>(() => clusterConfigFromBot(bot));
+  const [clusterDraft, setClusterDraft] = useState<BotClusterConfig>(() => clusterConfigFromBot(bot));
   const [clusterTimeoutDraft, setClusterTimeoutDraft] = useState(() => String(clusterConfigFromBot(bot).defaultTimeoutSeconds));
+  const clusterScopeRef = useRef({ alias: bot.alias, saved: clusterConfigFromBot(bot) });
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
   const [clusterResizeBlocked, setClusterResizeBlocked] = useState<ClusterResizeBlockedData | null>(null);
   const [clusterBlockerAction, setClusterBlockerAction] = useState("");
-  const dirty = !draftEquals(draft, draftFromBot(bot));
+  const clusterDirty = !clusterDraftEquals(clusterDraft, clusterConfig)
+    || clusterTimeoutDraft.trim() !== String(clusterConfig.defaultTimeoutSeconds);
+  const dirty = !draftEquals(draft, draftFromBot(bot)) || clusterDirty;
   const directoryBrowserAlias = manager.bots.find((item) => isMainBot(item))?.alias || manager.bots[0]?.alias || "main";
   const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draft.runtimeBackend === "native_agent";
   const nativeRuntime = getRuntimeBackend(bot) === "native_agent";
@@ -276,10 +283,21 @@ function EditPanel({
   }, [bot.alias]);
 
   useEffect(() => {
+    // Bot list refreshes (including the enable toggle) must not discard unsaved cluster edits.
     const nextClusterConfig = clusterConfigFromBot(bot);
+    const previous = clusterScopeRef.current;
+    clusterScopeRef.current = { alias: bot.alias, saved: nextClusterConfig };
+    const sameBot = previous.alias === bot.alias;
     setClusterConfig(nextClusterConfig);
-    setClusterTimeoutDraft(String(nextClusterConfig.defaultTimeoutSeconds));
-  }, [bot.cluster]);
+    setClusterDraft((current) => (
+      sameBot && !clusterDraftEquals(current, previous.saved) ? current : nextClusterConfig
+    ));
+    setClusterTimeoutDraft((current) => (
+      sameBot && current.trim() !== String(previous.saved.defaultTimeoutSeconds)
+        ? current
+        : String(nextClusterConfig.defaultTimeoutSeconds)
+    ));
+  }, [bot.alias, bot.cluster]);
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -331,9 +349,23 @@ function EditPanel({
   }
 
   async function submit(options: UpdateBotWorkdirOptions = {}) {
+    // Save pending cluster edits first, while the current alias is still valid.
+    if (clusterDirty && !(await saveClusterDraft())) {
+      return;
+    }
+    const previousCliType = bot.cliType;
     const result = await manager.saveBotEdits(bot, draft, options);
     if (result.ok) {
       setPendingWorkdirConflict(null);
+      if (draft.runtimeBackend === "cli" && result.bot.cliType !== previousCliType) {
+        try {
+          await startConversationAfterCliSwitch(manager.client, result.bot.alias);
+          onOpenConversation(result.bot.alias);
+          return;
+        } catch (err) {
+          manager.setError(`CLI 配置已更新，但新建会话失败：${err instanceof Error ? err.message : "未知错误"}`);
+        }
+      }
       onSaved(result.bot.alias);
       return;
     }
@@ -342,28 +374,9 @@ function EditPanel({
     }
   }
 
-  async function saveCluster(patch: Partial<BotClusterConfig>) {
+  async function persistCluster(next: BotClusterConfig, options: { replaceDraft: boolean }) {
     if (!canConfigureBot) {
-      return;
-    }
-    const next: BotClusterConfig = {
-      ...clusterConfig,
-      ...patch,
-      modelTiers: {
-        ...clusterConfig.modelTiers,
-        ...(patch.modelTiers || {}),
-      },
-      reasoningEfforts: {
-        ...clusterConfig.reasoningEfforts,
-        ...(patch.reasoningEfforts || {}),
-      },
-    };
-    if (nativeRuntime && nativeAgentModels) {
-      for (const tier of ["low", "medium", "high", "professional"] as const) {
-        if (!clusterReasoningOptions(next.modelTiers[tier]).includes(next.reasoningEfforts[tier])) {
-          next.reasoningEfforts[tier] = "";
-        }
-      }
+      return false;
     }
     setClusterSaving(true);
     setClusterError("");
@@ -377,10 +390,16 @@ function EditPanel({
         reasoningEfforts: next.reasoningEfforts,
       });
       setClusterConfig(result.cluster);
-      setClusterTimeoutDraft(String(result.cluster.defaultTimeoutSeconds));
+      if (options.replaceDraft) {
+        setClusterDraft(result.cluster);
+        setClusterTimeoutDraft(String(result.cluster.defaultTimeoutSeconds));
+      } else {
+        setClusterDraft((current) => ({ ...current, enabled: result.cluster.enabled }));
+      }
       setClusterStatus(result.status);
       setClusterResizeBlocked(null);
       manager.updateBotCluster(bot.alias, result.cluster);
+      return true;
     } catch (err) {
       if (
         err instanceof WebApiClientError
@@ -389,22 +408,45 @@ function EditPanel({
         setClusterResizeBlocked(err.data as ClusterResizeBlockedData);
       }
       setClusterError(err instanceof Error ? err.message : "保存集群配置失败");
+      return false;
     } finally {
       setClusterSaving(false);
     }
   }
 
-  async function commitClusterTimeout() {
-    const timeoutSeconds = Number(clusterTimeoutDraft);
+  // The switch applies immediately and leaves unsaved field edits in the draft.
+  async function toggleClusterEnabled(enabled: boolean) {
+    await persistCluster({ ...clusterConfig, enabled }, { replaceDraft: false });
+  }
+
+  async function saveClusterDraft() {
+    const timeoutSeconds = Number(clusterTimeoutDraft.trim());
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 60 || timeoutSeconds > 3600) {
-      setClusterTimeoutDraft(String(clusterConfig.defaultTimeoutSeconds));
       setClusterError("任务超时必须是 60 到 3600 之间的整数");
-      return;
+      return false;
     }
-    if (timeoutSeconds === clusterConfig.defaultTimeoutSeconds) {
-      return;
+    const next: BotClusterConfig = {
+      ...clusterDraft,
+      enabled: clusterConfig.enabled,
+      defaultTimeoutSeconds: timeoutSeconds,
+      modelTiers: { ...clusterDraft.modelTiers },
+      reasoningEfforts: { ...clusterDraft.reasoningEfforts },
+    };
+    if (nativeRuntime && nativeAgentModels) {
+      for (const tier of ["low", "medium", "high", "professional"] as const) {
+        if (!clusterReasoningOptions(next.modelTiers[tier]).includes(next.reasoningEfforts[tier])) {
+          next.reasoningEfforts[tier] = "";
+        }
+      }
     }
-    await saveCluster({ defaultTimeoutSeconds: timeoutSeconds });
+    return persistCluster(next, { replaceDraft: true });
+  }
+
+  function resetClusterDraft() {
+    setClusterDraft(clusterConfig);
+    setClusterTimeoutDraft(String(clusterConfig.defaultTimeoutSeconds));
+    setClusterError("");
+    setClusterResizeBlocked(null);
   }
 
   async function openBlockingConversation(blocker: ClusterResizeBlocker) {
@@ -491,7 +533,11 @@ function EditPanel({
             disabled={!canManage}
             onChange={(event) => {
               const cliType = event.target.value as CliType;
-              setDraft((prev) => ({ ...prev, cliType, cliPath: cliType === "deepseek" || prev.cliType === "deepseek" ? defaultCliPathForType(cliType) : prev.cliPath }));
+              setDraft((prev) => ({
+                ...prev,
+                cliType,
+                cliPath: suggestCliPath(cliType, manager.bots, { ...bot, cliPath: bot.cliPath || defaultCliPathForType(bot.cliType) }),
+              }));
             }}
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           >
@@ -570,7 +616,7 @@ function EditPanel({
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={!canManage || manager.savingAction !== "" || showRemotePicker}
+          disabled={!canManage || manager.savingAction !== "" || showRemotePicker || clusterSaving}
           className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:opacity-60"
         >
           <Save className="h-4 w-4" />
@@ -600,7 +646,7 @@ function EditPanel({
                 disabled={!canConfigureBot || clusterSaving || !clusterStatus}
                 onChange={(event) => {
                   if (!clusterStatus) return;
-                  void saveCluster({ enabled: event.target.checked });
+                  void toggleClusterEnabled(event.target.checked);
                 }}
               />
               启用集群模式
@@ -650,9 +696,9 @@ function EditPanel({
                   <span className="font-medium text-[var(--text)]">集群规模</span>
                   <select
                     aria-label="集群规模"
-                    value={clusterConfig.maxParallelAgents}
+                    value={clusterDraft.maxParallelAgents}
                     disabled={!canConfigureBot || clusterSaving}
-                    onChange={(event) => void saveCluster({ maxParallelAgents: Number(event.target.value) })}
+                    onChange={(event) => setClusterDraft((current) => ({ ...current, maxParallelAgents: Number(event.target.value) }))}
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   >
                     {Array.from({ length: 20 }, (_, index) => index + 1).map((count) => (
@@ -664,9 +710,9 @@ function EditPanel({
                   <span className="font-medium text-[var(--text)]">子 Agent 写入策略</span>
                   <select
                     aria-label="子 Agent 写入策略"
-                    value={clusterConfig.writePolicy}
+                    value={clusterDraft.writePolicy}
                     disabled={!canConfigureBot || clusterSaving}
-                    onChange={(event) => void saveCluster({ writePolicy: event.target.value as BotClusterConfig["writePolicy"] })}
+                    onChange={(event) => setClusterDraft((current) => ({ ...current, writePolicy: event.target.value as BotClusterConfig["writePolicy"] }))}
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
                   >
                     <option value="main_only">仅主 Agent 可写</option>
@@ -683,10 +729,10 @@ function EditPanel({
                     value={clusterTimeoutDraft}
                     disabled={!canConfigureBot || clusterSaving}
                     onChange={(event) => setClusterTimeoutDraft(event.target.value)}
-                    onBlur={() => void commitClusterTimeout()}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.currentTarget.blur();
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        void saveClusterDraft();
                       }
                     }}
                     className="h-9 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 text-sm"
@@ -697,14 +743,38 @@ function EditPanel({
           ) : null}
           {clusterStatus ? (
             <ClusterModelTiersPanel
-              value={clusterConfig.modelTiers}
-              reasoningEfforts={clusterConfig.reasoningEfforts}
+              value={clusterDraft.modelTiers}
+              reasoningEfforts={clusterDraft.reasoningEfforts}
               modelOptions={nativeRuntime ? nativeAgentModels?.items.map((item) => item.id) ?? [] : cliParams?.schema.model?.enum ?? []}
               reasoningOptions={clusterReasoningOptions}
               disabled={!canConfigureBot || clusterSaving}
-              onChange={(modelTiers) => void saveCluster({ modelTiers })}
-              onReasoningChange={(reasoningEfforts) => void saveCluster({ reasoningEfforts })}
+              onChange={(modelTiers) => setClusterDraft((current) => ({ ...current, modelTiers }))}
+              onReasoningChange={(reasoningEfforts) => setClusterDraft((current) => ({ ...current, reasoningEfforts }))}
             />
+          ) : null}
+          {clusterStatus ? (
+            <div className="flex items-center justify-end gap-2">
+              {clusterDirty ? (
+                <button
+                  type="button"
+                  onClick={resetClusterDraft}
+                  disabled={clusterSaving}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                >
+                  <Undo2 className="h-4 w-4" />
+                  还原集群配置
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void saveClusterDraft()}
+                disabled={!canConfigureBot || clusterSaving || !clusterDirty}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium tcb-solid-accent disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {clusterSaving ? "保存中..." : "保存集群配置"}
+              </button>
+            </div>
           ) : null}
           <ClusterSetupPanel key={`${bot.alias}:${bot.cliType}:${nativeRuntime}`} botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
       </div>

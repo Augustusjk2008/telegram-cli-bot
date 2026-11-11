@@ -168,6 +168,7 @@ from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore
 from bot.web.cli_context_usage import (
     get_antigravity_statusline_telemetry_path,
+    record_claude_context_windows,
     resolve_cli_context_usage,
 )
 from bot.web.cli_turn_cost import CliTurnCost
@@ -7617,6 +7618,8 @@ async def _stream_cli_chat(
                 if completion_state == "completed" or should_force_error_output
                 else (display_response or latest_preview_text)
             )
+            if cli_type == "claude":
+                record_claude_context_windows(native_session_id, parsed_result.context_windows)
             context_usage = await _resolve_cli_context_usage_bounded(
                 cli_type,
                 native_session_id,

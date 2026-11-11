@@ -1,9 +1,18 @@
 import { clsx } from "clsx";
-import { LoaderCircle, Network } from "lucide-react";
-import { useEffect, useState } from "react";
+import { LoaderCircle, Network, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { clusterDraftEquals } from "../utils/clusterDraft";
 import { ClusterModelTiersPanel } from "./ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "./ClusterSetupPanel";
-import { SettingsField, SettingsSection, SettingsSwitch, settingsControlClassName } from "./SettingsSection";
+import {
+  SettingsDirtyBadge,
+  SettingsField,
+  SettingsSection,
+  SettingsSwitch,
+  settingsButtonClassName,
+  settingsControlClassName,
+  settingsPrimaryButtonClassName,
+} from "./SettingsSection";
 import type {
   BotClusterConfig,
   BotOverview,
@@ -22,6 +31,7 @@ type Props = {
   client: WebBotClient;
   overview?: BotOverview | null;
   canManage?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 };
 
 const TIERS: ClusterModelTier[] = ["low", "medium", "high", "professional"];
@@ -83,18 +93,36 @@ function tierConfigTypes(configs: ClusterTierConfigs | undefined, inheritedCliTy
   ].filter(Boolean)));
 }
 
-export function BotClusterSettingsPanel({ botAlias, client, overview, canManage = true }: Props) {
+export function BotClusterSettingsPanel({ botAlias, client, overview, canManage = true, onDirtyChange }: Props) {
+  // `cluster` mirrors the persisted config; `draft` holds edits until the user saves them together.
   const [cluster, setCluster] = useState<BotClusterConfig>(() => cloneCluster(overview?.cluster));
+  const [draft, setDraft] = useState<BotClusterConfig>(() => cloneCluster(overview?.cluster));
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [cliParamsByType, setCliParamsByType] = useState<Partial<Record<string, CliParamsPayload>>>({});
   const [nativeModels, setNativeModels] = useState<NativeAgentModelsPayload | null>(null);
   const [timeoutDraft, setTimeoutDraft] = useState(String(cluster.defaultTimeoutSeconds));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const cliParamsScopeRef = useRef(0);
+  const requestedCliTypesRef = useRef<Set<string>>(new Set());
+  const [cliParamsScope, setCliParamsScope] = useState(0);
 
   const nativeRuntime = overview?.defaultExecutionMode === "native_agent" || overview?.executionMode === "native_agent";
   const inheritedCliType = String(overview?.cliType || "codex");
   const mainCliParams = cliParamsByType[inheritedCliType];
+  const dirty = !clusterDraftEquals(draft, cluster) || timeoutDraft.trim() !== String(cluster.defaultTimeoutSeconds);
+  const draftCliTypesKey = nativeRuntime ? "" : tierConfigTypes(draft.tierConfigs, inheritedCliType).join("\n");
+
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  useEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  }, [onDirtyChange]);
+
+  useEffect(() => {
+    onDirtyChangeRef.current?.(dirty);
+  }, [dirty]);
+
+  useEffect(() => () => onDirtyChangeRef.current?.(false), []);
 
   async function load() {
     setError("");
@@ -115,69 +143,62 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
       tierConfigs: nextStatus.tierConfigs || overview?.cluster?.tierConfigs,
     });
     setCluster(nextCluster);
+    setDraft(nextCluster);
     setTimeoutDraft(String(nextCluster.defaultTimeoutSeconds));
 
     if (nativeRuntime) {
       const modelsResult = await Promise.allSettled([client.getNativeAgentModels(botAlias)]);
       const modelValue = modelsResult[0];
       if (modelValue.status === "fulfilled") setNativeModels(modelValue.value);
-      return;
     }
-
-    const types = tierConfigTypes(nextCluster.tierConfigs, inheritedCliType);
-    const paramsResults = await Promise.allSettled(types.map((cliType) => client.getCliParams(botAlias, cliType as CliType)));
-    const paramsByType: Partial<Record<string, CliParamsPayload>> = {};
-    paramsResults.forEach((result, index) => {
-      if (result.status === "fulfilled") paramsByType[types[index]] = result.value;
-    });
-    setCliParamsByType(paramsByType);
   }
 
   useEffect(() => {
-    setCluster(cloneCluster(overview?.cluster));
+    const nextCluster = cloneCluster(overview?.cluster);
+    setCluster(nextCluster);
+    setDraft(nextCluster);
     setTimeoutDraft(String(overview?.cluster?.defaultTimeoutSeconds || DEFAULT_CLUSTER.defaultTimeoutSeconds));
+    // CLI params are per Bot and may change with its runtime, so reload them for the new scope.
+    cliParamsScopeRef.current += 1;
+    requestedCliTypesRef.current = new Set();
+    setCliParamsByType({});
+    setCliParamsScope(cliParamsScopeRef.current);
     void load();
   }, [botAlias, client, nativeRuntime, overview?.alias, overview?.cluster]);
 
-  async function save(patch: Partial<BotClusterConfig>) {
-    if (!canManage) return;
-    const mergedTierConfigs = cloneTierConfigs(
-      patch.tierConfigs || cluster.tierConfigs,
-      cluster.modelTiers,
-      cluster.reasoningEfforts,
-    );
-    const nextModelTiers = { ...cluster.modelTiers };
-    const nextReasoningEfforts = { ...cluster.reasoningEfforts };
-    for (const tier of TIERS) {
-      if (patch.tierConfigs?.[tier]) {
-        nextModelTiers[tier] = mergedTierConfigs[tier].model;
-        nextReasoningEfforts[tier] = mergedTierConfigs[tier].reasoningEffort;
-      }
-    }
-    const next: BotClusterConfig = {
-      ...cluster,
-      ...patch,
-      modelTiers: { ...nextModelTiers, ...(patch.modelTiers || {}) },
-      reasoningEfforts: { ...nextReasoningEfforts, ...(patch.reasoningEfforts || {}) },
-      tierConfigs: mergedTierConfigs,
-    };
+  useEffect(() => {
+    // Draft tiers can pick a CLI that has not been loaded yet; fetch its options before saving.
+    if (nativeRuntime || !draftCliTypesKey) return;
+    const missing = draftCliTypesKey.split("\n").filter((cliType) => !requestedCliTypesRef.current.has(cliType));
+    if (!missing.length) return;
+    missing.forEach((cliType) => requestedCliTypesRef.current.add(cliType));
+    const scope = cliParamsScopeRef.current;
+    void Promise.allSettled(missing.map((cliType) => client.getCliParams(botAlias, cliType as CliType))).then((results) => {
+      if (scope !== cliParamsScopeRef.current) return;
+      setCliParamsByType((current) => {
+        const next = { ...current };
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") next[missing[index]] = result.value;
+          else requestedCliTypesRef.current.delete(missing[index]);
+        });
+        return next;
+      });
+    });
+  }, [botAlias, client, nativeRuntime, draftCliTypesKey, cliParamsScope]);
+
+  async function persist(next: BotClusterConfig, options: { replaceDraft: boolean }) {
     setSaving(true);
     setError("");
     try {
       const result = await client.updateClusterConfig(botAlias, next);
-      setCluster(cloneCluster(result.cluster));
+      const saved = cloneCluster(result.cluster);
+      setCluster(saved);
       setStatus(result.status);
-      setTimeoutDraft(String(result.cluster.defaultTimeoutSeconds));
-      if (!nativeRuntime) {
-        const types = tierConfigTypes(result.cluster.tierConfigs, inheritedCliType);
-        const paramsResults = await Promise.allSettled(types.map((cliType) => client.getCliParams(botAlias, cliType as CliType)));
-        setCliParamsByType((current) => {
-          const next = { ...current };
-          paramsResults.forEach((paramsResult, index) => {
-            if (paramsResult.status === "fulfilled") next[types[index]] = paramsResult.value;
-          });
-          return next;
-        });
+      if (options.replaceDraft) {
+        setDraft(saved);
+        setTimeoutDraft(String(saved.defaultTimeoutSeconds));
+      } else {
+        setDraft((current) => ({ ...current, enabled: saved.enabled }));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "保存集群配置失败");
@@ -186,14 +207,40 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
     }
   }
 
-  async function saveTimeout() {
-    const value = Number(timeoutDraft);
-    if (!Number.isInteger(value) || value < 60 || value > 3600) {
-      setTimeoutDraft(String(cluster.defaultTimeoutSeconds));
+  // The switch applies immediately and leaves unsaved field edits in the draft.
+  async function toggleEnabled(enabled: boolean) {
+    if (!canManage) return;
+    await persist({ ...cluster, enabled }, { replaceDraft: false });
+  }
+
+  async function saveDraft() {
+    if (!canManage || saving || !dirty) return;
+    const timeout = Number(timeoutDraft.trim());
+    if (!Number.isInteger(timeout) || timeout < 60 || timeout > 3600) {
       setError("任务超时必须是 60 到 3600 之间的整数");
       return;
     }
-    if (value !== cluster.defaultTimeoutSeconds) await save({ defaultTimeoutSeconds: value });
+    await persist({
+      ...draft,
+      enabled: cluster.enabled,
+      defaultTimeoutSeconds: timeout,
+      tierConfigs: cloneTierConfigs(draft.tierConfigs, draft.modelTiers, draft.reasoningEfforts),
+    }, { replaceDraft: true });
+  }
+
+  function resetDraft() {
+    setDraft(cluster);
+    setTimeoutDraft(String(cluster.defaultTimeoutSeconds));
+    setError("");
+  }
+
+  function updateDraftTier(tier: ClusterModelTier, next: ClusterTierConfig) {
+    setDraft((current) => ({
+      ...current,
+      modelTiers: { ...current.modelTiers, [tier]: next.model },
+      reasoningEfforts: { ...current.reasoningEfforts, [tier]: next.reasoningEffort },
+      tierConfigs: { ...current.tierConfigs, [tier]: next } as ClusterTierConfigs,
+    }));
   }
 
   const fallbackModelOptions = nativeRuntime
@@ -214,6 +261,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
       title="集群模式"
       description="子智能体由主 agent 按当前会话动态编组；这里配置并发、写入策略、超时和模型档位。"
       badge={(
+        <>
         <span
           className={clsx(
             "inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-medium",
@@ -224,6 +272,8 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
         >
           {cluster.enabled ? "已启用" : "未启用"}
         </span>
+        {dirty ? <SettingsDirtyBadge /> : null}
+        </>
       )}
       actions={(
         <>
@@ -233,7 +283,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
             title="启用集群模式"
             checked={cluster.enabled}
             disabled={!canManage || saving || !status}
-            onChange={(event) => void save({ enabled: event.target.checked })}
+            onChange={(event) => void toggleEnabled(event.target.checked)}
           />
         </>
       )}
@@ -249,34 +299,50 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
         {error ? <p role="alert" className="text-xs text-[var(--feedback-error-text-deep)]">{error}</p> : null}
         <div className="grid gap-2 @sm:grid-cols-2 @xl:grid-cols-3">
           <SettingsField label="并发规模">
-            <select aria-label="集群规模" value={cluster.maxParallelAgents} disabled={!canManage || saving} onChange={(event) => void save({ maxParallelAgents: Number(event.target.value) })} className={settingsControlClassName}>
+            <select aria-label="集群规模" value={draft.maxParallelAgents} disabled={!canManage || saving} onChange={(event) => setDraft((current) => ({ ...current, maxParallelAgents: Number(event.target.value) }))} className={settingsControlClassName}>
               {Array.from({ length: 20 }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </SettingsField>
           <SettingsField label="子 Agent 写入策略">
-            <select aria-label="子 Agent 写入策略" value={cluster.writePolicy} disabled={!canManage || saving} onChange={(event) => void save({ writePolicy: event.target.value as BotClusterConfig["writePolicy"] })} className={settingsControlClassName}>
+            <select aria-label="子 Agent 写入策略" value={draft.writePolicy} disabled={!canManage || saving} onChange={(event) => setDraft((current) => ({ ...current, writePolicy: event.target.value as BotClusterConfig["writePolicy"] }))} className={settingsControlClassName}>
               <option value="main_only">仅主 Agent 可写</option>
               <option value="all_agents">允许子 Agent 写入</option>
             </select>
           </SettingsField>
           <SettingsField label="默认超时（秒）">
-            <input aria-label="任务超时（秒）" type="number" min={60} max={3600} value={timeoutDraft} disabled={!canManage || saving} onChange={(event) => setTimeoutDraft(event.target.value)} onBlur={() => void saveTimeout()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} className={settingsControlClassName} />
+            <input aria-label="任务超时（秒）" type="number" min={60} max={3600} value={timeoutDraft} disabled={!canManage || saving} onChange={(event) => setTimeoutDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void saveDraft(); } }} className={settingsControlClassName} />
           </SettingsField>
         </div>
         <ClusterModelTiersPanel
-          value={cluster.modelTiers}
-          reasoningEfforts={cluster.reasoningEfforts}
-          tierConfigs={cluster.tierConfigs}
+          value={draft.modelTiers}
+          reasoningEfforts={draft.reasoningEfforts}
+          tierConfigs={draft.tierConfigs}
           cliParamsByType={cliParamsByType}
           inheritedCliType={inheritedCliType}
           nativeRuntime={nativeRuntime}
           modelOptions={fallbackModelOptions}
           reasoningOptions={fallbackReasoningOptions}
           disabled={!canManage || saving}
-          onTierConfigChange={(tier, next) => void save({ tierConfigs: { ...cluster.tierConfigs, [tier]: next } as ClusterTierConfigs })}
-          onChange={(modelTiers) => void save({ modelTiers })}
-          onReasoningChange={(reasoningEfforts) => void save({ reasoningEfforts })}
+          onTierConfigChange={updateDraftTier}
+          onChange={(modelTiers) => setDraft((current) => ({ ...current, modelTiers }))}
+          onReasoningChange={(reasoningEfforts) => setDraft((current) => ({ ...current, reasoningEfforts }))}
         />
+        <div className="flex items-center justify-end gap-2">
+          {dirty ? (
+            <button type="button" onClick={resetDraft} disabled={saving} className={settingsButtonClassName}>
+              还原
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void saveDraft()}
+            disabled={!canManage || saving || !dirty}
+            className={settingsPrimaryButtonClassName}
+          >
+            {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            {saving ? "保存中..." : "保存集群配置"}
+          </button>
+        </div>
         <ClusterSetupPanel botAlias={botAlias} client={client} canManage={canManage} />
       </div>
     </SettingsSection>

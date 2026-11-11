@@ -539,7 +539,9 @@ async def run_all_bots():
         _print_web_access_lines(runtime_bind)
         await _open_local_browser(runtime_bind)
         try:
-            telegram_gateway = await start_telegram_gateway(manager, chat_url=web_server.chat_public_url)
+            telegram_gateway = await start_telegram_gateway(
+                manager, chat_url=web_server.chat_public_url, host=web_server,
+            )
         except Exception:
             if not os.environ.get("TCB_UPDATE_JOB_ID"):
                 raise

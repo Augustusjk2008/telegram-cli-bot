@@ -1140,6 +1140,7 @@ function AppContent() {
           key={`settings-${currentBot}`}
           botAlias={currentBot}
           client={client}
+          onCliSwitched={() => setCurrentTab("chat")}
           sessionCapabilities={session?.capabilities}
         />
       </div>

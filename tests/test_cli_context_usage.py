@@ -2,9 +2,15 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
+import bot.web.cli_context_usage as cli_context_usage
+from bot.web.native_history_locator import LocatedTranscript
 from bot.web.cli_context_usage import (
     cleanup_antigravity_statusline_telemetry,
+    clear_context_usage_cache,
     record_antigravity_statusline_payload,
+    record_claude_context_windows,
     resolve_antigravity_statusline_usage,
     resolve_cli_context_usage,
     resolve_deepseek_context_usage,
@@ -120,3 +126,57 @@ def test_antigravity_statusline_cleanup_removes_only_expired_files(tmp_path):
     assert cleanup_antigravity_statusline_telemetry(root=tmp_path, now=1000, max_age_seconds=50) == 1
     assert fresh.exists()
     assert not stale.exists()
+
+
+@pytest.mark.parametrize(
+    ("model", "window"),
+    [
+        ("claude-fable-5-2", 1_000_000),
+        ("claude-mythos-5-1", 1_000_000),
+        ("claude-opus-4-8[1m]", 1_000_000),
+        ("opus", 1_000_000),
+        ("claude-opus-4-5-20251101", 200_000),
+        ("claude-sonnet-5-5", 1_000_000),
+        ("claude-sonnet-4-6", 1_000_000),
+        ("claude-sonnet-4-20250514", 200_000),
+        ("claude-haiku-5-5", 1_000_000),
+        ("claude-haiku-4-5-20251001", 200_000),
+        ("claude-3-5-sonnet-20241022", 200_000),
+        ("deepseek-chat", 256_000),
+    ],
+)
+def test_claude_context_window_fallback_by_model_family(model, window):
+    assert cli_context_usage._lookup_claude_context_window(model) == window
+
+
+def test_claude_reported_context_window_replaces_fallback(tmp_path, monkeypatch):
+    clear_context_usage_cache()
+    transcript = tmp_path / "claude-session.jsonl"
+    transcript.write_text(
+        json.dumps({
+            "type": "assistant",
+            "message": {
+                "model": "claude-sonnet-4-5",
+                "usage": {"input_tokens": 10_000, "cache_read_input_tokens": 90_000, "output_tokens": 50},
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_context_usage,
+        "locate_claude_transcript",
+        lambda session_id, cwd_hint=None: LocatedTranscript("claude", session_id, transcript),
+    )
+
+    fallback = resolve_cli_context_usage("claude", "claude-session")
+    assert fallback["context_window"] == 200_000
+    assert fallback["context_left_percent"] == 50
+
+    # Claude Code keys modelUsage by the requested model, including the [1m] opt-in suffix.
+    record_claude_context_windows("claude-session", {"claude-sonnet-4-5[1m]": 1_000_000, "claude-haiku-4-5": 0})
+    reported = resolve_cli_context_usage("claude", "claude-session")
+
+    assert reported["context_window"] == 1_000_000
+    assert reported["context_left_percent"] == 90
+    assert reported["status_text"] == "90% context left · 100k / 1m"
+    clear_context_usage_cache()

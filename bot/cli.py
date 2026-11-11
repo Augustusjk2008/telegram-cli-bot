@@ -77,6 +77,8 @@ class CliStreamParseResult:
     # Latest Claude ``rate_limit_event.rate_limit_info`` and when it was read.
     rate_limit_info: Optional[Dict[str, Any]] = None
     rate_limit_observed_at: Optional[datetime] = None
+    # Claude ``result.modelUsage[model].contextWindow`` keyed by model id.
+    context_windows: Optional[Dict[str, int]] = None
 
 
 class DeepSeekJsonStreamParser:
@@ -271,6 +273,33 @@ def _parse_terminal_usage(line: str, *, cli_type: str) -> Optional[Dict[str, Any
     return selected
 
 
+_CLAUDE_CONTEXT_WINDOW_MODEL_LIMIT = 16
+
+
+def _parse_claude_context_windows(line: str) -> Optional[Dict[str, int]]:
+    """Read the per-model context window Claude Code reports on its result event."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return None
+    model_usage = event.get("modelUsage")
+    if not isinstance(model_usage, dict):
+        return None
+    windows: Dict[str, int] = {}
+    for model, usage in model_usage.items():
+        if len(windows) >= _CLAUDE_CONTEXT_WINDOW_MODEL_LIMIT:
+            break
+        name = model.strip() if isinstance(model, str) else ""
+        if not name or not isinstance(usage, dict):
+            continue
+        window = usage.get("contextWindow")
+        if type(window) is int and window > 0:
+            windows[name] = window
+    return windows or None
+
+
 class CodexJsonStreamParser:
     def __init__(
         self,
@@ -365,6 +394,7 @@ class ClaudeJsonStreamParser:
         self.terminal_usage: Optional[Dict[str, Any]] = None
         self.rate_limit_info: Optional[Dict[str, Any]] = None
         self.rate_limit_observed_at: Optional[datetime] = None
+        self.context_windows: Optional[Dict[str, int]] = None
         self.total_bytes = 0
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
@@ -385,6 +415,10 @@ class ClaudeJsonStreamParser:
         terminal_usage = _parse_terminal_usage(stripped, cli_type="claude")
         if terminal_usage is not None:
             self.terminal_usage = terminal_usage
+        if '"modelUsage"' in stripped:
+            context_windows = _parse_claude_context_windows(stripped)
+            if context_windows:
+                self.context_windows = context_windows
         if parsed["session_id"]:
             self.session_id = parsed["session_id"]
         if parsed["completed_text"]:
@@ -442,6 +476,7 @@ class ClaudeJsonStreamParser:
             ),
             rate_limit_info=self.rate_limit_info,
             rate_limit_observed_at=self.rate_limit_observed_at,
+            context_windows=dict(self.context_windows) if self.context_windows else None,
         )
 
 

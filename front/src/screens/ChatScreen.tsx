@@ -58,6 +58,7 @@ import type {
   CliParamsPayload,
   DeepSeekProviderOption,
   ChatTraceEvent,
+  ConversationSelectResult,
   ConversationSummary,
   FavoriteAnswerItem,
   FileDownloadProgress,
@@ -73,6 +74,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { delightMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { resolvePreviewFilePath } from "../utils/fileLinks";
 import { copyText } from "../utils/clipboard";
+import { CONVERSATION_CREATED_EVENT, isConversationCreatedEvent, type ConversationCreatedDetail } from "../utils/conversationEvents";
 import { isAbortError } from "../utils/errorMessage";
 import { confirmLargeFileUploads } from "../utils/fileUploadConfirmation";
 import {
@@ -3982,25 +3984,59 @@ export function ChatScreen({
     setError("");
     try {
       const data = await createScopedConversation(client, botAlias, activeAgentIdRef.current, executionModeRef.current);
-      stopAssistantPoll();
-      stopSseRecoveryWatch();
-      stopClusterTaskPoll();
-      setClusterRunId("");
-      setClusterTaskStatus(null);
-      setClusterTaskError("");
-      clusterRunIdRef.current = "";
-      setTraceLoadState({});
-      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
-      setItems(data.messages);
-      setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
-      setConversations((prev) => [data.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
-      setHistoryPanelOpen(false);
+      showCreatedConversation(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建会话失败");
     } finally {
       setConversationLoading(false);
     }
   }
+
+  function showCreatedConversation(data: ConversationSelectResult) {
+    stopAssistantPoll();
+    stopSseRecoveryWatch();
+    stopClusterTaskPoll();
+    setClusterRunId("");
+    setClusterTaskStatus(null);
+    setClusterTaskError("");
+    clusterRunIdRef.current = "";
+    setTraceLoadState({});
+    setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+    setItems(data.messages);
+    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
+    setConversations((prev) => [
+      data.conversation,
+      ...prev.filter((item) => item.id !== data.conversation.id).map((item) => ({ ...item, active: false })),
+    ]);
+    setHistoryPanelOpen(false);
+  }
+
+  // Saving a CLI switch creates the main CLI conversation elsewhere; follow it when this chat shows that scope.
+  const followCreatedConversationRef = useRef<(detail: ConversationCreatedDetail) => void>(() => undefined);
+  followCreatedConversationRef.current = (detail) => {
+    if (
+      detail.botAlias !== botAlias
+      || !hasActivatedRef.current
+      || isStreamingRef.current
+      || (activeAgentIdRef.current || "main") !== "main"
+      || executionModeRef.current !== "cli"
+    ) {
+      return;
+    }
+    stopEndlessMode();
+    setError("");
+    showCreatedConversation(detail.result);
+  };
+
+  useEffect(() => {
+    const handleConversationCreated = (event: Event) => {
+      if (isConversationCreatedEvent(event)) {
+        followCreatedConversationRef.current(event.detail);
+      }
+    };
+    window.addEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
+    return () => window.removeEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
+  }, []);
 
   async function handleDeleteConversation(conversation: ConversationSummary, deleteNativeSession: boolean) {
     if (isStreamingRef.current) {
