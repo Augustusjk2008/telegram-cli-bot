@@ -40,6 +40,7 @@ class GitBackend(Protocol):
     def discard_all(self) -> dict[str, Any]: ...
     def fetch(self) -> dict[str, Any]: ...
     def pull(self) -> dict[str, Any]: ...
+    def merge(self) -> dict[str, Any]: ...
     def push(self) -> dict[str, Any]: ...
     def remotes(self) -> dict[str, Any]: ...
     def remote_add(self, name: Any, url: Any) -> dict[str, Any]: ...
@@ -146,6 +147,9 @@ class LocalGitBackend:
 
     def pull(self) -> dict[str, Any]:
         return local_git.pull_git_remote(self.manager, self.alias, self.user_id, auth_config=self._auth_config())
+
+    def merge(self) -> dict[str, Any]:
+        return local_git.merge_git_remote(self.manager, self.alias, self.user_id, auth_config=self._auth_config())
 
     def push(self) -> dict[str, Any]:
         return local_git.push_git_remote(self.manager, self.alias, self.user_id, auth_config=self._auth_config())
@@ -283,6 +287,9 @@ class RemoteGitBackend:
 
     def pull(self) -> dict[str, Any]:
         return self.service.pull()
+
+    def merge(self) -> dict[str, Any]:
+        return self.service.merge()
 
     def push(self) -> dict[str, Any]:
         return self.service.push()

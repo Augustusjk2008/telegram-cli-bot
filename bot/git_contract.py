@@ -17,6 +17,7 @@ GIT_CAPABILITY_NAMES: tuple[str, ...] = (
     "identity",
     "fetch",
     "pull",
+    "merge",
     "push",
     "remotes",
     "publish",
@@ -31,6 +32,7 @@ GIT_CAPABILITIES_REQUIRING_CONFIRMATION = frozenset(
         "stash",
         "stash_create",
         "pull",
+        "merge",
         "push",
         "publish",
     }

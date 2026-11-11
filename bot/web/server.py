@@ -4434,6 +4434,13 @@ class WebApiServer:
         overview = await asyncio.to_thread(backend.pull)
         return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
 
+    async def post_git_merge(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
+        overview = await asyncio.to_thread(backend.merge)
+        return _json({"ok": True, "data": {"message": "已合并远端更新", "overview": overview}})
+
     async def post_git_push(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)

@@ -33,6 +33,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/git/commit", server.post_git_commit)
     app.router.add_post("/api/bots/{alias}/git/fetch", server.post_git_fetch)
     app.router.add_post("/api/bots/{alias}/git/pull", server.post_git_pull)
+    app.router.add_post("/api/bots/{alias}/git/merge", server.post_git_merge)
     app.router.add_post("/api/bots/{alias}/git/push", server.post_git_push)
     app.router.add_get("/api/bots/{alias}/git/remotes", server.get_git_remotes_view)
     app.router.add_post("/api/bots/{alias}/git/remotes", server.post_git_remote_add)

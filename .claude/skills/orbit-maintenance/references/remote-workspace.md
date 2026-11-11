@@ -16,8 +16,8 @@
 - 远程 capability 绑定 profile alias 和 `remote_workspace` fingerprint；接口还校验当前 profile 是否启用、归档、控制目录或远端配置是否变化。移除 profile 时撤销绑定，旧 token 不得转指新目标。私有 bridge 配置位于 `get_app_data_root()/remote-chat/`。
 - Codex（含 `codex_server`）和 Claude 通过启动参数注入 stdio MCP。仅 Antigravity 写入控制目录的 `.agents/mcp_config.json`，配套 ownership state、跨进程锁和原子写入；保留用户服务器与用户修改过的 `tcb-remote` 条目，冲突时报错，撤销只清理本 profile 仍拥有的条目。DeepSeek Harness 只支持本地工作区；远程 Antigravity 暂不支持 Cluster 编排。
 - `exec.commands` 支持批量命令；`edit` 要求 `old_text` 恰好匹配一次，并按读取到的文件版本做乐观并发校验。
-- 远程 Git 使用远端 workspace root 和对应 Web capability；支持状态、diff、分支、图、暂存、提交、身份配置、已有 stash 操作、fetch/pull/push、远端添加/修改/移除和分支发布（`push --set-upstream`），具体可用性以 capabilities 为准，当前不支持创建 stash。GitHub 账号令牌只用于宿主侧 GitHub API 和本地 Git，不经 SSH 发送到远程主机；远程同步与发布使用远程主机自己的凭据，远端列表的 `github_account_auth` 为 `false`。智能提交把远端 diff 交给本地 agent 生成提交信息，Git 操作仍在远端执行。
-- Git 同步和发布错误保留 `operation`、`outcome`、`refresh_required`；网络中断可能返回 `outcome=unknown`，mutation 不自动重试。`pull` 使用 `--ff-only` 并要求干净工作区和 upstream。
+- 远程 Git 使用远端 workspace root 和对应 Web capability；支持状态、diff、分支、图、暂存、提交、身份配置、已有 stash 操作、fetch/pull/merge/push、远端添加/修改/移除和分支发布（`push --set-upstream`），具体可用性以 capabilities 为准，当前不支持创建 stash。GitHub 账号令牌只用于宿主侧 GitHub API 和本地 Git，不经 SSH 发送到远程主机；远程同步与发布使用远程主机自己的凭据，远端列表的 `github_account_auth` 为 `false`。智能提交把远端 diff 交给本地 agent 生成提交信息，Git 操作仍在远端执行。
+- Git 同步和发布错误保留 `operation`、`outcome`、`refresh_required`；网络中断可能返回 `outcome=unknown`，mutation 不自动重试。`pull` 使用 `--ff-only` 并要求干净工作区和 upstream。`merge` 以 `pull --no-rebase --ff --no-edit` 合并 upstream，同样要求干净工作区；已有未完成合并时拒绝执行，本次合并中途停止（冲突或提交失败）则 `merge --abort` 回滚并返回 `git_merge_conflict` 或 `git_merge_failed`。
 - Terminal session 按 `(user_id, owner_id)` 隔离；每个 tab 使用独立 `owner_id`，关闭 tab 必须关闭对应 shell，WebSocket detach 只移除客户端并保留会话以便重连。远程 tab 使用独立 SSH channel。`/api/bots/{alias}/terminal/session/rebuild` 和无 alias 的 rebuild 路由保留为兼容创建入口。
 
 ## 验证

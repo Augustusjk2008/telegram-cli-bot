@@ -6514,7 +6514,7 @@ export class MockWebBotClient implements WebBotClient {
       capabilities: Object.fromEntries(GIT_CAPABILITY_NAMES.map((name) => [name, {
         available: true,
         reason: "",
-        requiresConfirmation: ["discard", "branch_mutation", "stash", "stash_create", "pull", "push", "publish"].includes(name),
+        requiresConfirmation: ["discard", "branch_mutation", "stash", "stash_create", "pull", "merge", "push", "publish"].includes(name),
       }])) as GitCapabilities["capabilities"],
     };
   }
@@ -6763,6 +6763,10 @@ export class MockWebBotClient implements WebBotClient {
 
   async pullGitRemote(botAlias: string): Promise<GitActionResult> {
     return this.actionWithOverview(botAlias, "已拉取远端更新");
+  }
+
+  async mergeGitRemote(botAlias: string): Promise<GitActionResult> {
+    return this.actionWithOverview(botAlias, "已合并远端更新");
   }
 
   async pushGitRemote(botAlias: string): Promise<GitActionResult> {

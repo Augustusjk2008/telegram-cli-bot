@@ -47,6 +47,10 @@ _STASH_REF_RE = re.compile(r"^stash@\{\d+\}$")
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _UNMERGED_STATUSES = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
 _SYNC_OPERATIONS = frozenset({"fetch", "pull", "push"})
+# --no-rebase/--ff override pull.rebase and pull.ff so Merge always performs a
+# real merge; --no-edit keeps Git from opening an editor for the merge commit.
+_MERGE_UPSTREAM_ARGS = ["pull", "--no-rebase", "--ff", "--no-edit"]
+_MERGE_CONFLICT_PATHS_LIMIT = 20
 _REMOTE_FILE_PERMISSION_ERRORS = ("permission denied", "access is denied")
 
 
@@ -553,7 +557,7 @@ class RemoteGitService:
                 reason="remote_feature_unavailable",
             )
             capabilities = payload["capabilities"]
-            for name in _SYNC_OPERATIONS:
+            for name in (*_SYNC_OPERATIONS, "merge"):
                 capabilities[name]["available"] = True
                 capabilities[name]["reason"] = ""
             return payload
@@ -579,6 +583,10 @@ class RemoteGitService:
             "git_remote_not_configured",
             "git_upstream_not_configured",
             "git_pull_requires_manual_resolution",
+            "git_conflict",
+            "git_dirty_worktree",
+            "git_merge_in_progress",
+            "git_merge_conflict",
             "git_remote_not_found",
             "invalid_git_remote_name",
             "git_detached_head",
@@ -714,6 +722,76 @@ class RemoteGitService:
 
     def push(self) -> dict:
         return self._run_remote_sync("push", ["push"], require_upstream=True)
+
+    def _merge_in_progress(self) -> bool:
+        probe = self._git(
+            ["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
+            allowed=(0, 1, 128),
+            error="git_merge_probe_failed",
+        )
+        return probe["returncode"] == 0
+
+    def _rollback_failed_merge(self, failure: str) -> RemoteWorkspaceError:
+        """Undo a merge Git stopped halfway and describe why it stopped."""
+        if not self._merge_in_progress():
+            # Git refused before touching the worktree.
+            return RemoteWorkspaceError(400, "git_merge_failed", failure)
+        _, files, _ = self._status()
+        conflicts = [str(item.get("path") or "") for item in files if self._has_conflict([item])]
+        abort = self._git(
+            ["merge", "--abort"],
+            error="git_merge_abort_failed",
+            allowed=tuple(range(256)),
+            truncated=True,
+            mutation=True,
+        )
+        rollback = (
+            "The merge was rolled back; the worktree is unchanged."
+            if abort["returncode"] == 0
+            else "Automatic rollback failed; run `git merge --abort` on the remote host before retrying."
+        )
+        if not conflicts:
+            return RemoteWorkspaceError(400, "git_merge_failed", f"{failure}\n{rollback}")
+        listed = [f"  {path}" for path in conflicts[:_MERGE_CONFLICT_PATHS_LIMIT]]
+        if len(conflicts) > len(listed):
+            listed.append(f"  ... {len(conflicts)} files in total")
+        return RemoteWorkspaceError(
+            409,
+            "git_merge_conflict",
+            "\n".join(["The upstream branch conflicts with local commits:", *listed, rollback]),
+        )
+
+    def merge(self) -> dict:
+        """Merge the upstream branch into the current branch, leaving no half-finished merge behind."""
+        with self._lock:
+            try:
+                self._remote_sync_precheck(require_upstream=True, require_clean=False)
+                _, files, _ = self._status()
+                self._require_clean_worktree(files)
+                if self._merge_in_progress():
+                    # Never roll back a merge this request did not start.
+                    raise RemoteWorkspaceError(
+                        409, "git_merge_in_progress", "The remote repository already has an unfinished merge",
+                    )
+            except RemoteWorkspaceError as exc:
+                raise self._sync_error("merge", exc, executed=False) from exc
+
+            try:
+                result = self._git(
+                    _MERGE_UPSTREAM_ARGS,
+                    error="git_merge_failed",
+                    allowed=tuple(range(256)),
+                    truncated=True,
+                    mutation=True,
+                )
+                if result["returncode"]:
+                    failure = (result["stderr"] or result["stdout"] or "Remote Git command failed").strip()
+                    if result["output_truncated"]:
+                        failure += "\n[Remote Git output truncated]"
+                    raise self._rollback_failed_merge(failure)
+                return self._overview()
+            except RemoteWorkspaceError as exc:
+                raise self._sync_error("merge", exc, executed=True) from exc
 
     @staticmethod
     def _remote_input_error(exc: GitRemoteInputError) -> RemoteWorkspaceError:

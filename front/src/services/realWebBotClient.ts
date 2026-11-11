@@ -7216,6 +7216,13 @@ export class RealWebBotClient implements WebBotClient {
     return mapGitActionResult(data);
   }
 
+  async mergeGitRemote(botAlias: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/merge`, {
+      method: "POST",
+    });
+    return mapGitActionResult(data);
+  }
+
   async pushGitRemote(botAlias: string): Promise<GitActionResult> {
     const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/push`, {
       method: "POST",

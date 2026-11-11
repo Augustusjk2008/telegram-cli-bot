@@ -414,6 +414,7 @@ export interface WebBotClient {
   commitGitChanges(botAlias: string, message: string): Promise<GitActionResult>;
   fetchGitRemote(botAlias: string): Promise<GitActionResult>;
   pullGitRemote(botAlias: string): Promise<GitActionResult>;
+  mergeGitRemote(botAlias: string): Promise<GitActionResult>;
   pushGitRemote(botAlias: string): Promise<GitActionResult>;
   listGitRemotes(botAlias: string): Promise<GitRemoteList>;
   addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList>;

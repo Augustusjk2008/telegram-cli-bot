@@ -118,6 +118,7 @@ const remoteGitCapabilities: GitCapabilities = {
     identity: { available: true, reason: "", requiresConfirmation: false },
     fetch: { available: true, reason: "", requiresConfirmation: false },
     pull: { available: true, reason: "", requiresConfirmation: true },
+    merge: { available: true, reason: "", requiresConfirmation: true },
     push: { available: true, reason: "", requiresConfirmation: true },
     remotes: { available: true, reason: "", requiresConfirmation: false },
     publish: { available: true, reason: "", requiresConfirmation: true },
@@ -208,6 +209,7 @@ function createGitScreenClient(capabilities: GitCapabilities = localGitCapabilit
     commitGitChanges: vi.fn(async () => createActionResult()),
     fetchGitRemote: vi.fn(async () => createActionResult()),
     pullGitRemote: vi.fn(async () => createActionResult()),
+    mergeGitRemote: vi.fn(async () => createActionResult()),
     pushGitRemote: vi.fn(async () => createActionResult()),
     listGitRemotes: vi.fn(async () => ({
       repoFound: true,
@@ -433,6 +435,23 @@ test("a stale workspace response cannot overwrite the newly bound Git state", as
   resolveOld({ ...cloneOverview(), workingDir: "C:/old", repoPath: "C:/old", currentBranch: "old" });
   await waitFor(() => expect(screen.getAllByText("new").length).toBeGreaterThan(0));
   expect(screen.queryByText("C:/old")).not.toBeInTheDocument();
+});
+
+test.each([false, true])("Merge confirms once, then merges the upstream branch (remote=%s)", async (remote) => {
+  const { client } = createGitScreenClient(remote ? remoteGitCapabilities : localGitCapabilities);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  render(<GitScreen botAlias={remote ? "remote" : "main"} client={client} remote={remote} />);
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(client.mergeGitRemote).not.toHaveBeenCalled();
+
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+  await waitFor(() => expect(client.mergeGitRemote).toHaveBeenCalledWith(remote ? "remote" : "main"));
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(client.pullGitRemote).not.toHaveBeenCalled();
 });
 
 test.each([false, true])("Pull and Push require one confirmation per action (remote=%s)", async (remote) => {

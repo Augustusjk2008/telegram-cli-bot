@@ -52,6 +52,7 @@ class Connection:
         self.overrides = {}
         self.readonly_outputs = {}
         self.remote_urls = {}
+        self.merge_head = False
 
     def execute(self, command, root, *, timeout, max_output):
         tokens = shlex.split(command)
@@ -101,6 +102,8 @@ class Connection:
             return result(self.readonly_outputs.get("graph_refs", ""))
         if args[0] == "log" and "--topo-order" in args:
             return result(self.readonly_outputs.get("graph", ""))
+        if args == ["rev-parse", "--quiet", "--verify", "MERGE_HEAD"]:
+            return result(returncode=0 if self.merge_head else 1)
         if args[:2] == ["rev-parse", "--verify"]:
             return result(self.readonly_outputs.get("head", ""), returncode=0 if self.readonly_outputs.get("head") else 128)
         if args[0] == "check-ref-format":
@@ -143,7 +146,7 @@ class Connection:
             if "--numstat" in args:
                 return result("2\t1\tfile.txt\x00")
             return result("diff --git a/file.txt b/file.txt\n+new\n", returncode=1 if "--no-index" in args else 0)
-        if args[0] in {"add", "rm", "reset", "restore", "clean", "commit", "branch", "switch", "fetch", "pull", "push"}:
+        if args[0] in {"add", "rm", "reset", "restore", "clean", "commit", "branch", "switch", "fetch", "pull", "merge", "push"}:
             return result()
         raise AssertionError(args)
 
@@ -174,7 +177,7 @@ def test_capabilities_probe_local_remote_config_and_mark_sync_features():
     assert set(capabilities) == set(GIT_CAPABILITY_NAMES)
     readable = {
         "tree_status", "commit_graph", "branches", "branch_mutation", "discard", "stash", "identity",
-        "fetch", "pull", "push", "remotes", "publish", "commit_message_generation", "smart_commit",
+        "fetch", "pull", "merge", "push", "remotes", "publish", "commit_message_generation", "smart_commit",
     }
     assert all(
         item["available"] is (name in readable)
@@ -357,6 +360,39 @@ def test_remote_pull_requires_clean_worktree_and_maps_conflicts_to_manual_resolu
         remote.RemoteGitService(conflict, ROOT).pull()
     assert exc.value.code == "git_pull_requires_manual_resolution"
     assert not any(call[0][0] == "pull" for call in conflict.calls)
+
+
+def test_remote_merge_runs_one_real_merge_and_rolls_back_only_its_own_conflict():
+    merge_args = ["pull", "--no-rebase", "--ff", "--no-edit"]
+    clean = Connection(files={})
+    assert remote.RemoteGitService(clean, ROOT).merge()["repo_path"] == ROOT
+    assert [call[0] for call in clean.calls if call[0][0] in {"pull", "merge"}] == [merge_args]
+
+    conflicted = Connection(files={})
+
+    def stop_on_conflict(_args):
+        conflicted.merge_head = True
+        conflicted.files = {"file.txt": "UU"}
+        return result(stdout="CONFLICT (content): Merge conflict in file.txt\n", stderr="From origin\n", returncode=1)
+
+    conflicted.overrides["pull"] = stop_on_conflict
+    with pytest.raises(RemoteWorkspaceError) as exc:
+        remote.RemoteGitService(conflicted, ROOT).merge()
+    assert (exc.value.status, exc.value.code) == (409, "git_merge_conflict")
+    assert "file.txt" in exc.value.message and "rolled back" in exc.value.message
+    assert exc.value.data == {"operation": "merge", "outcome": "rejected", "refresh_required": True}
+    assert [call[0] for call in conflicted.calls if call[0][0] in {"pull", "merge"}] == [merge_args, ["merge", "--abort"]]
+
+    for blocked, code in (
+        (Connection(files={"file.txt": ".M"}), "git_dirty_worktree"),
+        (Connection(files={}), "git_merge_in_progress"),
+    ):
+        blocked.merge_head = code == "git_merge_in_progress"
+        with pytest.raises(RemoteWorkspaceError) as exc:
+            remote.RemoteGitService(blocked, ROOT).merge()
+        assert exc.value.code == code
+        assert exc.value.data == {"operation": "merge", "outcome": "not_started", "refresh_required": False}
+        assert not any(call[0][0] in {"pull", "merge"} for call in blocked.calls)
 
 
 @pytest.mark.parametrize(

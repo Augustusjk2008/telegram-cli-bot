@@ -13,6 +13,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitFork,
+  GitMerge,
   GitPullRequest,
   Github,
   LoaderCircle,
@@ -38,6 +39,7 @@ import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
+  GitActionResult,
   GitBranchList,
   GitChangedFile,
   GitCommitGraphEdge,
@@ -90,13 +92,23 @@ type Props = {
 type GitFileGroupKey = "staged" | "unstaged" | "untracked";
 type CommitLike = Pick<GitCommitGraphNode, "hash" | "shortHash" | "subject">;
 type SelectedGitDiff = GitDiffPayload & { label: string };
-type RemoteGitAction = "fetch" | "pull" | "push";
+type RemoteGitAction = "fetch" | "pull" | "push" | "merge";
 
-const REMOTE_GIT_ACTIONS: RemoteGitAction[] = ["fetch", "pull", "push"];
+const REMOTE_GIT_ACTIONS: RemoteGitAction[] = ["fetch", "pull", "push", "merge"];
 const REMOTE_GIT_ACTION_LABELS: Record<RemoteGitAction, string> = {
   fetch: "Fetch",
   pull: "Pull",
   push: "Push",
+  merge: "Merge",
+};
+const REMOTE_GIT_ACTION_ICONS: Record<RemoteGitAction, typeof CloudDownload> = {
+  fetch: CloudDownload,
+  pull: ArrowDownToLine,
+  push: ArrowUpFromLine,
+  merge: GitMerge,
+};
+const REMOTE_GIT_ACTION_HINTS: Partial<Record<RemoteGitAction, string>> = {
+  merge: "Merge：合并远端分支到本地，有冲突时自动撤销",
 };
 
 const GIT_GRAPH_LIMIT = 50;
@@ -134,6 +146,7 @@ const GIT_CAPABILITY_LABELS: Partial<Record<GitCapabilityName, string>> = {
   identity: "Git 身份配置",
   fetch: "Fetch",
   pull: "Pull",
+  merge: "Merge",
   push: "Push",
   remotes: "远端管理",
   publish: "发布分支",
@@ -1054,11 +1067,13 @@ export function GitScreen({
   }
 
   async function runRemoteGitAction(operation: RemoteGitAction) {
-    const mutation = operation === "fetch"
-      ? () => client.fetchGitRemote(botAlias)
-      : operation === "pull"
-        ? () => client.pullGitRemote(botAlias)
-        : () => client.pushGitRemote(botAlias);
+    const mutations: Record<RemoteGitAction, () => Promise<GitActionResult>> = {
+      fetch: () => client.fetchGitRemote(botAlias),
+      pull: () => client.pullGitRemote(botAlias),
+      push: () => client.pushGitRemote(botAlias),
+      merge: () => client.mergeGitRemote(botAlias),
+    };
+    const mutation = mutations[operation];
     if (remote && operation !== "fetch" && !window.confirm(`确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？`)) {
       return;
     }
@@ -1551,9 +1566,11 @@ export function GitScreen({
                 <span
                   className="inline-flex shrink-0 items-center gap-1"
                   style={{ color: overview.isClean ? "var(--status-success)" : "var(--status-warning)" }}
+                  title={overview.isClean ? "工作区干净" : "存在改动"}
                 >
                   <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
-                  <span>{overview.isClean ? "工作区干净" : "存在改动"}</span>
+                  {/* A narrow side panel keeps the dot and gives the room to the branch name. */}
+                  <span className="@max-[22rem]:sr-only">{overview.isClean ? "工作区干净" : "存在改动"}</span>
                 </span>
               </div>
             ) : (
@@ -1566,7 +1583,8 @@ export function GitScreen({
                 const capability = getCapability(operation);
                 const unavailable = !capability.available;
                 const label = REMOTE_GIT_ACTION_LABELS[operation];
-                const Icon = operation === "fetch" ? CloudDownload : operation === "pull" ? ArrowDownToLine : ArrowUpFromLine;
+                const Icon = REMOTE_GIT_ACTION_ICONS[operation];
+                const hint = REMOTE_GIT_ACTION_HINTS[operation] || label;
                 const badge = operation === "pull" ? overview.behindCount : operation === "push" ? overview.aheadCount : 0;
                 const badgeHint = operation === "pull" ? `落后 ${badge}` : `领先 ${badge}`;
                 return (
@@ -1574,7 +1592,7 @@ export function GitScreen({
                     key={operation}
                     type="button"
                     aria-label={label}
-                    title={!remote && unavailable ? `${label}：${gitCapabilityReason(capability, gitCapabilitiesLoading)}` : badge > 0 ? `${label}（${badgeHint}）` : label}
+                    title={!remote && unavailable ? `${label}：${gitCapabilityReason(capability, gitCapabilitiesLoading)}` : badge > 0 ? `${label}（${badgeHint}）` : hint}
                     aria-describedby={!remote ? `git-capability-reason-${operation}` : undefined}
                     onClick={() => void runRemoteGitAction(operation)}
                     disabled={mutationBusy || (!remote && unavailable)}

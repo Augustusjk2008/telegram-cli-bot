@@ -30,7 +30,7 @@ def repo(tmp_path, monkeypatch):
 
 def _capabilities():
     payload = git_service.get_git_capabilities(None, "main", 1)["capabilities"]
-    return {name: payload[name]["available"] for name in ("fetch", "pull", "push", "remotes", "publish")}
+    return {name: payload[name]["available"] for name in ("fetch", "pull", "merge", "push", "remotes", "publish")}
 
 
 def _error(call) -> WebApiError:
@@ -80,7 +80,9 @@ def test_remote_management_validates_input_and_redacts_credentials(repo):
 def test_publish_sets_upstream_and_enables_push_and_pull(repo):
     work, bare = repo
     git_service.add_git_remote(None, "main", 1, "origin", f"file://{bare.as_posix()}")
-    assert _capabilities() == {"fetch": True, "pull": False, "push": False, "remotes": True, "publish": True}
+    assert _capabilities() == {
+        "fetch": True, "pull": False, "merge": False, "push": False, "remotes": True, "publish": True,
+    }
     assert _error(lambda: git_service.publish_git_branch(None, "main", 1, "origin")).code == "git_no_commits"
 
     _git(work, "-c", "user.name=Dev", "-c", "user.email=dev@example.com", "commit", "--allow-empty", "-m", "init")
@@ -89,7 +91,7 @@ def test_publish_sets_upstream_and_enables_push_and_pull(repo):
     assert overview["current_branch"] == "main"
     assert _git(work, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}") == "origin/main"
     assert _git(bare, "rev-parse", "main") == _git(work, "rev-parse", "HEAD")
-    assert _capabilities() == {name: True for name in ("fetch", "pull", "push", "remotes", "publish")}
+    assert _capabilities() == {name: True for name in ("fetch", "pull", "merge", "push", "remotes", "publish")}
     assert git_service.list_git_remotes(None, "main", 1)["upstream"] == "origin/main"
 
     _git(work, "checkout", "-q", "--detach")
@@ -131,3 +133,64 @@ def test_github_auth_failures_explain_the_connected_account():
     assert "GitHub 账号" not in git_service._git_network_error_message(rejected, ())
     other_host = git_service.GitCommandError("fatal: Authentication failed for 'https://gitlab.com/x/y.git/'")
     assert "GitHub 账号" not in git_service._git_network_error_message(other_host, auth)
+
+
+def _diverged_repo(repo, tmp_path, *, remote_file: str, local_file: str):
+    """Publish `work`, then let the remote and the local branch each gain one commit."""
+    work, bare = repo
+    for key, value in (("user.name", "Dev"), ("user.email", "dev@example.com")):
+        _git(work, "config", key, value)
+    (work / "shared.txt").write_text("base\n", encoding="utf-8")
+    _git(work, "add", "shared.txt")
+    _git(work, "commit", "-q", "-m", "init")
+    git_service.add_git_remote(None, "main", 1, "origin", f"file://{bare.as_posix()}")
+    git_service.publish_git_branch(None, "main", 1, "origin")
+
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", "-b", "main", str(bare), str(other)], check=True)
+    (other / remote_file).write_text("remote\n", encoding="utf-8")
+    _git(other, "add", remote_file)
+    _git(other, "-c", "user.name=Peer", "-c", "user.email=peer@example.com", "commit", "-q", "-m", "remote change")
+    _git(other, "push", "-q", "origin", "main")
+
+    (work / local_file).write_text("local\n", encoding="utf-8")
+    _git(work, "add", local_file)
+    _git(work, "commit", "-q", "-m", "local change")
+    return work
+
+
+def test_merge_joins_diverged_upstream_that_fast_forward_pull_rejects(repo, tmp_path):
+    work = _diverged_repo(repo, tmp_path, remote_file="remote.txt", local_file="local.txt")
+    assert _error(lambda: git_service.pull_git_remote(None, "main", 1)).code == "git_pull_failed"
+
+    overview = git_service.merge_git_remote(None, "main", 1)
+
+    assert overview["is_clean"] and overview["behind_count"] == 0
+    assert len(_git(work, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3
+    assert (work / "remote.txt").read_text(encoding="utf-8") == "remote\n"
+    assert (work / "local.txt").read_text(encoding="utf-8") == "local\n"
+
+
+def test_merge_conflict_reports_files_and_restores_the_pre_merge_state(repo, tmp_path):
+    work = _diverged_repo(repo, tmp_path, remote_file="shared.txt", local_file="shared.txt")
+    (work / "draft.txt").write_text("uncommitted\n", encoding="utf-8")
+    head = _git(work, "rev-parse", "HEAD")
+
+    error = _error(lambda: git_service.merge_git_remote(None, "main", 1))
+
+    assert (error.status, error.code) == (409, "git_merge_conflict")
+    assert "shared.txt" in error.message and "已撤销" in error.message
+    assert _git(work, "rev-parse", "HEAD") == head
+    assert not (work / ".git" / "MERGE_HEAD").exists()
+    assert (work / "shared.txt").read_text(encoding="utf-8") == "local\n"
+    assert _git(work, "status", "--porcelain") == "?? draft.txt"
+
+
+def test_merge_refuses_to_touch_a_merge_started_elsewhere(repo, tmp_path):
+    work = _diverged_repo(repo, tmp_path, remote_file="shared.txt", local_file="shared.txt")
+    _git(work, "fetch", "-q", "origin")
+    subprocess.run(["git", "merge", "origin/main"], cwd=work, capture_output=True)
+    assert (work / ".git" / "MERGE_HEAD").exists()
+
+    assert _error(lambda: git_service.merge_git_remote(None, "main", 1)).code == "git_merge_in_progress"
+    assert (work / ".git" / "MERGE_HEAD").exists()

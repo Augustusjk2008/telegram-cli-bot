@@ -2856,6 +2856,7 @@ export const GIT_CAPABILITY_NAMES = [
   "identity",
   "fetch",
   "pull",
+  "merge",
   "push",
   "remotes",
   "publish",

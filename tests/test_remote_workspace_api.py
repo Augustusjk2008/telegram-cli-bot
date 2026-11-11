@@ -290,6 +290,7 @@ async def test_remote_upload_accepts_files_over_20mb(tmp_path, monkeypatch, payl
     ("GET", "git/diff?path=a%20b.txt&staged=true", None, "diff", ("a b.txt",), {"staged": True}),
     ("POST", "git/stage", {"paths": ["a b.txt"]}, "stage", (["a b.txt"],), {}),
     ("POST", "git/push", None, "push", (), {}),
+    ("POST", "git/merge", None, "merge", (), {}),
 ])
 async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolation(
     tmp_path, monkeypatch, method, suffix, body, operation, args, kwargs,
@@ -335,7 +336,7 @@ async def test_remote_git_routes_use_unified_backend_and_preserve_local_isolatio
         response = await client.request(method, url, json=body)
         assert response.status == 200, await response.text()
         data = (await response.json())["data"]
-        assert (data["overview"] if operation in {"stage", "push"} else data) == payload
+        assert (data["overview"] if operation in {"stage", "push", "merge"} else data) == payload
         factory.assert_called_once_with(connection, CONFIG["root"])
         getattr(git, operation).assert_called_once_with(*args, **kwargs)
         monkeypatch.setattr(server, "_can_operate_bot", lambda auth, alias: False)
@@ -446,7 +447,7 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         ("POST", "git/commit-message/generate"),
         ("PUT", "git/identity"), ("POST", "git/discard"), ("POST", "git/discard-all"),
         ("POST", "git/init"), ("POST", "git/stage"), ("POST", "git/unstage"), ("POST", "git/commit"),
-        ("POST", "git/fetch"), ("POST", "git/pull"), ("POST", "git/push"),
+        ("POST", "git/fetch"), ("POST", "git/pull"), ("POST", "git/merge"), ("POST", "git/push"),
         ("GET", "git/remotes"), ("POST", "git/remotes"), ("POST", "git/remotes/update"),
         ("POST", "git/remotes/remove"), ("POST", "git/publish"),
         ("POST", "git/stash/pop"),

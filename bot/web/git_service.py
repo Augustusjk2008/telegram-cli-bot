@@ -1371,7 +1371,7 @@ def _local_git_sync_capabilities(repo_root: Optional[str]) -> dict[str, tuple[bo
     if not repo_root:
         return {
             name: (False, "git_not_repository")
-            for name in ("fetch", "pull", "push", "remotes", "publish")
+            for name in ("fetch", "pull", "merge", "push", "remotes", "publish")
         }
 
     try:
@@ -1380,7 +1380,10 @@ def _local_git_sync_capabilities(repo_root: Optional[str]) -> dict[str, tuple[bo
         remotes = []
     if not remotes:
         missing = (False, "git_remote_not_configured")
-        return {"fetch": missing, "pull": missing, "push": missing, "remotes": (True, ""), "publish": missing}
+        return {
+            "fetch": missing, "pull": missing, "merge": missing, "push": missing,
+            "remotes": (True, ""), "publish": missing,
+        }
 
     try:
         upstream = _run_git(
@@ -1392,9 +1395,12 @@ def _local_git_sync_capabilities(repo_root: Optional[str]) -> dict[str, tuple[bo
         upstream = None
     ready = (True, "")
     if upstream is not None and upstream.returncode == 0 and (getattr(upstream, "stdout", "") or "").strip():
-        return {"fetch": ready, "pull": ready, "push": ready, "remotes": ready, "publish": ready}
+        return {"fetch": ready, "pull": ready, "merge": ready, "push": ready, "remotes": ready, "publish": ready}
     no_upstream = (False, "git_upstream_not_configured")
-    return {"fetch": ready, "pull": no_upstream, "push": no_upstream, "remotes": ready, "publish": ready}
+    return {
+        "fetch": ready, "pull": no_upstream, "merge": no_upstream, "push": no_upstream,
+        "remotes": ready, "publish": ready,
+    }
 
 
 def get_git_capabilities(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
@@ -2538,6 +2544,75 @@ def pull_git_remote(
         remote=True,
         auth_config=auth_config,
     )
+
+
+# --no-rebase/--ff override pull.rebase and pull.ff so the button always performs
+# a real merge; --no-edit keeps Git from opening an editor for the merge commit.
+_GIT_MERGE_UPSTREAM_ARGS = ["pull", "--no-rebase", "--ff", "--no-edit"]
+_GIT_MERGE_CONFLICT_PATHS_LIMIT = 20
+
+
+def _git_merge_in_progress(repo_root: str) -> bool:
+    result = _run_git(repo_root, ["rev-parse", "--quiet", "--verify", "MERGE_HEAD"], check=False)
+    return result.returncode == 0
+
+
+def _rollback_failed_git_merge(repo_root: str, failure: str) -> tuple[int, str, str]:
+    """Undo a merge Git stopped halfway and describe why it stopped."""
+    if not _git_merge_in_progress(repo_root):
+        # Git refused before touching the worktree (network, overlapping local changes...).
+        return 400, "git_merge_failed", failure
+    unmerged = _run_git(repo_root, ["diff", "--name-only", "--diff-filter=U", "-z"], check=False)
+    conflicts = [path for path in (unmerged.stdout or "").split("\x00") if path]
+    aborted = _run_git(repo_root, ["merge", "--abort"], check=False).returncode == 0
+    rollback = (
+        "已撤销本次合并，本地保持合并前的状态。"
+        if aborted
+        else "自动撤销失败，请在终端执行 git merge --abort 后再试。"
+    )
+    if not conflicts:
+        return 400, "git_merge_failed", f"{failure}\n{rollback}"
+    listed = [f"  {path}" for path in conflicts[:_GIT_MERGE_CONFLICT_PATHS_LIMIT]]
+    if len(conflicts) > len(listed):
+        listed.append(f"  ... 共 {len(conflicts)} 个文件")
+    return 409, "git_merge_conflict", "\n".join(["远端与本地存在冲突，无法自动合并：", *listed, rollback])
+
+
+def merge_git_remote(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    *,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
+    """Merge the upstream branch into the current branch, leaving no half-finished merge behind."""
+    working_dir, repo_root = _require_repo_root(manager, alias, user_id)
+    if _git_merge_in_progress(repo_root):
+        # Never roll back a merge this request did not start.
+        _raise(409, "git_merge_in_progress", "仓库中已有未完成的合并，请先完成或中止后再试")
+
+    try:
+        result = _run_git(
+            repo_root,
+            _GIT_MERGE_UPSTREAM_ARGS,
+            check=False,
+            env=_build_git_remote_env(repo_root, auth_config),
+            remote=True,
+        )
+        failure = "" if result.returncode == 0 else (result.stderr or result.stdout or "").strip() or "Git 命令执行失败"
+    except GitCommandError as exc:
+        failure = str(exc)
+    if not failure:
+        _invalidate_git_status_cache(repo_root)
+        return _build_git_overview(working_dir, repo_root)
+
+    failure = _git_network_error_message(failure, auth_config)
+    try:
+        status, code, message = _rollback_failed_git_merge(repo_root, failure)
+    except GitCommandError:
+        status, code, message = 400, "git_merge_failed", failure
+    _invalidate_git_status_cache(repo_root)
+    _raise(status, code, message)
 
 
 def push_git_remote(
