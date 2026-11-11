@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from scripts import update_transaction as transaction
@@ -132,10 +134,13 @@ def test_unchanged_targets_are_neither_backed_up_nor_rewritten(tmp_path):
     tx.apply(stage, files, expected_hashes={name: transaction.sha256(root / name) for name in files})
     assert (root / "same").stat().st_mtime_ns == untouched
     assert (root / "one").read_text() == "new one"
-    assert (root / "tool").stat().st_mode & 0o111  # an executable-bit change is still applied
+    # Windows chmod does not change POSIX executable bits, so tool stays unchanged.
+    expected_backups = {"one"} if os.name == "nt" else {"one", "tool"}
+    if os.name != "nt":
+        assert (root / "tool").stat().st_mode & 0o111
     records = transaction.read_journal(tx.journal)
-    assert {r.get("relative_path") for r in records if r["event"] == "backup_done"} == {"one", "tool"}
-    assert [r["count"] for r in records if r["event"] == "unchanged_skipped"] == [1]
+    assert {r.get("relative_path") for r in records if r["event"] == "backup_done"} == expected_backups
+    assert [r["count"] for r in records if r["event"] == "unchanged_skipped"] == [len(files) - len(expected_backups)]
     tx.recover()
     assert (root / "one").read_text() == "old one"
     assert (root / "same").read_text() == "identical"
