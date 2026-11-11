@@ -1568,9 +1568,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
 
         {!loading && activeTab === "chat-translation" ? (
-          <div className="admin-embed">
-            <ChatTranslationSettingsPanel key={chatTranslationPanelKey} client={client} onSaved={() => setNotice("聊天翻译配置已保存")} />
-          </div>
+          <ChatTranslationSettingsPanel key={chatTranslationPanelKey} client={client} onSaved={() => setNotice("聊天翻译配置已保存")} />
         ) : null}
 
         {!loading && activeTab === "inline-completion" ? (

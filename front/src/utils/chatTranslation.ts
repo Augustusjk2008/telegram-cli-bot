@@ -16,6 +16,7 @@ export const DEFAULT_CHAT_TRANSLATION_CONFIG: ChatTranslationConfig = {
   cli_params: {},
   cli_defaults: {},
   cli_schema: {},
+  cli_options: {},
 };
 
 export function mapChatTranslation(value: unknown): ChatTranslation | null {
