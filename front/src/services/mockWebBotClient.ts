@@ -4013,12 +4013,20 @@ export class MockWebBotClient implements WebBotClient {
   } = {}): Promise<PluginInstallBatchResult> {
     const force = Boolean(options.force);
     const discovered = this.installablePlugins.length;
-    const installed: PluginSummary[] = [];
+    const installed: PluginInstallBatchResult["installed"] = [];
     for (const plugin of this.installablePlugins) {
       if (plugin.installed && !force) {
         continue;
       }
-      installed.push(await this.installPlugin({ pluginId: plugin.id, force }));
+      const previousVersion = this.plugins.find((item) => item.id === (plugin.pluginId || plugin.id))?.version ?? null;
+      const summary = await this.installPlugin({ pluginId: plugin.id, force });
+      installed.push({
+        ...summary,
+        installOutcome: previousVersion === null
+          ? "installed"
+          : previousVersion === summary.version ? "reinstalled" : "upgraded",
+        previousVersion,
+      });
     }
     return { sourcePath, discovered, installed };
   }

@@ -1717,10 +1717,19 @@ export type InstallablePluginSummary = {
   installed: boolean;
 };
 
+/** What a directory install did to the copy of the plugin installed before it. */
+export type PluginInstallOutcome = "installed" | "upgraded" | "reinstalled" | "downgraded";
+
+export type PluginInstallBatchItem = PluginSummary & {
+  installOutcome: PluginInstallOutcome;
+  /** Version installed before this batch; null when the plugin is new. */
+  previousVersion: string | null;
+};
+
 export type PluginInstallBatchResult = {
   sourcePath: string;
   discovered: number;
-  installed: PluginSummary[];
+  installed: PluginInstallBatchItem[];
 };
 
 export type PluginUpdateInput = {

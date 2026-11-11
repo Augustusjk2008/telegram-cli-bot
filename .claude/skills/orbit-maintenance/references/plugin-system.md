@@ -9,7 +9,7 @@
 
 ## 安装与刷新
 
-- CLI `python -m bot.plugins.installer --repo-root <repo> --all` 或重复 `--plugin <id>` 安装示例插件，已安装项默认跳过；`--force` 显式覆盖。Web 安装、卸载、配置修改要求 `run_plugins`，列表要求 `view_plugins`；自定义 `sourcePath` 还要求本机请求、本机管理员和开发模式。目录安装递归发现 `plugin.json` 并先检查重复 ID/目标目录名。
+- CLI `python -m bot.plugins.installer --repo-root <repo> --all` 或重复 `--plugin <id>` 安装示例插件，已安装项默认跳过；`--force` 显式覆盖。Web 安装、卸载、配置修改要求 `run_plugins`，列表要求 `view_plugins`；自定义 `sourcePath` 还要求本机请求、本机管理员和开发模式。目录安装递归发现 `plugin.json` 并先检查重复 ID/目标目录名；结果中每个插件带 `previousVersion` 和按安装前版本得出的 `installOutcome`（`installed`/`upgraded`/`reinstalled`/`downgraded`，SemVer 比较，无法排序的版本变化记为 `upgraded`），Web 安装完成后以结果对话框展示各类数量。
 - 服务初始化或扫描时，只为已安装且源文件内容一致的内置插件同步 manifest，保留已安装的 `enabled` 和 `config`；后端文件不同或缺失时跳过同步。源码更新需通过重新安装复制到运行目录。
 - Web API 更新 plugin 会合并配置、写 manifest、立即重新 discover，然后清理 view sessions 并停止该插件进程；后续执行按需启动。
 - Web 刷新调用 `reload_plugins()`，只对 manifest 签名变化或被移除的插件执行失效清理；纯后端源码编辑不属于 manifest 签名，刷新不能保证重启该进程。配置更新或覆盖安装走显式失效路径。
@@ -29,4 +29,5 @@
 
 - Plugin runtime 和 Host API：`tests/test_plugin_runtime.py`、`tests/test_plugins_host_api.py`。
 - 外部 runtime 安装器：`tests/test_plugin_runtime_installers.py`。
+- 目录安装结果分类：`tests/test_plugin_install_outcomes.py`。
 - 涉及插件文件视图或 waveform UI 时运行 `npm run test:gate`、`npm run lint` 和 `npm run build`，并在人工启动的应用中完成交互验收。

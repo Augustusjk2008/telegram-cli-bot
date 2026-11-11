@@ -4,11 +4,12 @@ import { createPortal } from "react-dom";
 import { Puzzle, Trash2 } from "lucide-react";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { PluginCatalog } from "../components/PluginCatalog";
+import { PluginInstallResultDialog } from "../components/plugins/PluginInstallResultDialog";
 import { SectionHeader } from "../components/SectionHeader";
 import { SurfacePanel } from "../components/SurfacePanel";
 import { ToolbarButton, toolbarButtonClass } from "../components/ToolbarButton";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { HostEffect, PluginSummary } from "../services/types";
+import type { HostEffect, PluginInstallBatchResult, PluginSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 type Props = {
@@ -53,6 +54,7 @@ export function PluginsScreen({
   const [pendingUninstallPlugin, setPendingUninstallPlugin] = useState("");
   const [installPickerOpen, setInstallPickerOpen] = useState(false);
   const [installingPlugin, setInstallingPlugin] = useState(false);
+  const [installResult, setInstallResult] = useState<PluginInstallBatchResult | null>(null);
   const requestIdRef = useRef(0);
 
   function loadData(refresh = false, nextNotice = "") {
@@ -120,8 +122,8 @@ export function PluginsScreen({
     setNotice("");
     client.installPluginsFromPath(sourcePath, { force: true, allowDevSourcePath: true })
       .then((result) => {
-        const count = result.installed.length;
-        loadData(false, count > 0 ? `已安装 ${count} 个插件` : "所选目录中没有可安装的插件");
+        setInstallResult(result);
+        loadData();
       })
       .catch((err: unknown) => {
         setError(err instanceof Error && err.message ? err.message : "插件安装失败");
@@ -158,7 +160,7 @@ export function PluginsScreen({
         onClick={() => setInstallPickerOpen(true)}
         disabled={!canOperate || loading || installingPlugin}
       >
-        安装插件
+        {installingPlugin ? "安装中..." : "安装插件"}
       </ToolbarButton>
       <ToolbarButton
         type="button"
@@ -279,6 +281,7 @@ export function PluginsScreen({
       </main>
       {installPickerDialog}
       {renderedUninstallDialog}
+      {installResult ? <PluginInstallResultDialog result={installResult} onClose={() => setInstallResult(null)} /> : null}
     </>
   );
 }

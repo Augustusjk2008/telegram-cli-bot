@@ -13,6 +13,7 @@ from .artifacts import ArtifactRecord, ArtifactStore
 from .audit import append_plugin_audit_event
 from .catalog import (
     build_installable_plugin_payload,
+    classify_plugin_install,
     iter_source_plugin_dirs,
     iter_plugin_dirs_recursive,
     merge_bundled_manifest,
@@ -433,10 +434,20 @@ class PluginService:
                 )
             seen_target_names[target_name_key] = source_dir
 
-        installed = [
-            await self.install_plugin(source_path=source_dir, force=force)
-            for source_dir in source_dirs
-        ]
+        # IDs are unique within the batch, so one snapshot gives each plugin's pre-install version.
+        previous_versions = {
+            plugin_id: manifest.version
+            for plugin_id, manifest in self.registry.discover().items()
+        }
+        installed = []
+        for source_dir in source_dirs:
+            payload = await self.install_plugin(source_path=source_dir, force=force)
+            previous_version = previous_versions.get(payload["id"])
+            installed.append({
+                **payload,
+                "installOutcome": classify_plugin_install(previous_version, payload["version"]),
+                "previousVersion": previous_version,
+            })
         return {
             "sourcePath": str(source_root),
             "discovered": len(source_dirs),
