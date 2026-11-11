@@ -267,7 +267,6 @@ async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypa
         runtime.cancel_run_tasks(run.run_id, "stop")
         yield {"type": "done", "output": "late output", "returncode": 0}
 
-
     monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream_cli_chat)
 
     await api_service._run_cluster_agent_task(object(), run.run_id, task.task_id)

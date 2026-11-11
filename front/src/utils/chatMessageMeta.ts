@@ -90,7 +90,6 @@ function mergeEndlessEvents(
 
 export type MergeMessageMetaOptions = {
   reconcileTraceSnapshots?: boolean;
-
   traceMode?: "merge" | "replace";
 };
 
@@ -133,8 +132,7 @@ export function mergeMessageMeta(
   streamedTrace?: ChatTraceEvent[],
   options: MergeMessageMetaOptions = {},
 ): ChatMessageMetaInfo | undefined {
-  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (undefined);
-
+  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation;
   const trace = options.traceMode === "replace"
     ? incoming?.trace || base?.trace || streamedTrace
     : mergeChatTraceEvents(
@@ -157,7 +155,6 @@ export function mergeMessageMeta(
   const hasEndlessMeta = Boolean(endlessEvents)
     || typeof incoming?.endlessContinueCount === "number"
     || typeof base?.endlessContinueCount === "number";
-
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
@@ -172,7 +169,6 @@ export function mergeMessageMeta(
     endlessEvents,
     endlessContinueCount: hasEndlessMeta ? endlessContinueCount : undefined,
     endlessGroupId: incoming?.endlessGroupId || base?.endlessGroupId,
-
     tracePresentation,
     trace,
   };

@@ -309,8 +309,6 @@ def test_latest_answer_times_ignore_child_agent_turns(tmp_path: Path) -> None:
     assert store.get_latest_answer_times(bot_id=1, user_id=2) == main_times
 
 
-
-
 def test_history_delta_keeps_legacy_after_id_and_uses_revision_only_when_requested(monkeypatch) -> None:
     items = [{"id": "m1"}, {"id": "m2"}]
 

@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ChatScreen } from "../screens/ChatScreen";
 import * as mermaidRenderer from "../markdown/mermaidRenderer";
-
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type { BotOverview, ChatMessage, ConversationListResult } from "../services/types";
@@ -285,7 +284,7 @@ test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, preview
   const client = createClient({
     getBotOverview: async () => ({
       alias: "main", cliType: "codex", status: "running", workingDir: "C:\\control\\remote", isProcessing: false,
-      supportedExecutionModes: ["cli"], executionMode: "cli", defaultExecutionMode: "cli",
+      executionMode: "cli",
       remoteWorkspace: { connectionId: "ssh-1", host: "remote.test", port: 22, username: "dev", root: platform === "windows" ? "/C:/project" : "/srv/project", hostKeyFingerprint: "SHA256:test", platform },
     }),
     uploadChatAttachment: upload, deleteChatAttachment: remove, sendMessage: send,
@@ -636,8 +635,6 @@ test("keeps text input locked while an active persisted voice task is foreground
       activeConversationId: "conversation-voice",
       sessionEpoch: 8,
       effectiveCapabilities: ["chat_send"],
-      supportedExecutionModes: ["cli"],
-      defaultExecutionMode: "cli",
       voice: { enabled: true, reason: "available" },
     }),
     steerMessage,
@@ -1334,7 +1331,7 @@ test("DeepSeek selects provider, model, and thinking atomically while retaining 
   const client = createClient({
     getBotOverview: async () => ({
       alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
-      supportedExecutionModes: ["cli"], defaultExecutionMode: "cli", voice: { enabled: true, reason: "enabled" },
+      voice: { enabled: true, reason: "enabled" },
     }),
   });
   await client.updateBotCli("main", "deepseek", "dsh");
@@ -1374,7 +1371,6 @@ test("DeepSeek selects provider, model, and thinking atomically while retaining 
   await userEvent.selectOptions(model, "none");
   await waitFor(() => expect(model).toHaveValue("none"));
   expect((await client.getCliParams("main")).params.model).toBeNull();
-  expect(screen.queryByRole("button", { name: "原生 agent" })).not.toBeInTheDocument();
   expect(screen.queryByTestId("codex-voice-foreground")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "开启集群模式" })).toBeDisabled();
   fireEvent.change(screen.getByLabelText("上传附件"), { target: { files: [new File(["image"], "photo.png", { type: "image/png" })] } });
@@ -1386,7 +1382,6 @@ test("DeepSeek preserves a selected custom model in mobile chat options", async 
   const client = createClient({
     getBotOverview: async () => ({
       alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
-      supportedExecutionModes: ["cli"], defaultExecutionMode: "cli",
     }),
   });
   await client.updateBotCli("main", "deepseek", "dsh");
@@ -1407,7 +1402,6 @@ test("DeepSeek keeps an editable model input when the selected provider has no m
   const client = createClient({
     getBotOverview: async () => ({
       alias: "main", cliType: "deepseek", status: "running", workingDir: "C:/workspace",
-      supportedExecutionModes: ["cli"], defaultExecutionMode: "cli",
     }),
   });
   await client.updateBotCli("main", "deepseek", "dsh");

@@ -1,10 +1,9 @@
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, LoaderCircle, } from "lucide-react";
+import { ChevronRight, LoaderCircle } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage, ChatMessageContextUsage } from "../services/types";
-
 import type { CliTranscriptEntry } from "../utils/cliTranscript";
 import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
 
@@ -21,7 +20,6 @@ type Props = {
   isTraceLoading?: boolean;
   traceLoadError?: string;
   onLoadTrace?: () => void;
-
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
   onContinue?: () => void;
@@ -226,7 +224,6 @@ function countProcessEntries(items: TranscriptRenderItem[]) {
 function entryCopyLabel(entry: CliTranscriptEntry) {
   if (entry.kind === "process") return entry.trace?.kind === "reasoning" ? "思考" : "过程";
   if (entry.kind === "tool") return `工具: ${entry.label}`;
-
   if (entry.kind === "error") return "错误";
   if (entry.kind === "cancelled") return "已取消";
   if (entry.kind === "endless_error") return "无尽错误";
@@ -364,12 +361,10 @@ function filterDuplicateFinalErrorItems(renderItems: TranscriptRenderItem[], res
 const TranscriptEntryRow = memo(function TranscriptEntryRow({
   entry,
   nested = false,
-
   onFileLinkClick,
 }: {
   entry: CliTranscriptEntry;
   nested?: boolean;
-
   onFileLinkClick?: (href: string) => void;
 }) {
   const rowClassName = nested ? "py-1" : "border-t border-[var(--workbench-hairline)] py-1";
@@ -400,7 +395,6 @@ const TranscriptEntryRow = memo(function TranscriptEntryRow({
       </div>
     );
   }
-
   return <ToolTranscriptEntryRow entry={entry} rowClassName={rowClassName} />;
 });
 
@@ -432,11 +426,9 @@ const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
 
 const TranscriptGroupRow = memo(function TranscriptGroupRow({
   item,
-
   onFileLinkClick,
 }: {
   item: Extract<TranscriptRenderItem, { kind: "group" }>;
-
   onFileLinkClick?: (href: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -444,10 +436,9 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
     <TranscriptEntryRow
       entry={entry}
       nested
-
       onFileLinkClick={onFileLinkClick}
     />
-  ), [onFileLinkClick,  ]);
+  ), [onFileLinkClick]);
   return (
     <details
       data-testid="cli-event-group"
@@ -477,11 +468,9 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
 
 const RetryGroupRow = memo(function RetryGroupRow({
   item,
-
   onFileLinkClick,
 }: {
   item: Extract<TranscriptRenderItem, { kind: "retry" }>;
-
   onFileLinkClick?: (href: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -489,10 +478,9 @@ const RetryGroupRow = memo(function RetryGroupRow({
     <TranscriptEntryRow
       entry={entry}
       nested
-
       onFileLinkClick={onFileLinkClick}
     />
-  ), [onFileLinkClick,  ]);
+  ), [onFileLinkClick]);
   return (
     <details
       data-testid="cli-retry-group"
@@ -539,7 +527,6 @@ export function CliTranscript({
   isTraceLoading = false,
   traceLoadError = "",
   onLoadTrace,
-
   onFileLinkClick,
   onCopyFinalAnswer,
   onContinue,
@@ -553,7 +540,6 @@ export function CliTranscript({
   endlessRetryAtMs,
   mobileLayout = false,
 }: Props) {
-
   const [traceExpanded, setTraceExpanded] = useState(false);
   const collapseProcess = mobileLayout || endlessActive;
   const totalTraceCount = typeof traceCount === "number" ? traceCount : entries.length;
@@ -616,23 +602,20 @@ export function CliTranscript({
     item.kind === "entry" ? (
       <TranscriptEntryRow
         entry={item.entry}
-
         onFileLinkClick={onFileLinkClick}
       />
     ) : item.kind === "group" ? (
       <TranscriptGroupRow
         item={item}
-
         onFileLinkClick={onFileLinkClick}
       />
     ) : (
       <RetryGroupRow
         item={item}
-
         onFileLinkClick={onFileLinkClick}
       />
     )
-  ), [ onFileLinkClick,  ]);
+  ), [onFileLinkClick]);
 
   const renderTranscriptItems = (items: TranscriptRenderItem[]) => (
     items.map((item) => (

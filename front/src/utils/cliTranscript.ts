@@ -77,10 +77,6 @@ function traceStableKey(trace: ChatTraceEvent) {
   return "";
 }
 
-function normalizeTraceSummary(value: unknown) {
-  return asString(value).trim().replace(/\s+/g, " ");
-}
-
 function stableSerialize(value: unknown, seen = new WeakSet<object>()): string {
   if (typeof value === "undefined") return "undefined";
   if (value === null) return "null";
@@ -152,29 +148,15 @@ function traceRichness(trace: ChatTraceEvent) {
   );
 }
 
-function shouldReplaceTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent, preferCurrentOnEqualAnonymous = false) {
+function shouldReplaceTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent) {
   if (current.kind === incoming.kind && current.kind === "tool_result" && current.callId && current.callId === incoming.callId) {
     return true;
   }
-  const currentScore = traceRichness(current);
-  const incomingScore = traceRichness(incoming);
-  if (incomingScore !== currentScore) {
-    return incomingScore > currentScore;
-  }
-  if (
-    preferCurrentOnEqualAnonymous
-    &&
-    !traceStableKey(current)
-    && !traceStableKey(incoming)
-    && normalizeTraceSummary(current.summary) === normalizeTraceSummary(incoming.summary)
-  ) {
-    return false;
-  }
-  return true;
+  return traceRichness(incoming) >= traceRichness(current);
 }
 
-function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent, preferCurrentOnEqualAnonymous = false): ChatTraceEvent {
-  const primary = shouldReplaceTraceEvent(current, incoming, preferCurrentOnEqualAnonymous) ? incoming : current;
+function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent): ChatTraceEvent {
+  const primary = shouldReplaceTraceEvent(current, incoming) ? incoming : current;
   const secondary = primary === incoming ? current : incoming;
   const merged: ChatTraceEvent = {
     kind: primary.kind || secondary.kind || "event",
@@ -266,9 +248,7 @@ export function isDuplicateFinalProcessTrace(trace: ChatTraceEvent, finalText: s
 export function mergeChatTraceEvents(
   sources: Array<ChatTraceEvent[] | undefined>,
   options: {
-
     reconcileTraceSnapshots?: boolean;
-
   } = {},
 ): ChatTraceEvent[] | undefined {
   const merged: ChatTraceEvent[] = [];
@@ -298,7 +278,6 @@ export function mergeChatTraceEvents(
         ?? (stableKey ? stableIndexMap.get(stableKey) : undefined)
         ?? (fallbackKey ? fallbackIndexMap.get(fallbackKey) : undefined)
       );
-
       if (typeof existingIndex !== "number" && options.reconcileTraceSnapshots) {
         const reconciliationKey = traceReconciliationKey(event);
         const candidates = reconciliationKey ? reconciliationCandidates.get(reconciliationKey) || [] : [];
@@ -306,11 +285,7 @@ export function mergeChatTraceEvents(
       }
       if (typeof existingIndex === "number") {
         semanticallyMatchedIndexes.add(existingIndex);
-        merged[existingIndex] = mergeTraceEvent(
-          merged[existingIndex],
-          event,
-          false,
-        );
+        merged[existingIndex] = mergeTraceEvent(merged[existingIndex], event);
         const nextStableKey = traceStableKey(merged[existingIndex]);
         const nextCallKey = traceCallKey(merged[existingIndex]);
         const nextFallbackKey = traceFallbackKey(merged[existingIndex]);

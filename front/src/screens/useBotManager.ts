@@ -32,8 +32,6 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   cliPath: "",
   workingDir: "",
   bypassApprovalAndSandbox: false,
-  supportedExecutionModes: ["cli"],
-  defaultExecutionMode: "cli",
 };
 
 export function resolveDefaultCliPath(cliType: CliType, bots: BotSummary[]) {
@@ -120,11 +118,8 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      const input = draft;
-
       const created = await client.addBot({
-        ...input,
-
+        ...draft,
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: draft.remoteWorkspace ? undefined : normalizePathInput(draft.workingDir),

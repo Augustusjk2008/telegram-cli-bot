@@ -53,7 +53,6 @@ function mapTokenUsage(value: unknown): ChatMessageTokenUsage | undefined {
 function displayContextProvider(provider: string) {
   const normalized = provider.trim().toLowerCase();
   if (isCodexCli(normalized)) return "codex";
-
   return provider || undefined;
 }
 

@@ -79,14 +79,14 @@ test("real client posts steering input to the active Codex server turn", async (
   });
 });
 
-test("settings saves codex server without changing CLI execution mode", async () => {
+test("settings saves the codex server CLI type", async () => {
   const client = new MockWebBotClient();
   const user = userEvent.setup();
   await client.login({ username: "127.0.0.1", password: "test" });
   render(<SettingsScreen botAlias="main" client={client} onLogout={() => undefined} />);
   await user.selectOptions(await screen.findByLabelText("CLI 类型"), "codex_server");
   await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
-  await waitFor(async () => expect(await client.getBotOverview("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex", defaultExecutionMode: "cli" }));
+  await waitFor(async () => expect(await client.getBotOverview("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex" }));
   expect(screen.getByLabelText("CLI 类型")).toHaveValue("codex_server");
 });
 

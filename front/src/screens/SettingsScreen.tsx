@@ -85,10 +85,8 @@ export function SettingsScreen({
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [peerBots, setPeerBots] = useState<BotSummary[]>([]);
-
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -133,7 +131,6 @@ export function SettingsScreen({
         setOverview(overviewData);
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
-
         setWorkdirDraft(overviewData.remoteWorkspace ? workspaceLabel(overviewData) : normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setLoading(false);
       })
@@ -192,7 +189,6 @@ export function SettingsScreen({
       setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
       setCliTypeDraft(nextBot.cliType);
       setCliPathDraft(nextBot.cliPath || nextCliPath);
-
       setNotice("CLI 配置已更新");
       if (overview && nextBot.cliType !== overview.cliType) {
         try {
@@ -417,48 +413,45 @@ export function SettingsScreen({
               titleId={isMainBot ? "main-bot-ops-title" : "bot-runtime-title"}
               icon={<Cpu className="h-3.5 w-3.5" />}
               title="运行配置"
-              description={isMainBot ? "主 Bot 的运行后端与执行入口。" : "选择执行后端以及 CLI 或原生 agent 参数。"}
+              description={isMainBot ? "主 Bot 的运行后端与执行入口。" : "选择 CLI 类型与可执行文件路径。"}
               badge={runtimeDirty ? <SettingsDirtyBadge /> : null}
             >
               <div className="grid gap-2 @md:grid-cols-2">
-
-                <>
-                    <SettingsField label="CLI 类型">
-                      <select
-                        aria-label="CLI 类型"
-                        value={cliTypeDraft}
-                        disabled={!canManageBotRuntime}
-                        onChange={(event) => {
-                          const cliType = event.target.value as CliType;
-                          setCliPathDraft(suggestCliPath(cliType, peerBots, overview ? {
-                            alias: overview.alias || botAlias,
-                            cliType: overview.cliType,
-                            cliPath: overview.cliPath,
-                          } : undefined));
-                          setCliTypeDraft(cliType);
-                        }}
-                        className={settingsControlClassName}
-                      >
-                        <option value="codex">codex</option>
-                        <option value="codex_server">codex server</option>
-                        <option value="claude">claude</option>
-                        <option value="antigravity">Antigravity CLI</option>
-                        <option value="deepseek" disabled={Boolean(overview?.remoteWorkspace)}>DeepSeek Harness</option>
-                      </select>
-                    </SettingsField>
-                    <SettingsField label="CLI 路径" className="@md:col-span-2">
-                      <input
-                        aria-label="CLI 路径"
-                        type="text"
-                        value={cliPathDraft}
-                        disabled={!canManageBotRuntime}
-                        onChange={(event) => setCliPathDraft(event.target.value)}
-                        className={clsx(settingsControlClassName, "font-mono")}
-                        placeholder={defaultCliPathForType(cliTypeDraft)}
-                        spellCheck={false}
-                      />
-                    </SettingsField>
-                  </>
+                <SettingsField label="CLI 类型">
+                  <select
+                    aria-label="CLI 类型"
+                    value={cliTypeDraft}
+                    disabled={!canManageBotRuntime}
+                    onChange={(event) => {
+                      const cliType = event.target.value as CliType;
+                      setCliPathDraft(suggestCliPath(cliType, peerBots, overview ? {
+                        alias: overview.alias || botAlias,
+                        cliType: overview.cliType,
+                        cliPath: overview.cliPath,
+                      } : undefined));
+                      setCliTypeDraft(cliType);
+                    }}
+                    className={settingsControlClassName}
+                  >
+                    <option value="codex">codex</option>
+                    <option value="codex_server">codex server</option>
+                    <option value="claude">claude</option>
+                    <option value="antigravity">Antigravity CLI</option>
+                    <option value="deepseek" disabled={Boolean(overview?.remoteWorkspace)}>DeepSeek Harness</option>
+                  </select>
+                </SettingsField>
+                <SettingsField label="CLI 路径" className="@md:col-span-2">
+                  <input
+                    aria-label="CLI 路径"
+                    type="text"
+                    value={cliPathDraft}
+                    disabled={!canManageBotRuntime}
+                    onChange={(event) => setCliPathDraft(event.target.value)}
+                    className={clsx(settingsControlClassName, "font-mono")}
+                    placeholder={defaultCliPathForType(cliTypeDraft)}
+                    spellCheck={false}
+                  />
+                </SettingsField>
               </div>
               <div className="mt-2.5 flex items-center justify-end gap-2">
                 <button

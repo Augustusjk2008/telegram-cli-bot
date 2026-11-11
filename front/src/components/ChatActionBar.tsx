@@ -41,7 +41,6 @@ const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 
 
-
 export function ChatActionBar({
   planMode,
   planDisabled = false,
@@ -166,7 +165,6 @@ export function ChatActionBar({
               聊天选项
               <button type="button" aria-label="关闭聊天选项" onClick={closeOptions} className={iconButtonClassName}><X className="h-4 w-4" /></button>
             </div>
-
             {providerOptions.length > 1 ? (
               <label className="mb-2 block text-xs text-[var(--muted)]">
                 Provider
@@ -258,7 +256,6 @@ export function ChatActionBar({
         data-testid="chat-action-bar"
         className="flex max-w-full gap-1.5 overflow-x-auto"
       >
-
         <div className={groupClassName} role="group" aria-label="聊天模式">
           <button
             type="button"

@@ -3752,14 +3752,12 @@ class WebApiServer:
             ),
         })
 
-
     async def get_cli_params(self, request: web.Request) -> web.Response:
         await self._with_bot_config_access(request)
         alias = self._manager_alias(request)
         cli_type = request.query.get("cli_type") or None
         data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type)
         return _json({"ok": True, "data": data})
-
 
     async def patch_cli_params(self, request: web.Request) -> web.Response:
         auth = await self._with_bot_config_access(request)
@@ -4169,7 +4167,6 @@ class WebApiServer:
             write_key=f"{alias}:{chat_user_id}:{agent_id}",
         )
         return _json({"ok": True, "data": data})
-
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
@@ -5233,7 +5230,6 @@ class WebApiServer:
         except InlineCompletionConfigError as exc:
             raise WebApiError(exc.status, exc.code, exc.message) from exc
         return _json({"ok": True, "data": data})
-
 
     async def admin_language_server_install(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)

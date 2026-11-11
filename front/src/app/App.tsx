@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { workspaceLabel } from "../services/remoteWorkspace";
 import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
@@ -42,8 +41,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { AppearanceProvider, useAppearance } from "../theme/AppearanceProvider";
-import type { ChatWorkbenchStatus, } from "../workbench/workbenchTypes";
-
+import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import {
   APP_NAME,
   persistChatEnterToSend,
@@ -264,7 +262,6 @@ function AppContent() {
   const [desktopChatStatusByBot, setDesktopChatStatusByBot] = useState<Record<string, ChatWorkbenchStatus>>({});
   const [desktopChatPaneVisible, setDesktopChatPaneVisible] = useState(true);
   const [remoteReconnectRevision, setRemoteReconnectRevision] = useState(0);
-
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
@@ -331,10 +328,6 @@ function AppContent() {
     }
     : undefined, [accountKey, currentBot, currentBotSummary?.workingDir, remoteWorkspace?.connectionId, remoteWorkspace?.platform, remoteWorkspace?.root]);
   const chatInstanceKey = chatInstanceKeyFor(accountKey, currentBot);
-
-  const currentWorkspaceName = (currentBotSummary?.remoteWorkspace ? workspaceLabel(currentBotSummary) : "") || currentBotSummary?.workingDir.split(/[\\/]+/).filter(Boolean).pop()
-    || currentBotSummary?.workingDir
-    || "";
   const visibleChatBotAlias = currentBot
     && !showBotManager
     && !showAdminCenter
@@ -701,7 +694,6 @@ function AppContent() {
     setUnreadBots([]);
     setMountedChatBots([]);
     setDesktopChatStatusByBot({});
-
     setDesktopChatPaneVisible(true);
     setLoginError("");
     setIsChatImmersive(false);
@@ -923,7 +915,6 @@ function AppContent() {
 
   function renderDesktopChatStack(options: {
     requestPreview?: (path: string) => void;
-
     currentVisible?: boolean;
   } = {}) {
     const currentVisible = options.currentVisible ?? desktopChatPaneVisible;
@@ -946,7 +937,6 @@ function AppContent() {
                 enterToSend={chatEnterToSend}
                 onOpenBotSettings={() => openBotSettings(alias)}
                 onOpenGlobalPromptSettings={openAdminCenter}
-
                 onRequestDesktopPreview={options.requestPreview}
                 onUnreadResult={recordBotCompletion}
                 onBotActivityChange={handleBotActivityChange}
@@ -1138,7 +1128,7 @@ function AppContent() {
       <>
         <PersistentTerminalProvider client={client}>
           <Suspense fallback={lazyFallback}>
-          <DesktopWorkbench
+            <DesktopWorkbench
               authToken={session?.token || ""}
               accountId={accountKey}
               botAlias={currentBot}
@@ -1165,7 +1155,6 @@ function AppContent() {
               hasUnreadOtherBots={hasUnreadOtherBots}
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-
               chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
                 requestPreview,
               })}

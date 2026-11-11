@@ -16,12 +16,12 @@
 - `bot/update_state.py` 通过运行态路径定位安装专属状态，使用规范化根目录身份、修订号、原子写入和 OS 文件锁。`bot/update_service.py` 统一自动/手动/离线/上传准备；SSE 只订阅任务，断线不会重复下载。自动检查在 Web 宿主启动时及每 6 小时（`UPDATE_AUTO_CHECK_INTERVAL_SECONDS`）运行，只准备不应用，不会重新准备当前任务已取消、或下载完成后才失败的同一版本（只自动重试下载中断）；在线准备拒绝与运行版本相同的 Release（`update_not_available`）。状态每次读取都重新计算 `update_available`，并给出任务目录中已存在的 `preparation_log` / `runner_log`。上传可带 `?size=`：超限提前拒绝并提供进度百分比，上传期间的状态写入节流且在线程中执行。`state.json` 以纯 ASCII JSON 写入。旧状态只认领可证明属于当前安装的包，并要求重新准备。
 - 宿主与启动器的安装锁位于独立控制目录，数据目录迁移不会改变锁身份；直接 `python -m bot` 也参与互斥。新宿主通过带进程身份的交接文件报告当前状态路径，启动器在普通重启和升级退出后重新读取，避免消费迁移前的状态。官方宿主启动后把交接路径与令牌从 `os.environ` 移入 `bot/update_state.py` 进程内状态，Agent、终端和插件子进程不会继承；`tests/conftest.py` 同时清除继承的更新协议变量，防止在 Agent 会话里跑测试时覆盖在线宿主的交接文件。健康确认前暂停新任务，成功或安全恢复后开放，被接受的宿主随即移除 `TCB_UPDATE_JOB_ID` 与 `TCB_UPDATE_HEALTH_TOKEN`。
 - 阶段为 `preparing → ready → waiting_restart → applying → awaiting_health → succeeded`；准备可取消/重试：取消只核对任务 ID 与阶段（准备进度每秒多次推进修订号），并终止正在运行的 pip/npm 进程树；新任务遇到同一 Release 的已失败、已取消或就绪前任务时接管其下载断点或已校验的完整包。应用失败进入 `rolling_back → rolled_back / recovery_required`。应用绑定任务 ID 与修订号，并阻止运行中的 Agent、集群任务和存储迁移；Web 宿主先在线程中核验全部原文件与暂存文件哈希，再在事件循环内关闭准入并做空闲检查。
-- `scripts/update_transaction.py` 跳过内容与可执行位都已与暂存文件一致的目标（不备份、不改写，日志记 `unchanged_skipped`），其余目标在替换前复制并验证全部备份，落盘记录操作意图；Windows 瞬时占用（winerror 5/32/33）的替换与删除会短暂重试；恢复复制备份且可重复执行。中断时保留事务目录；旧 `.update-apply-*` 材料不全时报告人工恢复要求。
-- `scripts/update_package.py` 统一清单、版本、归档路径、平台架构、包类型及文件哈希验证。保护配置和实际存储路径；源码本地修改、未知文件所有权及修改过的托管扩展作为冲突保留。废弃文件必须有旧清单证明归属。
+- `scripts/update_transaction.py` 跳过内容与可执行位都已与暂存文件一致的目标（不备份、不改写，日志记 `unchanged_skipped`），其余目标在替换前复制并验证全部备份，落盘记录操作意图；Windows 瞬时占用（winerror 5/32/33）的替换与删除会短暂重试；恢复复制备份且可重复执行，日志记录目标原可执行位，内容未变但可执行位不同的目标同样从备份还原（缺少该字段的旧日志只按内容判断）。中断时保留事务目录；旧 `.update-apply-*` 材料不全时报告人工恢复要求。
+- `scripts/update_package.py` 统一清单、版本、归档路径、平台架构、包类型及文件哈希验证。保护配置和实际存储路径；源码本地修改及未知文件所有权作为冲突保留。废弃文件必须有旧清单证明归属。
 - `bot/update_preparation.py` 在稳定的独立路径准备 Python 环境并核验依赖指纹。前端包记录部署参数与资源哈希，匹配时复用；重建使用暂存目录与 `npm ci`。跳过同步选项不会授权不满足要求的更新。
 - `scripts/update_runner.py` 与标准库辅助模块复制到固定快照运行；绿色版控制 Python 位于更新目标外。旧宿主退出并释放安装锁后才应用。新实例健康检查核验任务、令牌、版本、实例和实际监听地址，默认等待 180 秒，`TCB_UPDATE_HEALTH_TIMEOUT_SECONDS`（30–1800）在确认应用时写入任务；恢复前以 `host.lock` 判断宿主是否仍在运行，记录的 PID 只用于不持锁的 legacy 宿主；前端资源完整且必要迁移结束才就绪。外部模型、Telegram 和隧道状态不单独触发恢复。
 - 旧程序及依赖环境保留到健康确认。恢复后再次验证旧版本，结果中提供可重试恢复命令。公告同步是独立后续动作，其失败不能改变程序升级成功状态。数据迁移兼容性由 `bot/update_migration_gate.py` 检查，程序回滚保持用户数据。
-- 首次旧版升级使用完整新包中的 `scripts/update_bootstrap.py`，参数与操作顺序见两个根 README；没有 Git 或旧清单时需原版本完整包及其 SHA-256 建立基线。工具先准备，由用户退出旧服务后显式应用，保留引导目录与恢复命令。
+- 首次旧版升级使用完整新包中的 `scripts/update_bootstrap.py`，参数与操作顺序见两个根 README；没有 Git 或旧清单时需原版本完整包及其 SHA-256 建立基线。工具先准备，由用户退出旧服务后显式应用，保留引导目录与恢复命令。回滚旧绿色版时，执行器仅复用已还原 `start.ps1` 的环境与 PATH 初始化，再执行旧 Python bootstrap；完整启动脚本的提权、迁移和 supervisor 入口不在此路径执行。
 
 
 ## 发布
@@ -34,10 +34,10 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 在线准备绑定具体 GitHub Release 与资产；离线包由宿主路径或管理员流式上传提供。版本、分发标记与清单必须一致，默认拒绝降级及不兼容平台/包类型。
 - Release body 使用 `-ReleaseNotesFile` 指定的 Markdown；省略时使用 `gh release create --generate-notes`。
 - 默认 `-Mode BuildAndPublish` 会构建、提交发布改动、推送分支/tag 并创建 GitHub Release；`BuildOnly` 只构建，`PublishOnly` 复用已有产物。`-RunChecks` 是构建阶段选项，执行 `python -m pytest tests examples/plugins -q`、前端 test gate 和 lint；构建流程另外生成前端、Windows portable 包、公告快照、法律文件和 SHA-256 校验文件。
-- Windows portable 由 `.release-local/portable-win/build-portable.ps1` 构建，固定 Node `22.17.1`、`@earendil-works/pi-coding-agent@0.74.2`、`pi-workspace-history@0.2.2`，并包含 Python、Git 和 Python 依赖；包内启动器使用自己的 bootstrap。
+- Windows portable 由 `.release-local/portable-win/build-portable.ps1` 构建，固定 Node `22.17.1`，并包含 Python、Git 和 Python 依赖；包内启动器使用自己的 bootstrap。
 - `scripts/verify_release_legal_files.py` 只检查 zip/tar 中必需的法律文件与 portable runtime 许可文件是否存在。`scripts/update_package.py verify` 独立检查更新协议、文件清单/哈希、版本及提交身份。PowerShell/Shell 发布入口均运行两类校验；`PublishOnly` 必须匹配当前提交且禁止 dirty 产物。
 - `docs/` 和 release notes 保持在 Git 外，不要 force-add。
-- 绿色版只在首次启动缺失时生成 Pi `settings.json` / `models.json`；仅 `data/pi-home/.pi/agent/extensions/tcb-cluster.ts` 与 `workspace-history.ts` 登记为数据目录下的托管文件。发布清单包含实际源码提交、dirty 标志、依赖指纹、前端构建参数及全部程序文件哈希。
+- 数据目录整体受更新保护；旧清单中的数据文件也不会被列入删除计划。发布清单包含实际源码提交、dirty 标志、依赖指纹、前端构建参数及全部程序文件哈希。
 
 
 ## 运行态路径
@@ -47,7 +47,7 @@ pwsh -ExecutionPolicy Bypass -File .release-local/publish-release.ps1 -Version <
 - 已提交的 `~/.tcb/storage.json` 定位器优先确定两类根目录；目标缺失时报错，冲突的 `TCB_DATA_DIR` 被拒绝，当前进程冻结路径直到重启。迁移流程见 `bot/storage_migration.py`、`storage_runtime.py`；插件、历史和附件等调用者应使用路径函数。
 - 存储迁移移动 `updates/<安装>/state.json`，但 `updates/<安装>/jobs`（包、暂存、冻结执行器、事务备份、依赖环境）是安装程序材料：不复制、不改写其绝对路径、清理时保留在原位置，使状态中的 `python_executable` 与恢复材料保持有效。
 - `UpdateStore.prune_job_dirs()` 只清理当前状态根 `jobs/` 下的有效任务 ID 子目录：在持有 `preparation.lock` 时运行（`_reserve` 新建任务后；执行器在 `succeeded`/`rolled_back` 后非阻塞获取）。当前任务、被状态任意绝对路径值、`sys.executable`（`abspath`，不解析符号链接）或执行器快照（`CLI_BRIDGE_UPDATE_RUNNER_PATH`）引用的任务、24 小时内修改的目录、事务日志未以 `committed`/`rolled_back` 结束的目录以及链接一律保留；当前任务处于交接、应用、恢复或未知阶段、状态不可读、受监管宿主缺少执行器路径时不清理。删除失败只记录日志。`launcher-info` 在 supervisor 与 host 锁均空闲时，清理控制目录中超过 24 小时且未被状态、启动器指针或当前进程引用的 `launcher-*` 与控制 Python 快照。
-- Portable 设置 `TCB_PORTABLE_ROOT=<包>`，将 `<包>/.tcb` 作为独立 storage root，避免读取宿主用户的迁移定位器；默认 app data 为 `<包>/data/orbit-safe-claw`、Pi home 为 `<包>/data/pi-home`。绿色版迁移后由包内定位器决定 app data root，并清除默认 `TCB_DATA_DIR` 覆盖。
+- Portable 设置 `TCB_PORTABLE_ROOT=<包>`，将 `<包>/.tcb` 作为独立 storage root，避免读取宿主用户的迁移定位器；默认 app data 为 `<包>/data/orbit-safe-claw`。绿色版迁移后由包内定位器决定 app data root，并清除默认 `TCB_DATA_DIR` 覆盖。
 - 公告内容通过 `get_announcements_content_path()` 获取；仓库根 `.web_announcements.json` 用于旧数据迁移和发布包公告快照。用户内容应写当前运行态目录；现有仓库局部运行文件（如 `.tcb/startup`、`.plugins`、`managed_bots.json`）按各自实现维护并保持在 Git 外。
 
 ## 验证

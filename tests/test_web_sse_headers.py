@@ -123,8 +123,6 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     assert 'event: done\ndata: {"type": "done", "output": "ok", "elapsed_seconds": 0}' in body
 
 
-
-
 @pytest.mark.asyncio
 async def test_terminal_sse_emits_structured_error_before_closing_on_queue_failure(
     monkeypatch: pytest.MonkeyPatch,

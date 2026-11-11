@@ -41,7 +41,6 @@ type Props = {
   terminalVisible: boolean;
   chatVisible: boolean;
   availableLayoutControls?: LayoutControlId[];
-
   onToggleSidebar: () => void;
   onToggleEditor: () => void;
   onToggleTerminal: () => void;
@@ -66,7 +65,6 @@ export function WorkbenchHeader({
   terminalVisible,
   chatVisible,
   availableLayoutControls,
-
   onToggleSidebar,
   onToggleEditor,
   onToggleTerminal,
@@ -183,7 +181,6 @@ export function WorkbenchHeader({
         </button>
       ) : null}
       <div className="flex min-w-fit flex-1 items-center justify-end gap-1.5">
-
         {announcementAction ? (
           <div className="flex items-center">{announcementAction}</div>
         ) : null}

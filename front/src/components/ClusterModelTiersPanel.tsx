@@ -20,7 +20,6 @@ type Props = {
   tierConfigs?: ClusterTierConfigs;
   cliParamsByType?: Partial<Record<string, CliParamsPayload>>;
   inheritedCliType?: CliType | string;
-
   onTierConfigChange?: (tier: TierKey, next: ClusterTierConfig) => void;
 };
 
@@ -95,7 +94,6 @@ export function ClusterModelTiersPanel({
   tierConfigs,
   cliParamsByType = {},
   inheritedCliType = "codex",
-
   onTierConfigChange,
 }: Props) {
   const hasTierCliConfig = Boolean(onTierConfigChange || tierConfigs);
@@ -128,7 +126,6 @@ export function ClusterModelTiersPanel({
       <p className="text-[11px] leading-4 text-[var(--muted)]">
         每档可选择执行 CLI、模型和思考深度；留空时继承所选 CLI 配置。
       </p>
-
       <div className="divide-y divide-[var(--workbench-hairline)]">
         {TIER_LABELS.map((tier) => {
           const config: ClusterTierConfig = {

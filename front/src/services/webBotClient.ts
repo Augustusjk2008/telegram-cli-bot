@@ -212,7 +212,6 @@ export interface WebBotClient {
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   reloadEnvConfig(): Promise<EnvConfigPatchResult>;
   reloadSystemEnvConfig(): Promise<EnvConfigPatchResult>;
-
   getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
   getCodexUsageConfig(): Promise<CodexUsageConfig>;
   updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;
@@ -284,7 +283,6 @@ export interface WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
-
     onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage>;
@@ -294,7 +292,6 @@ export interface WebBotClient {
     turnId: string,
     options?: ChatSendOptions,
   ): Promise<ChatMessage | SteerMessageResult>;
-
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
@@ -464,7 +461,6 @@ export interface WebBotClient {
   ): NotificationSubscription;
   sendNotificationPresenceUpdate?(presence: NotificationPresenceUpdate): void;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
-
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;

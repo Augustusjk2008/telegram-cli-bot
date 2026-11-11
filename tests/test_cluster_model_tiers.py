@@ -98,8 +98,6 @@ def test_cluster_execution_snapshot_uses_target_cli_namespace_and_path() -> None
     assert snapshot.params_config.get_param("codex", "model") == "codex-main-model"
 
 
-
-
 def test_deepseek_tier_rejects_provider_outside_catalog(monkeypatch, tmp_path) -> None:
     from bot.web import api_service
 
@@ -145,8 +143,6 @@ def test_cluster_cli_override_applies_model_and_reasoning_for_selected_tier(
 
     assert override.get_param(cli_type, "model") == "strong-model"
     assert override.get_param(cli_type, parameter_name) == reasoning_effort
-
-
 
 
 @pytest.mark.asyncio

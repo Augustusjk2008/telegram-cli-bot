@@ -111,7 +111,6 @@ export function botMatchesManagerQuery(bot: BotSummary, query: string) {
     bot.alias,
     bot.workingDir,
     bot.cliType,
-
     ...(bot.busyAgentNames || []),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);

@@ -932,8 +932,6 @@ async def test_main_chat_run_loads_persisted_conversation_team_before_start(monk
     assert saved_run.team == team_state["cluster_team"]
 
 
-
-
 @pytest.mark.asyncio
 async def test_new_main_conversation_does_not_precreate_child_conversations(monkeypatch) -> None:
     import bot.web.api_service as api_service
@@ -1325,10 +1323,6 @@ def test_deleted_or_archived_main_conversation_retires_stable_run(monkeypatch, t
 
     assert store.changed == operation
     assert run.status == "completed"
-
-
-
-
 
 
 def _explicit_lifecycle_race_setup(api_service, monkeypatch, tmp_path):

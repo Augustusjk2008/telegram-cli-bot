@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-
 def _trace_event(kind: str, **extra: Any) -> dict[str, Any]:
     summary = str(extra.get("summary") or "").strip()
     event = {

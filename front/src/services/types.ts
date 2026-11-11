@@ -545,8 +545,6 @@ export type BotSummary = {
   cluster?: BotClusterConfig;
   promptPresets?: PromptPreset[];
   globalPromptPresets?: PromptPreset[];
-  supportedExecutionModes?: ChatExecutionMode[];
-  defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
 };
 
@@ -659,7 +657,6 @@ export type ClusterStatus = {
     claude: ClusterMcpTargetStatus;
     deepseek?: ClusterMcpTargetStatus;
     antigravity?: ClusterMcpTargetStatus;
-
     targets?: Record<string, ClusterMcpTargetStatus>;
     byCliType?: Record<string, ClusterMcpTargetStatus>;
   };
@@ -768,8 +765,6 @@ export type ClusterSetupPrepareResult = {
   installCommand: string[];
   verifyCommand: string[];
   removeCommand: string[];
-
-  selfTestCommand?: string[];
   workspaceMcpConfigPath?: string;
   workspaceMcpScope?: string;
   mcpAllowedTools?: string[];
@@ -793,8 +788,6 @@ export type ClusterSetupTarget = {
   installCommand?: string[];
   verifyCommand?: string[];
   removeCommand?: string[];
-
-  selfTestCommand?: string[];
   workspaceMcpConfigPath?: string;
   workspaceMcpScope?: string;
   mcpAllowedTools?: string[];
@@ -1072,8 +1065,6 @@ export type BotOverview = {
   effectiveCapabilities?: Capability[];
   promptPresets?: PromptPreset[];
   globalPromptPresets?: PromptPreset[];
-  supportedExecutionModes?: ChatExecutionMode[];
-  defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
 };
 
@@ -1169,9 +1160,7 @@ export type ChatMessageMetaInfo = {
   endlessEvents?: ChatEndlessEvent[];
   endlessContinueCount?: number;
   endlessGroupId?: string;
-
   tracePresentation?: "generic";
-
   voice?: VoiceTaskBinding;
 };
 
@@ -1280,7 +1269,6 @@ export type ConversationSummary = {
   agentId?: string;
   workingDir: string;
   nativeSource?: ChatMessageNativeSource;
-
   clusterTeam?: ClusterTeam;
   clusterTeamRevision?: number;
   createdAt: string;
@@ -1390,7 +1378,6 @@ export type ChatSendOptions = {
   visibleText?: string;
   agentId?: string;
   executionMode?: ChatExecutionMode;
-
   endlessMode?: boolean;
   endlessGroupId?: string;
   endlessParentMessageId?: string;
@@ -2720,8 +2707,6 @@ export type CreateBotInput = {
   workingDir?: string;
   remoteWorkspace?: Pick<RemoteWorkspace, "connectionId" | "root">;
   bypassApprovalAndSandbox?: boolean;
-  supportedExecutionModes?: ChatExecutionMode[];
-  defaultExecutionMode?: ChatExecutionMode;
 };
 
 export type PublicExposureSnapshot = {

@@ -3925,7 +3925,6 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
                 or session._execution_id
                 or session.stop_requested
                 or session._control_stop_task is not None
-
             )
         if session_busy:
             return False
@@ -8193,7 +8192,6 @@ async def remove_managed_bot_with_history(
     favorite_deleted = 0
     if should_delete_history:
         chat_store = ChatStore(Path(profile.working_dir))
-        conversations_to_delete = chat_store.list_bot_conversation_records(bot_id=bot_id, include_archived=True)
         favorite_deleted = ChatFavoriteStore(Path(profile.working_dir)).delete_favorites_for_bot(bot_id=bot_id)
         history_deleted = chat_store.delete_bot_history(bot_id=bot_id)
         clear_bot_sessions(bot_id)

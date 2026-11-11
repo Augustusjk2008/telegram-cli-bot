@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -125,25 +126,46 @@ def test_unchanged_targets_are_neither_backed_up_nor_rewritten(tmp_path):
     root, stage, tx = make_transaction(tmp_path)
     (root / "same").write_text("identical")
     (stage / "same").write_text("identical")
-    (root / "tool").write_text("identical")
-    (stage / "tool").write_text("identical")
-    (stage / "tool").chmod(0o755)
-    (root / "tool").chmod(0o644)
-    untouched = (root / "same").stat().st_mtime_ns
-    files = ["one", "same", "tool"]
+    # A rewrite copies the staged file's newer mtime, so a distinct old stamp
+    # exposes it even where file timestamps are coarse.
+    stamp = 1_000_000_000 * 10**9
+    os.utime(root / "same", ns=(stamp, stamp))
+    files = ["one", "same"]
     tx.apply(stage, files, expected_hashes={name: transaction.sha256(root / name) for name in files})
-    assert (root / "same").stat().st_mtime_ns == untouched
+    assert (root / "same").stat().st_mtime_ns == stamp
     assert (root / "one").read_text() == "new one"
-    # Windows chmod does not change POSIX executable bits, so tool stays unchanged.
-    expected_backups = {"one"} if os.name == "nt" else {"one", "tool"}
-    if os.name != "nt":
-        assert (root / "tool").stat().st_mode & 0o111
     records = transaction.read_journal(tx.journal)
-    assert {r.get("relative_path") for r in records if r["event"] == "backup_done"} == expected_backups
-    assert [r["count"] for r in records if r["event"] == "unchanged_skipped"] == [len(files) - len(expected_backups)]
+    assert {r.get("relative_path") for r in records if r["event"] == "backup_done"} == {"one"}
+    assert [r["count"] for r in records if r["event"] == "unchanged_skipped"] == [1]
     tx.recover()
     assert (root / "one").read_text() == "old one"
     assert (root / "same").read_text() == "identical"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows derives executable bits from file extensions")
+@pytest.mark.parametrize(("old_mode", "new_mode"), [(0o644, 0o755), (0o755, 0o644)])
+def test_executable_bit_only_change_is_applied_and_rolled_back(tmp_path, old_mode, new_mode):
+    root, stage, tx = make_transaction(tmp_path)
+    (root / "tool").write_text("identical")
+    (stage / "tool").write_text("identical")
+    (root / "tool").chmod(old_mode)
+    (stage / "tool").chmod(new_mode)
+    tx.apply(stage, ["tool"], expected_hashes={"tool": transaction.sha256(root / "tool")})
+    assert (root / "tool").stat().st_mode & 0o777 == new_mode
+    records = transaction.read_journal(tx.journal)
+    assert [r["relative_path"] for r in records if r["event"] == "backup_done"] == ["tool"]
+    tx.recover()
+    assert (root / "tool").stat().st_mode & 0o777 == old_mode
+
+
+def test_recovery_accepts_journals_without_executable_flags(tmp_path):
+    root, stage, tx = make_transaction(tmp_path)
+    tx.apply(stage, ["one"])
+    # Executors released before the flag existed still recover by content.
+    records = [{k: v for k, v in r.items() if k != "old_executable"} for r in transaction.read_journal(tx.journal)]
+    tx.journal.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    tx.recover()
+    assert (root / "one").read_text() == "old one"
 
 
 def test_transient_windows_lock_is_retried_but_real_denials_are_not(monkeypatch, tmp_path):

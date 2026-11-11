@@ -63,7 +63,6 @@ describe("CliTranscript", () => {
         entries={[entry]}
         resultText=""
         state="streaming"
-
         traceCount={1}
         processCount={1}
         traceLoaded
@@ -91,7 +90,6 @@ describe("CliTranscript", () => {
         ]}
         resultText=""
         state="streaming"
-
         traceCount={6}
         processCount={2}
         toolCallCount={2}
@@ -130,7 +128,6 @@ describe("CliTranscript", () => {
         entries={entries}
         resultText="最终回答"
         state="done"
-
       />,
     );
 
@@ -191,7 +188,6 @@ describe("CliTranscript", () => {
         entries={entries}
         resultText="最终回答"
         state="done"
-
       />,
     );
 

@@ -140,7 +140,6 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
                   {target.installCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2 py-1.5 text-[11px] leading-4">安装：{commandText(target.installCommand)}</pre> : null}
                   {target.verifyCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2 py-1.5 text-[11px] leading-4">验证：{commandText(target.verifyCommand)}</pre> : null}
                   {target.deepseekPatchPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">DeepSeek patch：{target.deepseekPatchPath}</p> : null}
-
                 </div>
               ))}
             </div>
@@ -169,14 +168,6 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
               ) : null}
             </div>
           ) : null}
-
-          {prepare.selfTestCommand && prepare.selfTestCommand.length > 0 ? (
-            <div>
-              <div className="text-xs font-medium text-[var(--text)]">本项目自检</div>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{commandText(prepare.selfTestCommand)}</pre>
-            </div>
-          ) : null}
-
         </div>
       ) : null}
     </section>

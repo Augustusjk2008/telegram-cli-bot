@@ -150,9 +150,7 @@ type Props = {
   announcementAction?: ReactNode;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
-
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
-
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;
   onOpenBotManager?: () => void;
@@ -191,9 +189,7 @@ export function DesktopWorkbench({
   announcementAction,
   chatPaneContent,
   chatStatus: externalChatStatus,
-
   onUnreadResult,
-
   onViewModeChange,
   onOpenBotSwitcher,
   onOpenBotManager,
@@ -1475,7 +1471,6 @@ export function DesktopWorkbench({
             onResetTemplate={resetLayoutTemplate}
           />
         )}
-
         onToggleSidebar={toggleSidebar}
         onToggleEditor={toggleEditor}
         onToggleTerminal={toggleTerminal}

@@ -32,8 +32,6 @@ function createOverview(): BotOverview {
     effectiveCapabilities: [],
     promptPresets: [],
     globalPromptPresets: [],
-    supportedExecutionModes: ["cli"],
-    defaultExecutionMode: "cli",
     executionMode: "cli",
   };
 }
@@ -234,7 +232,6 @@ test("reloads favorites for agent scopes without reloading CLI params", async ()
       { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
       { id: "reviewer", name: "旧固定角色", systemPrompt: "", enabled: true, isMain: false },
     ],
-    supportedExecutionModes: ["cli"],
   };
   vi.spyOn(client, "getBotOverview").mockResolvedValue(overview);
   vi.spyOn(client, "listAgents").mockResolvedValue({ items: overview.agents || [] });

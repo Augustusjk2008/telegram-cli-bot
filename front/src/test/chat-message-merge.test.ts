@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { mergeMessagesPreservingClientState } from "../screens/ChatScreen";
-import type { ChatMessage, } from "../services/types";
+import type { ChatMessage } from "../services/types";
 import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
 
 test("idle history merge preserves message references when nothing changed", () => {

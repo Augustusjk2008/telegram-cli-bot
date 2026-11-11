@@ -271,7 +271,6 @@ async function themeAssetDescriptor(file: File): Promise<ThemeIllustrationAsset>
   return { kind: "uploaded", assetId: `asset_${hash}`, mimeType: file.type as ThemeIllustrationAsset["mimeType"], width, height, sha256: hash };
 }
 import { WebBotClient } from "./webBotClient";
-
 import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
@@ -776,7 +775,6 @@ function createMockEnvItems(): EnvConfigItem[] {
       restartRequired: true,
       rebuildRequired: false,
     },
-
     {
       key: "WEB_ALLOWED_ORIGINS",
       label: "允许来源",
@@ -1805,9 +1803,6 @@ export class MockWebBotClient implements WebBotClient {
           },
         } : {}),
         promptPresets: clonePromptPresets(item.promptPresets),
-        supportedExecutionModes: ["cli"],
-        defaultExecutionMode: "cli",
-
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -1818,7 +1813,6 @@ export class MockWebBotClient implements WebBotClient {
     ]),
   );
   private globalPromptPresets: PromptPreset[] = [];
-
   private currentPaths = new Map<string, string>();
   private cliParamsByBot = new Map<string, Partial<Record<CliType, CliParamsPayload>>>();
   private pluginSessions = new Map<
@@ -2959,18 +2953,6 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private extractReasoningEfforts(modelRecord: Record<string, unknown>, options: Record<string, unknown>): string[] {
-    const raw = modelRecord.reasoningEfforts
-      ?? modelRecord.reasoning_efforts
-      ?? options.reasoningEfforts
-      ?? options.reasoning_efforts;
-    const efforts = Array.isArray(raw)
-      ? Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)))
-      : [];
-    const defaultReasoningEffort = String(options.reasoningEffort || "").trim();
-    return efforts.length > 0 ? efforts : (defaultReasoningEffort ? [defaultReasoningEffort] : []);
-  }
-
   private getBotSummary(botAlias: string): BotSummary {
     const fallback = this.bots.get("main") || Array.from(this.bots.values())[0];
     const base = this.bots.get(botAlias) || fallback;
@@ -3003,8 +2985,6 @@ export class MockWebBotClient implements WebBotClient {
     return {
       ...base,
       ...(base.cliType === "deepseek" ? {
-        supportedExecutionModes: ["cli" as const],
-        defaultExecutionMode: "cli" as const,
         executionMode: "cli" as const,
         voice: { enabled: false, reason: "unsupported_cli" },
       } : {}),
@@ -3021,7 +3001,6 @@ export class MockWebBotClient implements WebBotClient {
       isOwnedByCurrentUser: ownerAccountId !== "" && ownerAccountId === this.currentAccountId(),
       promptPresets: clonePromptPresets(base.promptPresets),
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
-
       cluster: base.cluster
         ? {
             ...base.cluster,
@@ -4124,7 +4103,6 @@ export class MockWebBotClient implements WebBotClient {
         scope: "workspace",
         allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "cancel_agent_task", "poll_agent_tasks", "wait_agent_messages"],
       };
-
       return { state: "runtime_ready", message: "运行态可用" };
     };
     const targets = Object.fromEntries(configuredCliTypes.map((cliType) => [cliType, targetStatus(cliType)]));
@@ -4142,7 +4120,6 @@ export class MockWebBotClient implements WebBotClient {
         claude: targets.claude || { state: "not_checked", message: "未使用" },
         deepseek: targets.deepseek || { state: "not_checked", message: "未使用" },
         antigravity: targets.antigravity || { state: "not_checked", message: "未使用" },
-
         targets,
         byCliType: targets,
       },
@@ -4213,7 +4190,6 @@ export class MockWebBotClient implements WebBotClient {
         message: "Antigravity 工作区 MCP 已配置",
       };
     }
-
     return {
       serverName: "tcb-cluster",
       launcherPath,
@@ -4262,7 +4238,7 @@ export class MockWebBotClient implements WebBotClient {
       agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
       busyAgentIds: [],
-      executionMode: options.executionMode || bot.executionMode || bot.defaultExecutionMode || "cli",
+      executionMode: options.executionMode || bot.executionMode || "cli",
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
       voice: { enabled: false, reason: "disabled" },
     };
@@ -4292,7 +4268,6 @@ export class MockWebBotClient implements WebBotClient {
       agentId,
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
-
       ...(agentId === "main" ? {
         clusterTeam: { version: 1, assignments: [] },
         clusterTeamRevision: 0,
@@ -4331,7 +4306,6 @@ export class MockWebBotClient implements WebBotClient {
       agentId,
       cliType: bot.cliType,
       workingDir: bot.workingDir,
-
       ...(agentId === "main" ? {
         clusterTeam: { version: 1, assignments: [] },
         clusterTeamRevision: 0,
@@ -4595,12 +4569,6 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private inferHistoryLinearIndex(turnId: string) {
-    const match = String(turnId || "").match(/(\d+)$/);
-    const parsed = match ? Number(match[1]) : 1;
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }
-
   async getDebugProfile(_botAlias: string): Promise<DebugProfile | null> {
     return {
       specVersion: 3,
@@ -4782,7 +4750,6 @@ export class MockWebBotClient implements WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
-
     _onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     _onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
@@ -4816,7 +4783,6 @@ export class MockWebBotClient implements WebBotClient {
       ].join("\n");
       onChunk(summary);
       onStatus?.({ elapsedSeconds: 1 });
-
       const assistantMessage: ChatMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
@@ -4830,7 +4796,6 @@ export class MockWebBotClient implements WebBotClient {
     }
 
     let streamed = "";
-
     await streamAssistantReply((chunk) => {
       streamed += chunk;
       onChunk(chunk);
@@ -4838,7 +4803,6 @@ export class MockWebBotClient implements WebBotClient {
         elapsedSeconds: streamed.length > 0 ? 1 : 0,
       });
     });
-
     const assistantMessage = {
       id: Date.now().toString(),
       role: "assistant",
@@ -7521,9 +7485,6 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentIds: [],
       busyAgentNames: [],
       busyAgentCount: 0,
-      supportedExecutionModes: input.supportedExecutionModes || ["cli"],
-      defaultExecutionMode: input.defaultExecutionMode || "cli",
-
       cluster: {
         ...DEFAULT_CLUSTER,
         modelTiers: { ...DEFAULT_CLUSTER.modelTiers },

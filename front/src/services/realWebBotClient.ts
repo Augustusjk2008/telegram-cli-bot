@@ -253,7 +253,6 @@ import type {
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
-
 import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
 import {
@@ -409,10 +408,6 @@ type RawBotSummary = {
   promptPresets?: RawPromptPreset[];
   global_prompt_presets?: RawPromptPreset[];
   globalPromptPresets?: RawPromptPreset[];
-  supported_execution_modes?: string[];
-  supportedExecutionModes?: string[];
-  default_execution_mode?: string;
-  defaultExecutionMode?: string;
   execution_mode?: string;
   executionMode?: string;
 };
@@ -648,7 +643,6 @@ type RawConversationSummary = {
   messageCount?: number;
   pinned?: boolean;
   active?: boolean;
-
   cluster_team?: unknown;
   clusterTeam?: unknown;
   cluster_team_revision?: number;
@@ -775,7 +769,6 @@ type RawChatMessageMeta = {
   endlessContinueCount?: number;
   endless_group_id?: string;
   endlessGroupId?: string;
-
   voice?: RawVoiceTaskBinding | null;
 };
 
@@ -1699,12 +1692,6 @@ type StreamEvent = StreamEventPayload & {
   assistantMessageId?: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
 function mapStatus(status: string, isProcessing = false): BotStatus {
   if (isProcessing) {
     return "busy";
@@ -1889,20 +1876,10 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   if (Array.isArray(raw.effective_capabilities) || Array.isArray(raw.effectiveCapabilities)) {
     summary.effectiveCapabilities = (raw.effective_capabilities ?? raw.effectiveCapabilities ?? []).map((item) => item as Capability);
   }
-
-  const supportedExecutionModes = mapExecutionModes(raw.supported_execution_modes ?? raw.supportedExecutionModes);
-  if (supportedExecutionModes) {
-    summary.supportedExecutionModes = supportedExecutionModes;
-  }
-  const defaultExecutionMode = normalizeExecutionMode(raw.default_execution_mode ?? raw.defaultExecutionMode);
-  if (defaultExecutionMode) {
-    summary.defaultExecutionMode = defaultExecutionMode;
-  }
   const executionMode = normalizeExecutionMode(raw.execution_mode ?? raw.executionMode);
   if (executionMode) {
     summary.executionMode = executionMode;
   }
-
   if (raw.owner_account_id || raw.ownerAccountId) {
     summary.ownerAccountId = String(raw.owner_account_id ?? raw.ownerAccountId ?? "");
   }
@@ -1914,8 +1891,6 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   }
   if (summary.cliType === "deepseek") {
     summary.cliPath ||= "dsh";
-    summary.supportedExecutionModes = ["cli"];
-    summary.defaultExecutionMode = "cli";
     summary.executionMode = "cli";
     summary.voice = { enabled: false, reason: "unsupported_cli" };
   }
@@ -2084,7 +2059,6 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       claude: targetFor("claude", mcp.claude),
       deepseek: mcp.deepseek || targets.deepseek ? targetFor("deepseek", mcp.deepseek) : undefined,
       antigravity: mcp.antigravity || targets.antigravity ? targetFor("antigravity", mcp.antigravity) : undefined,
-
       ...(Object.keys(targets).length ? { targets, byCliType: targets } : {}),
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
@@ -2212,8 +2186,6 @@ function mapClusterSetupTarget(raw: unknown, cliType?: string): ClusterSetupTarg
     installCommand: list("install_command", "installCommand"),
     verifyCommand: list("verify_command", "verifyCommand"),
     removeCommand: list("remove_command", "removeCommand"),
-
-    selfTestCommand: list("self_test_command", "selfTestCommand"),
     workspaceMcpConfigPath: String(value.workspace_mcp_config_path || value.workspaceMcpConfigPath || "") || undefined,
     workspaceMcpScope: String(value.workspace_mcp_scope || value.workspaceMcpScope || "") || undefined,
     mcpAllowedTools: Array.isArray(value.mcp_allowed_tools ?? value.mcpAllowedTools)
@@ -2258,8 +2230,6 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     installCommand: list("install_command", "installCommand"),
     verifyCommand: list("verify_command", "verifyCommand"),
     removeCommand: list("remove_command", "removeCommand"),
-
-    selfTestCommand: list("self_test_command", "selfTestCommand"),
     workspaceMcpConfigPath: String(value.workspace_mcp_config_path || value.workspaceMcpConfigPath || ""),
     workspaceMcpScope: String(value.workspace_mcp_scope || value.workspaceMcpScope || ""),
     mcpAllowedTools: Array.isArray(value.mcp_allowed_tools ?? value.mcpAllowedTools)
@@ -2335,7 +2305,6 @@ function mapApiErrorData(code: string | undefined, raw: unknown): unknown {
       minimumSize: Number(value.minimum_size ?? value.minimumSize ?? 0),
       blockers: blockers.map((rawBlocker): ClusterResizeBlocker => {
         const blocker = rawBlocker && typeof rawBlocker === "object" ? rawBlocker as Record<string, unknown> : {};
-        const executionMode = String(blocker.execution_mode ?? blocker.executionMode ?? "cli");
         const minimumSize = blocker.minimum_size ?? blocker.minimumSize;
         const outsideAgentIds = blocker.outside_agent_ids ?? blocker.outsideAgentIds;
         return {
@@ -2563,31 +2532,9 @@ function normalizeExecutionMode(value: unknown): ChatExecutionMode | undefined {
   return undefined;
 }
 
-function mapExecutionModes(value: unknown): ChatExecutionMode[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const modes = value
-    .map((item) => normalizeExecutionMode(item))
-    .filter((item): item is ChatExecutionMode => Boolean(item));
-  return modes.length > 0 ? Array.from(new Set(modes)) : undefined;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return Array.from(new Set(
-    value
-      .map((item) => String(item || "").trim())
-      .filter(Boolean),
-  ));
-}
-
 function displayNativeProvider(provider?: string) {
   const normalized = String(provider || "").trim().toLowerCase();
   if (isCodexCli(normalized)) return "codex";
-
   return provider || undefined;
 }
 
@@ -2607,13 +2554,11 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
       }
     : undefined);
   const rawContextUsage = raw.context_usage ?? raw.contextUsage;
-
   const rawEndlessEvents = raw.endless_events || raw.endlessEvents || [];
   const voice = mapVoiceTaskBinding(raw.voice);
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
-
   const trace = mergeChatTraceEvents([rawTrace]);
   const traceSummary = summarizeTrace(trace);
 
@@ -2684,7 +2629,6 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   if (endlessGroupId) {
     meta.endlessGroupId = endlessGroupId;
   }
-
   if (voice) {
     meta.voice = voice;
   }
@@ -2752,7 +2696,6 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
 function mapConversationSummary(raw: RawConversationSummary): ConversationSummary {
   const nativeProvider = String(raw.native_provider ?? raw.nativeProvider ?? "");
   const nativeSessionId = String(raw.native_session_id ?? raw.nativeSessionId ?? "");
-
   const clusterTeam = mapClusterTeam(raw.cluster_team ?? raw.clusterTeam);
   const clusterTeamRevision = raw.cluster_team_revision ?? raw.clusterTeamRevision;
   return {
@@ -2773,7 +2716,6 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
         sessionId: nativeSessionId,
       },
     } : {}),
-
     ...(clusterTeam ? { clusterTeam } : {}),
     ...(typeof clusterTeamRevision === "number" ? { clusterTeamRevision } : {}),
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
@@ -4148,7 +4090,6 @@ function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
-
   const trace = mergeChatTraceEvents([rawTrace]) || [];
   const summary = summarizeTrace(trace);
   return {
@@ -5453,7 +5394,6 @@ export class RealWebBotClient implements WebBotClient {
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{
       bot: RawBotSummary;
@@ -5579,7 +5519,6 @@ export class RealWebBotClient implements WebBotClient {
   async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<HistorySnapshotResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{
       items: RawHistoryItem[];
@@ -5658,7 +5597,6 @@ export class RealWebBotClient implements WebBotClient {
       params.set("q", query.trim());
     }
     appendAgentParam(params, options.agentId);
-
     const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
     );
@@ -5735,7 +5673,6 @@ export class RealWebBotClient implements WebBotClient {
       params.set("q", query.trim());
     }
     appendAgentParam(params, options.agentId);
-
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ items?: RawFavoriteAnswerItem[]; execution_mode?: string; executionMode?: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/favorites${suffix}`,
@@ -5770,7 +5707,6 @@ export class RealWebBotClient implements WebBotClient {
   async deleteFavoriteAnswer(botAlias: string, favoriteId: string, options: AgentScopedOptions = {}): Promise<{ deleted: boolean; favoriteId: string }> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ deleted?: boolean; favorite_id?: string; favoriteId?: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/favorites/${encodeURIComponent(favoriteId)}${suffix}`,
@@ -5792,7 +5728,6 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<ConversationDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
     }
@@ -5849,7 +5784,6 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<ConversationBulkDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
     }
@@ -5877,7 +5811,6 @@ export class RealWebBotClient implements WebBotClient {
       limit: String(limit),
     });
     appendAgentParam(params, options.agentId);
-
     if (typeof options.revision === "number") {
       params.set("revision", String(options.revision));
     }
@@ -5912,7 +5845,6 @@ export class RealWebBotClient implements WebBotClient {
   async getMessageTrace(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTraceDetails> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawChatTraceDetails>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
@@ -5927,7 +5859,6 @@ export class RealWebBotClient implements WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
-
     onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
@@ -5947,7 +5878,6 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
-
         ...(options?.endlessMode ? { endless_mode: true } : {}),
         ...(options?.endlessGroupId ? { endless_group_id: options.endlessGroupId } : {}),
         ...(options?.endlessParentMessageId ? { endless_parent_message_id: options.endlessParentMessageId } : {}),
@@ -5979,7 +5909,6 @@ export class RealWebBotClient implements WebBotClient {
     let streamedContextUsage: ChatMessageContextUsage | undefined;
     let streamFinished = false;
     let terminalSeen = false;
-
     const seenStreamSequences = new Set<number>();
 
     const captureStreamBinding = (event: StreamEvent) => {
@@ -6154,11 +6083,10 @@ export class RealWebBotClient implements WebBotClient {
 
     if (!terminalSeen) {
       const meta = mergeMessageMeta(
-            streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
-            undefined,
-            streamedTrace,
-            {  },
-          );
+        streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
+        undefined,
+        streamedTrace,
+      );
       const partialMessage: ChatMessage = {
         id: streamAssistantMessageId || `assistant-${Date.now()}`,
         ...(streamTurnId ? { turnId: streamTurnId } : {}),
@@ -6166,7 +6094,7 @@ export class RealWebBotClient implements WebBotClient {
         text: streamedText || finalText,
         createdAt: new Date().toISOString(),
         state: "streaming",
-        ...(typeof (finalElapsedSeconds) === "number"
+        ...(typeof finalElapsedSeconds === "number"
           ? { elapsedSeconds: finalElapsedSeconds }
           : {}),
         ...(meta ? { meta } : {}),
@@ -6192,7 +6120,6 @@ export class RealWebBotClient implements WebBotClient {
       streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
       undefined,
       streamedTrace,
-      {  },
     );
     return {
       id: streamAssistantMessageId || `assistant-${Date.now()}`,
@@ -6278,7 +6205,6 @@ export class RealWebBotClient implements WebBotClient {
   async retryAnswerTranslation(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTranslation> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return this.requestJson<ChatTranslation>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/translation/retry${suffix}`,
@@ -7722,9 +7648,6 @@ export class RealWebBotClient implements WebBotClient {
           remote_workspace: { connection_id: input.remoteWorkspace.connectionId, root: input.remoteWorkspace.root },
         } : { working_dir: input.workingDir }),
         bypass_approval_and_sandbox: input.cliType !== "deepseek" && Boolean(input.bypassApprovalAndSandbox),
-        ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
-        ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
-        ...(input.cliType === "deepseek" ? { supported_execution_modes: ["cli"], default_execution_mode: "cli" } : {}),
       }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));

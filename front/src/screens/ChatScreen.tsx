@@ -50,7 +50,6 @@ import type {
   ClusterTaskStatus,
   ChatMessage,
   ChatMessageContextUsage,
-  ChatMessageMetaInfo,
   ChatExecutionMode,
   ChatSendOptions,
   ChatStatusUpdate,
@@ -81,9 +80,7 @@ import {
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
-
 import { extractPlanDraft, extractPlanTitle, stripPlanDraftTags } from "../utils/planDraft";
-
 import {
   buildCliTranscriptEntries,
 } from "../utils/cliTranscript";
@@ -128,7 +125,6 @@ type Props = {
   onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
-
   onOpenGlobalPromptSettings?: () => void;
   onOpenBotSettings?: () => void;
   mobileLayout?: boolean;
@@ -874,14 +870,10 @@ function visibleTurnCountForMessage(items: readonly ChatMessage[], messageIndex:
   return Math.max(CHAT_INITIAL_VISIBLE_TURNS, starts.length - targetTurnIndex);
 }
 
-function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
+function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent): ChatMessage {
   return {
     ...item,
-    meta: mergeMessageMeta(item.meta, {
-      trace: [traceEvent],
-      traceVersion: 1,
-      tracePresentation,
-    }, undefined),
+    meta: mergeMessageMeta(item.meta, { trace: [traceEvent], traceVersion: 1 }),
   };
 }
 
@@ -1029,11 +1021,7 @@ function applyChatStreamEvents(
     }
     if (event.kind === "trace") {
       updateAssistant(event, (item) => {
-        const nextItem = appendTraceToMessage(
-          item,
-          event.trace,
-
-        );
+        const nextItem = appendTraceToMessage(item, event.trace);
         const canUseTracePreview = event.trace.kind === "commentary"
           && Boolean(event.trace.summary.trim())
           && !event.usingPreviewReplace
@@ -1178,11 +1166,9 @@ type ChatMessageRowProps = {
   onContinueFinalAnswer?: () => void;
   onFastForward?: (message: ChatMessage) => void;
   onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
-
   messageClientStateKey: string;
   favorite: boolean;
   canContinue: boolean;
-
   wideMessages: boolean;
   mobileLayout: boolean;
 };
@@ -1206,11 +1192,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onContinueFinalAnswer,
   onFastForward,
   onToggleFavoriteAnswer,
-
   messageClientStateKey,
   favorite,
   canContinue,
-
   wideMessages,
   mobileLayout,
 }: ChatMessageRowProps) {
@@ -1260,9 +1244,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const userAttachments = parsedUserMessage?.attachments || [];
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const trace = item.meta?.trace;
-
   const isAssistant = item.role === "assistant";
-
   const endlessEvents = item.meta?.endlessEvents;
   const endlessContinueCount = item.meta?.endlessContinueCount;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
@@ -1275,7 +1257,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const hasCliTraceTranscript = hasTrace && item.meta?.tracePresentation !== "generic";
   const isEndlessStreamingAssistant = isStreamingAssistant && (endlessModeActive || Boolean(endlessEvents?.length));
   const hasTranscript = isAssistant && (hasCliTraceTranscript || Boolean(endlessEvents?.length) || isEndlessStreamingAssistant);
-
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const usesAssistantAnswerLayout = hasTranscript || (
     isAssistant
@@ -1307,8 +1288,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           endlessContinueCount={endlessContinueCount}
           mobileLayout={mobileLayout}
         />
-        <div className={undefined}>
-
+        <div>
           <div
             data-streaming={isStreamingAssistant ? "true" : "false"}
             className={usesAssistantAnswerLayout
@@ -1332,7 +1312,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 originalResultText={item.text}
                 translationControl={translationControl}
                 state={item.state}
-
                 traceCount={traceCount}
                 toolCallCount={item.meta?.toolCallCount}
                 processCount={item.meta?.processCount}
@@ -1340,7 +1319,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 isTraceLoading={Boolean(messageTraceLoadState?.loading)}
                 traceLoadError={messageTraceLoadState?.error}
                 onLoadTrace={handleLoadMessageTrace}
-
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
@@ -1487,7 +1465,6 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleContinueFinalAnswer: () => void;
   handleFastForward: (message: ChatMessage) => void;
   handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
-
   executingPlanMessageId: string;
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
@@ -1510,7 +1487,6 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleContinueFinalAnswer,
   handleFastForward,
   handleToggleFavoriteAnswer,
-
   executingPlanMessageId,
   planExecuteError,
   handleExecutePlan,
@@ -1539,11 +1515,9 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         onContinueFinalAnswer={handleContinueFinalAnswer}
         onFastForward={handleFastForward}
         onToggleFavoriteAnswer={handleToggleFavoriteAnswer}
-
         messageClientStateKey={row.messageClientStateKey}
         favorite={row.favorite}
         canContinue={row.canContinue}
-
         wideMessages={wideMessages}
         mobileLayout={mobileLayout}
       />
@@ -1575,7 +1549,6 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     handleExecutePlan,
     handleFileLinkClick,
     handleLoadMessageTrace,
-
     handleToggleFavoriteAnswer,
     planExecuteError,
     traceLoadState,
@@ -1641,7 +1614,6 @@ export function ChatScreen({
   onBotActivityChange,
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
-
   onOpenGlobalPromptSettings,
   onOpenBotSettings,
   mobileLayout = false,
@@ -1664,7 +1636,6 @@ export function ChatScreen({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
-
   const [modelSaving, setModelSaving] = useState(false);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
@@ -1734,10 +1705,8 @@ export function ChatScreen({
   favoriteScopeKeyRef.current = favoriteScopeKey;
   const favoriteClientRef = useRef(client);
   favoriteClientRef.current = client;
-
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
-
   const [composerPulseKey, setComposerPulseKey] = useState(0);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -1784,20 +1753,16 @@ export function ChatScreen({
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const activeTurnBindingRef = useRef<ActiveTurnBinding | null>(null);
-
   const previousBotAliasRef = useRef(botAlias);
   const previousStorageScopeRef = useRef(storageScope);
-
   const hasActivatedRef = useRef(false);
   const previousForegroundRef = useRef(isForeground);
   const previousVisibleRef = useRef(isVisible);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const historyRevisionStateRef = useRef(new HistoryRevisionState());
-
   const isSseStreaming = () => streamModeRef.current === "sse";
   const streamBatcher = useChatStreamBatcher(useCallback((events: readonly ChatStreamInputEvent[]) => {
     const batch = reduceChatStreamBatch(events);
-
     setItems((current) => applyChatStreamEvents(
       current,
       batch.events,
@@ -1883,15 +1848,12 @@ export function ChatScreen({
     stopClusterTaskPoll();
     assistantSendVersionRef.current += 1;
     streamBatcher.cancel();
-
     activeTurnBindingRef.current = null;
     sseLastActivityAtRef.current = null;
-
     clearClusterTaskState();
   }, [
     abortActiveSseRequest,
     clearClusterTaskState,
-
     stopEndlessMode,
     stopAssistantPoll,
     stopClusterTaskPoll,
@@ -1906,9 +1868,7 @@ export function ChatScreen({
   useLayoutEffect(() => {
     const previousBotAlias = previousBotAliasRef.current;
     const previousScope = previousStorageScopeRef.current;
-
     const scopeChanged = previousBotAlias !== botAlias || previousScope !== storageScope;
-
     if (!scopeChanged) {
       return;
     }
@@ -1925,7 +1885,7 @@ export function ChatScreen({
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
     const storedExecutionMode = "cli";
     executionModeRef.current = storedExecutionMode;
-  }, [botAlias, cancelInactiveChatTransport,  storageScope]);
+  }, [botAlias, cancelInactiveChatTransport, storageScope]);
 
   useEffect(() => {
     setClusterSaving(false);
@@ -3790,7 +3750,6 @@ export function ChatScreen({
       return;
     }
     const composedText = buildComposedMessageText(text, options.attachments || []);
-
     if (!composedText) {
       return;
     }
@@ -3801,7 +3760,6 @@ export function ChatScreen({
     assistantSendVersionRef.current += 1;
     const sendVersion = assistantSendVersionRef.current;
     const displayUserText = options.sendOptions?.visibleText || composedText;
-
     const backgroundSend = options.background === true;
     const reuseAssistant = options.reuseAssistant;
     const userMessage: ChatMessage | null = backgroundSend ? null : {
@@ -3848,7 +3806,6 @@ export function ChatScreen({
     shouldStickToBottomRef.current = true;
     traceInspectionAutoScrollPausedRef.current = false;
     streamBatcher.cancel();
-
     setItems((prev) => {
       if (reuseAssistant) {
         const target: ActiveAssistantTarget = {
@@ -3918,7 +3875,6 @@ export function ChatScreen({
         }
         const previousTarget = activeAssistantTarget();
         streamBatcher.flush();
-
         streamTurnId = "";
         streamAssistantMessageId = "";
         usingPreviewReplace = false;
@@ -4009,7 +3965,6 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
-
         streamBatcher.enqueue({
           kind: "chunk",
           sendVersion,
@@ -4025,7 +3980,6 @@ export function ChatScreen({
         }
         markSseActivity();
         captureStreamStatus(status);
-
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
         }
@@ -4054,7 +4008,6 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
-
         streamBatcher.enqueue({
           kind: "trace",
           sendVersion,
@@ -4062,11 +4015,9 @@ export function ChatScreen({
           ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
           trace: traceEvent,
-
           usingPreviewReplace,
         });
       };
-
       const finalMessage = await client.sendMessage(
         botAlias,
         composedText,
@@ -4074,7 +4025,6 @@ export function ChatScreen({
         onStatus,
         onTrace,
         requestSendOptions,
-
         handleEndlessError,
         handleEndlessContinue,
       );
@@ -4196,10 +4146,8 @@ export function ChatScreen({
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
-
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
-
       if (recoverIncompleteStream) {
         isStreamingRef.current = true;
         streamModeRef.current = "poll";
@@ -4220,7 +4168,7 @@ export function ChatScreen({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks,  resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
@@ -4258,8 +4206,6 @@ export function ChatScreen({
     setConversationLoading(true);
     setError("");
     try {
-      const currentExecutionMode = executionModeRef.current;
-
       const result = await client.executePlan(botAlias, {
         content: planContent,
         title: planTitle,
@@ -4289,15 +4235,13 @@ export function ChatScreen({
       setExecutingPlanMessageId("");
       setConversationLoading(false);
     }
-  }, [botAlias, botOverview, client, sendMessageInternal, setPlanMode,  stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
+  }, [botAlias, botOverview, client, sendMessageInternal, setPlanMode, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
 
   const handleSend = useCallback(async (text: string) => {
     if (activeAgentIdRef.current !== "main") {
       return;
     }
     stopEndlessMode();
-    const currentExecutionMode = executionModeRef.current;
-
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
     if (planMode && isExecutingPlanPrompt) {
       setPlanMode(false);
@@ -4431,7 +4375,7 @@ export function ChatScreen({
       sendOptions,
     });
     return true;
-  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode,  stopEndlessMode]);
+  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode, stopEndlessMode]);
 
   const handleCancelQueuedMessage = useCallback(() => {
     setQueuedMessageState(null, {
@@ -4445,15 +4389,12 @@ export function ChatScreen({
       return;
     }
     const endlessMode = endlessModeRef.current;
-    const currentExecutionMode = executionModeRef.current;
-
     void sendMessageInternal("Continue", {
       background: options.background ?? endlessMode,
       reuseAssistant: options.reuseAssistant,
       sendOptions: {
         taskMode: "standard",
         skipInputTranslation: true,
-
         ...(endlessMode ? { endlessMode: true } : {}),
         ...(endlessMode && options.reuseAssistant?.meta?.endlessGroupId
           ? { endlessGroupId: options.reuseAssistant.meta.endlessGroupId }
@@ -4477,7 +4418,7 @@ export function ChatScreen({
         stopEndlessMode();
       } : undefined,
     });
-  }, [sendMessageInternal,  stopEndlessMode]);
+  }, [sendMessageInternal, stopEndlessMode]);
 
   const handleOpenEndlessMode = useCallback((message: ChatMessage) => {
     if (endlessModeRef.current || loadingRef.current || isStreamingRef.current) {
@@ -4511,7 +4452,6 @@ export function ChatScreen({
     setActionLoading("kill");
     setError("");
     try {
-      const currentExecutionMode = executionModeRef.current;
       const message = await client.killTask(botAlias, {
         ...(activeAgentIdRef.current !== "main" ? { agentId: activeAgentIdRef.current } : {}),
       });
@@ -4713,7 +4653,6 @@ export function ChatScreen({
 
   const terminateVisible = isStreaming || endlessModeActive || actionLoading === "kill";
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
-
   const deepseekCli = botOverview?.cliType === "deepseek";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeConversation = conversations.find((conversation) => conversation.active);
@@ -4817,7 +4756,6 @@ export function ChatScreen({
   const cliModelOptions = cliParams?.cliType === "deepseek" && hasDeepSeekProviderModelCatalog
     ? [MODEL_OPTION_NONE, ...selectedDeepSeekModelOptions.map((model) => model.id)]
     : cliParams?.schema.model?.enum ?? [];
-
   const selectedModel = deepSeekModelEditable
     ? String(cliParams?.params.model ?? cliParams?.defaults.model ?? "")
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
@@ -4881,7 +4819,7 @@ export function ChatScreen({
       return [{ value: selectedModel, label: selectedModel }, ...options];
     }
     return options;
-  }, [cliModelOptions, deepSeekModelEditable,    selectedModel]);
+  }, [cliModelOptions, deepSeekModelEditable, selectedModel]);
   const deepSeekProviderDescription = cliParams?.cliType === "deepseek"
     ? cliParams.catalogDiagnostic || (cliParams.catalogStatus ? `catalog：${cliParams.catalogStatus}` : "")
     : "";
@@ -4949,9 +4887,8 @@ export function ChatScreen({
       }
     }
     return "";
-  }, [chatMutationsDisabled, isStreaming, loading,  visibleItems]);
+  }, [chatMutationsDisabled, isStreaming, loading, visibleItems]);
   const favoriteAnswerByMessageKey = useMemo(() => favoriteItemsByMessageKey(favoriteItems), [favoriteItems]);
-
   const displayContextUsage = useMemo(() => buildDisplayContextUsage(items), [items]);
   const messageRowModels = useMemo<ChatMessageRowModel[]>(() => visibleItems.map((item) => {
     const messageClientStateKey = getMessageClientStateKey(item);
@@ -4969,7 +4906,7 @@ export function ChatScreen({
       deletedAttachmentKeys: deletedAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
     };
-  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, displayContextUsage, favoriteAnswerByMessageKey, latestContinuableAssistantKey,  visibleItems]);
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, displayContextUsage, favoriteAnswerByMessageKey, latestContinuableAssistantKey, visibleItems]);
 
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";
@@ -5017,7 +4954,6 @@ export function ChatScreen({
     <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
       {showActionBar ? (
         <ChatActionBar
-
           planMode={planMode}
           planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
@@ -5033,16 +4969,16 @@ export function ChatScreen({
           providerOptions={deepSeekProviderOptions}
           selectedProvider={selectedDeepSeekProvider}
           providerDescription={deepSeekProviderDescription}
-          providerDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || (!cliParams)}
+          providerDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || !cliParams}
           onProviderChange={cliParams?.cliType === "deepseek" ? (provider) => void handleProviderChange(provider) : undefined}
           modelOptions={visibleModelOptions}
           selectedModel={selectedModel}
           modelEditable={deepSeekModelEditable}
-          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!cliParams)}
+          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || !cliParams}
           onModelChange={(model) => void handleModelChange(model)}
           reasoningEffortOptions={visibleReasoningEffortOptions}
           selectedReasoningEffort={selectedReasoningEffort}
-          reasoningEffortDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!cliParams)}
+          reasoningEffortDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || !cliParams}
           onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
         />
       ) : null}
@@ -5142,7 +5078,6 @@ export function ChatScreen({
             handleContinueFinalAnswer={handleContinueFinalAnswer}
             handleFastForward={handleOpenEndlessMode}
             handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
-
             executingPlanMessageId={executingPlanMessageId}
             planExecuteError={planExecuteError}
             handleExecutePlan={handleExecutePlan}
@@ -5288,16 +5223,16 @@ export function ChatScreen({
             providerOptions={deepSeekProviderOptions}
             selectedProvider={selectedDeepSeekProvider}
             providerDescription={deepSeekProviderDescription}
-            providerDisabled={modelSaving || readOnly || (!cliParams)}
+            providerDisabled={modelSaving || readOnly || !cliParams}
             onProviderChange={cliParams?.cliType === "deepseek" ? (provider) => void handleProviderChange(provider) : undefined}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelEditable={!mobileLayout && deepSeekModelEditable}
-            modelDisabled={modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!cliParams)}
+            modelDisabled={modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || !cliParams}
             onModelChange={(model) => void handleModelChange(model)}
             reasoningEffortOptions={mobileLayout ? [] : visibleReasoningEffortOptions}
             selectedReasoningEffort={selectedReasoningEffort}
-            reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!cliParams)}
+            reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || !cliParams}
             onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
             globalPromptPresets={botOverview?.globalPromptPresets || []}
             botPromptPresets={botOverview?.promptPresets || []}

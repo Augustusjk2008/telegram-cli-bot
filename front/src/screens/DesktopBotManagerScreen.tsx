@@ -2,7 +2,6 @@ import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { cliTypeLabel, suggestCliPath } from "../utils/cliType";
 import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
-
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { clsx } from "clsx";
@@ -28,7 +27,6 @@ import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { clusterDraftEquals } from "../utils/clusterDraft";
 import { WebApiClientError } from "../services/types";
@@ -213,7 +211,6 @@ function EditPanel({
   canManage,
   canConfigureBot,
   canCreateWorkdirDirectory,
-
   onCancel,
   onSaved,
   onOpenConversation,
@@ -224,7 +221,6 @@ function EditPanel({
   canManage: boolean;
   canConfigureBot: boolean;
   canCreateWorkdirDirectory: boolean;
-
   onCancel: () => void;
   onSaved: (alias: string) => void;
   onOpenConversation: (alias: string) => void;
@@ -241,7 +237,6 @@ function EditPanel({
   const [clusterTimeoutDraft, setClusterTimeoutDraft] = useState(() => String(clusterConfigFromBot(bot).defaultTimeoutSeconds));
   const clusterScopeRef = useRef({ alias: bot.alias, saved: clusterConfigFromBot(bot) });
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
-
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
   const [clusterResizeBlocked, setClusterResizeBlocked] = useState<ClusterResizeBlockedData | null>(null);
@@ -392,7 +387,6 @@ function EditPanel({
       modelTiers: { ...clusterDraft.modelTiers },
       reasoningEfforts: { ...clusterDraft.reasoningEfforts },
     };
-
     return persistCluster(next, { replaceDraft: true });
   }
 
@@ -462,7 +456,6 @@ function EditPanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           />
         </label>
-
         <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 类型</span>
           <select
@@ -498,7 +491,6 @@ function EditPanel({
           />
           </label>
       </div>
-
       {bot.remoteWorkspace ? (
         <div className="space-y-2 text-sm">
           <span className="text-[var(--muted)]">远程地址和工作目录</span>
@@ -859,7 +851,6 @@ export function DesktopBotManagerScreen({
   canRunUnsafeCli = false,
 }: Props) {
   const manager = useBotManager({ client, onBotsChange, includeArchived: canManage });
-
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ManagerViewFilter>("all");
   const [mode, setMode] = useState<Mode>("inspect");
@@ -1464,7 +1455,6 @@ export function DesktopBotManagerScreen({
                 canManage={canManage}
                 canCreateWorkdirDirectory={canCreateWorkdirDirectory}
                 canRunUnsafeCli={canRunUnsafeCli}
-
                 onCreated={(alias) => {
                   setDirty(false);
                   setFocusedAlias(alias);
@@ -1492,7 +1482,6 @@ export function DesktopBotManagerScreen({
                     canManage={canManage}
                     canConfigureBot={canManage || focusedBot.canOperate !== false}
                     canCreateWorkdirDirectory={canCreateWorkdirDirectory}
-
                     onCancel={() => {
                       setDirty(false);
                       setInspectorTab("overview");

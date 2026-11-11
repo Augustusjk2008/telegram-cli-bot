@@ -1,5 +1,4 @@
-import { describe, expect, it, } from "vitest";
-
+import { describe, expect, it } from "vitest";
 import type { ChatStreamInputEvent } from "../stream/chatStreamBatch";
 import { isChatStreamBarrier, reduceChatStreamBatch } from "../stream/chatStreamBatch";
 
@@ -12,8 +11,8 @@ describe("chat stream domain batching", () => {
       { ...base, kind: "chunk", chunk: "b" },
       { ...base, kind: "status", userMessageId: "user-1", status: { previewText: "first" } },
       { ...base, kind: "status", userMessageId: "user-1", status: { previewText: "last", elapsedSeconds: 2 } },
-      { ...base, kind: "trace", trace: { kind: "commentary", summary: "one" },  usingPreviewReplace: false },
-      { ...base, kind: "trace", trace: { kind: "commentary", summary: "two" },  usingPreviewReplace: false },
+      { ...base, kind: "trace", trace: { kind: "commentary", summary: "one" }, usingPreviewReplace: false },
+      { ...base, kind: "trace", trace: { kind: "commentary", summary: "two" }, usingPreviewReplace: false },
     ];
 
     const batch = reduceChatStreamBatch(input);

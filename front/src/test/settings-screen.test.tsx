@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type {  BotOverview, } from "../services/types";
+import type { BotOverview } from "../services/types";
 
 afterEach(() => {
   vi.restoreAllMocks();

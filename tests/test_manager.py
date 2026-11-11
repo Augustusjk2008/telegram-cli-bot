@@ -96,7 +96,6 @@ class TestManagerLoadSave:
                 await manager.set_bot_chat_translation("main", False)
         assert manager.main_profile.chat_translation_enabled is True
 
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cli_type", ["codex", "antigravity"])
     async def test_add_bot_defaults_without_persisting_cli_params(self, temp_dir: Path, monkeypatch, cli_type):

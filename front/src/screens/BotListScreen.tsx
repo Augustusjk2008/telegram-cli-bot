@@ -12,7 +12,7 @@ import "../styles/agent-manager.css";
 import type { BotSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { useBotManager } from "./useBotManager";
-import { countBotManagerStats, isBotArchived, isBotOffline, isMainBot, } from "./botManagerModel";
+import { countBotManagerStats, isBotArchived, isBotOffline, isMainBot } from "./botManagerModel";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
@@ -143,7 +143,6 @@ export function BotListScreen({
   const [deleteWorkspace, setDeleteWorkspace] = useState(false);
   const [deleteWorkspaceConfirmText, setDeleteWorkspaceConfirmText] = useState("");
   const [selectedAliases, setSelectedAliases] = useState<string[]>([]);
-
   const {
     bots,
     loading,
@@ -426,7 +425,6 @@ export function BotListScreen({
             canManage={canManage}
             canCreateWorkdirDirectory={canCreateWorkdirDirectory}
             canRunUnsafeCli={canRunUnsafeCli}
-
             onCreated={onBotCreated}
           />
         </section>

@@ -98,7 +98,6 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
   const [draft, setDraft] = useState<BotClusterConfig>(() => cloneCluster(overview?.cluster));
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [cliParamsByType, setCliParamsByType] = useState<Partial<Record<string, CliParamsPayload>>>({});
-
   const [timeoutDraft, setTimeoutDraft] = useState(String(cluster.defaultTimeoutSeconds));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -156,7 +155,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
     setCliParamsByType({});
     setCliParamsScope(cliParamsScopeRef.current);
     void load();
-  }, [botAlias, client,  overview?.alias, overview?.cluster]);
+  }, [botAlias, client, overview?.alias, overview?.cluster]);
 
   useEffect(() => {
     // Draft tiers can pick a CLI that has not been loaded yet; fetch its options before saving.
@@ -176,7 +175,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
         return next;
       });
     });
-  }, [botAlias, client,  draftCliTypesKey, cliParamsScope]);
+  }, [botAlias, client, draftCliTypesKey, cliParamsScope]);
 
   async function persist(next: BotClusterConfig, options: { replaceDraft: boolean }) {
     setSaving(true);
@@ -278,7 +277,6 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
           <div className="space-y-0.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--muted)]">
             {inheritedCliType === "deepseek" ? <p>DeepSeek Harness：集群轮次自动注入 MCP。</p> : null}
             {inheritedCliType === "deepseek" ? <p>集群档位继承主 Bot 的 Provider：DeepSeek。</p> : null}
-
           </div>
         ) : null}
         {error ? <p role="alert" className="text-xs text-[var(--feedback-error-text-deep)]">{error}</p> : null}
@@ -304,7 +302,6 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
           tierConfigs={draft.tierConfigs}
           cliParamsByType={cliParamsByType}
           inheritedCliType={inheritedCliType}
-
           modelOptions={fallbackModelOptions}
           reasoningOptions={fallbackReasoningOptions}
           disabled={!canManage || saving}

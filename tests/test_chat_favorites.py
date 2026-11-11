@@ -371,7 +371,6 @@ def test_favorite_answer_rejects_invalid_message(tmp_path: Path):
     manager = _manager(tmp_path)
     _store, handle, message = _completed_turn(manager, tmp_path)
 
-
     with pytest.raises(WebApiError) as role_error:
         upsert_favorite_answer(
             manager,

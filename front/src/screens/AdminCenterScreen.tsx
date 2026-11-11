@@ -84,7 +84,6 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   storage: { label: "数据迁移", description: "将运行数据迁移到新的存储目录" },
   users: { label: "用户", description: "账号角色、能力授权与可操作的 Bot" },
   invites: { label: "邀请", description: "生成和管理注册邀请码" },
-
   "inline-completion": { label: "补全", description: "编辑器 AI 行内补全服务" },
   "chat-translation": { label: "翻译", description: "聊天消息翻译服务" },
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
@@ -106,7 +105,6 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
   telegram: "Telegram",
   web: "Web",
-
   tunnel: "Tunnel",
   updates: "更新",
   update: "更新",
@@ -121,7 +119,6 @@ const ENV_CATEGORY_ORDER = [
   "basic",
   "telegram",
   "web",
-
   "tunnel",
   "updates",
   "update",
@@ -328,7 +325,6 @@ export function AdminCenterScreen({
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
   const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
   const [lanChatSaving, setLanChatSaving] = useState(false);
-
   const [storageSnapshot, setStorageSnapshot] = useState<StorageMigrationSnapshot | null>(null);
   const [storagePreview, setStoragePreview] = useState<StorageMigrationPreview | null>(null);
   const [storageTargetRoot, setStorageTargetRoot] = useState("");
@@ -357,7 +353,6 @@ export function AdminCenterScreen({
     "inline-completion": false,
     "chat-translation": false,
     "lan-chat": false,
-
     storage: false,
     env: false,
     global: false,
@@ -386,7 +381,6 @@ export function AdminCenterScreen({
       "inline-completion",
       "chat-translation",
       "lan-chat",
-
       "storage",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
     ],

@@ -20,7 +20,6 @@ type Props = {
   canManage: boolean;
   canCreateWorkdirDirectory: boolean;
   canRunUnsafeCli: boolean;
-
   /** `panel` sits in the desktop inspector; `card` stacks inside the narrow list. */
   layout: "panel" | "card";
   description: string;
@@ -37,9 +36,6 @@ function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
     workingDir: draft.workingDir.trim(),
     remoteWorkspace: draft.remoteWorkspace,
     bypassApprovalAndSandbox: Boolean(draft.bypassApprovalAndSandbox),
-
-    supportedExecutionModes: ["cli"],
-    defaultExecutionMode: "cli",
   };
 }
 
@@ -62,7 +58,6 @@ export function AgentCreateForm({
   canManage,
   canCreateWorkdirDirectory,
   canRunUnsafeCli,
-
   layout,
   description,
   onCreated,
@@ -73,7 +68,6 @@ export function AgentCreateForm({
   const titleId = `${ids}-title`;
   const aliasId = `${ids}-alias`;
   const cliPathId = `${ids}-cli-path`;
-
   const workdirId = `${ids}-workdir`;
   const baseDraft = useMemo(() => buildCreateDraft("codex", bots), [bots]);
   const [draft, setDraft] = useState<CreateDraft>(() => buildCreateDraft());
@@ -107,9 +101,7 @@ export function AgentCreateForm({
   }, [canRunUnsafeCli, draft.bypassApprovalAndSandbox]);
 
   const alias = draft.alias.trim();
-
   const isDeepSeek = draft.cliType === "deepseek";
-
   const missing = [
     !alias && "别名",
     remoteCreate && !draft.remoteWorkspace && "远程工作目录",

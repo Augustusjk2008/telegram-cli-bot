@@ -187,6 +187,7 @@ class Transaction:
                 "relative_path": relative, "target_path": str(target),
                 "backup_path": str(self.directory / f"backup-{index:06d}") if existed else "",
                 "existed": existed, "old_sha256": old_hash or "",
+                "old_executable": _executable(target) if existed else None,
                 "new_sha256": (new_hashes or {}).get(relative, ""),
             }
             self._log("backup_intent", **record)
@@ -257,13 +258,17 @@ class Transaction:
             current_hash = sha256(target) if target.exists() else ""
             old_hash = record.get("old_sha256", "")
             if record.get("existed"):
-                if current_hash == old_hash:
+                old_executable = record.get("old_executable")
+                # A mode-only update keeps the old bytes; journals from older executors lack the flag.
+                mode_changed = (current_hash == old_hash and isinstance(old_executable, bool)
+                                and _executable(target) != old_executable)
+                if current_hash == old_hash and not mode_changed:
                     self._log("restored", **{k: v for k, v in record.items() if k != "event"})
                     continue
                 backup = Path(record.get("backup_path", ""))
                 if backup.parent.resolve() != self.directory or not backup.is_file() or sha256(backup) != old_hash:
                     raise RecoveryRequired(f"恢复材料缺失或损坏: {relative}; {self.directory}")
-                if current_hash and current_hash != record.get("new_sha256"):
+                if current_hash and not mode_changed and current_hash != record.get("new_sha256"):
                     raise RecoveryRequired(f"目标存在事务之外的修改，保留现场: {relative}")
                 self._log("restore_intent", **{k: v for k, v in record.items() if k != "event"})
                 atomic_copy(backup, target)
