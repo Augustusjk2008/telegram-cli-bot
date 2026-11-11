@@ -1,46 +1,48 @@
-# 主题规范
+# Theme Spec
 
-本文档描述当前代码已经实现的主题契约。精确的 token、插画资产 ID、尺寸和哈希以仓库中的 JSON 文件为准；这里记录结构、边界和容易遗漏的关联。
+This document describes the theme contract the current code already implements. The exact tokens, illustration asset IDs, dimensions and hashes are defined by the JSON files in the repository; this document records the structure, the boundaries and the relationships that are easy to miss.
 
-## 主题系统边界
+## Theme system boundaries
 
-当前发布包包含八套只读预置主题，顺序和身份如下：
+The current release package contains eight read-only preset themes, with the following order and identities:
 
-| ID | 名称 | 角色 | 当前插画组 |
+| ID | Name | Role | Current illustration set |
 | --- | --- | --- | --- |
-| `paper-daylight` | 钢铁核心 | 默认主题，保留这个 ID | `armor-core-hud` |
-| `theme_0f2e4a8c1d6b4f90a3c7e5b2d8f1046a` | 阿波罗计划 | 发布预置 | `apollo-plan` |
-| `theme_92ba863d3714c089235dfcef47ce3415` | 薄荷柑橘 | 发布预置 | `mint-citrus` |
-| `theme_43f2d67a91c84f0aa8d5e1c7b3f9264d` | 轻音少女 | 发布预置 | `k-on-light-music` |
-| `theme_3dc3829743be9c6941e6da88c0f780a1` | 赛博朋克 | 发布预置 | `cyberpunk-2077` |
-| `theme_6f7ac1823da81d2e52d1a1549ee69c85` | Deepseek | 发布预置 | `deepseek-big-fish` |
-| `theme_7b6e1d3a4c5f708192a3b4c5d6e7f809` | 雾岚纸境 | 发布预置 | `alpine-fog` |
-| `theme_8c7d2e4b5a6f8192a3b4c5d6e7f8091a` | 墨砚铜章 | 发布预置 | `moonlit-garden` |
+| `paper-daylight` | Steel Core | Default theme; keep this ID | `armor-core-hud` |
+| `theme_0f2e4a8c1d6b4f90a3c7e5b2d8f1046a` | Apollo Plan | Release preset | `apollo-plan` |
+| `theme_92ba863d3714c089235dfcef47ce3415` | Mint Citrus | Release preset | `mint-citrus` |
+| `theme_43f2d67a91c84f0aa8d5e1c7b3f9264d` | K-On | Release preset | `k-on-light-music` |
+| `theme_3dc3829743be9c6941e6da88c0f780a1` | Cyberpunk | Release preset | `cyberpunk-2077` |
+| `theme_6f7ac1823da81d2e52d1a1549ee69c85` | Deepseek | Release preset | `deepseek-big-fish` |
+| `theme_7b6e1d3a4c5f708192a3b4c5d6e7f809` | Mist Paper | Release preset | `alpine-fog` |
+| `theme_8c7d2e4b5a6f8192a3b4c5d6e7f8091a` | Ink Brass | Release preset | `moonlit-garden` |
 
-每套发布预置都具有 `schemaVersion: 1`、`baseId: "paper-daylight"` 和 `readonly: true`。默认主题应保持在主题列表首位。新增主题时先读取 `bot/web/theme_presets.json`，不要把上表的数量当成永远不变的常量。
+The table uses the English names from `README.en.md`; the `name` field of each preset in `theme_presets.json` holds the Chinese display name listed in `README.md`.
 
-主题库通过 `/api/public/ui/themes` 和 `/api/ui/themes` 读取。登录页只在当前浏览器保存预览选择；登录后的接口根据当前账户返回其选中主题，账户之间相互隔离。运行时持久化的是主题库 revision 和账户到选中主题 ID 的映射，旧版全局选中 ID 作为迁移回退。当前 `bot/web/theme_store.py` 以及主题路由会拒绝主题创建、导入、更新、删除和资源上传，返回只读错误；主题包内的预置内容仍由版本文件提供。
+Every release preset has `schemaVersion: 1`, `baseId: "paper-daylight"` and `readonly: true`. The default theme should stay first in the theme list. When adding a theme, read `bot/web/theme_presets.json` first, and do not treat the count in the table above as a constant that never changes.
 
-## 源文件和消费者
+The theme library is read through `/api/public/ui/themes` and `/api/ui/themes`. The login page saves its preview selection only in the current browser; the signed-in endpoint returns the selected theme of the current account, and accounts are isolated from each other. The runtime persists the theme library revision and the mapping from account to selected theme ID, with the legacy global selected ID as the migration fallback. The current `bot/web/theme_store.py` and the theme routes reject theme creation, import, update, deletion and asset upload and return a read-only error; the preset content in the theme package is still provided by the versioned files.
 
-| 文件 | 作用 | 什么时候修改 |
+## Source files and consumers
+
+| File | Purpose | When to modify |
 | --- | --- | --- |
-| `bot/web/theme_presets.json` | 发布主题清单和每套主题的完整外观 | 添加或编辑发布预置 |
-| `bot/web/theme_catalog.json` | `schemaVersion: 1` 的颜色 token 目录；当前有 299 个 token（`light.glow` 是主题光色，默认派生自 `accent`） | 增加/删除 token、CSS 变量或 token 语义 |
-| `bot/web/theme_illustrations.json` | `schemaVersion: 3` 的内置插画组、三类 surface、图层元数据和资源路径 | 添加/替换内置插画资产 |
-| `front/public/assets/theme-illustrations/` | 与插画目录路径对应的静态资源 | 添加/替换内置插画文件 |
-| `front/src/theme/resolveAppearance.ts` | 前端外观规范化、派生颜色解析、插画解析和对比度计算 | 只有主题契约或解析行为改变时修改 |
-| `front/src/theme/types.ts` | 主题结构、surface、插画组和资源类型 | 新增 surface 或插画组类型时修改 |
-| `front/src/theme/illustrationPresets.ts` | 插画组 ID、显示选项、模板和 catalog 映射 | 新增插画组或编辑主题管理器选项时修改 |
-| `bot/web/theme_store.py` | 后端 token、插画、主题文件校验和按账户的 selection 持久化 | 后端契约改变，或新增插画组需要加入允许列表时修改 |
-| `tests/test_theme_store.py`、`tests/test_theme_api.py` | 后端主题数据和 API 契约 | 清单身份、只读边界或资源契约改变时更新 |
-| `front/src/test/theme*.test.ts*` | 前端解析、客户端、插画和管理器契约 | 受影响的前端行为改变时更新 |
+| `bot/web/theme_presets.json` | The released theme manifest and the complete appearance of each theme | Adding or editing a release preset |
+| `bot/web/theme_catalog.json` | The color token catalog with `schemaVersion: 1`; currently 299 tokens (`light.glow` is the theme light color, derived from `accent` by default) | Adding/removing tokens, CSS variables or token semantics |
+| `bot/web/theme_illustrations.json` | The built-in illustration sets with `schemaVersion: 3`, the three surface types, layer metadata and asset paths | Adding/replacing built-in illustration assets |
+| `front/public/assets/theme-illustrations/` | The static assets matching the illustration catalog paths | Adding/replacing built-in illustration files |
+| `front/src/theme/resolveAppearance.ts` | Frontend appearance normalization, derived color resolution, illustration resolution and contrast calculation | Only when the theme contract or resolution behavior changes |
+| `front/src/theme/types.ts` | The theme structure, surfaces, illustration sets and asset types | When adding a surface or an illustration set type |
+| `front/src/theme/illustrationPresets.ts` | Illustration set IDs, display options, templates and the catalog mapping | When adding an illustration set or editing the theme manager options |
+| `bot/web/theme_store.py` | Backend validation of tokens, illustrations and theme files, and per-account selection persistence | When the backend contract changes, or a new illustration set must be added to the allowlist |
+| `tests/test_theme_store.py`, `tests/test_theme_api.py` | The backend theme data and API contract | When the manifest identity, the read-only boundary or the asset contract changes |
+| `front/src/test/theme*.test.ts*` | The frontend resolution, client, illustration and manager contract | When the affected frontend behavior changes |
 
-普通预置主题只需要改 `theme_presets.json`；它使用现有 token 和插画组时不需要改解析器、类型或注册表。
+An ordinary preset theme only needs changes to `theme_presets.json`; when it uses existing tokens and illustration sets, the resolver, the types and the registries do not need to change.
 
-## 主题对象
+## Theme object
 
-发布文件的根形状是：
+The root shape of the release file is:
 
 ```json
 {
@@ -51,8 +53,8 @@
   "themes": [
     {
       "schemaVersion": 1,
-      "id": "theme_<32 位小写十六进制>",
-      "name": "主题名称",
+      "id": "theme_<32 lowercase hex digits>",
+      "name": "Theme name",
       "baseId": "paper-daylight",
       "appearance": {
         "colors": {
@@ -81,46 +83,46 @@
 }
 ```
 
-示例中的 `illustrations` 只是占位，发布主题必须使用完整的规范化场景配置。新主题 ID 应稳定且唯一，格式为 `theme_` 加 32 位小写十六进制；`paper-daylight` 是保留的默认 ID。不要通过改名或复用旧 ID 生成一个看似全新的主题，否则各账户已保存的选择会指向另一个外观。
+`illustrations` in the example is only a placeholder; a released theme must use the complete normalized scene configuration. A new theme ID should be stable and unique, in the format `theme_` plus 32 lowercase hex digits; `paper-daylight` is the reserved default ID. Do not create a seemingly brand-new theme by renaming or reusing an old ID, or the selections accounts have already saved will point to a different appearance.
 
-`name` 经过后端校验后必须是 1 到 80 个字符，不能包含控制字符。`updatedAt` 必须是包含时区的 ISO 时间字符串，`version` 是至少为 1 的整数。主题的 `baseId` 当前固定为 `paper-daylight`，`schemaVersion` 当前固定为 1。
+After backend validation, `name` must be 1 to 80 characters and must not contain control characters. `updatedAt` must be an ISO time string that includes a timezone, and `version` is an integer of at least 1. The theme `baseId` is currently fixed to `paper-daylight`, and `schemaVersion` is currently fixed to 1.
 
-## 颜色契约
+## Color contract
 
-`appearance.colors` 只能包含 `scheme` 和 `overrides`。`scheme` 为 `light` 或 `dark`；`overrides` 的 key 必须来自 `theme_catalog.json`。
+`appearance.colors` may only contain `scheme` and `overrides`. `scheme` is `light` or `dark`; the keys of `overrides` must come from `theme_catalog.json`.
 
-- 颜色接受 `#RGB`、`#RGBA`、`#RRGGBB` 或 `#RRGGBBAA`，后端会规范化成大写的八位格式。
-- token 的 `allowAlpha: false` 时必须使用完全不透明的颜色；只有目录允许透明度时才能使用 alpha。
-- 未写入 `overrides` 的 token 使用目录的 `derive` 或 `default`。派生 token 依赖的 key 必须存在，不能循环依赖。
-- `cssVariable` 存在时会写入对应的 CSS 自定义属性；没有 `cssVariable` 的 token 仍可能被组件直接读取，不能因为没有 CSS 变量就删除。
-- `contrastAgainst` 和 `minContrast` 描述文字、焦点、边框等 token 的最低对比度目标。颜色编辑后检查主题管理器的对比度提示，并覆盖工作台、聊天、编辑器、终端、文件树、状态反馈和弹层等场景。
-- `terminal` 标记的 token 会生成终端主题。至少检查终端前景、光标、选区前景与选区背景的可读性；现有测试把 4.5 作为终端基线。
+- Colors accept `#RGB`, `#RGBA`, `#RRGGBB` or `#RRGGBBAA`, and the backend normalizes them to the uppercase eight-digit format.
+- A token with `allowAlpha: false` must use a fully opaque color; alpha can be used only when the catalog allows transparency.
+- A token not written in `overrides` uses the catalog's `derive` or `default`. The keys a derived token depends on must exist, and circular dependencies are not allowed.
+- When `cssVariable` exists, the value is written to the corresponding CSS custom property; a token without `cssVariable` may still be read directly by components and must not be deleted just because it has no CSS variable.
+- `contrastAgainst` and `minContrast` describe the minimum contrast target of tokens such as text, focus and borders. After editing colors, check the contrast hints in the theme manager, and cover scenes such as the workbench, chat, editor, terminal, file tree, status feedback and overlays.
+- Tokens marked `terminal` generate the terminal theme. At a minimum, check the readability of the terminal foreground, the cursor, and the selection foreground against the selection background; the existing tests use 4.5 as the terminal baseline.
 
-## 排版契约
+## Typography contract
 
-`appearance.typography` 可以省略；解析器会使用默认值。若提供它，四个字段都必须存在：
+`appearance.typography` may be omitted; the resolver uses the defaults. If it is provided, all four fields must exist:
 
-- `chatBodyFontFamily`: `sans`、`serif`、`kai`、`fangsong` 或 `mono`
-- `chatBodyFontSize`: `small`、`medium` 或 `large`
-- `chatBodyLineHeight`: `tight`、`normal` 或 `relaxed`
-- `chatBodyParagraphSpacing`: `tight`、`normal` 或 `relaxed`
+- `chatBodyFontFamily`: `sans`, `serif`, `kai`, `fangsong` or `mono`
+- `chatBodyFontSize`: `small`, `medium` or `large`
+- `chatBodyLineHeight`: `tight`, `normal` or `relaxed`
+- `chatBodyParagraphSpacing`: `tight`, `normal` or `relaxed`
 
-当前八套发布主题都显式保存默认排版值。编辑主题时保持这四项完整，避免产生依赖隐式默认值的半配置。
+All eight currently released themes store the default typography values explicitly. Keep these four items complete when editing a theme, to avoid a half configuration that depends on implicit defaults.
 
-## 材质契约
+## Material contract
 
-`appearance.material` 描述主题的非颜色质感，可以省略（解析器使用 `crisp/frost/soft/float`）。若提供它，四个字段都必须存在：
+`appearance.material` describes the non-color texture of a theme and may be omitted (the resolver uses `crisp/frost/soft/float`). If it is provided, all four fields must exist:
 
-- `shape`: `sharp`、`crisp`、`soft` 或 `round`，决定 `--radius-control/chip/card/panel/overlay/bubble`
-- `glass`: `none`、`frost` 或 `deep`，决定玻璃面板的模糊、饱和度和透明度（`--glass-*`）；`none` 为不透明纸面
-- `glow`: `none`、`soft` 或 `vivid`，决定 `--glow-strength`；`none` 同时关闭扫光、呼吸灯等光效动画
-- `depth`: `flat`、`print` 或 `float`，决定 `--shadow-island/raised/overlay`；`print` 使用实色偏移阴影
+- `shape`: `sharp`, `crisp`, `soft` or `round`; determines `--radius-control/chip/card/panel/overlay/bubble`
+- `glass`: `none`, `frost` or `deep`; determines the blur, saturation and opacity of glass panels (`--glass-*`); `none` is an opaque paper surface
+- `glow`: `none`, `soft` or `vivid`; determines `--glow-strength`; `none` also turns off light-effect animations such as the sweep and the breathing light
+- `depth`: `flat`, `print` or `float`; determines `--shadow-island/raised/overlay`; `print` uses solid offset shadows
 
-`front/src/theme/material.ts` 把材质解析成 CSS 变量，并在根节点写入 `data-material-*` 属性；后端 `theme_store.py` 校验同一枚举。设计系统原语（岛面板、按钮、分段控件、封面横幅等）在 `front/src/styles/orbit.css`，只消费这些变量，不写死圆角、阴影和光效。八套发布主题都显式保存完整材质。
+`front/src/theme/material.ts` resolves the material into CSS variables and writes `data-material-*` attributes on the root node; the backend `theme_store.py` validates the same enums. The design system primitives (island panels, buttons, segmented controls, cover banners and so on) are in `front/src/styles/orbit.css`; they only consume these variables and do not hard-code corner radii, shadows or light effects. All eight released themes store the complete material explicitly.
 
-## 插画契约
+## Illustration contract
 
-新发布主题使用规范化的 `appearance.illustrations`：
+A new released theme uses the normalized `appearance.illustrations`:
 
 ```json
 {
@@ -138,10 +140,10 @@
 }
 ```
 
-当前 surface 只有 `workbench`、`adminCenter` 和 `agentManager`，三者都必须出现。每个场景包含 1 到 32 个图层，图层 ID 在场景内唯一。图层必填 `id`、`asset`、`anchor` 和 `enabled`；`anchor` 为 `top`、`left`、`right`、`bottom`、`bottom-left`、`bottom-right` 或 `center`。可选的 `x`、`y` 范围为 -100 到 100，`width` 和 `height` 范围为 0.01 到 300，`opacity` 范围为 0 到 1，`objectPosition` 最长 120 个字符。场景总透明度 `opacity` 范围为 0 到 1；新界面把插画作为全强度画布和封面使用，发布预置通常为 1，文字区域的可读性由玻璃面板负责。
+The only current surfaces are `workbench`, `adminCenter` and `agentManager`, and all three must be present. Each scene contains 1 to 32 layers, and layer IDs are unique within the scene. A layer requires `id`, `asset`, `anchor` and `enabled`; `anchor` is `top`, `left`, `right`, `bottom`, `bottom-left`, `bottom-right` or `center`. The optional `x` and `y` range from -100 to 100, `width` and `height` from 0.01 to 300, `opacity` from 0 to 1, and `objectPosition` is at most 120 characters. The overall scene `opacity` ranges from 0 to 1; the new UI uses illustrations as full-strength canvases and covers, release presets are usually 1, and the readability of text areas is the responsibility of the glass panels.
 
-内置资源必须来自 `theme_illustrations.json`，并完整匹配其中的 `assetId`、`mimeType`、`width`、`height` 和 `sha256`。资源路径必须与 `front/public/assets/` 下的实际文件对应。上传资源另有单文件 4 MiB、单主题总量 12 MiB 的限制；发布预置不应把上传资源写入主题文件。
+Built-in assets must come from `theme_illustrations.json` and fully match its `assetId`, `mimeType`, `width`, `height` and `sha256`. The asset path must correspond to an actual file under `front/public/assets/`. Uploaded assets are additionally limited to 4 MiB per file and 12 MiB in total per theme; a release preset should not write uploaded assets into the theme file.
 
-当前插画目录有 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077`、`deepseek-big-fish` 和 `k-on-light-music` 十二个组。`none` 是无装饰的基线。插画目录和后端允许列表、前端 `ThemeIllustrationSetId` 联合类型及选项数组必须保持同步。
+The current illustration catalog has twelve sets: `none`, `forest-grove`, `tidal-grove`, `desert-dusk`, `alpine-fog`, `moonlit-garden`, `armor-core-hud`, `apollo-plan`, `mint-citrus`, `cyberpunk-2077`, `deepseek-big-fish` and `k-on-light-music`. `none` is the undecorated baseline. The illustration catalog must stay in sync with the backend allowlist, the frontend `ThemeIllustrationSetId` union type and the options array.
 
-旧版 `setId`/`upload` 格式仍用于导入和迁移。新发布数据使用 `scenes` 规范，除非任务本身是在维护迁移兼容性，否则不要新增旧格式。
+The legacy `setId`/`upload` format is still used for import and migration. New release data uses the `scenes` spec; do not add the legacy format unless the task itself is maintaining migration compatibility.

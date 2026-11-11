@@ -1,29 +1,29 @@
-# Remote Workspace、Terminal 与 Git
+# Remote Workspace, Terminal and Git
 
-## 入口和边界
+## Entry points and boundaries
 
-- SSH 连接、主机密钥确认、远程路径解析和连接池：`bot/remote_workspace/transport.py`、`windows.py`。
-- Agent 远程工具、profile capability、loopback bridge：`bot/remote_workspace/chat.py`、`mcp_stdio.py`、`tools.py`。
-- Web 文件、目录和远程执行：`bot/web/routes/remote_routes.py`；统一 Git 后端与远端操作：`bot/web/git_backend.py`、`bot/remote_workspace/git_service.py`。
-- Web terminal：`bot/web/terminal_manager.py`、`bot/web/routes/terminal_routes.py`。
+- SSH connections, host key confirmation, remote path resolution and the connection pool: `bot/remote_workspace/transport.py`, `windows.py`; optional encrypted password storage: `credentials.py`.
+- Agent remote tools, profile capability, loopback bridge: `bot/remote_workspace/chat.py`, `mcp_stdio.py`, `tools.py`.
+- Web files, directories and remote execution: `bot/web/routes/remote_routes.py`; the unified Git backend and remote operations: `bot/web/git_backend.py`, `bot/remote_workspace/git_service.py`.
+- Web terminal: `bot/web/terminal_manager.py`, `bot/web/routes/terminal_routes.py`.
 
-## 必须保持的行为
+## Behavior that must be preserved
 
-- SSH 首次连接接受系统已知 host key，未知密钥要求确认指纹；已绑定指纹变化必须拒绝。密码和私钥口令只保留在连接对象内存中，关闭连接时清除。
-- 已绑定工作区的文件 API 和 `exec.cwd` 校验 workspace root；连接向导可浏览远端目录以选择 root。远程 shell 按 SSH 账户权限执行，路径校验与工具路由不提供进程级文件系统沙箱。
-- POSIX 命令使用 `/bin/sh`；Windows 命令使用 `powershell.exe`，需兼容 PowerShell 5.1。Windows 文件 API 规范化盘符路径并拒绝 UNC/device 路径、junction 和 symlink。
-- Agent 的远程项目操作必须经过 `tcb-remote` 的 `exec/read/write/edit/list` 工具。bridge 只允许连接已有 Web 服务的 loopback 地址，工具参数和输出有大小上限；可能已经执行的 mutation 不得自动重试。
-- 远程 capability 绑定 profile alias 和 `remote_workspace` fingerprint；接口还校验当前 profile 是否启用、归档、控制目录或远端配置是否变化。移除 profile 时撤销绑定，旧 token 不得转指新目标。私有 bridge 配置位于 `get_app_data_root()/remote-chat/`。
-- Codex（含 `codex_server`）和 Claude 通过启动参数注入 stdio MCP。仅 Antigravity 写入控制目录的 `.agents/mcp_config.json`，配套 ownership state、跨进程锁和原子写入；保留用户服务器与用户修改过的 `tcb-remote` 条目，冲突时报错，撤销只清理本 profile 仍拥有的条目。DeepSeek Harness 只支持本地工作区；远程 Antigravity 暂不支持 Cluster 编排。
-- `exec.commands` 支持批量命令；`edit` 要求 `old_text` 恰好匹配一次，并按读取到的文件版本做乐观并发校验。
-- 远程 Git 使用远端 workspace root 和对应 Web capability；支持状态、diff、分支、图、暂存、提交、身份配置、已有 stash 操作、fetch/pull/merge/push、远端添加/修改/移除和分支发布（`push --set-upstream`），具体可用性以 capabilities 为准，当前不支持创建 stash。GitHub 账号令牌只用于宿主侧 GitHub API 和本地 Git，不经 SSH 发送到远程主机；远程同步与发布使用远程主机自己的凭据，远端列表的 `github_account_auth` 为 `false`。智能提交把远端 diff 交给本地 agent 生成提交信息，Git 操作仍在远端执行。
-- Git 同步和发布错误保留 `operation`、`outcome`、`refresh_required`；网络中断可能返回 `outcome=unknown`，mutation 不自动重试。`pull` 使用 `--ff-only` 并要求干净工作区和 upstream。`merge` 以 `pull --no-rebase --ff --no-edit` 合并 upstream，同样要求干净工作区；已有未完成合并时拒绝执行，本次合并中途停止（冲突或提交失败）则 `merge --abort` 回滚并返回 `git_merge_conflict` 或 `git_merge_failed`。
-- Terminal session 按 `(user_id, owner_id)` 隔离；每个 tab 使用独立 `owner_id`，关闭 tab 必须关闭对应 shell，WebSocket detach 只移除客户端并保留会话以便重连。远程 tab 使用独立 SSH channel。`/api/bots/{alias}/terminal/session/rebuild` 和无 alias 的 rebuild 路由保留为兼容创建入口。
+- The first SSH connection accepts a host key the system already knows and requires fingerprint confirmation for an unknown key; a change of an already bound fingerprint must be rejected. By default the password and the private key passphrase are kept only in the memory of the connection object and cleared when the connection closes. With an explicit `remember_password=true`, the password is encrypted and saved under `get_app_data_root()/remote-ssh/` after a successful connection, bound to the connection ID, host, port, username, fingerprint, private key path and platform; an authorized saved configuration can restore the password after a service restart. A re-login can reuse the password with an explicit `use_saved_password=true`, and `remember_password=false` deletes the saved password after a successful connection; a failure neither overwrites nor deletes the old credential. A draft connection cannot borrow a passed-in connection ID to obtain credentials. The credential status endpoint follows the Bot management permission and only returns the saved state; neither the API nor the profile returns the password or the ciphertext; the private key passphrase stays memory-only.
+- The file API and `exec.cwd` of a bound workspace validate the workspace root; the connection wizard can browse remote directories to choose the root. The remote shell runs with the permissions of the SSH account; path validation and tool routing do not provide a process-level file system sandbox.
+- POSIX commands use `/bin/sh`; Windows commands use `powershell.exe` and must stay compatible with PowerShell 5.1. The Windows file API normalizes drive-letter paths and rejects UNC/device paths, junctions and symlinks.
+- The agent's remote project operations must go through the `exec/read/write/edit/list` tools of `tcb-remote`. The bridge only allows connecting to the loopback address of the existing Web service, and tool parameters and output have size limits; a mutation that may already have executed must not be retried automatically.
+- The remote capability is bound to the profile alias and the `remote_workspace` fingerprint; the endpoints also check whether the current profile is enabled or archived, and whether the control directory or the remote configuration has changed. Removing a profile revokes the binding, and an old token must never point to a new target. The private bridge configuration lives under `get_app_data_root()/remote-chat/`.
+- Codex (including `codex_server`) and Claude inject the stdio MCP through launch arguments. Only Antigravity writes `.agents/mcp_config.json` in the control directory, with accompanying ownership state, a cross-process lock and atomic writes; it keeps user servers and `tcb-remote` entries the user has modified, reports an error on conflict, and revocation only cleans up entries this profile still owns. DeepSeek Harness only supports local workspaces; remote Antigravity does not support Cluster orchestration yet.
+- `exec.commands` supports batched commands; `edit` requires `old_text` to match exactly once and performs an optimistic concurrency check against the file version that was read.
+- Remote Git uses the remote workspace root and the corresponding Web capability; it supports status, diff, branches, graph, staging, commits, identity configuration, operations on existing stashes, fetch/pull/merge/push, adding/modifying/removing remotes and branch publishing (`push --set-upstream`). Actual availability follows the capabilities, and creating a stash is currently unsupported. The GitHub account token is used only for the host-side GitHub API and local Git and is never sent over SSH to the remote host; remote sync and publishing use the remote host's own credentials, and `github_account_auth` in the remote list is `false`. Smart commit hands the remote diff to the local agent to generate the commit message, while the Git operation still runs on the remote.
+- Git sync and publish errors retain `operation`, `outcome` and `refresh_required`; a network interruption may return `outcome=unknown`, and mutations are not retried automatically. `pull` uses `--ff-only` and requires a clean worktree and an upstream. `merge` merges the upstream with `pull --no-rebase --ff --no-edit` and likewise requires a clean worktree; it refuses to run when an unfinished merge already exists, and if this merge stops midway (conflict or commit failure) it rolls back with `merge --abort` and returns `git_merge_conflict` or `git_merge_failed`.
+- Terminal sessions are isolated by `(user_id, owner_id)`; each tab uses an independent `owner_id`, closing a tab must close the corresponding shell, and a WebSocket detach only removes the client and keeps the session for reconnection. Remote tabs use an independent SSH channel. `/api/bots/{alias}/terminal/session/rebuild` and the rebuild route without an alias are retained as compatibility creation entry points.
 
-## 验证
+## Verification
 
-- SSH、主机密钥、路径边界和连接池：`tests/test_remote_workspace_transport.py`、`tests/test_remote_workspace_windows.py`。
-- 远程 API、附件、agent tools 和 profile 绑定：`tests/test_remote_workspace_api.py`；capability、MCP 配置归属、CLI 注入及会话失效：`tests/test_remote_workspace_chat.py`。
-- 远程 Git：`tests/test_remote_git_service.py`。
-- Terminal 生命周期、owner 隔离、重连和 WebSocket 协议：`tests/test_terminal_manager.py`、`front/src/test/terminal-session.test.ts`。
-- 涉及远程文件或 Git UI 时选择 `front/src/test/remote-workspace.test.tsx`、`front/src/test/remote-git.spec.ts` 及相应前端检查；浏览器测试复用用户已启动的服务。
+- SSH, host keys, encrypted password storage, path boundaries and the connection pool: `tests/test_remote_workspace_transport.py`, `tests/test_remote_workspace_credentials.py`, `tests/test_remote_workspace_windows.py`.
+- Remote API, attachments, agent tools and profile binding: `tests/test_remote_workspace_api.py`; capability, MCP configuration ownership, CLI injection and session invalidation: `tests/test_remote_workspace_chat.py`.
+- Remote Git: `tests/test_remote_git_service.py`.
+- Terminal lifecycle, owner isolation, reconnection and the WebSocket protocol: `tests/test_terminal_manager.py`, `front/src/test/terminal-session.test.ts`.
+- When the remote file or Git UI is involved, select `front/src/test/remote-workspace.test.tsx`, `front/src/test/remote-git.spec.ts` and the corresponding frontend checks; browser tests reuse a service the user has already started.

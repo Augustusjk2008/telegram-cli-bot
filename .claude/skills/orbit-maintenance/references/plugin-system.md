@@ -1,33 +1,33 @@
 # Plugin System
 
-## 模块和数据
+## Modules and data
 
-- Plugin 位于 `get_tcb_home_root()/plugins`，默认 `~/.tcb/plugins`，存储迁移后跟随定位器。`TCB_DATA_DIR` 单独覆盖应用数据目录时不改变插件根目录。
-- Manifest：`bot/plugins/manifest.py`、`models.py`；registry/file matching：`registry.py`；进程和 Host API：`runtime.py`、`host_api.py`；编排、view session、cache、artifact 和 audit：`service.py`、`view_sessions.py`、`artifacts.py`、`audit.py`；受 allowlist 约束的外部运行时安装：`runtime_installers.py`。
-- Web 路由注册：`bot/web/routes/plugin_routes.py`；权限和输入校验：`bot/web/plugin_api_service.py`；server handler：`bot/web/server.py`。
-- 内置插件来源为 `examples/plugins/`，安装和同步见 `installer.py`、`catalog.py`。临时产物与 audit 当前分别位于 `repo_root/.plugins/artifacts`、`repo_root/.plugins/audit`；存储迁移排除该仓库目录。
+- Plugins live under `get_tcb_home_root()/plugins`, by default `~/.tcb/plugins`, and follow the locator after storage migration. Overriding only the app data directory with `TCB_DATA_DIR` does not change the plugin root.
+- Manifest: `bot/plugins/manifest.py`, `models.py`; registry/file matching: `registry.py`; process and Host API: `runtime.py`, `host_api.py`; orchestration, view sessions, cache, artifacts and audit: `service.py`, `view_sessions.py`, `artifacts.py`, `audit.py`; allowlist-constrained external runtime installation: `runtime_installers.py`.
+- Web route registration: `bot/web/routes/plugin_routes.py`; permissions and input validation: `bot/web/plugin_api_service.py`; server handler: `bot/web/server.py`.
+- Bundled plugins come from `examples/plugins/`; for installation and sync see `installer.py` and `catalog.py`. Temporary artifacts and audit currently live in `repo_root/.plugins/artifacts` and `repo_root/.plugins/audit` respectively; storage migration excludes that repository directory.
 
-## 安装与刷新
+## Installation and refresh
 
-- CLI `python -m bot.plugins.installer --repo-root <repo> --all` 或重复 `--plugin <id>` 安装示例插件，已安装项默认跳过；`--force` 显式覆盖。Web 安装、卸载、配置修改要求 `run_plugins`，列表要求 `view_plugins`；自定义 `sourcePath` 还要求本机请求、本机管理员和开发模式。目录安装递归发现 `plugin.json` 并先检查重复 ID/目标目录名；结果中每个插件带 `previousVersion` 和按安装前版本得出的 `installOutcome`（`installed`/`upgraded`/`reinstalled`/`downgraded`，SemVer 比较，无法排序的版本变化记为 `upgraded`），Web 安装完成后以结果对话框展示各类数量。
-- 服务初始化或扫描时，只为已安装且源文件内容一致的内置插件同步 manifest，保留已安装的 `enabled` 和 `config`；后端文件不同或缺失时跳过同步。源码更新需通过重新安装复制到运行目录。
-- Web API 更新 plugin 会合并配置、写 manifest、立即重新 discover，然后清理 view sessions 并停止该插件进程；后续执行按需启动。
-- Web 刷新调用 `reload_plugins()`，只对 manifest 签名变化或被移除的插件执行失效清理；纯后端源码编辑不属于 manifest 签名，刷新不能保证重启该进程。配置更新或覆盖安装走显式失效路径。
+- The CLI `python -m bot.plugins.installer --repo-root <repo> --all`, or repeated `--plugin <id>`, installs the example plugins; installed ones are skipped by default, and `--force` overwrites explicitly. Web install, uninstall and configuration changes require `run_plugins`, and listing requires `view_plugins`; a custom `sourcePath` additionally requires a local request, a local administrator and development mode. Directory installation discovers `plugin.json` recursively and first checks for duplicate IDs/target directory names; each plugin in the result carries `previousVersion` and an `installOutcome` derived from the version before installation (`installed`/`upgraded`/`reinstalled`/`downgraded`, compared by SemVer, with version changes that cannot be ordered recorded as `upgraded`), and after a Web installation finishes a result dialog shows the count of each category.
+- On service initialization or scan, the manifest is synced only for bundled plugins that are installed and whose source file contents are identical, keeping the installed `enabled` and `config`; sync is skipped when backend files differ or are missing. Source updates must be copied to the runtime directory by reinstalling.
+- Updating a plugin through the Web API merges the configuration, writes the manifest, rediscovers immediately, then clears the view sessions and stops that plugin's process; later executions start it on demand.
+- Web refresh calls `reload_plugins()`, which runs invalidation cleanup only for plugins whose manifest signature changed or that were removed; pure backend source edits are not part of the manifest signature, so a refresh cannot guarantee that the process restarts. Configuration updates and overwrite installs take the explicit invalidation path.
 
-## 必须保持的行为
+## Behavior that must be preserved
 
-- 当前 `plugin.json` 只接受 schema v2；`views[].viewMode`、`views[].dataProfile`、`runtime.permissions`、`runtime.limits`、`configSchema`、`catalogActions` 、`fileHandlers` 和可选 `icon` 都属于当前 v2 契约。
-- `icon` 是插件目录内的相对路径（`.svg`/`.png`/`.webp`），路径越界或类型不符时拒绝 manifest；文件缺失、超过 128 KiB 或经符号链接越界时忽略。列表 payload 以 data URL 形式返回 `iconUrl`，前端 `PluginIcon` 在缺省时按扩展名/renderer 生成图标。
-- Runtime 当前只支持 `type=python`、`protocol=jsonrpc-stdio`，使用宿主 Python，进程按 `(bot_alias, plugin_id)` 复用，cwd 为插件目录。Host API 的 permission/limits 约束宿主接口；插件进程仍继承宿主环境和操作系统权限。
-- Host API 必须按 manifest permission 和 limits 放行 workspace 读取、目录枚举、受控 workspace 写入和 artifact 写入；workspace 路径必须留在 root 内，workspace 文件按单文件大小限制原子写入，artifact 按单个、数量和总大小限额保存。
-- 外部 plugin runtime 只允许 allowlist 中的固定下载项，当前为 `mermaid-visio/graphviz` 的 Windows x64 Graphviz `16.1.0`。下载使用 HTTPS、校验 SHA-256、限制压缩包大小，拒绝越界路径、符号链接、设备名和不安全文件类型，并以可恢复的目录替换完成安装；插件不得自带下载 URL/校验和等安装参数。
-- Plugin service 的失效路径清理 view sessions、artifacts、snapshot cache 及关联 in-flight 状态并停止 plugin process；运行时和 Host API 事件写入 audit。snapshot cache 有条目和字节双重 LRU 上限。
-- Vivado backend 使用 Python JSON-RPC stdio，按 source fingerprint 建 VCD index，按需返回可见 time/signal window。
-- `config.lodEnabled` 控制 dense-segment LOD；压缩不得隐藏 signal activity。
+- The current `plugin.json` only accepts schema v2; `views[].viewMode`, `views[].dataProfile`, `runtime.permissions`, `runtime.limits`, `configSchema`, `catalogActions`, `fileHandlers` and the optional `icon` all belong to the current v2 contract.
+- `icon` is a relative path inside the plugin directory (`.svg`/`.png`/`.webp`); the manifest is rejected when the path escapes the directory or the type does not match, and the icon is ignored when the file is missing, larger than 128 KiB or escapes through a symlink. The list payload returns `iconUrl` as a data URL, and the frontend `PluginIcon` generates an icon from the extension/renderer when it is absent.
+- The runtime currently only supports `type=python` and `protocol=jsonrpc-stdio`, uses the host Python, reuses processes by `(bot_alias, plugin_id)`, and uses the plugin directory as cwd. The Host API permissions/limits constrain the host interfaces; the plugin process still inherits the host environment and operating system permissions.
+- The Host API must gate workspace reads, directory listing, controlled workspace writes and artifact writes by the manifest permissions and limits; workspace paths must stay inside the root, workspace files are written atomically under the per-file size limit, and artifacts are stored under per-item, count and total-size quotas.
+- External plugin runtimes are limited to the fixed downloads in the allowlist, currently Windows x64 Graphviz `16.1.0` for `mermaid-visio/graphviz`. The download uses HTTPS, verifies SHA-256, limits the archive size, rejects escaping paths, symlinks, device names and unsafe file types, and completes the installation with a recoverable directory replacement; a plugin must not bring its own installation parameters such as the download URL/checksum.
+- The plugin service's invalidation path clears view sessions, artifacts, the snapshot cache and the associated in-flight state and stops the plugin process; runtime and Host API events are written to the audit. The snapshot cache has LRU limits on both entries and bytes.
+- The Vivado backend uses Python JSON-RPC stdio, builds the VCD index by source fingerprint, and returns the visible time/signal window on demand.
+- `config.lodEnabled` controls dense-segment LOD; compression must not hide signal activity.
 
-## 验证
+## Verification
 
-- Plugin runtime 和 Host API：`tests/test_plugin_runtime.py`、`tests/test_plugins_host_api.py`。
-- 外部 runtime 安装器：`tests/test_plugin_runtime_installers.py`。
-- 目录安装结果分类：`tests/test_plugin_install_outcomes.py`。
-- 涉及插件文件视图或 waveform UI 时运行 `npm run test:gate`、`npm run lint` 和 `npm run build`，并在人工启动的应用中完成交互验收。
+- Plugin runtime and Host API: `tests/test_plugin_runtime.py`, `tests/test_plugins_host_api.py`.
+- External runtime installers: `tests/test_plugin_runtime_installers.py`.
+- Directory installation outcome classification: `tests/test_plugin_install_outcomes.py`.
+- When the plugin file view or waveform UI is involved, run `npm run test:gate`, `npm run lint` and `npm run build`, and complete interactive acceptance in a manually started application.

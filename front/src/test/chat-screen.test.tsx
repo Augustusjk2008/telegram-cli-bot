@@ -251,7 +251,14 @@ test("stopping endless mode terminates the active continuation", async () => {
   await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
 
   fireEvent.click(screen.getByRole("button", { name: "终止任务" }));
+  fireEvent.click(within(await screen.findByRole("dialog", { name: "确认终止任务" })).getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog", { name: "确认终止任务" })).not.toBeInTheDocument();
+  expect(killTask).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "终止任务" }));
+  fireEvent.click(within(await screen.findByRole("dialog", { name: "确认终止任务" })).getByRole("button", { name: "确认终止" }));
   await waitFor(() => expect(killTask).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("dialog", { name: "确认终止任务" })).not.toBeInTheDocument();
 
   activeAttempt.resolve({
     id: "assistant-endless-stopped",
@@ -682,6 +689,82 @@ test("keeps regular codex messages in the existing queue while streaming", async
       state: "done",
     });
   });
+});
+
+test("cancelling a queued message returns it to the composer and confirms before overwriting a draft", async () => {
+  const user = userEvent.setup();
+  const final = deferred<ChatMessage>();
+  const sendMessage = vi.fn<WebBotClient["sendMessage"]>(() => final.promise);
+  const client = createClient({ sendMessage });
+
+  render(<ChatScreen botAlias="main" client={client} />);
+  const queue = async () => {
+    await user.type(screen.getByPlaceholderText("输入消息"), "排队要求");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText("排队中")).toBeInTheDocument();
+  };
+  await user.type(await screen.findByPlaceholderText("输入消息"), "原始任务");
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+
+  await queue();
+  await user.click(screen.getByRole("button", { name: "取消排队消息" }));
+  expect(screen.queryByText("排队中")).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("排队要求");
+
+  await user.click(screen.getByRole("button", { name: "发送" }));
+  expect(await screen.findByText("排队中")).toBeInTheDocument();
+  await user.type(screen.getByPlaceholderText("输入消息"), "新草稿");
+  await user.click(screen.getByRole("button", { name: "取消排队消息" }));
+  await user.click(within(await screen.findByRole("dialog", { name: "确认覆盖输入框内容" })).getByRole("button", { name: "保留排队" }));
+  expect(screen.getByText("排队中")).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("新草稿");
+
+  await user.click(screen.getByRole("button", { name: "取消排队消息" }));
+  await user.click(within(await screen.findByRole("dialog", { name: "确认覆盖输入框内容" })).getByRole("button", { name: "覆盖并取消排队" }));
+  expect(screen.queryByText("排队中")).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("排队要求");
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+});
+
+test("starting a new session from an empty session does nothing", async () => {
+  const user = userEvent.setup();
+  const createConversation = vi.fn<WebBotClient["createConversation"]>(async () => ({
+    conversation: {
+      id: "conv-new",
+      title: "新会话",
+      lastMessagePreview: "",
+      messageCount: 0,
+      pinned: false,
+      active: true,
+      status: "active",
+      botAlias: "main",
+      cliType: "codex",
+      workingDir: "C:\\workspace",
+      createdAt: "2026-11-12T00:00:00Z",
+      updatedAt: "2026-11-12T00:00:00Z",
+    },
+    messages: [],
+  }));
+  const history: ChatMessage[] = [];
+  const client = createClient({ createConversation, listMessages: async () => ({ items: history }) });
+
+  const view = render(<ChatScreen botAlias="main" client={client} />);
+  await screen.findByPlaceholderText("输入消息");
+  await user.click(screen.getByRole("button", { name: "历史会话" }));
+  await user.click(await screen.findByRole("button", { name: "新会话" }));
+  expect(createConversation).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "新会话" })).toBeInTheDocument();
+  view.unmount();
+
+  history.push({ id: "user-old", role: "user", text: "旧问题", createdAt: "2026-11-12T00:00:00Z", state: "done" });
+  render(<ChatScreen botAlias="main" client={client} />);
+  expect(await screen.findByText("旧问题")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "历史会话" }));
+  await user.click(await screen.findByRole("button", { name: "新会话" }));
+  await waitFor(() => expect(createConversation).toHaveBeenCalledTimes(1));
 });
 
 test("cluster chat stays on the main Agent, preserves @ text, and sends no dispatch fields", async () => {

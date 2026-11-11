@@ -1,60 +1,60 @@
-# CLI 与 Cluster
+# CLI and Cluster
 
-## 入口和状态
+## Entry points and state
 
-- `bot/sessions.py` 按 `(bot_id, shared_user_id, agent_id)` 保存 session；Web 用户通过 `bot/chat_identity.py:chat_session_user_id()` 归一化。
-- `UserSession` 跟踪工作目录、processing state、active subprocess、conversation id，以及 Codex、Claude、Antigravity、DeepSeek 的会话绑定。
-- 会话快照默认持久化到应用数据目录的 `sessions/session_store.sqlite3`；`session_store.json` 同时用于旧数据迁移、显式 JSON 后端和 SQLite 初始化失败后的回退。后端选择见 `bot/session_store.py`。
-- chat history 由 `bot/web/chat_store.py` 的 SQLite store 保存；conversation 保存 provider session ID 和 metadata，turn 保存 `context_usage`，运行态 overlay 留在内存。
-- Claude CLI 的 `context_usage` 由 `bot/web/cli_context_usage.py` 按 transcript 最近 assistant usage 估算；窗口优先采用 `result.modelUsage[model].contextWindow`，turn 结束时按 Claude session 与模型记入内存（宿主重启后丢失）。未报告时按模型族回退：Fable/Mythos、Opus/Sonnet 4.6+、Haiku 5+ 为 1M，更早型号 200K，无法识别的模型 256K。
+- `bot/sessions.py` stores sessions by `(bot_id, shared_user_id, agent_id)`; Web users are normalized through `bot/chat_identity.py:chat_session_user_id()`.
+- `UserSession` tracks the working directory, processing state, active subprocess, conversation id, and the session bindings for Codex, Claude, Antigravity and DeepSeek.
+- Session snapshots are persisted by default to `sessions/session_store.sqlite3` in the app data directory; `session_store.json` serves legacy data migration, the explicit JSON backend, and the fallback after SQLite initialization fails. Backend selection is in `bot/session_store.py`.
+- Chat history is stored by the SQLite store in `bot/web/chat_store.py`; a conversation stores the provider session ID and metadata, a turn stores `context_usage`, and the runtime overlay stays in memory.
+- The Claude CLI `context_usage` is estimated by `bot/web/cli_context_usage.py` from the most recent assistant usage in the transcript; the window prefers `result.modelUsage[model].contextWindow`, recorded in memory per Claude session and model when the turn ends (lost on host restart). When it is not reported, the fallback is by model family: 1M for Fable/Mythos, Opus/Sonnet 4.6+ and Haiku 5+, 200K for earlier models, and 256K for unrecognized models.
 
-## CLI 链路
+## CLI chain
 
-- Web/shared chat：`bot/web/api_service.py`。
-- CLI 命令和参数：`bot/cli.py`、`bot/cli_params.py`。
-- CLI 类型包括 `claude`、`codex`、`codex_server`、`antigravity`、`deepseek`；后三者默认命令分别为 `codex`、`agy`、`dsh`。
-- `codex_server` 通过 `bot/codex_server/client.py`、`runtime.py` 复用 `codex app-server` 的 stdio JSON-RPC 进程；Web 入口仍进入共享 CLI SSE/持久化链。它与 `codex` 分开保存参数，历史数据 provider 共用 `codex`。
-- Antigravity 使用 `agy -p ... --output-format stream-json`，维护 `antigravity_conversation_id`；本地 CLI 集群和远程工作区 MCP 均有入口，远程 Antigravity 集群在 `_effective_cli_params()` 中拒绝。
-- DeepSeek Harness 使用本地 headless JSON CLI，支持本地集群；详细协议、patch 和支持边界见 [deepseek-harness.md](deepseek-harness.md)。
+- Web/shared chat: `bot/web/api_service.py`.
+- CLI commands and parameters: `bot/cli.py`, `bot/cli_params.py`.
+- CLI types are `claude`, `codex`, `codex_server`, `antigravity` and `deepseek`; the default commands of the last three are `codex`, `agy` and `dsh` respectively.
+- `codex_server` reuses the stdio JSON-RPC process of `codex app-server` through `bot/codex_server/client.py` and `runtime.py`; the Web entry still goes through the shared CLI SSE/persistence chain. Its parameters are stored separately from `codex`, and its history data shares the `codex` provider.
+- Antigravity uses `agy -p ... --output-format stream-json` and maintains `antigravity_conversation_id`; both the local CLI cluster and the remote workspace MCP have entry points, and remote Antigravity clusters are rejected in `_effective_cli_params()`.
+- DeepSeek Harness uses the local headless JSON CLI and supports local clusters; for the detailed protocol, patch and support boundaries see [deepseek-harness.md](deepseek-harness.md).
 
-## 必须保持的行为
+## Behavior that must be preserved
 
-- CLI 保持 SSE `meta/status/trace/done`，增量正文预览放在 `status.preview_text`。
-- CLI 通过 `StreamingPersistenceBuffer` 写入流式预览和 trace，并由 `complete_turn()` 完成最终持久化。
-- CLI transcript 展示工具调用、执行结果和上下文用量。
-- CLI SSE `meta/status/trace/done` 顶层保留 `turn_id`、`assistant_message_id`。
-- 普通聊天按显式 `agent_id` 路由并隔离 session；启用 Bot 级 cluster 后，主 agent 通过 `tcb-cluster` MCP 动态编组和委派 child-agent 任务，`@agent_id` 不承担集群分发协议。
+- CLI keeps SSE `meta/status/trace/done`, with the incremental body preview in `status.preview_text`.
+- CLI writes the streaming preview and trace through `StreamingPersistenceBuffer`, and `complete_turn()` performs the final persistence.
+- The CLI transcript displays tool calls, execution results and context usage.
+- The top level of CLI SSE `meta/status/trace/done` retains `turn_id` and `assistant_message_id`.
+- Ordinary chat is routed by the explicit `agent_id` with isolated sessions; once the Bot-level cluster is enabled, the main agent forms the team and delegates child-agent tasks dynamically through the `tcb-cluster` MCP, and `@agent_id` does not carry the cluster dispatch protocol.
 
-## Cluster 公共 MCP 链路
+## Shared cluster MCP chain
 
-- Codex（含 `codex_server`）、Claude、Antigravity、DeepSeek Harness 使用同一套 cluster runtime、bridge API 与工具契约。
-- Codex、Claude 在集群轮次中由 `bot/web/api_service.py` 动态注入 `bot/cluster/mcp_stdio.py` launcher；管理页也可生成对应的 `mcp add/get/remove` 命令。`codex_server` 的注入只修改自身参数块。
-- Antigravity 通过 `bot/cluster/setup.py` 管理工作区 `.agents/mcp_config.json` 的 `tcb-cluster` 条目，并用同目录的 `.tcb-cluster-mcp-state.json` 记录管理状态；保留其他 server，遇到用户已有条目或后续修改时报告冲突，关闭集群时仅清理由宿主管理且未被改动的条目。
-- DeepSeek 在集群轮次追加 `--patch`，由 `@deepseek-ai/dsh-mcp-client` 调用项目 `mcp_stdio.py --config ...`。管理页准备该 patch，安装、验证、移除命令列表为空；不向用户 Harness 全局配置写入注册项。
-- 公共 MCP 暴露 `configure_team`、`cluster_status`、`list_agents`、`new_agent_session`、`ask_agent`、`cancel_agent_task`、`poll_agent_tasks`、`wait_agent_messages`。
-- `bot/data/prompts/cluster_mode.md` 在底层 agent 会话首轮或集群状态/写入策略变化时拼到用户消息前；连续启用轮次改用 `cluster_turn.md` 提醒继续使用当前 `run_id`，连续关闭轮次不重复提示。MCP tool description 只描述具体工具和参数。
-- `run_id` 由主会话 `conversation_id + cluster_team_revision` 稳定推导；同一主会话与编组在普通轮次和宿主重启后得到同一个 ID，不新增数据库 ID 字段。
-- 只有 `configure_team` 实际新增、删除、修改或重新分配角色时才递增编组版本并轮换 `run_id`。无变化请求返回 `changed=false` 和原 ID；普通轮次结束、异常、停止、集群开关切换及宿主重启均不轮换。
-- `configure_team` 成功后主 agent 必须查看 `changed`：`changed=true` 时同一轮所有后续工具立即使用响应中的新 `run_id`，`changed=false` 时继续使用原 ID。
-- `extend` 只占用空闲槽位、不改动已有分配，子任务运行中也允许；`ClusterRuntime.rekey_run()` 保留同一个运行态对象及其任务、消息游标，Web API 同步把 `_ClusterRunControl` 迁到新 `run_id`，旧 ID 作为内部别名供在途子任务继续上报。旧 ID 可读；`ask_agent`、`cancel_agent_task`、`new_agent_session` 拒绝旧 ID 并返回 `cluster_run_changed` 及当前 ID，`configure_team` 返回 `cluster_team_changed` 及当前 ID。`replace` 可能重新分配忙碌槽位，仍需等主会话子任务结束（`cluster_team_busy`）。
-- 每次工具调用必须显式传入当前 `run_id`；stdio MCP 适配层不缓存或自动切换 ID，只把本次工具参数通过 `X-TCB-Cluster-Run-Id` header 传给 bridge，也不依赖 `TCB_CLUSTER_RUN_ID` 环境变量。
-- Cluster task、进度消息和后台任务仍是内存态，不跨宿主重启持久化。
-- 子任务结束后唤醒主会话的通知为英文，只列 task_id 并要求主 agent 用 `poll_agent_tasks(task_ids=...)` 读取结果，不内联子 agent 输出。是否通知只看主 agent 是否已读到结果，不设时间窗口：`poll_agent_tasks` 返回终态任务或 `wait_agent_messages` 返回其 `final` 消息即记为已读（`result_observed`）。未读的子任务无论在主 agent 轮次中还是轮次结束后结束都会通知；轮次中结束的先挂起，由 `_finish_cluster_parent_turn()` 在主会话空闲后投递，投递前已读的不再通知。bridge 不区分调用方；与 `adopt_unfinished_tasks()` 和 `wait_agent_messages` 的托管游标相同，这两个工具的读取都按主 agent 读取处理。
-- 通知只覆盖最近一次用户请求：`_start_cluster_run_if_requested()` 按 `session._execution_id` 递增主会话的请求代数（无尽模式各次尝试共用同一代），内部续接轮次不递增；旧请求的子任务只有在最新请求中被 `poll_agent_tasks` 查询且仍未结束时才转入当前请求。主 agent 状态按主会话保存在 `ClusterRuntime`，`configure_team` 轮换 `run_id` 后仍然有效。
-- CLI stdio launcher 或 DeepSeek patch 向 `mcp_stdio.py` 传入 `--config`，读取 cluster bridge 配置文件。
-- `profile.cluster.enabled` 是当前 Bot 级集群开关；请求体旧 `cluster` 字段仅为兼容输入，不决定是否启动 cluster run。
+- Codex (including `codex_server`), Claude, Antigravity and DeepSeek Harness use the same cluster runtime, bridge API and tool contract.
+- For Codex and Claude, `bot/web/api_service.py` dynamically injects the `bot/cluster/mcp_stdio.py` launcher in cluster turns; the admin page can also generate the corresponding `mcp add/get/remove` commands. Injection for `codex_server` only modifies its own parameter block.
+- Antigravity manages the `tcb-cluster` entry of the workspace `.agents/mcp_config.json` through `bot/cluster/setup.py`, and records the management state in `.tcb-cluster-mcp-state.json` in the same directory; it keeps other servers, reports a conflict when the user already has an entry or modifies it later, and when the cluster is disabled it only cleans up entries that the host manages and that have not been changed.
+- DeepSeek appends `--patch` in cluster turns, and `@deepseek-ai/dsh-mcp-client` calls the project's `mcp_stdio.py --config ...`. The admin page prepares that patch, and the install, verify and remove command lists are empty; no registration is written to the user's global Harness configuration.
+- The shared MCP exposes `configure_team`, `cluster_status`, `list_agents`, `new_agent_session`, `ask_agent`, `cancel_agent_task`, `poll_agent_tasks` and `wait_agent_messages`.
+- `bot/data/prompts/cluster_mode.md` is prepended to the user message on the first turn of the underlying agent session or when the cluster state/write policy changes; consecutive enabled turns use `cluster_turn.md` instead, as a reminder to keep using the current `run_id`, and consecutive disabled turns do not repeat the prompt. MCP tool descriptions only describe the specific tool and its parameters.
+- `run_id` is derived stably from the main conversation's `conversation_id + cluster_team_revision`; the same main conversation and team yield the same ID across ordinary turns and host restarts, and no database ID field is added.
+- The team revision is incremented and `run_id` rotated only when `configure_team` actually adds, removes, modifies or reassigns a role. A request with no change returns `changed=false` and the original ID; the end of an ordinary turn, exceptions, stops, toggling the cluster switch and host restarts never rotate it.
+- After `configure_team` succeeds, the main agent must check `changed`: with `changed=true`, all subsequent tools in the same turn immediately use the new `run_id` from the response; with `changed=false`, they keep using the original ID.
+- `extend` only takes free slots and does not touch existing assignments, and it is allowed while child tasks are running; `ClusterRuntime.rekey_run()` keeps the same runtime object with its tasks and message cursors, the Web API moves `_ClusterRunControl` to the new `run_id` in step, and the old ID remains an internal alias so in-flight child tasks can keep reporting. The old ID is readable; `ask_agent`, `cancel_agent_task` and `new_agent_session` reject the old ID and return `cluster_run_changed` with the current ID, and `configure_team` returns `cluster_team_changed` with the current ID. `replace` may reassign busy slots and still has to wait for the main conversation's child tasks to finish (`cluster_team_busy`).
+- Every tool call must pass the current `run_id` explicitly; the stdio MCP adapter does not cache or automatically switch the ID, it only passes this call's tool parameter to the bridge through the `X-TCB-Cluster-Run-Id` header, and it does not rely on the `TCB_CLUSTER_RUN_ID` environment variable.
+- Cluster tasks, progress messages and background tasks remain in memory and are not persisted across host restarts.
+- The notification that wakes the main conversation after a child task ends is in English; it only lists the task_id and asks the main agent to read the result with `poll_agent_tasks(task_ids=...)`, without inlining the child agent's output. Whether to notify depends only on whether the main agent has already read the result, with no time window: a result counts as read (`result_observed`) once `poll_agent_tasks` returns the task in a terminal state or `wait_agent_messages` returns its `final` message. An unread child task triggers a notification whether it ends during a main-agent turn or after the turn; one that ends during the turn is held back and delivered by `_finish_cluster_parent_turn()` once the main conversation is idle, and one that was read before delivery is not notified. The bridge does not distinguish callers; as with `adopt_unfinished_tasks()` and the managed cursor of `wait_agent_messages`, reads through these two tools are all treated as reads by the main agent.
+- Notifications only cover the most recent user request: `_start_cluster_run_if_requested()` increments the main conversation's request generation by `session._execution_id` (all attempts of an endless-mode run share one generation), and internal continuation turns do not increment it; a child task of an older request is moved into the current request only if the latest request queries it with `poll_agent_tasks` while it is still unfinished. The main agent state is kept per main conversation in `ClusterRuntime` and remains valid after `configure_team` rotates `run_id`.
+- The CLI stdio launcher or the DeepSeek patch passes `--config` to `mcp_stdio.py` to read the cluster bridge configuration file.
+- `profile.cluster.enabled` is the current Bot-level cluster switch; the legacy `cluster` field in the request body is only a compatibility input and does not decide whether a cluster run starts.
 
-## Cluster 编排配置的执行边界
+## Execution boundaries of the cluster orchestration configuration
 
-- 动态任务使用主会话编组里的角色名称和职责；物理槽位的旧 `system_prompt` 在这条链路中会被抑制。
-- Bot 级 `max_parallel_agents`、`default_timeout_seconds` 和 `write_policy` 进入运行时；CLI（含 DeepSeek）共用低、中、高、专业四档 `model_tiers`、`reasoning_efforts` 配置。专业档用于特殊工作，主 Agent 只有在用户明确提出使用专业档时才选择它。子任务按入队时的配置快照覆盖模型和思考深度，空档位继承主 Agent 配置，不修改主 Bot。
-- 管理页各执行后端共用集群配置面板。CLI 模型和思考深度选项来自各自参数 schema。
-- `conflict_policy` 以及物理槽位的 `enabled`、`allow_cluster`、`allow_write`、`session_policy`、`timeout_seconds` 当前只被解析、保存或回显，不驱动动态任务执行。
-- `ask_agent.allow_write` 当前只按 Bot `write_policy` 校验并记录，不是文件系统或 CLI sandbox 的权限边界。
-- `ask_agent.timeout_seconds` 未传时使用 Bot `default_timeout_seconds`；超时是软期限，只在任务状态标记 `deadline_exceeded`，不会强制终止子 agent。主 agent 可通过 `cancel_agent_task(task_id)` 精确停止一个排队或运行中的子任务，不影响同一 run 的其他任务。
+- Dynamic tasks use the role names and responsibilities from the main conversation's team; the legacy `system_prompt` of a physical slot is suppressed on this chain.
+- The Bot-level `max_parallel_agents`, `default_timeout_seconds` and `write_policy` reach the runtime; every CLI (including DeepSeek) shares the low, medium, high and professional tiers of the `model_tiers` and `reasoning_efforts` configuration. The professional tier is for special work, and the main Agent selects it only when the user explicitly asks for the professional tier. A child task overrides the model and reasoning effort from the configuration snapshot taken when it was queued; an empty tier inherits the main Agent configuration, and the main Bot is not modified.
+- On the admin page, all execution backends share the cluster configuration panel. CLI model and reasoning-effort options come from each backend's parameter schema.
+- `conflict_policy` and the physical-slot fields `enabled`, `allow_cluster`, `allow_write`, `session_policy` and `timeout_seconds` are currently only parsed, saved or echoed back; they do not drive dynamic task execution.
+- `ask_agent.allow_write` is currently only validated against the Bot `write_policy` and recorded; it is not a permission boundary of the file system or the CLI sandbox.
+- When `ask_agent.timeout_seconds` is not passed, the Bot `default_timeout_seconds` is used; the timeout is a soft deadline that only marks `deadline_exceeded` in the task state and does not forcibly terminate the child agent. The main agent can call `cancel_agent_task(task_id)` to stop exactly one queued or running child task without affecting other tasks in the same run.
 
-## 验证
+## Verification
 
-- CLI/provider：`tests/test_cli_streaming.py`、`tests/test_codex_server_runtime.py`、`tests/test_codex_server_config.py`；DeepSeek 定向检查见对应参考。
-- Session/history：`tests/test_sessions.py`、`tests/test_session_store.py`、`tests/test_chat_history_service.py`、`tests/test_chat_store_revision.py`。
-- Cluster：`tests/test_cluster_setup.py`、`tests/test_cluster_mcp_schema.py`、`tests/test_cluster_mcp_client.py`、`tests/test_cluster_auto_run.py`、`tests/test_cluster_new_agent_session.py`、`tests/test_cluster_team_config.py`、`tests/test_cluster_model_tiers.py`、`tests/test_cluster_cancel.py`、`tests/test_cluster_parent_wakeup.py`。
+- CLI/provider: `tests/test_cli_streaming.py`, `tests/test_codex_server_runtime.py`, `tests/test_codex_server_config.py`; for targeted DeepSeek checks see its reference.
+- Session/history: `tests/test_sessions.py`, `tests/test_session_store.py`, `tests/test_chat_history_service.py`, `tests/test_chat_store_revision.py`.
+- Cluster: `tests/test_cluster_setup.py`, `tests/test_cluster_mcp_schema.py`, `tests/test_cluster_mcp_client.py`, `tests/test_cluster_auto_run.py`, `tests/test_cluster_new_agent_session.py`, `tests/test_cluster_team_config.py`, `tests/test_cluster_model_tiers.py`, `tests/test_cluster_cancel.py`, `tests/test_cluster_parent_wakeup.py`.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Orbit Safe Claw Maintenance"
-  short_description: "按需加载 Orbit CLI、集群、远程工作区、插件和发布约束"
-  default_prompt: "使用 $orbit-maintenance 修改 Orbit Safe Claw 的 CLI、集群或基础设施，并按对应约束验证。"
+  short_description: "Load Orbit CLI, cluster, remote workspace, plugin and release constraints on demand"
+  default_prompt: "Use $orbit-maintenance to change Orbit Safe Claw's CLI, cluster or infrastructure, and verify against the corresponding constraints."

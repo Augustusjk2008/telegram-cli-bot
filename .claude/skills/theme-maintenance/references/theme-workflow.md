@@ -1,91 +1,91 @@
-# 主题工作流
+# Theme Workflow
 
-按主题变更的真实范围执行。普通预置主题的变更路径应保持短；只有改变目录、资源或运行时契约时才扩大范围。
+Work to the real scope of the theme change. The change path for an ordinary preset theme should stay short; widen the scope only when the catalog, the assets or the runtime contract changes.
 
-## 1. 确定变更类型
+## 1. Determine the change type
 
-先回答三个问题：
+Answer three questions first:
 
-1. 这是编辑已有发布预置、添加新的发布预置，还是改变运行时主题管理？
-2. 新主题是否只使用现有颜色 token 和现有插画组？
-3. 是否需要改变 token、surface、插画资源格式或公共 API？
+1. Is this editing an existing release preset, adding a new release preset, or changing runtime theme management?
+2. Does the new theme only use existing color tokens and existing illustration sets?
+3. Do tokens, surfaces, the illustration asset format or the public API need to change?
 
-编辑/添加发布预置属于发布数据变更。开放运行时自定义主题属于产品行为变更，因为当前后端的 `create`、`import_themes`、`update`、`delete` 和上传路由都会返回 `theme_readonly`；不要在普通配色请求中启用它。
+Editing/adding a release preset is a release data change. Opening up runtime custom themes is a product behavior change, because the current backend's `create`, `import_themes`, `update`, `delete` and upload routes all return `theme_readonly`; do not enable it in an ordinary color request.
 
-## 2. 读取基线并选择最小修改面
+## 2. Read the baseline and choose the smallest change surface
 
-先读取当前的 `bot/web/theme_presets.json`、相关 token 和相关插画场景。复制最接近目标的现有主题对象，保留完整的 `appearance` 结构，再逐项修改颜色、排版或插画引用。不要从空对象开始拼主题，也不要因为某个组件暂时没有使用某 token 就删掉它。
+First read the current `bot/web/theme_presets.json`, the relevant tokens and the relevant illustration scenes. Copy the existing theme object closest to the target, keep the complete `appearance` structure, then modify the colors, typography or illustration references item by item. Do not assemble a theme from an empty object, and do not delete a token just because no component uses it for the moment.
 
-普通主题变更的最小文件通常是：
+The minimal files for an ordinary theme change are usually:
 
 - `bot/web/theme_presets.json`
-- 受清单身份影响的后端/前端测试
-- `README.md` 和 `README.en.md` 中列出主题名称或只读行为的段落
+- the backend/frontend tests affected by the manifest identity
+- the paragraphs in `README.md` and `README.en.md` that list theme names or the read-only behavior
 
-只要使用已有插画组，就不改 `theme_illustrations.json`、静态资源、后端 set ID 常量或前端插画注册表。
+As long as an existing illustration set is used, do not change `theme_illustrations.json`, the static assets, the backend set ID constants or the frontend illustration registries.
 
-## 3. 编辑现有发布预置
+## 3. Edit an existing release preset
 
-编辑现有主题时：
+When editing an existing theme:
 
-1. 保持主题 `id` 不变，保持 `baseId: "paper-daylight"`、`schemaVersion: 1` 和 `readonly: true` 不变。
-2. 只改需要改变的 `appearance` 字段；`colors.overrides` 使用目录中的真实 token key。
-3. 颜色优先使用八位大写十六进制；不透明 token 使用 `FF` alpha。对于能从目录 `derive` 得到的值，只有在主题确实需要不同结果时才写 override。
-4. 插画层直接复制目录里的元数据，不能手写一个与 catalog 哈希或尺寸不一致的资源描述。
-5. 内容改变时递增 `version`，用 UTC ISO 时间更新 `updatedAt`；不要改 ID 来规避版本变化。
-6. 保持主题列表顺序有意且稳定，默认 `paper-daylight` 仍在首位。
+1. Keep the theme `id` unchanged, and keep `baseId: "paper-daylight"`, `schemaVersion: 1` and `readonly: true` unchanged.
+2. Change only the `appearance` fields that need to change; `colors.overrides` uses real token keys from the catalog.
+3. Prefer eight-digit uppercase hex for colors; opaque tokens use `FF` alpha. For a value that the catalog's `derive` can produce, write an override only when the theme really needs a different result.
+4. Copy the metadata of illustration layers directly from the catalog; do not hand-write an asset description whose hash or dimensions disagree with the catalog.
+5. When the content changes, increment `version` and update `updatedAt` with a UTC ISO time; do not change the ID to avoid a version change.
+6. Keep the theme list order deliberate and stable, with the default `paper-daylight` still first.
 
-## 4. 添加新的发布预置
+## 4. Add a new release preset
 
-如果新主题只使用现有 token 和插画组：
+If the new theme only uses existing tokens and illustration sets:
 
-1. 从已有主题复制完整对象。
-2. 生成稳定且未使用的 `theme_` 加 32 位小写十六进制 ID。
-3. 设置新名称、配色模式、颜色覆盖、排版和三个 surface 的插画场景。
-4. 保持 `readonly: true`，将主题放在 `themes` 数组的明确位置。
-5. 不在 `front/src/theme.ts` 里追加登录页主题常量；登录页通过公共主题 API 读取发布清单，默认回退仍由 `paper-daylight` 提供。
-6. 更新所有写死预置主题名称、数量或 ID 的稳定断言和 README 文案。
+1. Copy a complete object from an existing theme.
+2. Generate a stable, unused ID of `theme_` plus 32 lowercase hex digits.
+3. Set the new name, color scheme, color overrides, typography and the illustration scenes of the three surfaces.
+4. Keep `readonly: true`, and place the theme at an explicit position in the `themes` array.
+5. Do not append login-page theme constants to `front/src/theme.ts`; the login page reads the release manifest through the public theme API, and the default fallback is still provided by `paper-daylight`.
+6. Update every stable assertion and README text that hard-codes preset theme names, counts or IDs.
 
-新主题若使用已有插画组，完成这一步就足够进入验证；不要为每个主题复制一套静态图片。
+If the new theme uses an existing illustration set, finishing this step is enough to move on to verification; do not copy a set of static images for every theme.
 
-## 5. 添加或替换内置插画
+## 5. Add or replace built-in illustrations
 
-只有在主题需要新的资源组或现有资源内容改变时执行这一步：
+Do this step only when a theme needs a new asset set or the content of existing assets changes:
 
-1. 将实际资源放入 `front/public/assets/theme-illustrations/<set-id>/<surface>/`，路径命名与 catalog 一致。当前后端校验发布 catalog 的资源路径为 `.webp`。
-2. 计算每个文件的 MIME、像素尺寸和 SHA-256，写入 `bot/web/theme_illustrations.json` 的对应 layer。`assetId`、路径、哈希、尺寸和文件内容必须完全对应。
-3. 为新组在三个 surface 都提供至少一个图层；图层 ID 在各自场景内唯一，布局值满足主题规范范围。
-4. 在 `bot/web/theme_store.py` 的 `_ILLUSTRATION_SET_IDS` 中加入新 ID；在 `front/src/theme/types.ts` 的联合类型和 `front/src/theme/illustrationPresets.ts` 的 set ID、选项、模板数组中加入同一 ID。更新显示标签和颜色模板时保持命名一致。
-5. 将新组引用到 `theme_presets.json`，并增加针对资源路径或场景解析的聚焦测试。
-6. 替换现有资源时保留 asset ID 规则并同步更新哈希、尺寸和受影响的预置主题；不要让旧主题继续声明旧元数据。
+1. Put the actual assets in `front/public/assets/theme-illustrations/<set-id>/<surface>/`, with path names matching the catalog. The backend currently validates that asset paths in the release catalog are `.webp`.
+2. Compute the MIME type, pixel dimensions and SHA-256 of each file and write them into the corresponding layer in `bot/web/theme_illustrations.json`. The `assetId`, path, hash, dimensions and file content must correspond exactly.
+3. Provide at least one layer on each of the three surfaces for the new set; layer IDs are unique within their own scene, and the layout values stay within the ranges of the theme spec.
+4. Add the new ID to `_ILLUSTRATION_SET_IDS` in `bot/web/theme_store.py`; add the same ID to the union type in `front/src/theme/types.ts` and to the set ID, options and template arrays in `front/src/theme/illustrationPresets.ts`. Keep the naming consistent when updating display labels and color templates.
+5. Reference the new set from `theme_presets.json`, and add a focused test for the asset paths or scene resolution.
+6. When replacing existing assets, keep the asset ID rule and update the hashes, dimensions and the affected preset themes together; do not let an old theme keep declaring the old metadata.
 
-如果只是把现有主题切换到已有组，跳过本节的注册表和资源工作。
+If you are only switching an existing theme to an existing set, skip the registry and asset work in this section.
 
-## 6. 修改颜色目录或主题契约
+## 6. Modify the color catalog or the theme contract
 
-新增/删除 token、CSS 变量、surface 或解析规则会影响所有主题：
+Adding/removing tokens, CSS variables, surfaces or resolution rules affects every theme:
 
-- 先检查 `theme_catalog.json` 的 `derive` 依赖、alpha 规则、对比度目标和 `terminal` 标记。
-- 再检查 `resolveAppearance.ts`、`AppearanceProvider.tsx`、主题管理器、组件 CSS 和终端映射的消费者。
-- 如果新增 surface 或插画字段，同时更新后端规范化、前端类型、解析器、默认值、导入迁移和测试。
-- 对现有主题保留兼容默认值；如果必须提高 `schemaVersion`，设计显式迁移并一起更新所有读写端。
+- First check the `derive` dependencies, alpha rules, contrast targets and `terminal` markers in `theme_catalog.json`.
+- Then check the consumers: `resolveAppearance.ts`, `AppearanceProvider.tsx`, the theme manager, component CSS and the terminal mapping.
+- If a surface or an illustration field is added, update the backend normalization, the frontend types, the resolver, the defaults, the import migration and the tests together.
+- Keep compatible defaults for existing themes; if `schemaVersion` must be raised, design an explicit migration and update every reader and writer together.
 
-这类任务不再是单纯的 `theme_presets.json` 编辑，应按跨模块契约变更验证。
+A task of this kind is no longer a plain `theme_presets.json` edit and should be verified as a cross-module contract change.
 
-## 7. 验证
+## 7. Verification
 
-先做便宜的静态检查，再运行聚焦测试：
+Run the cheap static checks first, then the focused tests:
 
-1. 解析 `bot/web/theme_catalog.json`、`bot/web/theme_illustrations.json` 和 `bot/web/theme_presets.json`，确认 JSON 格式有效、主题 ID 唯一、默认主题存在、每个主题的内置 asset ID 都能在插画目录中找到。
-2. 对涉及后端数据或只读边界的变更运行：
+1. Parse `bot/web/theme_catalog.json`, `bot/web/theme_illustrations.json` and `bot/web/theme_presets.json`, and confirm that the JSON is valid, theme IDs are unique, the default theme exists, and every built-in asset ID of every theme can be found in the illustration catalog.
+2. For changes that involve backend data or the read-only boundary, run:
 
    ```powershell
    python -m pytest tests/test_theme_store.py tests/test_theme_api.py -q
    ```
 
-   如果本机已提交的存储定位器与仓库测试 fixture 的临时 `TCB_DATA_DIR` 冲突，保留定位器不做迁移或删除；对不依赖公共 fixture 的这两个主题测试可以使用 `python -m pytest --noconftest tests/test_theme_store.py tests/test_theme_api.py -q` 作为受限 fallback，并在交付说明中写明。
+   If the storage locator committed on this machine conflicts with the temporary `TCB_DATA_DIR` of the repository test fixture, keep the locator without migrating or deleting it; for these two theme tests, which do not depend on the shared fixture, `python -m pytest --noconftest tests/test_theme_store.py tests/test_theme_api.py -q` can be used as a limited fallback, and this must be stated in the delivery notes.
 
-3. 对涉及前端解析、客户端、管理器或插画的变更，在 `front` 目录运行：
+3. For changes that involve frontend resolution, the client, the manager or illustrations, run in the `front` directory:
 
    ```powershell
    npm exec vitest run src/test/theme.test.ts src/test/theme-client.test.ts src/test/theme-illustrations.test.tsx src/test/theme-manager.test.tsx -- --maxWorkers=1 --fileParallelism=false
@@ -93,13 +93,13 @@
    npm run build
    ```
 
-   如果命令行版本不接受额外的 Vitest 参数，直接运行 `npm run test:gate`，并报告实际命令和结果。
+   If the command-line version does not accept the extra Vitest arguments, run `npm run test:gate` directly and report the actual command and result.
 
-4. 如果变更了布局、插画可见区域或资源加载，使用用户已经启动的应用运行对应 Playwright 检查；不要由 agent 启动开发服务、preview 或临时 HTTP 服务。
-5. 最后运行 `git diff --check`，检查 JSON diff 中没有意外删除 token、主题或资源引用，并确认 `front/dist` 等生成物是否属于当前仓库约定。
+4. If the layout, the visible illustration area or asset loading changed, run the corresponding Playwright checks against the application the user has already started; the agent must not start a development service, a preview or a temporary HTTP service.
+5. Finally run `git diff --check`, check that the JSON diff does not accidentally delete tokens, themes or asset references, and confirm whether generated output such as `front/dist` belongs to the current repository conventions.
 
-主题文案或 JSON 机械调整不需要新增测试。新增主题身份、插画路径、资产完整性、只读边界和解析行为属于稳定契约，应更新或保留最合适的一层测试，避免在组件、页面和 shell 层重复断言。
+Theme copy or mechanical JSON adjustments do not need new tests. New theme identities, illustration paths, asset integrity, the read-only boundary and resolution behavior are stable contracts; update or keep the test at the most appropriate layer, and avoid duplicating assertions across the component, page and shell layers.
 
-## 8. 交付说明
+## 8. Delivery notes
 
-交付时说明当前有效的主题清单变化、修改的源文件、实际运行的测试/构建命令及结果。若没有运行浏览器检查，指出布局或资源加载边界仍未覆盖；不要把未完成的运行时主题 CRUD 说成已支持。
+On delivery, describe the changes to the currently effective theme manifest, the source files modified, and the test/build commands actually run with their results. If no browser check was run, point out that the layout or asset-loading boundary is still uncovered; do not describe unfinished runtime theme CRUD as supported.

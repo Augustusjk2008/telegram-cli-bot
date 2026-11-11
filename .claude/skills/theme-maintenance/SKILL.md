@@ -1,30 +1,30 @@
 ---
 name: theme-maintenance
-description: "在 Orbit Safe Claw 中新增、编辑、校验和发布前端主题，覆盖配色令牌、预置主题、插画目录及其资源。"
+description: "Add, edit, validate and release frontend themes in Orbit Safe Claw, covering color tokens, preset themes, the illustration catalog and its assets."
 metadata:
-  short-description: "维护 Orbit Safe Claw 主题配色、插画目录和发布工作流"
+  short-description: "Maintain Orbit Safe Claw theme colors, the illustration catalog and the release workflow"
 ---
 
 # Theme Maintenance
 
-用于处理 Orbit Safe Claw 的主题预置、颜色令牌、插画资源和主题发布前验证。先判断请求属于编辑现有预置、添加新的发布预置、添加插画资源，还是改变主题运行时能力，再按对应流程执行。
+Use this for Orbit Safe Claw theme presets, color tokens, illustration assets and pre-release theme verification. First decide whether the request is editing an existing preset, adding a new release preset, adding illustration assets, or changing the theme runtime capability, then follow the matching flow.
 
-先读 [theme-spec.md](references/theme-spec.md) 了解当前数据契约和运行时边界；需要实际改动时再读 [theme-workflow.md](references/theme-workflow.md) 执行工作流。只读取与当前任务相关的参考内容。
+Read [theme-spec.md](references/theme-spec.md) first to understand the current data contract and runtime boundaries; when actual changes are needed, read [theme-workflow.md](references/theme-workflow.md) and follow the workflow. Read only the reference content relevant to the current task.
 
-## 工作原则
+## Working principles
 
-- 把 `bot/web/theme_presets.json`、`bot/web/theme_catalog.json` 和 `bot/web/theme_illustrations.json` 当作主题发布数据的源文件。前端解析器和后端校验器共同约束它们的格式。
-- 先区分“发布预置主题”和“运行时主题管理”。当前发布的八套主题都是只读预置；运行时只持久化各账户的选中主题，主题增删改、导入和资源上传接口会拒绝请求。添加一个发布预置不需要顺手开启运行时 CRUD。
-- 修改现有主题时保持既有 ID、`baseId`、`schemaVersion`、只读属性和插画资产元数据稳定；内容变化时递增主题 `version` 并更新带时区的 `updatedAt`。
-- 颜色只引用当前目录中的 token key。透明度、派生色、对比度、终端颜色和插画图层都按参考规范检查，避免只看登录页或单个预览区域。
-- 新增插画组时同步更新资源文件、插画目录、后端允许的 set ID、前端类型和选项；只增加一个使用现有插画组的主题时不要改这些注册表。
-- 主题清单或稳定字段发生变化时，更新对应的后端/前端契约断言和中英文 README；普通文案或机械 JSON 变更不新增重复测试。
-- 变更完成后至少运行主题后端测试、前端主题测试、TypeScript 检查和生产构建。不要启动开发服务器或临时预览服务器。
+- Treat `bot/web/theme_presets.json`, `bot/web/theme_catalog.json` and `bot/web/theme_illustrations.json` as the source files of the released theme data. The frontend parser and the backend validator jointly constrain their format.
+- Distinguish "release preset themes" from "runtime theme management" first. The eight currently released themes are all read-only presets; the runtime only persists each account's selected theme, and the endpoints for creating, updating, deleting and importing themes and uploading assets reject requests. Adding a release preset does not call for enabling runtime CRUD along the way.
+- When modifying an existing theme, keep the existing ID, `baseId`, `schemaVersion`, read-only attribute and illustration asset metadata stable; when the content changes, increment the theme `version` and update the timezone-aware `updatedAt`.
+- Colors only reference token keys in the current catalog. Check opacity, derived colors, contrast, terminal colors and illustration layers against the reference spec, rather than looking only at the login page or a single preview area.
+- When adding an illustration set, update the asset files, the illustration catalog, the set IDs allowed by the backend, and the frontend types and options together; when only adding a theme that uses an existing illustration set, do not change these registries.
+- When the theme manifest or a stable field changes, update the corresponding backend/frontend contract assertions and the Chinese and English READMEs; ordinary copy or mechanical JSON changes do not get new duplicate tests.
+- After the change, run at least the backend theme tests, the frontend theme tests, the TypeScript check and the production build. Do not start a development server or a temporary preview server.
 
-## 快速路由
+## Quick routing
 
-- 只改颜色、排版或现有插画组合：读主题规范中“主题对象”和“颜色/插画”小节，再按发布预置流程执行。
-- 新增一套发布主题：重点修改 `theme_presets.json`，并同步更新清单断言与文档。
-- 新增或替换一套内置插画：读主题规范中的插画目录约束和工作流中的资源步骤；需要改硬编码 set ID 注册表。
-- 修改 token、表面、CSS 变量或主题运行时行为：把它视为主题契约变更，先检查所有消费者和测试，再扩大验证范围。
-- 用户要求开放自定义主题、导入、删除或上传：暂停在独立设计范围内，说明当前后端有意返回只读错误，不能把它当作普通预置主题编辑。
+- Only changing colors, typography or an existing illustration combination: read the "Theme object" and color/illustration sections of the theme spec, then follow the release preset flow.
+- Adding a new release theme: mainly modify `theme_presets.json`, and update the manifest assertions and documentation together.
+- Adding or replacing a set of built-in illustrations: read the illustration catalog constraints in the theme spec and the asset steps in the workflow; the hard-coded set ID registries need to change.
+- Modifying tokens, surfaces, CSS variables or theme runtime behavior: treat it as a theme contract change, check all consumers and tests first, then widen the verification scope.
+- The user asks to open up custom themes, import, deletion or upload: stop and treat it as a separate design scope, explain that the current backend intentionally returns a read-only error, and do not handle it as an ordinary preset theme edit.

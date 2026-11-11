@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ClipboardEvent, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, LoaderCircle, Paperclip, Plus, Send, Settings, Square, Trash2, X } from "lucide-react";
 import type { DeepSeekProviderOption, FileUploadProgress, PromptPreset } from "../services/types";
@@ -23,7 +23,14 @@ type ComposerAttachment = {
   savedPath: string;
 };
 
+/** Lets the owner read the draft text or replace it, e.g. to hand a cancelled queued message back. */
+export type ChatComposerHandle = {
+  getDraft: () => string;
+  setDraft: (text: string) => void;
+};
+
 type Props = {
+  ref?: Ref<ChatComposerHandle>;
   onSend: (text: string) => void | boolean | Promise<void | boolean>;
   /** When set, a running task replaces the empty-draft send button with a terminate button. */
   onStop?: () => void;
@@ -118,6 +125,7 @@ function clonePromptPresetList(presets: PromptPreset[] = []) {
 }
 
 export function ChatComposer({
+  ref,
   onSend,
   onStop,
   stopDisabled = false,
@@ -293,6 +301,14 @@ export function ChatComposer({
       textareaRef.current?.setSelectionRange(cursor, cursor);
     });
   }
+
+  useImperativeHandle(ref, () => ({
+    getDraft: () => textareaRef.current?.value ?? "",
+    setDraft: (text: string) => {
+      setMessage(text);
+      focusTextarea(text.length);
+    },
+  }), []);
 
   function insertTextAtCursor(content: string) {
     const textarea = textareaRef.current;

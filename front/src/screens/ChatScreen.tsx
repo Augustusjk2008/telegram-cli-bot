@@ -19,13 +19,13 @@ import {
   type TouchEvent as ReactTouchEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { createPortal } from "react-dom";
 import { clsx } from "clsx";
 import { CheckCheck, Copy, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
-import { ChatComposer, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
+import { ChatComposer, type ChatComposerHandle, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
+import { ChatConfirmDialog } from "../components/ChatConfirmDialog";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
@@ -1630,6 +1630,9 @@ export function ChatScreen({
   const [error, setError] = useState("");
   const [selectionNotice, setSelectionNotice] = useState("");
   const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  const [queueRestoreTarget, setQueueRestoreTarget] = useState<QueuedChatMessage | null>(null);
+  const composerRef = useRef<ChatComposerHandle | null>(null);
   const [endlessModeActive, setEndlessModeActive] = useState(false);
   const [endlessRetryDeadlineMs, setEndlessRetryDeadlineMs] = useState<number | null>(null);
   const [workingDir, setWorkingDir] = useState("");
@@ -3406,6 +3409,15 @@ export function ChatScreen({
       setError("当前任务运行中，先终止或等待完成");
       return;
     }
+    // The current session is still empty, so it already is the new session.
+    const activeSummary = conversations.find((conversation) => conversation.active);
+    if (
+      !loading
+      && !itemsRef.current.some((item) => item.role !== "system")
+      && !(activeSummary && activeSummary.messageCount > 0)
+    ) {
+      return;
+    }
     stopEndlessMode();
     setConversationLoading(true);
     setError("");
@@ -4377,12 +4389,37 @@ export function ChatScreen({
     return true;
   }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode, stopEndlessMode]);
 
-  const handleCancelQueuedMessage = useCallback(() => {
+  // Cancelling hands the queued message back to the composer instead of discarding it.
+  const restoreQueuedMessageToComposer = useCallback(() => {
+    const queued = queuedMessageRef.current;
+    setQueueRestoreTarget(null);
+    if (!queued) {
+      return;
+    }
     setQueuedMessageState(null, {
       botAlias,
       agentId: activeAgentIdRef.current || "main",
     });
+    if (queued.attachments.length > 0) {
+      setPendingAttachments((prev) => [
+        ...prev,
+        ...queued.attachments.filter((attachment) => !prev.some((item) => item.id === attachment.id)),
+      ]);
+    }
+    composerRef.current?.setDraft(queued.text);
   }, [botAlias, setQueuedMessageState]);
+
+  const handleCancelQueuedMessage = useCallback(() => {
+    const queued = queuedMessageRef.current;
+    if (!queued) {
+      return;
+    }
+    if (composerRef.current?.getDraft().trim()) {
+      setQueueRestoreTarget(queued);
+      return;
+    }
+    restoreQueuedMessageToComposer();
+  }, [restoreQueuedMessageToComposer]);
 
   const handleContinueFinalAnswer = useCallback((options: { background?: boolean; reuseAssistant?: ChatMessage } = {}) => {
     if (activeAgentIdRef.current !== "main") {
@@ -4652,6 +4689,11 @@ export function ChatScreen({
   }, [botAlias, client]);
 
   const terminateVisible = isStreaming || endlessModeActive || actionLoading === "kill";
+  useEffect(() => {
+    if (!isStreaming && !endlessModeActive) {
+      setKillConfirmOpen(false);
+    }
+  }, [endlessModeActive, isStreaming]);
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const deepseekCli = botOverview?.cliType === "deepseek";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
@@ -4923,31 +4965,17 @@ export function ChatScreen({
   }
 
   const endlessModeDialog = endlessModeConfirmOpen ? (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
-      <div role="dialog" aria-modal="true" aria-label="确认开启无尽模式" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
-        <h2 className="text-sm font-semibold text-[var(--text)]">开启无尽模式</h2>
-        <p className="mt-2 text-sm text-[var(--muted)]">将自动发送“Continue”。如果回答出错，会按环境配置的等待间隔后继续，直到获得正常回答。</p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              endlessModeTargetRef.current = null;
-              setEndlessModeConfirmOpen(false);
-            }}
-            className="inline-flex h-8 items-center rounded-md border border-[var(--workbench-hairline)] px-3 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)]"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirmEndlessMode}
-            className="inline-flex h-8 items-center rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:opacity-90"
-          >
-            确认开启
-          </button>
-        </div>
-      </div>
-    </div>
+    <ChatConfirmDialog
+      label="确认开启无尽模式"
+      title="开启无尽模式"
+      description="将自动发送“Continue”。如果回答出错，会按环境配置的等待间隔后继续，直到获得正常回答。"
+      confirmLabel="确认开启"
+      onCancel={() => {
+        endlessModeTargetRef.current = null;
+        setEndlessModeConfirmOpen(false);
+      }}
+      onConfirm={handleConfirmEndlessMode}
+    />
   ) : null;
 
   return (
@@ -5205,7 +5233,8 @@ export function ChatScreen({
           <ChatComposer
             key={`composer-${composerPulseKey}`}
             onSend={handleSend}
-            onStop={terminateVisible ? () => void handleKillTask() : undefined}
+            ref={composerRef}
+            onStop={terminateVisible ? () => setKillConfirmOpen(true) : undefined}
             stopDisabled={killTaskDisabled}
             stopBusy={actionLoading === "kill"}
             onAttachFiles={handleAttachFiles}
@@ -5245,7 +5274,34 @@ export function ChatScreen({
         ) : null}
       </div>
 
-      {endlessModeDialog && typeof document !== "undefined" ? createPortal(endlessModeDialog, document.body) : endlessModeDialog}
+      {endlessModeDialog}
+
+      {killConfirmOpen && terminateVisible ? (
+        <ChatConfirmDialog
+          label="确认终止任务"
+          title="终止任务"
+          description={endlessModeActive ? "将终止当前任务并停止无尽模式，确定继续吗？" : "将终止当前正在运行的任务，确定继续吗？"}
+          confirmLabel="确认终止"
+          tone="danger"
+          onCancel={() => setKillConfirmOpen(false)}
+          onConfirm={() => {
+            setKillConfirmOpen(false);
+            void handleKillTask();
+          }}
+        />
+      ) : null}
+
+      {queueRestoreTarget && queueRestoreTarget === queuedMessage ? (
+        <ChatConfirmDialog
+          label="确认覆盖输入框内容"
+          title="覆盖输入框内容"
+          description="输入框中已有内容。取消排队后，排队消息会放回输入框并覆盖当前内容。"
+          confirmLabel="覆盖并取消排队"
+          cancelLabel="保留排队"
+          onCancel={() => setQueueRestoreTarget(null)}
+          onConfirm={restoreQueuedMessageToComposer}
+        />
+      ) : null}
 
       {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog
