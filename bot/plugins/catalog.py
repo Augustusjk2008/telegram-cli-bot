@@ -58,6 +58,24 @@ def build_installable_plugin_payload(source_dir: Path, plugins_root: Path) -> di
     }
 
 
+def classify_plugin_install(previous_version: str | None, version: str) -> str:
+    """Describe what installing ``version`` did to the copy installed before (None: no copy)."""
+    if previous_version is None:
+        return "installed"
+    if previous_version == version:
+        return "reinstalled"
+    from scripts.update_package import compare_versions
+
+    try:
+        order = compare_versions(version, previous_version)
+    except ValueError:
+        # Versions outside SemVer cannot be ordered; a changed version still replaces the old copy.
+        return "upgraded"
+    if order == 0:
+        return "reinstalled"
+    return "upgraded" if order > 0 else "downgraded"
+
+
 def resolve_install_source_dir(
     source_plugins_root: Path,
     plugins_root: Path,
