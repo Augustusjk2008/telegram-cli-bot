@@ -1012,6 +1012,7 @@ def save_uploaded_file(
     filename: str,
     data: bytes,
     *,
+    parent_path: str | None = None,
     allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
@@ -1019,7 +1020,8 @@ def save_uploaded_file(
         _raise(400, "empty_file", "文件内容不能为空")
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_write_path(browser_dir, filename, allow_external_paths=allow_external_paths)
+    parent_dir = resolve_action_parent_dir(session, parent_path, allow_external_paths=allow_external_paths)
+    file_path = resolve_safe_write_path(parent_dir, filename, allow_external_paths=allow_external_paths)
     with open(file_path, "wb") as handle:
         handle.write(data)
     invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
@@ -1037,12 +1039,14 @@ async def save_uploaded_file_from_chunks(
     filename: str,
     chunks: AsyncIterator[bytes],
     *,
+    parent_path: str | None = None,
     allow_external_paths: bool = False,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
     browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_write_path(browser_dir, filename, allow_external_paths=allow_external_paths)
+    parent_dir = resolve_action_parent_dir(session, parent_path, allow_external_paths=allow_external_paths)
+    file_path = resolve_safe_write_path(parent_dir, filename, allow_external_paths=allow_external_paths)
     size = await _write_chunks(file_path, chunks, replace_existing=True)
     invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
     return {

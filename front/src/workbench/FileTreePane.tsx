@@ -34,7 +34,7 @@ type Props = {
   onDeletedFile: (path: string) => void;
   onRequestPreview: (path: string) => void;
   onRequestDiff?: (path: string, absolutePath: string) => void | Promise<void>;
-  onRequestUpload: (files: File[]) => Promise<void>;
+  onRequestUpload: (files: File[], parentPath: string) => Promise<void>;
   onRequestHome: () => Promise<void>;
   onRequestNavigatePath?: (path: string) => Promise<void>;
   onRequestOpenSystemFolder?: () => Promise<void>;
@@ -1143,7 +1143,7 @@ export function FileTreePane({
     });
   }
 
-  function resolveCreateParentPath() {
+  function resolveSelectedDirectoryPath() {
     const selectedPath = tree.selectedPath;
     if (!selectedPath) {
       return "";
@@ -1192,9 +1192,9 @@ export function FileTreePane({
     setActionError("");
     try {
       if (createKind === "directory") {
-        await tree.createDirectory(pendingName.trim(), resolveCreateParentPath());
+        await tree.createDirectory(pendingName.trim(), resolveSelectedDirectoryPath());
       } else {
-        const result = await tree.createFile(pendingName.trim(), "", resolveCreateParentPath());
+        const result = await tree.createFile(pendingName.trim(), "", resolveSelectedDirectoryPath());
         onCreatedFile(result.path, "", result.lastModifiedNs);
       }
       setCreateKind(null);
@@ -1429,7 +1429,7 @@ export function FileTreePane({
     }
     setActionError("");
     try {
-      await onRequestUpload(files);
+      await onRequestUpload(files, resolveSelectedDirectoryPath());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "上传失败");
     }
@@ -2112,7 +2112,7 @@ export function FileTreePane({
           data-testid="desktop-file-drop-overlay"
           className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-2xl border border-dashed border-[var(--accent)] bg-[var(--accent-soft)] text-sm font-medium text-[var(--text)]"
         >
-          释放文件以上传到当前工作区根目录
+          {resolveSelectedDirectoryPath() ? `释放文件以上传到 ${resolveSelectedDirectoryPath()}` : "释放文件以上传到当前工作区根目录"}
         </div>
       ) : null}
 

@@ -74,7 +74,7 @@ export type UseFileTreeResult = {
   downloadFile: (path: string) => Promise<void>;
   cancelDownload: () => void;
   /** Resolves false when the batch stopped being tracked because the bot or client changed. */
-  uploadFiles: (files: File[]) => Promise<boolean>;
+  uploadFiles: (files: File[], parentPath?: string) => Promise<boolean>;
   cancelUpload: () => void;
 };
 
@@ -714,7 +714,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     setDownloadProgress(null);
   }
 
-  async function uploadFiles(files: File[]) {
+  async function uploadFiles(files: File[], parentPath = "") {
     if (files.length === 0) {
       return false;
     }
@@ -724,6 +724,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     if (!confirmLargeFileUploads(files)) {
       return false;
     }
+    const targetDirectory = joinAbsoluteTreePath(rootPath, parentPath, remote, platform);
     const controller = new AbortController();
     uploadAbortControllerRef.current = controller;
     const isTracked = () => uploadAbortControllerRef.current === controller;
@@ -741,9 +742,11 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
           if (isTracked() && !controller.signal.aborted) {
             setUploadProgress({ ...batch, ...progress });
           }
-        }, controller.signal);
+        }, controller.signal, targetDirectory);
         if (isTracked()) {
-          highlightPath(file.name);
+          const path = joinTreePath(parentPath, file.name);
+          updateExpandedPathsSynced((current) => uniqueExpandedPaths([...current, ...ancestorPathsForPath(path)]));
+          highlightPath(path);
         }
       }
     } catch (nextError) {

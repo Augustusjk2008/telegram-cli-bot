@@ -340,16 +340,25 @@ test("remote desktop sidebar opens settings and refreshes the workspace after SS
   await waitFor(() => expect(list).toHaveBeenCalled());
 });
 
-test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the file tree", async (entrypoint) => {
+test.each([
+  ["picker", ""], ["drop", ""], ["picker", "uploads"], ["drop", "uploads"],
+])("remote desktop file upload via %s into %s refreshes the file tree", async (entrypoint, parentPath) => {
   const client = new MockWebBotClient();
   let uploaded = false;
-  const list = vi.spyOn(client, "listFiles").mockImplementation(async () => ({
-    workingDir: remote.root,
-    entries: uploaded ? [{ name: "report.txt", isDir: false }] : [{ name: "README.md", isDir: false }],
+  const targetDirectory = parentPath ? `${remote.root}/${parentPath}` : remote.root;
+  const list = vi.spyOn(client, "listFiles").mockImplementation(async (_alias, path) => ({
+    workingDir: path || remote.root,
+    entries: parentPath && path !== targetDirectory
+      ? [{ name: parentPath, isDir: true }]
+      : uploaded ? [{ name: "report.txt", isDir: false }] : [{ name: "README.md", isDir: false }],
   }));
   const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
   render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="remote" client={client} remoteWorkspace={remote} /></PersistentTerminalProvider>);
-  await screen.findByRole("button", { name: "打开 README.md" });
+  if (parentPath) {
+    fireEvent.click(await screen.findByRole("button", { name: `展开 ${parentPath}` }));
+  }
+  const prefix = parentPath ? `${parentPath}/` : "";
+  await screen.findByRole("button", { name: `打开 ${prefix}README.md` });
   list.mockClear();
   const file = new File(["remote upload"], "report.txt", { type: "text/plain" });
   if (entrypoint === "picker") {
@@ -359,10 +368,10 @@ test.each(["picker", "drop"])("remote desktop file upload via %s refreshes the f
   } else {
     fireEvent.drop(screen.getByTestId("desktop-file-tree-dropzone"), { dataTransfer: { files: [file], types: ["Files"] } });
   }
-  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file, expect.any(Function), expect.any(AbortSignal)));
-  expect(await screen.findByRole("button", { name: "打开 report.txt" })).toBeInTheDocument();
+  await waitFor(() => expect(upload).toHaveBeenCalledWith("remote", file, expect.any(Function), expect.any(AbortSignal), targetDirectory));
+  expect(await screen.findByRole("button", { name: `打开 ${prefix}report.txt` })).toBeInTheDocument();
   expect(list).toHaveBeenCalled();
-  fireEvent.contextMenu(screen.getByRole("button", { name: "打开 report.txt" }));
+  fireEvent.contextMenu(screen.getByRole("button", { name: `打开 ${prefix}report.txt` }));
   expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
 });
 

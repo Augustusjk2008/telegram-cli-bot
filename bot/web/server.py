@@ -4508,6 +4508,7 @@ class WebApiServer:
             self._chat_user_id(auth),
             filename,
             _iter_field_chunks(field),
+            parent_path=request.query.get("parent_path"),
             allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
         )
         return _json({"ok": True, "data": result})

@@ -231,7 +231,8 @@ async def test_remote_chat_attachment_scope_and_chat_permissions(tmp_path, monke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("root,platform", [("/srv/project", "posix"), ("/D:/project", "windows")])
-async def test_remote_upload_uses_current_remote_directory_and_preserves_bytes(tmp_path, monkeypatch, root, platform):
+@pytest.mark.parametrize("parent_path", [None, "selected", "absolute"])
+async def test_remote_upload_uses_target_directory_and_preserves_bytes(tmp_path, monkeypatch, root, platform, parent_path):
     server, auth = _server(tmp_path, monkeypatch)
     config = {**CONFIG, "root": root, "platform": platform}
     server.manager.main_profile.remote_workspace = config
@@ -242,17 +243,23 @@ async def test_remote_upload_uses_current_remote_directory_and_preserves_bytes(t
     connection.upload_file.return_value = {"size": len(payload)}
     service = Mock(get=Mock(return_value=connection))
     monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    parent = root + "/资料 #1" if parent_path == "absolute" else parent_path
+    target = root + "/资料 #1" if parent_path == "absolute" else root + "/assets" + ("/selected" if parent_path else "")
+    params = {"parent_path": parent} if parent else {}
     async with TestClient(TestServer(server._build_app())) as client:
         response = await client.post("/api/bots/main/cd", json={"path": "assets"})
         assert response.status == 200
-        response = await client.post("/api/bots/main/files/upload", data=_upload_form("image.bin", payload))
+        response = await client.post("/api/bots/main/files/upload", params=params, data=_upload_form("image.bin", payload))
         assert response.status == 200, await response.text()
-        assert (await response.json())["data"]["saved_path"] == root + "/assets/image.bin"
-        connection.upload_file.assert_called_once_with(root + "/assets/image.bin", payload, root=root)
+        assert (await response.json())["data"]["saved_path"] == target + "/image.bin"
+        connection.upload_file.assert_called_once_with(target + "/image.bin", payload, root=root)
+        response = await client.post("/api/bots/main/files/upload", data=_upload_form("next.bin", payload))
+        assert response.status == 200, await response.text()
+        connection.upload_file.assert_called_with(root + "/assets/next.bin", payload, root=root)
         auth.capabilities.remove(CAP_WRITE_FILES)
-        response = await client.post("/api/bots/main/files/upload", data=_upload_form("image.bin", payload))
+        response = await client.post("/api/bots/main/files/upload", params=params, data=_upload_form("image.bin", payload))
         assert response.status == 403
-        assert connection.upload_file.call_count == 1
+        assert connection.upload_file.call_count == 2
     assert not (Path(server.manager.main_profile.working_dir) / "image.bin").exists()
 
 

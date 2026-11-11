@@ -6077,6 +6077,7 @@ export class MockWebBotClient implements WebBotClient {
     file: File,
     onProgress?: (progress: FileUploadProgress) => void,
     signal?: AbortSignal,
+    parentPath?: string,
   ): Promise<void> {
     signal?.throwIfAborted();
     emitMockUploadProgress(file, onProgress);

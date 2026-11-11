@@ -6898,9 +6898,11 @@ export class RealWebBotClient implements WebBotClient {
     file: File,
     onProgress?: (progress: FileUploadProgress) => void,
     signal?: AbortSignal,
+    parentPath?: string,
   ): Promise<void> {
+    const query = parentPath ? `?parent_path=${encodeURIComponent(parentPath)}` : "";
     await this.uploadMultipartFile<unknown>(
-      `/api/bots/${encodeURIComponent(botAlias)}/files/upload`,
+      `/api/bots/${encodeURIComponent(botAlias)}/files/upload${query}`,
       file,
       "上传失败",
       onProgress,

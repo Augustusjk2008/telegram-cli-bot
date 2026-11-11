@@ -158,7 +158,9 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
             data.extend(chunk)
         if not data:
             raise WebApiError(400, "empty_file", "文件内容不能为空")
-        target = _relative_target(filename, current, platform)
+        parent_path = request.query.get("parent_path", "").strip()
+        parent = _relative_target(parent_path, current, platform) if parent_path else current
+        target = _relative_target(filename, parent, platform)
         result = await asyncio.to_thread(connection.upload_file, target, bytes(data), root=root)
         return _response({"filename": filename, "saved_path": target, "size": result["size"]})
     if suffix == "ls":

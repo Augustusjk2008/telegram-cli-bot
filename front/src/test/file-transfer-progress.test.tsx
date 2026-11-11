@@ -65,6 +65,36 @@ test("asks for Chinese confirmation before uploading a file larger than 20MB", a
   expect(upload).not.toHaveBeenCalled();
 });
 
+test.each(["picker", "drop"])("desktop upload via %s saves in the selected nested directory and refreshes it", async (entrypoint) => {
+  const client = new MockWebBotClient();
+  let uploaded = false;
+  vi.spyOn(client, "listFiles").mockImplementation(async (_alias, path) => ({
+    workingDir: path || "C:/workspace",
+    entries: path === "C:/workspace/docs/资料 #1"
+      ? uploaded ? [{ name: "report.txt", isDir: false }] : []
+      : path === "C:/workspace/docs" ? [{ name: "资料 #1", isDir: true }] : [{ name: "docs", isDir: true }],
+  }));
+  const changeDirectory = vi.spyOn(client, "changeDirectory");
+  const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
+  render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="main" client={client} /></PersistentTerminalProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: "展开 docs" }));
+  fireEvent.click(await screen.findByRole("button", { name: "展开 docs/资料 #1" }));
+  await screen.findByRole("button", { name: "收起 docs/资料 #1" });
+
+  const file = new File(["selected directory"], "report.txt");
+  if (entrypoint === "picker") {
+    fireEvent.click(screen.getByRole("button", { name: "更多文件操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "上传文件" }));
+    fireEvent.change(screen.getByLabelText("上传文件"), { target: { files: [file] } });
+  } else {
+    fireEvent.drop(screen.getByTestId("desktop-file-tree-dropzone"), { dataTransfer: { files: [file], types: ["Files"] } });
+  }
+
+  await waitFor(() => expect(upload).toHaveBeenCalledWith("main", file, expect.any(Function), expect.any(AbortSignal), "C:/workspace/docs/资料 #1"));
+  expect(await screen.findByRole("button", { name: "打开 docs/资料 #1/report.txt" })).toBeInTheDocument();
+  expect(changeDirectory).not.toHaveBeenCalled();
+});
+
 test("desktop status bar shows progress bars for file-tree downloads and uploads", async () => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "listFiles").mockResolvedValue({

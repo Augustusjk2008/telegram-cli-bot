@@ -1207,11 +1207,11 @@ export function DesktopWorkbench({
     }
   }
 
-  async function handleUpload(files: File[]) {
+  async function handleUpload(files: File[], parentPath: string) {
     if (!canMutateFiles) {
       return;
     }
-    if (await fileTree.uploadFiles(files)) {
+    if (await fileTree.uploadFiles(files, parentPath)) {
       await refreshWorkspaceChrome({ preserveExpandedPaths: true });
     }
   }

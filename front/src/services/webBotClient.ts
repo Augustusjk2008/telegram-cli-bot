@@ -372,6 +372,7 @@ export interface WebBotClient {
     file: File,
     onProgress?: (progress: FileUploadProgress) => void,
     signal?: AbortSignal,
+    parentPath?: string,
   ): Promise<void>;
   downloadFile(
     botAlias: string,

@@ -134,7 +134,7 @@ describe("RealWebBotClient", () => {
     }
   }
 
-  test("uploads multipart files with request progress under the node prefix", async () => {
+  test.each([undefined, "C:/workspace/资料 #1 & drafts"])("uploads multipart files with request progress and parent %s under the node prefix", async (parentPath) => {
     window.history.replaceState(null, "", "/node/files-host/");
     vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/files-host" });
     FakeUploadXhr.instances = [];
@@ -142,10 +142,11 @@ describe("RealWebBotClient", () => {
     const file = new File(["0123456789"], "report.txt", { type: "text/plain" });
     const progress = vi.fn();
 
-    const upload = new RealWebBotClient().uploadFile("main bot", file, progress);
+    const upload = new RealWebBotClient().uploadFile("main bot", file, progress, undefined, parentPath);
     const xhr = FakeUploadXhr.instances[0];
     expect(xhr.method).toBe("POST");
-    expect(xhr.url).toBe("/node/files-host/api/bots/main%20bot/files/upload");
+    const query = parentPath ? `?parent_path=${encodeURIComponent(parentPath)}` : "";
+    expect(xhr.url).toBe(`/node/files-host/api/bots/main%20bot/files/upload${query}`);
     expect(xhr.body?.get("file")).toBe(file);
     expect(xhr.headers["Content-Type"]).toBeUndefined();
     // The multipart request is larger than the file; progress is scaled back to the file size.
