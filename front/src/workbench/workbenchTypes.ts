@@ -23,6 +23,20 @@ export type FocusedWorkbenchPane = "sidebar" | "editor" | "terminal" | "chat" | 
 
 export type WorkbenchRestoreState = "clean" | "restored" | "draft-only";
 
+export type EditorGroupId = "left" | "right";
+
+export type EditorGroup = {
+  paths: string[];
+  activePath: string;
+};
+
+export type EditorGroupsState = {
+  left: EditorGroup;
+  right: EditorGroup;
+  activeGroupId: EditorGroupId;
+  splitRatio: number;
+};
+
 export type TerminalOverrideState = {
   cwd: string;
   source: "tree" | "manual";
@@ -60,6 +74,7 @@ export type PersistedWorkbenchSession = {
   expandedPaths: string[];
   selectedTreePath?: string;
   activeTabPath: string;
+  editorGroups?: EditorGroupsState;
   terminalOverrideCwd?: string;
   focusedPane?: FocusedWorkbenchPane;
   tabs: PersistedWorkbenchTab[];
@@ -138,6 +153,7 @@ export type EditorTab = {
 };
 
 export type EditorRevealLocation = {
+  groupId?: EditorGroupId;
   path: string;
   line: number;
   column: number;

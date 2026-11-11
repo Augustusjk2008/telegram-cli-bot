@@ -16,9 +16,12 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { selectTabsForPersistence } from "./workbenchSession";
+import { normalizeEditorGroups } from "./editorGroups";
 import {
   CLOSED_TAB_HISTORY_LIMIT,
   type EditorTab,
+  type EditorGroupId,
+  type EditorGroupsState,
   type PersistedWorkbenchTab,
   type PersistedWorkbenchSession,
 } from "./workbenchTypes";
@@ -206,12 +209,72 @@ function createTabFromSnapshot(tab: PersistedWorkbenchTab): EditorTab {
 }
 
 export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly = false, canWriteFiles = true, enableDocumentSync = true, remoteWorkspace }: Props) {
-  const [tabs, setTabs] = useState<EditorTab[]>([]);
-  const [activeTabPath, setActiveTabPath] = useState("");
+  const [tabs, setTabsState] = useState<EditorTab[]>([]);
+  const [groups, setGroupsState] = useState<EditorGroupsState>(() => normalizeEditorGroups(null, []));
+  const [editorSessionKey, setEditorSessionKey] = useState<object>(() => ({}));
   const [closedTabs, setClosedTabs] = useState<PersistedWorkbenchTab[]>([]);
   const tabsRef = useRef<EditorTab[]>([]);
+  const groupsRef = useRef(groups);
+  const saveRequestsRef = useRef(new Map<string, object>());
+  const readRequestsRef = useRef(new Map<string, { promise: Promise<void>; token: object }>());
+  const externalSourceRequestsRef = useRef(new Map<string, object>());
+  const activeTabPath = groups[groups.activeGroupId].activePath;
   const activeTabPathRef = useRef("");
   const closedTabsRef = useRef<PersistedWorkbenchTab[]>([]);
+
+  function setTabs(value: EditorTab[] | ((current: EditorTab[]) => EditorTab[])) {
+    const next = typeof value === "function" ? value(tabsRef.current) : value;
+    tabsRef.current = next;
+    setTabsState(next);
+  }
+
+  function setGroups(value: EditorGroupsState) {
+    groupsRef.current = value;
+    activeTabPathRef.current = value[value.activeGroupId].activePath;
+    setGroupsState(value);
+  }
+
+  function setActiveTabPath(path: string, groupId = groupsRef.current.activeGroupId) {
+    const current = groupsRef.current;
+    const tab = tabsRef.current.find((item) => item.path === path);
+    const otherId = groupId === "left" ? "right" : "left";
+    // Session-backed and preview tabs retain a single view and lifecycle.
+    if (tab && tab.kind !== "file" && current[otherId].paths.includes(path)) groupId = otherId;
+    const group = current[groupId];
+    setGroups({
+      ...current,
+      activeGroupId: groupId,
+      [groupId]: { paths: path && !group.paths.includes(path) ? [...group.paths, path] : group.paths, activePath: path },
+    });
+  }
+
+  function focusGroup(groupId: EditorGroupId) {
+    if (groupsRef.current.activeGroupId !== groupId) setGroups({ ...groupsRef.current, activeGroupId: groupId });
+  }
+
+  function groupForPath(path: string, preferred = groupsRef.current.activeGroupId): EditorGroupId {
+    const current = groupsRef.current;
+    if (current[preferred].paths.includes(path)) return preferred;
+    const other = preferred === "left" ? "right" : "left";
+    return current[other].paths.includes(path) ? other : preferred;
+  }
+
+  function setSplitRatio(ratio: number) {
+    setGroups({ ...groupsRef.current, splitRatio: Math.min(0.8, Math.max(0.2, ratio)) });
+  }
+
+  function closeRightGroup() {
+    const current = groupsRef.current;
+    setGroups({
+      ...current,
+      left: {
+        paths: [...new Set([...current.left.paths, ...current.right.paths])],
+        activePath: current.activeGroupId === "right" ? current.right.activePath : current.left.activePath,
+      },
+      right: { paths: [], activePath: "" },
+      activeGroupId: "left",
+    });
+  }
   function documentPath(path: string) {
     return remoteWorkspace ? relativeRemotePath(path, remoteWorkspace.root, remoteWorkspace.platform) : path;
   }
@@ -354,14 +417,6 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   useEffect(() => {
-    tabsRef.current = tabs;
-  }, [tabs]);
-
-  useEffect(() => {
-    activeTabPathRef.current = activeTabPath;
-  }, [activeTabPath]);
-
-  useEffect(() => {
     closedTabsRef.current = closedTabs;
   }, [closedTabs]);
 
@@ -384,8 +439,12 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
 
   useEffect(() => {
     setTabs([]);
-    setActiveTabPath("");
+    setGroups(normalizeEditorGroups(null, []));
     setClosedTabs([]);
+    setEditorSessionKey({});
+    saveRequestsRef.current.clear();
+    readRequestsRef.current.clear();
+    externalSourceRequestsRef.current.clear();
   }, [scopeIdentity]);
 
   useEffect(() => {
@@ -435,6 +494,19 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   async function hydrateTabContent(path: string, generation = scopeGenerationRef.current) {
+    const existing = readRequestsRef.current.get(path);
+    if (existing) return existing.promise;
+    const token = {};
+    const request = readTabContent(path, generation, token);
+    readRequestsRef.current.set(path, { promise: request, token });
+    try {
+      await request;
+    } finally {
+      if (readRequestsRef.current.get(path)?.token === token) readRequestsRef.current.delete(path);
+    }
+  }
+
+  async function readTabContent(path: string, generation: number, token: object) {
     if (structureOnly || !isCurrentScope(generation)) {
       return;
     }
@@ -456,7 +528,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
 
     try {
       const result = await client.readFileFull(botAlias, path);
-      if (!isCurrentScope(generation)) {
+      if (!isCurrentScope(generation) || readRequestsRef.current.get(path)?.token !== token) {
         return;
       }
       setTabs((current) => isCurrentScope(generation) && current.some((item) => item.path === path)
@@ -492,7 +564,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         }, "didOpen");
       }
     } catch (error) {
-      if (!isCurrentScope(generation)) {
+      if (!isCurrentScope(generation) || readRequestsRef.current.get(path)?.token !== token) {
         return;
       }
       const message = error instanceof Error ? error.message : "读取文件失败";
@@ -530,7 +602,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     queueDocumentSync(nextTab, "didOpen");
   }
 
-  async function openFile(path: string, pluginTargets?: PluginOpenTarget[]) {
+  async function openFile(path: string, pluginTargets?: PluginOpenTarget[], groupId = groupsRef.current.activeGroupId) {
     if (structureOnly) {
       return;
     }
@@ -542,10 +614,10 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       setTabs((current) => current.map((item) => item.path === path
         ? {
             ...item,
-            pluginTargets: nextPluginTargets,
+            pluginTargets: nextPluginTargets ?? item.pluginTargets,
           }
         : item));
-      setActiveTabPath(path);
+      setActiveTabPath(path, groupId);
       if (existing.cold || existing.missing) {
         await hydrateTabContent(path, generation);
       }
@@ -562,14 +634,14 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         pluginTargets: nextPluginTargets,
       }),
     ]);
-    setActiveTabPath(path);
+    setActiveTabPath(path, groupId);
     await hydrateTabContent(path, generation);
   }
 
   async function openExternalSource(input: {
     sourceId: string;
     displayPath?: string;
-  } | string): Promise<boolean> {
+  } | string, groupId = groupsRef.current.activeGroupId): Promise<boolean> {
     if (structureOnly) {
       return false;
     }
@@ -580,6 +652,8 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     }
     const requestedDisplayPath = typeof input === "string" ? "" : String(input.displayPath || "").trim();
     const path = externalTabPath(sourceId);
+    const request = {};
+    externalSourceRequestsRef.current.set(path, request);
     const existing = tabsRef.current.find((item) => item.kind === "external-source" && item.sourceId === sourceId);
     const initialTab = existing || createTab(path, "", undefined, {
       basename: externalDisplayName(requestedDisplayPath, sourceId),
@@ -601,12 +675,11 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         : item);
       setTabs(tabsRef.current);
     }
-    activeTabPathRef.current = path;
-    setActiveTabPath(path);
+    setActiveTabPath(path, groupId);
 
     try {
       const result: ExternalSourceReadResult = await client.readExternalSource(botAlias, sourceId);
-      if (!isCurrentScope(generation)) {
+      if (!isCurrentScope(generation) || externalSourceRequestsRef.current.get(path) !== request || !tabsRef.current.some((tab) => tab.path === path)) {
         return false;
       }
       const displayPath = result.displayPath || requestedDisplayPath || "外部源码";
@@ -632,16 +705,12 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         missing: false,
         contentPersistence: "none",
       };
-      const nextTabs = tabsRef.current.some((item) => item.path === path)
-        ? tabsRef.current.map((item) => item.path === path ? nextTab : item)
-        : [...tabsRef.current, nextTab];
+      const nextTabs = tabsRef.current.map((item) => item.path === path ? nextTab : item);
       tabsRef.current = nextTabs;
       setTabs(nextTabs);
-      activeTabPathRef.current = path;
-      setActiveTabPath(path);
       return true;
     } catch (error) {
-      if (!isCurrentScope(generation)) {
+      if (!isCurrentScope(generation) || externalSourceRequestsRef.current.get(path) !== request) {
         return false;
       }
       const message = getExternalSourceErrorMessage(error);
@@ -663,10 +732,12 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       tabsRef.current = nextTabs;
       setTabs(nextTabs);
       return false;
+    } finally {
+      if (externalSourceRequestsRef.current.get(path) === request) externalSourceRequestsRef.current.delete(path);
     }
   }
 
-  async function openPluginView(target: PluginOpenTarget, options?: { activate?: boolean }) {
+  async function openPluginView(target: PluginOpenTarget, options?: { activate?: boolean; groupId?: EditorGroupId }) {
     if (structureOnly) {
       return;
     }
@@ -712,7 +783,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     setTabs(loadingTabs);
     if (options?.activate !== false) {
       activeTabPathRef.current = tabPath;
-      setActiveTabPath(tabPath);
+      setActiveTabPath(tabPath, options?.groupId);
     }
 
     try {
@@ -824,6 +895,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     statusText?: string;
     error?: string;
     activate?: boolean;
+    groupId?: EditorGroupId;
   }) {
     if (structureOnly) {
       return "";
@@ -883,13 +955,13 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     });
     if (input.activate !== false) {
       activeTabPathRef.current = tabPath;
-      setActiveTabPath(tabPath);
+      setActiveTabPath(tabPath, input.groupId);
     }
     return tabPath;
   }
 
-  async function activateTab(path: string) {
-    setActiveTabPath(path);
+  async function activateTab(path: string, groupId = groupsRef.current.activeGroupId) {
+    setActiveTabPath(path, groupId);
     if (structureOnly) {
       return;
     }
@@ -900,8 +972,11 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   }
 
   function updateActiveContent(content: string) {
-    const activePath = activeTabPathRef.current;
-    const target = tabsRef.current.find((item) => item.path === activePath);
+    updateContent(activeTabPathRef.current, content);
+  }
+
+  function updateContent(path: string, content: string) {
+    const target = tabsRef.current.find((item) => item.path === path);
     if (!target || target.readOnly || !canWriteFiles || target.content === content) {
       return;
     }
@@ -914,16 +989,19 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       error: "",
       missing: false,
     };
-    const nextTabs = tabsRef.current.map((item) => item.path === activePath ? next : item);
+    const nextTabs = tabsRef.current.map((item) => item.path === path ? next : item);
     tabsRef.current = nextTabs;
     setTabs(nextTabs);
     queueDocumentSync(next, "didChange");
   }
 
   async function saveActiveTab() {
-    const currentActivePath = activeTabPathRef.current;
-    const target = tabsRef.current.find((item) => item.path === currentActivePath);
-    if (!target) {
+    await saveTab(activeTabPathRef.current);
+  }
+
+  async function saveTab(path: string) {
+    const target = tabsRef.current.find((item) => item.path === path);
+    if (!target || target.saving || target.loading || target.missing || !target.dirty) {
       return;
     }
     if (target.readOnly) {
@@ -936,36 +1014,46 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       return;
     }
 
+    const generation = scopeGenerationRef.current;
+    const request = {};
+    saveRequestsRef.current.set(path, request);
     setTabs((current) => current.map((item) => item.path === target.path
       ? { ...item, saving: true, error: "", statusText: "" }
       : item));
 
     try {
       const result = await client.writeFile(botAlias, target.path, target.content, target.lastModifiedNs, target.encoding);
+      if (!isCurrentScope(generation) || saveRequestsRef.current.get(path) !== request) return;
       setTabs((current) => current.map((item) => item.path === target.path
         ? {
             ...item,
             saving: false,
-            dirty: false,
-            savedContent: item.content,
-            statusText: "已保存",
+            dirty: item.content !== target.content,
+            savedContent: target.content,
+            statusText: item.content === target.content ? "已保存" : "",
             error: "",
             lastModifiedNs: result.lastModifiedNs,
             encoding: result.encoding || target.encoding,
-            contentPersistence: "clean_snapshot",
+            contentPersistence: item.content === target.content ? "clean_snapshot" : "dirty_snapshot",
             cold: false,
             missing: false,
           }
         : item));
     } catch (error) {
+      if (!isCurrentScope(generation) || saveRequestsRef.current.get(path) !== request) return;
       const message = error instanceof Error ? error.message : "保存失败";
       setTabs((current) => current.map((item) => item.path === target.path
         ? { ...item, saving: false, error: message }
         : item));
+    } finally {
+      if (saveRequestsRef.current.get(path) === request) saveRequestsRef.current.delete(path);
     }
   }
 
   function closePath(path: string) {
+    saveRequestsRef.current.delete(path);
+    readRequestsRef.current.delete(path);
+    externalSourceRequestsRef.current.delete(path);
     const target = tabsRef.current.find((item) => item.path === path);
     if (target) {
       void closeDocuments([target]);
@@ -979,12 +1067,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
       }
       const nextTabs = current.filter((item) => item.path !== path);
       tabsRef.current = nextTabs;
-      if (activeTabPathRef.current !== path) {
-        return nextTabs;
-      }
-      const nextActive = nextTabs[Math.max(0, index - 1)]?.path || nextTabs[nextTabs.length - 1]?.path || "";
-      activeTabPathRef.current = nextActive;
-      setActiveTabPath(nextActive);
+      setGroups(normalizeEditorGroups(groupsRef.current, nextTabs.map((item) => item.path)));
       return nextTabs;
     });
   }
@@ -996,22 +1079,19 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     });
     if (removedTabs.length > 0) {
       void closeDocuments(removedTabs);
-      removedTabs.forEach((item) => disposePluginSession(item));
+      removedTabs.forEach((item) => {
+        saveRequestsRef.current.delete(item.path);
+        disposePluginSession(item);
+      });
     }
 
     setTabs((current) => {
-      const activeIndex = current.findIndex((item) => item.path === activeTabPathRef.current);
       const nextTabs = current.filter((item) => {
         const sourcePath = editorTabSourcePath(item);
         return !sourcePath || !isSameOrDescendantSourcePath(sourcePath, path);
       });
       tabsRef.current = nextTabs;
-      if (nextTabs.some((item) => item.path === activeTabPathRef.current)) {
-        return nextTabs;
-      }
-      const nextActive = nextTabs[Math.max(0, activeIndex - 1)]?.path || nextTabs[nextTabs.length - 1]?.path || "";
-      activeTabPathRef.current = nextActive;
-      setActiveTabPath(nextActive);
+      setGroups(normalizeEditorGroups(groupsRef.current, nextTabs.map((item) => item.path)));
       return nextTabs;
     });
     setClosedTabs((current) => {
@@ -1021,20 +1101,37 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     });
   }
 
-  function closeTab(path: string) {
-    const target = tabsRef.current.find((item) => item.path === path);
-    if (!target) {
-      return true;
-    }
-    if (target.dirty && !window.confirm("文件尚未保存，确定放弃修改吗？")) {
+  function closeGroupTabs(paths: string[], groupId: EditorGroupId) {
+    const current = groupsRef.current;
+    const otherId = groupId === "left" ? "right" : "left";
+    const closing = new Set(paths);
+    const documents = tabsRef.current.filter((tab) => closing.has(tab.path) && !current[otherId].paths.includes(tab.path));
+    if (documents.some((tab) => tab.dirty) && !window.confirm("文件尚未保存，确定放弃修改吗？")) {
       return false;
     }
-    pushClosedTab(path);
-    closePath(path);
+    const group = current[groupId];
+    const nextPaths = group.paths.filter((path) => !closing.has(path));
+    const activeIndex = group.paths.indexOf(group.activePath);
+    const activePath = nextPaths.includes(group.activePath)
+      ? group.activePath
+      : nextPaths[Math.max(0, activeIndex - 1)] || nextPaths[0] || "";
+    setGroups({
+      ...current,
+      [groupId]: { paths: nextPaths, activePath },
+      activeGroupId: current.activeGroupId === groupId && nextPaths.length === 0 ? otherId : current.activeGroupId,
+    });
+    documents.forEach((tab) => pushClosedTab(tab.path));
+    documents.forEach((tab) => closePath(tab.path));
+    if (!groupsRef.current.right.paths.length && groupsRef.current.activeGroupId === "right") focusGroup("left");
     return true;
   }
 
-  function closeAllTabs() {
+  function closeTab(path: string, groupId = groupsRef.current.activeGroupId) {
+    return closeGroupTabs([path], groupId);
+  }
+
+  function closeAllTabs(groupId?: EditorGroupId) {
+    if (groupId) return closeGroupTabs(groupsRef.current[groupId].paths, groupId);
     const closingTabs = tabsRef.current;
     if (closingTabs.some((item) => item.dirty) && !window.confirm("存在未保存的文件，确定关闭全部并放弃修改吗？")) {
       return false;
@@ -1046,44 +1143,26 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     void closeDocuments(closingTabs);
     tabsRef.current = [];
     setTabs([]);
-    activeTabPathRef.current = "";
-    setActiveTabPath("");
+    setGroups(normalizeEditorGroups(null, []));
+    saveRequestsRef.current.clear();
+    readRequestsRef.current.clear();
+    externalSourceRequestsRef.current.clear();
     return true;
   }
 
-  function closeOtherTabs(path: string) {
-    const currentTabs = tabsRef.current;
-    const nextClosed = currentTabs.filter((item) => item.path !== path);
-    nextClosed.forEach((item) => pushClosedTab(item.path));
-    nextClosed.forEach((item) => disposePluginSession(item));
-    void closeDocuments(nextClosed);
-    const nextTabs = currentTabs.filter((item) => item.path === path);
-    tabsRef.current = nextTabs;
-    setTabs(nextTabs);
-    const nextActivePath = nextTabs[0]?.path || "";
-    activeTabPathRef.current = nextActivePath;
-    setActiveTabPath(nextActivePath);
+  function closeOtherTabs(path: string, groupId = groupsRef.current.activeGroupId) {
+    if (closeGroupTabs(groupsRef.current[groupId].paths.filter((item) => item !== path), groupId)) {
+      setActiveTabPath(path, groupId);
+    }
   }
 
-  function closeTabsToRight(path: string) {
-    const currentTabs = tabsRef.current;
-    const index = currentTabs.findIndex((item) => item.path === path);
+  function closeTabsToRight(path: string, groupId = groupsRef.current.activeGroupId) {
+    const paths = groupsRef.current[groupId].paths;
+    const index = paths.indexOf(path);
     if (index < 0) {
       return;
     }
-    const closingTabs = currentTabs.slice(index + 1);
-    closingTabs.forEach((item) => {
-      pushClosedTab(item.path);
-      disposePluginSession(item);
-    });
-    void closeDocuments(closingTabs);
-    const nextTabs = currentTabs.slice(0, index + 1);
-    tabsRef.current = nextTabs;
-    setTabs(nextTabs);
-    if (!nextTabs.some((item) => item.path === activeTabPathRef.current)) {
-      activeTabPathRef.current = path;
-      setActiveTabPath(path);
-    }
+    closeGroupTabs(paths.slice(index + 1), groupId);
   }
 
   async function reopenLastClosedTab() {
@@ -1155,14 +1234,18 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         ? [{ previous: item, next: nextTab }]
         : [];
     });
-    const activeIndex = currentTabs.findIndex((item) => item.path === activeTabPathRef.current);
-    const nextActivePath = activeIndex >= 0 ? nextTabs[activeIndex]?.path || "" : activeTabPathRef.current;
+    const remappedPaths = new Map(currentTabs.map((tab, index) => [tab.path, nextTabs[index].path]));
+    const nextGroups = { ...groupsRef.current };
+    for (const id of ["left", "right"] as const) {
+      const group = nextGroups[id];
+      nextGroups[id] = {
+        paths: group.paths.map((path) => remappedPaths.get(path) || path),
+        activePath: remappedPaths.get(group.activePath) || group.activePath,
+      };
+    }
     tabsRef.current = nextTabs;
     setTabs(nextTabs);
-    if (nextActivePath !== activeTabPathRef.current) {
-      activeTabPathRef.current = nextActivePath;
-      setActiveTabPath(nextActivePath);
-    }
+    setGroups(nextGroups);
     setClosedTabs((current) => {
       const nextClosedTabs = current.map((item) => {
         const remappedPath = remapEditorSourcePath(item.path, oldPath, nextPath);
@@ -1200,12 +1283,12 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
   async function restoreFromSnapshot(
     restoredTabs: PersistedWorkbenchSession["tabs"],
     restoredActiveTabPath: string,
-    options?: { append?: boolean },
+    options?: { append?: boolean; groups?: EditorGroupsState },
   ) {
     if (structureOnly || !canWriteFiles) {
       if (!options?.append) {
         setTabs([]);
-        setActiveTabPath("");
+        setGroups(normalizeEditorGroups(null, []));
       }
       return;
     }
@@ -1213,7 +1296,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     if (snapshotTabs.length === 0) {
       if (!options?.append) {
         setTabs([]);
-        setActiveTabPath("");
+        setGroups(normalizeEditorGroups(null, []));
       }
       return;
     }
@@ -1236,13 +1319,13 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     } else {
       setTabs(snapshotTabs);
     }
-    setActiveTabPath(nextActiveTabPath);
+    if (options?.append) setActiveTabPath(nextActiveTabPath);
+    else setGroups(normalizeEditorGroups(options?.groups, snapshotTabs.map((tab) => tab.path), nextActiveTabPath));
     snapshotTabs.filter(isSyncableTab).forEach((tab) => queueDocumentSync(tab, "didOpen"));
 
-    const activeRestoredTab = snapshotTabs.find((item) => item.path === nextActiveTabPath);
-    if (activeRestoredTab?.cold) {
-      await hydrateTabContent(activeRestoredTab.path);
-    }
+    await Promise.all([...new Set([groupsRef.current.left.activePath, groupsRef.current.right.activePath])]
+      .filter((path) => snapshotTabs.some((tab) => tab.path === path && tab.cold))
+      .map((path) => hydrateTabContent(path)));
   }
 
   function buildPersistenceSnapshot() {
@@ -1267,6 +1350,12 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
 
   return {
     tabs,
+    groups,
+    editorSessionKey,
+    focusGroup,
+    groupForPath,
+    setSplitRatio,
+    closeRightGroup,
     activeTab,
     activeTabPath,
     hasDirtyTabs,
@@ -1281,7 +1370,9 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     buildPersistenceSnapshot,
     activateTab,
     updateActiveContent,
+    updateContent,
     saveActiveTab,
+    saveTab,
     closeTab,
     closeAllTabs,
     closePath,

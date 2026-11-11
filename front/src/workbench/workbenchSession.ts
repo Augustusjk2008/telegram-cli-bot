@@ -6,6 +6,7 @@ import {
   type PersistedWorkbenchSession,
   type PersistedWorkbenchTab,
 } from "./workbenchTypes";
+import { normalizeEditorGroups } from "./editorGroups";
 
 function byteSize(value: string) {
   return new Blob([value]).size;
@@ -62,7 +63,7 @@ function normalizeTab(raw: unknown): PersistedWorkbenchTab | null {
     documentVersion,
     lastModifiedNs: typeof candidate.lastModifiedNs === "string" ? candidate.lastModifiedNs : undefined,
     encoding,
-    savedContent: normalizedPersistence === "clean_snapshot" ? savedContent : undefined,
+    savedContent: normalizedPersistence !== "none" ? savedContent : undefined,
     draftContent: normalizedPersistence === "dirty_snapshot" ? draftContent : undefined,
     contentPersistence: normalizedPersistence,
   };
@@ -95,7 +96,7 @@ export function selectTabsForPersistence(
     }
     const draftContent = tab.dirty ? tab.draftContent ?? tab.savedContent : undefined;
     const savedContent = !tab.dirty ? tab.savedContent : undefined;
-    const nextSize = byteSize(draftContent ?? savedContent ?? "");
+    const nextSize = byteSize(draftContent ?? savedContent ?? "") + (tab.dirty ? byteSize(tab.savedContent) : 0);
     const canKeepClean = !tab.dirty && nextSize <= WORKBENCH_CLEAN_TAB_SNAPSHOT_LIMIT_BYTES;
     const canKeepAny = totalBytes + nextSize <= WORKBENCH_SNAPSHOT_TOTAL_LIMIT_BYTES;
 
@@ -110,11 +111,12 @@ export function selectTabsForPersistence(
       contentPersistence: "none",
     };
 
-    if (tab.dirty && draftContent && canKeepAny) {
+    if (tab.dirty && draftContent !== undefined && canKeepAny) {
       persisted.draftContent = draftContent;
+      persisted.savedContent = tab.savedContent;
       persisted.contentPersistence = "dirty_snapshot";
       totalBytes += nextSize;
-    } else if (!tab.dirty && savedContent && canKeepClean && canKeepAny) {
+    } else if (!tab.dirty && savedContent !== undefined && canKeepClean && canKeepAny) {
       persisted.savedContent = savedContent;
       persisted.contentPersistence = "clean_snapshot";
       totalBytes += nextSize;
@@ -144,6 +146,10 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
     return null;
   }
 
+  const tabs = Array.isArray(candidate.tabs)
+    ? candidate.tabs.map(normalizeTab).filter((item): item is PersistedWorkbenchTab => item !== null)
+    : [];
+
   return {
     version: WORKBENCH_SESSION_VERSION,
     botAlias,
@@ -156,6 +162,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
       ? candidate.selectedTreePath.trim()
       : undefined,
     activeTabPath: isTransientTabPath(activeTabPath) ? "" : activeTabPath,
+    editorGroups: normalizeEditorGroups(candidate.editorGroups, tabs.map((tab) => tab.path), activeTabPath),
     terminalOverrideCwd: typeof candidate.terminalOverrideCwd === "string" ? candidate.terminalOverrideCwd : undefined,
     focusedPane:
       candidate.focusedPane === "sidebar"
@@ -164,9 +171,7 @@ export function normalizePersistedWorkbenchSession(raw: unknown): PersistedWorkb
       || candidate.focusedPane === "chat"
         ? candidate.focusedPane
         : null,
-    tabs: Array.isArray(candidate.tabs)
-      ? candidate.tabs.map(normalizeTab).filter((item): item is PersistedWorkbenchTab => item !== null)
-      : [],
+    tabs,
   };
 }
 

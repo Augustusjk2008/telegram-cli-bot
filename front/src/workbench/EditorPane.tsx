@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Code2, Eye, Maximize2, Minimize2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Columns2, Code2, Eye, Maximize2, Minimize2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
@@ -8,10 +8,17 @@ import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurf
 import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget, RemoteWorkspace } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { pruneFileEditorDocuments } from "../utils/fileEditorSession";
 import { isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
 import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
+  sessionKey?: object;
+  viewId?: string;
+  active?: boolean;
+  documentPaths?: readonly string[];
+  onOpenToRight?: (path: string) => void;
+  onCloseGroup?: () => void;
   previewVisible?: boolean;
   botAlias: string;
   remotePlatform?: RemoteWorkspace["platform"];
@@ -98,6 +105,12 @@ function PluginViewLoading() {
 }
 
 export function EditorPane({
+  sessionKey,
+  viewId,
+  active = true,
+  documentPaths,
+  onOpenToRight,
+  onCloseGroup,
   previewVisible = true,
   botAlias,
   remotePlatform,
@@ -140,6 +153,10 @@ export function EditorPane({
   const codeNavigationHoverRequestSeqRef = useRef(0);
 
   useEffect(() => {
+    if (sessionKey && documentPaths) pruneFileEditorDocuments(sessionKey, documentPaths);
+  }, [sessionKey, documentPaths]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!canUseInlineCompletion) {
       setInlineCompletionConfig(null);
@@ -172,13 +189,13 @@ export function EditorPane({
       path: activeTab.path,
       languageId: inferFileEditorLanguageId(activeTab.path),
       lastModifiedNs: activeTab.lastModifiedNs,
-      disabled: activeTab.loading || activeTab.saving || Boolean(activeTab.readOnly),
+      disabled: !active || activeTab.loading || activeTab.saving || Boolean(activeTab.readOnly),
       autoTriggerEnabled: inlineCompletionConfig.autoTriggerEnabled,
       manualTriggerEnabled: inlineCompletionConfig.manualTriggerEnabled,
       autoTriggerDelayMs: Math.max(700, inlineCompletionConfig.autoTriggerDelayMs),
       request: (input, signal) => client.requestInlineCompletion(botAlias, input, signal),
     };
-  }, [activeTab, botAlias, canUseInlineCompletion, client, inlineCompletionConfig]);
+  }, [active, activeTab, botAlias, canUseInlineCompletion, client, inlineCompletionConfig]);
 
   const codeNavigationHoverContextKey = useMemo(() => {
     if (!activeTab) {
@@ -423,6 +440,18 @@ export function EditorPane({
                     className="desktop-workbench-menu fixed z-40 max-h-[calc(100dvh-16px)] w-44 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
                     style={{ left: menuPosition.x, top: menuPosition.y }}
                   >
+                    {tab.kind === "file" && onOpenToRight ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuPath("");
+                          onOpenToRight(tab.path);
+                        }}
+                        className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                      >
+                        在右侧打开
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
@@ -481,7 +510,29 @@ export function EditorPane({
             );
           })}
         </div>
-        <div className="relative flex shrink-0 items-center gap-1 px-1">
+        <div className="editor-group-actions relative flex shrink-0 items-center gap-1 px-1">
+          {activeTab.kind === "file" && onOpenToRight ? (
+            <button
+              type="button"
+              aria-label="在右侧打开"
+              title="在右侧打开"
+              onClick={() => onOpenToRight(activeTab.path)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+            >
+              <Columns2 className="h-4 w-4" />
+            </button>
+          ) : null}
+          {onCloseGroup ? (
+            <button
+              type="button"
+              aria-label="关闭右侧分栏"
+              title="关闭右侧分栏"
+              onClick={onCloseGroup}
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
           <button
             type="button"
             aria-label="导航后退"
@@ -680,6 +731,10 @@ export function EditorPane({
           </div>
         ) : (
           <FileEditorSurface
+            sessionKey={sessionKey}
+            viewId={viewId}
+            active={active}
+            documentPaths={documentPaths}
             path={activeTab.path}
             value={activeTab.content}
             loading={activeTab.loading}

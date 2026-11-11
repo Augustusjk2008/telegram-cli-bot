@@ -29,6 +29,7 @@ type Props = {
   tree: UseFileTreeResult;
   themeName?: UiThemeName;
   onOpenFile: (path: string) => void;
+  onOpenFileToRight?: (path: string) => void;
   onCreatedFile: (path: string, content: string, lastModifiedNs?: string) => void;
   onRenamedFile: (oldPath: string, nextPath: string) => void;
   onDeletedFile: (path: string) => void;
@@ -931,6 +932,7 @@ export function FileTreePane({
   tree,
   themeName,
   onOpenFile,
+  onOpenFileToRight,
   onCreatedFile,
   onRenamedFile,
   onDeletedFile,
@@ -2029,6 +2031,18 @@ export function FileTreePane({
                 >
                   预览
                 </button>
+                {onOpenFileToRight && !structureOnly ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenFileToRight(contextMenu.entry.path);
+                      closeContextMenu();
+                    }}
+                    className="flex w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    在右侧打开
+                  </button>
+                ) : null}
                 {contextMenuDecoration === "modified" && onRequestDiff ? (
                   <button
                     type="button"

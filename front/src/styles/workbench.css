@@ -8,6 +8,40 @@
   background: var(--workbench-shell-bg);
 }
 
+.editor-group {
+  container-type: inline-size;
+}
+
+.editor-group[data-active="true"] .editor-tab-strip {
+  box-shadow: inset 0 2px var(--accent);
+}
+
+@container (max-width: 420px) {
+  .editor-group .editor-tab-strip,
+  :root[data-style-profile="paper"] .desktop-workbench-root .editor-group .editor-tab-strip {
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .editor-group .editor-tab-strip > [role="tablist"] {
+    flex-basis: 100%;
+    height: 34px;
+  }
+
+  .editor-group .editor-group-actions {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 30px;
+    flex-shrink: 1;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+
+  .editor-group .editor-group-actions > button {
+    flex-shrink: 0;
+  }
+}
+
 /* Lift workbench chrome above the canvas; viewport overlays (.fixed) keep their own positioning and z-index. */
 .desktop-workbench-root > :not(.orbit-canvas, .fixed) {
   position: relative;

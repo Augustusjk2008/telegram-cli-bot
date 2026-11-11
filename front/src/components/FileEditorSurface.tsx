@@ -16,10 +16,15 @@ import {
 } from "../utils/fileEditorCodeNavigation";
 import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
 import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
+import { getFileEditorDocument, pruneFileEditorDocuments } from "../utils/fileEditorSession";
 
 type Props = {
   path: string;
   value: string;
+  sessionKey?: object;
+  viewId?: string;
+  active?: boolean;
+  documentPaths?: readonly string[];
   loading?: boolean;
   saving?: boolean;
   dirty?: boolean;
@@ -104,10 +109,96 @@ const FILE_EDITOR_SYNTAX_HIGHLIGHTING = syntaxHighlighting(FILE_EDITOR_HIGHLIGHT
 
 type EditorRuntime = {
   CodeMirrorEditor: CodeMirrorComponent;
+  getDefaultExtensions: typeof import("@uiw/react-codemirror").getDefaultExtensions;
   languageExtensions: Extension[];
   stateModule: typeof import("@codemirror/state");
   viewModule: typeof import("@codemirror/view");
 };
+
+function SharedFileEditor({
+  sessionKey,
+  path,
+  viewId,
+  value,
+  active,
+  editable,
+  readOnly,
+  runtime,
+  extensions,
+  onChange,
+  onCreateEditor,
+}: {
+  sessionKey: object;
+  path: string;
+  viewId: string;
+  value: string;
+  active: boolean;
+  editable: boolean;
+  readOnly: boolean;
+  runtime: EditorRuntime;
+  extensions: Extension[];
+  onChange: (value: string) => void;
+  onCreateEditor: (view: CodeMirrorEditorView | null) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<CodeMirrorEditorView | null>(null);
+  const onChangeRef = useRef(onChange);
+  const mountedRef = useRef(false);
+  const configuration = useMemo(() => new codemirrorState.Compartment(), []);
+  const document = useMemo(() => getFileEditorDocument(sessionKey, path, value), [sessionKey, path]);
+  const renderedRevision = document.revision;
+  const configuredExtensions = useMemo(() => [
+    ...runtime.getDefaultExtensions({
+      theme: "none",
+      editable,
+      readOnly,
+      basicSetup: { ...FILE_EDITOR_BASIC_SETUP, history: false, historyKeymap: false },
+    }),
+    codemirrorView.EditorView.theme({
+      "&": { height: "100%", width: "100%" },
+      ".cm-scroller": { height: "100% !important" },
+    }),
+    ...extensions,
+  ], [document, editable, extensions, readOnly, runtime.getDefaultExtensions]);
+
+  useLayoutEffect(() => {
+    onChangeRef.current = onChange;
+    document.synchronize(value, renderedRevision);
+  }, [document, onChange, renderedRevision, value]);
+
+  useLayoutEffect(() => {
+    const view = document.createView(parentRef.current!, viewId, [configuration.of(configuredExtensions)], (text) => onChangeRef.current(text));
+    viewRef.current = view;
+    onCreateEditor(view);
+    return () => {
+      document.releaseView(view);
+      viewRef.current = null;
+      onCreateEditor(null);
+    };
+  }, [configuration, document, viewId, onCreateEditor]);
+
+  useLayoutEffect(() => {
+    viewRef.current?.dispatch({
+      effects: configuration.reconfigure(configuredExtensions),
+    });
+  }, [configuration, configuredExtensions, document]);
+
+  useLayoutEffect(() => {
+    if (!editable) document.closeHistoryGroup();
+  }, [document, editable]);
+
+  useEffect(() => {
+    const mounted = mountedRef.current;
+    mountedRef.current = true;
+    if (!active) return;
+    const parent = parentRef.current;
+    const group = parent?.closest("[data-editor-group]");
+    if (mounted && group?.contains(parent!.ownerDocument.activeElement)) return;
+    viewRef.current?.focus();
+  }, [active, document, viewId]);
+
+  return <div ref={parentRef} className="cm-theme-none h-full min-h-0 w-full min-w-0" />;
+}
 
 function createEditorTheme(
   EditorView: typeof import("@codemirror/view").EditorView,
@@ -312,6 +403,10 @@ function textOffsetAtPosition(value: string, line: number, column: number) {
 export function FileEditorSurface({
   path,
   value,
+  sessionKey,
+  viewId = "main",
+  active = true,
+  documentPaths,
   loading = false,
   saving = false,
   dirty = false,
@@ -338,6 +433,8 @@ export function FileEditorSurface({
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const [navigationMenuOpen, setNavigationMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const handledRevealRef = useRef<{ requestId: string; target: object } | null>(null);
+  const handledNavigationRef = useRef<string | null>(null);
   const codeNavigationHoverRef = useRef(codeNavigationHover);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
   // Color variables follow the snapshot on the root; only scheme changes need reconfiguration.
@@ -349,6 +446,10 @@ export function FileEditorSurface({
   useLayoutEffect(() => {
     codeNavigationHoverRef.current = codeNavigationHover;
   }, [codeNavigationHover]);
+
+  useEffect(() => {
+    if (sessionKey && documentPaths) pruneFileEditorDocuments(sessionKey, documentPaths);
+  }, [documentPaths, sessionKey]);
 
   const codeNavigationHoverExtensions = useMemo(() => {
     if (!canShowCodeNavigationHover) {
@@ -383,6 +484,7 @@ export function FileEditorSurface({
         }
         setEditorRuntime({
           CodeMirrorEditor: module.default as CodeMirrorComponent,
+          getDefaultExtensions: module.getDefaultExtensions,
           languageExtensions: languageExtensions as Extension[],
           stateModule: codemirrorState,
           viewModule: codemirrorView,
@@ -456,7 +558,11 @@ export function FileEditorSurface({
   }, [currentLine, editorView]);
 
   useEffect(() => {
-    if (!reveal) {
+    if (!active || !reveal) {
+      return;
+    }
+    const target = editorView ?? textareaRef.current;
+    if (handledRevealRef.current?.requestId === reveal.requestId && handledRevealRef.current.target === target) {
       return;
     }
     if (editorView) {
@@ -470,6 +576,7 @@ export function FileEditorSurface({
         effects: codemirrorView.EditorView.scrollIntoView(position, { y: "center" }),
       });
       editorView.focus();
+      handledRevealRef.current = { requestId: reveal.requestId, target: editorView };
       return;
     }
 
@@ -480,12 +587,13 @@ export function FileEditorSurface({
     }
     textarea.setSelectionRange(position, position);
     textarea.focus();
+    handledRevealRef.current = { requestId: reveal.requestId, target: textarea };
     const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 20;
     textarea.scrollTop = Math.max(0, (reveal.line - 1) * lineHeight - textarea.clientHeight / 2);
-  }, [editorView, reveal?.requestId]);
+  }, [active, editorView, reveal?.requestId]);
 
   function requestCodeNavigation(kind: CodeNavigationKind) {
-    if (!onResolveCodeNavigation || (kind === "implementation" && !canNavigateImplementation)) {
+    if (!active || !onResolveCodeNavigation || (kind === "implementation" && !canNavigateImplementation)) {
       return false;
     }
     const target = editorView
@@ -511,20 +619,26 @@ export function FileEditorSurface({
   }
 
   useEffect(() => {
-    if (navigationCommand) {
+    if (active && navigationCommand && handledNavigationRef.current !== navigationCommand.requestId) {
+      handledNavigationRef.current = navigationCommand.requestId;
       requestCodeNavigation(navigationCommand.kind);
     }
-  }, [navigationCommand?.requestId]);
+  }, [active, navigationCommand?.requestId]);
+
+  function saveDocument() {
+    if (sessionKey) getFileEditorDocument(sessionKey, path, value).closeHistoryGroup();
+    onSave();
+  }
 
   useEffect(() => {
-    if (!canSave || loading || saving || typeof window === "undefined") {
+    if (!active || !canSave || loading || saving || typeof window === "undefined") {
       return undefined;
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        onSave();
+        saveDocument();
       }
     };
 
@@ -532,7 +646,7 @@ export function FileEditorSurface({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [canSave, loading, onSave, saving]);
+  }, [active, canSave, loading, onSave, path, saving, sessionKey, value]);
   return (
     <section className="file-editor-container flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
       {!hideHeader ? (
@@ -552,7 +666,7 @@ export function FileEditorSurface({
               </button>
               <button
                 type="button"
-                onClick={onSave}
+                onClick={saveDocument}
                 disabled={loading || saving || !canSave}
                 className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-[var(--accent-foreground)] disabled:opacity-60"
               >
@@ -572,7 +686,7 @@ export function FileEditorSurface({
             className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-transparent text-[var(--editor-text)]"
             onKeyDown={handleCodeNavigationKeyDown}
             onMouseDown={(event) => {
-              if (!onResolveCodeNavigation || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+              if (!active || !onResolveCodeNavigation || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
                 return;
               }
               const target = event.target;
@@ -593,7 +707,21 @@ export function FileEditorSurface({
               onResolveCodeNavigation(definitionTarget);
             }}
           >
-            <CodeMirrorEditor
+            {sessionKey ? (
+              <SharedFileEditor
+                sessionKey={sessionKey}
+                path={path}
+                viewId={viewId}
+                value={value}
+                active={active}
+                editable={!loading && !saving && !readOnly}
+                readOnly={readOnly}
+                runtime={editorRuntime!}
+                extensions={editorExtensions}
+                onCreateEditor={setEditorView}
+                onChange={onChange}
+              />
+            ) : <CodeMirrorEditor
               key={path}
               value={value}
               className="h-full min-h-0 w-full min-w-0"
@@ -601,14 +729,14 @@ export function FileEditorSurface({
               width="100%"
               theme="none"
               extensions={editorExtensions}
-              autoFocus
+              autoFocus={active}
               editable={!loading && !saving && !readOnly}
               onCreateEditor={(view) => {
                 setEditorView(view);
               }}
               basicSetup={FILE_EDITOR_BASIC_SETUP}
               onChange={onChange}
-            />
+            />}
           </div>
         ) : (
           <textarea
@@ -620,7 +748,7 @@ export function FileEditorSurface({
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={handleCodeNavigationKeyDown}
             onClick={(event) => {
-              if (!onResolveCodeNavigation || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
+              if (!active || !onResolveCodeNavigation || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
                 return;
               }
               const selectionStart = event.currentTarget.selectionStart ?? 0;

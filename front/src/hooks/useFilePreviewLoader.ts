@@ -21,13 +21,14 @@ export function useFilePreviewLoader(client: WebBotClient, botAlias: string, sco
         active = true;
         return () => { active = false; clear(); };
       },
-      reconcile(paths: string[], activePath: string) {
+      reconcile(paths: string[], activePath: string | string[]) {
+        const visible = Array.isArray(activePath) ? activePath : [activePath];
         for (const [path, request] of requests) {
           if (!paths.includes(path)) {
             if (request.displayed) cancel(path);
           } else {
             request.displayed = true;
-            if (path !== activePath) request.htmlPreview?.release();
+            if (!visible.includes(path)) request.htmlPreview?.release();
           }
         }
       },
