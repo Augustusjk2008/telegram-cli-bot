@@ -9,6 +9,7 @@ type Props = {
   client: WebBotClient;
   visible: boolean;
   readRevision?: number;
+  onUnreadChange?: (hasUnread: boolean) => void;
 };
 
 const FALLBACK_GROUP: LanChatConversation = {
@@ -21,11 +22,17 @@ const FALLBACK_GROUP: LanChatConversation = {
   updatedAt: "",
 };
 
-export function LanChatDock({ client, visible, readRevision = 0 }: Props) {
+export function LanChatDock({ client, visible, readRevision = 0, onUnreadChange }: Props) {
   const [listOpen, setListOpen] = useState(false);
   const [activeConversation, setActiveConversation] = useState<LanChatConversation | null>(null);
   const [toastText, setToastText] = useState("");
   const chat = useLanChat(client, visible, readRevision);
+  const hasUnread = visible && chat.totalUnread > 0;
+
+  useEffect(() => {
+    onUnreadChange?.(hasUnread);
+    return () => onUnreadChange?.(false);
+  }, [hasUnread, onUnreadChange]);
 
   const openConversation = useCallback(async (conversation: LanChatConversation) => {
     setActiveConversation(conversation);

@@ -269,6 +269,7 @@ function AppContent() {
   const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
   const [announcementOpen, setAnnouncementOpen] = useState(false);
   const [lanChatReadRevision, setLanChatReadRevision] = useState(0);
+  const [hasUnreadLanChat, setHasUnreadLanChat] = useState(false);
   const announcementAutoOpenedRef = useRef(false);
   const visibleChatBotAliasRef = useRef<string | null>(null);
   const desktopChatPaneVisibleRef = useRef(desktopChatPaneVisible);
@@ -835,7 +836,13 @@ function AppContent() {
       }}
     />
   );
-  const clearUnreadButton = <ClearUnreadButton key={accountKey} onClear={clearAllUnread} />;
+  const clearUnreadButton = (
+    <ClearUnreadButton
+      key={accountKey}
+      hasUnread={hasUnreadOtherBots || announcementState.hasUnseen || (effectiveLayoutMode === "desktop" && hasUnreadLanChat)}
+      onClear={clearAllUnread}
+    />
+  );
   const announcementDialog = (
     <AnnouncementDialog
       open={announcementOpen}
@@ -1182,6 +1189,7 @@ function AppContent() {
               hasUnreadOtherBots={hasUnreadOtherBots}
               clearUnreadAction={clearUnreadButton}
               lanChatReadRevision={lanChatReadRevision}
+              onLanChatUnreadChange={setHasUnreadLanChat}
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
               chatPaneContent={({ requestPreview }) => renderDesktopChatStack({

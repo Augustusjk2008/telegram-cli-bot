@@ -152,6 +152,7 @@ type Props = {
   hasUnreadOtherBots?: boolean;
   clearUnreadAction?: ReactNode;
   lanChatReadRevision?: number;
+  onLanChatUnreadChange?: (hasUnread: boolean) => void;
   announcementAction?: ReactNode;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
@@ -193,6 +194,7 @@ export function DesktopWorkbench({
   hasUnreadOtherBots = false,
   clearUnreadAction,
   lanChatReadRevision = 0,
+  onLanChatUnreadChange,
   announcementAction,
   chatPaneContent,
   chatStatus: externalChatStatus,
@@ -1448,6 +1450,7 @@ export function DesktopWorkbench({
       client={client}
       visible={!structureOnly && !Boolean(focusedPane)}
       readRevision={lanChatReadRevision}
+      onUnreadChange={onLanChatUnreadChange}
     />
   );
 

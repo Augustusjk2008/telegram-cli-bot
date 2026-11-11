@@ -2,10 +2,14 @@ import { expect, test, type Page } from "@playwright/test";
 
 test.skip(!process.env.PLAYWRIGHT_BASE_URL, "Requires a user-started service serving the built frontend");
 
-async function openUnreadWorkbench(page: Page, width: number, failAnnouncement = false) {
+async function openUnreadWorkbench(page: Page, width: number, {
+  failAnnouncement = false,
+  botUnread = true,
+  announcementUnread = true,
+} = {}) {
   const accountId = "unread-qa";
   let terminalAt = "2026-08-27T01:10:00Z";
-  let announcementSeen = false;
+  let announcementSeen = !announcementUnread;
   let lanReadSeq = 0;
   const bot = (alias: string) => ({
     alias, name: alias, cli_type: "codex", status: "running", working_dir: "C:/workspace",
@@ -56,7 +60,7 @@ async function openUnreadWorkbench(page: Page, width: number, failAnnouncement =
   await page.setViewportSize({ width, height: 900 });
   await page.goto("./");
   await expect(page.getByRole("button", { name: "清除全部未读", exact: true })).toBeVisible();
-  await page.evaluate(({ accountId, terminalAt }) => {
+  if (botUnread) await page.evaluate(({ accountId, terminalAt }) => {
     const prefix = `tcb-chat-unread-watermark:v2:${accountId}:`;
     localStorage.setItem(`${prefix}initialized`, "1");
     for (const alias of ["main", "worker"]) {
@@ -66,8 +70,9 @@ async function openUnreadWorkbench(page: Page, width: number, failAnnouncement =
     localStorage.setItem(`${prefix}pending:worker:unread`, "1");
   }, { accountId, terminalAt });
   await page.reload();
-  await expect(page.getByTestId("bot-switcher-unread-indicator")).toBeVisible();
-  await expect(page.getByTestId("announcement-unseen-dot")).toBeVisible();
+  await expect(page.getByRole("button", { name: "公告", exact: true })).toBeVisible();
+  await expect(page.getByTestId("bot-switcher-unread-indicator")).toHaveCount(botUnread ? 1 : 0);
+  await expect(page.getByTestId("announcement-unseen-dot")).toHaveCount(announcementUnread ? 1 : 0);
   return {
     readSeq: () => lanReadSeq,
     nextCompletion: () => { terminalAt = "2026-08-27T01:20:00Z"; },
@@ -84,27 +89,29 @@ for (const width of [1440, 390]) {
     if (width > 1000) await expect(page.getByRole("button", { name: "成员聊天，3 条未读" })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath(`unread-before-${width}.png`) });
     await clear.click();
-    await expect(clear).toBeEnabled();
+    await expect(clear).toHaveCount(0);
     await expect(page.getByTestId("bot-switcher-unread-indicator")).toHaveCount(0);
     await expect(page.getByTestId("announcement-unseen-dot")).toHaveCount(0);
-    expect(state.readSeq()).toBe(7);
+    await expect.poll(state.readSeq).toBe(7);
     if (width > 1000) await expect(page.getByRole("button", { name: "成员聊天", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`unread-cleared-${width}.png`) });
 
     await page.reload();
-    await expect(clear).toBeVisible();
+    await expect(page.getByRole("button", { name: "公告", exact: true })).toBeVisible();
+    await expect(clear).toHaveCount(0);
     await expect(page.getByTestId("bot-switcher-unread-indicator")).toHaveCount(0);
     await expect(page.getByTestId("announcement-unseen-dot")).toHaveCount(0);
     state.nextCompletion();
     await page.reload();
     await expect(page.getByTestId("bot-switcher-unread-indicator")).toBeVisible();
+    await expect(clear).toBeVisible();
     expect(pageErrors).toEqual([]);
   });
 }
 
 test("failed remote reads remain visible and can be retried", async ({ page }) => {
-  const state = await openUnreadWorkbench(page, 390, true);
+  const state = await openUnreadWorkbench(page, 390, { failAnnouncement: true });
   const clear = page.getByRole("button", { name: "清除全部未读", exact: true });
   await clear.click();
   await expect(page.getByRole("alert")).toHaveText("部分未读未能清除，请重试");
@@ -113,7 +120,18 @@ test("failed remote reads remain visible and can be retried", async ({ page }) =
   expect(state.readSeq()).toBe(7);
   state.recoverAnnouncements();
   await clear.click();
-  await expect(clear).toBeEnabled();
+  await expect(clear).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByTestId("announcement-unseen-dot")).toHaveCount(0);
+});
+
+test("member chat unread alone shows the desktop clear action", async ({ page }) => {
+  const state = await openUnreadWorkbench(page, 1440, { botUnread: false, announcementUnread: false });
+  const clear = page.getByRole("button", { name: "清除全部未读", exact: true });
+  await expect(page.getByRole("button", { name: "成员聊天，3 条未读" })).toBeVisible();
+  await expect(clear).toBeVisible();
+  await clear.click();
+  await expect(page.getByRole("button", { name: "成员聊天", exact: true })).toBeVisible();
+  await expect(clear).toHaveCount(0);
+  expect(state.readSeq()).toBe(7);
 });

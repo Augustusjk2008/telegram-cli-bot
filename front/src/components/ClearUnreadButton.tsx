@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CheckCheck } from "lucide-react";
 
-export function ClearUnreadButton({ onClear }: { onClear: () => Promise<void> }) {
+export function ClearUnreadButton({ hasUnread, onClear }: { hasUnread: boolean; onClear: () => Promise<void> }) {
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState("");
 
@@ -17,6 +17,8 @@ export function ClearUnreadButton({ onClear }: { onClear: () => Promise<void> })
       setClearing(false);
     }
   }
+
+  if (!hasUnread) return null;
 
   return (
     <span className="relative flex shrink-0 items-center">
