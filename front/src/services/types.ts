@@ -510,6 +510,8 @@ export type RemoteConnectionInput = {
   port: number;
   username: string;
   password?: string;
+  rememberPassword?: boolean;
+  useSavedPassword?: boolean;
   keyFilename?: string;
   passphrase?: string;
   hostKeyFingerprint?: string;

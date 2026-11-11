@@ -25,6 +25,8 @@ export function remoteConnectionBody(input: RemoteConnectionInput, reconnect = f
     ...(!reconnect ? { host: input.host, port: input.port, username: input.username } : {}),
     ...(!reconnect && input.platform ? { platform: input.platform } : {}),
     ...(input.password ? { password: input.password } : {}),
+    ...(input.rememberPassword !== undefined ? { remember_password: input.rememberPassword } : {}),
+    ...(input.useSavedPassword !== undefined ? { use_saved_password: input.useSavedPassword } : {}),
     ...(input.keyFilename ? { key_filename: input.keyFilename } : {}),
     ...(input.passphrase ? { passphrase: input.passphrase } : {}),
     ...(input.hostKeyFingerprint ? { host_key_fingerprint: input.hostKeyFingerprint } : {}),

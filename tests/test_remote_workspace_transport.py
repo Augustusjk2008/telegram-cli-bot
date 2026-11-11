@@ -335,6 +335,75 @@ def test_manual_disconnect_closes_pool_until_reauthentication(ssh):
     assert ssh.service.get(config).list_directory(root=ROOT)["entries"]
 
 
+def test_saved_password_restores_after_restart_and_explicit_login_can_forget_it(ssh):
+    config, original = connected(ssh, password="secret", passphrase="memory-only", remember_password=True)
+    assert ssh.service.credentials_status(config) == {"password_saved": True}
+    assert "password" not in config and "remember_password" not in config
+    ssh.service.close_all()
+    assert original._password is original._passphrase is None
+
+    restarted = remote.RemoteWorkspaceService()
+    restored = restarted.get(config)
+    restored.list_directory(root=ROOT)
+    assert ssh.clients[-1].kwargs["password"] == "secret"
+    assert ssh.clients[-1].kwargs["passphrase"] is None
+    restored.close()
+    with error_code("remote_connection_closed"):
+        restarted.get(config).list_directory(root=ROOT)
+    assert restarted.credentials_status(config) == {"password_saved": True}
+
+    restarted.connect(8, {**config, "use_saved_password": True, "remember_password": False}, connection_id=config["connection_id"])
+    assert ssh.clients[-1].kwargs["password"] == "secret"
+    assert restarted.credentials_status(config) == {"password_saved": False}
+    restarted.close_all()
+    assert restarted.get(config)._password is None
+    restarted.close_all()
+
+
+@pytest.mark.parametrize("remember", [True, False])
+def test_failed_login_preserves_saved_password_and_existing_connection(ssh, remember):
+    config, existing = connected(ssh, password="original", remember_password=True)
+    ssh.auth_error = paramiko.AuthenticationException("denied")
+    with error_code("remote_auth_failed"):
+        ssh.service.connect(7, {**config, "password": "replacement", "remember_password": remember}, connection_id=config["connection_id"])
+    assert ssh.service._credentials.get(config) == "original"
+    assert ssh.service.get(config) is existing and not existing._closed
+
+
+@pytest.mark.parametrize("fingerprint,code", [
+    ("", "host_key_confirmation_required"),
+    ("SHA256:" + "B" * 43, "host_key_mismatch"),
+])
+def test_unverified_host_does_not_persist_password(ssh, fingerprint, code):
+    with error_code(code):
+        connected(ssh, password="secret", remember_password=True, host_key_fingerprint=fingerprint)
+    assert not ssh.service._credentials.root.exists()
+
+
+def test_saved_password_requires_authorized_connection_and_new_password_wins(ssh):
+    config, _ = connected(ssh, password="original", remember_password=True)
+    for owner in (7, 8):
+        with error_code("remote_auth_required"):
+            ssh.service.connect(owner, {**config, "use_saved_password": True})
+    assert len(ssh.clients) == 1
+    ssh.service.connect(8, {**config, "password": "fresh", "use_saved_password": True, "remember_password": True}, connection_id=config["connection_id"])
+    assert ssh.clients[-1].kwargs["password"] == "fresh"
+    assert ssh.service._credentials.get(config) == "fresh"
+    ssh.service.close_all()
+    with error_code("remote_auth_required"):
+        ssh.service.connect(8, {**config, "username": "another", "use_saved_password": True}, connection_id=config["connection_id"])
+    assert len(ssh.clients) == 2
+    assert ssh.service.credentials_status(config) == {"password_saved": True}
+
+
+@pytest.mark.parametrize("field", ["remember_password", "use_saved_password"])
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_password_options_require_booleans(ssh, field, value):
+    with error_code("invalid_remote_workspace"):
+        connected(ssh, **{field: value})
+    assert not ssh.clients
+
+
 def test_draft_ownership_and_connection_identity(ssh):
     config, connection = connected(ssh)
     assert ssh.service.connection_config(config["connection_id"], 7) == config

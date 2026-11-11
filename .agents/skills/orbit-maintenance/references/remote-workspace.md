@@ -2,14 +2,14 @@
 
 ## 入口和边界
 
-- SSH 连接、主机密钥确认、远程路径解析和连接池：`bot/remote_workspace/transport.py`、`windows.py`。
+- SSH 连接、主机密钥确认、远程路径解析和连接池：`bot/remote_workspace/transport.py`、`windows.py`；可选密码加密保存：`credentials.py`。
 - Agent 远程工具、profile capability、loopback bridge：`bot/remote_workspace/chat.py`、`mcp_stdio.py`、`tools.py`。
 - Web 文件、目录和远程执行：`bot/web/routes/remote_routes.py`；统一 Git 后端与远端操作：`bot/web/git_backend.py`、`bot/remote_workspace/git_service.py`。
 - Web terminal：`bot/web/terminal_manager.py`、`bot/web/routes/terminal_routes.py`。
 
 ## 必须保持的行为
 
-- SSH 首次连接接受系统已知 host key，未知密钥要求确认指纹；已绑定指纹变化必须拒绝。密码和私钥口令只保留在连接对象内存中，关闭连接时清除。
+- SSH 首次连接接受系统已知 host key，未知密钥要求确认指纹；已绑定指纹变化必须拒绝。默认密码和私钥口令只保留在连接对象内存中，关闭连接时清除。显式 `remember_password=true` 时，成功连接后将密码加密保存在 `get_app_data_root()/remote-ssh/`，绑定 connection ID、主机、端口、用户名、指纹、私钥路径和平台；授权的已存配置可在服务重启后恢复密码。重新登录可显式 `use_saved_password=true` 复用密码，`remember_password=false` 在成功连接后删除已存密码；失败不覆盖或删除旧凭据。草稿连接不能借用传入的 connection ID 获取凭据。凭据状态接口沿用 Bot 管理权限，只返回保存状态，API 和 profile 均不返回密码或密文；私钥口令保持仅内存。
 - 已绑定工作区的文件 API 和 `exec.cwd` 校验 workspace root；连接向导可浏览远端目录以选择 root。远程 shell 按 SSH 账户权限执行，路径校验与工具路由不提供进程级文件系统沙箱。
 - POSIX 命令使用 `/bin/sh`；Windows 命令使用 `powershell.exe`，需兼容 PowerShell 5.1。Windows 文件 API 规范化盘符路径并拒绝 UNC/device 路径、junction 和 symlink。
 - Agent 的远程项目操作必须经过 `tcb-remote` 的 `exec/read/write/edit/list` 工具。bridge 只允许连接已有 Web 服务的 loopback 地址，工具参数和输出有大小上限；可能已经执行的 mutation 不得自动重试。
@@ -22,7 +22,7 @@
 
 ## 验证
 
-- SSH、主机密钥、路径边界和连接池：`tests/test_remote_workspace_transport.py`、`tests/test_remote_workspace_windows.py`。
+- SSH、主机密钥、密码加密保存、路径边界和连接池：`tests/test_remote_workspace_transport.py`、`tests/test_remote_workspace_credentials.py`、`tests/test_remote_workspace_windows.py`。
 - 远程 API、附件、agent tools 和 profile 绑定：`tests/test_remote_workspace_api.py`；capability、MCP 配置归属、CLI 注入及会话失效：`tests/test_remote_workspace_chat.py`。
 - 远程 Git：`tests/test_remote_git_service.py`。
 - Terminal 生命周期、owner 隔离、重连和 WebSocket 协议：`tests/test_terminal_manager.py`、`front/src/test/terminal-session.test.ts`。

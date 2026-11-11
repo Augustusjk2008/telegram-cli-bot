@@ -6212,6 +6212,11 @@ export class RealWebBotClient implements WebBotClient {
     );
   }
 
+  async getRemoteCredentialStatus(botAlias: string): Promise<{ passwordSaved: boolean }> {
+    const data = await this.requestJson<{ password_saved: boolean }>(`/api/bots/${encodeURIComponent(botAlias)}/remote/credentials`);
+    return { passwordSaved: data.password_saved === true };
+  }
+
   async disconnectRemote(botAlias: string): Promise<void> {
     await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/remote/disconnect`, { method: "POST" });
   }

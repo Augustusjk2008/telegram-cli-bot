@@ -743,6 +743,42 @@ async def test_disconnect_remote_closes_only_an_authorized_bot_connection(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_credentials_status_and_saved_password_reconnect_require_bot_authorization(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    service = Mock()
+    service.credentials_status.return_value = {"password_saved": True}
+    service.connect.return_value = CONFIG
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    body = {
+        "remember_password": False, "use_saved_password": True,
+        "connection_id": "another-connection", "host": "attacker.example", "username": "attacker",
+    }
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.get("/api/bots/MAIN/remote/credentials")
+        assert response.status == 200
+        assert await response.json() == {"ok": True, "data": {"password_saved": True}}
+        service.credentials_status.assert_called_once_with(CONFIG)
+        response = await client.post("/api/bots/main/remote/connect", json=body)
+        assert response.status == 200
+        service.connect.assert_called_once_with(
+            auth.user_id, {**CONFIG, "remember_password": False, "use_saved_password": True},
+            connection_id=CONFIG["connection_id"],
+        )
+
+        auth.capabilities.remove(CAP_MANAGE_BOTS)
+        for method, path in [("get", "credentials"), ("post", "connect")]:
+            response = await getattr(client, method)(f"/api/bots/main/remote/{path}")
+            assert response.status == 403
+        auth.capabilities.add(CAP_MANAGE_BOTS)
+        monkeypatch.setattr(server, "_can_operate_bot", lambda _auth, _alias: False)
+        for method, path in [("get", "credentials"), ("post", "connect")]:
+            response = await getattr(client, method)(f"/api/bots/main/remote/{path}")
+            assert response.status == 403
+        service.credentials_status.assert_called_once()
+        service.connect.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_agent_bridge_scopes_tokens_and_rejects_changed_workspaces(tmp_path, monkeypatch):
     from bot.remote_workspace.chat import prepare_remote_chat
     from bot.remote_workspace import tools

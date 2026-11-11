@@ -96,13 +96,16 @@ test("remote create requires explicit host key trust and a chosen directory, wit
   fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: remote.host } });
   fireEvent.change(screen.getByLabelText("SSH 用户名"), { target: { value: remote.username } });
   fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "secret-value" } });
+  expect(screen.getByRole("checkbox", { name: "记住密码" })).not.toBeChecked();
+  fireEvent.click(screen.getByRole("checkbox", { name: "记住密码" }));
   fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
   expect(await screen.findByText("SHA256:abc")).toBeInTheDocument();
   expect(connect).toHaveBeenCalledTimes(1);
   expect(browse).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "信任此主机密钥并连接" }));
   await screen.findByLabelText("远程目录路径");
-  expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ platform: "posix", password: "secret-value", hostKeyFingerprint: "SHA256:abc" }), undefined);
+  expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({ platform: "posix", password: "secret-value", rememberPassword: true, hostKeyFingerprint: "SHA256:abc" }), undefined);
+  expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain("secret-value");
   expect(screen.queryByLabelText("SSH 密码")).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("远程目录路径"), { target: { value: selectedRoot } });
   fireEvent.click(screen.getByRole("button", { name: "打开" }));
@@ -159,6 +162,60 @@ test("SSH key login clears passphrase after connecting", async () => {
   expect(screen.getByLabelText("私钥口令（可选）")).toHaveValue("");
 });
 
+test.each([true, false])("SSH saved password can reconnect without exposing it and remember=%s", async (remember) => {
+  const client = new MockWebBotClient();
+  const status = vi.spyOn(client, "getRemoteCredentialStatus").mockResolvedValue({ passwordSaved: true });
+  const connect = vi.spyOn(client, "connectRemote").mockResolvedValue(remote);
+  const done = vi.fn();
+  render(<RemoteConnectionForm client={client} botAlias="remote" initial={remote} onConnected={done} />);
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "记住密码" })).toBeChecked());
+  expect(status).toHaveBeenCalledWith("remote");
+  expect(screen.getByLabelText("SSH 密码")).toHaveValue("");
+  expect(screen.getByLabelText("SSH 密码")).not.toBeRequired();
+  if (!remember) fireEvent.click(screen.getByRole("checkbox", { name: "记住密码" }));
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(done).toHaveBeenCalledWith(remote));
+  expect(connect).toHaveBeenCalledWith(expect.objectContaining({ rememberPassword: remember, useSavedPassword: true }), "remote");
+  expect(connect.mock.calls[0][0]).not.toHaveProperty("password");
+});
+
+test("expired saved SSH password requires fresh input and changing auth omits password reuse", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getRemoteCredentialStatus").mockResolvedValue({ passwordSaved: true });
+  const connect = vi.spyOn(client, "connectRemote").mockRejectedValueOnce(new WebApiClientError("Expired", { status: 401, code: "remote_auth_required" })).mockResolvedValue(remote);
+  render(<RemoteConnectionForm client={client} botAlias="remote" initial={remote} onConnected={vi.fn()} />);
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: "记住密码" })).toBeChecked());
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("请重新输入 SSH 密码");
+  expect(screen.getByLabelText("SSH 密码")).toBeRequired();
+  fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh-password" } });
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+  expect(connect.mock.lastCall![0]).toMatchObject({ password: "fresh-password", rememberPassword: true });
+  expect(connect.mock.lastCall![0]).not.toHaveProperty("useSavedPassword");
+  await waitFor(() => expect(screen.getByLabelText("SSH 密码")).toHaveValue(""));
+  fireEvent.change(screen.getByLabelText("认证方式"), { target: { value: "agent" } });
+  expect(screen.queryByRole("checkbox", { name: "记住密码" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(3));
+  expect(connect.mock.lastCall![0]).toMatchObject({ rememberPassword: false });
+  expect(connect.mock.lastCall![0]).not.toHaveProperty("useSavedPassword");
+  expect(connect.mock.lastCall![0]).not.toHaveProperty("password");
+});
+
+test("SSH credential status and remember preferences use the authenticated connection API", async () => {
+  const fetch = vi.fn().mockResolvedValue(ok({ password_saved: true }));
+  vi.stubGlobal("fetch", fetch);
+  const client = new RealWebBotClient();
+  expect(await client.getRemoteCredentialStatus("remote/name")).toEqual({ passwordSaved: true });
+  expect(fetch.mock.lastCall![0]).toBe("/api/bots/remote%2Fname/remote/credentials");
+  fetch.mockResolvedValue(ok(wire));
+  await client.connectRemote({ ...remote, rememberPassword: false, useSavedPassword: true }, "remote/name");
+  expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({ remember_password: false, use_saved_password: true, host_key_fingerprint: remote.hostKeyFingerprint });
+  await client.connectRemote({ ...remote, password: "fresh", rememberPassword: true });
+  expect(JSON.parse(fetch.mock.lastCall![1].body)).toMatchObject({ password: "fresh", remember_password: true });
+});
+
 test("compact SSH control shows the remote path and disconnects until re-login", async () => {
   const client = new MockWebBotClient();
   const disconnect = vi.spyOn(client, "disconnectRemote").mockResolvedValue();
@@ -171,6 +228,7 @@ test("compact SSH control shows the remote path and disconnects until re-login",
   expect(screen.getByRole("status")).toHaveTextContent("SSH 已断开");
   expect(screen.getByRole("button", { name: "断开 SSH" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "SSH 重新登录" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "测试并连接 SSH" })).toBeEnabled());
   fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh" } });
   fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
   await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
@@ -334,6 +392,7 @@ test("remote desktop sidebar opens settings and refreshes the workspace after SS
   expect(workdir).toHaveAttribute("readonly");
   list.mockClear();
   fireEvent.click(screen.getByRole("button", { name: "SSH 重新登录" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "测试并连接 SSH" })).toBeEnabled());
   fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "fresh" } });
   fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
   await waitFor(() => expect(onRemoteReconnect).toHaveBeenCalledOnce());

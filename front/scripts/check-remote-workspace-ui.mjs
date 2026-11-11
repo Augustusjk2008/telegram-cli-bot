@@ -23,21 +23,29 @@ const result = await build({
     import { useState } from "react";
     import { createRoot } from "react-dom/client";
     import { RemoteWorkspacePicker } from "./src/components/RemoteWorkspacePicker";
+    import { RemoteSshMenu } from "./src/components/RemoteSshMenu";
+    import { applyResolvedAppearance } from "./src/theme/appearanceRuntime";
+    import { builtinLibrary, resolveAppearance } from "./src/theme/resolveAppearance";
     import { FilesScreen } from "./src/screens/FilesScreen";
     import { DesktopWorkbench } from "./src/workbench/DesktopWorkbench";
     import { PersistentTerminalProvider } from "./src/terminal/PersistentTerminalProvider";
     import { WebApiClientError } from "./src/services/types";
+    const themes = builtinLibrary().themes;
+    applyResolvedAppearance(resolveAppearance(themes.find((theme) => theme.appearance.colors.scheme === window.remoteThemeScheme) || themes[0]));
     const windows = window.remotePlatform === "windows";
     const remote = { connectionId: "ssh-1", host: windows ? "windows.test" : "linux.test", port: 22, username: "dev", root: windows ? "/C:/Users/dev" : "/home/dev", hostKeyFingerprint: "SHA256:browser-check", ...(windows ? { platform: "windows" } : {}) };
     let currentPath = remote.root;
     const uploads = [];
-    window.remoteSmoke = { connections: 0, confirmed: false, writes: 0, localCalls: [], directories: [], platform: "", uploads, listings: 0 };
+    window.remoteSmoke = { connections: 0, confirmed: false, writes: 0, localCalls: [], directories: [], platform: "", uploads, listings: 0, passwordSaved: false, lastConnection: null, reconnected: false };
     const client = {
-      async connectRemote(input) {
+      async getRemoteCredentialStatus() { return { passwordSaved: window.remoteSmoke.passwordSaved }; },
+      async connectRemote(input, botAlias) {
         window.remoteSmoke.connections++;
         window.remoteSmoke.platform = input.platform;
-        if (!input.hostKeyFingerprint) throw new WebApiClientError("Unknown host", { code: "remote_host_key_unknown", status: 409, data: { fingerprint: remote.hostKeyFingerprint } });
+        if (!botAlias && !input.hostKeyFingerprint) throw new WebApiClientError("Unknown host", { code: "remote_host_key_unknown", status: 409, data: { fingerprint: remote.hostKeyFingerprint } });
         window.remoteSmoke.confirmed = input.hostKeyFingerprint === remote.hostKeyFingerprint;
+        window.remoteSmoke.passwordSaved = Boolean(input.rememberPassword);
+        window.remoteSmoke.lastConnection = input;
         return remote;
       },
       async listRemoteDirectories(_id, dir) { window.remoteSmoke.directories.push(dir); return { workingDir: dir, entries: dir === remote.root || dir === "/D:/" ? [{ name: "project", isDir: true }] : [] }; },
@@ -60,6 +68,7 @@ const result = await build({
     };
     function Harness() {
       const [selected, setSelected] = useState(null);
+      if (window.reconnectSmoke) return <main className="p-4"><RemoteSshMenu client={client} botAlias="remote" remote={remote} compact onConnected={() => { window.remoteSmoke.reconnected = true; }} /></main>;
       if (window.workbenchSmoke) return <PersistentTerminalProvider client={client}><DesktopWorkbench
         botAlias="remote" client={client} remoteWorkspace={remote} chatPaneContent={<div className="p-4">Remote agent chat</div>}
       /></PersistentTerminalProvider>;
@@ -74,7 +83,7 @@ const cssNames = (await readdir(assets)).filter((name) => name.endsWith(".css"))
 const css = (await Promise.all(cssNames.map((name) => readFile(path.join(assets, name), "utf8")))).join("\n");
 const output = path.join(root, "test-results/remote-workspace");
 await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
+const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : process.platform === "win32" ? { channel: "chrome" } : {}) });
 try {
   for (const platform of ["posix", "windows"]) {
     for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
@@ -143,12 +152,51 @@ try {
     assert.deepEqual(await page.evaluate(() => window.remoteSmoke.uploads), [{ alias: "remote", name: "desktop-upload.txt", path: platform === "windows" ? "/C:/Users/dev" : "/home/dev" }]);
     await page.getByRole("button", { name: "打开 README.md" }).click();
     await page.getByRole("tab", { name: "README.md" }).waitFor();
-    await page.getByRole("button", { name: "隐藏底部终端", exact: true }).waitFor();
+    await page.getByRole("button", { name: "隐藏终端", exact: true }).waitFor();
     assert.deepEqual(await page.evaluate(() => window.remoteSmoke.localCalls), []);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "workbench horizontal overflow");
     assert.deepEqual(errors, []);
     await page.screenshot({ path: path.join(output, `workbench-${platform}-1280.png`), fullPage: true });
     await page.close();
   }
+  for (const scheme of ["light", "dark"]) {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+      const page = await browser.newPage({ viewport });
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.setContent('<html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>');
+      await page.addStyleTag({ content: css });
+      await page.evaluate((scheme) => { window.reconnectSmoke = true; window.remoteThemeScheme = scheme; }, scheme);
+      await page.addScriptTag({ content: result.outputFiles[0].text });
+      await page.getByRole("button", { name: "SSH 连接", exact: true }).click();
+      await page.getByRole("button", { name: "SSH 重新登录", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "SSH 重新登录", exact: true });
+      await dialog.getByLabel("SSH 密码", { exact: true }).fill("fixture-password");
+      await dialog.getByRole("checkbox", { name: "记住密码" }).check();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "SSH dialog horizontal overflow");
+      const bounds = await dialog.boundingBox();
+      assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= viewport.height + 1, "SSH dialog fits viewport");
+      await page.screenshot({ path: path.join(output, `ssh-login-${scheme}-${viewport.width}.png`), fullPage: true, animations: "disabled" });
+      await dialog.getByRole("button", { name: "测试并连接 SSH" }).click();
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(await page.evaluate(() => window.remoteSmoke.passwordSaved), true);
+      await page.getByRole("button", { name: "SSH 连接", exact: true }).click();
+      await page.getByRole("button", { name: "SSH 重新登录", exact: true }).click();
+      await dialog.getByText("已保存密码，输入新密码可更新。", { exact: true }).waitFor();
+      assert.equal(await dialog.getByLabel("SSH 密码", { exact: true }).inputValue(), "");
+      await page.screenshot({ path: path.join(output, `ssh-saved-${scheme}-${viewport.width}.png`), fullPage: true, animations: "disabled" });
+      await dialog.getByRole("checkbox", { name: "记住密码" }).uncheck();
+      await dialog.getByRole("button", { name: "测试并连接 SSH" }).click();
+      await dialog.waitFor({ state: "hidden" });
+      const input = await page.evaluate(() => window.remoteSmoke.lastConnection);
+      assert.equal(input.useSavedPassword, true);
+      assert.equal(input.rememberPassword, false);
+      assert.equal("password" in input, false);
+      assert.equal(await page.evaluate(() => window.remoteSmoke.passwordSaved), false);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+  }
+  console.log("SSH remember, reconnect and forget passed in light/dark themes at 390px and 1280px.");
   console.log("Remote POSIX/Windows SSH shared UI and uploads passed at 390px and 1280px; no server started.");
 } finally { await browser.close(); }

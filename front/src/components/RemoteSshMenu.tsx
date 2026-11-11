@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Server } from "lucide-react";
+import { ChevronDown, RotateCw, Server, Unplug } from "lucide-react";
 import type { RemoteWorkspace } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { RemoteReconnectDialog, remoteButtonClass } from "./RemoteConnectionForm";
@@ -92,18 +92,20 @@ export function RemoteSshMenu({ client, botAlias, remote, compact = false, disab
       ref={menuRef}
       role="dialog"
       aria-label="SSH 连接"
-      className="fixed z-[100] w-[min(20rem,calc(100vw-1rem))] rounded-md border border-[var(--border)] bg-[var(--workbench-panel-bg)] p-3 text-sm text-[var(--text)] shadow-[var(--shadow-card)]"
+      className="theme-dropdown-menu fixed z-[100] w-[min(20rem,calc(100vw-1rem))] p-4 text-sm text-[var(--text)]"
       style={{ top: menuPosition.top, left: menuPosition.left }}
     >
-      <p className="text-xs text-[var(--muted)]">远程工作区</p>
-      <p className="mt-1 break-all font-mono text-xs">{remote.username}@{remote.host}:{remote.port}</p>
-      <p className="break-all font-mono text-xs">{remote.root}</p>
+      <p className="flex items-center gap-2 font-medium"><Server size={15} className="text-[var(--accent)]" aria-hidden="true" />远程工作区</p>
+      <div className="my-3 space-y-1 rounded-[var(--radius-control)] border border-[var(--hairline)] bg-[var(--fill-subtle)] p-2.5">
+        <p className="break-all font-mono text-xs">{remote.username}@{remote.host}:{remote.port}</p>
+        <p className="break-all font-mono text-xs text-[var(--muted)]">{remote.root}</p>
+      </div>
       <p className="mt-2 text-xs text-[var(--muted)]">仅支持聊天、文件和终端</p>
       {disconnected && <p role="status" className="mt-2 text-xs text-[var(--danger)]">SSH 已断开，请重新登录后继续使用远程工作区。</p>}
       {error && <p role="alert" className="mt-2 text-xs text-[var(--danger)]">{error}</p>}
       <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" className={remoteButtonClass} disabled={disabled || busy} onClick={() => { setOpen(false); setReconnecting(true); }}>SSH 重新登录</button>
-        <button type="button" className={remoteButtonClass} disabled={disabled || busy || disconnected} onClick={() => void disconnect()}>{busy ? "正在断开…" : "断开 SSH"}</button>
+        <button type="button" className={remoteButtonClass} disabled={disabled || busy} onClick={() => { setOpen(false); setReconnecting(true); }}><RotateCw size={14} aria-hidden="true" />SSH 重新登录</button>
+        <button type="button" className="orbit-btn orbit-btn--ghost" disabled={disabled || busy || disconnected} onClick={() => void disconnect()}><Unplug size={14} aria-hidden="true" />{busy ? "正在断开…" : "断开 SSH"}</button>
       </div>
     </div>
   ) : null;

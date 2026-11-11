@@ -322,13 +322,21 @@ def register(app: web.Application, server) -> None:
         for field in ("key_filename", "host_key_fingerprint", "platform"):
             if field in body and body[field] != config.get(field, "posix" if field == "platform" else ""):
                 raise WebApiError(409, "remote_connection_bound", "重新登录使用已绑定的主机密钥和私钥路径；更换连接配置请编辑智能体")
-        for field in ("password", "passphrase"):
+        for field in ("password", "passphrase", "remember_password", "use_saved_password"):
             if field in body:
                 config[field] = body[field]
         result = await asyncio.to_thread(
             get_remote_workspace_service().connect, auth.user_id, config,
             connection_id=config["connection_id"],
         )
+        return _response(result)
+
+    async def credentials(request):
+        await server._with_capability(request, CAP_MANAGE_BOTS)
+        profile = get_profile_or_raise(server.manager, server._manager_alias(request))
+        if not profile.remote_workspace:
+            raise WebApiError(400, "not_remote_workspace", "当前智能体没有远程工作区")
+        result = await asyncio.to_thread(get_remote_workspace_service().credentials_status, profile.remote_workspace)
         return _response(result)
 
     async def disconnect(request):
@@ -343,5 +351,6 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/remote/connections", connect)
     app.router.add_get("/api/remote/connections/{connection_id}/directories", directories)
     app.router.add_post("/api/bots/{alias}/remote/connect", reconnect)
+    app.router.add_get("/api/bots/{alias}/remote/credentials", credentials)
     app.router.add_post("/api/bots/{alias}/remote/disconnect", disconnect)
     app.router.add_post("/api/remote/agent-tools", agent_tools)

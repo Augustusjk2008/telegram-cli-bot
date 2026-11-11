@@ -4661,6 +4661,10 @@ export class MockWebBotClient implements WebBotClient {
     throw new Error("SSH 连接需要连接真实服务");
   }
 
+  async getRemoteCredentialStatus(_botAlias: string): Promise<{ passwordSaved: boolean }> {
+    return { passwordSaved: false };
+  }
+
   async disconnectRemote(_botAlias: string): Promise<void> {
     throw new Error("SSH 断开需要连接真实服务");
   }

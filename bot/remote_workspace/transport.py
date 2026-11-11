@@ -30,6 +30,7 @@ import uuid
 import paramiko
 
 from bot.remote_workspace import windows
+from bot.remote_workspace.credentials import SSHCredentialStore, SSH_IDENTITY_FIELDS
 
 
 IO_TIMEOUT = 15
@@ -37,7 +38,7 @@ MAX_TEXT_BYTES = 2 * 1024 * 1024
 READ_CHUNK_BYTES = 32768
 MAX_COMMAND_OUTPUT = 1024 * 1024
 MAX_DIRECTORY_ENTRIES = 10000
-_IDENTITY_FIELDS = ("host", "port", "username", "host_key_fingerprint", "key_filename", "platform")
+_IDENTITY_FIELDS = SSH_IDENTITY_FIELDS
 
 
 class RemoteWorkspaceError(Exception):
@@ -310,11 +311,11 @@ class RemoteConnection:
             client.close()
             missing = self._password is None and self._passphrase is None
             raise RemoteWorkspaceError(401, "remote_auth_required" if missing else "remote_auth_failed",
-                                       "SSH authentication required; passwords/passphrases are not saved" if missing else "SSH authentication failed") from exc
+                                       "SSH authentication required; enter a password or unlock your SSH key" if missing else "SSH authentication failed") from exc
         except paramiko.SSHException as exc:
             client.close()
             if str(exc) == "No authentication methods available":
-                raise RemoteWorkspaceError(401, "remote_auth_required", "SSH authentication required; passwords/passphrases are not saved") from exc
+                raise RemoteWorkspaceError(401, "remote_auth_required", "SSH authentication required; enter a password or unlock your SSH key") from exc
             raise
         except Exception:
             client.close()
@@ -769,6 +770,7 @@ class RemoteWorkspaceService:
         self._owners: dict[str, int] = {}
         self._roots: dict[str, set[str]] = {}
         self._generation = 0
+        self._credentials = SSHCredentialStore()
 
     def connect(self, owner_id: int, payload: dict, *, connection_id: str = "") -> dict:
         """Create an owned draft, or reauthenticate an API-authorized persisted config.
@@ -779,6 +781,9 @@ class RemoteWorkspaceService:
         if not isinstance(owner_id, int) or isinstance(owner_id, bool):
             _invalid("Invalid owner ID")
         config = _config(payload, verified=bool(connection_id))
+        for field in ("remember_password", "use_saved_password"):
+            if field in payload and not isinstance(payload[field], bool):
+                _invalid(f"Invalid {field}")
         if connection_id and config["connection_id"] != connection_id:
             _invalid("Reauthentication requires the saved connection configuration")
         config["connection_id"] = connection_id or uuid.uuid4().hex
@@ -797,6 +802,11 @@ class RemoteWorkspaceService:
                 or config["root"] not in self._roots[pool_id]
             ):
                 raise RemoteWorkspaceError(409, "remote_connection_mismatch", "Cannot change a saved connection identity or root")
+        if payload.get("use_saved_password") and not secrets["password"]:
+            # A draft's submitted ID never authorizes access to stored credentials.
+            secrets["password"] = self._credentials.get(config) if connection_id else None
+            if secrets["password"] is None:
+                raise RemoteWorkspaceError(401, "remote_auth_required", "Saved SSH password is unavailable; enter your password")
         connection = RemoteConnection(config, **secrets)
         try:
             root = connection.canonical_root(config["root"])
@@ -807,6 +817,13 @@ class RemoteWorkspaceService:
             with self._lock:
                 if generation != self._generation or self._connections.get(pool_id) is not existing:
                     raise RemoteWorkspaceError(409, "remote_connection_changed", "Connection changed during authentication; reconnect again")
+                try:
+                    if payload.get("remember_password") is True and secrets["password"]:
+                        self._credentials.save(public, secrets["password"])
+                    elif payload.get("remember_password") is False:
+                        self._credentials.delete(public)
+                except (OSError, ValueError) as exc:
+                    raise RemoteWorkspaceError(500, "remote_credentials_unavailable", "Unable to update saved SSH password") from exc
                 self._connections[pool_id] = connection
                 self._roots.setdefault(pool_id, set()).add(root)
                 if not connection_id:
@@ -846,12 +863,19 @@ class RemoteWorkspaceService:
         with self._lock:
             connection = self._connections.get(public["connection_id"])
             if connection is None:
-                connection = RemoteConnection(public)
+                connection = RemoteConnection(public, password=self._credentials.get(public))
                 self._connections[public["connection_id"]] = connection
             elif any(connection.config.get(key) != public.get(key) for key in _IDENTITY_FIELDS):
                 raise RemoteWorkspaceError(409, "remote_connection_mismatch", "Connection identity does not match its saved configuration")
             self._roots.setdefault(public["connection_id"], set()).add(public["root"])
             return connection
+
+    def credentials_status(self, config: dict) -> dict:
+        """Accept an authorized persisted config and expose availability only."""
+        public = normalize_remote_workspace(config)
+        if not public:
+            _invalid("Remote workspace is required")
+        return {"password_saved": self._credentials.get(public) is not None}
 
     def connection_status(self, config: dict) -> str:
         public = normalize_remote_workspace(config)
