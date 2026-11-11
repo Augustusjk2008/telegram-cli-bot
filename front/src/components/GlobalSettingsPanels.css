@@ -1,0 +1,330 @@
+/*
+ * Admin Center → 全局配置: the interface/notification rows and the global prompt presets.
+ * The island material comes from .admin-embed in admin-center.css; proportions follow
+ * ChatTranslationSettingsPanel.css so the page reads like the other Admin Center islands.
+ * Fields and switches inherit the Orbit look from admin-center.css. Theme variables only.
+ */
+
+/* -------------------------------------------------------------- island */
+
+.global-settings-island {
+  container: global-settings-island / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.global-settings-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.global-settings-head-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-outline);
+}
+
+.global-settings-head h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.global-settings-head > .orbit-chip {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- rows */
+
+/* One grouped well; each setting is a row with its control on the right edge. */
+.global-settings-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+}
+
+.global-settings-list:disabled {
+  opacity: 0.7;
+}
+
+.global-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 10px 14px;
+}
+
+.global-settings-row + .global-settings-row {
+  border-top: 1px solid var(--hairline);
+}
+
+label.global-settings-row,
+label.global-settings-row-label {
+  cursor: pointer;
+}
+
+.global-settings-row-label {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.global-settings-row-label > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Status, action and switch travel together: when the row is too narrow they wrap as one group. */
+.global-settings-row-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px 10px;
+  margin-left: auto;
+}
+
+.global-settings-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* The theme picker sits in its row as a fixed-width control instead of a full-width block. */
+.global-settings-theme {
+  flex: 0 1 260px;
+  min-width: 0;
+  text-align: right;
+}
+
+.global-settings-theme button[aria-haspopup="listbox"] {
+  height: 36px;
+  padding-block: 0;
+  border-radius: var(--radius-control);
+  font-size: 13.5px;
+}
+
+.global-settings-theme .theme-dropdown-option {
+  font-size: 13.5px;
+}
+
+/* ------------------------------------------------------------- presets */
+
+.global-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.global-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  transition: border-color 200ms var(--ease-out);
+}
+
+.global-preset:focus-within {
+  border-color: var(--accent-outline);
+}
+
+.global-preset-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.global-preset-index {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding-inline: 4px;
+  border-radius: var(--radius-chip);
+  background: var(--fill-pressed);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-preset-remove {
+  color: var(--muted);
+}
+
+.global-preset-remove:not(:disabled):hover {
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.admin-content .global-preset-title,
+.admin-content .global-preset-content {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 14px;
+}
+
+.admin-content .global-preset-title {
+  flex: 1 1 auto;
+  height: 36px;
+  padding: 0 12px;
+  font-weight: 600;
+}
+
+.admin-content .global-preset-content {
+  min-height: 88px;
+  padding: 8px 12px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+/* The add row closes the list; with no presets yet it doubles as the empty state. */
+.global-presets-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-card);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color 140ms var(--ease-out), background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+
+.global-presets-add:not(:disabled):hover {
+  border-color: var(--accent-outline);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.global-presets-add:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.global-presets-add:disabled {
+  opacity: 0.5;
+}
+
+.global-settings-empty {
+  margin: 0;
+  padding: 18px 12px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-card);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* -------------------------------------------------------------- footer */
+
+.global-settings-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.global-settings-foot-note {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 20px;
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* Stays in the tree as a live region; with nothing to say it takes no room. */
+.global-settings-foot-note:empty {
+  flex-basis: 0;
+  min-height: 0;
+}
+
+.global-settings-foot-note > svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.global-settings-foot-note[data-tone="success"],
+.global-settings-foot-note[data-tone="success"] > svg {
+  color: var(--status-success);
+}
+
+/* Wrapped rows stay on the right edge, where the primary action sits. */
+.global-settings-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------- island widths */
+
+@container global-settings-island (max-width: 480px) {
+  /* The picker drops under its label and takes the row width. */
+  .global-settings-theme {
+    flex-basis: 100%;
+    text-align: left;
+  }
+
+  .global-preset {
+    padding: 12px;
+  }
+}

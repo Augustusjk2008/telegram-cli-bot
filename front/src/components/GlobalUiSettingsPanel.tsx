@@ -1,5 +1,5 @@
-import { Bell } from "lucide-react";
-import { useState } from "react";
+import { Bell, CornerDownLeft, Palette, SlidersHorizontal } from "lucide-react";
+import { useId, useState } from "react";
 import { ThemeDropdown } from "./ThemeDropdown";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import {
@@ -9,6 +9,7 @@ import {
   writeChatCompletionWebNotificationEnabled,
 } from "../utils/chatNotificationEvents";
 import type { BrowserNotificationPermission } from "../services/types";
+import "./GlobalSettingsPanels.css";
 
 type Props = {
   canManage?: boolean;
@@ -19,10 +20,17 @@ type Props = {
 };
 
 function permissionText(permission: BrowserNotificationPermission) {
-  if (permission === "granted") return "已允许";
-  if (permission === "denied") return "已拒绝";
+  if (permission === "granted") return "浏览器已允许";
+  if (permission === "denied") return "浏览器已拒绝";
   if (permission === "unsupported") return "浏览器不支持";
-  return "未询问";
+  return "浏览器未授权";
+}
+
+/** Notifications that are switched on but cannot be delivered read as a warning. */
+function permissionTone(permission: BrowserNotificationPermission, enabled: boolean) {
+  if (permission === "granted") return "success";
+  if (permission === "denied") return "danger";
+  return enabled ? "warning" : undefined;
 }
 
 export function GlobalUiSettingsPanel({
@@ -32,6 +40,7 @@ export function GlobalUiSettingsPanel({
   chatEnterToSend = true,
   onChatEnterToSendChange,
 }: Props) {
+  const uid = useId();
   const [notificationEnabled, setNotificationEnabled] = useState(() => readChatCompletionWebNotificationEnabled());
   const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() => getBrowserNotificationPermission());
   const [requestingPermission, setRequestingPermission] = useState(false);
@@ -63,43 +72,72 @@ export function GlobalUiSettingsPanel({
   }
 
   return (
-    <section aria-labelledby="global-ui-settings-title" className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-      <div>
-        <h2 id="global-ui-settings-title" className="text-base font-semibold text-[var(--text)]">通用显示设置</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">全局配置 · 影响所有智能体和当前浏览器中的聊天界面。</p>
-      </div>
-      <fieldset disabled={!canManage} className="space-y-3">
-        <ThemeDropdown value={themeName} onChange={(value) => void changeTheme(value)} />
-        <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
-          <span className="text-sm text-[var(--text)]">Enter 键发送消息</span>
-          <input aria-label="Enter 键发送消息" type="checkbox" checked={chatEnterToSend} onChange={(event) => onChatEnterToSendChange?.(event.target.checked)} className="h-4 w-4" />
-        </label>
-      </fieldset>
+    <section aria-labelledby={`${uid}-title`} className="global-settings-island">
+      <header className="global-settings-head">
+        <span className="global-settings-head-icon" aria-hidden="true"><SlidersHorizontal className="h-4 w-4" /></span>
+        <h2 id={`${uid}-title`}>界面与通知</h2>
+      </header>
 
-      <div className="space-y-3 border-t border-[var(--border)] pt-3">
-        <div className="flex items-center gap-2">
-          <Bell className="h-5 w-5 text-[var(--accent)]" />
-          <div>
-            <h3 className="text-base font-semibold text-[var(--text)]">网页通知</h3>
-            <p className="text-xs text-[var(--muted)]">全局网页通知开关只保存在当前浏览器。</p>
+      <fieldset disabled={!canManage} className="global-settings-list">
+        <div className="global-settings-row">
+          <span className="global-settings-row-label">
+            <Palette className="h-4 w-4" aria-hidden="true" />
+            界面主题
+          </span>
+          <ThemeDropdown
+            value={themeName}
+            onChange={(value) => void changeTheme(value)}
+            className="global-settings-theme"
+            menuAlign="right"
+          />
+        </div>
+
+        <label className="global-settings-row">
+          <span className="global-settings-row-label">
+            <CornerDownLeft className="h-4 w-4" aria-hidden="true" />
+            Enter 键发送消息
+          </span>
+          <input
+            aria-label="Enter 键发送消息"
+            type="checkbox"
+            checked={chatEnterToSend}
+            onChange={(event) => onChatEnterToSendChange?.(event.target.checked)}
+          />
+        </label>
+
+        <div className="global-settings-row">
+          <label htmlFor={`${uid}-notification`} className="global-settings-row-label">
+            <Bell className="h-4 w-4" aria-hidden="true" />
+            聊天完成网页通知
+          </label>
+          <div className="global-settings-row-controls">
+            <span className="orbit-chip" data-tone={permissionTone(notificationPermission, notificationEnabled)}>
+              <span className="global-settings-dot" aria-hidden="true" />
+              {permissionText(notificationPermission)}
+            </span>
+            {notificationPermission === "default" ? (
+              <button
+                type="button"
+                aria-label="请求浏览器通知权限"
+                onClick={() => void requestPermission()}
+                disabled={requestingPermission}
+                className="orbit-btn orbit-btn--secondary orbit-btn--sm"
+              >
+                {requestingPermission ? "请求中..." : "授权"}
+              </button>
+            ) : null}
+            <input
+              id={`${uid}-notification`}
+              aria-label="聊天完成网页通知"
+              type="checkbox"
+              checked={notificationEnabled}
+              onChange={(event) => changeNotification(event.target.checked)}
+            />
           </div>
         </div>
-        <fieldset disabled={!canManage} className="space-y-3">
-          <label className="flex items-center justify-between gap-3 border-t border-[var(--border)] px-1 py-2">
-            <span className="text-sm text-[var(--text)]">聊天完成网页通知</span>
-            <input aria-label="聊天完成网页通知" type="checkbox" checked={notificationEnabled} onChange={(event) => changeNotification(event.target.checked)} className="h-4 w-4" />
-          </label>
-          <div className="grid grid-cols-1 gap-3 text-sm text-[var(--muted)] sm:grid-cols-2">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">浏览器权限: <span className="font-medium text-[var(--text)]">{permissionText(notificationPermission)}</span></div>
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">本地开关: <span className="font-medium text-[var(--text)]">{notificationEnabled ? "已开启" : "已关闭"}</span></div>
-          </div>
-          <button type="button" onClick={() => void requestPermission()} disabled={requestingPermission || notificationPermission === "unsupported"} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-60">
-            <Bell className="h-4 w-4" />
-            {requestingPermission ? "请求中..." : "请求浏览器通知权限"}
-          </button>
-        </fieldset>
-      </div>
-      {notice ? <p role="status" className="text-sm text-[var(--feedback-success-text-deep)]">{notice}</p> : null}
+      </fieldset>
+
+      <p role="status" className="sr-only">{notice}</p>
     </section>
   );
 }

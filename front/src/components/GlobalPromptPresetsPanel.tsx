@@ -1,8 +1,11 @@
-import { Plus, Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, Info, MessageSquareQuote, Plus, RotateCcw, Save, Trash2, TriangleAlert } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { PromptPreset } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
+import "./GlobalSettingsPanels.css";
+
+const MAX_PRESETS = 50;
 
 type Props = {
   client: WebBotClient;
@@ -15,6 +18,9 @@ function clonePresets(value: PromptPreset[] = []) {
 }
 
 export function GlobalPromptPresetsPanel({ client, botAlias, canManage = true }: Props) {
+  const uid = useId();
+  const listRef = useRef<HTMLOListElement>(null);
+  const focusNewPreset = useRef(false);
   const [presets, setPresets] = useState<PromptPreset[]>([]);
   const [draft, setDraft] = useState<PromptPreset[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,8 +54,16 @@ export function GlobalPromptPresetsPanel({ client, botAlias, canManage = true }:
     setDraft((current) => current.map((preset, itemIndex) => itemIndex === index ? { ...preset, ...patch } : preset));
   }
 
+  // A new preset lands at the end of the list; move the caret into its title.
+  useEffect(() => {
+    if (!focusNewPreset.current) return;
+    focusNewPreset.current = false;
+    listRef.current?.querySelector<HTMLInputElement>("li:last-child .global-preset-title")?.focus();
+  }, [draft.length]);
+
   function addPreset() {
-    if (draft.length >= 50) return;
+    if (draft.length >= MAX_PRESETS) return;
+    focusNewPreset.current = true;
     setDraft((current) => [...current, { id: `global-${Date.now().toString(36)}`, title: "", content: "" }]);
   }
 
@@ -60,7 +74,7 @@ export function GlobalPromptPresetsPanel({ client, botAlias, canManage = true }:
   async function save() {
     const normalized = draft.map((preset) => ({ id: preset.id.trim(), title: preset.title.trim(), content: preset.content }));
     if (normalized.some((preset) => !preset.id || !preset.title || !preset.content.trim())) {
-      setError("每条全局预设都需要填写 ID、标题和内容");
+      setError("每条全局预设都需要填写标题和内容");
       return;
     }
     setSaving(true);
@@ -84,40 +98,102 @@ export function GlobalPromptPresetsPanel({ client, botAlias, canManage = true }:
     setNotice("");
   }
 
+  const dirty = JSON.stringify(draft) !== JSON.stringify(presets);
+
   return (
-    <section aria-labelledby="global-prompt-presets-title" className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-      <div>
-        <h2 id="global-prompt-presets-title" className="text-base font-semibold text-[var(--text)]">全局提示词预设</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">影响所有智能体；聊天输入框只负责选择和插入。</p>
-      </div>
-      {loading ? <p className="text-sm text-[var(--muted)]">加载中...</p> : null}
-      {!loading && draft.length === 0 ? <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-5 text-center text-sm text-[var(--muted)]">暂无全局预设</p> : null}
-      <div className="space-y-3">
-        {draft.map((preset, index) => (
-          <div key={`${preset.id}-${index}`} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3">
-            <div className="flex items-start gap-3">
-              <div className="min-w-0 flex-1 space-y-2">
-                <label className="block text-sm font-medium text-[var(--text)]">预设标题 {index + 1}
-                  <input aria-label={`全局预设标题 ${index + 1}`} value={preset.title} maxLength={80} disabled={!canManage || saving} onChange={(event) => updatePreset(index, { title: event.currentTarget.value })} className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] disabled:opacity-60" />
-                </label>
-                <label className="block text-sm font-medium text-[var(--text)]">预设内容 {index + 1}
-                  <textarea aria-label={`全局预设内容 ${index + 1}`} value={preset.content} maxLength={12000} rows={4} disabled={!canManage || saving} onChange={(event) => updatePreset(index, { content: event.currentTarget.value })} className="mt-1 w-full resize-y rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm font-normal text-[var(--text)] disabled:opacity-60" />
-                </label>
+    <section aria-labelledby={`${uid}-title`} className="global-settings-island">
+      <header className="global-settings-head">
+        <span className="global-settings-head-icon" aria-hidden="true"><MessageSquareQuote className="h-4 w-4" /></span>
+        <h2 id={`${uid}-title`}>全局提示词预设</h2>
+        {loading ? null : <span className="orbit-chip">{draft.length} / {MAX_PRESETS}</span>}
+      </header>
+
+      {loading ? <p role="status" className="global-settings-empty">加载中...</p> : null}
+      {!loading && !canManage && draft.length === 0 ? <p className="global-settings-empty">暂无全局预设</p> : null}
+
+      {draft.length > 0 ? (
+        <ol ref={listRef} className="global-presets">
+          {draft.map((preset, index) => (
+            <li key={`${preset.id}-${index}`} className="global-preset">
+              <div className="global-preset-head">
+                <span className="global-preset-index" aria-hidden="true">{index + 1}</span>
+                <input
+                  aria-label={`全局预设标题 ${index + 1}`}
+                  className="global-preset-title"
+                  value={preset.title}
+                  maxLength={80}
+                  placeholder="预设标题"
+                  disabled={!canManage || saving}
+                  onChange={(event) => updatePreset(index, { title: event.currentTarget.value })}
+                />
+                {canManage ? (
+                  <button
+                    type="button"
+                    aria-label={`删除全局预设 ${preset.title || index + 1}`}
+                    onClick={() => removePreset(index)}
+                    disabled={saving}
+                    className="orbit-btn orbit-btn--icon global-preset-remove"
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                ) : null}
               </div>
-              {canManage ? <button type="button" aria-label={`删除全局预设 ${preset.title || index + 1}`} onClick={() => removePreset(index)} disabled={saving} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] hover:bg-[var(--feedback-error-background-subtle)] hover:text-[var(--feedback-error-text-strong)] disabled:opacity-50"><Trash2 className="h-4 w-4" /></button> : null}
-            </div>
-          </div>
-        ))}
-      </div>
-      {error ? <p className="rounded-lg border border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] px-3 py-2 text-sm text-[var(--feedback-error-text-deep)]">{error}</p> : null}
-      {notice ? <p role="status" className="text-sm text-[var(--feedback-success-text-deep)]">{notice}</p> : null}
-      {canManage ? <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-3">
-        <button type="button" onClick={addPreset} disabled={saving || draft.length >= 50} className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50"><Plus className="h-4 w-4" />新增预设</button>
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={cancel} disabled={saving} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50">取消</button>
-          <button type="button" onClick={() => void save()} disabled={saving} className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm tcb-solid-accent disabled:opacity-50"><Save className="h-4 w-4" />{saving ? "保存中..." : "保存全局预设"}</button>
+              <textarea
+                aria-label={`全局预设内容 ${index + 1}`}
+                className="global-preset-content"
+                value={preset.content}
+                maxLength={12000}
+                rows={4}
+                placeholder="预设内容"
+                disabled={!canManage || saving}
+                onChange={(event) => updatePreset(index, { content: event.currentTarget.value })}
+              />
+            </li>
+          ))}
+        </ol>
+      ) : null}
+
+      {canManage && !loading ? (
+        <button type="button" onClick={addPreset} disabled={saving || draft.length >= MAX_PRESETS} className="global-presets-add">
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          新增预设
+        </button>
+      ) : null}
+
+      {error ? (
+        <div role="alert" className="admin-callout" data-tone="danger">
+          <TriangleAlert className="h-4 w-4 flex-none" aria-hidden="true" />
+          <span>{error}</span>
         </div>
-      </div> : null}
+      ) : null}
+
+      {canManage && !loading ? (
+        <footer className="global-settings-foot">
+          <p role="status" className="global-settings-foot-note" data-tone={!dirty && notice ? "success" : undefined}>
+            {dirty ? (
+              <>
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+                有尚未保存的更改
+              </>
+            ) : notice ? (
+              <>
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                {notice}
+              </>
+            ) : null}
+          </p>
+          <div className="global-settings-foot-actions">
+            <button type="button" onClick={cancel} disabled={saving || !dirty} className="orbit-btn orbit-btn--ghost">
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              放弃更改
+            </button>
+            <button type="button" onClick={() => void save()} disabled={saving || !dirty} className="orbit-btn orbit-btn--primary">
+              <Save className="h-4 w-4" aria-hidden="true" />
+              {saving ? "保存中..." : "保存全局预设"}
+            </button>
+          </div>
+        </footer>
+      ) : null}
     </section>
   );
 }
