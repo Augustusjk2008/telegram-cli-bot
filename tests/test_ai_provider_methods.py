@@ -1,9 +1,13 @@
+from types import SimpleNamespace
+
 import pytest
 
-from bot.models import GitCommitMessageCliConfig
+from bot.models import BotProfile, GitCommitMessageCliConfig
 from bot.web.git_commit_message import extract_commit_message, run_llm_commit_message
-from bot.web.translation_config import TranslationConfig
+from bot.web.translation_config import TranslationConfig, TranslationConfigError, TranslationConfigStore
 from bot.web.translation_service import TranslationService
+import bot.web.chat_translation as chat_translation
+import bot.web.translation_config as translation_config_module
 import bot.web.translation_service as translation_service_module
 
 
@@ -37,6 +41,60 @@ async def test_translation_can_use_cli_method(monkeypatch):
     assert result["status"] == "completed"
     assert result["text"] == "你好 CLI"
     assert observed["cli_type"] == "codex"
+
+
+def test_translation_uses_its_own_cli_settings_instead_of_the_bot_cli(monkeypatch, tmp_path):
+    store = TranslationConfigStore(tmp_path / "config.json")
+    store.update({
+        "method": "cli",
+        "cli_type": "claude",
+        "cli_path": "claude-translate",
+        "cli_params": {"effort": "low", "model": "none"},
+    })
+    monkeypatch.setattr(chat_translation, "get_translation_service", lambda: SimpleNamespace(config_store=store))
+    profile = BotProfile(alias="main", cli_type="codex", cli_path="codex-bot", working_dir=str(tmp_path))
+
+    snapshot = chat_translation.translation_snapshot(profile=profile)
+
+    # Only the working directory follows the chatting Bot.
+    assert (snapshot.cli_type, snapshot.cli_path) == ("claude", "claude-translate")
+    assert snapshot.cli_working_dir == str(tmp_path)
+    # "none" in the model list means the CLI's own default, not a model called none.
+    assert snapshot.cli_params["claude"]["effort"] == "low"
+    assert snapshot.cli_params["claude"]["model"] is None
+
+
+def test_saved_translation_cli_settings_load_again_after_a_restart(tmp_path):
+    path = tmp_path / "config.json"
+    TranslationConfigStore(path).update({
+        "method": "cli", "cli_type": "claude", "cli_path": "claude", "cli_params": {"effort": "low"},
+    })
+
+    reloaded = TranslationConfigStore(path).get_config()
+
+    assert (reloaded.method, reloaded.cli_type, reloaded.cli_path) == ("cli", "claude", "claude")
+    assert reloaded.cli_params["claude"]["effort"] == "low"
+
+
+def test_enabling_cli_translation_requires_a_runnable_cli(monkeypatch, tmp_path):
+    store = TranslationConfigStore(tmp_path / "config.json")
+    monkeypatch.setattr(translation_config_module, "resolve_cli_executable", lambda *_args: None)
+
+    with pytest.raises(TranslationConfigError, match="未找到 CLI 可执行文件: missing-cli"):
+        store.update({"method": "cli", "cli_path": "missing-cli", "translate_user_enabled": True})
+
+    assert store.get_config().translate_user_enabled is False
+    # The CLI can still be prepared while translation is switched off.
+    assert store.update({"method": "cli", "cli_path": "missing-cli"})["cli_path"] == "missing-cli"
+
+
+def test_translation_settings_describe_every_cli_without_host_controlled_parameters():
+    options = TranslationConfig().to_public_dict()["cli_options"]
+
+    assert set(options) == {"codex", "codex_server", "claude", "antigravity", "deepseek"}
+    for option in options.values():
+        assert not {"session_id", "stream_json", "json_output"} & set(option["schema"])
+        assert set(option["schema"]) <= set(option["params"])
 
 
 @pytest.mark.asyncio

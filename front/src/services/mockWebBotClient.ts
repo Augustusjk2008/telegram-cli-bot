@@ -612,6 +612,17 @@ function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): Gi
   };
 }
 
+/** Mirrors the backend: one entry per CLI, without the output-format switch the host controls. */
+function buildMockTranslationCliOptions(): ChatTranslationConfig["cli_options"] {
+  const options: ChatTranslationConfig["cli_options"] = {};
+  for (const cliType of ["codex", "codex_server", "claude", "antigravity", "deepseek"] as const) {
+    const { params, defaults, schema } = buildMockCliParams(cliType);
+    const { json_output: _hostControlled, ...visibleSchema } = schema;
+    options[cliType] = { params: { ...params }, defaults: { ...defaults }, schema: visibleSchema };
+  }
+  return options;
+}
+
 function createMockEnvItems(): EnvConfigItem[] {
   return [
     {
@@ -1866,7 +1877,10 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   };
-  private chatTranslationConfig = { ...DEFAULT_CHAT_TRANSLATION_CONFIG };
+  private chatTranslationConfig: ChatTranslationConfig = {
+    ...DEFAULT_CHAT_TRANSLATION_CONFIG,
+    cli_options: buildMockTranslationCliOptions(),
+  };
   private inlineCompletionConfig: InlineCompletionConfig = {
     enabled: false,
     providerType: "openai_compatible",
@@ -3710,12 +3724,22 @@ export class MockWebBotClient implements WebBotClient {
 
   async updateChatTranslationConfig(input: ChatTranslationConfigInput): Promise<ChatTranslationConfig> {
     if (!this.hasAdminOps()) throw new WebApiClientError("无权修改聊天翻译配置", { status: 403, code: "forbidden" });
-    const { api_key, clear_api_key, ...config } = input;
-    this.chatTranslationConfig = {
+    const { api_key, clear_api_key, cli_params, ...config } = input;
+    const next: ChatTranslationConfig = {
       ...this.chatTranslationConfig,
       ...config,
       api_key_configured: clear_api_key ? false : Boolean(api_key?.trim() || this.chatTranslationConfig.api_key_configured),
     };
+    // A request carries the selected CLI's parameters; each CLI keeps its own block.
+    const selected = next.cli_options[next.cli_type];
+    if (selected && cli_params) {
+      next.cli_options = {
+        ...next.cli_options,
+        [next.cli_type]: { ...selected, params: { ...selected.params, ...cli_params } },
+      };
+    }
+    next.cli_params = { ...(next.cli_options[next.cli_type]?.params || {}) };
+    this.chatTranslationConfig = next;
     return this.getChatTranslationConfig();
   }
 

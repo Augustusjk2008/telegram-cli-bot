@@ -543,6 +543,7 @@ function mapChatTranslationConfig(raw: RawChatTranslationConfig): ChatTranslatio
     cli_params: raw.cli_params || {},
     cli_defaults: raw.cli_defaults || {},
     cli_schema: raw.cli_schema || {},
+    cli_options: raw.cli_options || {},
     api_key_configured: Boolean(raw.api_key_configured ?? api_key_set),
   };
 }

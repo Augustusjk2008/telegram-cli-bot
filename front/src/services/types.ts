@@ -1185,6 +1185,13 @@ export type BotChatTranslationConfig = {
   can_edit: boolean;
 };
 
+/** One CLI's parameters, defaults and schema, as the translation settings form edits them. */
+export type ChatTranslationCliOption = {
+  params: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  schema: Record<string, CliParamField>;
+};
+
 export type ChatTranslationConfig = {
   method: "llm" | "cli";
   reasoning_effort: "none" | "low" | "medium" | "high";
@@ -1201,11 +1208,13 @@ export type ChatTranslationConfig = {
   cli_params: Record<string, unknown>;
   cli_defaults: Record<string, unknown>;
   cli_schema: Record<string, CliParamField>;
+  /** Every CLI the translation can run, so the form can switch types before saving. */
+  cli_options: Partial<Record<CliType, ChatTranslationCliOption>>;
   cli_configured?: boolean;
   llm_configured?: boolean;
 };
 
-export type ChatTranslationConfigInput = Partial<Omit<ChatTranslationConfig, "api_key_configured">> & {
+export type ChatTranslationConfigInput = Partial<Omit<ChatTranslationConfig, "api_key_configured" | "cli_options">> & {
   api_key?: string;
   clear_api_key?: boolean;
 };

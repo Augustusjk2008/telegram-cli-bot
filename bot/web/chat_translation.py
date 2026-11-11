@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import replace
 from typing import Any
 
 from .translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig
@@ -37,18 +36,10 @@ def translation_snapshot(*, enabled: bool = True, profile: Any | None = None) ->
     if not enabled:
         return None
     config = get_translation_service().config_store.get_config()
-    if profile is None:
-        return config
-    # CLI translation follows the selected Bot's normal CLI configuration;
-    # copy it into the immutable turn snapshot so later profile edits do not
-    # change an in-flight translation.
-    return replace(
-        config,
-        cli_type=str(getattr(profile, "cli_type", config.cli_type) or config.cli_type),
-        cli_path=str(getattr(profile, "cli_path", config.cli_path) or config.cli_path),
-        cli_params=getattr(getattr(profile, "cli_params", None), "to_dict", lambda: config.cli_params)(),
-        cli_working_dir=str(getattr(profile, "working_dir", config.cli_working_dir) or config.cli_working_dir),
-    )
+    # Translation runs its own CLI settings rather than the Bot's. The Bot only
+    # supplies the working directory, copied into the immutable turn snapshot so
+    # later profile edits do not change an in-flight translation.
+    return config.in_working_dir(getattr(profile, "working_dir", ""))
 
 
 def input_translation_pending(text: str, config: TranslationConfig | None) -> dict[str, Any] | None:

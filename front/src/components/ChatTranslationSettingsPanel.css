@@ -1,0 +1,452 @@
+/*
+ * Admin Center → 翻译: the chat translation settings as one glass island — the two scope switches,
+ * the engine (LLM API or the translation's own local CLI) and the prompts, saved together.
+ * Proportions follow AppUpdatePanel.css so the page reads like the other Admin Center islands; fields
+ * and switches inherit the Orbit look from admin-center.css. Everything here reads theme variables only.
+ */
+
+/* -------------------------------------------------------------- island */
+
+.translation-island {
+  --translation-tone: var(--muted);
+  --translation-tone-soft: var(--fill-pressed);
+  --translation-tone-ring: var(--hairline-strong);
+  container: translation-island / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.translation-island[data-tone="accent"] {
+  --translation-tone: var(--accent);
+  --translation-tone-soft: var(--accent-soft);
+  --translation-tone-ring: var(--accent-outline);
+}
+
+.translation-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  min-width: 0;
+}
+
+.translation-head-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-card);
+  background: var(--translation-tone-soft);
+  color: var(--translation-tone);
+  box-shadow: inset 0 0 0 1px var(--translation-tone-ring);
+  transition: background-color 200ms var(--ease-out), color 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+}
+
+.translation-head-copy {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.translation-head-copy h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.translation-head-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.translation-head > .orbit-chip {
+  flex: none;
+  margin-left: auto;
+}
+
+.translation-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+/* ------------------------------------------------------------ callouts */
+
+.translation-callout-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.translation-callout:has(> .orbit-btn) {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.translation-callout > .orbit-btn {
+  flex: none;
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------------------- form */
+
+.translation-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.translation-form:disabled {
+  opacity: 0.7;
+}
+
+/* Scope switches: what gets translated. */
+.translation-toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.translation-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  transition: border-color 200ms var(--ease-out), background-color 200ms var(--ease-out);
+}
+
+.translation-toggle[data-on] {
+  border-color: var(--accent-outline);
+  background:
+    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--accent) calc(var(--glow-strength) * 12%), transparent), transparent 70%),
+    var(--fill-subtle);
+}
+
+.translation-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.translation-toggle-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------------------ sections */
+
+.translation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.translation-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  min-width: 0;
+}
+
+.translation-section-copy {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.translation-section-copy h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.translation-section-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.translation-segmented {
+  flex: none;
+}
+
+.orbit-segmented.translation-segmented > button {
+  gap: 6px;
+  height: 28px;
+  padding-inline: 10px;
+  font-size: 12.5px;
+}
+
+/* -------------------------------------------------------------- engine */
+
+.translation-engine {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+}
+
+.translation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+
+.translation-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Text fields and native selects share one height, so a mixed row lines up. */
+.admin-content .translation-field > :is(input, select) {
+  height: 36px;
+  padding-block: 0;
+}
+
+.translation-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.translation-field-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.translation-field-hint,
+.translation-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.translation-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.translation-note > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* A quiet text action beside a field label: clear the saved key, restore a default prompt. */
+.translation-field-action {
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  transition: color 140ms var(--ease-out), opacity 140ms var(--ease-out);
+}
+
+.translation-field-action:not(:disabled):hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.translation-field-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.translation-field-action:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.translation-field-action[aria-pressed="true"] {
+  color: var(--status-warning);
+}
+
+.admin-content .translation-mono {
+  font-family: var(--code-font-family);
+}
+
+/* Parameters beyond the model choice: other values, switches, extra arguments. */
+.translation-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.translation-caption {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+/* The switch rows carry their own inline padding; pull them back onto the field edge. */
+.translation-switches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 2px 14px;
+  margin-inline: -10px;
+}
+
+.admin-content .translation-args {
+  min-height: 56px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.translation-timeout {
+  display: grid;
+  grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
+  align-items: end;
+  gap: 6px 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* Sit on the input's text baseline rather than under the field. */
+.translation-timeout > .translation-field-hint {
+  padding-bottom: 9px;
+}
+
+/* ------------------------------------------------------------- prompts */
+
+.translation-prompts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.admin-content .translation-prompt {
+  min-height: 200px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+/* -------------------------------------------------------------- footer */
+
+.translation-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.translation-foot-note {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.translation-foot-note > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.translation-foot-note[data-tone="pending"] {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.translation-foot-note[data-tone="pending"] > svg {
+  color: var(--accent);
+}
+
+.translation-foot-note[data-tone="success"] {
+  color: var(--status-success);
+}
+
+/* Wrapped rows stay on the right edge, where the primary action sits. */
+.translation-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------- island widths */
+
+@container translation-island (min-width: 880px) {
+  .translation-prompts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container translation-island (max-width: 560px) {
+  /* A chip that wraps under the title lines up with the title text, not the far edge. */
+  .translation-head > .orbit-chip {
+    margin-left: 44px;
+  }
+
+  .translation-toggles,
+  .translation-grid,
+  .translation-timeout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .translation-timeout > .translation-field-hint {
+    padding-bottom: 0;
+  }
+
+  .translation-engine {
+    padding: 12px;
+  }
+}
