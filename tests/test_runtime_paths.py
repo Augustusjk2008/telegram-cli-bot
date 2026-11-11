@@ -43,20 +43,6 @@ def test_runtime_paths_loads_tcb_data_dir_from_dotenv(tmp_path, monkeypatch):
     assert reloaded.get_app_data_root() == data
 
 
-def test_native_agent_paths_default_under_home(monkeypatch, tmp_path: Path):
-    home = tmp_path / "home"
-    repo = tmp_path / "repo"
-    home.mkdir()
-    repo.mkdir()
-    monkeypatch.delenv("TCB_DATA_DIR", raising=False)
-    monkeypatch.chdir(repo)
-    monkeypatch.setattr(runtime_paths, "dotenv_values", lambda _path: {})
-    monkeypatch.setattr(runtime_paths.Path, "home", staticmethod(lambda: home))
-
-    assert runtime_paths.get_pi_session_store_path() == home / ".tcb" / "orbit-safe-claw" / "native-agent" / "pi_sessions.json"
-    assert str(repo) not in str(runtime_paths.get_pi_session_store_path())
-
-
 def test_normalize_workspace_dir_collapses_windows_path_variants(monkeypatch):
     monkeypatch.setattr(runtime_paths, "_is_windows_platform", lambda: True)
     monkeypatch.setattr(runtime_paths.os.path, "abspath", lambda value: str(value).replace("/", "\\").rstrip("\\"))

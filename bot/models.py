@@ -18,7 +18,6 @@ from bot.cluster.config import (
     normalize_bot_cluster_config,
 )
 from bot.cluster.team import ClusterSlotStatus
-from bot.native_agent.legacy_migration import migrate_native_agent_payload
 
 if TYPE_CHECKING:
     # 避免循环导入
@@ -32,8 +31,7 @@ PROMPT_PRESET_TITLE_MAX_LENGTH = 80
 PROMPT_PRESET_CONTENT_MAX_LENGTH = 12000
 PROMPT_PRESET_ID_MAX_LENGTH = 128
 EXECUTION_MODE_CLI = "cli"
-EXECUTION_MODE_NATIVE_AGENT = "native_agent"
-SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT}
+SUPPORTED_EXECUTION_MODES = {EXECUTION_MODE_CLI}
 
 
 class _SessionPersistenceScheduler:
@@ -202,170 +200,7 @@ def normalize_execution_mode_config(
     supported_value: Any,
     default_value: Any,
 ) -> tuple[list[str], str]:
-    supported = normalize_execution_modes(supported_value)
-    default = normalize_execution_mode(default_value, default=supported[0])
-    if supported == [EXECUTION_MODE_NATIVE_AGENT] or default == EXECUTION_MODE_NATIVE_AGENT:
-        return [EXECUTION_MODE_NATIVE_AGENT], EXECUTION_MODE_NATIVE_AGENT
     return [EXECUTION_MODE_CLI], EXECUTION_MODE_CLI
-
-
-def _native_agent_value(data: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in data:
-            return data.get(key)
-    return None
-
-
-def _native_agent_bool(data: dict[str, Any], *keys: str) -> bool:
-    value = _native_agent_value(data, *keys)
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def normalize_native_agent_provider(value: Any) -> str:
-    return str(value or "").strip().lower()
-
-
-def normalize_native_agent_base_url(value: Any) -> str:
-    base_url = str(value or "").strip()
-    if not base_url:
-        return ""
-    lowered = base_url.lower()
-    if not (lowered.startswith("http://") or lowered.startswith("https://")):
-        raise ValueError("Base URL 必须以 http:// 或 https:// 开头")
-    return base_url.rstrip("/")
-
-
-def mask_secret(value: Any) -> str:
-    secret = str(value or "")
-    if not secret:
-        return ""
-    suffix = secret[-4:] if len(secret) >= 4 else secret
-    prefix = secret[:3] if secret.startswith("sk-") else ""
-    return f"{prefix}****{suffix}"
-
-
-def normalize_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    data = migrate_native_agent_payload(value)
-    existing_config = dict(existing or {})
-    provider = normalize_native_agent_provider(data.get("provider"))
-    model = str(
-        data.get("model")
-        or data.get("modelId")
-        or data.get("model_id")
-        or data.get("native_agent_model")
-        or data.get("nativeAgentModel")
-        or data.get("selected_model")
-        or data.get("selectedModel")
-        or ""
-    ).strip()
-    if provider and model and "/" not in model:
-        model = f"{provider}/{model}"
-    pi_agent = str(data.get("pi_agent") or "").strip()
-    pi_command = str(data.get("pi_command") or data.get("piCommand") or "").strip()
-    system_prompt = str(data.get("system_prompt") or data.get("systemPrompt") or "").strip()
-    workspace_history_value = _native_agent_value(data, "workspace_history_enabled", "workspaceHistoryEnabled")
-    reasoning_effort = str(
-        data.get("reasoning_effort")
-        or data.get("reasoningEffort")
-        or ""
-    ).strip()
-    thinking_depth = str(
-        data.get("thinking_depth")
-        or data.get("thinkingDepth")
-        or ""
-    ).strip()
-    base_url = normalize_native_agent_base_url(_native_agent_value(data, "base_url", "baseUrl"))
-    clear_api_key = _native_agent_bool(data, "clear_api_key", "clearApiKey")
-    has_api_key_input = "api_key" in data or "apiKey" in data
-    api_key = str(_native_agent_value(data, "api_key", "apiKey") or "").strip() if has_api_key_input else ""
-    result: dict[str, Any] = {}
-    if data and any(
-        key in data
-        for key in (
-            "backend",
-            "model",
-            "modelId",
-            "model_id",
-            "native_agent_model",
-            "nativeAgentModel",
-            "selected_model",
-            "selectedModel",
-            "pi_agent",
-            "pi_command",
-            "piCommand",
-            "system_prompt",
-            "systemPrompt",
-            "workspace_history_enabled",
-            "workspaceHistoryEnabled",
-            "reasoning_effort",
-            "reasoningEffort",
-            "thinking_depth",
-            "thinkingDepth",
-        )
-    ):
-        result["backend"] = "pi"
-    if provider:
-        result["provider"] = provider
-    if model:
-        result["model"] = model
-    if pi_agent:
-        result["pi_agent"] = pi_agent
-    if pi_command:
-        result["pi_command"] = pi_command
-    if system_prompt:
-        result["system_prompt"] = system_prompt
-    if workspace_history_value is not None:
-        result["workspace_history_enabled"] = _native_agent_bool(data, "workspace_history_enabled", "workspaceHistoryEnabled")
-    if reasoning_effort:
-        result["reasoning_effort"] = reasoning_effort
-    if thinking_depth:
-        result["thinking_depth"] = thinking_depth
-    if base_url:
-        result["base_url"] = base_url
-    if clear_api_key:
-        pass
-    elif has_api_key_input:
-        if api_key:
-            result["api_key"] = api_key
-        elif existing_config.get("api_key"):
-            result["api_key"] = str(existing_config.get("api_key") or "")
-    elif existing_config.get("api_key"):
-        result["api_key"] = str(existing_config.get("api_key") or "")
-    return result
-
-
-def public_native_agent_config(value: Any) -> dict[str, Any]:
-    config = normalize_native_agent_config(value)
-    result = {
-        key: config[key]
-        for key in ("backend", "model", "pi_agent", "pi_command", "reasoning_effort", "thinking_depth")
-        if config.get(key)
-    }
-    if config.get("workspace_history_enabled") is not None:
-        result["workspace_history_enabled"] = bool(config.get("workspace_history_enabled"))
-    api_key = str(config.get("api_key") or "")
-    if api_key:
-        result["has_api_key"] = True
-        result["api_key_masked"] = mask_secret(api_key)
-    else:
-        result["has_api_key"] = False
-        result["api_key_masked"] = ""
-    return result
-
-
-def build_native_agent_model_id(value: Any) -> str:
-    config = normalize_native_agent_config(value)
-    provider = str(config.get("provider") or "").strip().lower()
-    model = str(config.get("model") or "").strip()
-    if not model:
-        return ""
-    if "/" in model:
-        return model
-    if provider:
-        return f"{provider}/{model}"
-    return model
 
 
 def normalize_prompt_presets(value: Any, *, strict: bool = False) -> list[dict[str, str]]:
@@ -503,7 +338,6 @@ class BotProfile:
     prompt_presets: List[dict[str, str]] = field(default_factory=list)
     supported_execution_modes: List[str] = field(default_factory=lambda: ["cli"])
     default_execution_mode: str = "cli"
-    native_agent: Dict[str, Any] = field(default_factory=dict)
     archived: bool = False
     chat_translation_enabled: bool = True
     remote_workspace: Dict[str, Any] = field(default_factory=dict)
@@ -547,7 +381,6 @@ class BotProfile:
             "chat_translation_enabled": self.chat_translation_enabled,
             "supported_execution_modes": supported_execution_modes,
             "default_execution_mode": default_execution_mode,
-            "native_agent": normalize_native_agent_config(self.native_agent),
         }
         if self.remote_workspace:
             from bot.remote_workspace.transport import normalize_remote_workspace
@@ -618,7 +451,6 @@ class BotProfile:
             prompt_presets=normalize_prompt_presets(data.get("prompt_presets", data.get("promptPresets"))),
             supported_execution_modes=supported_execution_modes,
             default_execution_mode=default_execution_mode,
-            native_agent=normalize_native_agent_config(data.get("native_agent", data.get("nativeAgent"))),
         )
         if data.get("remote_workspace"):
             from bot.remote_workspace.transport import normalize_remote_workspace
@@ -643,9 +475,6 @@ class UserSession:
     claude_session_id: Optional[str] = None
     antigravity_conversation_id: Optional[str] = None
     deepseek_session_id: Optional[str] = None
-    native_agent_session_id: Optional[str] = None
-    native_agent_run_id: Optional[str] = None
-    native_agent_server_key: Optional[str] = None
     claude_session_initialized: bool = False
     process: Optional[subprocess.Popen] = None
     is_processing: bool = False
@@ -672,9 +501,7 @@ class UserSession:
     _execution_id: Optional[str] = field(default=None, repr=False, compare=False)
     _execution_turn_id: Optional[str] = field(default=None, repr=False, compare=False)
     _execution_mode: str = field(default="", repr=False, compare=False)
-    _execution_detached: bool = field(default=False, repr=False, compare=False)
     _control_stop_task: Any = field(default=None, repr=False, compare=False)
-    _native_abort_task: Any = field(default=None, repr=False, compare=False)
     _control_stop_snapshot: Optional[dict] = field(default=None, repr=False, compare=False)
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
@@ -764,8 +591,6 @@ class UserSession:
         terminate_session_process(self)
         with self._lock:
             self.process = None
-            self.native_agent_run_id = None
-            self.native_agent_server_key = None
             self.stop_requested = False
             self.is_processing = False
             self.running_user_text = None
@@ -822,9 +647,6 @@ class UserSession:
             self.claude_session_id = None
             self.antigravity_conversation_id = None
             self.deepseek_session_id = None
-            self.native_agent_session_id = None
-            self.native_agent_run_id = None
-            self.native_agent_server_key = None
             self.claude_session_initialized = False
             self.active_conversation_id = None
             self._cluster_prompt_state = None

@@ -19,7 +19,6 @@ const CLI_LABELS: Record<string, string> = {
   codex_server: "codex server",
   antigravity: "Antigravity CLI",
   deepseek: "DeepSeek Harness",
-  pi: "Pi",
 };
 
 function cliLabel(cliType: string) {
@@ -35,7 +34,6 @@ function targetStatuses(status: ClusterStatus): Array<[string, ClusterMcpTargetS
     ["claude", status.mcp.claude],
     ["deepseek", status.mcp.deepseek],
     ["antigravity", status.mcp.antigravity],
-    ["pi", status.mcp.pi],
   ];
   const active = legacy.find(([cliType]) => cliType === status.mcp.activeCliType);
   return (active?.[1] ? [[active[0], active[1]]] : legacy.filter((entry): entry is [string, ClusterMcpTargetStatus] => Boolean(entry[1])));
@@ -142,7 +140,7 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
                   {target.installCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2 py-1.5 text-[11px] leading-4">安装：{commandText(target.installCommand)}</pre> : null}
                   {target.verifyCommand?.length ? <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2 py-1.5 text-[11px] leading-4">验证：{commandText(target.verifyCommand)}</pre> : null}
                   {target.deepseekPatchPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">DeepSeek patch：{target.deepseekPatchPath}</p> : null}
-                  {target.piExtensionPath ? <p className="mt-1 break-all text-xs text-[var(--muted)]">Pi 扩展：{target.piExtensionPath}</p> : null}
+
                 </div>
               ))}
             </div>
@@ -171,48 +169,14 @@ export function ClusterSetupPanel({ botAlias, client, canManage = true }: Props)
               ) : null}
             </div>
           ) : null}
-          {prepare.piExtensionPath ? (
-            <div>
-              <div className="text-xs font-medium text-[var(--text)]">Pi 扩展</div>
-              <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piExtensionPath}</p>
-              <p className="mt-1 text-xs text-[var(--muted)]">{prepare.piExtensionName || "tcb-cluster.ts"}</p>
-            </div>
-          ) : prepare.piSettingsSnippet ? (
-            <div>
-              <div className="text-xs font-medium text-[var(--text)]">Pi settings.json</div>
-              <p className="mt-1 break-all text-xs text-[var(--muted)]">{prepare.piSettingsPath}</p>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{prepare.piSettingsSnippet}</pre>
-            </div>
-          ) : null}
+
           {prepare.selfTestCommand && prepare.selfTestCommand.length > 0 ? (
             <div>
               <div className="text-xs font-medium text-[var(--text)]">本项目自检</div>
               <pre className="mt-1 overflow-x-auto rounded-md bg-[var(--surface-strong)] px-2.5 py-2 text-[11px] leading-4">{commandText(prepare.selfTestCommand)}</pre>
             </div>
           ) : null}
-          {prepare.piExtensionPath ? (
-            <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 py-2 text-[11px] text-[var(--muted)]">
-              <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
-              <ol className="mt-2 list-decimal space-y-1 pl-5">
-                <li>生成 launcher 和 config</li>
-                <li>把 tcb-cluster.ts 放入 Pi 扩展目录</li>
-                <li>重启 Pi 原生 agent</li>
-                <li>开启集群模式后用当前 run_id 调 cluster_status</li>
-              </ol>
-              <p className="mt-2">Pi 是主 agent，子 agent 仍由本项目 cluster runtime 托管。</p>
-            </div>
-          ) : prepare.piSettingsSnippet ? (
-            <div className="rounded-md border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 py-2 text-[11px] text-[var(--muted)]">
-              <div className="font-medium text-[var(--text)]">Pi 验证步骤</div>
-              <ol className="mt-2 list-decimal space-y-1 pl-5">
-                <li>生成 launcher 和 config</li>
-                <li>把上方 JSON 合入 Pi settings.json</li>
-                <li>重启 Pi 原生 agent</li>
-                <li>开启集群模式后用当前 run_id 调 cluster_status</li>
-              </ol>
-              <p className="mt-2">Pi 是主 agent，子 agent 仍由本项目 cluster runtime 托管。</p>
-            </div>
-          ) : null}
+
         </div>
       ) : null}
     </section>

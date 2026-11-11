@@ -246,7 +246,6 @@ def _redact_text(value: object) -> str:
         "WEB_API_TOKEN",
         "TCB_HUB_NODE_TOKEN",
         "TCB_HUB_FRPS_TOKEN",
-        "NATIVE_AGENT_API_KEY",
         "PUSHPLUS_TOKEN",
         "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN",
         "TCB_UPDATE_HEALTH_TOKEN",
@@ -633,6 +632,50 @@ def _instrument_legacy_health(module, repo_root: Path, job: dict) -> None:
     module.WebApiServer.health = health
 
 
+def _restore_legacy_portable_environment(repo_root: Path) -> None:
+    """Reuse only the restored launcher's environment initialization during rollback."""
+    launcher = repo_root / "start.ps1"
+    if os.name != "nt" or not launcher.is_file():
+        return
+    script = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+$before = [Environment]::GetEnvironmentVariables('Process')
+$scriptDir = Split-Path -Parent $env:TCB_RECOVERY_LAUNCHER
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TCB_RECOVERY_LAUNCHER, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Cannot parse the restored portable launcher' }
+foreach ($name in @('Prepend-Path', 'Set-PortableRuntimeEnv')) {
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    if (-not $fn) { throw "Missing portable environment initializer: $name" }
+    Invoke-Expression $fn.Extent.Text
+}
+$prepend = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Prepend-Path' }, $true)
+if ($prepend) { Invoke-Expression $prepend.Extent.Text }
+Set-PortableRuntimeEnv -PackageRoot $scriptDir
+$after = [Environment]::GetEnvironmentVariables('Process')
+$changes = @{}
+foreach ($name in @(@($before.Keys) + @($after.Keys) | Select-Object -Unique)) {
+    if ($before[$name] -cne $after[$name]) { $changes[$name] = $after[$name] }
+}
+ConvertTo-Json -InputObject $changes -Compress
+'''
+    result = subprocess.run(
+        [shutil.which("powershell.exe") or "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        cwd=repo_root, env={**os.environ, "TCB_RECOVERY_LAUNCHER": str(launcher)},
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode:
+        raise RuntimeError("无法恢复旧绿色版启动环境")
+    for name, value in json.loads(result.stdout).items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+
 def legacy_host(repo_root: Path, store, job_id: str) -> int:
     """Run the old host with authenticated process identity on its existing health route."""
     job = _job(store, job_id)
@@ -662,6 +705,7 @@ def legacy_host(repo_root: Path, store, job_id: str) -> int:
     sys.path.insert(0, str(repo_root))
     bootstrap = repo_root / "runtime/portable_bootstrap.py"
     if bootstrap.is_file():
+        _restore_legacy_portable_environment(repo_root)
         sys.argv = [str(bootstrap), "bot", str(repo_root)]
         runpy.run_path(str(bootstrap), run_name="__main__")
     else:

@@ -218,7 +218,7 @@ test("defers auxiliary data for hidden chats and reuses it across visibility cha
   });
 });
 
-test("reloads favorites for agent and execution mode scopes without reloading CLI params", async () => {
+test("reloads favorites for agent scopes without reloading CLI params", async () => {
   const client = createClient();
   const overview: BotOverview = {
     ...createOverview(),
@@ -234,7 +234,7 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
       { id: "main", name: "主 agent", systemPrompt: "", enabled: true, isMain: true },
       { id: "reviewer", name: "旧固定角色", systemPrompt: "", enabled: true, isMain: false },
     ],
-    supportedExecutionModes: ["cli", "native_agent"],
+    supportedExecutionModes: ["cli"],
   };
   vi.spyOn(client, "getBotOverview").mockResolvedValue(overview);
   vi.spyOn(client, "listAgents").mockResolvedValue({ items: overview.agents || [] });
@@ -289,12 +289,6 @@ test("reloads favorites for agent and execution mode scopes without reloading CL
     executionMode: "cli",
   });
 
-  fireEvent.click(screen.getByRole("button", { name: "原生 agent" }));
-  await waitFor(() => expect(listFavoriteAnswers).toHaveBeenCalledTimes(3));
-  expect(listFavoriteAnswers).toHaveBeenLastCalledWith("main", "", {
-    agentId: "reviewer",
-    executionMode: "native_agent",
-  });
   expect(getCliParams).toHaveBeenCalledTimes(1);
 });
 

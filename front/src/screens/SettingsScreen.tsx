@@ -25,10 +25,7 @@ import { copyText } from "../utils/clipboard";
 import type {
   BotOverview,
   BotSummary,
-  ChatExecutionMode,
   CliType,
-  NativeAgentDraft,
-  NativeAgentModelsPayload,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -36,11 +33,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage } from "../utils/errorMessage";
 import { normalizePathInput } from "../utils/pathInput";
 import { defaultCliPathForType } from "./useBotManager";
-import {
-  buildExecutionConfig,
-  DEFAULT_NATIVE_AGENT_DRAFT,
-  getRuntimeBackend,
-} from "./botManagerModel";
+
 type Props = {
   botAlias: string;
   client?: WebBotClient;
@@ -57,29 +50,6 @@ type Props = {
   onCliSwitched?: (botAlias: string) => void;
   sessionCapabilities?: string[];
 };
-
-function nativeAgentDraftFromOverview(overview?: Pick<BotOverview, "nativeAgent"> | null): NativeAgentDraft {
-  return {
-    ...DEFAULT_NATIVE_AGENT_DRAFT,
-    ...(overview?.nativeAgent || {}),
-    apiKey: "",
-    clearApiKey: false,
-  };
-}
-
-function normalizeNativeAgentDraft(draft: NativeAgentDraft) {
-  return {
-    ...DEFAULT_NATIVE_AGENT_DRAFT,
-    ...draft,
-    provider: "",
-    model: draft.model.trim(),
-    piAgent: draft.piAgent.trim(),
-    baseUrl: "",
-    apiKey: "",
-    clearApiKey: false,
-    reasoningEffort: draft.reasoningEffort?.trim(),
-  };
-}
 
 function remoteWorkspaceMcpStateLabel(state: string) {
   if (state === "installed") return "已配置";
@@ -115,11 +85,10 @@ export function SettingsScreen({
 }: Props) {
   const [overview, setOverview] = useState<BotOverview | null>(null);
   const [peerBots, setPeerBots] = useState<BotSummary[]>([]);
-  const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
-  const [runtimeBackendDraft, setRuntimeBackendDraft] = useState<ChatExecutionMode>("cli");
+
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
-  const [nativeAgentDraft, setNativeAgentDraft] = useState<NativeAgentDraft>(() => ({ ...DEFAULT_NATIVE_AGENT_DRAFT }));
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -141,13 +110,6 @@ export function SettingsScreen({
     || sessionCapabilities.includes("manage_bots")
     || sessionCapabilities.includes("admin_ops");
   const canConfigureBot = overview ? overview.canOperate !== false : canManageBotRuntime;
-  const runtimeBackend = getRuntimeBackend(overview);
-  const nativeRuntime = runtimeBackend === "native_agent";
-  const draftNativeRuntime = runtimeBackendDraft === "native_agent";
-  const nativeAgentOptionVisible = cliTypeDraft !== "deepseek";
-  const nativeSelectedModel = nativeAgentDraft.model || nativeAgentModels?.selectedModel || "";
-  const nativeSelectedModelItem = nativeAgentModels?.items.find((item) => item.id === nativeSelectedModel);
-  const nativeReasoningEffortOptions = nativeSelectedModelItem?.reasoningEfforts || [];
 
   useEffect(() => {
     let cancelled = false;
@@ -171,8 +133,7 @@ export function SettingsScreen({
         setOverview(overviewData);
         setCliTypeDraft(overviewData.cliType);
         setCliPathDraft(overviewData.cliPath || "");
-        setRuntimeBackendDraft(getRuntimeBackend(overviewData));
-        setNativeAgentDraft(nativeAgentDraftFromOverview(overviewData));
+
         setWorkdirDraft(overviewData.remoteWorkspace ? workspaceLabel(overviewData) : normalizePathInput(prefilledWorkdir || overviewData.workingDir));
         setLoading(false);
       })
@@ -202,33 +163,6 @@ export function SettingsScreen({
   }, [client]);
 
   useEffect(() => {
-    if (!nativeRuntime && !draftNativeRuntime) {
-      setNativeAgentModels(null);
-      return;
-    }
-    let cancelled = false;
-    void client.getNativeAgentModels(botAlias)
-      .then((models) => {
-        if (!cancelled) {
-          setNativeAgentModels(models);
-          setNativeAgentDraft((prev) => ({
-            ...prev,
-            model: prev.model || models.selectedModel || models.items[0]?.id || "",
-            reasoningEffort: prev.reasoningEffort || models.selectedReasoningEffort || models.items[0]?.defaultReasoningEffort || "",
-          }));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setNativeAgentModels(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [botAlias, client, nativeRuntime, draftNativeRuntime]);
-
-  useEffect(() => {
     if (!prefilledWorkdir) {
       return;
     }
@@ -237,12 +171,12 @@ export function SettingsScreen({
   }, [prefilledWorkdir]);
 
   const saveRuntimeConfig = async () => {
-    if (cliTypeDraft === "deepseek" && (overview?.remoteWorkspace || runtimeBackendDraft !== "cli")) {
+    if (cliTypeDraft === "deepseek" && (overview?.remoteWorkspace)) {
       setError("DeepSeek Harness 目前仅支持本地 CLI");
       return;
     }
     const nextCliPath = cliPathDraft.trim();
-    if (runtimeBackendDraft === "cli" && !nextCliPath) {
+    if (!nextCliPath) {
       setError("CLI 路径不能为空");
       return;
     }
@@ -251,38 +185,16 @@ export function SettingsScreen({
     setError("");
     setNotice("");
     try {
-      let nextBot = overview;
-      if (runtimeBackendDraft === "cli" && cliTypeDraft !== "deepseek") {
-        nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
-      }
-      const normalizedNativeAgent = normalizeNativeAgentDraft(nativeAgentDraft);
-      const executionChanged =
-        runtimeBackend !== runtimeBackendDraft
-        || (overview?.nativeAgent?.piAgent || "").trim() !== normalizedNativeAgent.piAgent;
-      const nativeModelChanged =
-        (overview?.nativeAgent?.model || "").trim() !== normalizedNativeAgent.model
-        || (overview?.nativeAgent?.reasoningEffort || "").trim() !== (normalizedNativeAgent.reasoningEffort || "");
-      if (executionChanged || (runtimeBackendDraft === "native_agent" && nativeModelChanged)) {
-        const executionConfig = buildExecutionConfig(runtimeBackendDraft);
-        nextBot = await client.updateBotExecutionConfig(botAlias, {
-          supportedExecutionModes: executionConfig.supportedExecutionModes,
-          defaultExecutionMode: executionConfig.defaultExecutionMode,
-          nativeAgent: normalizedNativeAgent,
-        });
-      }
-      if (runtimeBackendDraft === "cli" && cliTypeDraft === "deepseek") {
-        nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
-      }
+      const nextBot = await client.updateBotCli(botAlias, cliTypeDraft, nextCliPath);
       if (!nextBot) {
         throw new Error("更新运行配置失败");
       }
       setOverview((prev) => (prev ? { ...prev, ...nextBot } : { ...nextBot }));
       setCliTypeDraft(nextBot.cliType);
       setCliPathDraft(nextBot.cliPath || nextCliPath);
-      setRuntimeBackendDraft(getRuntimeBackend(nextBot));
-      setNativeAgentDraft(nativeAgentDraftFromOverview(nextBot));
-      setNotice(runtimeBackendDraft === "native_agent" ? "原生 agent 配置已更新" : "CLI 配置已更新");
-      if (runtimeBackendDraft === "cli" && overview && nextBot.cliType !== overview.cliType) {
+
+      setNotice("CLI 配置已更新");
+      if (overview && nextBot.cliType !== overview.cliType) {
         try {
           await startConversationAfterCliSwitch(client, botAlias);
           setNotice(`已切换到 ${cliTypeLabel(nextBot.cliType)}，并开启新会话`);
@@ -371,19 +283,13 @@ export function SettingsScreen({
   };
 
   const runtimeDirty = Boolean(overview) && (
-    runtimeBackendDraft !== runtimeBackend
-    || (runtimeBackendDraft === "cli"
-      ? cliTypeDraft !== overview?.cliType || cliPathDraft.trim() !== (overview?.cliPath || "").trim()
-      : nativeAgentDraft.piAgent.trim() !== (overview?.nativeAgent?.piAgent || "").trim()
-        || (Boolean(overview?.nativeAgent?.model) && nativeAgentDraft.model.trim() !== (overview?.nativeAgent?.model || "").trim()))
+    (cliTypeDraft !== overview?.cliType || cliPathDraft.trim() !== (overview?.cliPath || "").trim())
   );
   const workdirDirty = Boolean(overview)
     && !overview?.remoteWorkspace
     && normalizePathInput(workdirDraft) !== normalizePathInput(overview?.workingDir || "");
   const runtimeSummary = overview
-    ? nativeRuntime
-      ? `原生 agent · ${overview.nativeAgent?.model || nativeAgentModels?.selectedModel || "全局默认模型"}`
-      : `${cliTypeLabel(overview.cliType)} CLI`
+    ? `${cliTypeLabel(overview.cliType)} CLI`
     : "";
   const statusRunning = overview?.status === "running";
   const statusLabel = overview ? ({ running: "运行中", busy: "处理中", unread: "未读", offline: "离线" } as Record<string, string>)[overview.status] || overview.status : "";
@@ -391,7 +297,7 @@ export function SettingsScreen({
     { id: "settings-section-runtime", label: "运行", icon: Cpu },
     { id: "settings-section-workdir", label: "目录", icon: FolderOpen },
     { id: "settings-section-cluster", label: "集群", icon: Network },
-    ...(!nativeRuntime ? [{ id: "settings-section-params", label: "参数", icon: SlidersHorizontal }] : []),
+    ...([{ id: "settings-section-params", label: "参数", icon: SlidersHorizontal }]),
     { id: "settings-section-presets", label: "预设", icon: MessageSquareText },
   ];
 
@@ -515,20 +421,8 @@ export function SettingsScreen({
               badge={runtimeDirty ? <SettingsDirtyBadge /> : null}
             >
               <div className="grid gap-2 @md:grid-cols-2">
-                <SettingsField label="运行后端">
-                  <select
-                    aria-label="运行后端"
-                    value={runtimeBackendDraft}
-                    disabled={!canManageBotRuntime}
-                    onChange={(event) => setRuntimeBackendDraft(event.target.value as ChatExecutionMode)}
-                    className={settingsControlClassName}
-                  >
-                    <option value="cli">CLI</option>
-                    {nativeAgentOptionVisible ? <option value="native_agent">原生 agent</option> : null}
-                  </select>
-                </SettingsField>
-                {runtimeBackendDraft === "cli" ? (
-                  <>
+
+                <>
                     <SettingsField label="CLI 类型">
                       <select
                         aria-label="CLI 类型"
@@ -565,64 +459,6 @@ export function SettingsScreen({
                       />
                     </SettingsField>
                   </>
-                ) : (
-                  <>
-                    <SettingsField label="Pi agent">
-                      <input
-                        aria-label="Pi agent"
-                        value={nativeAgentDraft.piAgent}
-                        disabled={!canManageBotRuntime || savingCliConfig}
-                        onChange={(event) => setNativeAgentDraft((prev) => ({ ...prev, piAgent: event.target.value }))}
-                        className={settingsControlClassName}
-                        placeholder="main"
-                        spellCheck={false}
-                      />
-                    </SettingsField>
-                    <SettingsField label="Native model">
-                      <select
-                        aria-label="Native model"
-                        value={nativeSelectedModel}
-                        disabled={!canManageBotRuntime || savingCliConfig || !nativeAgentModels?.items.length}
-                        onChange={(event) => {
-                          const selected = nativeAgentModels?.items.find((item) => item.id === event.target.value);
-                          setNativeAgentDraft((prev) => ({
-                            ...prev,
-                            model: event.target.value,
-                            reasoningEffort: selected?.defaultReasoningEffort || selected?.reasoningEfforts?.[0] || "",
-                          }));
-                        }}
-                        className={settingsControlClassName}
-                      >
-                        {nativeSelectedModel && !nativeAgentModels?.items.some((model) => model.id === nativeSelectedModel) ? (
-                          <option value={nativeSelectedModel}>{nativeSelectedModel}</option>
-                        ) : null}
-                        {nativeAgentModels?.items.length ? nativeAgentModels.items.map((model) => (
-                          <option key={model.id} value={model.id}>{model.label || model.id}</option>
-                        )) : (
-                          <option value="">使用全局默认</option>
-                        )}
-                      </select>
-                    </SettingsField>
-                    <SettingsField label="Reasoning effort">
-                      <select
-                        aria-label="Reasoning effort"
-                        value={nativeAgentDraft.reasoningEffort || nativeAgentModels?.selectedReasoningEffort || ""}
-                        disabled={!canManageBotRuntime || savingCliConfig || nativeReasoningEffortOptions.length === 0}
-                        onChange={(event) => setNativeAgentDraft((prev) => ({ ...prev, reasoningEffort: event.target.value }))}
-                        className={settingsControlClassName}
-                      >
-                        {nativeReasoningEffortOptions.length ? nativeReasoningEffortOptions.map((effort) => (
-                          <option key={effort} value={effort}>{effort}</option>
-                        )) : (
-                          <option value="">使用模型默认</option>
-                        )}
-                      </select>
-                    </SettingsField>
-                    <p className="text-[11px] leading-4 text-[var(--muted)] @md:col-span-2">
-                      Provider、Base URL、API Key 在全局环境配置中设置。
-                    </p>
-                  </>
-                )}
               </div>
               <div className="mt-2.5 flex items-center justify-end gap-2">
                 <button
@@ -634,7 +470,7 @@ export function SettingsScreen({
                   {savingCliConfig ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                   {savingCliConfig
                     ? "保存中..."
-                    : runtimeBackendDraft === "native_agent" ? "保存原生 agent 配置" : "保存 CLI 配置"}
+                    : "保存 CLI 配置"}
                 </button>
               </div>
             </SettingsSection>
@@ -822,7 +658,7 @@ export function SettingsScreen({
 
           {overview ? <BotClusterSettingsPanel botAlias={botAlias} client={client} overview={overview} canManage={canConfigureBot} onDirtyChange={setClusterDirty} /> : null}
 
-          {overview && !nativeRuntime ? (
+          {overview ? (
             <BotCliParamsPanel
               botAlias={botAlias}
               client={client}

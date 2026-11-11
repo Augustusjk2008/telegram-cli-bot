@@ -113,7 +113,7 @@ export function formatContextUsageDetails(
     formatTokenUsage(contextUsage?.currentUsage) ? `current usage: ${formatTokenUsage(contextUsage.currentUsage)}` : "",
     formatTokenUsage(contextUsage?.turnUsage) ? `turn usage: ${formatTokenUsage(contextUsage.turnUsage)}` : "",
     model ? `model: ${model}` : "",
-    contextUsage?.provider ? `provider: ${contextUsage.provider.replace(/原生 (?:agent|智能体)/gi, "native agent")}` : "",
+    contextUsage?.provider ? `provider: ${contextUsage.provider}` : "",
     contextUsage?.sessionId ? `session: ${contextUsage.sessionId}` : "",
     formatCompactionCount(contextUsage?.compactionCount),
     endlessContinueCount > 0 ? `endless Continue: ${endlessContinueCount}` : "",

@@ -1,6 +1,6 @@
 ---
 name: orbit-maintenance
-description: Use when changing Orbit Safe Claw CLI or native-agent execution, cluster, session/history flow, remote workspace/terminal/Git bridge, plugin runtime or manifests, installation, updater, release packaging, or their focused tests.
+description: Use when changing Orbit Safe Claw CLI execution, cluster, session/history flow, remote workspace/terminal/Git bridge, plugin runtime or manifests, installation, updater, release packaging, or their focused tests.
 ---
 
 # Orbit Maintenance
@@ -9,9 +9,9 @@ Load only the reference for the subsystem being changed. Do not read every refer
 
 ## Route by subsystem
 
-- Codex exec/app-server, Claude, Antigravity, native Pi RPC/runtime/session, AG-UI, shared cluster contracts, context usage and workspace history: read [references/native-agent.md](references/native-agent.md).
-- DeepSeek Harness CLI configuration, headless JSON, MCP patch injection, session/history and support boundaries: read [references/deepseek-harness.md](references/deepseek-harness.md); read the native-agent reference when changing shared cluster behavior.
-- Remote workspace, SSH transport, remote MCP/Pi extension, remote Git and terminal isolation: read [references/remote-workspace.md](references/remote-workspace.md).
+- Codex exec/app-server, Claude, Antigravity, shared cluster contracts, context usage and session history: read [references/cli-agent.md](references/cli-agent.md).
+- DeepSeek Harness CLI configuration, headless JSON, MCP patch injection, session/history and support boundaries: read [references/deepseek-harness.md](references/deepseek-harness.md); read the CLI reference when changing shared cluster behavior.
+- Remote workspace, SSH transport, remote MCP, remote Git and terminal isolation: read [references/remote-workspace.md](references/remote-workspace.md).
 - Plugin manifests, registry, runtime, Host API, runtime installers, view sessions, artifacts/audit and bundled plugins: read [references/plugin-system.md](references/plugin-system.md).
 - Install/start scripts, runtime paths, updater, release packaging: read [references/release-runtime.md](references/release-runtime.md).
 

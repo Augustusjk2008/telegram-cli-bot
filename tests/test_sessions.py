@@ -238,14 +238,12 @@ class TestClearBotSessions:
         reviewer = get_or_create_session(1, "main", 100, str(old_dir), agent_id="reviewer")
         main.codex_session_id = "codex-main"
         main.antigravity_conversation_id = "agy-main"
-        main.native_agent_session_id = "native-main"
         main.active_conversation_id = "conv-main"
         main.is_processing = True
         main.running_user_text = "text"
         main.running_preview_text = "preview"
         main.web_turn_overlays = [{"a": 1}]
         reviewer.codex_session_id = "codex-reviewer"
-        reviewer.native_agent_session_id = "native-reviewer"
         reviewer.active_conversation_id = "conv-reviewer"
         reviewer.is_processing = True
 
@@ -257,9 +255,6 @@ class TestClearBotSessions:
             assert session.browse_dir == str(new_dir)
             assert session.codex_session_id is None
             assert session.antigravity_conversation_id is None
-            assert session.native_agent_session_id is None
-            assert session.native_agent_run_id is None
-            assert session.native_agent_server_key is None
             assert session.active_conversation_id is None
             assert session.running_user_text is None
             assert session.running_preview_text == ""

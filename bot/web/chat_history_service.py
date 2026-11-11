@@ -8,7 +8,7 @@ from typing import Any
 from bot.cli import cli_data_provider
 from bot.models import BotProfile, UserSession
 from bot.web.async_chat_store import AsyncChatStore
-from bot.web.chat_store import ChatStore, ChatTurnHandle
+from bot.web.chat_store import ChatStore, ChatTurnHandle, is_cli_history_provider
 from bot.web.native_history_builder import resolve_native_trace_for_turn
 
 
@@ -198,6 +198,8 @@ class ChatHistoryService:
 
     def _matches_native_provider(self, native_provider: str | None) -> bool:
         provider = str(native_provider or "").strip()
+        if not is_cli_history_provider(provider):
+            return False
         if self.native_provider_filter is not None and provider != self.native_provider_filter:
             return False
         if self.native_provider_exclude is not None and provider == self.native_provider_exclude:
@@ -230,7 +232,9 @@ class ChatHistoryService:
         if str(context.get("completion_state") or "") not in {"completed", "cancelled"}:
             return False
         raw_provider = str(context.get("native_provider") or "").strip().lower()
-        provider = raw_provider if raw_provider == "native_agent" else cli_data_provider(raw_provider)
+        if not is_cli_history_provider(raw_provider):
+            return False
+        provider = cli_data_provider(raw_provider)
         if provider not in {"codex", "claude"}:
             return False
         return bool(str(context.get("native_session_id") or "").strip())
@@ -991,7 +995,6 @@ class ChatHistoryService:
                 "claude_session_id": session.claude_session_id,
                 "antigravity_conversation_id": session.antigravity_conversation_id,
                 "deepseek_session_id": getattr(session, "deepseek_session_id", None),
-                "native_agent_session_id": session.native_agent_session_id,
                 "claude_session_initialized": session.claude_session_initialized,
             },
             "active_conversation_id": _active_conversation_id(session),

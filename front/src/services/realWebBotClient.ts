@@ -60,7 +60,6 @@ import type {
   GitHubRepository,
   GitHubRepositoryPage,
   GitResetMode,
-  GitGraphScope,
   GitOverview,
   GitSmartCommitJob,
   GitStashList,
@@ -73,7 +72,6 @@ import type {
   CodexVoiceConnection,
   CodexVoiceConnectionOptions,
   CodexVoiceMessage,
-  BotExecutionConfigInput,
   BotWorkdirOpenResult,
   BotStatus,
   BotSummary,
@@ -88,18 +86,6 @@ import type {
   ChatMessageMetaInfo,
   ChatStatusUpdate,
   ChatTraceEvent,
-  NativeAgentPermissionReplyOptions,
-  NativeAgentConfig,
-  NativeAgentConfigInput,
-  NativeAgentConfigPayload,
-  NativeAgentHistoryChangesPayload,
-  NativeAgentHistoryDiffPayload,
-  NativeAgentHistoryRollbackResult,
-  NativeAgentPreflightResult,
-  NativeAgentModelOption,
-  NativeAgentModelsPayload,
-  NativeAgentModelUpdateResult,
-  NativeAgentModelUpdateOptions,
   CliErrorStatsFilters,
   CliErrorStatsItem,
   CliErrorStatsResult,
@@ -267,27 +253,13 @@ import type {
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
-import {
-  createAgUiStreamAdapter,
-  isAgUiEventType,
-} from "./agUiStreamAdapter";
-import {
-  EventType,
-  type AgUiEvent,
-} from "./agUiProtocol";
-import {
-  buildAgUiMessageMeta,
-  createAgUiRunAccumulator,
-  createAgUiRunState,
-  findAgUiActivityForDelta,
-  type AgUiActivityItem,
-} from "../utils/agUiRunReducer";
+
 import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
 import {
   mergeChatTraceEvents,
   traceEventsEquivalent,
-} from "../utils/nativeAgentTranscript";
+} from "../utils/cliTranscript";
 
 type JsonEnvelope<T> = {
   ok: boolean;
@@ -443,8 +415,6 @@ type RawBotSummary = {
   defaultExecutionMode?: string;
   execution_mode?: string;
   executionMode?: string;
-  native_agent?: Record<string, unknown>;
-  nativeAgent?: Record<string, unknown>;
 };
 
 type RawPromptPreset = {
@@ -678,15 +648,7 @@ type RawConversationSummary = {
   messageCount?: number;
   pinned?: boolean;
   active?: boolean;
-  workspace_history_head?: string;
-  workspaceHistoryHead?: string;
-  linear_index?: number;
-  linearIndex?: number;
-  rollback_supported?: boolean;
-  rollbackSupported?: boolean;
-  degraded?: boolean;
-  degraded_reason?: string;
-  degradedReason?: string;
+
   cluster_team?: unknown;
   clusterTeam?: unknown;
   cluster_team_revision?: number;
@@ -813,15 +775,7 @@ type RawChatMessageMeta = {
   endlessContinueCount?: number;
   endless_group_id?: string;
   endlessGroupId?: string;
-  workspace_history_head?: string;
-  workspaceHistoryHead?: string;
-  linear_index?: number;
-  linearIndex?: number;
-  rollback_supported?: boolean;
-  rollbackSupported?: boolean;
-  degraded?: boolean;
-  degraded_reason?: string;
-  degradedReason?: string;
+
   voice?: RawVoiceTaskBinding | null;
 };
 
@@ -865,55 +819,6 @@ type RawChatTraceDetails = {
   tool_call_count?: number;
   process_count?: number;
   trace?: RawChatTraceEvent[];
-};
-
-type RawNativeAgentHistoryChangedFile = {
-  path?: string;
-  old_path?: string;
-  oldPath?: string;
-  status?: string;
-  additions?: number;
-  deletions?: number;
-  binary?: boolean;
-};
-
-type RawNativeAgentHistoryChangesPayload = {
-  conversation_id?: string;
-  conversationId?: string;
-  turn_id?: string;
-  turnId?: string;
-  linear_index?: number;
-  linearIndex?: number;
-  base_head?: string;
-  baseHead?: string;
-  head?: string;
-  files?: RawNativeAgentHistoryChangedFile[];
-  discarded?: boolean;
-  message?: string;
-};
-
-type RawNativeAgentHistoryDiffPayload = {
-  conversation_id?: string;
-  conversationId?: string;
-  turn_id?: string;
-  turnId?: string;
-  path?: string;
-  old_path?: string;
-  oldPath?: string;
-  status?: string;
-  diff?: string;
-  truncated?: boolean;
-  binary?: boolean;
-};
-
-type RawNativeAgentHistoryRollbackResult = {
-  conversation_id?: string;
-  conversationId?: string;
-  current_turn_id?: string;
-  currentTurnId?: string;
-  rollback_supported?: boolean;
-  rollbackSupported?: boolean;
-  message?: string;
 };
 
 type RawClusterAgentTask = {
@@ -1800,19 +1705,6 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function contentForAgUiActivityEvent(
-  activities: AgUiActivityItem[],
-  event: AgUiEvent,
-): Record<string, unknown> {
-  if (event.type !== EventType.ACTIVITY_SNAPSHOT && event.type !== EventType.ACTIVITY_DELTA) {
-    return {};
-  }
-  if (event.type === EventType.ACTIVITY_SNAPSHOT) {
-    return asRecord(event.content);
-  }
-  return findAgUiActivityForDelta(activities, event.activityType, event.messageId)?.content || {};
-}
-
 function mapStatus(status: string, isProcessing = false): BotStatus {
   if (isProcessing) {
     return "busy";
@@ -1997,6 +1889,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   if (Array.isArray(raw.effective_capabilities) || Array.isArray(raw.effectiveCapabilities)) {
     summary.effectiveCapabilities = (raw.effective_capabilities ?? raw.effectiveCapabilities ?? []).map((item) => item as Capability);
   }
+
   const supportedExecutionModes = mapExecutionModes(raw.supported_execution_modes ?? raw.supportedExecutionModes);
   if (supportedExecutionModes) {
     summary.supportedExecutionModes = supportedExecutionModes;
@@ -2009,10 +1902,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   if (executionMode) {
     summary.executionMode = executionMode;
   }
-  const nativeAgent = mapNativeAgentConfig(raw.native_agent ?? raw.nativeAgent);
-  if (nativeAgent) {
-    summary.nativeAgent = nativeAgent;
-  }
+
   if (raw.owner_account_id || raw.ownerAccountId) {
     summary.ownerAccountId = String(raw.owner_account_id ?? raw.ownerAccountId ?? "");
   }
@@ -2194,7 +2084,7 @@ function mapClusterStatus(raw: unknown): ClusterStatus {
       claude: targetFor("claude", mcp.claude),
       deepseek: mcp.deepseek || targets.deepseek ? targetFor("deepseek", mcp.deepseek) : undefined,
       antigravity: mcp.antigravity || targets.antigravity ? targetFor("antigravity", mcp.antigravity) : undefined,
-      pi: mcp.pi || targets.pi ? targetFor("pi", mcp.pi) : undefined,
+
       ...(Object.keys(targets).length ? { targets, byCliType: targets } : {}),
     },
     agents: Array.isArray(value.agents) ? value.agents.map((rawAgent) => {
@@ -2322,8 +2212,7 @@ function mapClusterSetupTarget(raw: unknown, cliType?: string): ClusterSetupTarg
     installCommand: list("install_command", "installCommand"),
     verifyCommand: list("verify_command", "verifyCommand"),
     removeCommand: list("remove_command", "removeCommand"),
-    piExtensionPath: String(value.pi_extension_path || value.piExtensionPath || "") || undefined,
-    piExtensionName: String(value.pi_extension_name || value.piExtensionName || "") || undefined,
+
     selfTestCommand: list("self_test_command", "selfTestCommand"),
     workspaceMcpConfigPath: String(value.workspace_mcp_config_path || value.workspaceMcpConfigPath || "") || undefined,
     workspaceMcpScope: String(value.workspace_mcp_scope || value.workspaceMcpScope || "") || undefined,
@@ -2369,10 +2258,7 @@ function mapClusterSetupPrepare(raw: unknown): ClusterSetupPrepareResult {
     installCommand: list("install_command", "installCommand"),
     verifyCommand: list("verify_command", "verifyCommand"),
     removeCommand: list("remove_command", "removeCommand"),
-    piSettingsPath: String(value.pi_settings_path || value.piSettingsPath || ""),
-    piSettingsSnippet: String(value.pi_settings_snippet || value.piSettingsSnippet || ""),
-    piExtensionPath: String(value.pi_extension_path || value.piExtensionPath || ""),
-    piExtensionName: String(value.pi_extension_name || value.piExtensionName || ""),
+
     selfTestCommand: list("self_test_command", "selfTestCommand"),
     workspaceMcpConfigPath: String(value.workspace_mcp_config_path || value.workspaceMcpConfigPath || ""),
     workspaceMcpScope: String(value.workspace_mcp_scope || value.workspaceMcpScope || ""),
@@ -2417,16 +2303,9 @@ function appendAgentParam(params: URLSearchParams, agentId?: string) {
   }
 }
 
-function appendExecutionModeParam(params: URLSearchParams, executionMode?: ChatExecutionMode) {
-  if (executionMode === "native_agent") {
-    params.set("execution_mode", executionMode);
-  }
-}
-
 function scopedRequestBody(options: AgentScopedOptions = {}) {
   return {
     ...(options.agentId ? { agent_id: options.agentId } : {}),
-    ...(options.executionMode === "native_agent" ? { execution_mode: options.executionMode } : {}),
   };
 }
 
@@ -2462,7 +2341,7 @@ function mapApiErrorData(code: string | undefined, raw: unknown): unknown {
         return {
           conversationId: String(blocker.conversation_id ?? blocker.conversationId ?? ""),
           title: String(blocker.title || "新会话"),
-          executionMode: executionMode === "native_agent" ? "native_agent" : "cli",
+          executionMode: "cli",
           roleCount: Number(blocker.role_count ?? blocker.roleCount ?? 0),
           outsideAgentIds: Array.isArray(outsideAgentIds)
             ? outsideAgentIds.map((item) => String(item))
@@ -2678,7 +2557,7 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
 
 function normalizeExecutionMode(value: unknown): ChatExecutionMode | undefined {
   const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "cli" || normalized === "native_agent") {
+  if (normalized === "cli") {
     return normalized;
   }
   return undefined;
@@ -2694,96 +2573,6 @@ function mapExecutionModes(value: unknown): ChatExecutionMode[] | undefined {
   return modes.length > 0 ? Array.from(new Set(modes)) : undefined;
 }
 
-function mapNativeAgentConfig(value: unknown): NativeAgentConfig | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = value as Record<string, unknown>;
-  const reasoningEffort = String(raw.reasoning_effort ?? raw.reasoningEffort ?? "").trim();
-  const thinkingDepth = String(raw.thinking_depth ?? raw.thinkingDepth ?? "").trim();
-  return {
-    provider: String(raw.provider || ""),
-    model: String(raw.model || ""),
-    piAgent: String(raw.pi_agent ?? raw.piAgent ?? raw.agent ?? ""),
-    baseUrl: String(raw.base_url ?? raw.baseUrl ?? ""),
-    hasApiKey: Boolean(raw.has_api_key ?? raw.hasApiKey ?? raw.api_key_masked ?? raw.apiKeyMasked),
-    apiKeyMasked: String(raw.api_key_masked ?? raw.apiKeyMasked ?? ""),
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-    ...(thinkingDepth ? { thinkingDepth } : {}),
-  };
-}
-
-function mapNativeAgentModelOption(raw: unknown): NativeAgentModelOption {
-  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const reasoningEfforts = toStringArray(item.reasoning_efforts ?? item.reasoningEfforts);
-  const defaultReasoningEffort = String(item.default_reasoning_effort ?? item.defaultReasoningEffort ?? "").trim();
-  return {
-    id: String(item.id || ""),
-    provider: String(item.provider || ""),
-    model: String(item.model || ""),
-    name: String(item.name || item.model || ""),
-    label: String(item.label || item.id || ""),
-    ...(typeof item.context_window === "number" ? { contextWindow: item.context_window } : {}),
-    ...(typeof item.contextWindow === "number" ? { contextWindow: item.contextWindow } : {}),
-    ...(typeof item.output_limit === "number" ? { outputLimit: item.output_limit } : {}),
-    ...(typeof item.outputLimit === "number" ? { outputLimit: item.outputLimit } : {}),
-    ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
-    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
-  };
-}
-
-function mapNativeAgentPreflightResult(raw: unknown): NativeAgentPreflightResult {
-  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const checks = Array.isArray(item.checks) ? item.checks : [];
-  return {
-    ok: Boolean(item.ok),
-    code: String(item.code ?? ""),
-    message: String(item.message ?? ""),
-    platform: String(item.platform ?? ""),
-    checks: checks.map((rawCheck) => {
-      const check = rawCheck && typeof rawCheck === "object" ? rawCheck as Record<string, unknown> : {};
-      return {
-        key: String(check.key ?? ""),
-        ok: Boolean(check.ok),
-        severity: String(check.severity ?? (check.ok ? "info" : "error")),
-        message: String(check.message ?? ""),
-        fix: String(check.fix ?? ""),
-        ...(check.path ? { path: String(check.path) } : {}),
-        ...(check.command ? { command: String(check.command) } : {}),
-        ...(check.version ? { version: String(check.version) } : {}),
-      };
-    }),
-  };
-}
-
-function mapNativeAgentConfigPayload(raw: unknown): NativeAgentConfigPayload {
-  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const models = Array.isArray(item.models) ? item.models.map(mapNativeAgentModelOption) : [];
-  const rawPreflight = item.preflight ?? item.preflightResult;
-  return {
-    config: item.config && typeof item.config === "object" ? item.config as Record<string, unknown> : {},
-    backend: String(item.backend ?? "pi"),
-    configPath: String(item.config_path ?? item.configPath ?? ""),
-    modelsPath: String(item.models_path ?? item.modelsPath ?? ""),
-    workspaceHistoryEnabled: Boolean(item.workspace_history_enabled ?? item.workspaceHistoryEnabled),
-    models,
-    selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),
-    selectedReasoningEffort: String(item.selected_reasoning_effort ?? item.selectedReasoningEffort ?? "").trim(),
-    needsRestart: Boolean(item.needs_restart ?? item.needsRestart),
-    ...(rawPreflight ? { preflight: mapNativeAgentPreflightResult(rawPreflight) } : {}),
-  };
-}
-
-function mapNativeAgentModelsPayload(raw: unknown): NativeAgentModelsPayload {
-  const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const items = Array.isArray(item.items) ? item.items.map(mapNativeAgentModelOption) : [];
-  return {
-    items,
-    selectedModel: String(item.selected_model ?? item.selectedModel ?? ""),
-    selectedReasoningEffort: String(item.selected_reasoning_effort ?? item.selectedReasoningEffort ?? "").trim(),
-  };
-}
-
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -2795,20 +2584,10 @@ function toStringArray(value: unknown): string[] {
   ));
 }
 
-function serializeNativeAgentConfig(input: NativeAgentConfigInput | undefined) {
-  const nativeAgent = input || { provider: "", model: "", piAgent: "", baseUrl: "" };
-  return {
-    backend: "pi",
-    pi_agent: nativeAgent.piAgent,
-  };
-}
-
 function displayNativeProvider(provider?: string) {
   const normalized = String(provider || "").trim().toLowerCase();
   if (isCodexCli(normalized)) return "codex";
-  if (normalized === "native_agent") {
-    return "原生 agent";
-  }
+
   return provider || undefined;
 }
 
@@ -2828,21 +2607,14 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
       }
     : undefined);
   const rawContextUsage = raw.context_usage ?? raw.contextUsage;
-  const rawWorkspaceHistoryHead = raw.workspace_history_head ?? raw.workspaceHistoryHead;
-  const rawLinearIndex = raw.linear_index ?? raw.linearIndex;
-  const rawRollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
-  const rawDegraded = raw.degraded;
-  const rawDegradedReason = raw.degraded_reason ?? raw.degradedReason;
+
   const rawEndlessEvents = raw.endless_events || raw.endlessEvents || [];
   const voice = mapVoiceTaskBinding(raw.voice);
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
-  const isNativeFlat = String(rawNativeSource?.provider || "").trim().toLowerCase() === "native_agent";
-  const trace = mergeChatTraceEvents([rawTrace], {
-    nativeFlat: isNativeFlat,
-    autoNativeFlat: isNativeFlat,
-  });
+
+  const trace = mergeChatTraceEvents([rawTrace]);
   const traceSummary = summarizeTrace(trace);
 
   const meta: ChatMessageMetaInfo = {};
@@ -2875,9 +2647,6 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
     meta.trace = trace;
   }
   if (rawNativeSource?.provider || rawNativeSource?.session_id) {
-    if (isNativeFlat) {
-      meta.tracePresentation = "native_agent_flat";
-    }
     meta.nativeSource = {
       provider: displayNativeProvider(rawNativeSource.provider),
       sessionId: rawNativeSource.session_id || undefined,
@@ -2915,21 +2684,7 @@ function mapMessageMeta(raw?: RawChatMessageMeta | null): ChatMessageMetaInfo | 
   if (endlessGroupId) {
     meta.endlessGroupId = endlessGroupId;
   }
-  if (typeof rawWorkspaceHistoryHead === "string") {
-    meta.workspaceHistoryHead = rawWorkspaceHistoryHead;
-  }
-  if (typeof rawLinearIndex === "number" && Number.isFinite(rawLinearIndex)) {
-    meta.linearIndex = rawLinearIndex;
-  }
-  if (typeof rawRollbackSupported === "boolean") {
-    meta.rollbackSupported = rawRollbackSupported;
-  }
-  if (typeof rawDegraded === "boolean") {
-    meta.degraded = rawDegraded;
-  }
-  if (typeof rawDegradedReason === "string") {
-    meta.degradedReason = rawDegradedReason;
-  }
+
   if (voice) {
     meta.voice = voice;
   }
@@ -2994,61 +2749,10 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
   };
 }
 
-function mapNativeAgentHistoryChangedFile(raw: RawNativeAgentHistoryChangedFile) {
-  return {
-    path: String(raw.path || ""),
-    oldPath: String(raw.old_path ?? raw.oldPath ?? ""),
-    status: String(raw.status || "unknown"),
-    additions: Number(raw.additions || 0),
-    deletions: Number(raw.deletions || 0),
-    binary: Boolean(raw.binary),
-  };
-}
-
-function mapNativeAgentHistoryChanges(raw: RawNativeAgentHistoryChangesPayload): NativeAgentHistoryChangesPayload {
-  const linearIndex = Number(raw.linear_index ?? raw.linearIndex ?? 0);
-  return {
-    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
-    turnId: String(raw.turn_id ?? raw.turnId ?? ""),
-    linearIndex: Number.isFinite(linearIndex) ? linearIndex : 0,
-    baseHead: String(raw.base_head ?? raw.baseHead ?? ""),
-    head: String(raw.head || ""),
-    files: Array.isArray(raw.files) ? raw.files.map(mapNativeAgentHistoryChangedFile) : [],
-    ...(typeof raw.discarded === "boolean" ? { discarded: raw.discarded } : {}),
-    ...(typeof raw.message === "string" ? { message: raw.message } : {}),
-  };
-}
-
-function mapNativeAgentHistoryDiff(raw: RawNativeAgentHistoryDiffPayload): NativeAgentHistoryDiffPayload {
-  return {
-    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
-    turnId: String(raw.turn_id ?? raw.turnId ?? ""),
-    path: String(raw.path || ""),
-    oldPath: String(raw.old_path ?? raw.oldPath ?? ""),
-    status: String(raw.status || "unknown"),
-    diff: String(raw.diff || ""),
-    truncated: Boolean(raw.truncated),
-    binary: Boolean(raw.binary),
-  };
-}
-
-function mapNativeAgentHistoryRollback(raw: RawNativeAgentHistoryRollbackResult): NativeAgentHistoryRollbackResult {
-  return {
-    conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
-    currentTurnId: String(raw.current_turn_id ?? raw.currentTurnId ?? ""),
-    rollbackSupported: Boolean(raw.rollback_supported ?? raw.rollbackSupported),
-    message: String(raw.message || ""),
-  };
-}
-
 function mapConversationSummary(raw: RawConversationSummary): ConversationSummary {
   const nativeProvider = String(raw.native_provider ?? raw.nativeProvider ?? "");
   const nativeSessionId = String(raw.native_session_id ?? raw.nativeSessionId ?? "");
-  const workspaceHistoryHead = raw.workspace_history_head ?? raw.workspaceHistoryHead;
-  const linearIndex = raw.linear_index ?? raw.linearIndex;
-  const rollbackSupported = raw.rollback_supported ?? raw.rollbackSupported;
-  const degraded = raw.degraded;
-  const degradedReason = raw.degraded_reason ?? raw.degradedReason;
+
   const clusterTeam = mapClusterTeam(raw.cluster_team ?? raw.clusterTeam);
   const clusterTeamRevision = raw.cluster_team_revision ?? raw.clusterTeamRevision;
   return {
@@ -3069,11 +2773,7 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
         sessionId: nativeSessionId,
       },
     } : {}),
-    ...(typeof workspaceHistoryHead === "string" ? { workspaceHistoryHead } : {}),
-    ...(typeof linearIndex === "number" && Number.isFinite(linearIndex) ? { linearIndex } : {}),
-    ...(typeof rollbackSupported === "boolean" ? { rollbackSupported } : {}),
-    ...(typeof degraded === "boolean" ? { degraded } : {}),
-    ...(typeof degradedReason === "string" ? { degradedReason } : {}),
+
     ...(clusterTeam ? { clusterTeam } : {}),
     ...(typeof clusterTeamRevision === "number" ? { clusterTeamRevision } : {}),
     createdAt: String(raw.created_at ?? raw.createdAt ?? ""),
@@ -3082,7 +2782,7 @@ function mapConversationSummary(raw: RawConversationSummary): ConversationSummar
 }
 
 function normalizeFavoriteExecutionMode(value: unknown): ChatExecutionMode {
-  return String(value || "").trim() === "native_agent" ? "native_agent" : "cli";
+  return "cli";
 }
 
 function mapFavoriteAnswerItem(raw: RawFavoriteAnswerItem): FavoriteAnswerItem {
@@ -4448,11 +4148,8 @@ function mapChatTraceDetails(raw: RawChatTraceDetails): ChatTraceDetails {
   const rawTrace = (raw.trace || [])
     .map((item) => mapTraceEvent(item))
     .filter((item): item is ChatTraceEvent => Boolean(item));
-  const nativeFlat = rawTrace.some((item) => String(item.source || "").trim().toLowerCase() === "native_agent");
-  const trace = mergeChatTraceEvents([rawTrace], {
-    nativeFlat,
-    autoNativeFlat: nativeFlat,
-  }) || [];
+
+  const trace = mergeChatTraceEvents([rawTrace]) || [];
   const summary = summarizeTrace(trace);
   return {
     traceCount: summary.traceCount,
@@ -5756,7 +5453,7 @@ export class RealWebBotClient implements WebBotClient {
   async getBotOverview(botAlias: string, options: AgentScopedOptions = {}): Promise<BotOverview> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{
       bot: RawBotSummary;
@@ -5882,7 +5579,7 @@ export class RealWebBotClient implements WebBotClient {
   async listMessages(botAlias: string, options: AgentScopedOptions = {}): Promise<HistorySnapshotResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{
       items: RawHistoryItem[];
@@ -5961,7 +5658,7 @@ export class RealWebBotClient implements WebBotClient {
       params.set("q", query.trim());
     }
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
     );
@@ -6038,7 +5735,7 @@ export class RealWebBotClient implements WebBotClient {
       params.set("q", query.trim());
     }
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ items?: RawFavoriteAnswerItem[]; execution_mode?: string; executionMode?: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/favorites${suffix}`,
@@ -6073,7 +5770,7 @@ export class RealWebBotClient implements WebBotClient {
   async deleteFavoriteAnswer(botAlias: string, favoriteId: string, options: AgentScopedOptions = {}): Promise<{ deleted: boolean; favoriteId: string }> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ deleted?: boolean; favorite_id?: string; favoriteId?: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/favorites/${encodeURIComponent(favoriteId)}${suffix}`,
@@ -6095,7 +5792,7 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<ConversationDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
     }
@@ -6152,7 +5849,7 @@ export class RealWebBotClient implements WebBotClient {
   ): Promise<ConversationBulkDeleteResult> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     if (options.deleteNativeSession) {
       params.set("delete_native_session", "true");
     }
@@ -6180,7 +5877,7 @@ export class RealWebBotClient implements WebBotClient {
       limit: String(limit),
     });
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     if (typeof options.revision === "number") {
       params.set("revision", String(options.revision));
     }
@@ -6215,7 +5912,7 @@ export class RealWebBotClient implements WebBotClient {
   async getMessageTrace(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTraceDetails> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawChatTraceDetails>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
@@ -6230,12 +5927,11 @@ export class RealWebBotClient implements WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
-    onAgUiEvent?: (event: AgUiEvent) => void,
+
     onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
-    const useAgUiProtocol = options?.executionMode === "native_agent";
-    const streamUrl = `/api/bots/${encodeURIComponent(botAlias)}/chat/stream${useAgUiProtocol ? "?protocol=ag-ui" : ""}`;
+    const streamUrl = `/api/bots/${encodeURIComponent(botAlias)}/chat/stream`;
     const response = await fetch(withApiBase(streamUrl), {
       method: "POST",
       credentials: "same-origin",
@@ -6251,12 +5947,11 @@ export class RealWebBotClient implements WebBotClient {
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),
         ...(options?.agentId ? { agent_id: options.agentId } : {}),
         ...(options?.executionMode ? { execution_mode: options.executionMode } : {}),
-        ...(options?.soloMode ? { solo_mode: true } : {}),
+
         ...(options?.endlessMode ? { endless_mode: true } : {}),
         ...(options?.endlessGroupId ? { endless_group_id: options.endlessGroupId } : {}),
         ...(options?.endlessParentMessageId ? { endless_parent_message_id: options.endlessParentMessageId } : {}),
         ...(options?.skipInputTranslation ? { skip_input_translation: true } : {}),
-        ...(useAgUiProtocol ? { protocol: "ag-ui" } : {}),
       }),
     });
 
@@ -6284,10 +5979,7 @@ export class RealWebBotClient implements WebBotClient {
     let streamedContextUsage: ChatMessageContextUsage | undefined;
     let streamFinished = false;
     let terminalSeen = false;
-    const agUiAdapter = createAgUiStreamAdapter();
-    const agUiAccumulator = createAgUiRunAccumulator();
-    let agUiState = createAgUiRunState();
-    let sawAgUiEvent = false;
+
     const seenStreamSequences = new Set<number>();
 
     const captureStreamBinding = (event: StreamEvent) => {
@@ -6304,13 +5996,9 @@ export class RealWebBotClient implements WebBotClient {
       return { turnId, assistantMessageId };
     };
 
-    const appendStreamTrace = (traceEvent: ChatTraceEvent, nativeFlat: boolean) => {
+    const appendStreamTrace = (traceEvent: ChatTraceEvent) => {
       const previousTrace = streamedTrace.slice();
-      const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]], {
-        nativeFlat,
-        autoNativeFlat: nativeFlat,
-        dedupeAnonymous: true,
-      }) || [];
+      const mergedTrace = mergeChatTraceEvents([streamedTrace, [traceEvent]]) || [];
       streamedTrace.splice(0, streamedTrace.length, ...mergedTrace);
       const maxLength = Math.max(previousTrace.length, mergedTrace.length);
       for (let index = 0; index < maxLength; index += 1) {
@@ -6381,74 +6069,6 @@ export class RealWebBotClient implements WebBotClient {
           separator = findSseSeparator(buffer);
           continue;
         }
-        const shouldAdaptAgUiEvent = useAgUiProtocol || isAgUiEventType(event.type);
-        const agUiEvents = shouldAdaptAgUiEvent ? agUiAdapter.adapt(event) : [];
-        if (agUiEvents.length > 0) {
-          sawAgUiEvent = true;
-          for (const agUiEvent of agUiEvents) {
-            agUiState = agUiAccumulator.reduce(agUiEvent);
-            onAgUiEvent?.(agUiEvent);
-            const activityContent = contentForAgUiActivityEvent(agUiState.activities, agUiEvent);
-            if (agUiEvent.type === EventType.ACTIVITY_SNAPSHOT || agUiEvent.type === EventType.ACTIVITY_DELTA) {
-              const content = activityContent;
-              if (agUiEvent.activityType === "TCB_STATUS") {
-                const contextUsage = mapContextUsage(content.contextUsage ?? content.context_usage);
-                if (contextUsage) {
-                  streamedContextUsage = contextUsage;
-                }
-                if (typeof content.elapsedSeconds === "number") {
-                  finalElapsedSeconds = content.elapsedSeconds;
-                }
-              }
-            }
-            if (agUiEvent.type === EventType.RUN_ERROR) {
-              finalText = agUiState.assistantText || finalText || streamedText || agUiEvent.message;
-              terminalSeen = true;
-              streamFinished = true;
-              await reader.cancel().catch(() => undefined);
-              break;
-            }
-            if (agUiEvent.type === EventType.RUN_FINISHED) {
-              const result = agUiEvent.result && typeof agUiEvent.result === "object" && !Array.isArray(agUiEvent.result)
-                ? agUiEvent.result as Record<string, unknown>
-                : {};
-              const resultContent = typeof result.content === "string" ? result.content.trim() : "";
-              const resultTurnId = typeof (result.turn_id ?? result.turnId) === "string"
-                ? String(result.turn_id ?? result.turnId)
-                : "";
-              const resultAssistantMessageId = typeof (result.assistant_message_id ?? result.assistantMessageId) === "string"
-                ? String(result.assistant_message_id ?? result.assistantMessageId)
-                : "";
-              if (resultTurnId) {
-                streamTurnId = resultTurnId;
-              }
-              if (resultAssistantMessageId) {
-                streamAssistantMessageId = resultAssistantMessageId;
-              }
-              const resultMessage = result.message;
-              if (resultMessage && typeof resultMessage === "object" && !Array.isArray(resultMessage)) {
-                finalMessage = mapChatMessage(resultMessage as RawHistoryItem, 0);
-                finalMessage.text = finalMessage.text || resultContent || finalText || agUiState.assistantText || streamedText;
-                finalText = finalMessage.text;
-              } else {
-                finalText = resultContent || finalText || agUiState.assistantText || streamedText;
-              }
-              finalElapsedSeconds = agUiState.elapsedSeconds ?? finalElapsedSeconds;
-              terminalSeen = true;
-              streamFinished = true;
-              await reader.cancel().catch(() => undefined);
-              break;
-            }
-          }
-          if (streamFinished) {
-            break;
-          }
-        }
-
-        if (sawAgUiEvent && event.type !== "done" && event.type !== "error") {
-          separator = findSseSeparator(buffer);
-          continue;
-        }
 
         if (event.type === "delta" && event.text) {
           streamedText += event.text;
@@ -6494,8 +6114,7 @@ export class RealWebBotClient implements WebBotClient {
         } else if (event.type === "trace") {
           const traceEvent = mapTraceEvent(event.event);
           if (traceEvent) {
-            const nativeFlatTrace = options?.executionMode === "native_agent";
-            const acceptedTrace = appendStreamTrace(traceEvent, nativeFlatTrace);
+            const acceptedTrace = appendStreamTrace(traceEvent);
             if (acceptedTrace) {
               onTrace?.(acceptedTrace);
             }
@@ -6533,34 +6152,22 @@ export class RealWebBotClient implements WebBotClient {
       }
     }
 
-    if (sawAgUiEvent) {
-      if (!terminalSeen) {
-        agUiState = agUiAccumulator.snapshot();
-      }
-      agUiAccumulator.dispose();
-    }
-
     if (!terminalSeen) {
-      const meta = sawAgUiEvent
-        ? mergeMessageMeta(
-            agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
-            buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
-          )
-        : mergeMessageMeta(
+      const meta = mergeMessageMeta(
             streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
             undefined,
             streamedTrace,
-            { dedupeAnonymous: true },
+            {  },
           );
       const partialMessage: ChatMessage = {
-        id: agUiState.messageId || streamAssistantMessageId || `assistant-${Date.now()}`,
+        id: streamAssistantMessageId || `assistant-${Date.now()}`,
         ...(streamTurnId ? { turnId: streamTurnId } : {}),
         role: "assistant",
-        text: agUiState.assistantText || streamedText || finalText,
+        text: streamedText || finalText,
         createdAt: new Date().toISOString(),
         state: "streaming",
-        ...(typeof (agUiState.elapsedSeconds ?? finalElapsedSeconds) === "number"
-          ? { elapsedSeconds: agUiState.elapsedSeconds ?? finalElapsedSeconds }
+        ...(typeof (finalElapsedSeconds) === "number"
+          ? { elapsedSeconds: finalElapsedSeconds }
           : {}),
         ...(meta ? { meta } : {}),
       };
@@ -6572,20 +6179,6 @@ export class RealWebBotClient implements WebBotClient {
     }
 
     if (finalMessage) {
-      if (sawAgUiEvent) {
-        return normalizeResolvedFinalMessage({
-          ...finalMessage,
-          text: finalMessage.text || finalText || agUiState.assistantText,
-          elapsedSeconds: finalMessage.elapsedSeconds ?? agUiState.elapsedSeconds ?? finalElapsedSeconds,
-          meta: mergeMessageMeta(
-            agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
-            mergeMessageMeta(
-              finalMessage.meta,
-              buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
-            ),
-          ),
-        });
-      }
       return normalizeResolvedFinalMessage({
         ...finalMessage,
         ...(!finalMessage.turnId && streamTurnId ? { turnId: streamTurnId } : {}),
@@ -6594,32 +6187,12 @@ export class RealWebBotClient implements WebBotClient {
       });
     }
 
-    if (sawAgUiEvent) {
-      const meta = mergeMessageMeta(
-        agUiState.contextUsage ? { contextUsage: agUiState.contextUsage } : undefined,
-        buildAgUiMessageMeta(agUiState, { nativeAgent: options?.executionMode === "native_agent" }),
-      );
-      const completionState = meta?.completionState || "";
-      return {
-        id: agUiState.messageId || streamAssistantMessageId || `assistant-${Date.now()}`,
-        ...(streamTurnId ? { turnId: streamTurnId } : {}),
-        role: "assistant",
-        text: finalText || agUiState.assistantText || streamedText,
-        createdAt: new Date().toISOString(),
-        state: agUiState.error || (completionState && completionState !== "completed") ? "error" : "done",
-        ...(typeof (agUiState.elapsedSeconds ?? finalElapsedSeconds) === "number"
-          ? { elapsedSeconds: agUiState.elapsedSeconds ?? finalElapsedSeconds }
-          : {}),
-        ...(meta ? { meta } : {}),
-      };
-    }
-
     const messageText = finalText || streamedText;
     const meta = mergeMessageMeta(
       streamedContextUsage ? { contextUsage: streamedContextUsage } : undefined,
       undefined,
       streamedTrace,
-      { dedupeAnonymous: true },
+      {  },
     );
     return {
       id: streamAssistantMessageId || `assistant-${Date.now()}`,
@@ -6630,34 +6203,6 @@ export class RealWebBotClient implements WebBotClient {
       state: "done",
       ...(typeof finalElapsedSeconds === "number" ? { elapsedSeconds: finalElapsedSeconds } : {}),
       ...(meta ? { meta } : {}),
-    };
-  }
-
-  async replyNativeAgentPermission(
-    botAlias: string,
-    permissionId: string,
-    options: NativeAgentPermissionReplyOptions,
-  ): Promise<{ permissionId: string; approved: boolean }> {
-    const data = await this.requestJson<{
-      permission_id?: string;
-      permissionId?: string;
-      approved?: boolean;
-    }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/permissions/${encodeURIComponent(permissionId)}/reply`,
-      {
-        method: "POST",
-        headers: this.headers({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          ...scopedRequestBody(options),
-          approved: Boolean(options.approved),
-          ...(options.message ? { message: options.message } : {}),
-          ...(typeof options.value !== "undefined" ? { value: options.value } : {}),
-        }),
-      },
-    );
-    return {
-      permissionId: String(data.permission_id || data.permissionId || permissionId),
-      approved: Boolean(data.approved),
     };
   }
 
@@ -6733,7 +6278,7 @@ export class RealWebBotClient implements WebBotClient {
   async retryAnswerTranslation(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTranslation> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
-    appendExecutionModeParam(params, options.executionMode);
+
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return this.requestJson<ChatTranslation>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/translation/retry${suffix}`,
@@ -8116,21 +7661,6 @@ export class RealWebBotClient implements WebBotClient {
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
   }
 
-  async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
-    const data = await this.requestJson<{ bot: RawBotSummary }>(`/api/admin/bots/${encodeURIComponent(botAlias)}/execution`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        supported_execution_modes: input.supportedExecutionModes,
-        default_execution_mode: input.defaultExecutionMode,
-        native_agent: serializeNativeAgentConfig(input.nativeAgent),
-      }),
-    });
-    return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
-  }
-
   async updateBotWorkdir(
     botAlias: string,
     workingDir: string,
@@ -8195,9 +7725,6 @@ export class RealWebBotClient implements WebBotClient {
         ...(input.supportedExecutionModes ? { supported_execution_modes: input.supportedExecutionModes } : {}),
         ...(input.defaultExecutionMode ? { default_execution_mode: input.defaultExecutionMode } : {}),
         ...(input.cliType === "deepseek" ? { supported_execution_modes: ["cli"], default_execution_mode: "cli" } : {}),
-        ...(input.nativeAgent ? {
-          native_agent: serializeNativeAgentConfig(input.nativeAgent),
-        } : {}),
       }),
     });
     return mapBotSummary(data.bot, Boolean(data.bot.is_processing));
@@ -8277,102 +7804,6 @@ export class RealWebBotClient implements WebBotClient {
     return mapCliParamsPayload(data);
   }
 
-  async getNativeAgentConfig(): Promise<NativeAgentConfigPayload> {
-    return mapNativeAgentConfigPayload(await this.requestJson("/api/admin/native-agent/config"));
-  }
-
-  async runNativeAgentPreflight(options: { cwd?: string; piCommand?: string } = {}): Promise<NativeAgentPreflightResult> {
-    const params = new URLSearchParams();
-    if (options.cwd) params.set("cwd", options.cwd);
-    if (options.piCommand) params.set("pi_command", options.piCommand);
-    const suffix = params.toString() ? `?${params.toString()}` : "";
-    return mapNativeAgentPreflightResult(await this.requestJson(`/api/admin/native-agent/preflight${suffix}`));
-  }
-
-  async updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload> {
-    return mapNativeAgentConfigPayload(await this.requestJson("/api/admin/native-agent/config", {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ config }),
-    }));
-  }
-
-  async getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload> {
-    return mapNativeAgentModelsPayload(await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/native-agent/models`));
-  }
-
-  async updateNativeAgentModel(botAlias: string, model: string, options: NativeAgentModelUpdateOptions = {}): Promise<NativeAgentModelUpdateResult> {
-    const body: Record<string, unknown> = { model };
-    if (Object.prototype.hasOwnProperty.call(options, "reasoningEffort")) {
-      body.reasoning_effort = options.reasoningEffort || "";
-    }
-    const raw = await this.requestJson<Record<string, unknown>>(`/api/bots/${encodeURIComponent(botAlias)}/native-agent/model`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    const mapped = mapNativeAgentModelsPayload(raw);
-    const bot = raw.bot ? mapBotSummary(raw.bot as RawBotSummary, Boolean((raw.bot as RawBotSummary).is_processing)) : undefined;
-    return { ...mapped, ...(bot ? { bot } : {}) };
-  }
-
-  async getNativeAgentHistoryChanges(
-    botAlias: string,
-    input: { conversationId: string; turnId: string; agentId?: string },
-  ): Promise<NativeAgentHistoryChangesPayload> {
-    const params = new URLSearchParams({
-      conversation_id: input.conversationId,
-      turn_id: input.turnId,
-    });
-    appendAgentParam(params, input.agentId);
-    const data = await this.requestJson<RawNativeAgentHistoryChangesPayload>(
-      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/history/changes?${params.toString()}`,
-    );
-    return mapNativeAgentHistoryChanges(data);
-  }
-
-  async getNativeAgentHistoryDiff(
-    botAlias: string,
-    input: { conversationId: string; turnId: string; path: string; agentId?: string },
-  ): Promise<NativeAgentHistoryDiffPayload> {
-    const params = new URLSearchParams({
-      conversation_id: input.conversationId,
-      turn_id: input.turnId,
-      path: input.path,
-    });
-    appendAgentParam(params, input.agentId);
-    const data = await this.requestJson<RawNativeAgentHistoryDiffPayload>(
-      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/history/diff?${params.toString()}`,
-    );
-    return mapNativeAgentHistoryDiff(data);
-  }
-
-  async rollbackNativeAgentHistory(
-    botAlias: string,
-    input: { conversationId: string; targetTurnId: string; agentId?: string },
-  ): Promise<NativeAgentHistoryRollbackResult> {
-    const normalizedAgentId = String(input.agentId || "").trim();
-    const data = await this.requestJson<RawNativeAgentHistoryRollbackResult>(
-      `/api/bots/${encodeURIComponent(botAlias)}/native-agent/history/rollback`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          conversation_id: input.conversationId,
-          target_turn_id: input.targetTurnId,
-          ...(normalizedAgentId && normalizedAgentId !== "main" ? { agent_id: normalizedAgentId } : {}),
-        }),
-      },
-    );
-    return mapNativeAgentHistoryRollback(data);
-  }
-
   async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {
     const data = await this.requestJson<RawCliParamsPayload>(`/api/bots/${encodeURIComponent(botAlias)}/cli-params`, {
       method: "PATCH",
@@ -8445,5 +7876,4 @@ export class RealWebBotClient implements WebBotClient {
     });
     return mapTunnelSnapshot(data);
   }
-
 }

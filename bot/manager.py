@@ -24,14 +24,12 @@ from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _D
 from bot.models import (
     AgentProfile,
     BotProfile,
-    EXECUTION_MODE_NATIVE_AGENT,
     GitCommitMessageCliConfig,
     normalize_execution_mode,
     normalize_execution_mode_config,
     normalize_execution_modes,
     normalize_prompt_presets,
 )
-from bot.native_agent.legacy_migration import migrate_native_agent_payload
 from bot.plugins.service import PluginService
 from bot.profile_store import (
     apply_persisted_main_profile,
@@ -77,7 +75,6 @@ def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> 
         codex_session_id=stored.get("codex_session_id"),
         claude_session_id=stored.get("claude_session_id"),
         antigravity_conversation_id=stored.get("antigravity_conversation_id"),
-        native_agent_session_id=stored.get("native_agent_session_id"),
         working_dir=stored.get("working_dir"),
         browse_dir=stored.get("browse_dir"),
         message_count=stored.get("message_count"),
@@ -102,37 +99,6 @@ async def _close_codex_server_runtimes(alias: str, *, require_idle: bool = True)
     registry = get_codex_server_registry()
     for session in targets:
         await registry.close_owner((session.bot_id, session.user_id, session.agent_id))
-
-
-def _normalize_bot_native_agent_config(value: Any, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    data = migrate_native_agent_payload(value)
-    existing_data = migrate_native_agent_payload(existing)
-    source = data if "pi_agent" in data else existing_data
-    pi_agent = str(source.get("pi_agent") or "").strip()
-    model_source = data
-    if not any(key in data for key in ("native_agent_model", "nativeAgentModel", "selected_model", "selectedModel", "model")):
-        model_source = existing_data
-    selected_model = ""
-    for key in ("model", "selected_model", "selectedModel", "native_agent_model", "nativeAgentModel"):
-        if key in model_source:
-            selected_model = str(model_source.get(key) or "").strip()
-            break
-    reasoning_source = data
-    if not any(key in data for key in ("reasoning_effort", "reasoningEffort")):
-        reasoning_source = existing_data
-    reasoning_effort = ""
-    for key in ("reasoning_effort", "reasoningEffort"):
-        if key in reasoning_source:
-            reasoning_effort = str(reasoning_source.get(key) or "").strip()
-            break
-    result: dict[str, Any] = {}
-    if pi_agent:
-        result["pi_agent"] = pi_agent
-    if selected_model and "/" in selected_model:
-        result["model"] = selected_model
-    if reasoning_effort:
-        result["reasoning_effort"] = reasoning_effort
-    return result
 
 
 class MultiBotManager:
@@ -327,7 +293,6 @@ class MultiBotManager:
         working_dir: Optional[str] = None,
         supported_execution_modes: Any = None,
         default_execution_mode: Any = None,
-        native_agent: Any = None,
         bypass_approval_and_sandbox: bool = False,
         remote_workspace: Any = None,
     ) -> BotProfile:
@@ -345,7 +310,6 @@ class MultiBotManager:
             requested_supported_execution_modes,
             requested_default_execution_mode,
         )
-        resolved_native_agent = _normalize_bot_native_agent_config(native_agent)
 
         remote_config = {}
         if remote_workspace:
@@ -359,10 +323,7 @@ class MultiBotManager:
 
         if not remote_config and not os.path.isdir(resolved_working_dir):
             raise ValueError(f"工作目录不存在: {resolved_working_dir}")
-        if (
-            resolved_default_execution_mode != EXECUTION_MODE_NATIVE_AGENT
-            and resolve_cli_executable(resolved_cli_path, resolved_working_dir) is None
-        ):
+        if resolve_cli_executable(resolved_cli_path, resolved_working_dir) is None:
             raise ValueError(
                 f"未找到 CLI 可执行文件: {resolved_cli_path} "
                 f"(请在设置页填写可执行名或完整路径，例如 Windows 可能需要 claude.cmd)"
@@ -379,7 +340,6 @@ class MultiBotManager:
                 enabled=True,
                 supported_execution_modes=resolved_supported_execution_modes,
                 default_execution_mode=resolved_default_execution_mode,
-                native_agent=resolved_native_agent,
                 remote_workspace=remote_config,
             )
             if bypass_approval_and_sandbox:
@@ -491,21 +451,19 @@ class MultiBotManager:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
             from bot.sessions import get_bot_sessions, unload_bot_sessions
-            from bot.native_agent.service import get_native_agent_service
 
             for session in get_bot_sessions(normalized_alias):
                 with session._lock:
                     if session.is_processing or session.process is not None:
                         raise ValueError("当前 Bot 有任务运行中，先终止或等待完成后再归档")
             # Remove access before awaiting runtime shutdown; publish the archive only
-            # after all idle native processes have closed successfully.
+            # after all idle CLI processes have closed successfully.
             del self.managed_profiles[normalized_alias]
             was_enabled = profile.enabled
             profile.enabled = False
             profile.archived = True
             try:
                 await _close_codex_server_runtimes(normalized_alias)
-                await get_native_agent_service().close_bot_runtimes(normalized_alias)
                 unload_bot_sessions(normalized_alias)
                 save_managed_profiles(self.storage_file, {**self.managed_profiles, normalized_alias: profile})
             except BaseException:
@@ -569,8 +527,6 @@ class MultiBotManager:
             data.get("default_execution_mode", data.get("defaultExecutionMode")),
             default=requested_supported_execution_modes[0],
         )
-        has_native_agent_payload = "native_agent" in data or "nativeAgent" in data
-        raw_native_agent = data.get("native_agent", data.get("nativeAgent")) if has_native_agent_payload else None
 
         async with self._lock:
             profile = self._get_profile_for_update(normalized_alias)
@@ -578,39 +534,8 @@ class MultiBotManager:
                 requested_supported_execution_modes,
                 requested_default_execution_mode,
             )
-            native_agent = (
-                _normalize_bot_native_agent_config(raw_native_agent, existing=profile.native_agent)
-                if has_native_agent_payload
-                else _normalize_bot_native_agent_config(profile.native_agent)
-            )
             profile.supported_execution_modes = supported
             profile.default_execution_mode = default_mode
-            profile.native_agent = native_agent
-            if normalized_alias == self.main_profile.alias:
-                self._persist_main_profile()
-            else:
-                self._save_profiles()
-
-    async def set_bot_native_agent_model(self, alias: str, model: str, reasoning_effort: str | None = None) -> None:
-        normalized_alias = str(alias or "").strip().lower()
-        selected_model = str(model or "").strip()
-        selected_reasoning_effort = str(reasoning_effort or "").strip()
-        if not selected_model:
-            raise ValueError("模型不能为空")
-        if "/" not in selected_model:
-            raise ValueError("模型必须使用 provider/model 格式")
-
-        async with self._lock:
-            profile = self._get_profile_for_update(normalized_alias)
-            if EXECUTION_MODE_NATIVE_AGENT not in profile.supported_execution_modes:
-                raise ValueError("仅原生 agent Bot 支持模型选择")
-            native_agent = _normalize_bot_native_agent_config(profile.native_agent)
-            native_agent["model"] = selected_model
-            if selected_reasoning_effort:
-                native_agent["reasoning_effort"] = selected_reasoning_effort
-            else:
-                native_agent.pop("reasoning_effort", None)
-            profile.native_agent = native_agent
             if normalized_alias == self.main_profile.alias:
                 self._persist_main_profile()
             else:

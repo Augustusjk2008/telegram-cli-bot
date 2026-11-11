@@ -1,13 +1,8 @@
 import { defaultCliPathForType } from "../utils/cliType";
 import type {
-  BotOverview,
   BotStatus,
   BotSummary,
-  ChatExecutionMode,
   CliType,
-  EnvConfigSnapshot,
-  NativeAgentConfig,
-  NativeAgentDraft,
   RemoteWorkspace,
 } from "../services/types";
 
@@ -24,8 +19,6 @@ export type EditDraft = {
   cliPath: string;
   workingDir: string;
   remoteWorkspace?: RemoteWorkspace;
-  runtimeBackend: ChatExecutionMode;
-  nativeAgent: NativeAgentDraft;
 };
 
 export type BotIssueCode =
@@ -57,71 +50,6 @@ export type BulkActionResult = {
   failed: Array<{ alias: string; message: string }>;
   skipped: Array<{ alias: string; reason: string }>;
 };
-
-export const DEFAULT_NATIVE_AGENT_CONFIG: NativeAgentConfig = {
-  provider: "",
-  model: "",
-  piAgent: "",
-  baseUrl: "",
-  hasApiKey: false,
-  apiKeyMasked: "",
-};
-
-export const DEFAULT_NATIVE_AGENT_DRAFT: NativeAgentDraft = {
-  ...DEFAULT_NATIVE_AGENT_CONFIG,
-  baseUrl: "",
-  hasApiKey: false,
-  apiKeyMasked: "",
-  apiKey: "",
-  clearApiKey: false,
-};
-
-type ExecutionModeSource = { cliType?: CliType } & (
-  | Pick<BotSummary, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">
-  | Pick<BotOverview, "supportedExecutionModes" | "defaultExecutionMode" | "executionMode">);
-
-export function getSupportedExecutionModes(source?: ExecutionModeSource | null): ChatExecutionMode[] {
-  if (source?.cliType === "deepseek") return ["cli"];
-  return source?.supportedExecutionModes?.length ? source.supportedExecutionModes : ["cli"];
-}
-
-export function getRuntimeBackend(source?: ExecutionModeSource | null): ChatExecutionMode {
-  const supported = getSupportedExecutionModes(source);
-  const preferred = source?.executionMode ?? source?.defaultExecutionMode;
-  if (preferred && supported.includes(preferred)) {
-    return preferred;
-  }
-  if (supported.includes("cli")) {
-    return "cli";
-  }
-  return supported[0] || "cli";
-}
-
-export function buildExecutionConfig(runtimeBackend: ChatExecutionMode) {
-  return runtimeBackend === "native_agent"
-    ? { supportedExecutionModes: ["native_agent"] as ChatExecutionMode[], defaultExecutionMode: "native_agent" as const }
-    : { supportedExecutionModes: ["cli"] as ChatExecutionMode[], defaultExecutionMode: "cli" as const };
-}
-
-export function isNativeAgentGloballyEnabled(snapshot?: EnvConfigSnapshot | null) {
-  const item = snapshot?.items?.find((entry) => entry.key === "NATIVE_AGENT_ENABLED");
-  if (!item) {
-    return null;
-  }
-  if (typeof item.value === "boolean") {
-    return item.value;
-  }
-  return String(item.value || "").trim().toLowerCase() === "true";
-}
-
-export function nativeAgentDraftFromBot(bot: BotSummary): NativeAgentDraft {
-  return {
-    ...DEFAULT_NATIVE_AGENT_DRAFT,
-    ...(bot.nativeAgent || {}),
-    apiKey: "",
-    clearApiKey: false,
-  };
-}
 
 const MANAGER_STATUS_PRIORITY: Record<BotStatus, number> = {
   unread: 0,
@@ -183,10 +111,7 @@ export function botMatchesManagerQuery(bot: BotSummary, query: string) {
     bot.alias,
     bot.workingDir,
     bot.cliType,
-    getRuntimeBackend(bot),
-    bot.nativeAgent?.provider || "",
-    bot.nativeAgent?.model || "",
-    bot.nativeAgent?.piAgent || "",
+
     ...(bot.busyAgentNames || []),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);
@@ -228,8 +153,6 @@ export function draftFromBot(bot: BotSummary): EditDraft {
     cliPath: bot.cliPath || defaultCliPathForType(bot.cliType),
     workingDir: bot.workingDir,
     remoteWorkspace: bot.remoteWorkspace,
-    runtimeBackend: getRuntimeBackend(bot),
-    nativeAgent: nativeAgentDraftFromBot(bot),
   };
 }
 
@@ -248,7 +171,7 @@ export function detectBotIssues(bot: BotSummary, allBots: BotSummary[]): BotIssu
   if (!bot.workingDir.trim()) {
     issues.push({ code: "missing_workdir", severity: "warning", label: "缺少工作目录" });
   }
-  if (getRuntimeBackend(bot) === "cli" && bot.cliPath !== undefined && !bot.cliPath.trim()) {
+  if (bot.cliPath !== undefined && !bot.cliPath.trim()) {
     issues.push({ code: "missing_cli_path", severity: "warning", label: "CLI 路径为空" });
   }
 

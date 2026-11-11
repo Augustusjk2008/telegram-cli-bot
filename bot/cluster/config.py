@@ -220,7 +220,7 @@ def resolve_cluster_execution(
 
     from bot.cli_params import CliParamsConfig
     from bot.config import default_cli_path
-    from bot.models import EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT, normalize_cli_type_config
+    from bot.models import EXECUTION_MODE_CLI, normalize_cli_type_config
 
     tier = _string(model_tier).lower()
     if tier not in MODEL_TIER_KEYS:
@@ -230,36 +230,7 @@ def resolve_cluster_execution(
     if not isinstance(tier_config, ClusterTierConfig):
         tier_config = ClusterTierConfig.from_value(tier_config)
 
-    requested_mode = _string(execution_mode).lower()
-    if requested_mode not in {EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT}:
-        requested_mode = _string(getattr(profile, "default_execution_mode", "cli")).lower()
-    if requested_mode not in {EXECUTION_MODE_CLI, EXECUTION_MODE_NATIVE_AGENT}:
-        requested_mode = EXECUTION_MODE_CLI
-
     configured_cli_type = _string(tier_config.cli_type).lower()
-    if requested_mode == EXECUTION_MODE_NATIVE_AGENT:
-        if configured_cli_type or _string(tier_config.cli_path) or _tier_value(tier_config.provider):
-            raise ValueError("native/Pi Bot 不支持为集群档位配置 CLI")
-        native = getattr(profile, "native_agent", {}) or {}
-        native_model = _string(native.get("model")) if isinstance(native, dict) else ""
-        native_effort = _string(native.get("reasoning_effort")) if isinstance(native, dict) else ""
-        profile_params = getattr(profile, "cli_params", None)
-        params = CliParamsConfig.from_dict(profile_params.to_dict() if profile_params is not None else None)
-        main_cli_type = normalize_cli_type_config(getattr(profile, "cli_type", "codex"))
-        main_cli_path = _string(getattr(profile, "cli_path", "")) or default_cli_path(main_cli_type)
-        return ClusterExecutionSnapshot(
-            execution_mode=EXECUTION_MODE_NATIVE_AGENT,
-            cli_type=main_cli_type,
-            cli_path=main_cli_path,
-            provider="",
-            model=_tier_value(tier_config.model) or _tier_value((getattr(cluster, "model_tiers", {}) or {}).get(tier)) or native_model,
-            reasoning_effort=(
-                _tier_value(tier_config.reasoning_effort)
-                or _tier_value((getattr(cluster, "reasoning_efforts", {}) or {}).get(tier))
-                or native_effort
-            ),
-            params_config=params,
-        )
 
     main_cli_type = normalize_cli_type_config(getattr(profile, "cli_type", "codex"))
     cli_type = configured_cli_type or main_cli_type

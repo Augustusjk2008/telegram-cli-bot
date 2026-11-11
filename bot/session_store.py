@@ -203,7 +203,6 @@ def _snapshot_rank(data: dict[str, Any] | None) -> tuple[int, int, int, str]:
         + int(bool(snapshot.get("claude_session_id")))
         + int(bool(snapshot.get("antigravity_conversation_id")))
         + int(bool(snapshot.get("deepseek_session_id")))
-        + int(bool(snapshot.get("native_agent_session_id")))
     )
     session_epoch = max(0, int(snapshot.get("session_epoch", 0) or 0))
     last_activity = str(snapshot.get("last_activity") or "")
@@ -274,9 +273,6 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
     if not merged.get("antigravity_conversation_id"):
         merged.pop("antigravity_conversation_id", None)
     merged.pop("kimi_session_id", None)
-    if not merged.get("native_agent_session_id"):
-        merged.pop("native_agent_session_id", None)
-    merged.pop("native_agent_server_key", None)
     if not merged.get("active_conversation_id"):
         merged.pop("active_conversation_id", None)
     merged.pop("managed_prompt_hash_seen", None)
@@ -312,7 +308,7 @@ def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[
     """加载指定会话的 session 信息
     
     Returns:
-        dict: 包含 codex_session_id, claude_session_id, native_agent_session_id
+        dict: 包含 CLI 会话绑定和工作目录
         None: 如果没有找到
     """
     _flush_live_session_if_available(bot_id, user_id, agent_id)
@@ -387,9 +383,7 @@ def migrate_local_history_snapshot(data: dict[str, Any] | None, *, default_worki
     next_data["claude_session_id"] = None
     next_data["antigravity_conversation_id"] = None
     next_data["deepseek_session_id"] = None
-    next_data["native_agent_session_id"] = None
     next_data.pop("kimi_session_id", None)
-    next_data.pop("native_agent_server_key", None)
     next_data["claude_session_initialized"] = False
     next_data.pop("running_user_text", None)
     next_data.pop("running_preview_text", None)
@@ -404,7 +398,6 @@ def save_session(
     user_id: int,
     codex_session_id: Optional[str] = None,
     claude_session_id: Optional[str] = None,
-    native_agent_session_id: Optional[str] = None,
     working_dir: Optional[str] = None,
     browse_dir: Optional[str] = None,
     history: Optional[list[dict]] = None,
@@ -435,8 +428,6 @@ def save_session(
         session_data["antigravity_conversation_id"] = antigravity_conversation_id
     if deepseek_session_id:
         session_data["deepseek_session_id"] = deepseek_session_id
-    if native_agent_session_id:
-        session_data["native_agent_session_id"] = native_agent_session_id
     if isinstance(working_dir, str) and working_dir:
         session_data["working_dir"] = working_dir
     if isinstance(browse_dir, str) and browse_dir:

@@ -193,10 +193,6 @@ function resolveVendorChunk(id: string) {
     return 'motion-vendor';
   }
 
-  if (packageName === '@ag-ui/core' || packageName === 'zod') {
-    return 'ag-ui-vendor';
-  }
-
   if (packageName === 'clsx' || packageName === 'tailwind-merge') {
     return 'ui-vendor';
   }

@@ -20,7 +20,7 @@ type Props = {
   tierConfigs?: ClusterTierConfigs;
   cliParamsByType?: Partial<Record<string, CliParamsPayload>>;
   inheritedCliType?: CliType | string;
-  nativeRuntime?: boolean;
+
   onTierConfigChange?: (tier: TierKey, next: ClusterTierConfig) => void;
 };
 
@@ -95,7 +95,7 @@ export function ClusterModelTiersPanel({
   tierConfigs,
   cliParamsByType = {},
   inheritedCliType = "codex",
-  nativeRuntime = false,
+
   onTierConfigChange,
 }: Props) {
   const hasTierCliConfig = Boolean(onTierConfigChange || tierConfigs);
@@ -128,11 +128,7 @@ export function ClusterModelTiersPanel({
       <p className="text-[11px] leading-4 text-[var(--muted)]">
         每档可选择执行 CLI、模型和思考深度；留空时继承所选 CLI 配置。
       </p>
-      {nativeRuntime && hasTierCliConfig ? (
-        <p role="alert" className="text-xs text-[var(--feedback-error-text-deep)]">
-          原生 Agent/Pi Bot 不支持为集群档位配置 CLI。请清空已有的执行 CLI 后再保存。
-        </p>
-      ) : null}
+
       <div className="divide-y divide-[var(--workbench-hairline)]">
         {TIER_LABELS.map((tier) => {
           const config: ClusterTierConfig = {
@@ -163,7 +159,7 @@ export function ClusterModelTiersPanel({
                   <select
                     aria-label={`${tier.label}执行 CLI`}
                     value={config.cliType}
-                    disabled={disabled || nativeRuntime}
+                    disabled={disabled}
                     onChange={(event) => updateTier(tier.key, {
                       cliType: event.target.value,
                       model: "",
@@ -229,7 +225,7 @@ export function ClusterModelTiersPanel({
                   <input
                     aria-label={`${tier.label} CLI 路径`}
                     value={config.cliPath}
-                    disabled={disabled || nativeRuntime}
+                    disabled={disabled}
                     placeholder="留空使用所选 CLI 默认路径"
                     onChange={(event) => updateTier(tier.key, { cliPath: event.target.value })}
                     className="mt-1.5 w-full h-8 min-w-0 rounded-[var(--radius-control)] border border-[var(--workbench-hairline)] bg-[var(--bg)] px-2.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent-outline)] focus:ring-2 focus:ring-[var(--workbench-focus-ring)] disabled:opacity-60"

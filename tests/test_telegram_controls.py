@@ -50,32 +50,6 @@ async def test_config_command_queries_and_updates_model_reasoning_and_cluster(ga
 
 
 @pytest.mark.asyncio
-async def test_native_config_command_uses_model_and_reasoning_api(gateway, monkeypatch):
-    profile = gateway.manager.get_profile("dev")
-    profile.supported_execution_modes = ["native_agent"]
-    profile.default_execution_mode = "native_agent"
-    models = {
-        "items": [{
-            "id": "openai/gpt-5",
-            "label": "GPT-5",
-            "reasoning_efforts": ["low", "high"],
-            "default_reasoning_effort": "low",
-        }],
-        "selected_model": "openai/gpt-5",
-        "selected_reasoning_effort": "low",
-    }
-    update_model = AsyncMock(return_value=models)
-    monkeypatch.setattr(api_service, "get_native_agent_models_payload", lambda *_args: models)
-    monkeypatch.setattr(api_service, "update_bot_native_agent_model", update_model)
-
-    await gateway.receive_update(update(1, "/config dev model openai/gpt-5"))
-    await gateway.receive_update(update(2, "/config dev reasoning high"))
-
-    assert update_model.await_args_list[0].args[1:] == ("dev", "openai/gpt-5", "low")
-    assert update_model.await_args_list[1].args[1:] == ("dev", "openai/gpt-5", "high")
-
-
-@pytest.mark.asyncio
 async def test_select_reply_and_final_buttons_keep_original_target(gateway, monkeypatch):
     calls = install_stream(monkeypatch, [done()])
     await gateway.receive_update(update(1, "/start"))
@@ -269,7 +243,7 @@ async def test_stop_confirmation_binds_exact_snapshot_and_deduplicates(gateway, 
 
 @pytest.mark.asyncio
 async def test_status_displays_child_tasks_and_unknown_context(gateway, monkeypatch):
-    snapshot = {"conversation_id": None, "execution_mode": "native_agent", "phase": "running",
+    snapshot = {"conversation_id": None, "execution_mode": "cli", "phase": "running",
                 "execution_id": None, "turn_id": None, "cluster_run_id": None,
                 "cluster_task_ids": ["child-1"], "context_usage": None}
     monkeypatch.setattr(api_service, "get_conversation_control_snapshot", AsyncMock(return_value=snapshot))

@@ -139,13 +139,8 @@ def prepare_new(args, release: Path) -> int:
         root = args.repo_root
         os.environ.update(WEB_ENABLED="true", PYTHONUTF8="1", PYTHONNOUSERSITE="1",
                           TCB_DATA_DIR=str(root / "data/orbit-safe-claw"),
-                          PI_AGENT_SETTINGS=str(root / "data/pi-home/.pi/agent/settings.json"),
-                          PI_AGENT_MODELS=str(root / "data/pi-home/.pi/agent/models.json"),
-                          NATIVE_AGENT_PI_HOME=str(root / "data/pi-home"), NATIVE_AGENT_ENABLED="true",
-                          NATIVE_AGENT_PI_COMMAND=str(root / "tools/pi/pi.cmd"),
-                          NATIVE_AGENT_COMMAND=str(root / "tools/pi/pi.cmd"),
                           TCB_CLUSTER_MCP_CONFIG=str(root / ".tcb/cluster-mcp/config.json"))
-        entries = [root / name for name in ("runtime/node", "tools/pi", "tools/pi/node_modules/.bin",
+        entries = [root / name for name in ("runtime/node",
                                             "tools/git/cmd", "tools/git/bin", "tools/git/usr/bin", "tools/git/mingw64/bin")]
         os.environ["PATH"] = os.pathsep.join([*(str(path) for path in entries), os.environ.get("PATH", "")])
     from bot.update_state import UpdateStore

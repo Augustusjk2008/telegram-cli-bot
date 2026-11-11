@@ -527,13 +527,17 @@ def test_portable_handoff_with_real_non_listening_host_processes(installation, m
 @pytest.mark.parametrize("portable", [False, True])
 def test_legacy_rollback_authenticates_actual_child_and_restored_frontend(installation, monkeypatch, portable):
     root, store = installation
+    monkeypatch.setenv("TCB_TEST_PORTABLE_SETTING", "inherited")
+    monkeypatch.setenv("TCB_TEST_PORTABLE_REMOVED", "inherited")
     web = root / "bot/web"
     web.mkdir()
     (web / "__init__.py").write_text("")
     (web / "server.py").write_text('''import json,os
 class Response:
     def __init__(self):
-        self.text = json.dumps(dict(ok=True, instance_id='instance-' + str(os.getpid()), base_path='/node/test'))
+        self.text = json.dumps(dict(ok=True, instance_id='instance-' + str(os.getpid()), base_path='/node/test',
+            launcher_setting=os.environ.get('TCB_TEST_PORTABLE_SETTING'),
+            launcher_removed=os.environ.get('TCB_TEST_PORTABLE_REMOVED'), launcher_path=os.environ.get('PATH')))
 class WebApiServer:
     async def health(self, request): return Response()
 ''')
@@ -550,6 +554,18 @@ time.sleep(60)
     if portable:
         (root / "runtime").mkdir()
         (root / "runtime/portable_bootstrap.py").write_text("import runpy\nrunpy.run_module('bot', run_name='__main__')\n")
+        (root / "start.ps1").write_text('''function Prepend-Path {
+    param([string[]]$Entries)
+    $env:Path = ($Entries -join ';') + ';' + $env:Path
+}
+function Set-PortableRuntimeEnv {
+    param([string]$PackageRoot)
+    $env:TCB_TEST_PORTABLE_SETTING = Join-Path $PackageRoot 'data/settings.json'
+    Remove-Item Env:TCB_TEST_PORTABLE_REMOVED
+}
+Prepend-Path -Entries @((Join-Path $scriptDir 'tools'))
+throw 'The full launcher must not run during recovery'
+''')
     (root / "front/dist/assets").mkdir(parents=True)
     (root / "front/dist/index.html").write_text('<script src="/old-hub/node/test/assets/old.js"></script>')
     (root / "front/dist/assets/old.js").write_text("old frontend")
@@ -577,6 +593,12 @@ time.sleep(60)
         assert payload["version"] == "1.0.0" and payload["update_health_token"]
         assert payload["instance_id"] not in store.read()["job"]["rejected_instance_ids"]
         assert store.read()["job"]["phase"] == "rolled_back"
+        if portable and os.name == "nt":
+            assert payload["launcher_setting"] == str(root / "data/settings.json")
+            assert payload["launcher_removed"] is None
+            assert payload["launcher_path"].split(os.pathsep)[0] == str(root / "tools")
+        else:
+            assert payload["launcher_setting"] == payload["launcher_removed"] == "inherited"
     finally:
         for child in children:
             runner._stop_child(child)
@@ -680,28 +702,27 @@ def test_bootstrap_never_applies_while_host_still_answers(monkeypatch):
         bootstrap._require_stopped("http://127.0.0.1:9999/api/health")
 
 
-def test_legacy_baseline_preserves_configs_and_rejects_modified_managed_extensions(tmp_path):
+def test_legacy_baseline_preserves_configs_and_rejects_modified_program_files(tmp_path):
     from scripts.update_package import ownership_plan
     repo = tmp_path / "old-install"
     repo.mkdir()
     (repo / "VERSION").write_text("1.0.0")
     (repo / ".env").write_text("private")
-    extension = "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"
-    (repo / extension).parent.mkdir(parents=True)
-    (repo / extension).write_text("official-old")
+    program = "bot/main.py"
+    (repo / program).parent.mkdir(parents=True)
+    (repo / program).write_text("official-old")
     package = tmp_path / "old.zip"
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr("VERSION", "1.0.0")
         archive.writestr(".env", "public-default")
-        archive.writestr("data/pi-home/.pi/agent/models.json", "public-default")
-        archive.writestr(extension, "official-old")
+        archive.writestr("data/settings.json", "public-default")
+        archive.writestr(program, "official-old")
     bootstrap.establish_baseline(repo, package, bootstrap.digest(package), tmp_path / "work")
     baseline = json.loads((repo / ".update-baseline.json").read_text())
-    assert set(baseline["files"]) == {"VERSION", extension}
-    target = {"files": {"VERSION": hashlib.sha256(b"2.0.0").hexdigest(), extension: hashlib.sha256(b"official-new").hexdigest()},
-              "managed_data_files": [extension]}
-    assert extension in ownership_plan(repo, target)[0]
-    (repo / extension).write_text("user-customized")
+    assert set(baseline["files"]) == {"VERSION", program}
+    target = {"files": {"VERSION": hashlib.sha256(b"2.0.0").hexdigest(), program: hashlib.sha256(b"official-new").hexdigest()}}
+    assert program in ownership_plan(repo, target)[0]
+    (repo / program).write_text("user-customized")
     with pytest.raises(ValueError, match="冲突"):
         ownership_plan(repo, target)
     assert (repo / ".env").read_text() == "private"

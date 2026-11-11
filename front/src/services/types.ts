@@ -10,7 +10,7 @@ export type {
 } from "../theme/types";
 
 export type CliType = "claude" | "codex" | "codex_server" | "antigravity" | "deepseek";
-export type ChatExecutionMode = "cli" | "native_agent";
+export type ChatExecutionMode = "cli";
 export type BotStatus = "running" | "busy" | "unread" | "offline";
 export type BotServiceStatus = "online" | "offline";
 export type BotActivityStatus = "idle" | "busy";
@@ -467,102 +467,6 @@ export type ClaudeUsageStatsQuery = CodexUsageStatsQuery;
 export type ClaudeUsageStatsRange = CodexUsageStatsRange;
 export type ClaudeUsageStats = CodexUsageStats;
 
-export type NativeAgentConfigView = {
-  provider: string;
-  model: string;
-  piAgent: string;
-  baseUrl?: string;
-  hasApiKey?: boolean;
-  apiKeyMasked?: string;
-  reasoningEffort?: string;
-  thinkingDepth?: string;
-};
-
-export type NativeAgentConfigInput = {
-  provider: string;
-  model: string;
-  piAgent: string;
-  baseUrl?: string;
-  apiKey?: string;
-  clearApiKey?: boolean;
-  reasoningEffort?: string;
-  thinkingDepth?: string;
-};
-
-export type NativeAgentModelOption = {
-  id: string;
-  provider: string;
-  model: string;
-  name: string;
-  label: string;
-  contextWindow?: number;
-  outputLimit?: number;
-  reasoningEfforts?: string[];
-  defaultReasoningEffort?: string;
-};
-
-export type NativeAgentPreflightCheck = {
-  key: string;
-  ok: boolean;
-  severity: "info" | "warning" | "error" | string;
-  message: string;
-  fix?: string;
-  path?: string;
-  command?: string;
-  version?: string;
-};
-
-export type NativeAgentPreflightResult = {
-  ok: boolean;
-  code: string;
-  message: string;
-  platform: string;
-  checks: NativeAgentPreflightCheck[];
-};
-
-export type NativeAgentConfigPayload = {
-  config: Record<string, unknown>;
-  backend: string;
-  configPath: string;
-  modelsPath?: string;
-  workspaceHistoryEnabled: boolean;
-  models: NativeAgentModelOption[];
-  selectedModel: string;
-  selectedReasoningEffort?: string;
-  needsRestart?: boolean;
-  preflight?: NativeAgentPreflightResult;
-};
-
-export type NativeAgentModelsPayload = {
-  items: NativeAgentModelOption[];
-  selectedModel: string;
-  selectedReasoningEffort?: string;
-};
-
-export type NativeAgentModelUpdateResult = NativeAgentModelsPayload & {
-  bot?: BotSummary;
-};
-
-export type NativeAgentModelUpdateOptions = {
-  reasoningEffort?: string;
-};
-
-export type NativeAgentDraft = NativeAgentConfigView & {
-  baseUrl: string;
-  hasApiKey: boolean;
-  apiKeyMasked: string;
-  apiKey: string;
-  clearApiKey: boolean;
-};
-
-export type NativeAgentConfig = NativeAgentConfigView;
-
-export type BotExecutionConfigInput = {
-  supportedExecutionModes: ChatExecutionMode[];
-  defaultExecutionMode: ChatExecutionMode;
-  nativeAgent: NativeAgentConfigInput;
-};
-
 export type RemoteWorkspace = {
   platform?: "posix" | "windows";
   connectionId: string;
@@ -644,7 +548,6 @@ export type BotSummary = {
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
-  nativeAgent?: NativeAgentConfigView;
 };
 
 export type PromptPreset = {
@@ -756,7 +659,7 @@ export type ClusterStatus = {
     claude: ClusterMcpTargetStatus;
     deepseek?: ClusterMcpTargetStatus;
     antigravity?: ClusterMcpTargetStatus;
-    pi?: ClusterMcpTargetStatus;
+
     targets?: Record<string, ClusterMcpTargetStatus>;
     byCliType?: Record<string, ClusterMcpTargetStatus>;
   };
@@ -865,10 +768,7 @@ export type ClusterSetupPrepareResult = {
   installCommand: string[];
   verifyCommand: string[];
   removeCommand: string[];
-  piSettingsPath?: string;
-  piSettingsSnippet?: string;
-  piExtensionPath?: string;
-  piExtensionName?: string;
+
   selfTestCommand?: string[];
   workspaceMcpConfigPath?: string;
   workspaceMcpScope?: string;
@@ -893,8 +793,7 @@ export type ClusterSetupTarget = {
   installCommand?: string[];
   verifyCommand?: string[];
   removeCommand?: string[];
-  piExtensionPath?: string;
-  piExtensionName?: string;
+
   selfTestCommand?: string[];
   workspaceMcpConfigPath?: string;
   workspaceMcpScope?: string;
@@ -1176,7 +1075,6 @@ export type BotOverview = {
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
   executionMode?: ChatExecutionMode;
-  nativeAgent?: NativeAgentConfigView;
 };
 
 export type ChatTraceEvent = {
@@ -1271,13 +1169,9 @@ export type ChatMessageMetaInfo = {
   endlessEvents?: ChatEndlessEvent[];
   endlessContinueCount?: number;
   endlessGroupId?: string;
-  agUiRunState?: unknown;
-  tracePresentation?: "native_agent_flat" | "generic";
-  workspaceHistoryHead?: string;
-  linearIndex?: number;
-  rollbackSupported?: boolean;
-  degraded?: boolean;
-  degradedReason?: string;
+
+  tracePresentation?: "generic";
+
   voice?: VoiceTaskBinding;
 };
 
@@ -1373,46 +1267,6 @@ export type HistoryDeltaOptions = AgentScopedOptions & {
   cursor?: string;
 };
 
-export type NativeAgentHistoryFileStatus = "added" | "modified" | "deleted" | "renamed" | "copied" | "unknown";
-
-export type NativeAgentHistoryChangedFile = {
-  path: string;
-  oldPath: string;
-  status: NativeAgentHistoryFileStatus | string;
-  additions: number;
-  deletions: number;
-  binary: boolean;
-};
-
-export type NativeAgentHistoryChangesPayload = {
-  conversationId: string;
-  turnId: string;
-  linearIndex: number;
-  baseHead: string;
-  head: string;
-  files: NativeAgentHistoryChangedFile[];
-  discarded?: boolean;
-  message?: string;
-};
-
-export type NativeAgentHistoryDiffPayload = {
-  conversationId: string;
-  turnId: string;
-  path: string;
-  oldPath: string;
-  status: NativeAgentHistoryFileStatus | string;
-  diff: string;
-  truncated?: boolean;
-  binary?: boolean;
-};
-
-export type NativeAgentHistoryRollbackResult = {
-  conversationId: string;
-  currentTurnId: string;
-  rollbackSupported: boolean;
-  message: string;
-};
-
 export type ConversationSummary = {
   id: string;
   title: string;
@@ -1426,11 +1280,7 @@ export type ConversationSummary = {
   agentId?: string;
   workingDir: string;
   nativeSource?: ChatMessageNativeSource;
-  workspaceHistoryHead?: string;
-  linearIndex?: number;
-  rollbackSupported?: boolean;
-  degraded?: boolean;
-  degradedReason?: string;
+
   clusterTeam?: ClusterTeam;
   clusterTeamRevision?: number;
   createdAt: string;
@@ -1540,7 +1390,7 @@ export type ChatSendOptions = {
   visibleText?: string;
   agentId?: string;
   executionMode?: ChatExecutionMode;
-  soloMode?: boolean;
+
   endlessMode?: boolean;
   endlessGroupId?: string;
   endlessParentMessageId?: string;
@@ -1561,12 +1411,6 @@ export type SteerMessageResult = {
   userMessageId?: string;
   conversationId?: string;
   message?: ChatMessage;
-};
-
-export type NativeAgentPermissionReplyOptions = AgentScopedOptions & {
-  approved: boolean;
-  message?: string;
-  value?: unknown;
 };
 
 export type BrowserNotificationPermission = NotificationPermission | "unsupported";
@@ -2878,7 +2722,6 @@ export type CreateBotInput = {
   bypassApprovalAndSandbox?: boolean;
   supportedExecutionModes?: ChatExecutionMode[];
   defaultExecutionMode?: ChatExecutionMode;
-  nativeAgent?: NativeAgentConfigInput;
 };
 
 export type PublicExposureSnapshot = {

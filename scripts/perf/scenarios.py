@@ -57,15 +57,6 @@ class ScenarioOutcome:
 ScenarioFunction = Callable[[ScenarioConfig], Awaitable[ScenarioOutcome]]
 
 
-def deterministic_chunks(*, seed: int, count: int, min_size: int = 8, max_size: int = 48) -> list[str]:
-    rng = random.Random(seed)
-    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-    return [
-        "".join(rng.choice(alphabet) for _ in range(rng.randint(min_size, max_size)))
-        for _ in range(count)
-    ]
-
-
 async def resolve_idle_probe(probe: IdleProbe | None) -> dict[str, bool]:
     if probe is None:
         return {"probe_available": False}
@@ -73,78 +64,6 @@ async def resolve_idle_probe(probe: IdleProbe | None) -> dict[str, bool]:
     if inspect.isawaitable(result):
         result = await result
     return {str(name): bool(value) for name, value in result.items()}
-
-
-async def run_pi_scenario(config: ScenarioConfig) -> ScenarioOutcome:
-    from bot.native_agent.pi_turn_stream import PiTurnChannel
-
-    started = time.monotonic()
-    delta_count = 10_000 if config.profile == "stress" else 1_000
-    chunks = deterministic_chunks(seed=config.seed, count=delta_count)
-
-    async def producer():
-        yield {"type": "meta", "native_session_id": "perf-session-1"}
-        for index, chunk in enumerate(chunks):
-            await asyncio.sleep(0)
-            yield {"type": "delta", "event_id": f"delta-{index}", "text": chunk}
-        yield {
-            "type": "done",
-            "turn_id": "perf-turn-1",
-            "assistant_message_id": "perf-message-1",
-        }
-
-    channel = PiTurnChannel(producer())
-    received: list[dict[str, object]] = []
-    try:
-        received = [event async for event in channel.events()]
-        await channel.wait_finished()
-    finally:
-        await channel.close()
-
-    received_chunks = [str(event.get("text") or "") for event in received if event.get("type") == "delta"]
-    event_ids = [str(event.get("event_id") or "") for event in received if event.get("event_id")]
-    sequences = [int(event.get("sequence") or 0) for event in received]
-    expected_sha = hashlib.sha256("".join(chunks).encode()).hexdigest()
-    actual_sha = hashlib.sha256("".join(received_chunks).encode()).hexdigest()
-    checks = {
-        "final_text_sha_matches": actual_sha == expected_sha,
-        "delta_ids_exactly_once": len(event_ids) == delta_count and len(set(event_ids)) == delta_count,
-        "sequences_contiguous": sequences == list(range(1, len(sequences) + 1)),
-        "done_exactly_once": sum(event.get("type") == "done" for event in received) == 1,
-        "turn_id_exactly_once": sum(event.get("turn_id") == "perf-turn-1" for event in received) == 1,
-        "assistant_message_id_exactly_once": sum(
-            event.get("assistant_message_id") == "perf-message-1" for event in received
-        ) == 1,
-        "no_gap": all(event.get("type") != "gap" for event in received),
-    }
-
-    def idle_probe() -> Mapping[str, bool]:
-        diagnostics = channel.diagnostics()
-        return {
-            "pi_turn_finished": bool(diagnostics["finished"]),
-            "pi_turn_no_consumers": int(diagnostics["active_consumers"]) == 0,
-            "pi_turn_replay_bounded": (
-                int(diagnostics["replay_events"]) <= int(diagnostics["replay_max_events"])
-                and int(diagnostics["replay_bytes"]) <= int(diagnostics["replay_max_bytes"])
-            ),
-        }
-
-    return ScenarioOutcome(
-        name="pi",
-        passed=all(checks.values()),
-        coverage="boundary",
-        duration_seconds=time.monotonic() - started,
-        metrics={
-            "seed": config.seed,
-            "delta_count": delta_count,
-            "expected_sha256": expected_sha,
-            "actual_sha256": actual_sha,
-            "diagnostics": channel.diagnostics(),
-            "public_boundary": "PiTurnChannel",
-        },
-        checks=checks,
-        idle_probe=idle_probe,
-    )
 
 
 def evaluate_terminal_timing(
@@ -551,7 +470,6 @@ async def run_git_scenario(config: ScenarioConfig) -> ScenarioOutcome:
 
 
 SCENARIOS: dict[str, ScenarioFunction] = {
-    "pi": run_pi_scenario,
     "terminal": run_terminal_scenario,
     "plugin": run_plugin_scenario,
     "search": run_search_scenario,

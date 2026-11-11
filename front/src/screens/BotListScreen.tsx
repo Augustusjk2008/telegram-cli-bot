@@ -12,7 +12,7 @@ import "../styles/agent-manager.css";
 import type { BotSummary } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { useBotManager } from "./useBotManager";
-import { countBotManagerStats, getRuntimeBackend, isBotArchived, isBotOffline, isMainBot, isNativeAgentGloballyEnabled } from "./botManagerModel";
+import { countBotManagerStats, isBotArchived, isBotOffline, isMainBot, } from "./botManagerModel";
 import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 
 const DELETE_WORKSPACE_CONFIRM_TEXT = "永久删除";
@@ -143,7 +143,7 @@ export function BotListScreen({
   const [deleteWorkspace, setDeleteWorkspace] = useState(false);
   const [deleteWorkspaceConfirmText, setDeleteWorkspaceConfirmText] = useState("");
   const [selectedAliases, setSelectedAliases] = useState<string[]>([]);
-  const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
+
   const {
     bots,
     loading,
@@ -164,22 +164,6 @@ export function BotListScreen({
     const available = new Set(bots.filter((bot) => canManage && !isMainBot(bot) && !isBotArchived(bot)).map((bot) => bot.alias));
     setSelectedAliases((current) => current.filter((alias) => available.has(alias)));
   }, [bots, canManage]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void client.getEnvConfig()
-      .then((snapshot) => {
-        if (cancelled) return;
-        setNativeAgentFeatureEnabled(isNativeAgentGloballyEnabled(snapshot));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setNativeAgentFeatureEnabled(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   async function saveRename(bot: BotSummary) {
     const renamed = await renameBot(bot, renameDrafts[bot.alias] || "");
@@ -308,7 +292,7 @@ export function BotListScreen({
                     </div>
                     <div className="am-type">
                       <span aria-hidden="true" className="am-type-mark" style={getBotIdentityTextStyle(bot.cliType)} />
-                      {getRuntimeBackend(bot) === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
+                      {`CLI / ${cliTypeLabel(bot.cliType)}`}
                     </div>
                   </div>
                   <div className="am-status shrink-0 justify-end">
@@ -442,7 +426,7 @@ export function BotListScreen({
             canManage={canManage}
             canCreateWorkdirDirectory={canCreateWorkdirDirectory}
             canRunUnsafeCli={canRunUnsafeCli}
-            nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
+
             onCreated={onBotCreated}
           />
         </section>

@@ -16,7 +16,7 @@ import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { AppLogo } from "../components/AppLogo";
 import { WORKBENCH_PANE_ICONS } from "./workbenchPaneIcons";
-import type { WorkbenchProductMode } from "./workbenchTypes";
+import type { } from "./workbenchTypes";
 
 type LayoutControlId = "sidebar" | "editor" | "terminal" | "chat";
 
@@ -41,9 +41,7 @@ type Props = {
   terminalVisible: boolean;
   chatVisible: boolean;
   availableLayoutControls?: LayoutControlId[];
-  productMode?: WorkbenchProductMode;
-  soloAvailable?: boolean;
-  onProductModeChange?: (mode: WorkbenchProductMode) => void;
+
   onToggleSidebar: () => void;
   onToggleEditor: () => void;
   onToggleTerminal: () => void;
@@ -68,9 +66,7 @@ export function WorkbenchHeader({
   terminalVisible,
   chatVisible,
   availableLayoutControls,
-  productMode,
-  soloAvailable = false,
-  onProductModeChange,
+
   onToggleSidebar,
   onToggleEditor,
   onToggleTerminal,
@@ -187,43 +183,7 @@ export function WorkbenchHeader({
         </button>
       ) : null}
       <div className="flex min-w-fit flex-1 items-center justify-end gap-1.5">
-        {productMode && onProductModeChange ? (
-          <div
-            aria-label="产品模式"
-            className="workbench-segmented inline-flex shrink-0"
-            role="group"
-          >
-            <button
-              type="button"
-              aria-label="构建模式"
-              aria-pressed={productMode === "build"}
-              onClick={() => onProductModeChange("build")}
-              className={clsx(
-                "h-7 px-2.5 text-xs font-medium transition-colors",
-                productMode === "build"
-                  ? "tcb-selected-accent"
-                  : "text-[var(--muted)] hover:text-[var(--text)]",
-              )}
-            >
-              IDE
-            </button>
-            <button
-              type="button"
-              aria-label="Solo 模式"
-              aria-pressed={productMode === "solo"}
-              disabled={!soloAvailable}
-              onClick={() => onProductModeChange("solo")}
-              className={clsx(
-                "h-7 px-2.5 text-xs font-medium transition-colors disabled:opacity-50",
-                productMode === "solo"
-                  ? "tcb-selected-accent"
-                  : "text-[var(--muted)] hover:text-[var(--text)]",
-              )}
-            >
-              Solo
-            </button>
-          </div>
-        ) : null}
+
         {announcementAction ? (
           <div className="flex items-center">{announcementAction}</div>
         ) : null}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -531,7 +532,7 @@ async def test_remote_bot_persistence_keeps_local_runtime_separate(tmp_path, mon
     storage.write_text('{"bots": []}', encoding="utf-8")
     manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
     profile = await manager.add_bot(
-        "remote", supported_execution_modes=["native_agent"], default_execution_mode="native_agent",
+        "remote", cli_path=sys.executable,
         remote_workspace={**target, "password": "must-not-persist"},
     )
     assert Path(profile.working_dir).is_dir()
@@ -565,7 +566,6 @@ async def test_existing_remote_bot_update_checks_draft_owner_and_resets_session(
     control_dir = profile.working_dir
     session = get_session_for_alias(server.manager, "main", auth.user_id)
     session.codex_session_id = "codex-old"
-    session.native_agent_session_id = "native-old"
     session.active_conversation_id = "conversation-old"
     prior_epoch = session.session_epoch
     old_bridge = prepare_remote_chat(profile, "http://127.0.0.1:8765")
@@ -631,7 +631,6 @@ async def test_existing_remote_bot_update_checks_draft_owner_and_resets_session(
     assert profile.working_dir == control_dir
     assert profile.remote_workspace == NEW_CONFIG
     assert session.codex_session_id is None
-    assert session.native_agent_session_id is None
     assert session.active_conversation_id is None
     assert session.session_epoch == prior_epoch + 1
     assert NEW_CONFIG["host"] in (Path(control_dir) / "AGENTS.md").read_text(encoding="utf-8")
@@ -647,7 +646,7 @@ async def test_managed_remote_bot_update_persists_same_control_directory(tmp_pat
     storage.write_text('{"bots": []}', encoding="utf-8")
     manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
     profile = await manager.add_bot(
-        "remote", supported_execution_modes=["native_agent"], default_execution_mode="native_agent",
+        "remote", cli_path=sys.executable,
         remote_workspace=CONFIG,
     )
     control_dir = profile.working_dir
@@ -667,7 +666,7 @@ async def test_failed_remote_bot_save_restores_profile_and_instructions(tmp_path
     storage.write_text('{"bots": []}', encoding="utf-8")
     manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
     profile = await manager.add_bot(
-        "remote", supported_execution_modes=["native_agent"], default_execution_mode="native_agent",
+        "remote", cli_path=sys.executable,
         remote_workspace=CONFIG,
     )
     instructions = Path(profile.working_dir) / "AGENTS.md"
@@ -707,7 +706,7 @@ async def test_ssh_login_confirmation_and_remote_creation_contract(tmp_path, mon
         response = await client.post("/api/remote/connections", json={**login, "host_key_fingerprint": CONFIG["host_key_fingerprint"]})
         assert response.status == 200
         response = await client.post("/api/admin/bots", json={
-            "alias": "remote", "supported_execution_modes": ["native_agent"], "default_execution_mode": "native_agent",
+            "alias": "remote", "cli_path": sys.executable,
             "remote_workspace": {"connection_id": CONFIG["connection_id"], "root": CONFIG["root"]},
         })
         data = await response.json()

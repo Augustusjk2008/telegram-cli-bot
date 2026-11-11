@@ -1,19 +1,19 @@
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
+import { ChevronRight, LoaderCircle, } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
 import type { ChatMessage, ChatMessageContextUsage } from "../services/types";
-import type { AgUiPermissionRequest, NativeAgentPermissionReply, NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
+
+import type { CliTranscriptEntry } from "../utils/cliTranscript";
 import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
 
 type Props = {
-  entries: NativeAgentTranscriptEntry[];
+  entries: CliTranscriptEntry[];
   resultText: string;
   originalResultText?: string;
   translationControl?: ReactNode;
   state?: ChatMessage["state"];
-  mode?: "native" | "cli";
   traceCount?: number;
   toolCallCount?: number;
   processCount?: number;
@@ -21,7 +21,7 @@ type Props = {
   isTraceLoading?: boolean;
   traceLoadError?: string;
   onLoadTrace?: () => void;
-  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
   onContinue?: () => void;
@@ -74,7 +74,7 @@ function compact(value: string, fallback: string) {
   return text || fallback;
 }
 
-function EntryBody({ entry }: { entry: NativeAgentTranscriptEntry }) {
+function EntryBody({ entry }: { entry: CliTranscriptEntry }) {
   const body = (entry.body || "").trim();
   if (!body) {
     return null;
@@ -86,7 +86,7 @@ function EntryBody({ entry }: { entry: NativeAgentTranscriptEntry }) {
   );
 }
 
-function shouldRenderEntrySummaryAsMarkdown(entry: NativeAgentTranscriptEntry) {
+function shouldRenderEntrySummaryAsMarkdown(entry: CliTranscriptEntry) {
   return entry.kind === "process" && entry.trace?.kind === "commentary";
 }
 
@@ -98,177 +98,36 @@ function stripThinkingBlocks(value: string) {
     .trim();
 }
 
-function stringValue(value: unknown) {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return "";
-}
-
-function permissionKind(permission?: AgUiPermissionRequest) {
-  return stringValue(permission?.uiKind).trim().toLowerCase() || "confirm";
-}
-
-function permissionOptions(permission?: AgUiPermissionRequest) {
-  return (permission?.options || []).map((option) => {
-    if (typeof option === "string" || typeof option === "number" || typeof option === "boolean") {
-      const value = String(option);
-      return { label: value, value };
-    }
-    if (option && typeof option === "object") {
-      const record = option as Record<string, unknown>;
-      const value = stringValue(record.value || record.id || record.label || record.name);
-      const label = stringValue(record.label || record.name || record.title || record.value || record.id) || value;
-      return { label, value };
-    }
-    return { label: "", value: "" };
-  }).filter((option) => option.value || option.label);
-}
-
-function PermissionEntry({
-  entry,
-  rowClassName,
-  replyingPermissionId,
-  onReply,
-}: {
-  entry: NativeAgentTranscriptEntry;
-  rowClassName: string;
-  replyingPermissionId: string;
-  onReply?: (reply: NativeAgentPermissionReply) => Promise<void>;
-}) {
-  const permission = entry.permission;
-  const permissionId = entry.permissionId || permission?.permissionId || "";
-  const pending = Boolean(entry.pending && permissionId);
-  const kind = permissionKind(permission);
-  const options = permissionOptions(permission);
-  const initialValue = stringValue(permission?.defaultValue) || stringValue(permission?.value) || options[0]?.value || "";
-  const [value, setValue] = useState(initialValue);
-  const disabled = Boolean(replyingPermissionId) || !pending;
-  const submit = (accepted: boolean, nextValue?: unknown) => {
-    if (!onReply || !permissionId || disabled) {
-      return;
-    }
-    void onReply({
-      requestId: permissionId,
-      accepted,
-      ...(typeof nextValue !== "undefined" ? { value: nextValue } : {}),
-    });
-  };
-
-  return (
-    <div key={entry.id} data-testid="native-agent-permission" className={rowClassName}>
-      <div className="whitespace-pre-wrap break-words text-[var(--text)]">{compact(entry.summary, "权限请求")}</div>
-      {pending && onReply ? (
-        kind === "select" || kind === "input" || kind === "editor" ? (
-          <div className="mt-2 flex flex-col gap-2">
-            {kind === "select" ? (
-              <select
-                aria-label="权限选项"
-                value={value}
-                disabled={disabled}
-                onChange={(event) => setValue(event.target.value)}
-                className="h-8 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)] disabled:opacity-60"
-              >
-                {options.map((option) => (
-                  <option key={option.value || option.label} value={option.value}>{option.label || option.value}</option>
-                ))}
-              </select>
-            ) : kind === "editor" ? (
-              <textarea
-                aria-label="权限输入"
-                value={value}
-                disabled={disabled}
-                placeholder={permission?.placeholder}
-                onChange={(event) => setValue(event.target.value)}
-                className="min-h-24 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 py-1.5 text-xs text-[var(--text)] disabled:opacity-60"
-              />
-            ) : (
-              <input
-                aria-label="权限输入"
-                value={value}
-                disabled={disabled}
-                placeholder={permission?.placeholder}
-                onChange={(event) => setValue(event.target.value)}
-                className="h-8 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-2 text-xs text-[var(--text)] disabled:opacity-60"
-              />
-            )}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => submit(true, value)}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Check className="h-3.5 w-3.5" />
-                提交
-              </button>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => submit(false)}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--feedback-error-border-light)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <X className="h-3.5 w-3.5" />
-                取消
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-1 flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => submit(true)}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--accent-outline)] px-2 text-xs text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Check className="h-3.5 w-3.5" />
-              允许一次
-            </button>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => submit(false)}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--feedback-error-border-light)] px-2 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <X className="h-3.5 w-3.5" />
-              拒绝
-            </button>
-          </div>
-        )
-      ) : null}
-    </div>
-  );
-}
-
 type TranscriptRenderItem =
-  | { kind: "entry"; entry: NativeAgentTranscriptEntry }
-  | { kind: "group"; groupIndex: number; entries: NativeAgentTranscriptEntry[] }
-  | { kind: "retry"; retryGroupIndex: number; attempt: number; entries: NativeAgentTranscriptEntry[] };
+  | { kind: "entry"; entry: CliTranscriptEntry }
+  | { kind: "group"; groupIndex: number; entries: CliTranscriptEntry[] }
+  | { kind: "retry"; retryGroupIndex: number; attempt: number; entries: CliTranscriptEntry[] };
 
-function isEndlessTranscriptEntry(entry: NativeAgentTranscriptEntry) {
+function isEndlessTranscriptEntry(entry: CliTranscriptEntry) {
   return entry.kind === "endless_error" || entry.kind === "endless_continue";
 }
 
-function cutsTranscriptGroup(entry: NativeAgentTranscriptEntry) {
+function cutsTranscriptGroup(entry: CliTranscriptEntry) {
   return (
     entry.kind === "process"
-    || ["permission", "error", "cancelled", "endless_error", "endless_continue"].includes(entry.kind)
+    || ["error", "cancelled", "endless_error", "endless_continue"].includes(entry.kind)
   );
 }
 
-function isToolResultEntry(entry: NativeAgentTranscriptEntry) {
+function isToolResultEntry(entry: CliTranscriptEntry) {
   return entry.trace?.kind === "tool_result" || entry.label === "工具结果";
 }
 
-function shouldWrapTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
+function shouldWrapTranscriptGroup(entries: CliTranscriptEntry[]) {
   if (entries.length <= 1) {
     return false;
   }
   return entries.some((entry) => entry.kind === "tool" || isToolResultEntry(entry));
 }
 
-function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): TranscriptRenderItem[] {
+function groupTranscriptEntries(entries: CliTranscriptEntry[]): TranscriptRenderItem[] {
   const grouped: TranscriptRenderItem[] = [];
-  let current: NativeAgentTranscriptEntry[] = [];
+  let current: CliTranscriptEntry[] = [];
   let groupIndex = 0;
   let retryGroupIndex = 0;
 
@@ -311,7 +170,7 @@ function groupTranscriptEntries(entries: NativeAgentTranscriptEntry[]): Transcri
   return grouped;
 }
 
-function describeTranscriptGroup(entries: NativeAgentTranscriptEntry[]) {
+function describeTranscriptGroup(entries: CliTranscriptEntry[]) {
   const toolCount = entries.filter((entry) => entry.kind === "tool").length;
   return `${entries.length} 条事件${toolCount > 0 ? ` · ${toolCount} 次工具` : ""}`;
 }
@@ -334,7 +193,7 @@ function describeRetryGroup(item: Extract<TranscriptRenderItem, { kind: "retry" 
   return `${attemptText}重试 · ${errorCount} 条错误 · ${continueCount} 次 Continue`;
 }
 
-function countEndlessRetries(entries: NativeAgentTranscriptEntry[]) {
+function countEndlessRetries(entries: CliTranscriptEntry[]) {
   const attempts = new Set<number>();
   let unknownErrors = 0;
   let unknownContinues = 0;
@@ -364,10 +223,10 @@ function countProcessEntries(items: TranscriptRenderItem[]) {
   }).length;
 }
 
-function entryCopyLabel(entry: NativeAgentTranscriptEntry) {
+function entryCopyLabel(entry: CliTranscriptEntry) {
   if (entry.kind === "process") return entry.trace?.kind === "reasoning" ? "思考" : "过程";
   if (entry.kind === "tool") return `工具: ${entry.label}`;
-  if (entry.kind === "permission") return "权限";
+
   if (entry.kind === "error") return "错误";
   if (entry.kind === "cancelled") return "已取消";
   if (entry.kind === "endless_error") return "无尽错误";
@@ -375,7 +234,7 @@ function entryCopyLabel(entry: NativeAgentTranscriptEntry) {
   return entry.label || "事件";
 }
 
-function formatTranscriptEntryForCopy(entry: NativeAgentTranscriptEntry) {
+function formatTranscriptEntryForCopy(entry: CliTranscriptEntry) {
   const summary = stripThinkingBlocks(compact(entry.summary, entry.label));
   const body = (entry.body || "").trim();
   const bodyText = body && body !== summary ? `\n${body}` : "";
@@ -400,7 +259,7 @@ function normalizedDisplayText(value: string) {
     .trim();
 }
 
-function isDuplicateFinalProcess(entry: NativeAgentTranscriptEntry, finalText: string) {
+function isDuplicateFinalProcess(entry: CliTranscriptEntry, finalText: string) {
   if (entry.kind !== "process" || !finalText) {
     return false;
   }
@@ -411,7 +270,7 @@ function isDuplicateFinalProcess(entry: NativeAgentTranscriptEntry, finalText: s
   return normalizedCopyText(entry.summary || "") === finalText;
 }
 
-function isDuplicateFinalError(entry: NativeAgentTranscriptEntry, finalText: string) {
+function isDuplicateFinalError(entry: CliTranscriptEntry, finalText: string) {
   if (entry.kind !== "error" || !finalText) {
     return false;
   }
@@ -505,14 +364,12 @@ function filterDuplicateFinalErrorItems(renderItems: TranscriptRenderItem[], res
 const TranscriptEntryRow = memo(function TranscriptEntryRow({
   entry,
   nested = false,
-  replyingPermissionId,
-  onReplyPermission,
+
   onFileLinkClick,
 }: {
-  entry: NativeAgentTranscriptEntry;
+  entry: CliTranscriptEntry;
   nested?: boolean;
-  replyingPermissionId: string;
-  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+
   onFileLinkClick?: (href: string) => void;
 }) {
   const rowClassName = nested ? "py-1" : "border-t border-[var(--workbench-hairline)] py-1";
@@ -543,16 +400,7 @@ const TranscriptEntryRow = memo(function TranscriptEntryRow({
       </div>
     );
   }
-  if (entry.kind === "permission") {
-    return (
-      <PermissionEntry
-        entry={entry}
-        rowClassName={rowClassName}
-        replyingPermissionId={replyingPermissionId}
-        onReply={onReplyPermission}
-      />
-    );
-  }
+
   return <ToolTranscriptEntryRow entry={entry} rowClassName={rowClassName} />;
 });
 
@@ -560,7 +408,7 @@ const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
   entry,
   rowClassName,
 }: {
-  entry: NativeAgentTranscriptEntry;
+  entry: CliTranscriptEntry;
   rowClassName: string;
 }) {
   const [expanded, setExpanded] = useState(!entry.collapsedByDefault);
@@ -584,28 +432,25 @@ const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
 
 const TranscriptGroupRow = memo(function TranscriptGroupRow({
   item,
-  replyingPermissionId,
-  onReplyPermission,
+
   onFileLinkClick,
 }: {
   item: Extract<TranscriptRenderItem, { kind: "group" }>;
-  replyingPermissionId: string;
-  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+
   onFileLinkClick?: (href: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const renderGroupEntry = useCallback((entry: NativeAgentTranscriptEntry) => (
+  const renderGroupEntry = useCallback((entry: CliTranscriptEntry) => (
     <TranscriptEntryRow
       entry={entry}
       nested
-      replyingPermissionId={replyingPermissionId}
-      onReplyPermission={onReplyPermission}
+
       onFileLinkClick={onFileLinkClick}
     />
-  ), [onFileLinkClick, onReplyPermission, replyingPermissionId]);
+  ), [onFileLinkClick,  ]);
   return (
     <details
-      data-testid="native-agent-event-group"
+      data-testid="cli-event-group"
       className="group border-t border-[var(--workbench-hairline)] py-1"
       onToggle={(event) => setExpanded(event.currentTarget.open)}
     >
@@ -632,28 +477,25 @@ const TranscriptGroupRow = memo(function TranscriptGroupRow({
 
 const RetryGroupRow = memo(function RetryGroupRow({
   item,
-  replyingPermissionId,
-  onReplyPermission,
+
   onFileLinkClick,
 }: {
   item: Extract<TranscriptRenderItem, { kind: "retry" }>;
-  replyingPermissionId: string;
-  onReplyPermission?: (reply: NativeAgentPermissionReply) => Promise<void>;
+
   onFileLinkClick?: (href: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const renderRetryEntry = useCallback((entry: NativeAgentTranscriptEntry) => (
+  const renderRetryEntry = useCallback((entry: CliTranscriptEntry) => (
     <TranscriptEntryRow
       entry={entry}
       nested
-      replyingPermissionId={replyingPermissionId}
-      onReplyPermission={onReplyPermission}
+
       onFileLinkClick={onFileLinkClick}
     />
-  ), [onFileLinkClick, onReplyPermission, replyingPermissionId]);
+  ), [onFileLinkClick,  ]);
   return (
     <details
-      data-testid="native-agent-retry-group"
+      data-testid="cli-retry-group"
       className="group border-t border-[var(--workbench-hairline)] py-1"
       open={expanded}
     >
@@ -684,13 +526,12 @@ const RetryGroupRow = memo(function RetryGroupRow({
   );
 });
 
-export function NativeAgentTranscript({
+export function CliTranscript({
   entries,
   resultText,
   originalResultText = resultText,
   translationControl,
   state,
-  mode = "native",
   traceCount,
   toolCallCount,
   processCount,
@@ -698,7 +539,7 @@ export function NativeAgentTranscript({
   isTraceLoading = false,
   traceLoadError = "",
   onLoadTrace,
-  onReplyPermission,
+
   onFileLinkClick,
   onCopyFinalAnswer,
   onContinue,
@@ -712,9 +553,9 @@ export function NativeAgentTranscript({
   endlessRetryAtMs,
   mobileLayout = false,
 }: Props) {
-  const [replyingPermissionId, setReplyingPermissionId] = useState("");
+
   const [traceExpanded, setTraceExpanded] = useState(false);
-  const collapseProcess = mode === "native" || mobileLayout || endlessActive;
+  const collapseProcess = mobileLayout || endlessActive;
   const totalTraceCount = typeof traceCount === "number" ? traceCount : entries.length;
   const hasCompleteTrace = totalTraceCount <= 0
     || traceLoaded === true
@@ -751,7 +592,7 @@ export function NativeAgentTranscript({
     collapseProcess
       ? displayRenderItems.filter((item) => (
           item.kind === "entry"
-          && (endlessActive ? ["permission"] : ["permission", "error", "cancelled"]).includes(item.entry.kind)
+          && (endlessActive ? [] : ["error", "cancelled"]).includes(item.entry.kind)
         ))
       : []
   ), [displayRenderItems, collapseProcess, endlessActive]);
@@ -759,7 +600,7 @@ export function NativeAgentTranscript({
     collapseProcess
       ? displayRenderItems.filter((item) => !(
           item.kind === "entry"
-          && (endlessActive ? ["permission"] : ["permission", "error", "cancelled"]).includes(item.entry.kind)
+          && (endlessActive ? [] : ["error", "cancelled"]).includes(item.entry.kind)
         ))
       : displayRenderItems
   ), [displayRenderItems, collapseProcess, endlessActive]);
@@ -770,44 +611,28 @@ export function NativeAgentTranscript({
   const shouldShowTraceDisclosure = shouldLazyLoadTrace
     || hasEndlessDetails
     || (collapseProcess && traceDetailRenderItems.length > 0);
-  const allowPermissionReply = mode === "native";
-
-  const replyPermission = useCallback(async (reply: NativeAgentPermissionReply) => {
-    if (!onReplyPermission || !reply.requestId || replyingPermissionId) {
-      return;
-    }
-    setReplyingPermissionId(reply.requestId);
-    try {
-      await onReplyPermission(reply);
-    } finally {
-      setReplyingPermissionId("");
-    }
-  }, [onReplyPermission, replyingPermissionId]);
 
   const renderTranscriptItem = useCallback((item: TranscriptRenderItem) => (
     item.kind === "entry" ? (
       <TranscriptEntryRow
         entry={item.entry}
-        replyingPermissionId={replyingPermissionId}
-        onReplyPermission={allowPermissionReply ? replyPermission : undefined}
+
         onFileLinkClick={onFileLinkClick}
       />
     ) : item.kind === "group" ? (
       <TranscriptGroupRow
         item={item}
-        replyingPermissionId={replyingPermissionId}
-        onReplyPermission={allowPermissionReply ? replyPermission : undefined}
+
         onFileLinkClick={onFileLinkClick}
       />
     ) : (
       <RetryGroupRow
         item={item}
-        replyingPermissionId={replyingPermissionId}
-        onReplyPermission={allowPermissionReply ? replyPermission : undefined}
+
         onFileLinkClick={onFileLinkClick}
       />
     )
-  ), [allowPermissionReply, onFileLinkClick, replyPermission, replyingPermissionId]);
+  ), [ onFileLinkClick,  ]);
 
   const renderTranscriptItems = (items: TranscriptRenderItem[]) => (
     items.map((item) => (
@@ -826,7 +651,7 @@ export function NativeAgentTranscript({
     ["process", "tool", "event"].includes(entry.kind) && stripThinkingBlocks(entry.summary).trim()
   ));
   const progressPreview = stripThinkingBlocks(latestProgress?.summary || visibleResultText).trim();
-  const progressStatus = entries.some((entry) => entry.kind === "permission" && entry.pending)
+  const progressStatus = entries.some((entry) => false)
     ? "等待授权"
     : latestProgress?.kind === "tool" ? `执行工具：${latestProgress.label}` : "执行中";
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
@@ -839,9 +664,9 @@ export function NativeAgentTranscript({
   );
 
   return (
-    <div data-testid="native-agent-transcript" className="min-w-0 text-sm text-[var(--text)]">
+    <div data-testid="cli-transcript" className="min-w-0 text-sm text-[var(--text)]">
       {mobileLayout && state === "streaming" ? (
-        <div data-testid="native-agent-streaming-status" role="status" className="flex min-w-0 items-start gap-1.5 py-1 text-xs text-[var(--muted)]">
+        <div data-testid="cli-streaming-status" role="status" className="flex min-w-0 items-start gap-1.5 py-1 text-xs text-[var(--muted)]">
           {endlessStreaming ? <EndlessTypingLabel retryAtMs={endlessRetryAtMs} /> : (
             <>
               <LoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--accent)]" />
@@ -854,7 +679,7 @@ export function NativeAgentTranscript({
         </div>
       ) : null}
       {shouldShowTraceDisclosure ? (
-        <section data-testid="native-agent-trace-summary" className={`border-b border-[var(--workbench-hairline)] ${mobileLayout ? "pb-1" : "pb-2"}`}>
+        <section data-testid="cli-trace-summary" className={`border-b border-[var(--workbench-hairline)] ${mobileLayout ? "pb-1" : "pb-2"}`}>
           <button
             type="button"
             data-chat-scroll-lock-on-expand="true"
@@ -895,7 +720,7 @@ export function NativeAgentTranscript({
       {alwaysVisibleRenderItems.length > 0 ? renderTranscriptItems(alwaysVisibleRenderItems) : null}
 
       {showFinalResult || showFinalActions ? (
-        <div data-testid="native-agent-final-result" className="chat-final-answer-compact border-t border-[var(--workbench-hairline)] pt-2">
+        <div data-testid="cli-final-result" className="chat-final-answer-compact border-t border-[var(--workbench-hairline)] pt-2">
           {showFinalResult && (state === "done" ? (
             <ChatMarkdownMessage content={visibleResultText} onFileLinkClick={onFileLinkClick} />
           ) : (
@@ -919,7 +744,7 @@ export function NativeAgentTranscript({
       ) : null}
       {!mobileLayout && state === "streaming" ? (
         <div
-          data-testid="native-agent-streaming-status"
+          data-testid="cli-streaming-status"
           role="status"
           className="flex items-center gap-2 border-t border-[var(--workbench-hairline)] py-2 text-sm text-[var(--muted)]"
         >

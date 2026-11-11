@@ -12,7 +12,7 @@ def _create_conversation(
     *,
     agent_id: str = "main",
     title: str = "主会话",
-    native_provider: str = "native_agent",
+    native_provider: str = "codex",
     cli_type: str = "codex",
     parent: str | None = None,
     assignment_revision: int | None = None,
@@ -110,7 +110,7 @@ def test_child_conversation_binding_can_be_found_by_parent_assignment_and_mode(t
         parent_conversation_id=parent,
         agent_id="cluster-slot-1",
         assignment_revision=3,
-        execution_mode="native_agent",
+        execution_mode="cli",
     )
 
     assert conversation["cluster_parent_conversation_id"] == parent
@@ -120,7 +120,7 @@ def test_child_conversation_binding_can_be_found_by_parent_assignment_and_mode(t
         parent_conversation_id=parent,
         agent_id="cluster-slot-1",
         assignment_revision=2,
-        execution_mode="native_agent",
+        execution_mode="cli",
     ) is None
 
 
@@ -184,7 +184,7 @@ def test_deactivating_child_conversations_preserves_history_but_prevents_runtime
         parent_conversation_id=parent,
         agent_id="cluster-slot-1",
         assignment_revision=1,
-        execution_mode="native_agent",
+        execution_mode="cli",
     ) is None
     assert child in {
         item["id"]

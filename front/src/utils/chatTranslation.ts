@@ -58,7 +58,7 @@ export function translatedMessageText(item: ChatMessage) {
     ? item.translation.text : item.text;
 }
 
-/** Both CLI meta/status and AG-UI RUN_STARTED/CUSTOM carry these extension fields. */
+/** CLI meta/status carry these translation fields. */
 export function mapUserTranslationUpdate(value: unknown): ChatStatusUpdate {
   if (!value || typeof value !== "object") return {};
   const event = value as Record<string, unknown>;

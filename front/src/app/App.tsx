@@ -42,8 +42,8 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { LoginScreen } from "../screens/LoginScreen";
 import { PersistentTerminalProvider } from "../terminal/PersistentTerminalProvider";
 import { AppearanceProvider, useAppearance } from "../theme/AppearanceProvider";
-import type { ChatWorkbenchStatus, WorkbenchProductMode } from "../workbench/workbenchTypes";
-import { soloModeStorageKey, type SoloSessionSnapshot } from "../workbench/soloTypes";
+import type { ChatWorkbenchStatus, } from "../workbench/workbenchTypes";
+
 import {
   APP_NAME,
   persistChatEnterToSend,
@@ -60,7 +60,6 @@ import {
   LazyGitScreen as GitScreen,
   LazyMobileDebugScreen as MobileDebugScreen,
   LazySettingsScreen as SettingsScreen,
-  LazySoloWorkbench as SoloWorkbench,
   LazyTerminalScreen as TerminalScreen,
 } from "./lazyScreens";
 import "../styles/tokens.css";
@@ -76,13 +75,7 @@ const EMPTY_ANNOUNCEMENT_STATE: AnnouncementListResult = {
   lastSeenId: "",
   hasUnseen: false,
 };
-function readStoredProductMode(accountKey: string, botAlias: string): WorkbenchProductMode | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const raw = window.localStorage.getItem(soloModeStorageKey(accountKey, botAlias));
-  return raw === "solo" || raw === "build" ? raw : null;
-}
+
 const lazyFallback = (
   <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted)]">
     正在加载...
@@ -271,9 +264,7 @@ function AppContent() {
   const [desktopChatStatusByBot, setDesktopChatStatusByBot] = useState<Record<string, ChatWorkbenchStatus>>({});
   const [desktopChatPaneVisible, setDesktopChatPaneVisible] = useState(true);
   const [remoteReconnectRevision, setRemoteReconnectRevision] = useState(0);
-  const [productModeByBot, setProductModeByBot] = useState<Record<string, WorkbenchProductMode>>({});
-  const [soloSessionSnapshotByBot, setSoloSessionSnapshotByBot] = useState<Record<string, SoloSessionSnapshot | null>>({});
-  const [soloHistoryRevisionByBot, setSoloHistoryRevisionByBot] = useState<Record<string, number>>({});
+
   const [isChatImmersive, setIsChatImmersive] = useState(false);
   const [isTerminalImmersive, setIsTerminalImmersive] = useState(false);
   const [announcementState, setAnnouncementState] = useState<AnnouncementListResult>(EMPTY_ANNOUNCEMENT_STATE);
@@ -340,28 +331,7 @@ function AppContent() {
     }
     : undefined, [accountKey, currentBot, currentBotSummary?.workingDir, remoteWorkspace?.connectionId, remoteWorkspace?.platform, remoteWorkspace?.root]);
   const chatInstanceKey = chatInstanceKeyFor(accountKey, currentBot);
-  const productModeKey = currentBot ? soloModeStorageKey(accountKey, currentBot) : "";
-  const currentBotSupportedExecutionModes = currentBotSummary?.supportedExecutionModes || [];
-  const soloAvailable = Boolean(
-    currentBotSupportedExecutionModes.includes("native_agent")
-    || currentBotSummary?.defaultExecutionMode === "native_agent",
-  );
-  const storedProductMode = currentBot
-    ? productModeByBot[productModeKey] || readStoredProductMode(accountKey, currentBot)
-    : null;
-  const productMode: WorkbenchProductMode = storedProductMode
-    ? (storedProductMode === "solo" && !soloAvailable ? "build" : storedProductMode)
-    : (
-      soloAvailable
-      && (
-        currentBotSummary?.defaultExecutionMode === "native_agent"
-        || (currentBotSupportedExecutionModes.length === 1 && currentBotSupportedExecutionModes[0] === "native_agent")
-      )
-        ? "solo"
-        : "build"
-    );
-  const soloSessionSnapshot = currentBot ? soloSessionSnapshotByBot[currentBot] || null : null;
-  const soloHistoryRevision = currentBot ? soloHistoryRevisionByBot[currentBot] || 0 : 0;
+
   const currentWorkspaceName = (currentBotSummary?.remoteWorkspace ? workspaceLabel(currentBotSummary) : "") || currentBotSummary?.workingDir.split(/[\\/]+/).filter(Boolean).pop()
     || currentBotSummary?.workingDir
     || "";
@@ -370,7 +340,7 @@ function AppContent() {
     && !showAdminCenter
     && (
       effectiveLayoutMode === "desktop"
-        ? (Boolean(remoteWorkspace) || productMode === "solo" || desktopChatPaneVisible)
+        ? (Boolean(remoteWorkspace) || desktopChatPaneVisible)
         : currentTab === "chat"
     )
     ? currentBot
@@ -402,32 +372,6 @@ function AppContent() {
     commitBotSelection(alias);
     setCurrentTab("chat");
     return true;
-  }
-
-  function handleProductModeChange(mode: WorkbenchProductMode) {
-    if (!currentBot) {
-      return;
-    }
-    const nextMode = mode === "solo" && !soloAvailable ? "build" : mode;
-    const key = soloModeStorageKey(accountKey, currentBot);
-    setProductModeByBot((prev) => (
-      prev[key] === nextMode ? prev : { ...prev, [key]: nextMode }
-    ));
-    try {
-      window.localStorage.setItem(key, nextMode);
-    } catch {
-      // Keep in-memory preference if storage is unavailable.
-    }
-  }
-
-  function bumpSoloHistoryRevision(alias: string | null = currentBot) {
-    if (!alias) {
-      return;
-    }
-    setSoloHistoryRevisionByBot((prev) => ({
-      ...prev,
-      [alias]: (prev[alias] || 0) + 1,
-    }));
   }
 
   async function openBotSwitcher(anchorRect?: DOMRect) {
@@ -757,7 +701,7 @@ function AppContent() {
     setUnreadBots([]);
     setMountedChatBots([]);
     setDesktopChatStatusByBot({});
-    setSoloHistoryRevisionByBot({});
+
     setDesktopChatPaneVisible(true);
     setLoginError("");
     setIsChatImmersive(false);
@@ -979,11 +923,7 @@ function AppContent() {
 
   function renderDesktopChatStack(options: {
     requestPreview?: (path: string) => void;
-    forcedExecutionMode?: "native_agent";
-    soloMode?: boolean;
-    soloHistoryRevision?: number;
-    onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
-    onSoloHistoryRollback?: () => void;
+
     currentVisible?: boolean;
   } = {}) {
     const currentVisible = options.currentVisible ?? desktopChatPaneVisible;
@@ -1006,11 +946,7 @@ function AppContent() {
                 enterToSend={chatEnterToSend}
                 onOpenBotSettings={() => openBotSettings(alias)}
                 onOpenGlobalPromptSettings={openAdminCenter}
-                forcedExecutionMode={instanceKey === chatInstanceKey ? options.forcedExecutionMode : undefined}
-                soloMode={instanceKey === chatInstanceKey ? options.soloMode : false}
-                soloHistoryRevision={instanceKey === chatInstanceKey ? options.soloHistoryRevision : undefined}
-                onSoloSessionInfoChange={instanceKey === chatInstanceKey ? options.onSoloSessionInfoChange : undefined}
-                onSoloHistoryRollback={instanceKey === chatInstanceKey ? options.onSoloHistoryRollback : undefined}
+
                 onRequestDesktopPreview={options.requestPreview}
                 onUnreadResult={recordBotCompletion}
                 onBotActivityChange={handleBotActivityChange}
@@ -1202,45 +1138,7 @@ function AppContent() {
       <>
         <PersistentTerminalProvider client={client}>
           <Suspense fallback={lazyFallback}>
-          {productMode === "solo" && !remoteWorkspace ? (
-            <SoloWorkbench
-              botAlias={currentBot}
-              client={client}
-              workspaceName={currentWorkspaceName}
-              branchName=""
-              viewMode={viewMode}
-              hasUnreadOtherBots={hasUnreadOtherBots}
-              announcementAction={announcementButton}
-              chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
-                requestPreview,
-                forcedExecutionMode: "native_agent",
-                soloMode: true,
-                soloHistoryRevision,
-                onSoloSessionInfoChange: (snapshot) => {
-                  setSoloSessionSnapshotByBot((prev) => (
-                    prev[currentBot] && JSON.stringify(prev[currentBot]) === JSON.stringify(snapshot)
-                      ? prev
-                      : { ...prev, [currentBot]: snapshot }
-                  ));
-                },
-                onSoloHistoryRollback: () => bumpSoloHistoryRevision(currentBot),
-                currentVisible: true,
-              })}
-              sessionSnapshot={soloSessionSnapshot}
-              soloHistoryRevision={soloHistoryRevision}
-              chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-              productMode={productMode}
-              soloAvailable={soloAvailable}
-              onProductModeChange={handleProductModeChange}
-              onSoloHistoryRollback={() => bumpSoloHistoryRevision(currentBot)}
-              onViewModeChange={setViewMode}
-              onOpenBotSwitcher={(anchorRect) => {
-                void openBotSwitcher(anchorRect);
-              }}
-              onLogout={handleLogout}
-            />
-          ) : (
-            <DesktopWorkbench
+          <DesktopWorkbench
               authToken={session?.token || ""}
               accountId={accountKey}
               botAlias={currentBot}
@@ -1267,9 +1165,7 @@ function AppContent() {
               hasUnreadOtherBots={hasUnreadOtherBots}
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-              productMode={remoteWorkspace ? "build" : productMode}
-              soloAvailable={!remoteWorkspace && soloAvailable}
-              onProductModeChange={remoteWorkspace ? undefined : handleProductModeChange}
+
               chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
                 requestPreview,
               })}
@@ -1291,7 +1187,6 @@ function AppContent() {
               onChatPaneVisibilityChange={handleDesktopChatPaneVisibilityChange}
               onRemoteReconnect={() => setRemoteReconnectRevision((revision) => revision + 1)}
             />
-          )}
           </Suspense>
         </PersistentTerminalProvider>
         {switcher}

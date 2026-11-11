@@ -1,7 +1,8 @@
+import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
 import { cliTypeLabel, suggestCliPath } from "../utils/cliType";
 import { startConversationAfterCliSwitch } from "../utils/conversationEvents";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
-import { RemoteReconnectButton } from "../components/RemoteConnectionForm";
+
 import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { clsx } from "clsx";
@@ -27,7 +28,7 @@ import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-import { NativeAgentConfigFields } from "../components/NativeAgentConfigFields";
+
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { clusterDraftEquals } from "../utils/clusterDraft";
 import { WebApiClientError } from "../services/types";
@@ -39,13 +40,11 @@ import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import type {
   BotClusterConfig,
   BotSummary,
-  ChatExecutionMode,
   CliType,
   CliParamsPayload,
   ClusterResizeBlockedData,
   ClusterResizeBlocker,
   ClusterStatus,
-  NativeAgentModelsPayload,
   UpdateBotWorkdirOptions,
   WorkdirChangeConflict,
 } from "../services/types";
@@ -53,16 +52,13 @@ import type { WebBotClient } from "../services/webBotClient";
 import {
   buildBulkActionPlan,
   countBotManagerStats,
-  DEFAULT_NATIVE_AGENT_DRAFT,
   detectBotIssues,
   draftFromBot,
-  getRuntimeBackend,
   getBotManagerStatus,
   getVisibleManagedBots,
   isBotOffline,
   isBotArchived,
   isMainBot,
-  isNativeAgentGloballyEnabled,
   type BulkAction,
   type BulkActionResult,
   type EditDraft,
@@ -115,26 +111,12 @@ function managerPillStatus(bot: BotSummary) {
 }
 
 function normalizeEditDraft(draft: EditDraft): EditDraft {
-  const providerInput = draft.nativeAgent.provider.trim();
-  const providerLooksLikeUrl = /^https?:\/\//i.test(providerInput);
-  const baseUrlInput = draft.nativeAgent.baseUrl.trim();
   return {
     alias: draft.alias.trim(),
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
     remoteWorkspace: draft.remoteWorkspace,
-    runtimeBackend: draft.runtimeBackend,
-    nativeAgent: {
-      ...DEFAULT_NATIVE_AGENT_DRAFT,
-      ...draft.nativeAgent,
-      provider: providerLooksLikeUrl ? "codeflow" : providerInput,
-      model: draft.nativeAgent.model.trim(),
-      piAgent: draft.nativeAgent.piAgent.trim(),
-      baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
-      apiKey: draft.nativeAgent.apiKey.trim(),
-      clearApiKey: Boolean(draft.nativeAgent.clearApiKey),
-    },
   };
 }
 
@@ -159,10 +141,6 @@ function clusterConfigFromBot(bot: BotSummary): BotClusterConfig {
 
 function cliPathPlaceholder(cliType: CliType) {
   return defaultCliPathForType(cliType);
-}
-
-function runtimeBackendLabel(runtimeBackend: ChatExecutionMode) {
-  return runtimeBackend === "native_agent" ? "原生 agent" : "CLI";
 }
 
 function clampInspectorWidth(width: number, availableWidth?: number) {
@@ -235,7 +213,7 @@ function EditPanel({
   canManage,
   canConfigureBot,
   canCreateWorkdirDirectory,
-  nativeAgentFeatureEnabled,
+
   onCancel,
   onSaved,
   onOpenConversation,
@@ -246,7 +224,7 @@ function EditPanel({
   canManage: boolean;
   canConfigureBot: boolean;
   canCreateWorkdirDirectory: boolean;
-  nativeAgentFeatureEnabled: boolean | null;
+
   onCancel: () => void;
   onSaved: (alias: string) => void;
   onOpenConversation: (alias: string) => void;
@@ -263,7 +241,7 @@ function EditPanel({
   const [clusterTimeoutDraft, setClusterTimeoutDraft] = useState(() => String(clusterConfigFromBot(bot).defaultTimeoutSeconds));
   const clusterScopeRef = useRef({ alias: bot.alias, saved: clusterConfigFromBot(bot) });
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
-  const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
+
   const [clusterSaving, setClusterSaving] = useState(false);
   const [clusterError, setClusterError] = useState("");
   const [clusterResizeBlocked, setClusterResizeBlocked] = useState<ClusterResizeBlockedData | null>(null);
@@ -272,8 +250,6 @@ function EditPanel({
     || clusterTimeoutDraft.trim() !== String(clusterConfig.defaultTimeoutSeconds);
   const dirty = !draftEquals(draft, draftFromBot(bot)) || clusterDirty;
   const directoryBrowserAlias = manager.bots.find((item) => isMainBot(item))?.alias || manager.bots[0]?.alias || "main";
-  const nativeAgentOptionVisible = nativeAgentFeatureEnabled !== false || draft.runtimeBackend === "native_agent";
-  const nativeRuntime = getRuntimeBackend(bot) === "native_agent";
 
   useEffect(() => {
     setDraft(draftFromBot(bot));
@@ -304,30 +280,18 @@ function EditPanel({
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
-    if (nativeAgentFeatureEnabled === false && draft.runtimeBackend !== "native_agent") {
-      return;
-    }
-    if (nativeAgentFeatureEnabled === false && draft.runtimeBackend === "native_agent" && getRuntimeBackend(bot) !== "native_agent") {
-      setDraft((prev) => ({ ...prev, runtimeBackend: "cli" }));
-    }
-  }, [bot, draft.runtimeBackend, nativeAgentFeatureEnabled]);
-
-  useEffect(() => {
     let cancelled = false;
     setClusterError("");
     setClusterStatus(null);
     setCliParams(null);
-    setNativeAgentModels(null);
     void Promise.all([
       manager.client.getClusterStatus(bot.alias),
-      nativeRuntime ? Promise.resolve(null) : manager.client.getCliParams(bot.alias),
-      nativeRuntime ? manager.client.getNativeAgentModels(bot.alias) : Promise.resolve(null),
+      manager.client.getCliParams(bot.alias),
     ])
-      .then(([nextCluster, nextCliParams, nextNativeAgentModels]) => {
+      .then(([nextCluster, nextCliParams]) => {
         if (!cancelled) {
           setClusterStatus(nextCluster);
           setCliParams(nextCliParams);
-          setNativeAgentModels(nextNativeAgentModels);
         }
       })
       .catch((err: Error) => {
@@ -338,13 +302,9 @@ function EditPanel({
     return () => {
       cancelled = true;
     };
-  }, [bot.alias, bot.cliType, bot.nativeAgent?.model, nativeRuntime, manager.client]);
+  }, [bot.alias, bot.cliType, manager.client]);
 
   function clusterReasoningOptions(model: string): string[] {
-    if (nativeRuntime) {
-      const effectiveModel = model || nativeAgentModels?.selectedModel || bot.nativeAgent?.model;
-      return nativeAgentModels?.items.find((item) => item.id === effectiveModel)?.reasoningEfforts ?? [];
-    }
     return cliParams?.schema.reasoning_effort?.enum ?? cliParams?.schema.effort?.enum ?? [];
   }
 
@@ -357,7 +317,7 @@ function EditPanel({
     const result = await manager.saveBotEdits(bot, draft, options);
     if (result.ok) {
       setPendingWorkdirConflict(null);
-      if (draft.runtimeBackend === "cli" && result.bot.cliType !== previousCliType) {
+      if (result.bot.cliType !== previousCliType) {
         try {
           await startConversationAfterCliSwitch(manager.client, result.bot.alias);
           onOpenConversation(result.bot.alias);
@@ -432,13 +392,7 @@ function EditPanel({
       modelTiers: { ...clusterDraft.modelTiers },
       reasoningEfforts: { ...clusterDraft.reasoningEfforts },
     };
-    if (nativeRuntime && nativeAgentModels) {
-      for (const tier of ["low", "medium", "high", "professional"] as const) {
-        if (!clusterReasoningOptions(next.modelTiers[tier]).includes(next.reasoningEfforts[tier])) {
-          next.reasoningEfforts[tier] = "";
-        }
-      }
-    }
+
     return persistCluster(next, { replaceDraft: true });
   }
 
@@ -508,24 +462,8 @@ function EditPanel({
             className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
           />
         </label>
+
         <label className="space-y-1 text-sm">
-          <span className="text-[var(--muted)]">运行后端</span>
-          <select
-            aria-label="运行后端"
-            value={draft.runtimeBackend}
-            disabled={!canManage}
-            onChange={(event) => setDraft((prev) => ({ ...prev, runtimeBackend: event.target.value as EditDraft["runtimeBackend"] }))}
-            className="h-9 w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 text-sm disabled:opacity-60"
-          >
-            <option value="cli">CLI</option>
-            {nativeAgentOptionVisible && draft.cliType !== "deepseek" ? <option value="native_agent">原生 agent</option> : null}
-          </select>
-          {nativeAgentFeatureEnabled === false ? (
-            <p className="text-xs text-[var(--muted)]">原生 agent 全局未启用</p>
-          ) : null}
-        </label>
-        {draft.runtimeBackend === "cli" ? (
-          <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 类型</span>
           <select
             aria-label="智能体 CLI 类型"
@@ -548,9 +486,7 @@ function EditPanel({
             <option value="deepseek" disabled={Boolean(bot.remoteWorkspace)}>DeepSeek Harness</option>
           </select>
           </label>
-        ) : null}
-        {draft.runtimeBackend === "cli" ? (
-          <label className="space-y-1 text-sm">
+        <label className="space-y-1 text-sm">
           <span className="text-[var(--muted)]">CLI 路径</span>
           <input
             aria-label="智能体 CLI 路径"
@@ -561,29 +497,8 @@ function EditPanel({
             placeholder={cliPathPlaceholder(draft.cliType)}
           />
           </label>
-        ) : null}
       </div>
-      {draft.runtimeBackend === "native_agent" ? (
-        <NativeAgentConfigFields
-          provider={draft.nativeAgent.provider}
-          model={draft.nativeAgent.model}
-          piAgent={draft.nativeAgent.piAgent}
-          baseUrl={draft.nativeAgent.baseUrl}
-          apiKey={draft.nativeAgent.apiKey}
-          hasApiKey={draft.nativeAgent.hasApiKey}
-          apiKeyMasked={draft.nativeAgent.apiKeyMasked}
-          clearApiKey={draft.nativeAgent.clearApiKey}
-          editing
-          disabled={!canManage || manager.savingAction !== ""}
-          onNativeAgentChange={(patch) => setDraft((prev) => ({
-            ...prev,
-            nativeAgent: {
-              ...prev.nativeAgent,
-              ...patch,
-            },
-          }))}
-        />
-      ) : null}
+
       {bot.remoteWorkspace ? (
         <div className="space-y-2 text-sm">
           <span className="text-[var(--muted)]">远程地址和工作目录</span>
@@ -745,7 +660,7 @@ function EditPanel({
             <ClusterModelTiersPanel
               value={clusterDraft.modelTiers}
               reasoningEfforts={clusterDraft.reasoningEfforts}
-              modelOptions={nativeRuntime ? nativeAgentModels?.items.map((item) => item.id) ?? [] : cliParams?.schema.model?.enum ?? []}
+              modelOptions={cliParams?.schema.model?.enum ?? []}
               reasoningOptions={clusterReasoningOptions}
               disabled={!canConfigureBot || clusterSaving}
               onChange={(modelTiers) => setClusterDraft((current) => ({ ...current, modelTiers }))}
@@ -776,17 +691,15 @@ function EditPanel({
               </button>
             </div>
           ) : null}
-          <ClusterSetupPanel key={`${bot.alias}:${bot.cliType}:${nativeRuntime}`} botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
+          <ClusterSetupPanel key={`${bot.alias}:${bot.cliType}`} botAlias={bot.alias} client={manager.client} canManage={canConfigureBot} />
       </div>
 
-      {draft.runtimeBackend === "cli" ? (
-        <BotCliParamsPanel
+      <BotCliParamsPanel
           botAlias={bot.alias}
           client={manager.client}
           canManage={canConfigureBot}
           reloadKey={`${bot.alias}:${bot.cliType}:${bot.cliPath || ""}`}
         />
-      ) : null}
     </div>
   );
 }
@@ -946,7 +859,7 @@ export function DesktopBotManagerScreen({
   canRunUnsafeCli = false,
 }: Props) {
   const manager = useBotManager({ client, onBotsChange, includeArchived: canManage });
-  const [nativeAgentFeatureEnabled, setNativeAgentFeatureEnabled] = useState<boolean | null>(null);
+
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ManagerViewFilter>("all");
   const [mode, setMode] = useState<Mode>("inspect");
@@ -981,22 +894,6 @@ export function DesktopBotManagerScreen({
 
   const stats = countBotManagerStats(manager.bots);
   const focusedBotIssues = focusedBot ? detectBotIssues(focusedBot, manager.bots) : [];
-
-  useEffect(() => {
-    let cancelled = false;
-    void client.getEnvConfig()
-      .then((snapshot) => {
-        if (cancelled) return;
-        setNativeAgentFeatureEnabled(isNativeAgentGloballyEnabled(snapshot));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setNativeAgentFeatureEnabled(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
 
   useEffect(() => {
     if (!focusedBot && visibleBots[0]) {
@@ -1441,7 +1338,6 @@ export function DesktopBotManagerScreen({
                       const focused = mode !== "create" && focusedBot?.alias === bot.alias;
                       const checked = selectedAliases.has(bot.alias);
                       const issues = detectBotIssues(bot, manager.bots);
-                      const runtimeBackend = getRuntimeBackend(bot);
 
                       return (
                         <tr
@@ -1498,7 +1394,7 @@ export function DesktopBotManagerScreen({
                           <td>
                             <div className="am-type">
                               <span aria-hidden="true" className="am-type-mark" style={getBotIdentityTextStyle(bot.cliType)} />
-                              {runtimeBackend === "cli" ? `CLI / ${cliTypeLabel(bot.cliType)}` : "原生 agent"}
+                              {`CLI / ${cliTypeLabel(bot.cliType)}`}
                             </div>
                           </td>
                           <td>
@@ -1568,7 +1464,7 @@ export function DesktopBotManagerScreen({
                 canManage={canManage}
                 canCreateWorkdirDirectory={canCreateWorkdirDirectory}
                 canRunUnsafeCli={canRunUnsafeCli}
-                nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
+
                 onCreated={(alias) => {
                   setDirty(false);
                   setFocusedAlias(alias);
@@ -1596,7 +1492,7 @@ export function DesktopBotManagerScreen({
                     canManage={canManage}
                     canConfigureBot={canManage || focusedBot.canOperate !== false}
                     canCreateWorkdirDirectory={canCreateWorkdirDirectory}
-                    nativeAgentFeatureEnabled={nativeAgentFeatureEnabled}
+
                     onCancel={() => {
                       setDirty(false);
                       setInspectorTab("overview");
@@ -1625,7 +1521,7 @@ export function DesktopBotManagerScreen({
                           ))}
                         </div>
                         <div className="am-detail-sub">
-                          {getRuntimeBackend(focusedBot) === "cli" ? `CLI / ${cliTypeLabel(focusedBot.cliType)}` : "原生 agent"}
+                          {`CLI / ${cliTypeLabel(focusedBot.cliType)}`}
                         </div>
                       </div>
                     </div>
@@ -1633,20 +1529,12 @@ export function DesktopBotManagerScreen({
                     <dl className="am-defs">
                       <div className="am-def">
                         <dt>运行后端</dt>
-                        <dd>{runtimeBackendLabel(getRuntimeBackend(focusedBot))}</dd>
+                        <dd>CLI</dd>
                       </div>
-                      {getRuntimeBackend(focusedBot) === "cli" ? (
+                      {(
                         <div className="am-def">
                           <dt>CLI 路径</dt>
                           <dd className="am-mono">{focusedBot.cliPath || defaultCliPathForType(focusedBot.cliType)}</dd>
-                        </div>
-                      ) : (
-                        <div className="am-def">
-                          <dt>原生 agent</dt>
-                          <dd className="text-[var(--muted)]">
-                            <div>Provider/Model: 全局配置</div>
-                            <div>Pi agent: {focusedBot.nativeAgent?.piAgent || "未设置"}</div>
-                          </dd>
                         </div>
                       )}
                       <div className="am-def">

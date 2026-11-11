@@ -9,7 +9,6 @@ import pytest
 
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile
-from bot.native_agent.pi_session_store import PiSessionRecord, PiSessionStore, pi_session_key
 from bot.session_store import load_session, save_session
 from bot.chat_identity import chat_session_user_id
 from bot.web.api_common import AuthContext, WebApiError, resolve_session_bot_id
@@ -31,7 +30,6 @@ def _manager(tmp_path: Path, *, agents: list[AgentProfile] | None = None) -> Mul
         BotProfile(
             alias="main",
             working_dir=str(tmp_path),
-            supported_execution_modes=["cli", "native_agent"],
             agents=agents or [],
         ),
         str(storage),
@@ -42,7 +40,6 @@ def _add_managed_profile(manager: MultiBotManager, alias: str, working_dir: Path
     manager.managed_profiles[alias] = BotProfile(
         alias=alias,
         working_dir=str(working_dir),
-        supported_execution_modes=["cli", "native_agent"],
         agents=agents or [],
     )
 
@@ -122,7 +119,7 @@ def test_remove_bot_with_workspace_deletes_workspace_history_favorites_and_sessi
         bot_workspace,
         alias="team",
         agent_id="reviewer",
-        native_provider="native_agent",
+        native_provider="codex",
     )
     from bot.web.api_common import get_chat_session_for_alias
 
@@ -141,7 +138,7 @@ def test_remove_bot_with_workspace_deletes_workspace_history_favorites_and_sessi
         123,
         {"conversation_id": reviewer_handle.conversation_id, "message_id": reviewer_message["id"]},
         agent_id="reviewer",
-        execution_mode="native_agent",
+        execution_mode="cli",
     )
     _profile, _agent, main_session = get_chat_session_for_alias(manager, "team", 123, "main")
     _profile, _agent, reviewer_session = get_chat_session_for_alias(manager, "team", 123, "reviewer")
@@ -158,18 +155,6 @@ def test_remove_bot_with_workspace_deletes_workspace_history_favorites_and_sessi
         working_dir=str(bot_workspace) + "/",
         agent_id="old-agent",
     )
-    pi_key = pi_session_key(
-        cwd=str(bot_workspace),
-        bot_id=bot_id,
-        user_id=shared_user_id,
-        conversation_id=reviewer_handle.conversation_id,
-    )
-    PiSessionStore().upsert(PiSessionRecord(
-        key=pi_key,
-        cwd=str(bot_workspace),
-        conversation_id=reviewer_handle.conversation_id,
-        pi_session_id="pi-reviewer",
-    ))
 
     deleted = _remove_bot_with_history(manager, "team", delete_workspace=True)
 
@@ -183,7 +168,6 @@ def test_remove_bot_with_workspace_deletes_workspace_history_favorites_and_sessi
     assert "team" not in manager.managed_profiles
     assert not bot_workspace.exists()
     assert all(load_session(bot_id, shared_user_id, agent_id=item) is None for item in ("main", "reviewer", "old-agent"))
-    assert PiSessionStore().get(pi_key) is None
     assert _conversation_records(manager, bot_workspace, "team", None) == []
     assert ChatFavoriteStore(bot_workspace).list_favorites(FavoriteScope(bot_id=bot_id, user_id=shared_user_id)) == []
 
@@ -383,24 +367,10 @@ def test_remove_bot_with_workspace_rejects_root_directory(tmp_path: Path):
     _assert_workspace_removal_error(manager, "team", 409, "workspace_delete_scope_mismatch")
 
 
-def test_favorite_answer_rejects_invalid_message_and_execution_mode(tmp_path: Path):
+def test_favorite_answer_rejects_invalid_message(tmp_path: Path):
     manager = _manager(tmp_path)
-    _store, handle, message = _completed_turn(manager, tmp_path, native_provider="native_agent")
+    _store, handle, message = _completed_turn(manager, tmp_path)
 
-    with pytest.raises(WebApiError) as mode_error:
-        upsert_favorite_answer(
-            manager,
-            "main",
-            123,
-            {
-                "conversation_id": handle.conversation_id,
-                "message_id": message["id"],
-                "message_key": f"assistant|{message['id']}",
-            },
-            execution_mode="cli",
-        )
-    assert mode_error.value.status == 409
-    assert mode_error.value.code == "conversation_execution_mode_mismatch"
 
     with pytest.raises(WebApiError) as role_error:
         upsert_favorite_answer(
@@ -412,7 +382,7 @@ def test_favorite_answer_rejects_invalid_message_and_execution_mode(tmp_path: Pa
                 "message_id": handle.user_message_id,
                 "message_key": f"user|{handle.user_message_id}",
             },
-            execution_mode="native_agent",
+            execution_mode="cli",
         )
     assert role_error.value.status == 409
     assert role_error.value.code == "favorite_message_not_assistant"

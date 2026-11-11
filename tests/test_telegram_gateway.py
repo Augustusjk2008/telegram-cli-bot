@@ -138,7 +138,6 @@ async def test_progress_and_native_final_events_produce_one_terminal_reply(gatew
         yield {"type": "meta", "turn_id": "turn-1", "assistant_message_id": "message-1"}
         yield {"type": "status", "preview_text": "临时正文"}
         yield {"type": "trace", "event": {"summary": "执行工具"}}
-        yield {"type": "ag_ui", "event": {"type": "RUN_FINISHED", "result": {"content": "原生最终正文"}}}
         entered.set()
         await release.wait()
         yield done()
@@ -256,33 +255,6 @@ async def test_errors_and_missing_final_are_reported_once(gateway, monkeypatch, 
     assert len(gateway.client.messages) == 1
     assert expected in gateway.client.messages[0][1]
     assert gateway.state.get(1)["status"] == status
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("provider,expected_mode", [("native_agent", "native_agent"), ("codex", "cli")])
-async def test_current_conversation_mode_wins_over_profile_default(gateway, monkeypatch, provider, expected_mode):
-    profile, _, session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 42)
-    profile.supported_execution_modes = ["cli", "native_agent"]
-    profile.default_execution_mode = "cli" if expected_mode == "native_agent" else "native_agent"
-    session.active_conversation_id = "conv-1"
-    store = Mock()
-    store.get_conversation.return_value = {"native_provider": provider}
-    monkeypatch.setattr(api_service, "_get_chat_store", lambda _: store)
-    calls = []
-
-    async def cli_stream(*args, **kwargs):
-        calls.append("cli")
-        yield done()
-
-    async def native_stream(*args, **kwargs):
-        assert kwargs["protocol"] == "ag-ui"
-        calls.append("native_agent")
-        yield done()
-
-    monkeypatch.setattr(api_service, "_stream_cli_chat", cli_stream)
-    monkeypatch.setattr(api_service, "_stream_native_agent_chat", native_stream)
-    await gateway.receive_update(update())
-    assert calls == [expected_mode]
 
 
 @pytest.mark.asyncio
@@ -424,11 +396,11 @@ async def test_web_and_telegram_share_history_and_new_conversation_resets_bindin
 @pytest.mark.parametrize("current_mode", ["cli", None])
 async def test_new_preserves_current_mode_or_uses_profile_default_without_starting_model(gateway, monkeypatch, current_mode):
     profile, _, session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 42)
-    profile.supported_execution_modes = ["cli", "native_agent"]
-    profile.default_execution_mode = "native_agent" if current_mode != "native_agent" else "cli"
+    profile.supported_execution_modes = ["cli"]
+    profile.default_execution_mode = "cli"
     if current_mode:
         await api_service.create_conversation(gateway.manager, "dev", 1001, execution_mode=current_mode)
-    for name in ("codex_session_id", "claude_session_id", "native_agent_session_id", "native_agent_run_id", "native_agent_server_key"):
+    for name in ("codex_session_id", "claude_session_id"):
         setattr(session, name, "old-binding")
     calls = install_stream(monkeypatch, [done()])
     await gateway.receive_update(update(text="to dev /new"))
@@ -436,7 +408,7 @@ async def test_new_preserves_current_mode_or_uses_profile_default_without_starti
     assert gateway.state.get(1)["status"] == "completed"
     conversation = api_service._get_chat_store(session).get_conversation(session.active_conversation_id)
     assert api_service._conversation_execution_mode(conversation) == (current_mode or profile.default_execution_mode)
-    assert all(getattr(session, name) is None for name in ("codex_session_id", "claude_session_id", "native_agent_session_id", "native_agent_run_id", "native_agent_server_key"))
+    assert all(getattr(session, name) is None for name in ("codex_session_id", "claude_session_id"))
 
 
 @pytest.mark.asyncio
@@ -454,21 +426,6 @@ async def test_busy_web_turn_rejects_telegram_send_and_new(gateway):
 
 
 @pytest.mark.asyncio
-async def test_disabled_current_mode_does_not_redirect_to_profile_default(gateway, monkeypatch):
-    profile, _, session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 42)
-    profile.supported_execution_modes = ["cli", "native_agent"]
-    result = await api_service.create_conversation(gateway.manager, "dev", 1001, execution_mode="native_agent")
-    profile.supported_execution_modes = ["cli"]
-    stream = Mock(side_effect=AssertionError("disabled mode must not execute"))
-    monkeypatch.setattr(api_service, "_stream_cli_chat", stream)
-    await gateway.receive_update(update(1, "to dev hello"))
-    await gateway.receive_update(update(2, "to dev /new"))
-    assert session.active_conversation_id == result["conversation"]["id"]
-    assert all("执行模式已停用" in text for _, text in gateway.client.messages)
-    stream.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_pending_cluster_children_block_new_conversation(gateway, monkeypatch):
     result = await api_service.create_conversation(gateway.manager, "dev", 1001)
     pending = Mock(return_value=True)
@@ -481,10 +438,10 @@ async def test_pending_cluster_children_block_new_conversation(gateway, monkeypa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["cli", "native_agent"])
+@pytest.mark.parametrize("mode", ["cli"])
 async def test_telegram_preparation_blocks_same_target_web_switch_and_allows_other_targets(gateway, monkeypatch, mode):
     profile = gateway.manager.managed_profiles["dev"]
-    profile.supported_execution_modes = ["cli", "native_agent"]
+    profile.supported_execution_modes = ["cli"]
     result = await api_service.create_conversation(gateway.manager, "dev", 1001, execution_mode=mode)
     conversation_id = result["conversation"]["id"]
     entered, release = asyncio.Event(), asyncio.Event()
@@ -496,7 +453,6 @@ async def test_telegram_preparation_blocks_same_target_web_switch_and_allows_oth
         yield done()
 
     monkeypatch.setattr(api_service, "_stream_cli_chat", stream)
-    monkeypatch.setattr(api_service, "_stream_native_agent_chat", stream)
     task = gateway.receive_update(update())
     try:
         await asyncio.wait_for(entered.wait(), 2)
@@ -516,32 +472,6 @@ async def test_telegram_preparation_blocks_same_target_web_switch_and_allows_oth
             await task
     await gateway.receive_update(update(4, "to dev /new"))
     assert gateway.state.get(4)["status"] == "completed"
-
-
-@pytest.mark.asyncio
-async def test_native_reconnect_observes_busy_turn_without_starting_another(gateway, monkeypatch):
-    profile, _, session = api_service.get_chat_session_for_alias(gateway.manager, "dev", 1001)
-    profile.supported_execution_modes = ["cli", "native_agent"]
-
-    async def replay(*, after_sequence):
-        assert after_sequence == 4
-        yield {"type": "status", "turn_id": "existing-turn", "sequence": 5}
-
-    service = SimpleNamespace(
-        resume_turn_channel=Mock(return_value=SimpleNamespace(events=replay)),
-        stream_chat=Mock(side_effect=AssertionError("reconnect must not execute")),
-    )
-    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: service)
-    with api_service._session_lifecycle_scope(session):
-        events = [event async for event in api_service.stream_chat(
-            gateway.manager, "dev", 1001, "", execution_mode="native_agent",
-            resume_stream_id="existing-stream", resume_turn_id="existing-turn", after_sequence=4,
-        )]
-        assert events == [{"type": "status", "turn_id": "existing-turn", "sequence": 5}]
-        await gateway.receive_update(update())
-        assert gateway.state.get(1)["status"] == "rejected"
-    service.resume_turn_channel.assert_called_once_with("existing-stream", turn_id="existing-turn")
-    service.stream_chat.assert_not_called()
 
 
 @pytest.mark.asyncio

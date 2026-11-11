@@ -137,7 +137,7 @@ def test_cluster_status_reports_each_configured_cli_target(monkeypatch, tmp_path
     status = api_service.get_cluster_status(Manager(), "main")
 
     assert status["mcp"]["target_cli_types"] == ["codex", "claude", "deepseek"]
-    assert set(status["mcp"]["targets"]) == {"codex", "codex_server", "claude", "deepseek", "antigravity", "pi"}
+    assert set(status["mcp"]["targets"]) == {"codex", "codex_server", "claude", "deepseek", "antigravity"}
     assert status["mcp"]["targets"]["claude"]["state"] == "runtime_ready"
     assert status["mcp"]["targets"]["codex_server"]["state"] == "not_checked"
 

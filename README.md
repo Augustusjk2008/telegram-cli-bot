@@ -9,7 +9,7 @@
 <h1 align="center">Orbit Safe Claw</h1>
 
 <p align="center">
-  <strong>在浏览器中统一操控 Codex、Claude、Antigravity、DeepSeek Harness 与 Pi 的多工作区 AI 开发控制台。</strong>
+  <strong>在浏览器中统一操控 Codex、Claude、Antigravity、DeepSeek Harness 的多工作区 AI 开发控制台。</strong>
 </p>
 
 <p align="center">
@@ -34,14 +34,14 @@
 </p>
 
 > [!NOTE]
-> Orbit Safe Claw 把本机 AI CLI、工作区和开发工具接入一个可远程访问的 Web 工作台，让多个仓库、Bot、会话和子 Agent 统一管理。模型服务及其认证由所选 CLI 或 Pi 配置提供。
+> Orbit Safe Claw 把本机 AI CLI、工作区和开发工具接入一个可远程访问的 Web 工作台，让多个仓库、Bot、会话和子 Agent 统一管理。模型服务及其认证由所选 CLI 配置提供。
 
 ## 一眼看懂
 
 ```mermaid
 flowchart LR
     Browser["🖥️ 浏览器 / 移动端"] --> Orbit["Orbit Safe Claw"]
-    Orbit --> Agents["🤖 Codex · Claude · Antigravity · DeepSeek · Pi"]
+    Orbit --> Agents["🤖 Codex · Claude · Antigravity · DeepSeek"]
     Orbit --> Workbench["💻 Chat · Files · Git · Terminal · Debug"]
     Orbit --> Cluster["🧭 子 Agent · Cluster"]
     Orbit --> Extend["🧩 Plugins · Admin"]
@@ -59,7 +59,7 @@ flowchart LR
     <td width="33%" valign="top"><strong>🧭 子 Agent 与集群</strong><br><br>通过子 Agent、路由和集群模式拆分审查、实现与验证任务，并统一回收结果。</td>
   </tr>
   <tr>
-    <td valign="top"><strong>⚡ CLI 与原生执行</strong><br><br>Codex、Claude、Antigravity 和 DeepSeek Harness 使用 CLI 流；Pi 原生 Agent 使用 AG-UI，保留工具调用、权限请求和上下文用量。</td>
+    <td valign="top"><strong>⚡ CLI 执行</strong><br><br>Codex、Claude、Antigravity 和 DeepSeek Harness 使用 CLI 流，保留工具调用、执行过程和上下文用量。</td>
     <td valign="top"><strong>🧩 可扩展插件运行时</strong><br><br>通过 <code>plugin.json</code> 扩展文件视图、配置页和后台进程，支持重型 session 视图。</td>
     <td valign="top"><strong>🔒 本地优先、自主管理</strong><br><br>工作区、会话、配置和运行数据保留在自己的设备上，并提供用户权限、公告和更新管理。</td>
   </tr>
@@ -70,7 +70,7 @@ flowchart LR
 ### Windows：推荐使用绿色版
 
 > [!TIP]
-> Windows 绿色版内置 Python、Node.js、Git、Pi CLI、Pi 扩展和前端产物；解压即可启动。使用 Codex、Claude、Antigravity 或 DeepSeek Harness 时，请在本机另行安装并配置对应 CLI。
+> Windows 绿色版内置 Python、Node.js、Git 和前端产物；解压即可启动。使用 Codex、Claude、Antigravity 或 DeepSeek Harness 时，请在本机另行安装并配置对应 CLI。
 
 1. 打开 [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest)。
 2. 下载 `orbit-safe-claw-windows-x64-<version>.zip` 并解压到可写目录。
@@ -109,7 +109,7 @@ bash install.sh --admin-username admin
 
 安装器会交互式读取密码。非交互安装可同时传入 `--admin-password <密码>`，或设置 `TCB_ADMIN_USERNAME` / `TCB_ADMIN_PASSWORD`。
 
-Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+；Pi 原生 Agent 还需要 bash。安装器会检查这些运行时版本。
+Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+。安装器会检查这些运行时版本。
 
 源码版 `start.bat`、`start.ps1` 和 `start.sh` 启动时直接使用现有的前端产物，不会自动重建前端。修改前端后请在 `front` 目录手动运行 `npm run build`，再重启服务。
 
@@ -124,7 +124,7 @@ Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+；Pi 原生 Agent 还�
     powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1 -Repository $PWD -WhatIf
     powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-service.ps1 -Repository $PWD
 
-任务以拥有 Codex、Claude、Pi、DeepSeek Harness 和 Telegram 凭据的用户运行；LocalSystem 不是默认账户。任务调用 start.ps1 -ServiceProcess -Mode service，同一任务名使用 IgnoreNew，并在崩溃后有限次数重试。服务模式默认不会打开浏览器，也不会阻止系统睡眠，除非显式设置 CLI_BRIDGE_SERVICE_MODE=1、WEB_AUTO_OPEN_BROWSER=true 或 TCB_KEEP_AWAKE=true。TCB_SERVICE_LOG_ENABLED=true 可启用轮转服务日志；默认位置是运行数据目录 logs/orbit-safe-claw-service.log，也可用 TCB_SERVICE_LOG_PATH 指定外部路径。
+任务以拥有 Codex、Claude、Antigravity、DeepSeek Harness 和 Telegram 凭据的用户运行；LocalSystem 不是默认账户。任务调用 start.ps1 -ServiceProcess -Mode service，同一任务名使用 IgnoreNew，并在崩溃后有限次数重试。服务模式默认不会打开浏览器，也不会阻止系统睡眠，除非显式设置 CLI_BRIDGE_SERVICE_MODE=1、WEB_AUTO_OPEN_BROWSER=true 或 TCB_KEEP_AWAKE=true。TCB_SERVICE_LOG_ENABLED=true 可启用轮转服务日志；默认位置是运行数据目录 logs/orbit-safe-claw-service.log，也可用 TCB_SERVICE_LOG_PATH 指定外部路径。
 
 Linux 安装阶段会根据当前 checkout 路径和执行账户，自动生成并安装 `/etc/systemd/system/orbit-safe-claw.service`；它通过 `start.sh` 和同一个 `scripts/update_runner.py` 运行，不要另起 watchdog。安装脚本只写入 unit，不会自动启动服务；`--check-only` 不会写入。若需要手动维护 unit，再把 `User`、`Group`、`WorkingDirectory` 和 `ExecStart` 改为目标用户及 checkout 路径：
 
@@ -167,7 +167,6 @@ bash install.sh
 - 主 Bot 与托管 Bot 可绑定不同仓库、CLI 和工作目录。
 - Web session 按 Bot、共享用户域和 Agent 隔离；获准访问同一 Bot 的 Web 账号共享对应 Agent 对话。
 - Codex（exec / app-server）、Claude、Antigravity 和 DeepSeek Harness 的 CLI 会话保留流式正文、状态、trace 和完成态；模型列表及参数按 CLI 类型独立保存。
-- Pi 原生 Agent 保留 session、工具调用、权限请求、上下文用量和过程详情。
 
 ### 无尽模式
 
@@ -177,17 +176,17 @@ bash install.sh
 
 ### SSH 远程工作区
 
-创建智能体时选择「远程 SSH」，在连接表单选择远程系统（Linux / POSIX 或 Windows），填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写、文件上传和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，AI CLI 或 Pi 在 Orbit 宿主机运行。DeepSeek Harness 当前只支持本地工作区。
+创建智能体时选择「远程 SSH」，在连接表单选择远程系统（Linux / POSIX 或 Windows），填写 SSH 连接信息，核对首次连接的主机密钥指纹，再浏览并选择远程目录。支持聊天、文件树、UTF-8 文本读写、文件上传和独立的 SSH 终端标签；远程主机需要 SSH/SFTP，AI CLI 在 Orbit 宿主机运行。DeepSeek Harness 当前只支持本地工作区。
 
 Agent 仍在运行 Orbit 的电脑上执行。本地控制目录默认位于 `~/.tcb/orbit-safe-claw/remote-workspaces/`（遵循 `TCB_DATA_DIR`），自动生成 `AGENTS.md` 和 `CLAUDE.md`。项目文件留在远程主机；聊天工具、文件操作和终端复用 SSH 连接。Agent 可批量运行命令、读取指定行范围及精确替换文本，减少反复登录和大段内容传输。
 
 文件面板上传写入远程工作区；聊天附件保存在本地控制目录的 `attachments/` 中，供本地 Agent 处理。
 
-密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供语言服务、插件、调试和工作区回滚。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
+密码和私钥口令只保留在服务内存，服务重启后可通过「SSH 重新登录」恢复连接；私钥文件路径指向运行 Orbit 的电脑。文本文件上限为 2 MiB。当前远程界面不提供语言服务、插件和调试。远程目标与会话绑定，使用另一个目录时新建智能体。文件 API 限制在选定目录内，终端和命令使用 SSH 账号自身权限；CLI 的本地工具仍受其原有权限设置约束。
 
 远程 Git 面板支持 Linux 和 Windows 上的仓库，所选远程目录必须是仓库顶层目录。Git 页面与本地使用相同的工作台入口和 API 语义，可查看状态、文件树 Git 状态、当前分支、提交图、近期提交、文件差异（包括未跟踪文件），逐文件暂存、取消暂存并手动提交；也支持初始化、丢弃改动、分支创建 / 切换 / 重置、Stash 列表 / 应用 / 删除 / 弹出、Fetch、Pull、Push、远端添加 / 修改 / 移除、分支发布、Git 身份配置、提交说明生成和智能提交。Stash 创建当前通过能力矩阵标记为不可用。提交和智能提交使用远程仓库的状态与 Diff，实际 Git 操作在远程 SSH 主机执行；提交身份来自远程 Git 配置，请在远程端配置 `user.name` 和 `user.email`。
 
-远程仓库、upstream 或 Git 凭据不可用时，操作返回诊断信息；Fetch、Pull、Push 和分支发布禁止交互式凭据提示。远程 Agent 不提供 shadow Git 工作区历史和回滚，远程项目继续使用自身真实仓库历史。
+远程仓库、upstream 或 Git 凭据不可用时，操作返回诊断信息；Fetch、Pull、Push 和分支发布禁止交互式凭据提示。远程项目使用自身的 Git 仓库历史。
 
 Git 必须在远程 SSH 账号的**非交互会话 PATH** 中可用；本地安装 Git 不会提供远程 Git 能力。缺少 Git 时，面板显示安装 / PATH 指引和重试入口，应用不会通过 SSH 安装软件。请按官方 [Linux 安装指引](https://git-scm.com/install/linux) 或 [Windows 安装指引](https://git-scm.com/install/windows) 准备与远程系统兼容的 Git，确认该账号通过 SSH 能执行 `git --version`，再重试。写操作超时或断线后应先刷新状态核对结果，再决定是否重试。
 
@@ -199,7 +198,7 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 
 ### Desktop Workbench
 
-- **Chat**：普通 CLI 与原生 Agent 对话、历史恢复、过程详情和上下文状态。
+- **Chat**：CLI 对话、历史恢复、过程详情和上下文状态。
 - **Files**：文件树、编辑器、预览、多标签和语言服务导航。
 - **Git**：状态、diff、提交历史、工作区操作、远端管理与 GitHub 关联。
 - **Terminal**：持久化多标签 Web 终端，每个标签使用独立 shell 和 owner。
@@ -232,8 +231,8 @@ HTML 文件上限为 1 MiB，其他单个资源上限为 16 MiB；只提供允�
 
 - 普通聊天可按显式 `agent_id` 进入隔离的 Agent 会话；集群模板用于准备 Bot 级并行槽位和模型档位。
 - 集群工具覆盖动态编组、状态查询、子 Agent 新会话、异步任务创建、按 `task_id` 精确取消、轮询和消息等待；主 Agent 取消一个子任务时不会停止同一 run 中的其他子任务。
-- CLI（含 DeepSeek Harness）与 Pi 使用相同的集群配置入口，可设置 1–20 个并发槽位、默认超时、写入策略，以及低、中、高、专业四档模型和思考深度。各档留空时继承主 Agent 配置；模型选项来自当前执行后端，Pi 的思考深度选项随所选模型变化。专业档用于特殊工作，主 Agent 只有在用户明确提出使用专业档时才选择它。档位覆盖只作用于子任务，已入队任务保留入队时的配置。
-- 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务。Codex（exec / app-server）和 Claude 自动注入 stdio MCP；Antigravity 自动配置工作区 MCP；DeepSeek Harness 在集群轮次通过 `--patch` 加载 MCP；Pi 使用扩展适配同一 bridge。
+- CLI（含 DeepSeek Harness） 使用相同的集群配置入口，可设置 1–20 个并发槽位、默认超时、写入策略，以及低、中、高、专业四档模型和思考深度。各档留空时继承主 Agent 配置；模型和思考深度选项来自当前 CLI。专业档用于特殊工作，主 Agent 只有在用户明确提出使用专业档时才选择它。档位覆盖只作用于子任务，已入队任务保留入队时的配置。
+- 启用 Bot 级集群后，主 Agent 通过统一的 `tcb-cluster` 工具面委派子任务。Codex（exec / app-server）和 Claude 自动注入 stdio MCP；Antigravity 自动配置工作区 MCP；DeepSeek Harness 在集群轮次通过 `--patch` 加载 MCP。
 - 上述入口均支持本地集群。远程 Antigravity 暂不支持集群；DeepSeek Harness 限于本地 CLI 模式。Antigravity 工作区已有用户管理的同名 `tcb-cluster` 配置时会提示冲突，需要先处理该配置。
 - 同一主会话的普通轮次沿用当前编组和 `run_id`；实际调整编组时切换到返回的新 ID。集群任务和进度保存在内存中，宿主重启后不会恢复正在执行的子任务。
 
@@ -270,7 +269,7 @@ TELEGRAM_BROADCAST_COMPLETIONS=false
 | `/expand` | 回复摘要时展开对应全文；单独发送时展开最近一条摘要 |
 | `/host` | 查看后端和公网入口（frp/隧道）状态，可重连 frp/隧道或确认后重启后端 |
 
-底部键盘提供智能体、发消息、新会话、状态、停止任务、配置、宿主和帮助入口。配置页会根据当前会话执行模式列出可用模型和思考强度；没有当前会话时使用 Bot 默认执行模式。模型列表来自 CLI 参数配置或 Pi 模型配置，非法值会被拒绝。模型、思考强度和集群开关保存到 Bot 配置，正在运行的任务继续使用启动时的配置，下一轮生效。
+底部键盘提供智能体、发消息、新会话、状态、停止任务、配置、宿主和帮助入口。配置页会根据当前会话执行模式列出可用模型和思考强度；没有当前会话时使用 Bot 默认执行模式。模型列表来自 CLI 参数配置，非法值会被拒绝。模型、思考强度和集群开关保存到 Bot 配置，正在运行的任务继续使用启动时的配置，下一轮生效。
 
 `/host`（或底部“宿主”）用于公网入口故障时的应急处理。Telegram 通过出站 HTTPS 长轮询 `api.telegram.org`，不经过 frp 或隧道。面板显示版本、PID、运行中的任务、公网入口状态、Hub 心跳和最近错误；“重连 frp/重启隧道”与 Admin Center 的重启隧道相同。“重启后端”需要二次确认，会中断运行中的任务，升级交接期间会被拒绝，恢复在线后向发起者发送通知。网关运行在宿主进程内，宿主卡死或退出时 Telegram 也会离线，无法用它恢复。
 
@@ -293,7 +292,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 
 | 发布包 | 适用场景 | 运行时 |
 |---|---|---|
-| Windows 绿色版 | 最快体验、离线携带 | 内置 Python、Node.js、Git、Pi CLI 与前端产物 |
+| Windows 绿色版 | 最快体验、离线携带 | 内置 Python、Node.js、Git 与前端产物 |
 | Windows 安装版 | 常规本机安装 | 由安装脚本检查并准备依赖 |
 | Linux x64 | Linux 自托管 | 使用本机 Python、Node.js、Git |
 | macOS universal | macOS 源码包 | 使用本机 Python、Node.js、Git |
@@ -303,8 +302,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 | 模式 | 主要目标 | 传输与展示 |
 |---|---|---|
 | `cli` | Codex exec / app-server、Claude、Antigravity、DeepSeek Harness | Legacy SSE：正文、状态、trace、完成态 |
-| `native_agent` | Pi | AG-UI：工具、权限、过程、上下文和原生 session |
-| Cluster | 上述 CLI 与 Pi；按 Bot 配置、按主会话编组 | 动态编组、异步委派、轮询、消息回告和模型档位 |
+| Cluster | 上述 CLI；按 Bot 配置、按主会话编组 | 动态编组、异步委派、轮询、消息回告和模型档位 |
 
 ## 安全边界
 
@@ -352,13 +350,13 @@ Desktop 模式会临时桥接 Desktop profile 的 `agent-default-model`、`crede
 
 Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否能被 headless profile 加载；当前已验证的 Desktop `0.2.1-rc.3` 不提供该 profile entry，因此 Orbit 会明确拒绝 Desktop 集群任务并保留普通聊天能力，等待包含该 client 的 Desktop 版本。
 
-官方 Desktop CLI 说明：[Terminal command](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md#terminal-command)。原生执行和远程工作区暂不支持。Git 提交说明生成可在本地 CLI 与 LLM API 之间选择；选择 CLI 时可使用 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。聊天翻译也可在 LLM API 与当前 Bot 的 CLI 之间切换。
+官方 Desktop CLI 说明：[Terminal command](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md#terminal-command)。远程工作区暂不支持。Git 提交说明生成可在本地 CLI 与 LLM API 之间选择；选择 CLI 时可使用 Codex、codex server 或 Claude，暂不支持 Antigravity 和 DeepSeek Harness。聊天翻译也可在 LLM API 与当前 Bot 的 CLI 之间切换。
 
 `cli_params.codex_server` 与 `cli_params.codex` 独立保存，使用相同的参数定义和默认值；切换入口不会覆盖另一入口的参数。
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。
 两种入口复用 Codex 历史格式、模型参数及费用语义。
 
-应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据和 Pi home 放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
+应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
 
 <details>
 <summary><strong>托管多个 Bot</strong></summary>
@@ -387,9 +385,9 @@ Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否�
 
 上下文详情弹窗显示按 `bot/data/model_prices.csv` 计算的费用总额。CSV 单价单位为每百万 token，`currency` 为币种代码（DeepSeek 使用人民币 CNY，其余默认模型使用 USD）；普通输入、缓存读取、缓存写入和输出分别计价，reasoning 不重复计入输出。Claude 的 `cache_write_per_million` 对应 5 分钟缓存写入，可选 `cache_write_1h_per_million` 对应 1 小时；上游未区分缓存时长时使用普通缓存写入单价。
 
-模型按 CSV 的 `model` 精确匹配；Pi 的 `provider/model` 优先匹配完整 ID，再匹配模型名。新模型、别名或带日期的模型 ID 可直接新增一行。未匹配、价格表无效或用量不完整时不显示费用。也可通过 `.env` 的 `MODEL_PRICES_FILE` 指定自己的 CSV 路径；修改 CSV 后下一次计价自动读取，已保存消息保留当时的费用快照。
+模型按 CSV 的 `model` 精确匹配。新模型、别名或带日期的模型 ID 可直接新增一行。未匹配、价格表无效或用量不完整时不显示费用。也可通过 `.env` 的 `MODEL_PRICES_FILE` 指定自己的 CSV 路径；修改 CSV 后下一次计价自动读取，已保存消息保留当时的费用快照。
 
-Codex 每轮报告的费用按会话累计快照处理，后台保留原始计算值。消息详情仅在当前金额严格大于同一会话上一轮的原始金额时显示两者差值；相等、回落或缺少上一轮金额时显示当前值。后续比较始终使用原始金额，不使用显示差值；前端尚未加载上一轮历史时也显示当前值。Claude 显示本次 CLI 调用的主模型用量费用，Pi 汇总本轮已完成的模型调用。DeepSeek Harness 在每轮结束时按去重后的步骤用量计价，普通输入与缓存读取分别计费，支持显式选择或继承 Harness 默认模型；中断或失败时保留可计价的已上报用量并标记为部分估算。集群子 agent 的费用保存在各自回复里，不额外汇入主回复。
+Codex 每轮报告的费用按会话累计快照处理，后台保留原始计算值。消息详情仅在当前金额严格大于同一会话上一轮的原始金额时显示两者差值；相等、回落或缺少上一轮金额时显示当前值。后续比较始终使用原始金额，不使用显示差值；前端尚未加载上一轮历史时也显示当前值。Claude 显示本次 CLI 调用的主模型用量费用。DeepSeek Harness 在每轮结束时按去重后的步骤用量计价，普通输入与缓存读取分别计费，支持显式选择或继承 Harness 默认模型；中断或失败时保留可计价的已上报用量并标记为部分估算。集群子 agent 的费用保存在各自回复里，不额外汇入主回复。
 
 DeepSeek 单价按 2026-10-22 的[官方人民币高峰价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)填写：`deepseek-flash` 每百万 token 的普通输入 / 缓存读取 / 输出为 2 / 0.04 / 8 元，`deepseek-v4-pro` 为 9 / 0.30 / 27 元，均无单独缓存写入费用。官方空闲时段价格减半；本项目使用 CSV 固定单价估算，不自动切换时段。其余默认模型采用 2026-09-05 核对的官方标准单价，来源保存在 `source_url` 列。订阅套餐实际扣款以及长上下文、加速模式、地区和工具调用等额外计费规则不自动套用，使用渠道价格时请自行调整 CSV。
 
@@ -454,32 +452,9 @@ server {
 </details>
 
 <details>
-<summary><strong>非绿色版安装 Pi 原生 Agent</strong></summary>
-
-非绿色版依赖 Node.js 22+、Git 和 bash。安装固定版本：
-
-```bash
-npm install -g @earendil-works/pi-coding-agent@0.74.2 pi-workspace-history@0.2.2
-```
-
-启用原生 Agent 必须配置：
-
-```env
-NATIVE_AGENT_ENABLED=true
-```
-
-`NATIVE_AGENT_PI_COMMAND` 默认是 `pi`，仅在 PATH 无法解析或使用自定义命令时设置。
-
-Pi 扩展默认位于 `~/.pi/agent/extensions`。使用 `PI_AGENT_SETTINGS` 或 `NATIVE_AGENT_PI_HOME` 时，应把 `workspace-history.ts` 和仓库内 `bot/cluster/pi_extension/tcb-cluster.ts` 放入实际生效的 extensions 目录。当前管理页安装助手只识别 `PI_AGENT_SETTINGS` 或系统 HOME；仅设置 `NATIVE_AGENT_PI_HOME` 时需手动确认目标目录。Windows 的 Pi `shellPath` 建议指向 Git Bash。
-
-Pi runtime 和持久化 session 按 Bot、共享用户、Agent 和 conversation 隔离。更改工作目录、模型、Pi Agent 或思考深度后，下一轮会失效旧 Pi session 和工作区回滚链。仅修改模型配置文件内容或普通环境变量时，可能重建进程并继续原会话；需要完整隔离时请新建会话。
-
-</details>
-
-<details>
 <summary><strong>Codex CLI 用量统计</strong></summary>
 
-管理中心的 Usage 页面可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、Pi、原生 Agent、行内补全或手工终端进程。
+管理中心的 Usage 页面可即时开启或关闭采集。功能默认关闭，只统计启用后由 Orbit 启动的普通 Codex CLI 进程，不回填历史，也不统计 Claude、行内补全或手工终端进程。
 
 统计按日期、Provider 和模型聚合，数据默认保存在 `~/.tcb/orbit-safe-claw/codex-usage/usage.sqlite3`，不会保存逐轮提示词、认证头或 API 密钥。
 
@@ -516,7 +491,7 @@ Admin Center 提供“检查更新 → 准备更新 → 应用更新”。开启
 
 应用前必须等待 Agent、集群任务和存储迁移结束。应用期间服务暂时断开，只替换内容有变化的文件；新实例通过版本、任务标识、本地健康接口和前端资源检查后，任务才显示成功。健康确认默认最长等待 180 秒，可用 `TCB_UPDATE_HEALTH_TIMEOUT_SECONDS`（30–1800）调整。失败时保留备份，恢复旧程序和旧环境并再次验证。升级成功后，已打开的页面会提示刷新以加载新版本界面。`recovery_required` 表示需要人工处理，任务结果中会提供恢复命令；保留对应任务目录及日志（管理中心会显示 `preparation.log` 与 `runner.log` 路径），处理文件冲突后再运行该命令。
 
-`.env`、真实 Bot 配置、存储定位器指向的数据、插件、历史、附件和 Pi 模型密钥受保护。绿色版 Pi `settings.json` / `models.json` 在首次启动且缺失时生成；两项随包扩展按旧文件哈希验证后更新。程序恢复不覆盖用户数据；无法确认向后兼容的数据迁移在停机前阻止自动应用。
+`.env`、真实 Bot 配置、存储定位器指向的数据、插件、历史和附件受保护；更新清单只管理程序文件。程序恢复不覆盖用户数据；无法确认向后兼容的数据迁移在停机前阻止自动应用。
 
 首次从没有新执行器的旧版升级，需要使用完整新包中的 `scripts/update_bootstrap.py`。先在安装目录之外解压新包，核对 Release 的 SHA-256，再用新包的 Python（绿色版）或可用 Python（源码版）执行。例如：
 
@@ -542,7 +517,7 @@ APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
 
 ```text
 .
-├─ bot/                    # Python 后端、Web API、Bot、Native Agent、Plugins
+├─ bot/                    # Python 后端、Web API、Bot、Plugins
 ├─ front/                  # React/Vite 工作台前端
 ├─ examples/plugins/       # 示例插件与文件预览器
 ├─ tests/                  # 后端与集成测试

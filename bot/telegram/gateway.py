@@ -369,72 +369,33 @@ class TelegramGateway:
         await self._deliver(update_id, chat_id, [f"[{alias}] 当前操作目标\n会话：{conversation_label(conversation_id)}"],
                             {"inline_keyboard": rows})
 
-    def _configuration_mode(self, alias: str, user_id: int) -> str:
-        profile, _agent, session = api_service.get_chat_session_for_alias(
-            self.manager, alias, chat_session_user_id(user_id), "main",
-        )
-        conversation_id = session.active_conversation_id
-        if conversation_id:
-            try:
-                conversation = api_service._get_chat_store(session).get_conversation(conversation_id)
-            except KeyError:
-                pass
-            else:
-                if str(conversation.get("native_provider") or "").strip().lower() == "native_agent":
-                    return "native_agent"
-                return "cli"
-        return str(profile.default_execution_mode or "cli").strip().lower() or "cli"
-
     async def _configuration(self, alias: str, user_id: int) -> dict[str, Any]:
         self._require_target(alias)
         profile = self.manager.get_profile(alias)
-        execution_mode = self._configuration_mode(alias, user_id)
-        if execution_mode == "native_agent":
-            payload = await asyncio.to_thread(api_service.get_native_agent_models_payload, self.manager, alias)
-            selected_model = str(payload.get("selected_model") or "").strip()
-            selected_reasoning = str(payload.get("selected_reasoning_effort") or "").strip()
-            model_options = [
-                {
-                    "value": str(item.get("id") or "").strip(),
-                    "label": str(item.get("label") or item.get("name") or item.get("id") or "").strip(),
-                }
-                for item in payload.get("items", [])
-                if isinstance(item, dict) and str(item.get("id") or "").strip()
-            ]
-            selected_item = next((item for item in payload.get("items", [])
-                                  if isinstance(item, dict) and str(item.get("id") or "") == selected_model), None)
-            reasoning_options = [
-                str(item or "").strip()
-                for item in (selected_item or {}).get("reasoning_efforts", [])
-                if str(item or "").strip()
-            ]
-            cli_type = "pi"
-            reasoning_key = "reasoning_effort"
-        else:
-            payload = await asyncio.to_thread(api_service.get_cli_params_payload, self.manager, alias, profile.cli_type)
-            params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
-            defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
-            schema = payload.get("schema") if isinstance(payload.get("schema"), dict) else {}
-            cli_type = str(payload.get("cli_type") or profile.cli_type or "cli")
-            reasoning_key = "effort" if cli_type in {"claude", "antigravity"} else "reasoning_effort"
-            selected_model = str(params.get("model") or "none").strip()
-            selected_reasoning = str(params.get(reasoning_key) or defaults.get(reasoning_key) or "").strip()
-            model_schema = schema.get("model") if isinstance(schema.get("model"), dict) else {}
-            model_options = [
-                {"value": str(item or "").strip(), "label": str(item or "").strip()}
-                for item in model_schema.get("enum", [])
-                if str(item or "").strip()
-            ]
-            reasoning_schema = schema.get(reasoning_key) if isinstance(schema.get(reasoning_key), dict) else {}
-            reasoning_options = [
-                str(item or "").strip()
-                for item in reasoning_schema.get("enum", [])
-                if str(item or "").strip()
-            ]
+        payload = await asyncio.to_thread(api_service.get_cli_params_payload, self.manager, alias, profile.cli_type)
+        params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        defaults = payload.get("defaults") if isinstance(payload.get("defaults"), dict) else {}
+        schema = payload.get("schema") if isinstance(payload.get("schema"), dict) else {}
+        cli_type = str(payload.get("cli_type") or profile.cli_type or "cli")
+        reasoning_key = "effort" if cli_type in {"claude", "antigravity"} else "reasoning_effort"
+        selected_model = str(params.get("model") or "none").strip()
+        selected_reasoning = str(params.get(reasoning_key) or defaults.get(reasoning_key) or "").strip()
+        model_schema = schema.get("model") if isinstance(schema.get("model"), dict) else {}
+        model_options = [
+            {"value": str(item or "").strip(), "label": str(item or "").strip()}
+            for item in model_schema.get("enum", [])
+            if str(item or "").strip()
+        ]
+        reasoning_schema = schema.get(reasoning_key) if isinstance(schema.get(reasoning_key), dict) else {}
+        reasoning_options = [
+            str(item or "").strip()
+            for item in reasoning_schema.get("enum", [])
+            if str(item or "").strip()
+        ]
 
         cluster = await asyncio.to_thread(api_service.get_cluster_status, self.manager, alias)
         return {
-            "execution_mode": execution_mode,
+            "execution_mode": "cli",
             "cli_type": cli_type,
             "reasoning_key": reasoning_key,
             "model": selected_model,
@@ -524,40 +485,24 @@ class TelegramGateway:
         elif setting == "model":
             if not normalized_value:
                 raise WebApiError(400, "missing_telegram_model", "模型不能为空。")
-            if configuration["execution_mode"] == "native_agent":
-                await api_service.update_bot_native_agent_model(
-                    self.manager,
-                    alias,
-                    normalized_value,
-                    configuration["reasoning_effort"],
-                )
-            else:
-                await api_service.update_cli_params(
-                    self.manager,
-                    alias,
-                    configuration["cli_type"],
-                    "model",
-                    normalized_value,
-                )
+            await api_service.update_cli_params(
+                self.manager,
+                alias,
+                configuration["cli_type"],
+                "model",
+                normalized_value,
+            )
             message = f"模型已设置为：{normalized_value}。"
         elif setting == "reasoning":
             if not normalized_value:
                 raise WebApiError(400, "missing_telegram_reasoning", "思考强度不能为空。")
-            if configuration["execution_mode"] == "native_agent":
-                await api_service.update_bot_native_agent_model(
-                    self.manager,
-                    alias,
-                    configuration["model"],
-                    normalized_value,
-                )
-            else:
-                await api_service.update_cli_params(
-                    self.manager,
-                    alias,
-                    configuration["cli_type"],
-                    configuration["reasoning_key"],
-                    normalized_value,
-                )
+            await api_service.update_cli_params(
+                self.manager,
+                alias,
+                configuration["cli_type"],
+                configuration["reasoning_key"],
+                normalized_value,
+            )
             message = f"思考强度已设置为：{normalized_value}。"
         else:
             raise WebApiError(400, "invalid_telegram_config_setting", "配置项只能是 model、reasoning 或 cluster。")
@@ -1015,15 +960,13 @@ class TelegramGateway:
         events = api_service.stream_chat(
             self.manager, alias, shared_user_id, body,
             agent_id="main", follow_current_conversation=True, include_trace=False,
-            protocol="ag-ui",
             telegram_origin_chat_id=chat_id,
             actor={"user_id": sender["id"], "username": sender.get("username") or sender.get("first_name") or "Telegram"},
             **expected,
         )
         try:
             async for event in events:
-                # Native AG-UI events are followed by the service's terminal done/error.
-                # Preview, trace and AG-UI deltas never trigger Telegram messages.
+                # Only final done/error events trigger Telegram messages.
                 if event.get("type") not in {"meta", "status", "done", "error"}:
                     continue
                 event_message = event.get("message") if isinstance(event.get("message"), dict) else {}

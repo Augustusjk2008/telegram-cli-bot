@@ -11,7 +11,6 @@ const loadPluginsScreen = () => import("../screens/PluginsScreen").then((module)
 const loadSettingsScreen = () => import("../screens/SettingsScreen").then((module) => ({ default: module.SettingsScreen }));
 const loadTerminalScreen = () => import("../screens/TerminalTabsScreen").then((module) => ({ default: module.TerminalTabsScreen }));
 const loadDesktopWorkbench = () => import("../workbench/DesktopWorkbench").then((module) => ({ default: module.DesktopWorkbench }));
-const loadSoloWorkbench = () => import("../workbench/SoloWorkbench").then((module) => ({ default: module.SoloWorkbench }));
 
 if (!FRONTEND_FEATURE_FLAGS.routeLazyLoading) {
   void Promise.all([
@@ -25,7 +24,6 @@ if (!FRONTEND_FEATURE_FLAGS.routeLazyLoading) {
     loadSettingsScreen(),
     loadTerminalScreen(),
     loadDesktopWorkbench(),
-    loadSoloWorkbench(),
   ]);
 }
 
@@ -39,4 +37,3 @@ export const LazyPluginsScreen = lazy(loadPluginsScreen);
 export const LazySettingsScreen = lazy(loadSettingsScreen);
 export const LazyTerminalScreen = lazy(loadTerminalScreen);
 export const LazyDesktopWorkbench = lazy(loadDesktopWorkbench);
-export const LazySoloWorkbench = lazy(loadSoloWorkbench);

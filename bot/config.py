@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, List, Optional, Set
 
 from bot.cli_params import CLI_MODEL_OPTION_TYPES, normalize_cli_model_options
-from bot.native_agent.legacy_migration import resolve_pi_agent_env
 
 try:
     import winreg as _WINREG
@@ -207,11 +206,7 @@ def _refresh_environment_config() -> None:
     """Refresh values derived from the current process environment."""
     global ALLOWED_USER_IDS, CLI_TYPE, CLI_PATH, TCB_CODEX_SERVER_VOICE_ENABLED
     global TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, TELEGRAM_BROADCAST_COMPLETIONS
-    global NATIVE_AGENT_BACKEND, NATIVE_AGENT_PATH, NATIVE_AGENT_ENABLED, NATIVE_AGENT_PI_HOME
-    global NATIVE_AGENT_PI_COMMAND, NATIVE_AGENT_COMMAND, NATIVE_AGENT_PROVIDER, NATIVE_AGENT_MODEL
-    global NATIVE_AGENT_BASE_URL, NATIVE_AGENT_API_KEY, NATIVE_AGENT_PI_AGENT
-    global NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED, NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS
-    global NATIVE_AGENT_REASONING_EFFORT, NATIVE_AGENT_THINKING_DEPTH, CLI_MODEL_OPTIONS
+    global CLI_MODEL_OPTIONS
     global CLI_GLOBAL_EXTRA_ARGS, MODEL_PRICES_FILE, WORKING_DIR, CLAUDE_DONE_DETECTOR_ENABLED
     global CLAUDE_DONE_QUIET_SECONDS, CLAUDE_DONE_SENTINEL_MODE, MANAGED_BOTS_FILE, WEB_ENABLED
     global WEB_HOST, WEB_PORT, WEB_PUBLIC_URL, WEB_API_TOKEN, WEB_ALLOWED_ORIGINS, WEB_DEFAULT_USER_ID
@@ -259,32 +254,6 @@ def _refresh_environment_config() -> None:
         "deepseek": "dsh",
     }.get(CLI_TYPE, "codex")
     TCB_CODEX_SERVER_VOICE_ENABLED = _get_project_bool("TCB_CODEX_SERVER_VOICE_ENABLED", False)
-    NATIVE_AGENT_BACKEND = "pi"
-    NATIVE_AGENT_PATH = _get_project_config("NATIVE_AGENT_PATH", "").strip()
-    NATIVE_AGENT_ENABLED = _get_project_bool("NATIVE_AGENT_ENABLED", False)
-    NATIVE_AGENT_PI_HOME = _get_project_config("NATIVE_AGENT_PI_HOME", "").strip()
-    NATIVE_AGENT_PI_COMMAND = (
-        _get_project_config(
-            "NATIVE_AGENT_PI_COMMAND",
-            _get_project_config("NATIVE_AGENT_COMMAND", NATIVE_AGENT_PATH or "pi"),
-        ).strip()
-        or "pi"
-    )
-    NATIVE_AGENT_COMMAND = (
-        _get_project_config("NATIVE_AGENT_COMMAND", "").strip()
-        or NATIVE_AGENT_PATH
-        or NATIVE_AGENT_PI_COMMAND
-        or "pi"
-    )
-    NATIVE_AGENT_PROVIDER = _get_project_config("NATIVE_AGENT_PROVIDER", "").strip()
-    NATIVE_AGENT_MODEL = _get_project_config("NATIVE_AGENT_MODEL", "").strip()
-    NATIVE_AGENT_BASE_URL = _get_project_config("NATIVE_AGENT_BASE_URL", "").strip()
-    NATIVE_AGENT_API_KEY = _get_project_config("NATIVE_AGENT_API_KEY", "").strip()
-    NATIVE_AGENT_PI_AGENT = resolve_pi_agent_env(_get_project_config)
-    NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED = _get_project_bool("NATIVE_AGENT_WORKSPACE_HISTORY_ENABLED", True)
-    NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS = _get_project_float("NATIVE_AGENT_NO_PROGRESS_TIMEOUT_SECONDS", 0.0)
-    NATIVE_AGENT_REASONING_EFFORT = _get_project_config("NATIVE_AGENT_REASONING_EFFORT", "").strip()
-    NATIVE_AGENT_THINKING_DEPTH = _get_project_config("NATIVE_AGENT_THINKING_DEPTH", "").strip()
     CLI_MODEL_OPTIONS = _parse_cli_model_options(_get_project_config("CLI_MODEL_OPTIONS", ""))
     CLI_GLOBAL_EXTRA_ARGS = _parse_cli_global_extra_args(_get_project_config("CLI_GLOBAL_EXTRA_ARGS", "{}"))
     MODEL_PRICES_FILE = _get_project_config("MODEL_PRICES_FILE", "").strip()
@@ -591,7 +560,6 @@ _SERVICE_LOG_SECRET_NAMES = (
     "WEB_API_TOKEN",
     "TCB_HUB_NODE_TOKEN",
     "TCB_HUB_FRPS_TOKEN",
-    "NATIVE_AGENT_API_KEY",
     "PUSHPLUS_TOKEN",
     "CLI_BRIDGE_UPDATE_HANDOFF_TOKEN",
     "TCB_UPDATE_HEALTH_TOKEN",

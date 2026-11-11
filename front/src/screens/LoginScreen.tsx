@@ -80,7 +80,7 @@ export function LoginScreen({
             本地 agent 控制台
           </div>
           <h1 className="login-title">{APP_LOGIN_NAME}</h1>
-          <p className="login-tagline">在浏览器里驾驭本机的 Codex、Claude、Antigravity、DeepSeek 与 Pi。</p>
+          <p className="login-tagline">在浏览器里驾驭本机的 Codex、Claude、Antigravity 与 DeepSeek。</p>
           <div className="login-host-grid">
             {hostStatusItems.map(({ label, value, Icon }) => (
               <div key={label} className="login-host-chip">

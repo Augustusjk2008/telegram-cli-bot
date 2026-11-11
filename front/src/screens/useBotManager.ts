@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
   BotClusterConfig,
   BotSummary,
-  ChatExecutionMode,
   CliType,
   CreateBotInput,
   RemoveBotOptions,
@@ -16,11 +15,7 @@ import { normalizePathInput } from "../utils/pathInput";
 import { defaultCliPathForType, suggestCliPath } from "../utils/cliType";
 export { defaultCliPathForType } from "../utils/cliType";
 import {
-  buildExecutionConfig,
-  DEFAULT_NATIVE_AGENT_CONFIG,
-  DEFAULT_NATIVE_AGENT_DRAFT,
   getErrorMessage,
-  getRuntimeBackend,
   isBotOffline,
   isMainBot,
   type EditDraft,
@@ -28,7 +23,6 @@ import {
 
 export type CreateDraft = CreateBotInput & {
   workingDir: string;
-  runtimeBackend: ChatExecutionMode;
 };
 export type { EditDraft } from "./botManagerModel";
 
@@ -40,8 +34,6 @@ export const EMPTY_CREATE_DRAFT: CreateDraft = {
   bypassApprovalAndSandbox: false,
   supportedExecutionModes: ["cli"],
   defaultExecutionMode: "cli",
-  runtimeBackend: "cli",
-  nativeAgent: { ...DEFAULT_NATIVE_AGENT_DRAFT },
 };
 
 export function resolveDefaultCliPath(cliType: CliType, bots: BotSummary[]) {
@@ -53,8 +45,6 @@ export function buildCreateDraft(cliType: CliType = "codex", bots: BotSummary[] 
     ...EMPTY_CREATE_DRAFT,
     cliType,
     cliPath: resolveDefaultCliPath(cliType, bots),
-    runtimeBackend: "cli",
-    nativeAgent: { ...DEFAULT_NATIVE_AGENT_DRAFT },
   };
 }
 
@@ -71,26 +61,6 @@ type UseBotManagerArgs = {
   onBotsChange?: (bots: BotSummary[]) => void;
   includeArchived?: boolean;
 };
-
-function normalizeNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
-  return {
-    ...DEFAULT_NATIVE_AGENT_CONFIG,
-    ...(nativeAgent || {}),
-    provider: "",
-    model: "",
-    piAgent: nativeAgent?.piAgent?.trim() || "",
-    baseUrl: "",
-    apiKey: "",
-    clearApiKey: false,
-  };
-}
-
-function comparableNativeAgentInput(nativeAgent: CreateBotInput["nativeAgent"] | EditDraft["nativeAgent"] | undefined) {
-  const normalized = normalizeNativeAgentInput(nativeAgent);
-  return {
-    piAgent: normalized.piAgent,
-  };
-}
 
 export function useBotManager({
   client = new MockWebBotClient(),
@@ -137,7 +107,7 @@ export function useBotManager({
   }, [client, includeArchived]);
 
   async function createBot(draft: CreateDraft) {
-    if (draft.cliType === "deepseek" && (draft.remoteWorkspace || draft.runtimeBackend !== "cli")) {
+    if (draft.cliType === "deepseek" && (draft.remoteWorkspace)) {
       setError("DeepSeek Harness 目前仅支持本地 CLI");
       return null;
     }
@@ -150,16 +120,15 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      const { runtimeBackend, ...input } = draft;
-      const executionConfig = buildExecutionConfig(runtimeBackend);
+      const input = draft;
+
       const created = await client.addBot({
         ...input,
-        ...executionConfig,
+
         alias: draft.alias.trim(),
         cliPath: normalizePathInput(draft.cliPath),
         workingDir: draft.remoteWorkspace ? undefined : normalizePathInput(draft.workingDir),
-        bypassApprovalAndSandbox: runtimeBackend === "cli" && draft.cliType !== "deepseek" ? Boolean(draft.bypassApprovalAndSandbox) : false,
-        nativeAgent: normalizeNativeAgentInput(draft.nativeAgent),
+        bypassApprovalAndSandbox: draft.cliType !== "deepseek" ? Boolean(draft.bypassApprovalAndSandbox) : false,
       });
       setNotice("智能体已创建");
       await loadBots();
@@ -332,12 +301,6 @@ export function useBotManager({
     setError("");
     setNotice("");
     try {
-      if (cliType === "deepseek" && getRuntimeBackend(bot) !== "cli") {
-        await client.updateBotExecutionConfig(bot.alias, {
-          ...buildExecutionConfig("cli"),
-          nativeAgent: normalizeNativeAgentInput(bot.nativeAgent),
-        });
-      }
       const updated = await client.updateBotCli(bot.alias, cliType, nextCliPath);
       setNotice("CLI 配置已更新");
       await loadBots();
@@ -403,7 +366,7 @@ export function useBotManager({
     draft: EditDraft,
     options: UpdateBotWorkdirOptions = {},
   ): Promise<SaveBotEditsResult> {
-    if (draft.cliType === "deepseek" && (draft.remoteWorkspace || draft.runtimeBackend !== "cli")) {
+    if (draft.cliType === "deepseek" && (draft.remoteWorkspace)) {
       setError("DeepSeek Harness 目前仅支持本地 CLI");
       return { ok: false };
     }
@@ -417,33 +380,11 @@ export function useBotManager({
       nextBot = renamed;
     }
 
-    if (draft.runtimeBackend === "cli") {
       const cliUpdated = await updateBotCli(nextBot, draft.cliType, draft.cliPath);
       if (!cliUpdated) {
         return { ok: false };
       }
       nextBot = cliUpdated;
-    }
-
-    const executionConfig = buildExecutionConfig(draft.runtimeBackend);
-    const executionChanged = JSON.stringify({
-      runtimeBackend: getRuntimeBackend(nextBot),
-      nativeAgent: comparableNativeAgentInput(nextBot.nativeAgent),
-    }) !== JSON.stringify({
-      runtimeBackend: draft.runtimeBackend,
-      nativeAgent: comparableNativeAgentInput(draft.nativeAgent),
-    });
-    if (executionChanged) {
-      nextBot = await client.updateBotExecutionConfig(nextBot.alias, {
-        supportedExecutionModes: executionConfig.supportedExecutionModes,
-        defaultExecutionMode: executionConfig.defaultExecutionMode,
-        nativeAgent: {
-          ...normalizeNativeAgentInput(draft.nativeAgent),
-        },
-      });
-      setNotice("执行模式配置已更新");
-      await loadBots();
-    }
 
     const workdirResult = await updateBotWorkdir(nextBot, draft.workingDir, {
       ...options,

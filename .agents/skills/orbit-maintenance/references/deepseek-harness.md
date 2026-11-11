@@ -3,19 +3,19 @@
 ## 配置与支持范围
 
 - CLI 类型为 `deepseek`，默认执行命令为 `dsh`；主 Bot 和子 Bot 均可选择。配置入口是 `bot/config.py`、`bot/manager.py`、`bot/cli_params.py`。
-- 当前支持本地工作区的 `execution_mode=cli`，包括 Bot 级 TCB 集群编排。原生执行模式、远程工作区和 Git commit message 生成会在启动前拒绝；修改入口时保持前后端边界一致。
+- 当前支持本地工作区的 `execution_mode=cli`，包括 Bot 级 TCB 集群编排。远程工作区和 Git commit message 生成会在启动前拒绝；修改入口时保持前后端边界一致。
 - provider、模型和 `reasoning_effort` 可在聊天页选择；空值或 `none` 继承 Harness 配置，思考深度支持 `off/low/high/max`。npm 版和官方 Desktop 版都通过每次调用的临时 patch 应用选择，保留其他配置；不修改用户的 Harness 配置。Desktop 会临时桥接 `agent-default-model`、`credentials`、`llm-pi-ai` 和 `llm-deepseek` entry。provider 切换清理当前 Web 用户和 agent 的 DeepSeek session 绑定，同一 provider 内切换模型保留 session。宿主 `extra_args` 仅接受 `--patch <文件路径>` 或 `--patch=<文件路径>`；协议参数、session id 和任务输入由宿主控制。
 - `bot/deepseek_launch.mjs --describe-models` 返回受控 provider catalog，只包含 provider、模型、思考深度和默认值。catalog 读取有大小和超时限制；失败时后端保留当前选择和静态模型候选。凭据内容、API key、环境变量实际值和原始 profile 不得进入 API、stdout、stderr 或历史。
 - 官方 Desktop 的 wrapper 通常位于安装目录下的 `resources\\runtime\\cli\\bin\\dsh.cmd`，使用 Desktop 内置运行时，不要求系统 Node.js。Windows 自动发现只对 `dsh` 启用 Desktop 安装注册信息 fallback；显式完整路径、PATH 和 npm 目录保持更高优先级。
 - Desktop 集群轮次会通过 `--dump-config` 预检 `@deepseek-ai/dsh-mcp-client`；如果 headless profile 返回 `orbit-tcb-cluster-mcp` 不存在，Orbit 会在启动前返回明确诊断并暂停该 Desktop 版本的集群任务。当前验证的 Desktop `0.2.1-rc.3` 属于此情况。
 - `permission_mode` 支持 `read-only/workspace-write/danger-full-access`，默认 `workspace-write`，通过 `DSH_PERMISSION_MODE` 传给 Harness。Web 调用通过 `clamp_unsafe_cli_params()` 限制未获 `allow_unsafe_cli` 的 `danger-full-access`；集群 `allow_write` 不替代这层 CLI 权限配置。
-- 前端 CLI 标签和默认路径由 `front/src/utils/cliType.ts` 管理；执行模式入口见 `front/src/screens/botManagerModel.ts`、`SettingsScreen.tsx`。设置页切换到 DeepSeek 时先保存 CLI 执行模式，再保存 CLI 类型和路径，保留 Bot 的集群开关。
+- 前端 CLI 标签和默认路径由 `front/src/utils/cliType.ts` 管理；配置入口见 `front/src/screens/botManagerModel.ts`、`SettingsScreen.tsx`。设置页切换到 DeepSeek 时保存 CLI 类型和路径，保留 Bot 的集群开关。
 
 ## 本地集群接入
 
 - `bot/web/api_service.py:_cluster_mcp_injected_params()` 调用 `write_deepseek_mcp_patch()`，向 DeepSeek 参数块追加 `--patch <path>`。`bot/cluster/setup.py` 生成包含 `@deepseek-ai/dsh-mcp-client` 的 patch，以当前 Python 执行项目 `bot/cluster/mcp_stdio.py --config <bridge-config>`，传入工作区 cwd，并设置 `failOnStartupError=true`。
 - patch 由宿主管理，位于 cluster MCP 配置目录；管理页准备该文件，DeepSeek 的 MCP 安装、验证、移除命令列表均为空。接入不修改用户 Harness 全局配置。
-- 工具、显式 `run_id` 和编组规则沿用 [native-agent.md](native-agent.md) 的公共 MCP 契约。CLI 子任务的模型档位映射到 DeepSeek 的 `model` 和 `reasoning_effort`。
+- 工具、显式 `run_id` 和编组规则沿用 [cli-agent.md](cli-agent.md) 的公共 MCP 契约。CLI 子任务的模型档位映射到 DeepSeek 的 `model` 和 `reasoning_effort`。
 
 ## 执行协议
 
@@ -30,8 +30,8 @@
 ## 会话、历史与前端事件
 
 - 会话沿用 `(bot_id, shared_user_id, agent_id)` 隔离；`deepseek_session_id` 由 `bot/models.py`、`bot/sessions.py`、`bot/session_store.py` 保存。只用 Harness 返回的 ID 续聊，新会话首次调用省略 `--session-id`。
-- 历史、trace 和用量由项目 `ChatStore` 持久化；`bot/web/chat_history_service.py` 从选中 conversation 的 `native_session_id` 恢复绑定。DeepSeek 历史恢复不扫描外部 CLI 会话目录。
-- trace 映射位于 `bot/web/native_history_adapter.py`。前端沿用 CLI `NativeAgentTranscript`，保持 legacy SSE `meta/status/trace/done` 及顶层 `turn_id`、`assistant_message_id`；增量正文位于 `status.preview_text`。
+- 历史、trace 和用量由项目 `ChatStore` 持久化；`bot/web/chat_history_service.py` 从选中 conversation 的 provider session ID 恢复绑定。DeepSeek 历史恢复不扫描外部 CLI 会话目录。
+- 前端 CLI transcript 展示 trace，保持 legacy SSE `meta/status/trace/done` 及顶层 `turn_id`、`assistant_message_id`；增量正文位于 `status.preview_text`。
 - 失败、停止和输出超限应保留已收到的正文，完成一次 turn 并释放 processing 状态；失败不得自动重放用户任务。
 
 ## 验证

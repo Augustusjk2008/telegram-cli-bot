@@ -85,7 +85,6 @@ def test_cli_model_options_table_keeps_cli_types_independent(monkeypatch):
     assert get_cli_model_options(table, "claude") == ["claude-model", "none"]
     assert get_cli_model_options(table, "antigravity") == ["agy-model", "none"]
     assert get_cli_model_options(table, "deepseek") == ["dsh-model", "none"]
-    assert get_cli_model_options(table, "pi") is None
     assert get_default_params("codex")["model"] == "codex-model"
     assert get_default_params("codex_server")["model"] == "server-model"
     assert get_default_params("claude")["model"] == "claude-model"

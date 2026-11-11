@@ -126,7 +126,7 @@ async def _workspace_request(server, request, profile, suffix, browse_dirs):
         # directory. Conversation/history storage remains local as intended.
         unsupported = suffix.startswith((
             "files/", "workspace/", "debug/", "plugins/", "terminal-actions/",
-            "native-agent/history/", "workdir", "chat/attachments",
+            "workdir", "chat/attachments",
         )) or suffix in {"debug", "plugins"}
         if unsupported:
             await server._with_capability(request, CAP_VIEW_FILE_TREE)

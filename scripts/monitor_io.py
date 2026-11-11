@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default="", help="Web API token.")
     parser.add_argument("--alias", default="", help="Bot alias to monitor. Empty means all bots.")
     parser.add_argument("--agent-id", default="main", help="Agent id for Web history scope.")
-    parser.add_argument("--execution-mode", default="", choices=("", "cli", "native_agent"), help="History scope.")
+    parser.add_argument("--execution-mode", default="", choices=("", "cli"), help="History scope.")
     parser.add_argument("--interval", type=float, default=1.5, help="Polling interval seconds.")
     parser.add_argument("--limit", type=int, default=80, help="History items fetched per bot.")
     parser.add_argument("--once", action="store_true", help="Poll once and exit.")

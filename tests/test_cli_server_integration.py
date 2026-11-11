@@ -192,7 +192,6 @@ async def test_server_steering_appends_user_message_to_active_turn(server_chat):
         working_dir=session.working_dir,
         session_epoch=session.session_epoch,
         conversation_id=session.active_conversation_id,
-        native_provider_exclude="native_agent",
     )
     assert first["type"] == "meta"
     assert running is not None
@@ -259,7 +258,6 @@ async def test_server_steering_rejects_stale_turn_and_wrong_owner(server_chat):
         working_dir=session.working_dir,
         session_epoch=session.session_epoch,
         conversation_id=session.active_conversation_id,
-        native_provider_exclude="native_agent",
     )
     assert running is not None
 
@@ -323,7 +321,6 @@ async def test_failed_server_steering_does_not_persist_user_message(server_chat)
         working_dir=session.working_dir,
         session_epoch=session.session_epoch,
         conversation_id=session.active_conversation_id,
-        native_provider_exclude="native_agent",
     )
     assert running is not None
     registry.steer_owner.side_effect = RuntimeError("codex server owner 没有运行时")

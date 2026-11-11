@@ -69,4 +69,4 @@ if ($existing) {
 } else {
     Write-Output "已注册 Orbit Safe Claw 后台任务：$TaskName"
 }
-Write-Output "运行账户：$User；该账户必须拥有 Codex、Claude、Pi、DeepSeek Harness 和 Telegram 凭据。"
+Write-Output "运行账户：$User；该账户必须拥有 Codex、Claude、Antigravity、DeepSeek Harness 和 Telegram 凭据。"

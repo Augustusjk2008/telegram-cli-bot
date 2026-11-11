@@ -2,13 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, X } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
-import type { ChatExecutionMode, DeepSeekProviderOption } from "../services/types";
+import type {  DeepSeekProviderOption } from "../services/types";
 
 type Props = {
-  executionMode: ChatExecutionMode;
-  supportedExecutionModes?: ChatExecutionMode[];
-  executionModeDisabled?: boolean;
-  onExecutionModeChange: (mode: ChatExecutionMode) => void;
   planMode: boolean;
   planDisabled?: boolean;
   onTogglePlanMode: () => void;
@@ -43,14 +39,10 @@ const groupClassName = "inline-flex shrink-0 items-center gap-1";
 const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2 text-[var(--muted)]");
 const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
-const segmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-transparent px-2 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
-const activeSegmentedButtonClassName = "inline-flex h-8 shrink-0 items-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+
+
 
 export function ChatActionBar({
-  executionMode,
-  supportedExecutionModes = ["cli"],
-  executionModeDisabled = false,
-  onExecutionModeChange,
   planMode,
   planDisabled = false,
   onTogglePlanMode,
@@ -119,7 +111,7 @@ export function ChatActionBar({
     const selectedModelLabel = modelDescription || modelOptions.find((option) => option.value === selectedModel)?.label || selectedModel || "模型";
     const selectedProviderLabel = providerOptions.find((option) => option.id === selectedProvider)?.label || selectedProvider || "默认 Provider";
     const optionsSummary = [
-      executionMode === "native_agent" ? "原生" : "CLI",
+      "CLI",
       providerOptions.length > 0 ? selectedProviderLabel : "",
       selectedModelLabel,
       selectedReasoningEffort,
@@ -174,20 +166,7 @@ export function ChatActionBar({
               聊天选项
               <button type="button" aria-label="关闭聊天选项" onClick={closeOptions} className={iconButtonClassName}><X className="h-4 w-4" /></button>
             </div>
-            {supportedExecutionModes.length > 1 ? (
-              <div className="mb-2 flex items-center gap-1" role="group" aria-label="执行模式">
-                {supportedExecutionModes.map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={executionMode === mode}
-                    disabled={executionModeDisabled}
-                    onClick={() => onExecutionModeChange(mode)}
-                    className={executionMode === mode ? activeSegmentedButtonClassName : segmentedButtonClassName}
-                  >{mode === "native_agent" ? "原生 agent" : "CLI"}</button>
-                ))}
-              </div>
-            ) : <p className="mb-2 text-xs">执行模式：{executionMode === "native_agent" ? "原生 agent" : "CLI"}</p>}
+
             {providerOptions.length > 1 ? (
               <label className="mb-2 block text-xs text-[var(--muted)]">
                 Provider
@@ -279,28 +258,7 @@ export function ChatActionBar({
         data-testid="chat-action-bar"
         className="flex max-w-full gap-1.5 overflow-x-auto"
       >
-        {supportedExecutionModes.length > 1 ? (
-          <div className={groupClassName} role="group" aria-label="执行模式">
-            <button
-              type="button"
-              aria-pressed={executionMode === "cli"}
-              disabled={executionModeDisabled}
-              onClick={() => onExecutionModeChange("cli")}
-              className={executionMode === "cli" ? activeSegmentedButtonClassName : segmentedButtonClassName}
-            >
-              CLI
-            </button>
-            <button
-              type="button"
-              aria-pressed={executionMode === "native_agent"}
-              disabled={executionModeDisabled}
-              onClick={() => onExecutionModeChange("native_agent")}
-              className={executionMode === "native_agent" ? activeSegmentedButtonClassName : segmentedButtonClassName}
-            >
-              原生 agent
-            </button>
-          </div>
-        ) : null}
+
         <div className={groupClassName} role="group" aria-label="聊天模式">
           <button
             type="button"

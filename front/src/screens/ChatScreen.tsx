@@ -2,7 +2,7 @@ import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
 import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { ChatTranslationControl } from "../components/ChatTranslationControl";
 import { buildDisplayContextUsage } from "../chat/displayContextUsage";
-import { applyUserTranslationUpdate, mapUserTranslationUpdate, mergeMessageTranslation, translatedMessageText } from "../utils/chatTranslation";
+import { applyUserTranslationUpdate, mergeMessageTranslation, translatedMessageText } from "../utils/chatTranslation";
 import {
   forwardRef,
   memo,
@@ -21,7 +21,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { clsx } from "clsx";
-import { CheckCheck, Copy, LoaderCircle, Paperclip, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCheck, Copy, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
@@ -34,7 +34,7 @@ import { ClusterTeamPanel } from "../components/ClusterTeamPanel";
 import { ConversationHistoryPanel, type ConversationHistoryPanelTab } from "../components/ConversationHistoryPanel";
 import { BotChatTranslationSettings } from "../components/BotChatTranslationSettings";
 import { FilePreviewDialog } from "../components/FilePreviewDialog";
-import { EndlessTypingLabel, NativeAgentTranscript } from "../components/NativeAgentTranscript";
+import { EndlessTypingLabel, CliTranscript } from "../components/CliTranscript";
 import { ImmersiveToggleButton } from "../components/ImmersiveToggleButton";
 import { PlanDraftCard } from "../components/PlanDraftCard";
 import { MockWebBotClient } from "../services/mockWebBotClient";
@@ -43,7 +43,6 @@ import { WebApiClientError } from "../services/types";
 import type {
   AgentSummary,
   BotOverview,
-  BotSummary,
   ChatAttachmentUploadResult,
   ClusterAgentTask,
   ClusterSlotStatus,
@@ -65,8 +64,6 @@ import type {
   FileReadResult,
   HistorySnapshotResult,
   PromptPreset,
-  NativeAgentModelsPayload,
-  NativeAgentModelOption,
   SteerMessageResult,
   VoiceTaskBinding,
 } from "../services/types";
@@ -84,19 +81,12 @@ import {
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
-import type { SoloSessionSnapshot } from "../workbench/soloTypes";
+
 import { extractPlanDraft, extractPlanTitle, stripPlanDraftTags } from "../utils/planDraft";
-import { EventType, type AgUiEvent } from "../services/agUiProtocol";
+
 import {
-  buildAgUiMessageMeta,
-  createAgUiRunAccumulator,
-  type AgUiRunState,
-  type NativeAgentPermissionReply,
-} from "../utils/agUiRunReducer";
-import {
-  buildNativeAgentTranscriptEntries,
-  isNativeAgentMessage,
-} from "../utils/nativeAgentTranscript";
+  buildCliTranscriptEntries,
+} from "../utils/cliTranscript";
 import { fallbackAgents } from "../utils/defaultAgents";
 import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
 import { useChatHistorySync } from "../hooks/useChatHistorySync";
@@ -138,11 +128,7 @@ type Props = {
   onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
-  forcedExecutionMode?: ChatExecutionMode;
-  soloMode?: boolean;
-  soloHistoryRevision?: number;
-  onSoloSessionInfoChange?: (snapshot: SoloSessionSnapshot) => void;
-  onSoloHistoryRollback?: () => void;
+
   onOpenGlobalPromptSettings?: () => void;
   onOpenBotSettings?: () => void;
   mobileLayout?: boolean;
@@ -187,12 +173,6 @@ type ChatMessageRowModel = {
   canContinue: boolean;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
-  soloRollbackTarget?: SoloRollbackTarget;
-};
-
-type SoloRollbackTarget = {
-  conversationId: string;
-  targetTurnId: string;
 };
 
 const EMPTY_ATTACHMENT_STATE: Record<string, boolean> = {};
@@ -254,10 +234,6 @@ function planModeStorageKey(botAlias: string, accountId?: string) {
   return `tcb.planMode.${storageScopePrefix(accountId)}${botAlias}`;
 }
 
-function executionModeStorageKey(botAlias: string, accountId?: string) {
-  return `tcb.executionMode.${storageScopePrefix(accountId)}${botAlias}`;
-}
-
 function immersiveButtonPositionStorageKey(botAlias: string, accountId?: string) {
   return `tcb.chatImmersiveButton.${storageScopePrefix(accountId)}${botAlias}`;
 }
@@ -291,28 +267,6 @@ function writeStoredPlanMode(botAlias: string, enabled: boolean, accountId?: str
     return;
   }
   window.localStorage.removeItem(planModeStorageKey(botAlias, accountId));
-}
-
-function readStoredExecutionMode(botAlias: string, accountId?: string): ChatExecutionMode | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const value = window.localStorage.getItem(executionModeStorageKey(botAlias, accountId));
-  if (value === null) {
-    return null;
-  }
-  return value === "native_agent" ? "native_agent" : "cli";
-}
-
-function writeStoredExecutionMode(botAlias: string, mode: ChatExecutionMode, accountId?: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  if (mode === "native_agent") {
-    window.localStorage.setItem(executionModeStorageKey(botAlias, accountId), mode);
-    return;
-  }
-  window.localStorage.removeItem(executionModeStorageKey(botAlias, accountId));
 }
 
 function readStoredQueuedMessage(botAlias: string, agentId: string, accountId?: string): QueuedChatMessage | null {
@@ -369,21 +323,8 @@ function clearStoredQueuedMessage(botAlias: string, agentId: string, accountId?:
 function agentOptions(agentId?: string, executionMode?: ChatExecutionMode): { agentId?: string; executionMode?: ChatExecutionMode } | undefined {
   const options = {
     ...(agentId && agentId !== "main" ? { agentId } : {}),
-    ...(executionMode === "native_agent" ? { executionMode } : {}),
   };
   return Object.keys(options).length > 0 ? options : undefined;
-}
-
-function getSupportedExecutionModes(overview?: Pick<BotOverview, "cliType" | "supportedExecutionModes"> | null): ChatExecutionMode[] {
-  if (overview?.cliType === "deepseek") return ["cli"];
-  return overview?.supportedExecutionModes?.length ? overview.supportedExecutionModes : ["cli"];
-}
-
-function getDefaultExecutionMode(overview?: Pick<BotOverview, "cliType" | "defaultExecutionMode" | "supportedExecutionModes"> | null): ChatExecutionMode {
-  const supportedExecutionModes = getSupportedExecutionModes(overview);
-  return overview?.defaultExecutionMode && supportedExecutionModes.includes(overview.defaultExecutionMode)
-    ? overview.defaultExecutionMode
-    : (supportedExecutionModes.includes("cli") ? "cli" : supportedExecutionModes[0] || "cli");
 }
 
 function getScopedOverview(client: WebBotClient, botAlias: string, agentId: string, executionMode?: ChatExecutionMode) {
@@ -501,29 +442,6 @@ function inferAntigravityModelEffort(model: string, options: string[]) {
   return options.includes(effort) ? effort : "";
 }
 
-function modelLimitTitle(contextWindow?: number, outputLimit?: number) {
-  return [
-    typeof contextWindow === "number" ? `context ${contextWindow.toLocaleString()}` : "",
-    typeof outputLimit === "number" ? `output ${outputLimit.toLocaleString()}` : "",
-  ].filter(Boolean).join(", ");
-}
-
-function resolveNativeReasoningEffort(model: NativeAgentModelOption | undefined, selected?: string) {
-  const efforts = model?.reasoningEfforts || [];
-  if (efforts.length === 0) {
-    return "";
-  }
-  const normalized = String(selected || "").trim();
-  if (normalized && efforts.includes(normalized)) {
-    return normalized;
-  }
-  const defaultEffort = String(model?.defaultReasoningEffort || "").trim();
-  if (defaultEffort && efforts.includes(defaultEffort)) {
-    return defaultEffort;
-  }
-  return efforts[0] || "";
-}
-
 function hasPersistedStreamingAssistant(items: ChatMessage[]) {
   return items.some((item) => (
     item.role === "assistant"
@@ -633,123 +551,6 @@ function resolveStreamStartMs(items: ChatMessage[], elapsedSeconds?: number) {
     return Date.now() - elapsedSeconds * 1000;
   }
   return Date.now();
-}
-
-function getAgUiRunState(meta?: ChatMessageMetaInfo): AgUiRunState | null {
-  const value = meta?.agUiRunState;
-  return value && typeof value === "object" ? value as AgUiRunState : null;
-}
-
-function buildLiveAgUiMessageMeta(state: AgUiRunState, nativeAgent = false): ChatMessageMetaInfo {
-  return {
-    ...(buildAgUiMessageMeta(state, { nativeAgent }) || {}),
-    agUiRunState: state,
-    ...(!nativeAgent && !state.nativeAgent && state.entries.length > 0 ? { tracePresentation: "generic" as const } : {}),
-  };
-}
-
-function hasPendingAgUiPermission(state: AgUiRunState | null) {
-  return Boolean(state && !state.completed && state.permissionRequests.some((permission) => {
-    const value = permission.state.trim().toLowerCase();
-    return !value || (
-      !value.includes("replied")
-      && !value.includes("approved")
-      && !value.includes("reject")
-      && !value.includes("denied")
-      && !value.includes("allow")
-    );
-  }));
-}
-
-function isNativePermissionTrace(event: ChatTraceEvent, permissionId: string) {
-  const payload = event.payload && typeof event.payload === "object"
-    ? event.payload as Record<string, unknown>
-    : {};
-  const currentId = String(payload.permissionId || payload.id || payload.permissionID || payload.permission_id || "").trim();
-  return event.kind === "permission" && currentId === permissionId;
-}
-
-function markNativePermissionTraceReplied(
-  meta: ChatMessageMetaInfo | undefined,
-  permissionId: string,
-  approved: boolean,
-  value?: unknown,
-): ChatMessageMetaInfo | undefined {
-  if (!meta?.trace?.length && !getAgUiRunState(meta)?.entries.length) {
-    return meta;
-  }
-  const summary = approved ? "原生 agent 权限已允许" : "原生 agent 权限已拒绝";
-  const response = approved ? "once" : "reject";
-  const patchTrace = (event: ChatTraceEvent): ChatTraceEvent => {
-    if (!isNativePermissionTrace(event, permissionId)) {
-      return event;
-    }
-    const payload = event.payload && typeof event.payload === "object"
-      ? event.payload as Record<string, unknown>
-      : {};
-    return {
-      ...event,
-      summary,
-      payload: {
-        ...payload,
-        state: "permission.replied",
-        response,
-        ...(typeof value !== "undefined" ? { value } : {}),
-      },
-    };
-  };
-  const agUiRunState = getAgUiRunState(meta);
-  const nextAgUiRunState = agUiRunState
-    ? {
-        ...agUiRunState,
-        permissionRequests: agUiRunState.permissionRequests.map((permission) => (
-          permission.permissionId === permissionId
-            ? {
-                ...permission,
-                summary,
-                state: "permission.replied",
-                content: {
-                  ...permission.content,
-                  state: "permission.replied",
-                  response,
-                  ...(typeof value !== "undefined" ? { value } : {}),
-                },
-                ...(typeof value !== "undefined" ? { value } : {}),
-              }
-            : permission
-        )),
-        traceEvents: agUiRunState.traceEvents.map(patchTrace),
-        entries: agUiRunState.entries.map((entry) => (
-          entry.kind === "permission" && entry.permissionId === permissionId
-            ? {
-                ...entry,
-                summary,
-                pending: false,
-                permission: entry.permission
-                  ? {
-                      ...entry.permission,
-                      summary,
-                      state: "permission.replied",
-                      content: {
-                        ...entry.permission.content,
-                        state: "permission.replied",
-                        response,
-                        ...(typeof value !== "undefined" ? { value } : {}),
-                      },
-                      ...(typeof value !== "undefined" ? { value } : {}),
-                    }
-                  : entry.permission,
-                trace: entry.trace ? patchTrace(entry.trace) : entry.trace,
-              }
-            : entry
-        )),
-      }
-    : undefined;
-  return {
-    ...meta,
-    ...(meta.trace?.length ? { trace: meta.trace.map(patchTrace) } : {}),
-    ...(nextAgUiRunState ? { agUiRunState: nextAgUiRunState } : {}),
-  };
 }
 
 function buildComposedMessageText(text: string, attachments: PendingChatAttachment[]) {
@@ -949,35 +750,6 @@ function favoriteAnswerInputForMessage(
   };
 }
 
-function isCompletedNativeHistoryPoint(item: ChatMessage) {
-  return Boolean(
-    item.role === "assistant"
-    && item.state !== "streaming"
-    && item.state !== "error"
-    && item.meta?.workspaceHistoryHead
-    && item.meta?.rollbackSupported !== false
-    && String(item.turnId || item.id || "").trim(),
-  );
-}
-
-function buildSoloRollbackTargets(items: ChatMessage[]) {
-  const targets = new Map<string, SoloRollbackTarget>();
-  let previousHistoryPoint: SoloRollbackTarget | null = null;
-  for (const item of items) {
-    if (item.role === "user" && previousHistoryPoint) {
-      targets.set(item.id, previousHistoryPoint);
-      continue;
-    }
-    if (isCompletedNativeHistoryPoint(item)) {
-      previousHistoryPoint = {
-        conversationId: item.conversationId || "",
-        targetTurnId: String(item.turnId || item.id || "").trim(),
-      };
-    }
-  }
-  return targets;
-}
-
 function resolveActiveConversationId(conversations: ConversationSummary[], items: ChatMessage[]) {
   return (
     conversations.find((conversation) => conversation.active)?.id
@@ -1103,16 +875,13 @@ function visibleTurnCountForMessage(items: readonly ChatMessage[], messageIndex:
 }
 
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent, tracePresentation?: ChatMessageMetaInfo["tracePresentation"]): ChatMessage {
-  const nativeTrace = tracePresentation === "native_agent_flat"
-    || isNativeAgentMessage(item.meta)
-    || ["native", "native_agent"].includes(String(traceEvent.source || "").trim().toLowerCase());
   return {
     ...item,
     meta: mergeMessageMeta(item.meta, {
       trace: [traceEvent],
       traceVersion: 1,
       tracePresentation,
-    }, undefined, { dedupeAnonymous: nativeTrace }),
+    }, undefined),
   };
 }
 
@@ -1263,10 +1032,9 @@ function applyChatStreamEvents(
         const nextItem = appendTraceToMessage(
           item,
           event.trace,
-          event.nativeTrace ? "native_agent_flat" : undefined,
+
         );
-        const canUseTracePreview = !event.nativeTrace
-          && event.trace.kind === "commentary"
+        const canUseTracePreview = event.trace.kind === "commentary"
           && Boolean(event.trace.summary.trim())
           && !event.usingPreviewReplace
           && !item.text.trim();
@@ -1276,39 +1044,9 @@ function applyChatStreamEvents(
       });
       continue;
     }
-    updateAssistant(event, (item) => {
-      const nextMeta = mergeMessageMeta(
-        item.meta,
-        buildLiveAgUiMessageMeta(event.state, event.nativeAgent),
-        undefined,
-        { traceMode: "replace" },
-      );
-      const completionState = nextMeta?.completionState || "";
-      return {
-        ...item,
-        ...(event.assistantMessageId ? { id: event.assistantMessageId } : {}),
-        ...(event.turnId ? { turnId: event.turnId } : {}),
-        text: event.state.assistantText,
-        state: event.state.error || (completionState && completionState !== "completed" && completionState !== "streaming")
-          ? "error"
-          : (event.state.completed ? "done" : "streaming"),
-        meta: event.state.contextUsage
-          ? { ...nextMeta, contextUsage: event.state.contextUsage }
-          : nextMeta,
-      };
-    });
   }
 
   return nextItems;
-}
-
-function shouldBatchAgUiEvent(event: AgUiEvent) {
-  return (
-    event.type === EventType.TEXT_MESSAGE_CONTENT
-    || event.type === EventType.REASONING_MESSAGE_CONTENT
-    || event.type === EventType.TOOL_CALL_ARGS
-    || event.type === EventType.ACTIVITY_DELTA
-  );
 }
 
 function comparableObjectKeys(value: Record<string, unknown>) {
@@ -1440,12 +1178,11 @@ type ChatMessageRowProps = {
   onContinueFinalAnswer?: () => void;
   onFastForward?: (message: ChatMessage) => void;
   onToggleFavoriteAnswer?: (messageKey: string, item: ChatMessage) => void;
-  onReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
+
   messageClientStateKey: string;
   favorite: boolean;
   canContinue: boolean;
-  soloRollbackTarget?: SoloRollbackTarget;
-  onRequestSoloRollback?: (target: SoloRollbackTarget) => void;
+
   wideMessages: boolean;
   mobileLayout: boolean;
 };
@@ -1469,12 +1206,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   onContinueFinalAnswer,
   onFastForward,
   onToggleFavoriteAnswer,
-  onReplyNativePermission,
+
   messageClientStateKey,
   favorite,
   canContinue,
-  soloRollbackTarget,
-  onRequestSoloRollback,
+
   wideMessages,
   mobileLayout,
 }: ChatMessageRowProps) {
@@ -1524,9 +1260,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const userAttachments = parsedUserMessage?.attachments || [];
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const trace = item.meta?.trace;
-  const agUiRunState = item.role === "assistant" ? getAgUiRunState(item.meta) : null;
+
   const isAssistant = item.role === "assistant";
-  const isNativeAgentAssistant = isAssistant && isNativeAgentMessage(item.meta);
+
   const endlessEvents = item.meta?.endlessEvents;
   const endlessContinueCount = item.meta?.endlessContinueCount;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
@@ -1536,10 +1272,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
     : trace?.length ?? 0;
   const traceLoaded = traceCount <= 0 || traceLoadedCount >= traceCount;
   const hasTrace = allowTrace && isAssistant && traceCount > 0;
-  const hasCliTraceTranscript = hasTrace && !isNativeAgentAssistant && !agUiRunState && item.meta?.tracePresentation !== "generic";
+  const hasCliTraceTranscript = hasTrace && item.meta?.tracePresentation !== "generic";
   const isEndlessStreamingAssistant = isStreamingAssistant && (endlessModeActive || Boolean(endlessEvents?.length));
-  const hasTranscript = isAssistant && (isNativeAgentAssistant || hasCliTraceTranscript || Boolean(endlessEvents?.length) || isEndlessStreamingAssistant);
-  const transcriptMode = isNativeAgentAssistant ? "native" : "cli";
+  const hasTranscript = isAssistant && (hasCliTraceTranscript || Boolean(endlessEvents?.length) || isEndlessStreamingAssistant);
+
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
   const usesAssistantAnswerLayout = hasTranscript || (
     isAssistant
@@ -1550,13 +1286,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const canCopyFinalAnswer = hasFinalAnswerText && (item.state === "done" || item.state === "error");
   const canFavoriteFinalAnswer = item.role === "assistant" && item.state === "done" && Boolean(item.text.trim());
   const canStartEndlessMode = canContinue && item.state === "error";
-  const nativeTranscriptEntries = buildNativeAgentTranscriptEntries({
+  const transcriptEntries = buildCliTranscriptEntries({
     trace,
     endlessEvents,
-    agUiState: agUiRunState,
-    mode: transcriptMode,
   });
-  const showSoloRollback = Boolean(isUser && isCurrentUserMessage && soloRollbackTarget && onRequestSoloRollback);
 
   return (
     <motion.div
@@ -1574,18 +1307,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
           endlessContinueCount={endlessContinueCount}
           mobileLayout={mobileLayout}
         />
-        <div className={showSoloRollback ? "flex items-start justify-end gap-1.5" : undefined}>
-          {showSoloRollback ? (
-            <button
-              type="button"
-              aria-label="撤回到此消息前"
-              title="撤回到此消息前"
-              onClick={() => onRequestSoloRollback?.(soloRollbackTarget as SoloRollbackTarget)}
-              className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--feedback-error-border-alpha25)] text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-alpha10)]"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
+        <div className={undefined}>
+
           <div
             data-streaming={isStreamingAssistant ? "true" : "false"}
             className={usesAssistantAnswerLayout
@@ -1602,14 +1325,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 ].join(" ")}
           >
             {hasTranscript ? (
-              <NativeAgentTranscript
+              <CliTranscript
                 key={mobileLayout ? messageClientStateKey : `${messageClientStateKey}:${item.state || ""}`}
-                entries={nativeTranscriptEntries}
+                entries={transcriptEntries}
                 resultText={displayText}
                 originalResultText={item.text}
                 translationControl={translationControl}
                 state={item.state}
-                mode={transcriptMode}
+
                 traceCount={traceCount}
                 toolCallCount={item.meta?.toolCallCount}
                 processCount={item.meta?.processCount}
@@ -1617,7 +1340,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 isTraceLoading={Boolean(messageTraceLoadState?.loading)}
                 traceLoadError={messageTraceLoadState?.error}
                 onLoadTrace={handleLoadMessageTrace}
-                onReplyPermission={isNativeAgentAssistant ? onReplyNativePermission : undefined}
+
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
@@ -1764,8 +1487,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleContinueFinalAnswer: () => void;
   handleFastForward: (message: ChatMessage) => void;
   handleToggleFavoriteAnswer: (messageKey: string, item: ChatMessage) => void;
-  handleReplyNativePermission: (reply: NativeAgentPermissionReply) => Promise<void>;
-  handleRequestSoloRollback?: (target: SoloRollbackTarget) => void;
+
   executingPlanMessageId: string;
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
@@ -1788,8 +1510,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   handleContinueFinalAnswer,
   handleFastForward,
   handleToggleFavoriteAnswer,
-  handleReplyNativePermission,
-  handleRequestSoloRollback,
+
   executingPlanMessageId,
   planExecuteError,
   handleExecutePlan,
@@ -1818,12 +1539,11 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         onContinueFinalAnswer={handleContinueFinalAnswer}
         onFastForward={handleFastForward}
         onToggleFavoriteAnswer={handleToggleFavoriteAnswer}
-        onReplyNativePermission={handleReplyNativePermission}
+
         messageClientStateKey={row.messageClientStateKey}
         favorite={row.favorite}
         canContinue={row.canContinue}
-        soloRollbackTarget={row.soloRollbackTarget}
-        onRequestSoloRollback={handleRequestSoloRollback}
+
         wideMessages={wideMessages}
         mobileLayout={mobileLayout}
       />
@@ -1855,8 +1575,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     handleExecutePlan,
     handleFileLinkClick,
     handleLoadMessageTrace,
-    handleReplyNativePermission,
-    handleRequestSoloRollback,
+
     handleToggleFavoriteAnswer,
     planExecuteError,
     traceLoadState,
@@ -1922,11 +1641,7 @@ export function ChatScreen({
   onBotActivityChange,
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
-  forcedExecutionMode,
-  soloMode = false,
-  soloHistoryRevision = 0,
-  onSoloSessionInfoChange,
-  onSoloHistoryRollback,
+
   onOpenGlobalPromptSettings,
   onOpenBotSettings,
   mobileLayout = false,
@@ -1949,7 +1664,7 @@ export function ChatScreen({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [actionLoading, setActionLoading] = useState<"" | "kill">("");
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
-  const [nativeAgentModels, setNativeAgentModels] = useState<NativeAgentModelsPayload | null>(null);
+
   const [modelSaving, setModelSaving] = useState(false);
   const [clusterSaving, setClusterSaving] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
@@ -2008,7 +1723,7 @@ export function ChatScreen({
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterTeamSnapshot, setClusterTeamSnapshot] = useState<ClusterTeamViewSnapshot | null>(null);
   const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
-  const [executionMode, setExecutionModeState] = useState<ChatExecutionMode>(() => forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli");
+  const executionMode: ChatExecutionMode = "cli";
   const favoriteScopeKey = JSON.stringify([botAlias, storageScope, activeAgentId, executionMode]);
   const favoriteAutoLoadRef = useRef<{
     client: WebBotClient;
@@ -2019,11 +1734,10 @@ export function ChatScreen({
   favoriteScopeKeyRef.current = favoriteScopeKey;
   const favoriteClientRef = useRef(client);
   favoriteClientRef.current = client;
-  const [nativePermissionPending, setNativePermissionPending] = useState(false);
+
   const [executingPlanMessageId, setExecutingPlanMessageId] = useState("");
   const [planExecuteError, setPlanExecuteError] = useState("");
-  const [soloRollbackTarget, setSoloRollbackTarget] = useState<SoloRollbackTarget | null>(null);
-  const [soloRollbacking, setSoloRollbacking] = useState(false);
+
   const [composerPulseKey, setComposerPulseKey] = useState(0);
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
@@ -2070,57 +1784,26 @@ export function ChatScreen({
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const activeTurnBindingRef = useRef<ActiveTurnBinding | null>(null);
-  const soloHistoryRevisionRef = useRef(soloHistoryRevision);
+
   const previousBotAliasRef = useRef(botAlias);
   const previousStorageScopeRef = useRef(storageScope);
-  const previousForcedExecutionModeRef = useRef(forcedExecutionMode);
+
   const hasActivatedRef = useRef(false);
   const previousForegroundRef = useRef(isForeground);
   const previousVisibleRef = useRef(isVisible);
   const activationTargetRef = useRef<{ botAlias: string; client: WebBotClient; storageScope: string } | null>(null);
   const historyRevisionStateRef = useRef(new HistoryRevisionState());
-  const agUiBatchStateRef = useRef<AgUiRunState | null>(null);
-  const agUiBatchReducerRef = useRef<ReturnType<typeof createAgUiRunAccumulator> | null>(null);
-  const sawAgUiEventRef = useRef(false);
-  const pollClusterTasksRef = useRef<() => void>(() => undefined);
+
   const isSseStreaming = () => streamModeRef.current === "sse";
   const streamBatcher = useChatStreamBatcher(useCallback((events: readonly ChatStreamInputEvent[]) => {
-    const reducer = agUiBatchReducerRef.current || createAgUiRunAccumulator();
-    agUiBatchReducerRef.current = reducer;
-    const batch = reduceChatStreamBatch(
-      events,
-      agUiBatchStateRef.current,
-      (_state, agUiEvents) => reducer.reduce(agUiEvents),
-    );
-    if (batch.sawAgUiEvent) {
-      sawAgUiEventRef.current = true;
-      agUiBatchStateRef.current = batch.agUiState;
-      const nextAgUiState = batch.agUiState;
-      if (typeof nextAgUiState?.elapsedSeconds === "number") {
-        setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, nextAgUiState.elapsedSeconds));
-      }
-      if (nextAgUiState?.clusterRunId && nextAgUiState.clusterRunId !== clusterRunIdRef.current) {
-        clusterRunIdRef.current = nextAgUiState.clusterRunId;
-        setClusterRunId(nextAgUiState.clusterRunId);
-        setClusterTaskStatus(null);
-        setClusterTaskError("");
-        pollClusterTasksRef.current();
-      }
-      setNativePermissionPending(Boolean(nextAgUiState && hasPendingAgUiPermission(nextAgUiState)));
-    }
+    const batch = reduceChatStreamBatch(events);
+
     setItems((current) => applyChatStreamEvents(
       current,
       batch.events,
       assistantSendVersionRef.current,
     ));
   }, []));
-  const releaseAgUiBatchState = useCallback(() => {
-    agUiBatchReducerRef.current?.dispose();
-    agUiBatchReducerRef.current = null;
-    agUiBatchStateRef.current = null;
-    sawAgUiEventRef.current = false;
-  }, []);
-  useEffect(() => releaseAgUiBatchState, [releaseAgUiBatchState]);
 
   const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
     setPlanModeState((current) => {
@@ -2128,20 +1811,6 @@ export function ChatScreen({
       writeStoredPlanMode(previousBotAliasRef.current, next, previousStorageScopeRef.current);
       return next;
     });
-  }, []);
-
-  const setExecutionMode = useCallback((value: ChatExecutionMode | ((current: ChatExecutionMode) => ChatExecutionMode)) => {
-    setExecutionModeState((current) => {
-      const next = typeof value === "function" ? value(current) : value;
-      writeStoredExecutionMode(previousBotAliasRef.current, next, previousStorageScopeRef.current);
-      executionModeRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const setTransientExecutionMode = useCallback((next: ChatExecutionMode) => {
-    executionModeRef.current = next;
-    setExecutionModeState(next);
   }, []);
 
   const setQueuedMessageState = useCallback((
@@ -2214,15 +1883,15 @@ export function ChatScreen({
     stopClusterTaskPoll();
     assistantSendVersionRef.current += 1;
     streamBatcher.cancel();
-    releaseAgUiBatchState();
+
     activeTurnBindingRef.current = null;
     sseLastActivityAtRef.current = null;
-    setNativePermissionPending(false);
+
     clearClusterTaskState();
   }, [
     abortActiveSseRequest,
     clearClusterTaskState,
-    releaseAgUiBatchState,
+
     stopEndlessMode,
     stopAssistantPoll,
     stopClusterTaskPoll,
@@ -2237,11 +1906,10 @@ export function ChatScreen({
   useLayoutEffect(() => {
     const previousBotAlias = previousBotAliasRef.current;
     const previousScope = previousStorageScopeRef.current;
-    const previousForcedExecutionMode = previousForcedExecutionModeRef.current;
+
     const scopeChanged = previousBotAlias !== botAlias || previousScope !== storageScope;
-    const forcedExecutionModeChanged = previousForcedExecutionMode !== forcedExecutionMode;
-    previousForcedExecutionModeRef.current = forcedExecutionMode;
-    if (!scopeChanged && !forcedExecutionModeChanged) {
+
+    if (!scopeChanged) {
       return;
     }
     cancelInactiveChatTransport();
@@ -2255,10 +1923,9 @@ export function ChatScreen({
     previousBotAliasRef.current = botAlias;
     previousStorageScopeRef.current = storageScope;
     setPlanModeState(readStoredPlanMode(botAlias, storageScope));
-    const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope) ?? "cli";
+    const storedExecutionMode = "cli";
     executionModeRef.current = storedExecutionMode;
-    setExecutionModeState(storedExecutionMode);
-  }, [botAlias, cancelInactiveChatTransport, forcedExecutionMode, storageScope]);
+  }, [botAlias, cancelInactiveChatTransport,  storageScope]);
 
   useEffect(() => {
     setClusterSaving(false);
@@ -2268,8 +1935,6 @@ export function ChatScreen({
     setHistoryPanelOpen(false);
     setConversationQuery("");
     setConversations([]);
-    setSoloRollbackTarget(null);
-    setSoloRollbacking(false);
     if (clusterTaskPollTimerRef.current !== null) {
       window.clearTimeout(clusterTaskPollTimerRef.current);
       clusterTaskPollTimerRef.current = null;
@@ -2277,7 +1942,6 @@ export function ChatScreen({
     setClusterRunId("");
     setClusterTaskStatus(null);
     setClusterTaskError("");
-    setNativePermissionPending(false);
     clusterRunIdRef.current = "";
     setQueuedMessage(null);
     queuedMessageRef.current = null;
@@ -2285,7 +1949,7 @@ export function ChatScreen({
     setActiveAgentId("main");
     activeAgentIdRef.current = "main";
     window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), "main");
-  }, [botAlias, forcedExecutionMode, storageScope]);
+  }, [botAlias, storageScope]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -2378,7 +2042,6 @@ export function ChatScreen({
     }
   }, [botOverview?.endlessAttempt, botOverview?.endlessMode, botOverview?.endlessRetryAtMs, botOverview?.isProcessing]);
 
-
   useEffect(() => {
     queuedMessageRef.current = queuedMessage;
   }, [queuedMessage]);
@@ -2394,19 +2057,6 @@ export function ChatScreen({
   useEffect(() => {
     executionModeRef.current = executionMode;
   }, [executionMode]);
-
-  useEffect(() => {
-    const supported = getSupportedExecutionModes(botOverview);
-    if (forcedExecutionMode) {
-      if (supported.includes(forcedExecutionMode) && executionModeRef.current !== forcedExecutionMode) {
-        setTransientExecutionMode(forcedExecutionMode);
-      }
-      return;
-    }
-    if (!supported.includes(executionModeRef.current)) {
-      setExecutionMode(getDefaultExecutionMode(botOverview));
-    }
-  }, [botOverview?.defaultExecutionMode, botOverview?.supportedExecutionModes, forcedExecutionMode, setExecutionMode, setTransientExecutionMode]);
 
   useEffect(() => {
     clusterRunIdRef.current = clusterRunId;
@@ -2446,34 +2096,6 @@ export function ChatScreen({
       });
   }, [botAlias, client, isForeground]);
 
-  useEffect(() => {
-    const supported = getSupportedExecutionModes(botOverview);
-    const shouldLoad = isVisible && supported.includes("native_agent");
-    let active = true;
-    if (!shouldLoad) {
-      setNativeAgentModels(null);
-      return () => {
-        active = false;
-      };
-    }
-
-    void client.getNativeAgentModels(botAlias)
-      .then((payload) => {
-        if (active) {
-          setNativeAgentModels(payload);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setNativeAgentModels(null);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [botAlias, botOverview?.defaultExecutionMode, botOverview?.supportedExecutionModes, client, isVisible]);
-
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
     overview: BotOverview,
@@ -2502,7 +2124,7 @@ export function ChatScreen({
         localAssistantId: activeAssistant.id,
         turnId: activeAssistant.turnId || "",
         assistantMessageId: activeAssistant.id,
-        codexServer: overview.cliType === "codex_server" && executionModeRef.current === "cli",
+        codexServer: overview.cliType === "codex_server",
         streamStartedAtMs: resolveStreamStartMs(nextItems),
       }
       : null;
@@ -2561,9 +2183,6 @@ export function ChatScreen({
       }
     }
   }, [botAlias, clearClusterTaskState, client, stopClusterTaskPoll]);
-  pollClusterTasksRef.current = () => {
-    void pollClusterTasks();
-  };
 
   const restoreClusterRunFromOverview = useCallback((overview: BotOverview) => {
     const activeRun = overview.activeClusterRun;
@@ -2884,8 +2503,6 @@ export function ChatScreen({
     attachmentUploadAbortControllerRef.current?.abort();
     attachmentUploadAbortControllerRef.current = null;
     setAttachmentUploadProgress(null);
-    setSoloRollbackTarget(null);
-    setSoloRollbacking(false);
     setDeletedAttachmentKeys({});
     setDeletingAttachmentKeys({});
     setTraceLoadState({});
@@ -2895,8 +2512,7 @@ export function ChatScreen({
     forceAutoScrollRef.current = true;
     traceInspectionAutoScrollPausedRef.current = false;
 
-    const storedExecutionMode = forcedExecutionMode ?? readStoredExecutionMode(botAlias, storageScope);
-    const requestedExecutionMode = forcedExecutionMode ?? storedExecutionMode ?? undefined;
+    const requestedExecutionMode: ChatExecutionMode = "cli";
     const requestedAgentId = "main";
     Promise.all([
       listScopedMessages(client, botAlias, requestedAgentId, requestedExecutionMode),
@@ -2906,46 +2522,12 @@ export function ChatScreen({
       .then(async ([initialSnapshot, initialOverview, initialConversationData]) => {
         if (cancelled) return;
         const nextAgents = initialOverview.agents?.length ? initialOverview.agents : fallbackAgents();
-        const supportedModes = getSupportedExecutionModes(initialOverview);
-        const nextExecutionMode = forcedExecutionMode && supportedModes.includes(forcedExecutionMode)
-          ? forcedExecutionMode
-          : storedExecutionMode
-          ? (getSupportedExecutionModes(initialOverview).includes(storedExecutionMode)
-            ? storedExecutionMode
-            : getDefaultExecutionMode(initialOverview))
-          : getDefaultExecutionMode(initialOverview);
+        const nextExecutionMode: ChatExecutionMode = "cli";
         const nextAgentId = "main";
-        let snapshot = initialSnapshot;
-        let overview = initialOverview;
-        let conversationData = initialConversationData;
-        if (forcedExecutionMode) {
-          setTransientExecutionMode(nextExecutionMode);
-        } else if (storedExecutionMode && nextExecutionMode !== storedExecutionMode) {
-          setExecutionMode(nextExecutionMode);
-        } else if (!storedExecutionMode && nextExecutionMode !== requestedExecutionMode) {
-          executionModeRef.current = nextExecutionMode;
-          setExecutionModeState(nextExecutionMode);
-        }
-        if (nextAgentId !== requestedAgentId) {
-          setActiveAgentId(nextAgentId);
-          activeAgentIdRef.current = nextAgentId;
-          window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
-        }
-        const requestedComparisonMode = requestedExecutionMode ?? "cli";
-        const executionModeNeedsReload = nextExecutionMode !== requestedComparisonMode;
-        if (nextAgentId !== requestedAgentId || executionModeNeedsReload) {
-          [snapshot, overview, conversationData] = await Promise.all([
-            listScopedMessages(client, botAlias, nextAgentId, nextExecutionMode),
-            getScopedOverview(client, botAlias, nextAgentId, nextExecutionMode),
-            listScopedConversations(client, botAlias, "", nextAgentId, nextExecutionMode),
-          ]);
-          if (cancelled || activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== nextExecutionMode) {
-            return;
-          }
-        }
-        if (cancelled || activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== nextExecutionMode) {
-          return;
-        }
+        const snapshot = initialSnapshot;
+        const overview = initialOverview;
+        const conversationData = initialConversationData;
+        if (cancelled || activeAgentIdRef.current !== nextAgentId) return;
         historyRevisionStateRef.current.seed(
           historyScopeForSnapshot(botAlias, nextAgentId, nextExecutionMode, snapshot, overview),
           snapshot,
@@ -2990,17 +2572,14 @@ export function ChatScreen({
     applyHistoryView,
     botAlias,
     client,
-    forcedExecutionMode,
     isVisible,
     restoreClusterRunFromOverview,
     scheduleAssistantPoll,
     setQueuedMessageState,
-    setTransientExecutionMode,
     stopAssistantPoll,
     stopSseRecoveryWatch,
     storageScope,
   ]);
-
 
   useEffect(() => {
     if (!isStreaming || !streamStartedAtMs) {
@@ -3020,7 +2599,6 @@ export function ChatScreen({
       window.clearInterval(timer);
     };
   }, [isStreaming, streamStartedAtMs]);
-
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
@@ -3545,25 +3123,6 @@ export function ChatScreen({
     });
   }, [botAlias, client, conversations, favoriteItems]);
 
-  const handleReplyNativePermission = useCallback(async (reply: NativeAgentPermissionReply) => {
-    try {
-      await client.replyNativeAgentPermission(botAlias, reply.requestId, {
-        approved: reply.accepted,
-        ...(typeof reply.value !== "undefined" ? { value: reply.value } : {}),
-        ...(typeof reply.value === "string" ? { message: reply.value } : {}),
-        agentId: activeAgentIdRef.current,
-        executionMode: "native_agent",
-      });
-      setItems((prev) => prev.map((item) => {
-        const nextMeta = markNativePermissionTraceReplied(item.meta, reply.requestId, reply.accepted, reply.value);
-        return nextMeta === item.meta ? item : { ...item, meta: nextMeta };
-      }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "处理原生 agent 权限失败");
-      throw err;
-    }
-  }, [botAlias, client]);
-
   const loadMessageTrace = useCallback(async (messageId: string) => {
     const currentMessage = itemsRef.current.find((item) => item.id === messageId);
     if (!currentMessage || currentMessage.role !== "assistant") {
@@ -3603,7 +3162,6 @@ export function ChatScreen({
           toolCallCount: traceDetails.toolCallCount,
           processCount: traceDetails.processCount,
           traceVersion: 1,
-          ...(isNativeAgentMessage(item.meta) ? { tracePresentation: "native_agent_flat" as const } : {}),
         }, undefined, { reconcileTraceSnapshots: true }),
       })));
       setTraceLoadState((prev) => ({
@@ -3769,97 +3327,6 @@ export function ChatScreen({
     storageScope,
   ]);
 
-  const refreshSoloNativeHistory = useCallback(async () => {
-    if (executionModeRef.current !== "native_agent") {
-      return;
-    }
-    const agentId = activeAgentIdRef.current || "main";
-    const sendVersion = assistantSendVersionRef.current;
-    setError("");
-    try {
-      const [snapshot, conversationData] = await Promise.all([
-        listScopedMessages(client, botAlias, agentId, "native_agent"),
-        listScopedConversations(client, botAlias, conversationQuery, agentId, "native_agent"),
-      ]);
-      if (
-        sendVersion !== assistantSendVersionRef.current
-        || activeAgentIdRef.current !== agentId
-        || executionModeRef.current !== "native_agent"
-      ) {
-        return;
-      }
-      setConversations(conversationData.items);
-      historyRevisionStateRef.current.seed(
-        historyScopeForSnapshot(botAlias, agentId, "native_agent", snapshot, botOverviewRef.current, conversationData.items),
-        snapshot,
-      );
-      itemsRef.current = snapshot.items;
-      const overview = botOverviewRef.current;
-      if (overview) {
-        applyHistoryView(snapshot.items, overview);
-      } else {
-        setItems(snapshot.items);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "刷新会话历史失败");
-    }
-  }, [applyHistoryView, botAlias, client, conversationQuery]);
-
-  useEffect(() => {
-    if (soloHistoryRevisionRef.current === soloHistoryRevision) {
-      return;
-    }
-    soloHistoryRevisionRef.current = soloHistoryRevision;
-    if (!soloMode || isStreamingRef.current) {
-      return;
-    }
-    void refreshSoloNativeHistory();
-  }, [refreshSoloNativeHistory, soloHistoryRevision, soloMode]);
-
-  const handleRequestSoloRollback = useCallback((target: SoloRollbackTarget) => {
-    setSoloRollbackTarget(target);
-  }, []);
-
-  const handleConfirmSoloRollback = useCallback(async () => {
-    if (botOverviewRef.current?.remoteWorkspace || !soloRollbackTarget || soloRollbacking) {
-      return;
-    }
-    const conversationId = soloRollbackTarget.conversationId || resolveActiveConversationId(conversations, itemsRef.current);
-    if (!conversationId) {
-      setSoloRollbackTarget(null);
-      setError("缺少会话 ID，无法撤回");
-      return;
-    }
-    setSoloRollbacking(true);
-    setError("");
-    try {
-      const agentId = activeAgentIdRef.current || "main";
-      await client.rollbackNativeAgentHistory(botAlias, {
-        conversationId,
-        targetTurnId: soloRollbackTarget.targetTurnId,
-        ...(agentId !== "main" ? { agentId } : {}),
-      });
-      setSoloRollbackTarget(null);
-      if (onSoloHistoryRollback) {
-        onSoloHistoryRollback();
-      } else {
-        await refreshSoloNativeHistory();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "撤回失败");
-    } finally {
-      setSoloRollbacking(false);
-    }
-  }, [
-    botAlias,
-    client,
-    conversations,
-    onSoloHistoryRollback,
-    refreshSoloNativeHistory,
-    soloRollbackTarget,
-    soloRollbacking,
-  ]);
-
   async function handleOpenHistoryPanel(defaultTab: ConversationHistoryPanelTab = "history") {
     setHistoryPanelTab(defaultTab);
     setHistoryPanelOpen(true);
@@ -4019,7 +3486,6 @@ export function ChatScreen({
       || !hasActivatedRef.current
       || isStreamingRef.current
       || (activeAgentIdRef.current || "main") !== "main"
-      || executionModeRef.current !== "cli"
     ) {
       return;
     }
@@ -4324,7 +3790,7 @@ export function ChatScreen({
       return;
     }
     const composedText = buildComposedMessageText(text, options.attachments || []);
-    const hideProcessPreview = false;
+
     if (!composedText) {
       return;
     }
@@ -4335,7 +3801,7 @@ export function ChatScreen({
     assistantSendVersionRef.current += 1;
     const sendVersion = assistantSendVersionRef.current;
     const displayUserText = options.sendOptions?.visibleText || composedText;
-    const nativeStreaming = options.sendOptions?.executionMode === "native_agent" || executionModeRef.current === "native_agent";
+
     const backgroundSend = options.background === true;
     const reuseAssistant = options.reuseAssistant;
     const userMessage: ChatMessage | null = backgroundSend ? null : {
@@ -4355,16 +3821,14 @@ export function ChatScreen({
       ...(reuseAssistant
         ? {}
         : {
-            meta: nativeStreaming
-              ? { tracePresentation: "native_agent_flat", renderKey: assistantId }
-              : { renderKey: assistantId },
+            meta: { renderKey: assistantId },
           }),
     };
     activeTurnBindingRef.current = {
       localAssistantId: assistantId,
       turnId: reuseAssistant?.turnId || "",
       assistantMessageId: reuseAssistant?.id || "",
-      codexServer: botOverviewRef.current?.cliType === "codex_server" && !nativeStreaming,
+      codexServer: botOverviewRef.current?.cliType === "codex_server",
       streamStartedAtMs: localStartedAtMs,
     };
 
@@ -4384,7 +3848,7 @@ export function ChatScreen({
     shouldStickToBottomRef.current = true;
     traceInspectionAutoScrollPausedRef.current = false;
     streamBatcher.cancel();
-    releaseAgUiBatchState();
+
     setItems((prev) => {
       if (reuseAssistant) {
         const target: ActiveAssistantTarget = {
@@ -4454,7 +3918,7 @@ export function ChatScreen({
         }
         const previousTarget = activeAssistantTarget();
         streamBatcher.flush();
-        releaseAgUiBatchState();
+
         streamTurnId = "";
         streamAssistantMessageId = "";
         usingPreviewReplace = false;
@@ -4545,9 +4009,7 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
-        if (sawAgUiEventRef.current) {
-          return;
-        }
+
         streamBatcher.enqueue({
           kind: "chunk",
           sendVersion,
@@ -4563,9 +4025,7 @@ export function ChatScreen({
         }
         markSseActivity();
         captureStreamStatus(status);
-        if (sawAgUiEventRef.current) {
-          return;
-        }
+
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
         }
@@ -4594,12 +4054,7 @@ export function ChatScreen({
           return;
         }
         markSseActivity();
-        if (sawAgUiEventRef.current) {
-          return;
-        }
-        if (hideProcessPreview) {
-          return;
-        }
+
         streamBatcher.enqueue({
           kind: "trace",
           sendVersion,
@@ -4607,34 +4062,11 @@ export function ChatScreen({
           ...streamEventBinding(),
           streamStartedAtMs: localStartedAtMs,
           trace: traceEvent,
-          nativeTrace: executionModeRef.current === "native_agent"
-            || ["native", "native_agent"].includes(String(traceEvent.source || "").trim().toLowerCase()),
+
           usingPreviewReplace,
         });
       };
-      const onAgUiEvent = (event: AgUiEvent) => {
-        if (sendVersion !== assistantSendVersionRef.current) {
-          return;
-        }
-        markSseActivity();
-        if (event.type === EventType.RUN_STARTED || event.type === EventType.CUSTOM) {
-          const status = mapUserTranslationUpdate(event);
-          captureStreamStatus(status);
-        }
-        sawAgUiEventRef.current = true;
-        streamBatcher.enqueue({
-          kind: "ag_ui",
-          sendVersion,
-          assistantId,
-          ...streamEventBinding(),
-          streamStartedAtMs: localStartedAtMs,
-          event,
-          nativeAgent: executionModeRef.current === "native_agent",
-        });
-        if (!shouldBatchAgUiEvent(event)) {
-          streamBatcher.flush();
-        }
-      };
+
       const finalMessage = await client.sendMessage(
         botAlias,
         composedText,
@@ -4642,7 +4074,7 @@ export function ChatScreen({
         onStatus,
         onTrace,
         requestSendOptions,
-        onAgUiEvent,
+
         handleEndlessError,
         handleEndlessContinue,
       );
@@ -4764,10 +4196,10 @@ export function ChatScreen({
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
-      releaseAgUiBatchState();
+
       stopSseRecoveryWatch();
       sseLastActivityAtRef.current = null;
-      setNativePermissionPending(false);
+
       if (recoverIncompleteStream) {
         isStreamingRef.current = true;
         streamModeRef.current = "poll";
@@ -4788,7 +4220,7 @@ export function ChatScreen({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, releaseAgUiBatchState, resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks,  resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
@@ -4827,12 +4259,11 @@ export function ChatScreen({
     setError("");
     try {
       const currentExecutionMode = executionModeRef.current;
-      const nativeSend = currentExecutionMode === "native_agent";
+
       const result = await client.executePlan(botAlias, {
         content: planContent,
         title: planTitle,
         agentId: activeAgentIdRef.current !== "main" ? activeAgentIdRef.current : undefined,
-        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
       });
       stopAssistantPoll();
       stopSseRecoveryWatch();
@@ -4848,13 +4279,7 @@ export function ChatScreen({
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
       setHistoryPanelOpen(false);
       await sendMessageInternal(result.executionMessage, {
-        sendOptions: nativeSend
-          ? {
-            taskMode: "standard",
-            executionMode: currentExecutionMode,
-            ...(soloMode ? { soloMode: true } : {}),
-          }
-          : { taskMode: "standard" },
+        sendOptions: { taskMode: "standard" },
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "执行方案失败";
@@ -4864,7 +4289,7 @@ export function ChatScreen({
       setExecutingPlanMessageId("");
       setConversationLoading(false);
     }
-  }, [botAlias, botOverview, client, sendMessageInternal, setPlanMode, soloMode, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
+  }, [botAlias, botOverview, client, sendMessageInternal, setPlanMode,  stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, setQueuedMessageState]);
 
   const handleSend = useCallback(async (text: string) => {
     if (activeAgentIdRef.current !== "main") {
@@ -4872,7 +4297,7 @@ export function ChatScreen({
     }
     stopEndlessMode();
     const currentExecutionMode = executionModeRef.current;
-    const nativeSend = currentExecutionMode === "native_agent";
+
     const isExecutingPlanPrompt = isPlanExecutionPrompt(text);
     if (planMode && isExecutingPlanPrompt) {
       setPlanMode(false);
@@ -4881,21 +4306,12 @@ export function ChatScreen({
     const sendOptions = isExecutingPlanPrompt
       ? {
         taskMode: "standard" as const,
-        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
-        ...(soloMode && nativeSend ? { soloMode: true } : {}),
       }
       : shouldSendPlanMode
       ? {
         taskMode: "plan" as const,
-        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
-        ...(soloMode && nativeSend ? { soloMode: true } : {}),
       }
-      : nativeSend
-        ? {
-          executionMode: currentExecutionMode,
-          ...(soloMode ? { soloMode: true } : {}),
-        }
-        : undefined;
+      : undefined;
     const voiceTaskBinding = voiceTaskBindingRef.current;
     if (voiceTaskBinding?.state === "active") {
       const composedText = buildComposedMessageText(text, pendingAttachments);
@@ -5015,7 +4431,7 @@ export function ChatScreen({
       sendOptions,
     });
     return true;
-  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode, soloMode, stopEndlessMode]);
+  }, [botAlias, client, pendingAttachments, planMode, sendMessageInternal, setPlanMode,  stopEndlessMode]);
 
   const handleCancelQueuedMessage = useCallback(() => {
     setQueuedMessageState(null, {
@@ -5030,15 +4446,14 @@ export function ChatScreen({
     }
     const endlessMode = endlessModeRef.current;
     const currentExecutionMode = executionModeRef.current;
-    const nativeSend = currentExecutionMode === "native_agent";
+
     void sendMessageInternal("Continue", {
       background: options.background ?? endlessMode,
       reuseAssistant: options.reuseAssistant,
       sendOptions: {
         taskMode: "standard",
         skipInputTranslation: true,
-        ...(nativeSend ? { executionMode: currentExecutionMode } : {}),
-        ...(soloMode && nativeSend ? { soloMode: true } : {}),
+
         ...(endlessMode ? { endlessMode: true } : {}),
         ...(endlessMode && options.reuseAssistant?.meta?.endlessGroupId
           ? { endlessGroupId: options.reuseAssistant.meta.endlessGroupId }
@@ -5062,7 +4477,7 @@ export function ChatScreen({
         stopEndlessMode();
       } : undefined,
     });
-  }, [sendMessageInternal, soloMode, stopEndlessMode]);
+  }, [sendMessageInternal,  stopEndlessMode]);
 
   const handleOpenEndlessMode = useCallback((message: ChatMessage) => {
     if (endlessModeRef.current || loadingRef.current || isStreamingRef.current) {
@@ -5087,7 +4502,6 @@ export function ChatScreen({
     });
   }, [handleContinueFinalAnswer]);
 
-
   async function handleKillTask() {
     stopEndlessMode();
     if (!isStreamingRef.current) {
@@ -5100,7 +4514,6 @@ export function ChatScreen({
       const currentExecutionMode = executionModeRef.current;
       const message = await client.killTask(botAlias, {
         ...(activeAgentIdRef.current !== "main" ? { agentId: activeAgentIdRef.current } : {}),
-        ...(currentExecutionMode === "native_agent" ? { executionMode: currentExecutionMode } : {}),
       });
       appendSystemMessage(message || "已发送终止任务请求");
     } catch (err) {
@@ -5234,21 +4647,6 @@ export function ChatScreen({
     try {
       if (cliParams?.cliType === "deepseek") {
         await handleDeepSeekSelectionChange({ model: nextModel });
-      } else if (nativeExecutionMode) {
-        const nextModelItem = nativeModelOptions.find((model) => model.id === nextModel);
-        const nextReasoningEffort = resolveNativeReasoningEffort(nextModelItem, nativeSelectedReasoningEffort);
-        const next = await client.updateNativeAgentModel(botAlias, nextModel, { reasoningEffort: nextReasoningEffort });
-        setNativeAgentModels({
-          items: next.items,
-          selectedModel: next.selectedModel,
-          selectedReasoningEffort: next.selectedReasoningEffort,
-        });
-        if (next.bot) {
-          const current = botOverviewRef.current;
-          const overview = (current ? { ...current, ...next.bot } : { ...next.bot }) as BotOverview;
-          botOverviewRef.current = overview;
-          setBotOverview(overview);
-        }
       } else if (cliParams) {
         let next = await client.updateCliParam(botAlias, "model", nextModel, cliParams.cliType);
         if (cliParams.cliType === "antigravity") {
@@ -5277,19 +4675,6 @@ export function ChatScreen({
     try {
       if (cliParams?.cliType === "deepseek") {
         await handleDeepSeekSelectionChange({ reasoningEffort: nextReasoningEffort });
-      } else if (nativeExecutionMode && nativeSelectedModel) {
-        const next = await client.updateNativeAgentModel(botAlias, nativeSelectedModel, { reasoningEffort: nextReasoningEffort });
-        setNativeAgentModels({
-          items: next.items,
-          selectedModel: next.selectedModel,
-          selectedReasoningEffort: next.selectedReasoningEffort,
-        });
-        if (next.bot) {
-          const current = botOverviewRef.current;
-          const overview = (current ? { ...current, ...next.bot } : { ...next.bot }) as BotOverview;
-          botOverviewRef.current = overview;
-          setBotOverview(overview);
-        }
       } else if (cliParams) {
         const next = await client.updateCliParam(botAlias, cliReasoningParamKey, nextReasoningEffort, cliParams.cliType);
         setCliParams(next);
@@ -5300,94 +4685,6 @@ export function ChatScreen({
       setModelSaving(false);
     }
   }
-
-  const handleExecutionModeChange = useCallback((mode: ChatExecutionMode) => {
-    if (mode === executionModeRef.current || isStreamingRef.current) {
-      return;
-    }
-    const previousAgentId = activeAgentIdRef.current || "main";
-    const nextAgentId = previousAgentId;
-    setError("");
-    setExecutionMode(mode);
-    clearStoredQueuedMessage(botAlias, previousAgentId, storageScope);
-    clearStoredQueuedMessage(botAlias, nextAgentId, storageScope);
-    activeAgentIdRef.current = nextAgentId;
-    setActiveAgentId(nextAgentId);
-    window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), nextAgentId);
-    cancelInactiveChatTransport();
-    loadingRef.current = true;
-    setLoading(true);
-    setError("");
-    setItems([]);
-    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
-    setConversations([]);
-    setTraceLoadState({});
-    setPendingAttachments([]);
-    setQueuedMessage(null);
-    queuedMessageRef.current = null;
-    isStreamingRef.current = false;
-    streamModeRef.current = "";
-    setIsStreaming(false);
-    setStreamMode("");
-    setStreamStartedAtMs(null);
-
-    Promise.all([
-      listScopedMessages(client, botAlias, nextAgentId, mode),
-      getScopedOverview(client, botAlias, nextAgentId, mode),
-      listScopedConversations(client, botAlias, "", nextAgentId, mode),
-    ])
-      .then(([snapshot, overview, conversationData]) => {
-        if (activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== mode) {
-          return;
-        }
-        historyRevisionStateRef.current.seed(
-          historyScopeForSnapshot(botAlias, nextAgentId, mode, snapshot, overview),
-          snapshot,
-        );
-        setBotOverview(overview);
-        setConversations(conversationData.items);
-        setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
-        restoreClusterRunFromOverview(overview);
-        if (overview.agents && overview.agents.length > 0) {
-          setAgents(overview.agents);
-        }
-        const { shouldPoll } = applyHistoryView(snapshot.items, overview);
-        loadingRef.current = false;
-        setLoading(false);
-        if (historyPanelOpen) {
-          if (historyPanelTab === "favorites") {
-            void loadFavorites(conversationQuery);
-          } else {
-            void loadConversations(conversationQuery);
-          }
-        }
-        if (!shouldPoll) {
-          void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId: nextAgentId });
-        }
-      })
-      .catch((err: Error) => {
-        if (activeAgentIdRef.current !== nextAgentId || executionModeRef.current !== mode) {
-          return;
-        }
-        setError(err.message || "切换执行模式失败");
-        loadingRef.current = false;
-        setLoading(false);
-      });
-  }, [
-    applyHistoryView,
-    botAlias,
-    client,
-    conversationQuery,
-    historyPanelTab,
-    historyPanelOpen,
-    loadFavorites,
-    loadConversations,
-    cancelInactiveChatTransport,
-    restoreClusterRunFromOverview,
-    setExecutionMode,
-    setPlanMode,
-    storageScope,
-  ]);
 
   const handleSaveGlobalPromptPresets = useCallback(async (presets: PromptPreset[]) => {
     const nextPresets = await client.updateGlobalPromptPresets(presets);
@@ -5416,14 +4713,7 @@ export function ChatScreen({
 
   const terminateVisible = isStreaming || endlessModeActive || actionLoading === "kill";
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
-  const rawSupportedExecutionModes = getSupportedExecutionModes(botOverview);
-  const forcedNativeSupported = forcedExecutionMode === "native_agent"
-    && (!botOverview || rawSupportedExecutionModes.includes("native_agent"));
-  const supportedExecutionModes = forcedNativeSupported ? ["native_agent" as const] : rawSupportedExecutionModes;
-  const effectiveExecutionMode = forcedNativeSupported
-    ? "native_agent"
-    : supportedExecutionModes.includes(executionMode) ? executionMode : getDefaultExecutionMode(botOverview);
-  const nativeExecutionMode = effectiveExecutionMode === "native_agent";
+
   const deepseekCli = botOverview?.cliType === "deepseek";
   const clusterMode = Boolean(botOverview?.cluster?.enabled);
   const activeConversation = conversations.find((conversation) => conversation.active);
@@ -5445,13 +4735,10 @@ export function ChatScreen({
     : activeClusterAssignment?.name || activeAgent.name || botAlias;
   const childAgentReadOnly = activeAgentId !== "main";
   const chatMutationsDisabled = readOnly || childAgentReadOnly;
-  const chatDisabledReason = nativePermissionPending
-    ? "等待权限处理"
-    : disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
+  const chatDisabledReason = disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || (!isStreaming && !endlessModeActive) || actionLoading === "kill";
   const voiceEnabled = botOverview?.alias === botAlias
     && botOverview?.cliType === "codex_server"
-    && effectiveExecutionMode === "cli"
     && botOverview.voice?.enabled === true
     && botOverview.effectiveCapabilities?.includes("chat_send") === true
     && !readOnly
@@ -5471,7 +4758,7 @@ export function ChatScreen({
     conversationId: voiceConversationId,
     sessionEpoch: botOverview?.sessionEpoch,
     taskBinding: restoredVoiceTask,
-    scopeKey: JSON.stringify([accountId, effectiveExecutionMode, voiceConversationId, botOverview?.sessionEpoch]),
+    scopeKey: JSON.stringify([accountId, executionMode, voiceConversationId, botOverview?.sessionEpoch]),
     enabled: voiceEnabled && isVisible,
     busy: isStreaming,
   });
@@ -5530,20 +4817,8 @@ export function ChatScreen({
   const cliModelOptions = cliParams?.cliType === "deepseek" && hasDeepSeekProviderModelCatalog
     ? [MODEL_OPTION_NONE, ...selectedDeepSeekModelOptions.map((model) => model.id)]
     : cliParams?.schema.model?.enum ?? [];
-  const nativeModelOptions = nativeAgentModels?.items ?? [];
-  const nativeSelectedModel = nativeAgentModels?.selectedModel
-    || botOverview?.nativeAgent?.model
-    || nativeModelOptions[0]?.id
-    || "";
-  const nativeSelectedModelItem = nativeModelOptions.find((model) => model.id === nativeSelectedModel);
-  const nativeReasoningEffortOptions = nativeSelectedModelItem?.reasoningEfforts || [];
-  const nativeSelectedReasoningEffort = resolveNativeReasoningEffort(
-    nativeSelectedModelItem,
-    nativeAgentModels?.selectedReasoningEffort || botOverview?.nativeAgent?.reasoningEffort,
-  );
-  const selectedModel = nativeExecutionMode
-    ? nativeSelectedModel
-    : deepSeekModelEditable
+
+  const selectedModel = deepSeekModelEditable
     ? String(cliParams?.params.model ?? cliParams?.defaults.model ?? "")
     : toModelOptionValue(cliParams?.params.model, cliModelOptions);
   const cliReasoningParamKey = cliParams?.cliType === "claude" || cliParams?.cliType === "antigravity"
@@ -5561,19 +4836,14 @@ export function ChatScreen({
       ?? cliReasoningEffortOptions[0]
       ?? "",
   );
-  const antigravityExplicitModel = !nativeExecutionMode
-    && cliParams?.cliType === "antigravity"
+  const antigravityExplicitModel = cliParams?.cliType === "antigravity"
     && selectedModel
     && selectedModel !== MODEL_OPTION_NONE;
   const visibleCliReasoningEffortOptions = antigravityExplicitModel
     ? []
     : cliReasoningEffortOptions;
-  const visibleReasoningEffortOptions = nativeExecutionMode
-    ? nativeReasoningEffortOptions
-    : visibleCliReasoningEffortOptions;
-  const selectedReasoningEffort = nativeExecutionMode
-    ? nativeSelectedReasoningEffort
-    : cliSelectedReasoningEffort;
+  const visibleReasoningEffortOptions = visibleCliReasoningEffortOptions;
+  const selectedReasoningEffort = cliSelectedReasoningEffort;
   const clusterTasks = clusterTaskStatus?.tasks.length
     ? clusterTaskStatus.tasks
     : clusterTeamView?.tasks || [];
@@ -5588,15 +4858,11 @@ export function ChatScreen({
   const childModelTier = activeTaskModelTier === "low" || activeTaskModelTier === "high" || activeTaskModelTier === "professional"
     ? activeTaskModelTier
     : "medium";
-  const childSessionModel = nativeExecutionMode
-    ? nativeSelectedModel
-    : botOverview?.cluster?.modelTiers[childModelTier] || selectedModel;
-  const childSessionProvider = !nativeExecutionMode && cliParams?.cliType === "deepseek"
+  const childSessionModel = botOverview?.cluster?.modelTiers[childModelTier] || selectedModel;
+  const childSessionProvider = cliParams?.cliType === "deepseek"
     ? selectedDeepSeekProviderOption?.label || selectedDeepSeekProvider || "默认"
     : "";
-  const childSessionReasoningEffort = nativeExecutionMode
-    ? nativeSelectedReasoningEffort
-    : botOverview?.cluster?.reasoningEfforts[childModelTier] || selectedReasoningEffort;
+  const childSessionReasoningEffort = botOverview?.cluster?.reasoningEfforts[childModelTier] || selectedReasoningEffort;
   const childReadOnlyStatus = [
     "会话只读",
     childSessionProvider ? `Provider：${childSessionProvider}` : "",
@@ -5604,17 +4870,6 @@ export function ChatScreen({
     `思考深度：${childSessionReasoningEffort || "默认"}`,
   ].filter(Boolean).join(" · ");
   const visibleModelOptions = useMemo<ChatComposerModelOption[]>(() => {
-    if (nativeExecutionMode) {
-      const options = nativeModelOptions.map((model) => ({
-        value: model.id,
-        label: model.label || `${model.provider} / ${model.name || model.model}`,
-        title: modelLimitTitle(model.contextWindow, model.outputLimit),
-      }));
-      if (nativeSelectedModel && !options.some((item) => item.value === nativeSelectedModel)) {
-        return [{ value: nativeSelectedModel, label: nativeSelectedModel }, ...options];
-      }
-      return options;
-    }
     if (deepSeekModelEditable) {
       return [];
     }
@@ -5626,7 +4881,7 @@ export function ChatScreen({
       return [{ value: selectedModel, label: selectedModel }, ...options];
     }
     return options;
-  }, [cliModelOptions, deepSeekModelEditable, nativeExecutionMode, nativeModelOptions, nativeSelectedModel, selectedModel]);
+  }, [cliModelOptions, deepSeekModelEditable,    selectedModel]);
   const deepSeekProviderDescription = cliParams?.cliType === "deepseek"
     ? cliParams.catalogDiagnostic || (cliParams.catalogStatus ? `catalog：${cliParams.catalogStatus}` : "")
     : "";
@@ -5684,7 +4939,7 @@ export function ChatScreen({
     container.scrollTop = anchor.scrollTop + insertedHeight;
   }, [visibleItems.length, visibleTurnCount]);
   const latestContinuableAssistantKey = useMemo(() => {
-    if (loading || isStreaming || chatMutationsDisabled || nativePermissionPending) {
+    if (loading || isStreaming || chatMutationsDisabled) {
       return "";
     }
     for (let index = visibleItems.length - 1; index >= 0; index -= 1) {
@@ -5694,13 +4949,9 @@ export function ChatScreen({
       }
     }
     return "";
-  }, [chatMutationsDisabled, isStreaming, loading, nativePermissionPending, visibleItems]);
+  }, [chatMutationsDisabled, isStreaming, loading,  visibleItems]);
   const favoriteAnswerByMessageKey = useMemo(() => favoriteItemsByMessageKey(favoriteItems), [favoriteItems]);
-  const soloRollbackTargets = useMemo(() => (
-    !botOverview?.remoteWorkspace && nativeExecutionMode && !isStreaming && !loading && !readOnly
-      ? buildSoloRollbackTargets(items)
-      : new Map<string, SoloRollbackTarget>()
-  ), [items, loading, nativeExecutionMode, readOnly, isStreaming, botOverview?.remoteWorkspace]);
+
   const displayContextUsage = useMemo(() => buildDisplayContextUsage(items), [items]);
   const messageRowModels = useMemo<ChatMessageRowModel[]>(() => visibleItems.map((item) => {
     const messageClientStateKey = getMessageClientStateKey(item);
@@ -5717,73 +4968,8 @@ export function ChatScreen({
       canContinue: messageClientStateKey === latestContinuableAssistantKey,
       deletedAttachmentKeys: deletedAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
       deletingAttachmentKeys: deletingAttachmentKeysByMessage[item.id] || EMPTY_ATTACHMENT_STATE,
-      soloRollbackTarget: soloRollbackTargets.get(item.id),
     };
-  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, displayContextUsage, favoriteAnswerByMessageKey, latestContinuableAssistantKey, soloRollbackTargets, visibleItems]);
-
-  const soloConversationLoadKeyRef = useRef("");
-
-  useEffect(() => {
-    if (!onSoloSessionInfoChange || loading) {
-      return;
-    }
-    const key = `${botAlias}:${activeAgentId}:${effectiveExecutionMode}`;
-    if (soloConversationLoadKeyRef.current === key) {
-      return;
-    }
-    soloConversationLoadKeyRef.current = key;
-    void listScopedConversations(client, botAlias, "", activeAgentIdRef.current, executionModeRef.current)
-      .then((data) => {
-        if (soloConversationLoadKeyRef.current === key) {
-          setConversations(data.items);
-        }
-      })
-      .catch(() => {
-        if (soloConversationLoadKeyRef.current === key) {
-          setConversations([]);
-        }
-      });
-  }, [activeAgentId, botAlias, client, effectiveExecutionMode, loading, onSoloSessionInfoChange]);
-
-  useEffect(() => {
-    if (!onSoloSessionInfoChange || effectiveExecutionMode !== "native_agent") {
-      return;
-    }
-    const activeConversation = conversations.find((conversation) => conversation.active) || conversations[0];
-    const latestNativeAssistant = [...items]
-      .reverse()
-      .find((item) => item.role === "assistant" && isNativeAgentMessage(item.meta));
-    const latestNativeMeta = latestNativeAssistant?.meta;
-    const contextUsage = latestNativeMeta?.contextUsage;
-    const snapshot: SoloSessionSnapshot = {
-      botAlias,
-      agentId: activeAgentId || "main",
-      executionMode: "native_agent",
-      conversationId: activeConversation?.id || "",
-      conversationTitle: activeConversation?.title || "当前会话",
-      workingDir: activeConversation?.workingDir || workingDir || botOverview?.workingDir || "",
-      model: contextUsage?.model || nativeSelectedModel || botOverview?.nativeAgent?.model || "",
-      nativeSessionId: latestNativeMeta?.nativeSource?.sessionId || activeConversation?.nativeSource?.sessionId || "",
-      workspaceHistoryHead: latestNativeMeta?.workspaceHistoryHead || activeConversation?.workspaceHistoryHead || "",
-      linearIndex: latestNativeMeta?.linearIndex ?? activeConversation?.linearIndex ?? 0,
-      rollbackSupported: latestNativeMeta?.rollbackSupported ?? activeConversation?.rollbackSupported ?? false,
-      degraded: latestNativeMeta?.degraded ?? activeConversation?.degraded ?? false,
-      degradedReason: latestNativeMeta?.degradedReason || activeConversation?.degradedReason || "",
-      contextStatusText: contextUsage?.statusText || "",
-    };
-    onSoloSessionInfoChange(snapshot);
-  }, [
-    botAlias,
-    botOverview?.nativeAgent?.model,
-    botOverview?.workingDir,
-    activeAgentId,
-    conversations,
-    effectiveExecutionMode,
-    items,
-    nativeSelectedModel,
-    onSoloSessionInfoChange,
-    workingDir,
-  ]);
+  }), [deletedAttachmentKeysByMessage, deletingAttachmentKeysByMessage, displayContextUsage, favoriteAnswerByMessageKey, latestContinuableAssistantKey,  visibleItems]);
 
   function emitBotActivityForActiveAgent(activityStatus: "idle" | "busy") {
     const agentId = activeAgentIdRef.current || "main";
@@ -5827,41 +5013,11 @@ export function ChatScreen({
     </div>
   ) : null;
 
-  const soloRollbackDialog = soloRollbackTarget ? (
-    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--overlay-backdrop-35)] px-4">
-      <div role="dialog" aria-modal="true" aria-label="确认撤回" className="w-full max-w-sm rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] p-4 shadow-[var(--shadow-card)]">
-        <h2 className="text-sm font-semibold text-[var(--text)]">确认撤回</h2>
-        <p className="mt-2 text-sm text-[var(--muted)]">会丢弃该点之后的会话和工作区改动，不可撤销</p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => setSoloRollbackTarget(null)}
-            disabled={soloRollbacking}
-            className="inline-flex h-8 items-center rounded-md border border-[var(--workbench-hairline)] px-3 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleConfirmSoloRollback()}
-            disabled={soloRollbacking}
-            className="inline-flex h-8 items-center rounded-md bg-[var(--button-danger-background-strong)] px-3 text-xs font-medium text-[var(--button-filled-foreground)] hover:bg-[var(--button-danger-background-deep)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {soloRollbacking ? "撤回中..." : "确认撤回"}
-          </button>
-        </div>
-      </div>
-    </div>
-  ) : null;
-
   return (
     <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
       {showActionBar ? (
         <ChatActionBar
-          executionMode={effectiveExecutionMode}
-          supportedExecutionModes={supportedExecutionModes}
-          executionModeDisabled={loading || isStreaming || readOnly}
-          onExecutionModeChange={handleExecutionModeChange}
+
           planMode={planMode}
           planDisabled={loading || isStreaming || chatMutationsDisabled}
           onTogglePlanMode={() => setPlanMode((value) => !value)}
@@ -5877,16 +5033,16 @@ export function ChatScreen({
           providerOptions={deepSeekProviderOptions}
           selectedProvider={selectedDeepSeekProvider}
           providerDescription={deepSeekProviderDescription}
-          providerDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || (!nativeExecutionMode && !cliParams)}
+          providerDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || (!cliParams)}
           onProviderChange={cliParams?.cliType === "deepseek" ? (provider) => void handleProviderChange(provider) : undefined}
           modelOptions={visibleModelOptions}
           selectedModel={selectedModel}
           modelEditable={deepSeekModelEditable}
-          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!nativeExecutionMode && !cliParams)}
+          modelDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!cliParams)}
           onModelChange={(model) => void handleModelChange(model)}
           reasoningEffortOptions={visibleReasoningEffortOptions}
           selectedReasoningEffort={selectedReasoningEffort}
-          reasoningEffortDisabled={loading || uploadingAttachments || chatMutationsDisabled || nativePermissionPending || modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+          reasoningEffortDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!cliParams)}
           onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
         />
       ) : null}
@@ -5986,8 +5142,7 @@ export function ChatScreen({
             handleContinueFinalAnswer={handleContinueFinalAnswer}
             handleFastForward={handleOpenEndlessMode}
             handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
-            handleReplyNativePermission={handleReplyNativePermission}
-            handleRequestSoloRollback={handleRequestSoloRollback}
+
             executingPlanMessageId={executingPlanMessageId}
             planExecuteError={planExecuteError}
             handleExecutePlan={handleExecutePlan}
@@ -6078,7 +5233,7 @@ export function ChatScreen({
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
         {childAgentReadOnly ? (
           <p className="px-4 py-3 text-xs font-medium text-[var(--muted)]">{childReadOnlyStatus}</p>
-        ) : chatMutationsDisabled || nativePermissionPending ? (
+        ) : chatMutationsDisabled ? (
           <p className="px-4 pt-3 text-xs font-medium text-[var(--status-warning)]">{chatDisabledReason || "只读模式"}</p>
         ) : null}
         {queuedMessage ? (
@@ -6122,7 +5277,7 @@ export function ChatScreen({
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}
             pulse={composerPulseKey > 0}
-            disabled={chatMutationsDisabled || nativePermissionPending || loading || voiceInputLocked}
+            disabled={chatMutationsDisabled || loading || voiceInputLocked}
             compact={isImmersive || embedded}
             mobileLayout={mobileLayout}
             enterToSend={enterToSend}
@@ -6133,16 +5288,16 @@ export function ChatScreen({
             providerOptions={deepSeekProviderOptions}
             selectedProvider={selectedDeepSeekProvider}
             providerDescription={deepSeekProviderDescription}
-            providerDisabled={modelSaving || readOnly || (!nativeExecutionMode && !cliParams)}
+            providerDisabled={modelSaving || readOnly || (!cliParams)}
             onProviderChange={cliParams?.cliType === "deepseek" ? (provider) => void handleProviderChange(provider) : undefined}
             modelOptions={mobileLayout ? [] : visibleModelOptions}
             selectedModel={selectedModel}
             modelEditable={!mobileLayout && deepSeekModelEditable}
-            modelDisabled={modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!nativeExecutionMode && !cliParams)}
+            modelDisabled={modelSaving || readOnly || (visibleModelOptions.length === 0 && !deepSeekModelEditable) || (!cliParams)}
             onModelChange={(model) => void handleModelChange(model)}
             reasoningEffortOptions={mobileLayout ? [] : visibleReasoningEffortOptions}
             selectedReasoningEffort={selectedReasoningEffort}
-            reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!nativeExecutionMode && !cliParams)}
+            reasoningEffortDisabled={modelSaving || readOnly || visibleReasoningEffortOptions.length === 0 || (!cliParams)}
             onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
             globalPromptPresets={botOverview?.globalPromptPresets || []}
             botPromptPresets={botOverview?.promptPresets || []}
@@ -6156,7 +5311,6 @@ export function ChatScreen({
       </div>
 
       {endlessModeDialog && typeof document !== "undefined" ? createPortal(endlessModeDialog, document.body) : endlessModeDialog}
-      {soloRollbackDialog && typeof document !== "undefined" ? createPortal(soloRollbackDialog, document.body) : soloRollbackDialog}
 
       {shouldUseInlinePreview && previewName ? (
         <FilePreviewDialog

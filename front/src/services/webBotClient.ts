@@ -35,7 +35,6 @@ import type {
   ClaudeUsageStatsQuery,
   UsageSamplesExportResult,
   UsageSamplesImportResult,
-  BotExecutionConfigInput,
   CliParamsPayload,
   DeepSeekSelectionRequest,
   DeepSeekSelectionResponse,
@@ -106,15 +105,6 @@ import type {
   WebNotificationEvent,
   ChatAttachmentUploadResult,
   ChatAttachmentDeleteResult,
-  NativeAgentPermissionReplyOptions,
-  NativeAgentConfigPayload,
-  NativeAgentPreflightResult,
-  NativeAgentModelUpdateResult,
-  NativeAgentModelUpdateOptions,
-  NativeAgentModelsPayload,
-  NativeAgentHistoryChangesPayload,
-  NativeAgentHistoryDiffPayload,
-  NativeAgentHistoryRollbackResult,
   ChatSendOptions,
   ClusterConfigUpdateInput,
   ClusterConfigUpdateResult,
@@ -178,7 +168,6 @@ import type {
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
 } from "./types";
-import type { AgUiEvent } from "./agUiProtocol";
 
 export interface WebBotClient {
   getPublicHostInfo(): Promise<PublicHostInfo>;
@@ -223,9 +212,7 @@ export interface WebBotClient {
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   reloadEnvConfig(): Promise<EnvConfigPatchResult>;
   reloadSystemEnvConfig(): Promise<EnvConfigPatchResult>;
-  getNativeAgentConfig(): Promise<NativeAgentConfigPayload>;
-  runNativeAgentPreflight(options?: { cwd?: string; piCommand?: string }): Promise<NativeAgentPreflightResult>;
-  updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload>;
+
   getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
   getCodexUsageConfig(): Promise<CodexUsageConfig>;
   updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;
@@ -297,7 +284,7 @@ export interface WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
-    onAgUiEvent?: (event: AgUiEvent) => void,
+
     onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage>;
@@ -307,25 +294,7 @@ export interface WebBotClient {
     turnId: string,
     options?: ChatSendOptions,
   ): Promise<ChatMessage | SteerMessageResult>;
-  replyNativeAgentPermission(
-    botAlias: string,
-    permissionId: string,
-    options: NativeAgentPermissionReplyOptions,
-  ): Promise<{ permissionId: string; approved: boolean }>;
-  getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload>;
-  updateNativeAgentModel(botAlias: string, model: string, options?: NativeAgentModelUpdateOptions): Promise<NativeAgentModelUpdateResult>;
-  getNativeAgentHistoryChanges(
-    botAlias: string,
-    input: { conversationId: string; turnId: string; agentId?: string },
-  ): Promise<NativeAgentHistoryChangesPayload>;
-  getNativeAgentHistoryDiff(
-    botAlias: string,
-    input: { conversationId: string; turnId: string; path: string; agentId?: string },
-  ): Promise<NativeAgentHistoryDiffPayload>;
-  rollbackNativeAgentHistory(
-    botAlias: string,
-    input: { conversationId: string; targetTurnId: string; agentId?: string },
-  ): Promise<NativeAgentHistoryRollbackResult>;
+
   getDebugProfile(botAlias: string): Promise<DebugProfile | null>;
   getDebugState(botAlias: string): Promise<DebugState>;
   getTerminalSession(ownerId: string): Promise<PersistentTerminalSnapshot>;
@@ -495,7 +464,7 @@ export interface WebBotClient {
   ): NotificationSubscription;
   sendNotificationPresenceUpdate?(presence: NotificationPresenceUpdate): void;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
-  updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary>;
+
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;
   renameBot(botAlias: string, newAlias: string): Promise<BotSummary>;

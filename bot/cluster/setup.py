@@ -36,18 +36,6 @@ _ANTIGRAVITY_LOCAL_LOCKS: dict[str, threading.RLock] = {}
 _ANTIGRAVITY_LOCAL_LOCKS_GUARD = threading.Lock()
 
 
-def build_pi_mcp_settings_snippet(launcher_path: Path) -> dict[str, Any]:
-    return {
-        "mcp": {
-            CLUSTER_MCP_SERVER_NAME: {
-                "type": "local",
-                "command": [str(launcher_path)],
-                "enabled": True,
-            }
-        }
-    }
-
-
 def get_antigravity_mcp_config_path(working_dir: Path | str) -> Path:
     return Path(working_dir).expanduser() / ".agents" / "mcp_config.json"
 
@@ -369,34 +357,6 @@ def write_deepseek_mcp_patch(
     return patch_path
 
 
-def get_pi_cluster_extension_source_path(repo_root: Path | None = None) -> Path:
-    root = repo_root or Path(__file__).resolve().parents[2]
-    return root / "bot" / "cluster" / "pi_extension" / "tcb-cluster.ts"
-
-
-def get_pi_cluster_extension_path(*, home_dir: Path | None = None) -> Path:
-    if home_dir is None:
-        settings_override = str(os.environ.get("PI_AGENT_SETTINGS") or "").strip()
-        if settings_override:
-            return Path(settings_override).expanduser().parent / "extensions" / "tcb-cluster.ts"
-    root = home_dir or Path.home()
-    return root / ".pi" / "agent" / "extensions" / "tcb-cluster.ts"
-
-
-def write_pi_cluster_extension(*, home_dir: Path | None = None, repo_root: Path | None = None) -> Path:
-    source = get_pi_cluster_extension_source_path(repo_root)
-    destination = get_pi_cluster_extension_path(home_dir=home_dir)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    return destination
-
-
-def build_pi_mcp_self_test_command(config_path: Path, *, python_executable: Path | None = None) -> list[str]:
-    python_executable = python_executable or Path(sys.executable)
-    script_path = Path(__file__).resolve().with_name("mcp_stdio.py")
-    return [str(python_executable), str(script_path), "--config", str(config_path), "--self-test"]
-
-
 @dataclass(frozen=True)
 class ClusterMcpLauncher:
     server_name: str
@@ -474,17 +434,17 @@ def prepare_cluster_mcp_launcher(
     return ClusterMcpLauncher(CLUSTER_MCP_SERVER_NAME, launcher_path, config_path, token_path)
 
 
-def normalize_cli_kind(cli_type: str) -> Literal["codex", "codex_server", "claude", "antigravity", "deepseek", "pi"]:
+def normalize_cli_kind(cli_type: str) -> Literal["codex", "codex_server", "claude", "antigravity", "deepseek"]:
     kind = str(cli_type or "").strip().lower()
-    if kind not in {"codex", "codex_server", "claude", "antigravity", "deepseek", "pi"}:
-        raise ValueError("cluster MCP 仅支持 codex / codex server / claude / antigravity / deepseek / pi")
+    if kind not in {"codex", "codex_server", "claude", "antigravity", "deepseek"}:
+        raise ValueError("cluster MCP 仅支持 codex / codex server / claude / antigravity / deepseek")
     return kind  # type: ignore[return-value]
 
 
 def build_cli_install_command(*, cli_type: str, cli_path: str, launcher_path: Path) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     executable = str(cli_path or ("codex" if kind == "codex_server" else kind))
-    if kind in {"antigravity", "deepseek", "pi"}:
+    if kind in {"antigravity", "deepseek"}:
         return []
     if kind in {"codex", "codex_server"}:
         return [executable, "mcp", "add", CLUSTER_MCP_SERVER_NAME, "--", str(launcher_path)]
@@ -495,8 +455,6 @@ def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
     if kind == "deepseek":
         return []
-    if kind == "pi":
-        return [str(cli_path or kind), "-p", "--tools", f"{CLUSTER_MCP_SERVER_NAME}.cluster_status", "List MCP tools"]
     if kind == "antigravity":
         return [str(cli_path or kind), "mcp", "list"]
     return [str(cli_path or ("codex" if kind == "codex_server" else kind)), "mcp", "get", CLUSTER_MCP_SERVER_NAME]
@@ -504,6 +462,6 @@ def build_cli_verify_command(cli_type: str, cli_path: str) -> list[str]:
 
 def build_cli_remove_command(cli_type: str, cli_path: str) -> list[str]:
     kind = normalize_cli_kind(cli_type)
-    if kind in {"antigravity", "deepseek", "pi"}:
+    if kind in {"antigravity", "deepseek"}:
         return []
     return [str(cli_path or ("codex" if kind == "codex_server" else kind)), "mcp", "remove", CLUSTER_MCP_SERVER_NAME]

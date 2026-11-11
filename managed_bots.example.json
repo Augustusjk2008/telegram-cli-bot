@@ -13,8 +13,6 @@
       "cli_path": "codex",
       "working_dir": "/path/to/project",
       "enabled": false,
-      "supported_execution_modes": ["cli"],
-      "default_execution_mode": "cli",
       "cli_params": {
         "codex_server": {
           "reasoning_effort": "xhigh"

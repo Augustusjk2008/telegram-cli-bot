@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { EventType } from "../services/agUiProtocol";
+
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { WebApiClientError } from "../services/types";
 import { buildFileDownloadUrl } from "../utils/fileLinks";
@@ -213,7 +213,7 @@ describe("RealWebBotClient", () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ cli_type: "deepseek", cli_path: "C:/tools/dsh.cmd" });
 
     fetchMock.mockResolvedValueOnce(jsonOk({
-      bot: { ...bot, supported_execution_modes: ["cli", "native_agent"], default_execution_mode: "native_agent" },
+      bot: { ...bot, supported_execution_modes: ["cli"], default_execution_mode: "cli" },
       session: { working_dir: "C:/workspace", message_count: 0, history_count: 0, is_processing: false },
       voice: { enabled: true },
     }));
@@ -966,7 +966,7 @@ describe("RealWebBotClient", () => {
             blockers: [{
               conversation_id: "conv-old",
               title: "旧会话",
-              execution_mode: "native_agent",
+              execution_mode: "cli",
               role_count: 3,
               outside_agent_ids: ["cluster-slot-4"],
               minimum_size: 4,
@@ -988,7 +988,7 @@ describe("RealWebBotClient", () => {
         blockers: [{
           conversationId: "conv-old",
           title: "旧会话",
-          executionMode: "native_agent",
+          executionMode: "cli",
           roleCount: 3,
           outsideAgentIds: ["cluster-slot-4"],
           minimumSize: 4,
@@ -1087,7 +1087,6 @@ describe("RealWebBotClient", () => {
       undefined,
       undefined,
       { endlessMode: true, skipInputTranslation: true },
-      undefined,
       (error, attempt, nextDelayMs) => errors.push({ text: error.text, attempt, nextDelayMs }),
       (attempt) => continues.push({ text: "Continue", attempt }),
     );
@@ -1128,7 +1127,6 @@ describe("RealWebBotClient", () => {
       undefined,
       undefined,
       { endlessMode: true },
-      undefined,
       (_message, _attempt, nextDelayMs, retryAtMs) => errors.push({ nextDelayMs, retryAtMs }),
     );
 
@@ -1208,86 +1206,6 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/plugins/dev-plugin", expect.objectContaining({ method: "DELETE" }));
   });
 
-  test("uses AG-UI for native requests and keeps native trace out of legacy callbacks", async () => {
-    fetchMock.mockResolvedValue(streamOk(
-      "event: message\ndata: {\"type\":\"RUN_STARTED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\"}\n\n",
-      "event: message\ndata: {\"type\":\"ACTIVITY_SNAPSHOT\",\"messageId\":\"activity-1\",\"activityType\":\"TCB_NATIVE_AGENT_TRACE\",\"replace\":true,\"content\":{\"id\":\"activity-1\",\"source\":\"native_agent\",\"rawKind\":\"commentary\",\"summary\":\"检查目录\"}}\n\n",
-      "event: message\ndata: {\"type\":\"RUN_FINISHED\",\"threadId\":\"thread-1\",\"runId\":\"run-1\",\"result\":{\"content\":\"原生完成\"},\"outcome\":{\"type\":\"success\"}}\n\n",
-    ));
-
-    const legacyTraces: string[] = [];
-    const agUiEvents: string[] = [];
-    const message = await new RealWebBotClient().sendMessage(
-      "main",
-      "hello",
-      () => undefined,
-      undefined,
-      (trace) => legacyTraces.push(trace.summary),
-      { executionMode: "native_agent" },
-      (event) => agUiEvents.push(event.type),
-    );
-
-    const request = fetchMock.mock.calls[0];
-    expect(request[0]).toBe("/api/bots/main/chat/stream?protocol=ag-ui");
-    expect(JSON.parse(String(request[1].body))).toMatchObject({
-      execution_mode: "native_agent",
-      protocol: "ag-ui",
-      stream_protocol_version: 2,
-    });
-    expect(agUiEvents).toEqual([EventType.RUN_STARTED, EventType.ACTIVITY_SNAPSHOT, EventType.RUN_FINISHED]);
-    expect(legacyTraces).toEqual([]);
-    expect(message).toMatchObject({ text: "原生完成", state: "done" });
-    expect(message.meta).toMatchObject({ tracePresentation: "native_agent_flat", traceCount: 1 });
-  });
-
-  test("maps compact AG-UI v1 and v2 terminal frames to identical final messages", async () => {
-    const persistedMessage = {
-      id: "assistant-compact-native",
-      turn_id: "turn-compact-native",
-      role: "assistant",
-      content: "原生最终答复",
-      created_at: "2026-08-08T00:00:00Z",
-      state: "done",
-    };
-    const results = [
-      { content: "原生最终答复", message: persistedMessage },
-      { message: persistedMessage },
-    ];
-    const messages = [];
-    for (const result of results) {
-      fetchMock.mockResolvedValueOnce(streamOk(
-        `event: message\ndata: ${JSON.stringify({
-          type: EventType.RUN_FINISHED,
-          threadId: "thread-compact-native",
-          runId: "run-compact-native",
-          result: {
-            ...result,
-            completion_state: "completed",
-            turn_id: "turn-compact-native",
-            assistant_message_id: "assistant-compact-native",
-          },
-          outcome: { type: "success" },
-        })}\n\n`,
-      ));
-      messages.push(await new RealWebBotClient().sendMessage(
-        "main",
-        "hello",
-        () => undefined,
-        undefined,
-        undefined,
-        { executionMode: "native_agent" },
-      ));
-    }
-
-    expect(messages[0]).toEqual(messages[1]);
-    expect(messages[0]).toMatchObject({
-      id: "assistant-compact-native",
-      turnId: "turn-compact-native",
-      text: "原生最终答复",
-      state: "done",
-    });
-  });
-
   test("drains an unterminated done frame at EOF", async () => {
     fetchMock.mockResolvedValue(streamOk('event: done\ndata: {"type":"done","output":"尾帧最终答复"}'));
 
@@ -1323,7 +1241,7 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.trace).toHaveLength(1);
   });
 
-  test("scopes agent history and conversations by agent and execution mode", async () => {
+  test("scopes CLI history and conversations by agent", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({ items: [] }))
       .mockResolvedValueOnce(jsonOk({
@@ -1348,20 +1266,20 @@ describe("RealWebBotClient", () => {
       }));
 
     const client = new RealWebBotClient();
-    const history = await client.listMessages("main", { agentId: "reviewer", executionMode: "native_agent" });
+    const history = await client.listMessages("main", { agentId: "reviewer", executionMode: "cli" });
     const conversations = await client.listConversations("main", "", {
       agentId: "reviewer",
-      executionMode: "native_agent",
+      executionMode: "cli",
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/bots/main/history?agent_id=reviewer&execution_mode=native_agent",
+      "/api/bots/main/history?agent_id=reviewer",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/bots/main/conversations?limit=80&agent_id=reviewer&execution_mode=native_agent",
+      "/api/bots/main/conversations?limit=80&agent_id=reviewer",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(conversations.items[0]).toMatchObject({

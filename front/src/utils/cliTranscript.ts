@@ -1,5 +1,17 @@
-import type { ChatEndlessEvent, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
-import type { AgUiPermissionRequest, AgUiRunState, NativeAgentTranscriptEntry } from "./agUiRunReducer";
+import type { ChatEndlessEvent, ChatTraceEvent } from "../services/types";
+
+export type CliTranscriptEntry = {
+  id: string;
+  seq: number;
+  kind: "process" | "tool" | "event" | "error" | "cancelled" | "endless_error" | "endless_continue";
+  label: string;
+  summary: string;
+  body?: string;
+  collapsedByDefault: boolean;
+  trace?: ChatTraceEvent;
+  attempt?: number;
+  createdAt?: string;
+};
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -69,71 +81,6 @@ function normalizeTraceSummary(value: unknown) {
   return asString(value).trim().replace(/\s+/g, " ");
 }
 
-function normalizeTraceSource(value: unknown) {
-  const source = asString(value).trim().toLowerCase();
-  return source === "native_agent" ? "native" : source;
-}
-
-function traceAnonymousBaseKey(trace: ChatTraceEvent) {
-  const kind = asString(trace.kind).trim();
-  const source = normalizeTraceSource(trace.source);
-  const callId = asString(trace.callId).trim();
-  const title = asString(trace.title).trim();
-  const toolName = asString(trace.toolName).trim();
-  if (!kind) {
-    return "";
-  }
-  return [kind, source, callId, title, toolName].join("\u001f");
-}
-
-function traceAnonymousKey(trace: ChatTraceEvent) {
-  const base = traceAnonymousBaseKey(trace);
-  const rawType = asString(trace.rawType).trim();
-  const summary = normalizeTraceSummary(trace.summary);
-  if (!base || !summary) {
-    return "";
-  }
-  return `${base}\u001f${rawType}\u001f${summary}`;
-}
-
-function shouldDedupeAnonymousTrace(trace: ChatTraceEvent, nativeFlat: boolean) {
-  return nativeFlat || isNativeFlatTraceEvent(trace);
-}
-
-function canReconcileAnonymousTrace(current: ChatTraceEvent, incoming: ChatTraceEvent, nativeFlat: boolean) {
-  if (!shouldDedupeAnonymousTrace(current, nativeFlat) || !shouldDedupeAnonymousTrace(incoming, nativeFlat)) {
-    return false;
-  }
-  if (traceStableKey(current) || traceStableKey(incoming)) {
-    return false;
-  }
-  const currentBase = traceAnonymousBaseKey(current);
-  const incomingBase = traceAnonymousBaseKey(incoming);
-  if (!currentBase || currentBase !== incomingBase) {
-    return false;
-  }
-  const currentSummary = normalizeTraceSummary(current.summary);
-  const incomingSummary = normalizeTraceSummary(incoming.summary);
-  if (!currentSummary || !incomingSummary) {
-    return false;
-  }
-  if (currentSummary === incomingSummary) {
-    return true;
-  }
-  const isCumulativeCommentary = (
-    current.kind === "commentary"
-    && incoming.kind === "commentary"
-    && (
-      current.rawType === "message.text.reclassified"
-      || incoming.rawType === "message.text.reclassified"
-    )
-  );
-  if (!isCumulativeCommentary) {
-    return false;
-  }
-  return currentSummary.startsWith(incomingSummary) || incomingSummary.startsWith(currentSummary);
-}
-
 function stableSerialize(value: unknown, seen = new WeakSet<object>()): string {
   if (typeof value === "undefined") return "undefined";
   if (value === null) return "null";
@@ -175,16 +122,7 @@ function traceCallKey(trace: ChatTraceEvent) {
   return callId ? `${trace.kind}:${callId}` : "";
 }
 
-function isNativeFlatTraceEvent(trace: ChatTraceEvent) {
-  const source = asString(trace.source).trim().toLowerCase();
-  const rawType = asString(trace.rawType).trim();
-  return source === "native_agent" || source === "native" || rawType === "message.text.reclassified";
-}
-
-function traceFallbackKey(trace: ChatTraceEvent, nativeFlat: boolean) {
-  if (nativeFlat || isNativeFlatTraceEvent(trace)) {
-    return "";
-  }
+function traceFallbackKey(trace: ChatTraceEvent) {
   const rawType = asString(trace.rawType).trim();
   const callId = asString(trace.callId).trim();
   const summary = asString(trace.summary).trim();
@@ -284,57 +222,17 @@ function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent, pref
   return merged;
 }
 
-function permissionId(trace: ChatTraceEvent) {
-  const payload = asRecord(trace.payload);
-  return asString(payload.permissionId || payload.id || payload.permissionID || payload.permission_id).trim();
-}
-
-function permissionFromTrace(trace: ChatTraceEvent, summary: string): AgUiPermissionRequest {
-  const payload = asRecord(trace.payload);
-  const id = permissionId(trace);
-  const uiKind = pickString(payload.uiKind, payload.ui_kind) || "confirm";
-  const options = Array.isArray(payload.options) ? payload.options : undefined;
-  const message = pickString(payload.message, payload.title, summary);
-  return {
-    permissionId: id,
-    summary,
-    state: pickString(payload.state, payload.status) || "",
-    content: payload,
-    source: pickString(trace.source, payload.source) || "",
-    uiKind,
-    ...(options ? { options } : {}),
-    ...(typeof payload.defaultValue !== "undefined" ? { defaultValue: payload.defaultValue } : {}),
-    ...(typeof payload.value !== "undefined" ? { value: payload.value } : {}),
-    ...(pickString(payload.placeholder) ? { placeholder: pickString(payload.placeholder) } : {}),
-    ...(message ? { message } : {}),
-  };
-}
-
-function isPermissionPending(trace: ChatTraceEvent) {
-  const payload = asRecord(trace.payload);
-  const state = asString(payload.state || payload.status).trim().toLowerCase();
-  return !state || (
-    !state.includes("replied")
-    && !state.includes("approved")
-    && !state.includes("reject")
-    && !state.includes("denied")
-    && !state.includes("allow")
-  );
-}
-
-function entryKind(trace: ChatTraceEvent): NativeAgentTranscriptEntry["kind"] {
+function entryKind(trace: ChatTraceEvent): CliTranscriptEntry["kind"] {
   if (trace.kind === "commentary" || trace.kind === "reasoning" || trace.kind === "status") return "process";
   if (trace.kind === "tool_call") return "tool";
-  if (trace.kind === "permission") return "permission";
   if (trace.kind === "error") return "error";
   if (trace.kind === "cancelled") return "cancelled";
   return "event";
 }
 
-function entryLabel(kind: NativeAgentTranscriptEntry["kind"], trace: ChatTraceEvent) {
+function entryLabel(kind: CliTranscriptEntry["kind"], trace: ChatTraceEvent) {
   if (kind === "process") return trace.kind === "reasoning" ? "思考" : "过程";
   if (kind === "tool") return trace.toolName || trace.title || "工具";
-  if (kind === "permission") return "权限";
   if (kind === "error") return "错误";
   if (kind === "cancelled") return "已取消";
   return trace.kind === "tool_result" ? "工具结果" : "事件";
@@ -344,13 +242,6 @@ function traceOrder(trace: ChatTraceEvent, index: number) {
   if (typeof trace.ordinal === "number") return trace.ordinal;
   if (typeof trace.sequence === "number") return trace.sequence;
   return index + 1;
-}
-
-function normalizeNativeAgentTrace(trace: ChatTraceEvent[]) {
-  return trace
-    .map((event, index) => ({ event, index }))
-    .sort((left, right) => traceOrder(left.event, left.index) - traceOrder(right.event, right.index))
-    .map((item) => item.event);
 }
 
 function normalizeTranscriptText(value: string) {
@@ -372,81 +263,18 @@ export function isDuplicateFinalProcessTrace(trace: ChatTraceEvent, finalText: s
   return normalizeTranscriptText(trace.summary || "") === normalizedFinalText;
 }
 
-function shouldNormalizeAsNativeFlat(trace: ChatTraceEvent[]) {
-  const hasNativeSource = trace.some((event) => {
-    const source = asString(event.source).trim().toLowerCase();
-    return source === "native_agent" || source === "native";
-  });
-  if (hasNativeSource) {
-    return true;
-  }
-  const hasToolCall = trace.some((event) => event.kind === "tool_call" && asString(event.callId).trim());
-  const hasReclassifiedCommentary = trace.some((event) => (
-    event.kind === "commentary" && asString(event.rawType).trim() === "message.text.reclassified"
-  ));
-  return hasToolCall && hasReclassifiedCommentary;
-}
-
 export function mergeChatTraceEvents(
   sources: Array<ChatTraceEvent[] | undefined>,
   options: {
-    nativeFlat?: boolean;
-    autoNativeFlat?: boolean;
+
     reconcileTraceSnapshots?: boolean;
-    dedupeAnonymous?: boolean;
+
   } = {},
 ): ChatTraceEvent[] | undefined {
   const merged: ChatTraceEvent[] = [];
   const stableIndexMap = new Map<string, number>();
   const callIndexMap = new Map<string, number>();
   const fallbackIndexMap = new Map<string, number>();
-  // Live native frames can lack durable IDs; persisted snapshots keep this opt-in.
-  const anonymousIndexMap = new Map<string, number[]>();
-  const anonymousBaseIndexMap = new Map<string, number[]>();
-
-  const rememberAnonymousIndex = (event: ChatTraceEvent, index: number) => {
-    if (!options.dedupeAnonymous || !shouldDedupeAnonymousTrace(event, Boolean(options.nativeFlat)) || traceStableKey(event)) {
-      return;
-    }
-    const exactKey = traceAnonymousKey(event);
-    if (exactKey) {
-      const exactIndexes = anonymousIndexMap.get(exactKey) || [];
-      if (!exactIndexes.includes(index)) {
-        exactIndexes.push(index);
-      }
-      anonymousIndexMap.set(exactKey, exactIndexes);
-    }
-    const baseKey = traceAnonymousBaseKey(event);
-    if (baseKey) {
-      const baseIndexes = anonymousBaseIndexMap.get(baseKey) || [];
-      if (!baseIndexes.includes(index)) {
-        baseIndexes.push(index);
-      }
-      anonymousBaseIndexMap.set(baseKey, baseIndexes);
-    }
-  };
-
-  const findAnonymousIndex = (event: ChatTraceEvent) => {
-    if (!options.dedupeAnonymous || !shouldDedupeAnonymousTrace(event, Boolean(options.nativeFlat)) || traceStableKey(event)) {
-      return undefined;
-    }
-    const exactKey = traceAnonymousKey(event);
-    const exactIndexes = exactKey ? anonymousIndexMap.get(exactKey) || [] : [];
-    if (exactIndexes.length > 0) {
-      return exactIndexes[exactIndexes.length - 1];
-    }
-    const baseKey = traceAnonymousBaseKey(event);
-    const baseIndexes = baseKey ? anonymousBaseIndexMap.get(baseKey) || [] : [];
-    for (let index = baseIndexes.length - 1; index >= 0; index -= 1) {
-      const candidateIndex = baseIndexes[index];
-      const candidate = merged[candidateIndex];
-      if (candidate && canReconcileAnonymousTrace(candidate, event, Boolean(options.nativeFlat))) {
-        return candidateIndex;
-      }
-    }
-    return undefined;
-  };
-
   for (const source of sources) {
     const reconciliationCandidates = new Map<string, number[]>();
     const semanticallyMatchedIndexes = new Set<number>();
@@ -464,15 +292,13 @@ export function mergeChatTraceEvents(
     for (const event of source || []) {
       const stableKey = traceStableKey(event);
       const callKey = traceCallKey(event);
-      const fallbackKey = traceFallbackKey(event, Boolean(options.nativeFlat));
+      const fallbackKey = traceFallbackKey(event);
       let existingIndex = (
         (callKey ? callIndexMap.get(callKey) : undefined)
         ?? (stableKey ? stableIndexMap.get(stableKey) : undefined)
         ?? (fallbackKey ? fallbackIndexMap.get(fallbackKey) : undefined)
       );
-      if (typeof existingIndex !== "number") {
-        existingIndex = findAnonymousIndex(event);
-      }
+
       if (typeof existingIndex !== "number" && options.reconcileTraceSnapshots) {
         const reconciliationKey = traceReconciliationKey(event);
         const candidates = reconciliationKey ? reconciliationCandidates.get(reconciliationKey) || [] : [];
@@ -483,11 +309,11 @@ export function mergeChatTraceEvents(
         merged[existingIndex] = mergeTraceEvent(
           merged[existingIndex],
           event,
-          Boolean(options.dedupeAnonymous),
+          false,
         );
         const nextStableKey = traceStableKey(merged[existingIndex]);
         const nextCallKey = traceCallKey(merged[existingIndex]);
-        const nextFallbackKey = traceFallbackKey(merged[existingIndex], Boolean(options.nativeFlat));
+        const nextFallbackKey = traceFallbackKey(merged[existingIndex]);
         if (nextStableKey) {
           stableIndexMap.set(nextStableKey, existingIndex);
         }
@@ -497,7 +323,6 @@ export function mergeChatTraceEvents(
         if (nextFallbackKey) {
           fallbackIndexMap.set(nextFallbackKey, existingIndex);
         }
-        rememberAnonymousIndex(merged[existingIndex], existingIndex);
         continue;
       }
       const nextIndex = merged.length;
@@ -511,22 +336,16 @@ export function mergeChatTraceEvents(
       if (fallbackKey) {
         fallbackIndexMap.set(fallbackKey, nextIndex);
       }
-      rememberAnonymousIndex(event, nextIndex);
     }
   }
 
-  const autoNativeFlat = options.autoNativeFlat ?? true;
-  const normalized = options.nativeFlat || (autoNativeFlat && shouldNormalizeAsNativeFlat(merged))
-    ? normalizeNativeAgentTrace(merged)
-    : merged;
-  return normalized.length > 0 ? normalized : undefined;
+  return merged.length > 0 ? merged : undefined;
 }
 
-function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(trace, index)): NativeAgentTranscriptEntry {
+function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(trace, index)): CliTranscriptEntry {
   const kind = entryKind(trace);
   const body = kind === "tool" || trace.kind === "tool_result" ? payloadText(trace) : undefined;
   const summary = trace.summary || trace.title || trace.toolName || "";
-  const permission = kind === "permission" ? permissionFromTrace(trace, summary) : undefined;
   return {
     id: trace.id || `${trace.kind || "trace"}-${seq}-${index}`,
     seq,
@@ -534,14 +353,13 @@ function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(tra
     label: entryLabel(kind, trace),
     summary,
     body,
-    collapsedByDefault: !["process", "permission", "error", "cancelled"].includes(kind),
+    collapsedByDefault: !["process", "error", "cancelled"].includes(kind),
     trace,
     ...(trace.createdAt ? { createdAt: trace.createdAt } : {}),
-    ...(permission ? { permissionId: permission.permissionId, pending: isPermissionPending(trace), permission } : {}),
   };
 }
 
-function endlessEventToEntry(event: ChatEndlessEvent): NativeAgentTranscriptEntry {
+function endlessEventToEntry(event: ChatEndlessEvent): CliTranscriptEntry {
   const kind = event.kind === "error" ? "endless_error" : "endless_continue";
   return {
     id: `endless-${event.sequence}-${kind}`,
@@ -555,12 +373,12 @@ function endlessEventToEntry(event: ChatEndlessEvent): NativeAgentTranscriptEntr
   };
 }
 
-function transcriptEntryTime(entry: NativeAgentTranscriptEntry) {
+function transcriptEntryTime(entry: CliTranscriptEntry) {
   const value = Date.parse(String(entry.createdAt || ""));
   return Number.isNaN(value) ? undefined : value;
 }
 
-function sortTranscriptEntries(entries: NativeAgentTranscriptEntry[]) {
+function sortTranscriptEntries(entries: CliTranscriptEntry[]) {
   const indexed = entries.map((entry, index) => ({
     entry,
     index,
@@ -578,36 +396,11 @@ function sortTranscriptEntries(entries: NativeAgentTranscriptEntry[]) {
     .map((item) => item.entry);
 }
 
-export function isNativeAgentMessage(meta?: ChatMessageMetaInfo): boolean {
-  const provider = String(meta?.nativeSource?.provider || "").trim().toLowerCase();
-  return (
-    meta?.tracePresentation === "native_agent_flat"
-    || provider === "native_agent"
-    || provider === "原生 agent"
-  );
-}
-
-export function buildNativeAgentTranscriptEntries(input: {
+export function buildCliTranscriptEntries(input: {
   trace?: ChatTraceEvent[];
   endlessEvents?: ChatEndlessEvent[];
-  agUiState?: AgUiRunState | null;
-  mode?: "native" | "cli";
-}): NativeAgentTranscriptEntry[] {
-  const liveTrace = input.agUiState?.entries
-    ?.map((entry) => entry.trace)
-    .filter((trace): trace is ChatTraceEvent => Boolean(trace));
-  const traceSource = input.trace?.length ? input.trace : liveTrace;
-  const nativeMode = input.mode !== "cli";
-  const normalizedTrace = mergeChatTraceEvents([traceSource], {
-    nativeFlat: nativeMode,
-    autoNativeFlat: nativeMode,
-  });
-
-  const processEntries = normalizedTrace?.length
-    ? normalizedTrace.map((trace, index) => traceToEntry(trace, index, index + 1))
-    : input.agUiState?.entries?.length
-      ? [...input.agUiState.entries].sort((left, right) => left.seq - right.seq)
-      : [];
-  const endlessEntries = (input.endlessEvents || []).map(endlessEventToEntry);
-  return sortTranscriptEntries([...processEntries, ...endlessEntries]);
+}): CliTranscriptEntry[] {
+  const trace = mergeChatTraceEvents([input.trace]);
+  const processEntries = (trace || []).map((event, index) => traceToEntry(event, index, index + 1));
+  return sortTranscriptEntries([...processEntries, ...(input.endlessEvents || []).map(endlessEventToEntry)]);
 }

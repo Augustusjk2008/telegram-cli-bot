@@ -28,9 +28,6 @@ import type {
   EnvConfigValue,
   LanChatConfig,
   LanChatConfigInput,
-  NativeAgentConfigPayload,
-  NativeAgentPreflightCheck,
-  NativeAgentPreflightResult,
   RegisterCodeCreateResult,
   RegisterCodeItem,
   NotificationSettingsStatus,
@@ -77,8 +74,7 @@ type AdminCenterTab =
   | "chat-translation"
   | "inline-completion"
   | "lan-chat"
-  | "native-agent"
-  | "storage"
+  |  "storage"
   | "env";
 
 const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: string }> = {
@@ -88,7 +84,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   storage: { label: "数据迁移", description: "将运行数据迁移到新的存储目录" },
   users: { label: "用户", description: "账号角色、能力授权与可操作的 Bot" },
   invites: { label: "邀请", description: "生成和管理注册邀请码" },
-  "native-agent": { label: "原生 Agent", description: "原生 Agent 运行时配置与预检" },
+
   "inline-completion": { label: "补全", description: "编辑器 AI 行内补全服务" },
   "chat-translation": { label: "翻译", description: "聊天消息翻译服务" },
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
@@ -101,7 +97,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
 const ADMIN_TAB_GROUPS: Array<{ label: string; tabs: AdminCenterTab[] }> = [
   { label: "系统", tabs: ["global", "env", "network-updates", "storage"] },
   { label: "成员", tabs: ["users", "invites"] },
-  { label: "智能与服务", tabs: ["native-agent", "inline-completion", "chat-translation", "usage"] },
+  { label: "智能与服务", tabs: [ "inline-completion", "chat-translation", "usage"] },
   { label: "消息", tabs: ["announcements", "notifications", "lan-chat"] },
   { label: "诊断", tabs: ["cli-errors"] },
 ];
@@ -110,7 +106,7 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
   telegram: "Telegram",
   web: "Web",
-  native_agent: "原生 Agent",
+
   tunnel: "Tunnel",
   updates: "更新",
   update: "更新",
@@ -125,7 +121,7 @@ const ENV_CATEGORY_ORDER = [
   "basic",
   "telegram",
   "web",
-  "native_agent",
+
   "tunnel",
   "updates",
   "update",
@@ -264,26 +260,6 @@ function mergeStorageMigrationSnapshot(
   };
 }
 
-function nativePreflightStatus(preflight?: NativeAgentPreflightResult) {
-  if (!preflight) return "未运行";
-  if (!preflight.ok) return "失败";
-  return preflight.checks.some((check) => check.severity === "warning" && !check.ok) ? "警告" : "通过";
-}
-
-function nativePreflightStatusClass(preflight?: NativeAgentPreflightResult) {
-  const status = nativePreflightStatus(preflight);
-  if (status === "失败") return "border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-deep)]";
-  if (status === "警告") return "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-stronger)]";
-  if (status === "通过") return "border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] text-[var(--feedback-success-text-deep)]";
-  return "admin-well text-[var(--muted)]";
-}
-
-function nativePreflightCheckClass(check: NativeAgentPreflightCheck) {
-  if (check.severity === "error" && !check.ok) return "border-[var(--feedback-error-border-light)] bg-[var(--feedback-error-background-subtle)] text-[var(--feedback-error-text-stronger)]";
-  if (check.severity === "warning" && !check.ok) return "border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] text-[var(--feedback-warning-text-stronger)]";
-  return "admin-well text-[var(--muted)]";
-}
-
 function shortErrorText(value: string) {
   const text = (value || "").trim();
   if (!text) return "-";
@@ -352,11 +328,7 @@ export function AdminCenterScreen({
   const [lanChatConfig, setLanChatConfig] = useState<LanChatConfig | null>(null);
   const [lanChatDraft, setLanChatDraft] = useState<LanChatConfigInput>({});
   const [lanChatSaving, setLanChatSaving] = useState(false);
-  const [nativeAgentConfig, setNativeAgentConfig] = useState<NativeAgentConfigPayload | null>(null);
-  const [nativeAgentDraft, setNativeAgentDraft] = useState("");
-  const [nativeAgentSystemPromptDraft, setNativeAgentSystemPromptDraft] = useState("");
-  const [nativeAgentSaving, setNativeAgentSaving] = useState(false);
-  const [nativeAgentPreflightRunning, setNativeAgentPreflightRunning] = useState(false);
+
   const [storageSnapshot, setStorageSnapshot] = useState<StorageMigrationSnapshot | null>(null);
   const [storagePreview, setStoragePreview] = useState<StorageMigrationPreview | null>(null);
   const [storageTargetRoot, setStorageTargetRoot] = useState("");
@@ -385,7 +357,7 @@ export function AdminCenterScreen({
     "inline-completion": false,
     "chat-translation": false,
     "lan-chat": false,
-    "native-agent": false,
+
     storage: false,
     env: false,
     global: false,
@@ -414,7 +386,7 @@ export function AdminCenterScreen({
       "inline-completion",
       "chat-translation",
       "lan-chat",
-      "native-agent",
+
       "storage",
       ...(canManageEnvConfig ? (["env"] as AdminCenterTab[]) : []),
     ],
@@ -642,33 +614,6 @@ export function AdminCenterScreen({
     }
   }
 
-  async function loadNativeAgentConfig(nextNotice = "", refresh = false) {
-    if (refresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-    setError("");
-    if (!nextNotice) {
-      setNotice("");
-    }
-    try {
-      const config = await client.getNativeAgentConfig();
-      setNativeAgentConfig(config);
-      setNativeAgentDraft(JSON.stringify(config.config || {}, null, 2));
-      setNativeAgentSystemPromptDraft(String(config.config?.system_prompt ?? config.config?.systemPrompt ?? ""));
-      setLoadedTabs((prev) => ({ ...prev, "native-agent": true }));
-      if (nextNotice) {
-        setNotice(nextNotice);
-      }
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "加载原生 Agent 配置失败"));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
-
   async function loadEnvConfig(nextNotice = "", refresh = false) {
     if (refresh) {
       setRefreshing(true);
@@ -767,8 +712,6 @@ export function AdminCenterScreen({
       await loadInlineCompletionSettings(nextNotice, refresh);
     } else if (activeTab === "lan-chat") {
       await loadLanChat(nextNotice, refresh);
-    } else if (activeTab === "native-agent") {
-      await loadNativeAgentConfig(nextNotice, refresh);
     } else if (activeTab === "storage") {
       await loadStorageMigration(nextNotice, refresh);
     } else if (activeTab === "env" && canManageEnvConfig) {
@@ -1006,51 +949,6 @@ export function AdminCenterScreen({
       setError(getErrorMessage(nextError, "保存联机聊天配置失败"));
     } finally {
       setLanChatSaving(false);
-    }
-  };
-
-  const saveNativeAgentConfig = async () => {
-    setNativeAgentSaving(true);
-    setError("");
-    setNotice("");
-    try {
-      const parsed = JSON.parse(nativeAgentDraft || "{}");
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        setError("配置必须是 JSON 对象");
-        return;
-      }
-      const nextConfig = { ...(parsed as Record<string, unknown>) };
-      const normalizedSystemPrompt = nativeAgentSystemPromptDraft.trim();
-      if (normalizedSystemPrompt) {
-        nextConfig.system_prompt = normalizedSystemPrompt;
-      } else {
-        delete nextConfig.system_prompt;
-        delete nextConfig.systemPrompt;
-      }
-      const saved = await client.updateNativeAgentConfig(nextConfig);
-      setNativeAgentConfig({ ...saved, preflight: undefined });
-      setNativeAgentDraft(JSON.stringify(saved.config || {}, null, 2));
-      setNativeAgentSystemPromptDraft(String(saved.config?.system_prompt ?? saved.config?.systemPrompt ?? ""));
-      setNotice(saved.needsRestart ? "配置已保存，重启原生 agent 后生效；请重新运行检查" : "原生 Agent 配置已保存；请重新运行检查");
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "保存原生 Agent 配置失败"));
-    } finally {
-      setNativeAgentSaving(false);
-    }
-  };
-
-  const runNativeAgentPreflight = async () => {
-    setNativeAgentPreflightRunning(true);
-    setError("");
-    setNotice("");
-    try {
-      const preflight = await client.runNativeAgentPreflight();
-      setNativeAgentConfig((prev) => prev ? { ...prev, preflight } : prev);
-      setNotice(preflight.ok ? "运行检查完成" : "运行检查失败");
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "运行检查失败"));
-    } finally {
-      setNativeAgentPreflightRunning(false);
     }
   };
 
@@ -1794,119 +1692,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           </section>
         ) : null}
 
-        {!loading && activeTab === "native-agent" ? (
-          <section className="admin-island orbit-island orbit-island--reading space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold text-[var(--text)]">Pi 原生 agent 配置</h2>
-                <p className="text-sm text-[var(--muted)]">Pi provider/model 配置。保存后需重启原生 agent。</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => void runNativeAgentPreflight()}
-                  disabled={nativeAgentPreflightRunning}
-                  className="orbit-btn orbit-btn--secondary"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  {nativeAgentPreflightRunning ? "检查中..." : "运行检查"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveNativeAgentConfig()}
-                  disabled={nativeAgentSaving}
-                  className="orbit-btn orbit-btn--primary"
-                >
-                  <Save className="h-4 w-4" />
-                  {nativeAgentSaving ? "保存中..." : "保存配置"}
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 text-xs text-[var(--muted)] lg:grid-cols-2">
-              <p className="break-all admin-well px-3 py-2">
-                Pi settings: {nativeAgentConfig?.configPath || "-"}
-              </p>
-              <p className="break-all admin-well px-3 py-2">
-                Pi models: {nativeAgentConfig?.modelsPath || "-"}
-              </p>
-              <p className="break-all admin-well px-3 py-2">
-                Workspace history: {nativeAgentConfig?.workspaceHistoryEnabled ? "启用" : "关闭"}
-              </p>
-            </div>
-
-            <div className={`rounded-lg border px-3 py-3 text-sm ${nativePreflightStatusClass(nativeAgentConfig?.preflight)}`}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-medium">运行检查: {nativePreflightStatus(nativeAgentConfig?.preflight)}</p>
-                <p className="text-xs">{nativeAgentConfig?.preflight?.message || "保存配置后运行检查"}</p>
-              </div>
-              {nativeAgentConfig?.preflight?.checks.length ? (
-                <div className="mt-3 grid gap-2 lg:grid-cols-2">
-                  {nativeAgentConfig.preflight.checks.map((check) => (
-                    <div key={check.key} className={`rounded-lg border px-3 py-2 ${nativePreflightCheckClass(check)}`}>
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="font-medium text-[var(--text)]">{check.key}</p>
-                        <span className="text-xs">{check.ok ? "通过" : check.severity === "warning" ? "警告" : "失败"}</span>
-                      </div>
-                      <p className="mt-1 text-xs">{check.message}</p>
-                      {!check.ok && check.fix ? <p className="mt-1 text-xs">修复: {check.fix}</p> : null}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-[var(--text)]">全局提示词</span>
-              <textarea
-                aria-label="原生 Agent 全局提示词"
-                value={nativeAgentSystemPromptDraft}
-                onChange={(event) => setNativeAgentSystemPromptDraft(event.target.value)}
-                rows={6}
-                className="min-h-32 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm text-[var(--text)]"
-                placeholder="启动 Pi 时通过 --system-prompt 注入"
-              />
-              <span className="block text-xs text-[var(--muted)]">仅新启动的 Pi runtime 生效。</span>
-            </label>
-
-            <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-              <label className="space-y-2">
-                <span className="text-sm font-medium text-[var(--text)]">配置 JSON</span>
-                <textarea
-                  aria-label="原生 Agent 配置 JSON"
-                  value={nativeAgentDraft}
-                  onChange={(event) => setNativeAgentDraft(event.target.value)}
-                  spellCheck={false}
-                  rows={22}
-                  className="min-h-[28rem] w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 font-mono text-xs text-[var(--text)]"
-                />
-              </label>
-
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-[var(--text)]">模型预览</h3>
-                {(nativeAgentConfig?.models || []).length ? (
-                  <div className="space-y-2">
-                    {nativeAgentConfig?.models.map((model) => (
-                      <div key={model.id} className="admin-well px-3 py-2 text-sm">
-                        <p className="font-medium text-[var(--text)]">{model.provider} / {model.name}</p>
-                        <p className="text-xs text-[var(--muted)]">
-                          context {model.contextWindow?.toLocaleString() || "未配置"}
-                          {model.outputLimit ? ` · output ${model.outputLimit.toLocaleString()}` : ""}
-                          {model.reasoningEfforts?.length ? ` · reasoning ${model.reasoningEfforts.join(" / ")}` : ""}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="admin-well px-3 py-2 text-sm text-[var(--muted)]">
-                    暂无模型
-                  </p>
-                )}
-              </div>
-            </div>
-          </section>
-        ) : null}
-
         {!loading && activeTab === "storage" ? (
           <section aria-labelledby="storage-migration-title" className="admin-island orbit-island orbit-island--reading space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2374,7 +2159,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             onDelete={(id) => void removeAnnouncement(id)}
           />
         ) : null}
-
 
         {!loading && activeTab === "cli-errors" ? (
           <section aria-labelledby="cli-error-stats-title" className="admin-island orbit-island orbit-island--reading space-y-4">

@@ -24,7 +24,6 @@ Packages grouped in one row use the same listed license family.
 
 | Component and audited version | License and attribution notes |
 | --- | --- |
-| `@ag-ui/core` 0.0.55 | MIT; upstream `LICENSE`, Copyright (c) 2025. |
 | `@codemirror/lang-cpp` 6.0.3, `lang-css` 6.3.1, `lang-html` 6.4.11, `lang-javascript` 6.2.5, `lang-json` 6.0.2, `lang-markdown` 6.5.0, `lang-python` 6.2.1, `language` 6.12.3, `legacy-modes` 6.5.3, `state` 6.7.1, `view` 6.43.6 | MIT; Copyright (C) 2018-2021 Marijn Haverbeke and others. |
 | `@lezer/highlight` 1.2.3 | MIT; Copyright (C) 2018 Marijn Haverbeke and others. |
 | `@uiw/react-codemirror` 4.25.9 | MIT; Kenny Wong. Installed metadata does not include a standalone license file. |
@@ -70,7 +69,6 @@ distribution metadata. Other installation methods resolve the constraints in
 | `pygdbmi` 0.11.0.0 | MIT. |
 | `pypdf` 6.14.2 | BSD-3-Clause. |
 | `tzdata` 2026.3 | Apache-2.0. |
-| `ag-ui-protocol` 0.1.19 | MIT; Markus Ecker. Installed metadata does not include a standalone license file. |
 | `pywinpty` 3.0.5 | MIT; Windows only. |
 | `psutil` 7.2.2 | BSD-3-Clause. |
 | `pytest` 9.1.1 | MIT; test dependency currently installed in the portable runtime. |
@@ -88,9 +86,6 @@ programs remain separate works under their own licenses.
 | npm 10.9.2 | Artistic-2.0; distributed as part of the Node.js runtime tree. |
 | Corepack 0.33.0 | MIT; distributed as part of the Node.js runtime tree. |
 | Git for Windows 2.41.0(3) | GPL-2.0-only for Git, with additional GPLv3/LGPL and component-specific terms in the copied Git distribution. Preserve `tools/git/LICENSE.txt`, `tools/git/ReleaseNotes.html`, and component notices such as `tools/git/mingw64/doc/git-credential-manager/NOTICE`. |
-| `@earendil-works/pi-coding-agent`, `pi-agent-core`, `pi-ai`, `pi-tui` 0.74.2 | MIT; Mario Zechner and contributors. The package metadata declares MIT but the audited npm package roots do not carry a standalone license file. |
-| `pi-workspace-history` 0.2.2 | MIT; wcldyx. The audited package root does not carry a standalone license file. |
-| Legacy `@mariozechner/pi-coding-agent`, `pi-agent-core`, `pi-ai`, `pi-tui` 0.70.6 under `tools/pi-extensions/node_modules` | MIT according to installed metadata. This older tree is currently included in the portable archive and must remain in artifact-specific inventory until packaging removes it. |
 
 Git for Windows is the highest-priority redistribution review item. Copying its
 complete installation does not change Orbit Safe Claw's own Apache-2.0 license,
@@ -122,7 +117,7 @@ Before publishing each binary release:
    `front/dist/THIRD_PARTY_LICENSES.txt`; the release scripts reject archives
    that omit it.
 2. Generate an artifact-specific dependency/SBOM inventory for the Python
-   environment, Pi trees, and bundled tool directories, and retain all license
+   environment and bundled tool directories, and retain all license
    files shipped inside those runtimes; metadata-only declarations are not
    enough where upstream requires a license text or notice.
 3. Recheck KaTeX font/OFL notices, Lucide/Feather dual notices, all frontend

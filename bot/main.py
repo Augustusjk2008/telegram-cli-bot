@@ -43,7 +43,6 @@ from bot.config import (
 from bot.manager import MultiBotManager
 from bot.messages import get_messages
 from bot.models import BotProfile
-from bot.native_agent.service import get_native_agent_service
 from bot.storage_lifecycle import stop_all_agent_processes
 from bot.storage_migration import StorageMigrationService
 from bot.storage_runtime import AsyncStorageMigrationService
@@ -565,7 +564,6 @@ async def run_all_bots():
         if telegram_gateway is not None:
             await telegram_gateway.stop()
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)
-        await get_native_agent_service().shutdown()
         # Migration already flushed these sessions before copying. The current
         # process still resolves the old root until the supervised restart.
         if storage_migration_service.status().get("state") != "awaiting_restart":

@@ -330,8 +330,7 @@ def _prepare_runtime(repo_root, job_dir, prepared, progress_callback) -> dict:
                   prepared_hashes={relative: _sha256(staging / relative) for relative in files},
                   host_environment={name: os.environ[name] for name in (
                       "PATH", "WEB_ENABLED", "TCB_DATA_DIR", "PYTHONUTF8", "PYTHONNOUSERSITE",
-                      "PI_AGENT_SETTINGS", "PI_AGENT_MODELS", "NATIVE_AGENT_PI_HOME", "NATIVE_AGENT_ENABLED",
-                      "NATIVE_AGENT_PI_COMMAND", "NATIVE_AGENT_COMMAND", "TCB_CLUSTER_MCP_CONFIG") if name in os.environ},
+                      "TCB_CLUSTER_MCP_CONFIG") if name in os.environ},
                   preparation_log=str(log))
     _progress(progress_callback, "ready", "依赖、前端与恢复执行器已就绪")
     return result

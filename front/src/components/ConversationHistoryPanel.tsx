@@ -272,7 +272,7 @@ export function ConversationHistoryPanel({
                       </div>
                       <div className="mt-2 flex items-center gap-2 text-[11px] text-[var(--muted)]">
                         <span>{item.agentId || "main"}</span>
-                        <span>{item.executionMode === "native_agent" ? "原生 agent" : "CLI"}</span>
+                        <span>CLI</span>
                       </div>
                     </button>
                     <button

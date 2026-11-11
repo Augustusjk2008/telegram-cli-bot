@@ -506,7 +506,7 @@ def remote_chat_prompt(profile: Any) -> str:
     host = json.dumps(str(remote["host"]), ensure_ascii=False)
     root = json.dumps(str(remote["root"]), ensure_ascii=False)
     shell = (
-        "Remote OS: Windows; commands run in Windows PowerShell (powershell.exe), including the Pi bash alias. "
+        "Remote OS: Windows; commands run in Windows PowerShell (powershell.exe). "
         "Use PowerShell syntax compatible with 5.1, not Bash or PowerShell 7 operators. "
         "File tool paths may be relative or drive-qualified (C:/... or /C:/...); shell paths use C:/... . "
         "Windows file APIs reject UNC/device paths and junctions/symlinks. "
@@ -518,10 +518,9 @@ def remote_chat_prompt(profile: Any) -> str:
         "This local working directory is only an agent control directory; it contains no project source or tests. "
         "Uploaded chat attachments are stored locally under attachments/ in this control directory. "
         "An 'Attachment path:' in the user message is a local absolute path: read or process it with local tools "
-        "(Pi: local_read/local_bash). Keep attachment processing outputs alongside the input attachment. "
+        "and keep attachment processing outputs alongside the input attachment. "
         "Perform ALL project reads, edits, searches, commands and tests on the remote workspace using "
-        "tcb-remote MCP exec/read/write/edit/list (Pi: remote_exec/remote_read/remote_write/remote_edit/remote_list; "
-        "read/write/edit/bash/ls are also routed remotely). Paths are remote, relative to the remote root. "
+        "tcb-remote MCP exec/read/write/edit/list. Paths are remote, relative to the remote root. "
         "Before changes, read the remote repository's AGENTS.md, CLAUDE.md and applicable nested instructions. "
         "Batch related commands with exec.commands; use bounded read ranges and rg to limit output. "
         "Use edit with exact old_text/new_text; ambiguous matches fail. If the bridge fails, report the error; "
@@ -603,19 +602,17 @@ class RemoteChatConfig:
                     "-c", f"mcp_servers.{SERVER_NAME}.args={json.dumps(args)}"]
         if cli_type == "claude":
             return ["--mcp-config", json.dumps({"mcpServers": {SERVER_NAME: server}})]
-        if cli_type == "pi":
-            return ["--no-builtin-tools", "--extension", str(Path(__file__).with_name("pi_extension.ts"))]
         if cli_type == "antigravity":
             # Antigravity discovers workspace-scoped MCP servers from cwd.
             return []
-        raise ValueError("Remote chat supports codex, codex_server, claude or pi")
+        raise ValueError("Remote chat supports codex, codex_server, claude or antigravity")
 
 
 def prepare_remote_chat(profile: Any, base_url: str = "") -> RemoteChatConfig:
-    """Register/refresh a profile capability and prepare CLI/Pi bridge configuration.
+    """Register/refresh a profile capability and prepare CLI bridge configuration.
 
-    Pass the web server's actual loopback base URL from the host. Pi may omit it
-    after host preparation; the cluster bridge config is a discovery fallback.
+    Pass the web server's actual loopback base URL from the host.
+    The existing bridge config is a discovery fallback.
     """
     fingerprint = remote_workspace_fingerprint(profile)
     if not fingerprint:

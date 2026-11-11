@@ -16,7 +16,6 @@ from typing import Any
 import threading
 
 from bot.cluster.team import ClusterTeamChangedError, ConversationTeam
-from bot.native_agent.legacy_migration import migrate_native_session_meta
 from bot.runtime_paths import (
     get_chat_history_db_path,
     get_chat_workspace_key,
@@ -27,6 +26,7 @@ from bot.runtime_paths import (
 from bot.web.diagnostics import diag_log_slow
 
 LOCAL_HISTORY_BACKEND = "local_v1"
+CLI_HISTORY_PROVIDERS = ("", "codex", "codex_server", "claude", "antigravity", "deepseek")
 PROCESS_TRACE_RAW_TYPES = {"file.edited", "file.watcher.updated"}
 _STORE_PREPARE_LOCK = Lock()
 _PREPARED_STORES: set[Path] = set()
@@ -34,6 +34,10 @@ _SCHEMA_READY_STORES: set[Path] = set()
 _MIGRATION_MARKER_LOCK = threading.RLock()
 _MIGRATION_MARKERS: set[str] = set()
 logger = logging.getLogger(__name__)
+
+
+def is_cli_history_provider(value: Any) -> bool:
+    return str(value or "").strip().lower() in CLI_HISTORY_PROVIDERS
 
 
 @dataclass(frozen=True)
@@ -491,8 +495,6 @@ class ChatStore:
                 context_usage_json TEXT,
                 endless_group_id TEXT,
                 endless_events_json TEXT,
-                workspace_history_head TEXT,
-                workspace_history_index INTEGER,
                 workspace_history_discarded_at TEXT,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
@@ -646,8 +648,7 @@ class ChatStore:
         self._ensure_column(conn, "turns", "context_usage_json", "TEXT")
         self._ensure_column(conn, "turns", "endless_group_id", "TEXT")
         self._ensure_column(conn, "turns", "endless_events_json", "TEXT")
-        self._ensure_column(conn, "turns", "workspace_history_head", "TEXT")
-        self._ensure_column(conn, "turns", "workspace_history_index", "INTEGER")
+        # Keep persisted tombstones so discarded messages remain hidden.
         self._ensure_column(conn, "turns", "workspace_history_discarded_at", "TEXT")
         self._ensure_column(conn, "messages", "author_user_id", "INTEGER")
         self._ensure_column(conn, "messages", "author_account_id", "TEXT")
@@ -799,8 +800,6 @@ class ChatStore:
                 t.error_message,
                 t.context_usage_json,
                 t.endless_events_json,
-                t.workspace_history_head,
-                t.workspace_history_index,
                 a.content AS assistant_content,
                 a.translation_json AS assistant_translation_json,
                 a.agent_input_text AS assistant_agent_input_text,
@@ -870,12 +869,6 @@ class ChatStore:
         native_provider = str(latest["native_provider"] or root["native_provider"] or "").strip() or None
         native_session_id = str(latest["native_session_id"] or root["native_session_id"] or "").strip() or None
         context_usage_json = latest["context_usage_json"] or root["context_usage_json"]
-        workspace_history_head = latest["workspace_history_head"] or root["workspace_history_head"]
-        workspace_history_index = (
-            latest["workspace_history_index"]
-            if latest["workspace_history_index"] is not None
-            else root["workspace_history_index"]
-        )
         completed_at = latest["completed_at"]
         if not completed_at and latest_completion_state == "completed":
             completed_at = latest["updated_at"]
@@ -892,9 +885,7 @@ class ChatStore:
                 error_code = ?,
                 error_message = ?,
                 context_usage_json = ?,
-                endless_events_json = ?,
-                workspace_history_head = ?,
-                workspace_history_index = ?
+                endless_events_json = ?
             WHERE id = ?
             """,
             (
@@ -908,8 +899,6 @@ class ChatStore:
                 latest["error_message"],
                 context_usage_json,
                 json.dumps(merged_events, ensure_ascii=False) if merged_events else None,
-                workspace_history_head,
-                workspace_history_index,
                 str(root["id"]),
             ),
         )
@@ -1348,8 +1337,9 @@ class ChatStore:
         native_provider_exclude: str | None = None,
         column: str = "native_provider",
     ) -> tuple[str, list[Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
+        placeholders = ", ".join("?" for _ in CLI_HISTORY_PROVIDERS)
+        clauses = [f"AND LOWER(TRIM(COALESCE({column}, ''))) IN ({placeholders})"]
+        params: list[Any] = list(CLI_HISTORY_PROVIDERS)
         provider = str(native_provider or "").strip()
         exclude = str(native_provider_exclude or "").strip()
         if provider:
@@ -1547,7 +1537,7 @@ class ChatStore:
         return conversation_id, 1
 
     def _conversation_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        native_session_meta = migrate_native_session_meta(_parse_json_dict(row["native_session_meta_json"]))
+        native_session_meta = _parse_json_dict(row["native_session_meta_json"])
         cluster_team = ConversationTeam.from_json(row["cluster_team_json"])
         assignment_revision = row["cluster_assignment_revision"]
         return {
@@ -1752,15 +1742,10 @@ class ChatStore:
         normalized_parent_id = str(parent_conversation_id or "").strip()
         normalized_agent_id = str(agent_id or "").strip()
         normalized_assignment_revision = int(assignment_revision)
-        normalized_mode = str(execution_mode or "").strip().lower()
         normalized_cli_type = str(cli_type or "").strip().lower()
         if normalized_assignment_revision < 1:
             raise ValueError("assignment_revision 必须是正整数")
-        provider_clause = "AND native_provider = ?"
-        provider_params: list[Any] = [normalized_mode]
-        if normalized_mode == "cli":
-            provider_clause = "AND COALESCE(native_provider, '') != 'native_agent'"
-            provider_params = []
+        provider_clause, provider_params = self._provider_scope_clause()
         cli_clause = "AND cli_type = ?" if normalized_cli_type else ""
         with closing(conn):
             with conn:
@@ -1832,19 +1817,21 @@ class ChatStore:
             agent_id: ordinal
             for ordinal, agent_id in enumerate(normalized_slot_ids, start=1)
         }
+        provider_clause, provider_params = self._provider_scope_clause()
         with closing(conn):
             with conn:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT *
                     FROM conversations
                     WHERE bot_id = ?
                       AND agent_id = 'main'
                       AND COALESCE(cluster_parent_conversation_id, '') = ''
                       AND archived_at IS NULL
+                      {provider_clause}
                     ORDER BY updated_at DESC, created_at DESC, id DESC
                     """,
-                    (int(bot_id),),
+                    [int(bot_id), *provider_params],
                 ).fetchall()
 
         blockers: list[dict[str, Any]] = []
@@ -1866,11 +1853,7 @@ class ChatStore:
                 {
                     "conversation_id": conversation["id"],
                     "title": conversation["title"],
-                    "execution_mode": (
-                        "native_agent"
-                        if conversation["native_provider"] == "native_agent"
-                        else "cli"
-                    ),
+                    "execution_mode": "cli",
                     "role_count": len(assignments),
                     "outside_agent_ids": outside_agent_ids,
                     "minimum_size": minimum_size,
@@ -1910,7 +1893,7 @@ class ChatStore:
                     raise KeyError(conversation_id)
                 return {
                     "session_id": str(row["native_session_id"] or ""),
-                    "meta": migrate_native_session_meta(_parse_json_dict(row["native_session_meta_json"])),
+                    "meta": _parse_json_dict(row["native_session_meta_json"]),
                 }
 
     def set_conversation_native_session(
@@ -1920,7 +1903,7 @@ class ChatStore:
         meta: dict[str, Any] | None = None,
     ) -> None:
         normalized_session_id = str(session_id or "").strip()
-        normalized_meta = migrate_native_session_meta(meta)
+        normalized_meta = dict(meta) if isinstance(meta, dict) else {}
         meta_json = json.dumps(normalized_meta, ensure_ascii=False) if normalized_session_id else None
         now = _utc_now()
         with self._connect_for_write() as conn:
@@ -3130,265 +3113,6 @@ class ChatStore:
         context_usage = _parse_json_dict(row["context_usage_json"])
         return context_usage or None
 
-    def update_turn_workspace_history(self, turn_id: str, head: str, index: int) -> bool:
-        normalized_turn_id = str(turn_id or "").strip()
-        normalized_head = str(head or "").strip()
-        try:
-            normalized_index = int(index)
-        except (TypeError, ValueError):
-            normalized_index = 0
-        now = _utc_now()
-        with self._connect_for_write() as conn:
-            turn = conn.execute(
-                "SELECT conversation_id, assistant_message_id FROM turns WHERE id = ?",
-                (normalized_turn_id,),
-            ).fetchone()
-            if turn is None:
-                raise KeyError(normalized_turn_id)
-            result = conn.execute(
-                """
-                UPDATE turns
-                SET workspace_history_head = ?,
-                    workspace_history_index = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (normalized_head, normalized_index, now, normalized_turn_id),
-            )
-            if result.rowcount == 0:
-                raise KeyError(normalized_turn_id)
-            self._record_message_changes(
-                conn,
-                str(turn["conversation_id"]),
-                [str(turn["assistant_message_id"])],
-                operation="upsert",
-                now=now,
-            )
-        return True
-
-    def get_turn_workspace_history(self, turn_id: str) -> dict[str, Any] | None:
-        normalized_turn_id = str(turn_id or "").strip()
-        conn = self._connect(create=False)
-        if conn is None:
-            return None
-        with closing(conn):
-            row = conn.execute(
-                """
-                SELECT
-                    id,
-                    conversation_id,
-                    seq,
-                    native_provider,
-                    workspace_history_head,
-                    workspace_history_index,
-                    workspace_history_discarded_at
-                FROM turns
-                WHERE id = ?
-                """,
-                (normalized_turn_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return {
-            "turn_id": str(row["id"]),
-            "conversation_id": str(row["conversation_id"] or ""),
-            "seq": int(row["seq"] or 0),
-            "native_provider": str(row["native_provider"] or ""),
-            "workspace_history_head": str(row["workspace_history_head"] or ""),
-            "linear_index": int(row["workspace_history_index"] or 0),
-            "discarded_at": str(row["workspace_history_discarded_at"] or ""),
-        }
-
-    def mark_turns_after_discarded(self, conversation_id: str, target_turn_id: str) -> int:
-        normalized_conversation_id = str(conversation_id or "").strip()
-        normalized_turn_id = str(target_turn_id or "").strip()
-        now = _utc_now()
-        with self._connect_for_write() as conn:
-            target = conn.execute(
-                """
-                SELECT seq
-                FROM turns
-                WHERE id = ? AND conversation_id = ? AND workspace_history_discarded_at IS NULL
-                """,
-                (normalized_turn_id, normalized_conversation_id),
-            ).fetchone()
-            if target is None:
-                raise KeyError(normalized_turn_id)
-            discarded_message_rows = conn.execute(
-                """
-                SELECT m.id
-                FROM messages AS m
-                JOIN turns AS t ON t.id = m.turn_id
-                WHERE t.conversation_id = ?
-                  AND t.seq > ?
-                  AND t.workspace_history_discarded_at IS NULL
-                ORDER BY t.seq ASC, m.created_at ASC, m.id ASC
-                """,
-                (normalized_conversation_id, int(target["seq"] or 0)),
-            ).fetchall()
-            result = conn.execute(
-                """
-                UPDATE turns
-                SET workspace_history_discarded_at = ?,
-                    updated_at = ?
-                WHERE conversation_id = ?
-                  AND seq > ?
-                  AND workspace_history_discarded_at IS NULL
-                """,
-                (now, now, normalized_conversation_id, int(target["seq"] or 0)),
-            )
-            latest = conn.execute(
-                """
-                SELECT m.content
-                FROM messages AS m
-                JOIN turns AS t ON t.id = m.turn_id
-                WHERE m.conversation_id = ?
-                  AND t.workspace_history_discarded_at IS NULL
-                ORDER BY
-                    t.seq DESC,
-                    CASE m.role WHEN 'user' THEN 0 ELSE 1 END DESC,
-                    m.created_at DESC,
-                    m.id DESC
-                LIMIT 1
-                """,
-                (normalized_conversation_id,),
-            ).fetchone()
-            count_row = conn.execute(
-                """
-                SELECT COUNT(*) AS count
-                FROM messages AS m
-                JOIN turns AS t ON t.id = m.turn_id
-                WHERE m.conversation_id = ?
-                  AND t.workspace_history_discarded_at IS NULL
-                """,
-                (normalized_conversation_id,),
-            ).fetchone()
-            conn.execute(
-                """
-                UPDATE conversations
-                SET last_message_preview = ?,
-                    message_count = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    self._summarize_preview(str(latest["content"] or "")) if latest is not None else "",
-                    int(count_row["count"] or 0) if count_row is not None else 0,
-                    now,
-                    normalized_conversation_id,
-                ),
-            )
-            self._record_message_changes(
-                conn,
-                normalized_conversation_id,
-                [str(row["id"]) for row in discarded_message_rows],
-                operation="delete",
-                now=now,
-            )
-            return int(result.rowcount or 0)
-
-    def latest_active_workspace_history(self, conversation_id: str) -> dict[str, Any] | None:
-        normalized_conversation_id = str(conversation_id or "").strip()
-        conn = self._connect(create=False)
-        if conn is None:
-            return None
-        with closing(conn):
-            row = conn.execute(
-                """
-                SELECT id, workspace_history_head, workspace_history_index
-                FROM turns
-                WHERE conversation_id = ?
-                  AND workspace_history_discarded_at IS NULL
-                  AND COALESCE(workspace_history_head, '') != ''
-                ORDER BY seq DESC, started_at DESC, id DESC
-                LIMIT 1
-                """,
-                (normalized_conversation_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return {
-            "turn_id": str(row["id"]),
-            "workspace_history_head": str(row["workspace_history_head"] or ""),
-            "linear_index": int(row["workspace_history_index"] or 0),
-        }
-
-    def latest_active_workspace_histories(
-        self,
-        conversation_ids: list[str] | tuple[str, ...] | set[str],
-    ) -> dict[str, dict[str, Any]]:
-        normalized_ids = list(
-            dict.fromkeys(
-                str(conversation_id or "").strip()
-                for conversation_id in conversation_ids
-                if str(conversation_id or "").strip()
-            )
-        )
-        if not normalized_ids:
-            return {}
-        conn = self._connect(create=False)
-        if conn is None:
-            return {}
-        placeholders = ",".join("?" for _ in normalized_ids)
-        with closing(conn):
-            rows = conn.execute(
-                f"""
-                SELECT conversation_id, id, workspace_history_head, workspace_history_index
-                FROM (
-                    SELECT
-                        conversation_id,
-                        id,
-                        workspace_history_head,
-                        workspace_history_index,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY conversation_id
-                            ORDER BY seq DESC, started_at DESC, id DESC
-                        ) AS row_number
-                    FROM turns
-                    WHERE conversation_id IN ({placeholders})
-                      AND workspace_history_discarded_at IS NULL
-                      AND COALESCE(workspace_history_head, '') != ''
-                )
-                WHERE row_number = 1
-                """,
-                normalized_ids,
-            ).fetchall()
-        return {
-            str(row["conversation_id"]): {
-                "turn_id": str(row["id"]),
-                "workspace_history_head": str(row["workspace_history_head"] or ""),
-                "linear_index": int(row["workspace_history_index"] or 0),
-            }
-            for row in rows
-        }
-
-    def invalidate_conversation_workspace_history(self, conversation_id: str) -> int:
-        normalized_conversation_id = str(conversation_id or "").strip()
-        now = _utc_now()
-        with self._connect_for_write() as conn:
-            result = conn.execute(
-                """
-                UPDATE turns
-                SET workspace_history_head = '',
-                    workspace_history_index = 0,
-                    updated_at = ?
-                WHERE conversation_id = ?
-                  AND (
-                    COALESCE(workspace_history_head, '') != ''
-                    OR COALESCE(workspace_history_index, 0) != 0
-                  )
-                """,
-                (now, normalized_conversation_id),
-            )
-            conn.execute(
-                """
-                UPDATE conversations
-                SET updated_at = ?
-                WHERE id = ?
-                """,
-                (now, normalized_conversation_id),
-            )
-            return int(result.rowcount or 0)
 
     def append_trace_event(
         self,
@@ -4190,25 +3914,6 @@ class ChatStore:
                 "tool_call_count": int(trace_stats.get("tool_call_count", 0) or 0),
                 "process_count": int(trace_stats.get("process_count", 0) or 0),
             })
-            try:
-                workspace_history_head = str(row["workspace_history_head"] or "").strip()
-            except (KeyError, IndexError):
-                workspace_history_head = ""
-            try:
-                workspace_history_index = row["workspace_history_index"]
-            except (KeyError, IndexError):
-                workspace_history_index = None
-            if workspace_history_head:
-                meta["workspace_history_head"] = workspace_history_head
-                meta["rollback_supported"] = True
-            if workspace_history_index is not None:
-                try:
-                    meta["linear_index"] = int(workspace_history_index)
-                except (TypeError, ValueError):
-                    pass
-            if "rollback_supported" not in meta:
-                meta["rollback_supported"] = False
-            meta["degraded"] = False
             native_provider = str(row["native_provider"] or "").strip()
             native_session_id = str(row["native_session_id"] or "").strip()
             if native_provider or native_session_id:
@@ -4299,9 +4004,7 @@ class ChatStore:
                     t.native_session_id,
                     t.context_usage_json,
                     t.endless_group_id,
-                    t.endless_events_json,
-                    t.workspace_history_head,
-                    t.workspace_history_index
+                    t.endless_events_json
                 FROM messages AS m
                 JOIN turns AS t ON t.id = m.turn_id
                 WHERE m.conversation_id = ?
@@ -4341,8 +4044,6 @@ class ChatStore:
                 recent.context_usage_json,
                 recent.endless_group_id,
                 recent.endless_events_json,
-                recent.workspace_history_head,
-                recent.workspace_history_index,
                 recent.message_rowid,
                 recent.role_order
             FROM (
@@ -4368,8 +4069,6 @@ class ChatStore:
                     t.context_usage_json,
                     t.endless_group_id,
                     t.endless_events_json,
-                    t.workspace_history_head,
-                    t.workspace_history_index,
                     m.rowid AS message_rowid,
                     CASE m.role WHEN 'user' THEN 0 ELSE 1 END AS role_order
                 FROM messages AS m
@@ -4437,13 +4136,10 @@ class ChatStore:
                         t.native_session_id,
                         t.context_usage_json,
                         t.endless_group_id,
-                        t.endless_events_json,
-                        t.workspace_history_head,
-                        t.workspace_history_index
+                        t.endless_events_json
                     FROM messages AS m
                     JOIN turns AS t ON t.id = m.turn_id
-                    WHERE m.id = ?
-                      AND t.workspace_history_discarded_at IS NULL
+                    WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
                     """,
                     (message_id,),
                 ).fetchone()
@@ -4520,9 +4216,7 @@ class ChatStore:
                 t.native_session_id,
                 t.context_usage_json,
                 t.endless_group_id,
-                t.endless_events_json,
-                t.workspace_history_head,
-                t.workspace_history_index
+                t.endless_events_json
             FROM messages AS m
             JOIN turns AS t ON t.id = m.turn_id
             WHERE m.conversation_id = ?
@@ -5403,8 +5097,7 @@ class ChatStore:
                     SELECT m.turn_id, m.content
                     FROM messages AS m
                     JOIN turns AS t ON t.id = m.turn_id
-                    WHERE m.id = ?
-                      AND t.workspace_history_discarded_at IS NULL
+                    WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
                     """,
                     (message_id,),
                 ).fetchone()

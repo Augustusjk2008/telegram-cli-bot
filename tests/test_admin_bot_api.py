@@ -244,21 +244,19 @@ async def test_archive_rejects_busy_sessions_and_rolls_back_shutdown_failure(tmp
     assert manager.managed_profiles["worker"].enabled
 
     session.is_processing = False
-    from bot.native_agent.service import get_native_agent_service
-    service = get_native_agent_service()
     async def fail_close(alias):
         assert alias not in manager.managed_profiles
         with pytest.raises(WebApiError):
             get_session_for_alias(manager, alias, 123)
         raise RuntimeError("shutdown failed")
-    monkeypatch.setattr(service, "close_bot_runtimes", fail_close)
+    monkeypatch.setattr("bot.manager._close_codex_server_runtimes", fail_close)
     with pytest.raises(RuntimeError, match="shutdown failed"):
         await manager.archive_bot("worker")
     assert manager.managed_profiles["worker"].enabled
     assert not manager.managed_profiles["worker"].archived
     assert not manager.load_archived_profiles()
 
-    monkeypatch.setattr(service, "close_bot_runtimes", AsyncMock())
+    monkeypatch.setattr("bot.manager._close_codex_server_runtimes", AsyncMock())
     monkeypatch.setattr("bot.manager.save_managed_profiles", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(OSError, match="disk full"):
         await manager.archive_bot("worker")

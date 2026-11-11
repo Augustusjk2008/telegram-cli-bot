@@ -22,7 +22,6 @@ import type {
   ClusterStatus,
   ClusterTierConfig,
   ClusterTierConfigs,
-  NativeAgentModelsPayload,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
@@ -99,7 +98,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
   const [draft, setDraft] = useState<BotClusterConfig>(() => cloneCluster(overview?.cluster));
   const [status, setStatus] = useState<ClusterStatus | null>(null);
   const [cliParamsByType, setCliParamsByType] = useState<Partial<Record<string, CliParamsPayload>>>({});
-  const [nativeModels, setNativeModels] = useState<NativeAgentModelsPayload | null>(null);
+
   const [timeoutDraft, setTimeoutDraft] = useState(String(cluster.defaultTimeoutSeconds));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -107,11 +106,10 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
   const requestedCliTypesRef = useRef<Set<string>>(new Set());
   const [cliParamsScope, setCliParamsScope] = useState(0);
 
-  const nativeRuntime = overview?.defaultExecutionMode === "native_agent" || overview?.executionMode === "native_agent";
   const inheritedCliType = String(overview?.cliType || "codex");
   const mainCliParams = cliParamsByType[inheritedCliType];
   const dirty = !clusterDraftEquals(draft, cluster) || timeoutDraft.trim() !== String(cluster.defaultTimeoutSeconds);
-  const draftCliTypesKey = nativeRuntime ? "" : tierConfigTypes(draft.tierConfigs, inheritedCliType).join("\n");
+  const draftCliTypesKey = tierConfigTypes(draft.tierConfigs, inheritedCliType).join("\n");
 
   const onDirtyChangeRef = useRef(onDirtyChange);
   useEffect(() => {
@@ -145,12 +143,6 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
     setCluster(nextCluster);
     setDraft(nextCluster);
     setTimeoutDraft(String(nextCluster.defaultTimeoutSeconds));
-
-    if (nativeRuntime) {
-      const modelsResult = await Promise.allSettled([client.getNativeAgentModels(botAlias)]);
-      const modelValue = modelsResult[0];
-      if (modelValue.status === "fulfilled") setNativeModels(modelValue.value);
-    }
   }
 
   useEffect(() => {
@@ -164,11 +156,11 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
     setCliParamsByType({});
     setCliParamsScope(cliParamsScopeRef.current);
     void load();
-  }, [botAlias, client, nativeRuntime, overview?.alias, overview?.cluster]);
+  }, [botAlias, client,  overview?.alias, overview?.cluster]);
 
   useEffect(() => {
     // Draft tiers can pick a CLI that has not been loaded yet; fetch its options before saving.
-    if (nativeRuntime || !draftCliTypesKey) return;
+    if (!draftCliTypesKey) return;
     const missing = draftCliTypesKey.split("\n").filter((cliType) => !requestedCliTypesRef.current.has(cliType));
     if (!missing.length) return;
     missing.forEach((cliType) => requestedCliTypesRef.current.add(cliType));
@@ -184,7 +176,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
         return next;
       });
     });
-  }, [botAlias, client, nativeRuntime, draftCliTypesKey, cliParamsScope]);
+  }, [botAlias, client,  draftCliTypesKey, cliParamsScope]);
 
   async function persist(next: BotClusterConfig, options: { replaceDraft: boolean }) {
     setSaving(true);
@@ -243,15 +235,8 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
     }));
   }
 
-  const fallbackModelOptions = nativeRuntime
-    ? nativeModels?.items.map((item) => item.id) || []
-    : mainCliParams?.schema.model?.enum || [];
-  const fallbackReasoningOptions = nativeRuntime
-    ? (model: string) => {
-      const selected = model || nativeModels?.selectedModel || overview?.nativeAgent?.model || "";
-      return nativeModels?.items.find((item) => item.id === selected)?.reasoningEfforts || [];
-    }
-    : mainCliParams?.schema.reasoning_effort?.enum || mainCliParams?.schema.effort?.enum || [];
+  const fallbackModelOptions = mainCliParams?.schema.model?.enum || [];
+  const fallbackReasoningOptions = mainCliParams?.schema.reasoning_effort?.enum || mainCliParams?.schema.effort?.enum || [];
 
   return (
     <SettingsSection
@@ -289,11 +274,11 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
       )}
     >
       <div className="space-y-2.5">
-        {inheritedCliType === "deepseek" || nativeRuntime ? (
+        {inheritedCliType === "deepseek" ? (
           <div className="space-y-0.5 rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--muted)]">
             {inheritedCliType === "deepseek" ? <p>DeepSeek Harness：集群轮次自动注入 MCP。</p> : null}
             {inheritedCliType === "deepseek" ? <p>集群档位继承主 Bot 的 Provider：DeepSeek。</p> : null}
-            {nativeRuntime ? <p>当前 Bot 使用原生 Agent/Pi 执行。模型档位沿用原生模型配置；为档位选择 CLI 会在保存时被拒绝。</p> : null}
+
           </div>
         ) : null}
         {error ? <p role="alert" className="text-xs text-[var(--feedback-error-text-deep)]">{error}</p> : null}
@@ -319,7 +304,7 @@ export function BotClusterSettingsPanel({ botAlias, client, overview, canManage 
           tierConfigs={draft.tierConfigs}
           cliParamsByType={cliParamsByType}
           inheritedCliType={inheritedCliType}
-          nativeRuntime={nativeRuntime}
+
           modelOptions={fallbackModelOptions}
           reasoningOptions={fallbackReasoningOptions}
           disabled={!canManage || saving}

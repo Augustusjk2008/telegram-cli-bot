@@ -1,12 +1,12 @@
 import { useEffect, useId, useMemo, useState, type CSSProperties } from "react";
-import { FolderOpen, HardDrive, Plus, Server, ShieldAlert, Sparkles, SquareTerminal, X } from "lucide-react";
+import { FolderOpen, HardDrive, Plus, Server, ShieldAlert, X } from "lucide-react";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
 import { RemoteWorkspacePicker } from "../components/RemoteWorkspacePicker";
 import type { BotSummary, CliType } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { getBotAccentColor, getBotIdentityTextStyle } from "../utils/botVisual";
 import { cliTypeLabel } from "../utils/cliType";
-import { buildExecutionConfig, DEFAULT_NATIVE_AGENT_DRAFT, isMainBot } from "./botManagerModel";
+import {  isMainBot } from "./botManagerModel";
 import { buildCreateDraft, defaultCliPathForType, type CreateDraft } from "./useBotManager";
 
 const CLI_TYPE_CHOICES: CliType[] = ["codex", "codex_server", "claude", "antigravity", "deepseek"];
@@ -20,7 +20,7 @@ type Props = {
   canManage: boolean;
   canCreateWorkdirDirectory: boolean;
   canRunUnsafeCli: boolean;
-  nativeAgentFeatureEnabled: boolean | null;
+
   /** `panel` sits in the desktop inspector; `card` stacks inside the narrow list. */
   layout: "panel" | "card";
   description: string;
@@ -30,31 +30,16 @@ type Props = {
 };
 
 function normalizeCreateDraft(draft: CreateDraft): CreateDraft {
-  const executionConfig = buildExecutionConfig(draft.runtimeBackend);
-  const providerInput = draft.nativeAgent?.provider?.trim() || "";
-  const providerLooksLikeUrl = /^https?:\/\//i.test(providerInput);
-  const baseUrlInput = draft.nativeAgent?.baseUrl?.trim() || "";
-  const nativeAgent = {
-    ...DEFAULT_NATIVE_AGENT_DRAFT,
-    ...(draft.nativeAgent || {}),
-    provider: providerLooksLikeUrl ? "codeflow" : providerInput,
-    model: draft.nativeAgent?.model?.trim() || "",
-    piAgent: draft.nativeAgent?.piAgent?.trim() || "",
-    baseUrl: providerLooksLikeUrl && !baseUrlInput ? providerInput.replace(/\/+$/, "") : baseUrlInput.replace(/\/+$/, ""),
-    apiKey: draft.nativeAgent?.apiKey?.trim() || "",
-    clearApiKey: Boolean(draft.nativeAgent?.clearApiKey),
-  };
   return {
     alias: draft.alias.trim(),
     cliType: draft.cliType,
     cliPath: draft.cliPath.trim(),
     workingDir: draft.workingDir.trim(),
     remoteWorkspace: draft.remoteWorkspace,
-    bypassApprovalAndSandbox: draft.runtimeBackend === "cli" ? Boolean(draft.bypassApprovalAndSandbox) : false,
-    runtimeBackend: draft.runtimeBackend,
-    supportedExecutionModes: executionConfig.supportedExecutionModes,
-    defaultExecutionMode: executionConfig.defaultExecutionMode,
-    nativeAgent,
+    bypassApprovalAndSandbox: Boolean(draft.bypassApprovalAndSandbox),
+
+    supportedExecutionModes: ["cli"],
+    defaultExecutionMode: "cli",
   };
 }
 
@@ -77,7 +62,7 @@ export function AgentCreateForm({
   canManage,
   canCreateWorkdirDirectory,
   canRunUnsafeCli,
-  nativeAgentFeatureEnabled,
+
   layout,
   description,
   onCreated,
@@ -88,7 +73,7 @@ export function AgentCreateForm({
   const titleId = `${ids}-title`;
   const aliasId = `${ids}-alias`;
   const cliPathId = `${ids}-cli-path`;
-  const piAgentId = `${ids}-pi-agent`;
+
   const workdirId = `${ids}-workdir`;
   const baseDraft = useMemo(() => buildCreateDraft("codex", bots), [bots]);
   const [draft, setDraft] = useState<CreateDraft>(() => buildCreateDraft());
@@ -116,28 +101,15 @@ export function AgentCreateForm({
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
-    if (nativeAgentFeatureEnabled === false && draft.runtimeBackend === "native_agent") {
-      setDraft((prev) => ({
-        ...prev,
-        runtimeBackend: "cli",
-        supportedExecutionModes: ["cli"],
-        defaultExecutionMode: "cli",
-      }));
-    }
-  }, [draft.runtimeBackend, nativeAgentFeatureEnabled]);
-
-  useEffect(() => {
     if (!canRunUnsafeCli && draft.bypassApprovalAndSandbox) {
       setDraft((prev) => ({ ...prev, bypassApprovalAndSandbox: false }));
     }
   }, [canRunUnsafeCli, draft.bypassApprovalAndSandbox]);
 
   const alias = draft.alias.trim();
-  const isCli = draft.runtimeBackend === "cli";
+
   const isDeepSeek = draft.cliType === "deepseek";
-  const nativeUnavailableReason = nativeAgentFeatureEnabled === false
-    ? "原生 agent 全局未启用"
-    : isDeepSeek ? "DeepSeek Harness 仅支持 CLI 运行" : "";
+
   const missing = [
     !alias && "别名",
     remoteCreate && !draft.remoteWorkspace && "远程工作目录",
@@ -145,18 +117,7 @@ export function AgentCreateForm({
   const canSubmit = canManage && !busy && missing.length === 0;
   const footHint = missing.length > 0
     ? `还需填写：${missing.join("、")}`
-    : `将创建 ${alias.toLowerCase()} · ${isCli ? `CLI / ${cliTypeLabel(draft.cliType)}` : "原生 agent"} · ${remoteCreate ? "远程 SSH" : "本地"}`;
-
-  // Segmented buttons, unlike the selects they replace, also fire for the active choice.
-  function selectRuntimeBackend(runtimeBackend: CreateDraft["runtimeBackend"]) {
-    if (runtimeBackend === draft.runtimeBackend) return;
-    setDraft((prev) => ({
-      ...prev,
-      runtimeBackend,
-      supportedExecutionModes: [runtimeBackend],
-      defaultExecutionMode: runtimeBackend,
-    }));
-  }
+    : `将创建 ${alias.toLowerCase()} · ${`CLI / ${cliTypeLabel(draft.cliType)}`} · ${remoteCreate ? "远程 SSH" : "本地"}`;
 
   function selectCliType(cliType: CliType) {
     if (cliType === "deepseek") setRemoteCreate(false);
@@ -231,29 +192,8 @@ export function AgentCreateForm({
 
           <section aria-labelledby={`${ids}-runtime`} className="am-create-group">
             <h3 id={`${ids}-runtime`} className="am-create-caption">运行方式</h3>
-            <div className="am-create-row am-create-row--inline">
-              <span id={`${ids}-backend`} className="am-create-label">运行后端</span>
-              <div role="group" aria-labelledby={`${ids}-backend`} className="orbit-segmented orbit-segmented--accent am-create-segmented">
-                <button type="button" aria-pressed={isCli} onClick={() => selectRuntimeBackend("cli")}>
-                  <SquareTerminal aria-hidden="true" className="h-3.5 w-3.5" />
-                  CLI
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={!isCli}
-                  disabled={isCli && Boolean(nativeUnavailableReason)}
-                  title={nativeUnavailableReason || undefined}
-                  onClick={() => selectRuntimeBackend("native_agent")}
-                >
-                  <Sparkles aria-hidden="true" className="h-3.5 w-3.5" />
-                  原生 agent
-                </button>
-              </div>
-              {nativeUnavailableReason ? <p className="am-create-hint">{nativeUnavailableReason}</p> : null}
-            </div>
 
-            {isCli ? (
-              <>
+            <>
                 <div className="am-create-row">
                   <span id={`${ids}-cli-type`} className="am-create-label">CLI 类型</span>
                   <div role="radiogroup" aria-labelledby={`${ids}-cli-type`} className="am-create-choices">
@@ -311,29 +251,6 @@ export function AgentCreateForm({
                   </label>
                 ) : null}
               </>
-            ) : (
-              <div className="am-create-row">
-                <label htmlFor={piAgentId} className="am-create-label">Pi agent</label>
-                <input
-                  id={piAgentId}
-                  aria-label="Pi agent"
-                  value={draft.nativeAgent?.piAgent || DEFAULT_NATIVE_AGENT_DRAFT.piAgent}
-                  onChange={(event) => setDraft((prev) => ({
-                    ...prev,
-                    nativeAgent: {
-                      ...DEFAULT_NATIVE_AGENT_DRAFT,
-                      ...(prev.nativeAgent || {}),
-                      piAgent: event.target.value,
-                    },
-                  }))}
-                  className="orbit-field am-create-input am-create-mono"
-                  placeholder="main"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <p className="am-create-hint">Provider、模型、Base URL、API Key 和推理参数在全局环境配置中设置</p>
-              </div>
-            )}
           </section>
         </div>
 

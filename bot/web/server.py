@@ -30,7 +30,6 @@ from urllib.parse import quote, urlencode, urlparse
 from aiohttp.client_exceptions import ClientConnectionResetError
 from aiohttp.http import WSCloseCode, WSMsgType
 from aiohttp import web
-from ag_ui.encoder import EventEncoder
 
 from bot import config
 from bot.chat_identity import chat_session_user_id
@@ -88,11 +87,6 @@ from bot.language_server import (
 from bot.language_server.python_ast_navigation import resolve_code_navigation
 from bot.manager import MultiBotManager
 from bot.models import session_persistence_diagnostics
-from bot.native_agent import get_native_agent_service
-from bot.native_agent.legacy_migration import (
-    LEGACY_EXECUTION_MODE_REMOVED_MESSAGE,
-    is_legacy_execution_mode,
-)
 from bot.platform.runtime import get_default_shell
 from bot.remote_workspace.transport import RemoteWorkspaceError
 from bot.runtime_paths import (
@@ -241,13 +235,7 @@ from .api_service import (
     get_file_browser_directory,
     get_history,
     get_history_delta,
-    get_native_agent_history_changes,
-    get_native_agent_history_diff,
     get_history_trace,
-    rollback_native_agent_history,
-    get_native_agent_config_payload,
-    get_native_agent_preflight_payload,
-    get_native_agent_models_payload,
     get_overview,
     get_codex_server_voice_session,
     open_codex_server_voice_runtime,
@@ -258,7 +246,6 @@ from .api_service import (
     get_processing_sessions,
     get_working_directory,
     kill_user_process,
-    reply_native_agent_permission,
     list_bots,
     list_archived_bots,
     list_agents,
@@ -298,8 +285,6 @@ from .api_service import (
     update_bot_cli,
     update_bot_execution_config,
     update_global_prompt_presets,
-    update_native_agent_config_payload,
-    update_bot_native_agent_model,
     update_bot_prompt_presets,
     update_plugin,
     upsert_favorite_answer,
@@ -1013,12 +998,12 @@ async def cors_middleware(request: web.Request, handler):
             response.headers["Access-Control-Allow-Origin"] = origin or "*"
         elif origin and _normalize_origin(origin) in normalized:
             response.headers["Access-Control-Allow-Origin"] = origin
-        
+
         response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
-    
+
     response = await handler(request)
 
     origin = request.headers.get("Origin", "")
@@ -1247,7 +1232,6 @@ class WebApiServer:
         self._runtime_diagnostics.register("loop_lag", self._loop_lag_tracker.diagnostics)
         self._runtime_diagnostics.register("loop_stall_watchdog", self._loop_stall_watchdog.diagnostics)
         self._runtime_diagnostics.register("terminal", self._terminal_manager.diagnostics)
-        self._runtime_diagnostics.register("native_agent", get_native_agent_service().diagnostics)
         self._runtime_diagnostics.register("workspace_search", workspace_search_diagnostics)
         self._runtime_diagnostics.register("git", git_service_diagnostics)
         self._runtime_diagnostics.register("chat_store", chat_store_executor_diagnostics)
@@ -2274,8 +2258,8 @@ class WebApiServer:
         if include_query and not value:
             value = request.query.get("execution_mode") or request.query.get("executionMode") or value
         normalized = str(value or "").strip()
-        if is_legacy_execution_mode(normalized):
-            raise WebApiError(400, "invalid_execution_mode", LEGACY_EXECUTION_MODE_REMOVED_MESSAGE)
+        if normalized.lower() not in {"", "cli"}:
+            raise WebApiError(400, "invalid_execution_mode", "仅支持 CLI 执行模式")
         return normalized
 
     def _chat_user_id(self, auth: AuthContext) -> int:
@@ -2554,7 +2538,6 @@ class WebApiServer:
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
-        solo_mode = bool(body.get("solo_mode") or body.get("soloMode"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
@@ -2573,7 +2556,6 @@ class WebApiServer:
                     cluster=cluster_enabled,
                     mentions=mentions,
                     execution_mode=execution_mode,
-                    solo_mode=solo_mode,
                     actor=actor,
                     allow_unsafe_cli=allow_unsafe_cli,
                 )
@@ -2587,7 +2569,6 @@ class WebApiServer:
                     cluster=cluster_enabled,
                     mentions=mentions,
                     execution_mode=execution_mode,
-                    solo_mode=solo_mode,
                     actor=actor,
                     allow_unsafe_cli=allow_unsafe_cli,
                 )
@@ -2662,48 +2643,16 @@ class WebApiServer:
             raise WebApiError(400, "invalid_endless_binding", "无尽模式绑定字段过长")
         skip_input_translation = bool(body.get("skip_input_translation") or body.get("skipInputTranslation"))
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        protocol = str(request.query.get("protocol") or body.get("protocol") or "").strip()
         agent_id = self._request_agent_id(request, body)
         cluster_enabled = bool(body.get("cluster"))
-        solo_mode = bool(body.get("solo_mode") or body.get("soloMode"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
         actor = self._chat_actor(auth)
-        wants_ag_ui = protocol.lower() == "ag-ui"
-        ag_ui_encoder = EventEncoder() if wants_ag_ui else None
         allow_unsafe_cli = CAP_RUN_UNSAFE_CLI in auth.capabilities
         include_trace = CAP_VIEW_CHAT_TRACE in auth.capabilities
         stream_protocol_version = normalize_stream_protocol_version(
             body.get("stream_protocol_version", body.get("streamProtocolVersion"))
         )
-        raw_stream_id = body.get("stream_id", body.get("streamId", ""))
-        raw_turn_id = body.get("turn_id", body.get("turnId", ""))
-        if not isinstance(raw_stream_id, str) or not isinstance(raw_turn_id, str):
-            raise WebApiError(400, "invalid_resume_identity", "恢复 stream_id/turn_id 必须是字符串")
-        resume_stream_id = raw_stream_id.strip()
-        resume_turn_id = raw_turn_id.strip()
-        if len(resume_stream_id) > 128 or len(resume_turn_id) > 128:
-            raise WebApiError(400, "invalid_resume_identity", "恢复 stream_id/turn_id 不合法")
-        raw_after_sequence = body.get("after_sequence", body.get("afterSequence", 0))
-        try:
-            if isinstance(raw_after_sequence, bool):
-                raise ValueError
-            after_sequence = int(raw_after_sequence or 0)
-        except (TypeError, ValueError):
-            raise WebApiError(400, "invalid_resume_sequence", "恢复 after_sequence 必须是非负整数")
-        if after_sequence < 0:
-            raise WebApiError(400, "invalid_resume_sequence", "恢复 after_sequence 必须是非负整数")
-        if not resume_stream_id and (resume_turn_id or after_sequence):
-            raise WebApiError(400, "invalid_resume_identity", "恢复请求缺少 stream_id")
-        if resume_stream_id:
-            try:
-                get_native_agent_service().resume_turn_channel(resume_stream_id, turn_id=resume_turn_id)
-            except RuntimeError as exc:
-                message = str(exc).strip() or "Pi turn 恢复流不存在或已过期"
-                code = "native_turn_stream_mismatch" if "不匹配" in message else "native_turn_stream_expired"
-                status = 409 if code.endswith("mismatch") else 410
-                raise WebApiError(status, code, message) from exc
-        enable_reconnect = bool(body.get("stream_reconnect") or body.get("streamReconnect"))
 
         response = web.StreamResponse(
             status=200,
@@ -2714,19 +2663,12 @@ class WebApiServer:
 
         client_disconnected = False
         stream_kwargs: dict[str, Any] = {
-            "protocol": protocol,
             "allow_unsafe_cli": allow_unsafe_cli,
-            "resume_stream_id": resume_stream_id,
-            "resume_turn_id": resume_turn_id,
-            "after_sequence": after_sequence,
-            "enable_reconnect": enable_reconnect,
             "include_trace": include_trace,
             "stream_protocol_version": stream_protocol_version,
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode
-        if solo_mode:
-            stream_kwargs["solo_mode"] = True
         if agent_id != "main":
             stream_kwargs["agent_id"] = agent_id
         if cluster_enabled:
@@ -2754,50 +2696,9 @@ class WebApiServer:
             **stream_kwargs,
             actor=actor,
         )
-        resumable_stream = False
         stream_detached = False
         try:
             async for event in event_stream:
-                resumable_stream = resumable_stream or bool(event.get("stream_id"))
-                if wants_ag_ui and str(event.get("type") or "") in {"endless_error", "endless_continue"}:
-                    if client_disconnected:
-                        continue
-                    try:
-                        event_type = str(event.get("type") or "")
-                        await response.write(_format_sse(event_type, self._decorate_chat_authors(event, auth)))
-                    except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                        client_disconnected = True
-                        logger.debug(
-                            "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
-                            alias,
-                            auth.user_id,
-                        )
-                        self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
-                        stream_detached = True
-                        break
-                    continue
-                if wants_ag_ui and str(event.get("type") or "") == "ag_ui":
-                    if client_disconnected:
-                        continue
-                    try:
-                        encoded = ag_ui_encoder.encode(event["event"]).encode("utf-8")
-                        if event.get("sequence") is not None:
-                            encoded = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded
-                        await response.write(encoded)
-                    except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                        client_disconnected = True
-                        logger.debug(
-                            "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
-                            alias,
-                            auth.user_id,
-                        )
-                        if endless_mode:
-                            self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
-                            stream_detached = True
-                            break
-                        if resumable_stream:
-                            break
-                    continue
                 event = self._decorate_chat_authors(event, auth)
                 event_type = str(event.get("type") or "")
                 if event_type == "done":
@@ -2818,11 +2719,10 @@ class WebApiServer:
                 if client_disconnected:
                     continue
                 try:
-                    if not wants_ag_ui:
-                        encoded_event = _format_sse(event["type"], event)
-                        if event.get("sequence") is not None:
-                            encoded_event = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded_event
-                        await response.write(encoded_event)
+                    encoded_event = _format_sse(event["type"], event)
+                    if event.get("sequence") is not None:
+                        encoded_event = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded_event
+                    await response.write(encoded_event)
                 except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
                     client_disconnected = True
                     logger.debug(
@@ -2833,8 +2733,6 @@ class WebApiServer:
                     if endless_mode:
                         self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
                         stream_detached = True
-                        break
-                    if resumable_stream:
                         break
         finally:
             if not stream_detached:
@@ -3854,26 +3752,6 @@ class WebApiServer:
             ),
         })
 
-    async def post_native_agent_permission_reply(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_CHAT_SEND)
-        alias = self._manager_alias(request)
-        permission_id = request.match_info.get("permission_id", "")
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
-        approved = bool(body.get("approved"))
-        if "approved" not in body:
-            response_value = str(body.get("response") or body.get("decision") or "").strip().lower()
-            approved = response_value in {"allow", "approve", "approved", "yes", "true", "1"}
-        data = await reply_native_agent_permission(
-            self.manager,
-            alias,
-            self._chat_user_id(auth),
-            permission_id,
-            approved=approved,
-            message=str(body.get("message") if body.get("message") is not None else body.get("value") or ""),
-            agent_id=agent_id,
-        )
-        return _json({"ok": True, "data": data})
 
     async def get_cli_params(self, request: web.Request) -> web.Response:
         await self._with_bot_config_access(request)
@@ -3882,22 +3760,6 @@ class WebApiServer:
         data = await asyncio.to_thread(get_cli_params_payload, self.manager, alias, cli_type)
         return _json({"ok": True, "data": data})
 
-    async def get_native_agent_models(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_VIEW_BOTS)
-        alias = self._manager_alias(request)
-        return _json({"ok": True, "data": get_native_agent_models_payload(self.manager, alias)})
-
-    async def patch_native_agent_model(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request)
-        data = await update_bot_native_agent_model(
-            self.manager,
-            alias,
-            body.get("model", body.get("native_agent_model", body.get("nativeAgentModel"))),
-            body.get("reasoning_effort", body.get("reasoningEffort")),
-        )
-        return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def patch_cli_params(self, request: web.Request) -> web.Response:
         auth = await self._with_bot_config_access(request)
@@ -4308,49 +4170,6 @@ class WebApiServer:
         )
         return _json({"ok": True, "data": data})
 
-    async def get_native_agent_history_changes_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
-        alias = self._manager_alias(request)
-        agent_id = self._request_agent_id(request)
-        data = get_native_agent_history_changes(
-            self.manager,
-            alias,
-            self._chat_user_id(auth),
-            conversation_id=str(request.query.get("conversation_id") or request.query.get("conversationId") or ""),
-            turn_id=str(request.query.get("turn_id") or request.query.get("turnId") or ""),
-            agent_id=agent_id,
-        )
-        return _json({"ok": True, "data": data})
-
-    async def get_native_agent_history_diff_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
-        alias = self._manager_alias(request)
-        agent_id = self._request_agent_id(request)
-        data = get_native_agent_history_diff(
-            self.manager,
-            alias,
-            self._chat_user_id(auth),
-            conversation_id=str(request.query.get("conversation_id") or request.query.get("conversationId") or ""),
-            turn_id=str(request.query.get("turn_id") or request.query.get("turnId") or ""),
-            path=str(request.query.get("path") or ""),
-            agent_id=agent_id,
-        )
-        return _json({"ok": True, "data": data})
-
-    async def post_native_agent_history_rollback_view(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_CHAT_SEND)
-        alias = self._manager_alias(request)
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
-        data = await rollback_native_agent_history(
-            self.manager,
-            alias,
-            self._chat_user_id(auth),
-            conversation_id=str(body.get("conversation_id") or body.get("conversationId") or ""),
-            target_turn_id=str(body.get("target_turn_id") or body.get("targetTurnId") or ""),
-            agent_id=agent_id,
-        )
-        return _json({"ok": True, "data": data})
 
     async def get_git_overview_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
@@ -5009,7 +4828,7 @@ class WebApiServer:
             limit=max(1, min(limit, 1000)),
         )
         return _json({"ok": True, "data": data})
-    
+
     async def admin_processing(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         alias = self._manager_alias(request)
@@ -5041,9 +4860,6 @@ class WebApiServer:
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
             working_dir=body.get("working_dir"),
-            supported_execution_modes=body.get("supported_execution_modes", body.get("supportedExecutionModes")),
-            default_execution_mode=body.get("default_execution_mode", body.get("defaultExecutionMode")),
-            native_agent=body.get("native_agent", body.get("nativeAgent")),
             bypass_approval_and_sandbox=bypass_approval_and_sandbox,
             remote_workspace=remote_workspace,
         )
@@ -5223,9 +5039,6 @@ class WebApiServer:
                 return "智能体仍有运行中的任务"
         if any(task.status in {"queued", "running"} for run in _CLUSTER_RUNTIME._runs.values() for task in run.tasks.values()):
             return "集群仍有排队或运行中的任务"
-        service = get_native_agent_service()
-        if any(not channel.diagnostics().get("finished") for channel in service._turn_channels.values()):
-            return "原生智能体仍有运行中的任务"
         if config.RESTART_REQUESTED:
             return "宿主正在重启"
         return ""
@@ -5421,22 +5234,6 @@ class WebApiServer:
             raise WebApiError(exc.status, exc.code, exc.message) from exc
         return _json({"ok": True, "data": data})
 
-    async def admin_native_agent_config_get(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        return _json({"ok": True, "data": get_native_agent_config_payload()})
-
-    async def admin_native_agent_preflight_get(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        data = get_native_agent_preflight_payload(
-            cwd=str(request.query.get("cwd", "")).strip(),
-            pi_command=str(request.query.get("pi_command", request.query.get("piCommand", ""))).strip(),
-        )
-        return _json({"ok": True, "data": data})
-
-    async def admin_native_agent_config_patch(self, request: web.Request) -> web.Response:
-        await self._with_capability(request, CAP_ADMIN_OPS)
-        body = await self._parse_json(request)
-        return _json({"ok": True, "data": update_native_agent_config_payload(body)})
 
     async def admin_language_server_install(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
@@ -5822,7 +5619,7 @@ class WebApiServer:
                         f"{attribute}={quote_mark}{public_base_path}/assets/",
                     )
         return html
-    
+
     def _get_static_dir(self, subdir=None):
         """Get static directory path."""
         script_dir = Path(__file__).resolve().parent.parent.parent
@@ -5861,7 +5658,7 @@ class WebApiServer:
             return False
         configured_path = self._web_base_path()
         return not configured_path or not any(path == f"{configured_path}{suffix}" for suffix in terminal_paths)
-    
+
     async def serve_index(self, request):
         """Serve index.html for SPA routes."""
         if self._is_unmatched_terminal_ws_path(request):

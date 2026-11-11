@@ -1253,9 +1253,6 @@ async def test_deepseek_cluster_launches_with_mcp_patch_but_other_entry_points_f
     with pytest.raises(api_service.WebApiError, match="本地工作区"):
         await _collect_stream_events(api_service._stream_cli_chat(usage_manager, "main", 1001, "hello"))
     profile.remote_workspace = None
-    profile.supported_execution_modes = ["cli", "native_agent"]
-    with pytest.raises(api_service.WebApiError, match="CLI 执行模式"):
-        api_service._resolve_chat_execution_mode(profile, "native_agent")
     with pytest.raises(api_service.WebApiError, match="DeepSeek Harness"):
         await git_service._generate_git_commit_message_from_context(
             usage_manager, "main", 1001, repo_root=profile.working_dir, context={},

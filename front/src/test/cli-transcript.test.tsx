@@ -1,14 +1,14 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { NativeAgentTranscript } from "../components/NativeAgentTranscript";
-import type { NativeAgentTranscriptEntry } from "../utils/agUiRunReducer";
+import { describe, expect, it,  } from "vitest";
+import { CliTranscript } from "../components/CliTranscript";
+import type { CliTranscriptEntry } from "../utils/cliTranscript";
 
 function processEntry(
   id: string,
   summary: string,
   seq: number,
   traceKind: "commentary" | "reasoning" | "status" = "commentary",
-): NativeAgentTranscriptEntry {
+): CliTranscriptEntry {
   return {
     id,
     seq,
@@ -21,7 +21,7 @@ function processEntry(
       sequence: seq,
       kind: traceKind,
       summary,
-      source: "native_agent",
+      source: "codex",
     },
   };
 }
@@ -31,7 +31,7 @@ function toolEntry(
   kind: "tool_call" | "tool_result",
   summary: string,
   seq: number,
-): NativeAgentTranscriptEntry {
+): CliTranscriptEntry {
   const isCall = kind === "tool_call";
   return {
     id,
@@ -46,7 +46,7 @@ function toolEntry(
       sequence: seq,
       kind,
       summary,
-      source: "native",
+      source: "deepseek",
       rawType: `deepseek_${kind}`,
       callId: "call-" + id,
       payload: { output: summary },
@@ -54,107 +54,16 @@ function toolEntry(
   };
 }
 
-describe("NativeAgentTranscript", () => {
-  it("keeps live details collapsed through updates until manually expanded", () => {
-    const firstEntry = processEntry("first", "先检查目录", 1);
-    const secondEntry = processEntry("second", "再读取文件", 2);
-    const { rerender } = render(
-      <NativeAgentTranscript
-        entries={[firstEntry]}
-        resultText=""
-        state="streaming"
-        mode="native"
-        traceCount={1}
-        processCount={1}
-        traceLoaded
-      />,
-    );
-
-    const transcript = screen.getByTestId("native-agent-transcript");
-    expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toHaveAttribute("aria-expanded", "false");
-    expect(within(transcript).queryByText("先检查目录")).not.toBeInTheDocument();
-
-    rerender(
-      <NativeAgentTranscript
-        entries={[firstEntry, secondEntry]}
-        resultText=""
-        state="streaming"
-        mode="native"
-        traceCount={2}
-        processCount={2}
-        traceLoaded
-      />,
-    );
-
-    expect(within(transcript).queryByText("再读取文件")).not.toBeInTheDocument();
-    fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
-    expect(within(transcript).getByText("先检查目录")).toBeInTheDocument();
-    expect(within(transcript).getByText("再读取文件")).toBeInTheDocument();
-  });
-
-  it("keeps expanded live details mounted while a newer trace tail loads", () => {
-    const firstEntry = processEntry("first", "先检查目录", 1);
-    const secondEntry = processEntry("second", "再读取文件", 2);
-    const onLoadTrace = vi.fn();
-    const { rerender } = render(
-      <NativeAgentTranscript
-        entries={[firstEntry]}
-        resultText=""
-        state="streaming"
-        mode="native"
-        traceCount={1}
-        processCount={1}
-        traceLoaded
-        onLoadTrace={onLoadTrace}
-      />,
-    );
-
-    const transcript = screen.getByTestId("native-agent-transcript");
-    fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
-    const firstRow = transcript.querySelector('[data-transcript-entry-id="first"]');
-
-    rerender(
-      <NativeAgentTranscript
-        entries={[firstEntry]}
-        resultText=""
-        state="streaming"
-        mode="native"
-        traceCount={2}
-        processCount={2}
-        traceLoaded={false}
-        onLoadTrace={onLoadTrace}
-      />,
-    );
-
-    expect(within(transcript).getByRole("button", { name: "收起过程详情" })).toHaveAttribute("aria-expanded", "true");
-    expect(transcript.querySelector('[data-transcript-entry-id="first"]')).toBe(firstRow);
-    expect(onLoadTrace).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <NativeAgentTranscript
-        entries={[firstEntry, secondEntry]}
-        resultText=""
-        state="streaming"
-        mode="native"
-        traceCount={2}
-        processCount={2}
-        traceLoaded
-        onLoadTrace={onLoadTrace}
-      />,
-    );
-
-    expect(transcript.querySelector('[data-transcript-entry-id="first"]')).toBe(firstRow);
-    expect(within(transcript).getByText("再读取文件")).toBeInTheDocument();
-  });
+describe("CliTranscript", () => {
 
   it("collapses CLI details on mobile while keeping the current progress visible", () => {
     const entry = processEntry("cli-process", "正在检查文件", 1);
     render(
-      <NativeAgentTranscript
+      <CliTranscript
         entries={[entry]}
         resultText=""
         state="streaming"
-        mode="cli"
+
         traceCount={1}
         processCount={1}
         traceLoaded
@@ -162,7 +71,7 @@ describe("NativeAgentTranscript", () => {
       />,
     );
 
-    const transcript = screen.getByTestId("native-agent-transcript");
+    const transcript = screen.getByTestId("cli-transcript");
     expect(within(transcript).getByRole("status")).toHaveTextContent("正在检查文件");
     expect(transcript.querySelector('[data-transcript-entry-id="cli-process"]')).not.toBeInTheDocument();
     fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
@@ -171,7 +80,7 @@ describe("NativeAgentTranscript", () => {
 
   it("splits DeepSeek tool events at each process boundary", () => {
     render(
-      <NativeAgentTranscript
+      <CliTranscript
         entries={[
           processEntry("step-1", "开始步骤 1", 1, "status"),
           toolEntry("call-1", "tool_call", "读取文件 A", 2),
@@ -182,7 +91,7 @@ describe("NativeAgentTranscript", () => {
         ]}
         resultText=""
         state="streaming"
-        mode="cli"
+
         traceCount={6}
         processCount={2}
         toolCallCount={2}
@@ -190,14 +99,14 @@ describe("NativeAgentTranscript", () => {
       />,
     );
 
-    const transcript = screen.getByTestId("native-agent-transcript");
-    expect(within(transcript).getAllByTestId("native-agent-event-group")).toHaveLength(2);
+    const transcript = screen.getByTestId("cli-transcript");
+    expect(within(transcript).getAllByTestId("cli-event-group")).toHaveLength(2);
     expect(within(transcript).getAllByText("过程 1")).toHaveLength(1);
     expect(within(transcript).getAllByText("过程 2")).toHaveLength(1);
   });
 
   it("keeps endless errors and Continue records collapsed", () => {
-    const entries: NativeAgentTranscriptEntry[] = [
+    const entries: CliTranscriptEntry[] = [
       {
         id: "endless-error-1",
         seq: 1,
@@ -217,20 +126,20 @@ describe("NativeAgentTranscript", () => {
     ];
 
     render(
-      <NativeAgentTranscript
+      <CliTranscript
         entries={entries}
         resultText="最终回答"
         state="done"
-        mode="cli"
+
       />,
     );
 
-    const transcript = screen.getByTestId("native-agent-transcript");
+    const transcript = screen.getByTestId("cli-transcript");
     expect(within(transcript).getByRole("button", { name: "展开过程详情" })).toHaveAttribute("aria-expanded", "false");
     expect(within(transcript).queryByText("临时失败")).not.toBeInTheDocument();
 
     fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
-    const retryGroup = within(transcript).getByTestId("native-agent-retry-group");
+    const retryGroup = within(transcript).getByTestId("cli-retry-group");
     expect(retryGroup.querySelector("summary")).toBeTruthy();
     expect(within(retryGroup).queryByText("临时失败")).not.toBeInTheDocument();
     fireEvent.click(retryGroup.querySelector("summary") as HTMLElement);
@@ -238,7 +147,7 @@ describe("NativeAgentTranscript", () => {
   });
 
   it("aggregates adjacent endless retries across attempts", () => {
-    const entries: NativeAgentTranscriptEntry[] = [
+    const entries: CliTranscriptEntry[] = [
       {
         id: "endless-error-1",
         seq: 1,
@@ -278,17 +187,17 @@ describe("NativeAgentTranscript", () => {
     ];
 
     render(
-      <NativeAgentTranscript
+      <CliTranscript
         entries={entries}
         resultText="最终回答"
         state="done"
-        mode="cli"
+
       />,
     );
 
-    const transcript = screen.getByTestId("native-agent-transcript");
+    const transcript = screen.getByTestId("cli-transcript");
     fireEvent.click(within(transcript).getByRole("button", { name: "展开过程详情" }));
-    const retryGroups = within(transcript).getAllByTestId("native-agent-retry-group");
+    const retryGroups = within(transcript).getAllByTestId("cli-retry-group");
     expect(retryGroups).toHaveLength(1);
     expect(within(retryGroups[0]).getByText("连续重试")).toBeInTheDocument();
 
@@ -297,24 +206,4 @@ describe("NativeAgentTranscript", () => {
     expect(within(retryGroups[0]).getByText("第二次失败")).toBeInTheDocument();
   });
 
-  it("counts a duplicate final commentary as one visible process", () => {
-    render(
-      <NativeAgentTranscript
-        entries={[
-          processEntry("analysis", "分析完成", 1),
-          processEntry("final-duplicate", "最终回答", 2),
-        ]}
-        resultText="最终回答"
-        state="done"
-        mode="native"
-        traceCount={2}
-        processCount={2}
-        traceLoaded
-      />,
-    );
-
-    const transcript = screen.getByTestId("native-agent-transcript");
-    expect(within(transcript).getByText("1 条过程")).toBeInTheDocument();
-    expect(within(transcript).queryByText("2 条过程")).not.toBeInTheDocument();
-  });
 });

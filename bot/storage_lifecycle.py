@@ -19,7 +19,6 @@ async def stop_all_agent_processes(server: Any | None = None) -> dict[str, Any]:
 
     from bot.codex_server.runtime import get_codex_server_registry
     from bot.models import flush_pending_session_persistence
-    from bot.native_agent.service import get_native_agent_service
     from bot.session_store import close_session_store
     from bot.sessions import sessions, sessions_lock
 
@@ -49,7 +48,7 @@ async def stop_all_agent_processes(server: Any | None = None) -> dict[str, Any]:
         if isinstance(result, BaseException):
             errors.append(str(result))
 
-    # Cluster child tasks can own separate CLI/native runtimes.  Cancel the
+    # Cluster child tasks can own separate CLI runtimes.  Cancel the
     # in-memory runs before closing the shared runtime registries.
     try:
         from bot.web import api_service
@@ -66,10 +65,6 @@ async def stop_all_agent_processes(server: Any | None = None) -> dict[str, Any]:
     except Exception as exc:
         errors.append(str(exc))
 
-    try:
-        await get_native_agent_service().shutdown()
-    except Exception as exc:
-        errors.append(str(exc))
     try:
         await get_codex_server_registry().aclose()
     except Exception as exc:

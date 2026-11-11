@@ -327,7 +327,7 @@ def test_archive_rejects_tar_links(tmp_path):
 
 
 def test_payload_preserves_configuration_and_requires_ownership(tmp_path):
-    package, manifest = update_archive(tmp_path, additions={".ENV": b"secret", "data/pi-home/.pi/agent/models.json": b"keys"})
+    package, manifest = update_archive(tmp_path, additions={".ENV": b"secret", "data/settings.json": b"keys"})
     staging = tmp_path / "stage"
     update_package.inspect_package(package, staging_dir=staging)
     assert not (staging / ".ENV").exists()
@@ -544,19 +544,16 @@ def test_offline_payload_is_frozen_then_applied_and_restored_without_user_data(m
     assert (root / ".web_announcements.json").read_text() == "user announcements"
 
 
-def test_release_manifest_records_build_identity_and_only_named_pi_extensions(monkeypatch, tmp_path):
+def test_release_manifest_records_build_identity_and_excludes_user_data(monkeypatch, tmp_path):
     package, _ = update_archive(tmp_path)
     stage = tmp_path / "stage"
     update_package.inspect_package(package, staging_dir=stage)
-    extension = "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"
-    (stage / extension).parent.mkdir(parents=True)
-    (stage / extension).write_text("bundled")
-    (stage / "data/pi-home/.pi/agent/models.json").write_text("private")
+    (stage / "data").mkdir()
+    (stage / "data/settings.json").write_text("private")
     monkeypatch.setattr(update_package, "_git", lambda root, *args: "c" * 40 if args[0] == "rev-parse" else " M bot/main.py")
-    manifest = update_package.create_manifest(stage, tmp_path, managed_data_files=[extension])
+    manifest = update_package.create_manifest(stage, tmp_path)
     assert manifest["commit"] == "c" * 40 and manifest["dirty"] is True
-    assert extension in manifest["files"]
-    assert "data/pi-home/.pi/agent/models.json" not in manifest["files"]
+    assert "data/settings.json" not in manifest["files"]
     assert manifest["frontend"]["files"]["front/dist/index.html"] == update_package.file_hash(stage / "front/dist/index.html")
 
 

@@ -43,8 +43,7 @@ def _normalize_agent_id(value: Any) -> str:
 
 
 def _normalize_execution_mode(value: Any) -> str:
-    normalized = str(value or "cli").strip().lower() or "cli"
-    return "native_agent" if normalized == "native_agent" else "cli"
+    return str(value or "cli").strip().lower() or "cli"
 
 
 def normalize_favorite_scope(scope: FavoriteScope) -> FavoriteScope:

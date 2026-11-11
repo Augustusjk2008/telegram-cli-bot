@@ -21,8 +21,6 @@ $script:FrontDir = Join-Path $script:RepoRoot "front"
 $script:VersionFile = Join-Path $script:RepoRoot "VERSION"
 $script:PackageBaseName = "orbit-safe-claw"
 $script:NodeVersion = "22.17.1"
-$script:PiPackageSpec = "@earendil-works/pi-coding-agent@0.74.2"
-$script:PiWorkspaceHistoryPackageSpec = "pi-workspace-history@0.2.2"
 $script:RequiredReleaseLegalFiles = @(
     "LICENSE",
     "NOTICE",
@@ -388,84 +386,6 @@ function Install-EmbeddedNode {
     }
 }
 
-function Install-PortablePi {
-    param([string]$PackageRoot)
-
-    Write-Step "安装包内 Pi CLI"
-    $nodeRoot = Join-Path $PackageRoot "runtime\node"
-    $npmCmd = Join-Path $nodeRoot "npm.cmd"
-    if (-not (Test-Path -LiteralPath $npmCmd)) {
-        throw "未找到包内 npm: $npmCmd"
-    }
-    $piRoot = Join-Path $PackageRoot "tools\pi"
-    Reset-Directory -Path $piRoot
-    Invoke-CheckedCommand -FilePath $npmCmd -Arguments @(
-        "install",
-        "--global",
-        "--prefix", $piRoot,
-        "--omit=dev",
-        "--no-audit",
-        "--no-fund",
-        $script:PiPackageSpec
-    ) -FailureMessage "安装包内 Pi CLI 失败" -WorkingDirectory $PackageRoot
-
-    $piCmd = Join-Path $piRoot "pi.cmd"
-    $piWrapper = @'
-@ECHO off
-SETLOCAL
-SET "SCRIPT_DIR=%~dp0"
-SET "NODE_EXE=%SCRIPT_DIR%..\..\runtime\node\node.exe"
-SET "CLI_JS=%SCRIPT_DIR%node_modules\@earendil-works\pi-coding-agent\dist\cli.js"
-IF NOT EXIST "%NODE_EXE%" SET "NODE_EXE=node"
-"%NODE_EXE%" "%CLI_JS%" %*
-EXIT /B %ERRORLEVEL%
-'@
-    Set-Content -LiteralPath $piCmd -Value $piWrapper -Encoding ASCII
-}
-
-function Install-PortablePiExtensions {
-    param([string]$PackageRoot)
-
-    Write-Step "安装包内 Pi 扩展"
-    $nodeRoot = Join-Path $PackageRoot "runtime\node"
-    $npmCmd = Join-Path $nodeRoot "npm.cmd"
-    if (-not (Test-Path -LiteralPath $npmCmd)) {
-        throw "未找到包内 npm: $npmCmd"
-    }
-    $piAgentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
-    $extensionsRoot = Join-Path $piAgentRoot "extensions"
-    $extensionInstallRoot = Join-Path $PackageRoot "tools\pi-extensions"
-    [void](New-Item -ItemType Directory -Path $extensionsRoot -Force)
-    Reset-Directory -Path $extensionInstallRoot
-    Invoke-CheckedCommand -FilePath $npmCmd -Arguments @(
-        "install",
-        "--prefix", $extensionInstallRoot,
-        "--omit=dev",
-        "--no-audit",
-        "--no-fund",
-        $script:PiWorkspaceHistoryPackageSpec
-    ) -FailureMessage "安装包内 Pi 扩展失败" -WorkingDirectory $PackageRoot
-
-    $workspaceHistorySource = Join-Path $extensionInstallRoot "node_modules\pi-workspace-history\.pi\extensions\workspace-history.ts"
-    if (-not (Test-Path -LiteralPath $workspaceHistorySource)) {
-        throw "未找到 pi-workspace-history 扩展文件: $workspaceHistorySource"
-    }
-    Copy-Item -LiteralPath $workspaceHistorySource -Destination (Join-Path $extensionsRoot "workspace-history.ts") -Force
-
-    $piClusterExtensionSource = Join-Path $script:RepoRoot "bot\cluster\pi_extension\tcb-cluster.ts"
-    if (-not (Test-Path -LiteralPath $piClusterExtensionSource)) {
-        throw "未找到 Pi 集群扩展文件: $piClusterExtensionSource"
-    }
-    Copy-Item -LiteralPath $piClusterExtensionSource -Destination (Join-Path $extensionsRoot "tcb-cluster.ts") -Force
-    $managed = [ordered]@{}
-    foreach ($name in @("workspace-history.ts", "tcb-cluster.ts")) {
-        $relative = "data/pi-home/.pi/agent/extensions/$name"
-        $managed[$relative] = (Get-FileHash -LiteralPath (Join-Path $PackageRoot $relative) -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-    $registration = [ordered]@{ schema_version = 1; files = $managed } | ConvertTo-Json -Depth 5
-    [System.IO.File]::WriteAllText((Join-Path $PackageRoot "runtime\pi-managed-files.json"), $registration, $script:Utf8NoBomEncoding)
-}
-
 function Write-PortableEnv {
     param([string]$PackageRoot)
 
@@ -619,30 +539,6 @@ function Ensure-PortableWebToken {
     [System.IO.File]::WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)
 }
 
-function Set-PortablePiShellPath {
-    param([string]$PackageRoot)
-
-    if ($env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1") { return }
-    $agentRoot = Join-Path $PackageRoot "data\pi-home\.pi\agent"
-    [void](New-Item -ItemType Directory -Path $agentRoot -Force)
-    $settingsPath = Join-Path $agentRoot "settings.json"
-    if (-not (Test-Path -LiteralPath $settingsPath)) {
-        $settings = [ordered]@{
-            backend = "pi"
-            model = ""
-            reasoning_effort = ""
-            pi_agent = ""
-            workspace_history_enabled = $true
-            shellPath = (Join-Path $PackageRoot "tools\git\bin\bash.exe")
-        } | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText($settingsPath, [string]$settings, $script:Utf8NoBomEncoding)
-    }
-    $modelsPath = Join-Path $agentRoot "models.json"
-    if (-not (Test-Path -LiteralPath $modelsPath)) {
-        [System.IO.File]::WriteAllText($modelsPath, '{"providers":{}}', $script:Utf8NoBomEncoding)
-    }
-}
-
 function Set-PortableRuntimeEnv {
     param([string]$PackageRoot)
 
@@ -657,12 +553,6 @@ function Set-PortableRuntimeEnv {
     } else {
         $env:TCB_DATA_DIR = $portableDataRoot
     }
-    $env:PI_AGENT_SETTINGS = Join-Path $PackageRoot "data\pi-home\.pi\agent\settings.json"
-    $env:PI_AGENT_MODELS = Join-Path $PackageRoot "data\pi-home\.pi\agent\models.json"
-    $env:NATIVE_AGENT_PI_COMMAND = Join-Path $PackageRoot "tools\pi\pi.cmd"
-    $env:NATIVE_AGENT_COMMAND = $env:NATIVE_AGENT_PI_COMMAND
-    $env:NATIVE_AGENT_ENABLED = "true"
-    $env:NATIVE_AGENT_PI_HOME = Join-Path $PackageRoot "data\pi-home"
     $env:TCB_CLUSTER_MCP_CONFIG = Join-Path $PackageRoot ".tcb\cluster-mcp\config.json"
 }
 
@@ -683,8 +573,6 @@ $pythonExe = Join-Path $scriptDir "runtime\python\python.exe"
 
 Prepend-Path -Entries @(
     (Join-Path $scriptDir "runtime\node"),
-    (Join-Path $scriptDir "tools\pi"),
-    (Join-Path $scriptDir "tools\pi\node_modules\.bin"),
     (Join-Path $scriptDir "tools\git\cmd"),
     (Join-Path $scriptDir "tools\git\bin"),
     (Join-Path $scriptDir "tools\git\usr\bin"),
@@ -732,7 +620,6 @@ if ($Mode -eq "service") {
         $env:TCB_KEEP_AWAKE = "false"
     }
 }
-Set-PortablePiShellPath -PackageRoot $scriptDir
 Set-PortableRuntimeEnv -PackageRoot $scriptDir
 
 if ($env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1") {
@@ -895,10 +782,8 @@ Orbit Safe Claw Windows 绿色版
 说明:
 - 绿色包无需安装 Python / Node / Git
 - 登录口令仅保存在本机解压目录的 .env
-- 包内已带 Python、Node 22、Git、Pi CLI、Pi 扩展和前端构建产物
-- Pi 可直接用于 native_agent；codex / claude 仍可外部安装或另配
-- 模型 API key 需在 Web 设置页或 data\pi-home\.pi\agent\models.json 填写
-- Pi 扩展目录: data\pi-home\.pi\agent\extensions
+- 包内已带 Python、Node 22、Git 和前端构建产物
+- 请安装并配置所需的 Codex、Claude、Antigravity 或 DeepSeek Harness CLI
 - 可在 Web 设置页或 .env 修改 CLI_TYPE / CLI_PATH
 - 默认 WORKING_DIR=当前解压目录，可在设置页再改
 "@
@@ -911,21 +796,11 @@ function Test-PortableBundle {
     Write-Step "校验绿色包"
     $pythonExe = Join-Path $PackageRoot "runtime\python\python.exe"
     $nodeExe = Join-Path $PackageRoot "runtime\node\node.exe"
-    $piCmd = Join-Path $PackageRoot "tools\pi\pi.cmd"
     $gitExe = Join-Path $PackageRoot "tools\git\cmd\git.exe"
     $envPath = Join-Path $PackageRoot ".env"
     $bootstrap = Join-Path $PackageRoot "runtime\portable_bootstrap.py"
-    $workspaceHistory = Join-Path $PackageRoot "data\pi-home\.pi\agent\extensions\workspace-history.ts"
-    $piClusterExtension = Join-Path $PackageRoot "data\pi-home\.pi\agent\extensions\tcb-cluster.ts"
 
     Invoke-CheckedCommand -FilePath $nodeExe -Arguments @("--version") -FailureMessage "包内 Node 校验失败" -WorkingDirectory $PackageRoot
-    Invoke-CheckedCommand -FilePath $piCmd -Arguments @("--version") -FailureMessage "包内 Pi 校验失败" -WorkingDirectory $PackageRoot
-    if (-not (Test-Path -LiteralPath $workspaceHistory)) {
-        throw "未找到包内 pi-workspace-history 扩展: $workspaceHistory"
-    }
-    if (-not (Test-Path -LiteralPath $piClusterExtension)) {
-        throw "未找到包内 Pi 集群扩展: $piClusterExtension"
-    }
 
     Invoke-CheckedCommand -FilePath $pythonExe -Arguments @(
         "-c",
@@ -1024,16 +899,9 @@ function Write-DistributionMarker {
         architecture = "x64"
     } | ConvertTo-Json
     Set-Content -LiteralPath (Join-Path $Root ".distribution.json") -Value $payload -Encoding UTF8
-    foreach ($relative in @("data/pi-home/.pi/agent/settings.json", "data/pi-home/.pi/agent/models.json")) {
-        if (Test-Path -LiteralPath (Join-Path $Root $relative)) {
-            throw "绿色包不能携带 Pi 用户配置，请保留首次启动生成策略: $relative"
-        }
-    }
     Invoke-CheckedCommand -FilePath "python" -Arguments @(
         (Join-Path $script:RepoRoot "scripts/update_package.py"), "create",
-        "--root", $Root, "--source-root", $script:RepoRoot,
-        "--managed-data-file", "data/pi-home/.pi/agent/extensions/workspace-history.ts",
-        "--managed-data-file", "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"
+        "--root", $Root, "--source-root", $script:RepoRoot
     ) -FailureMessage "生成绿色版更新清单失败"
 }
 
@@ -1071,8 +939,6 @@ try {
     Install-EmbeddedPython -PackageRoot $packageRoot
     Install-PortableGit -PackageRoot $packageRoot -SourceGitRoot $GitRoot
     Install-EmbeddedNode -PackageRoot $packageRoot
-    Install-PortablePi -PackageRoot $packageRoot
-    Install-PortablePiExtensions -PackageRoot $packageRoot
     Write-PortableEnv -PackageRoot $packageRoot
     Write-PortableScripts -PackageRoot $packageRoot
     Write-PortableReadme -PackageRoot $packageRoot -Version $version

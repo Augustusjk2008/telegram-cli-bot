@@ -84,8 +84,6 @@ def load_managed_profiles(storage_file: Path, *, archived: bool = False) -> dict
                 "default_execution_mode",
                 item.get("defaultExecutionMode"),
             )
-        if "native_agent" in item or "nativeAgent" in item:
-            profile_data["native_agent"] = item.get("native_agent", item.get("nativeAgent"))
         if "remote_workspace" in item:
             profile_data["remote_workspace"] = item["remote_workspace"]
         profiles[alias] = BotProfile.from_dict(profile_data)
@@ -163,13 +161,6 @@ def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Pa
         )
         main_profile.supported_execution_modes = supported_execution_modes
         main_profile.default_execution_mode = default_execution_mode
-
-    if any(key in profile_data for key in ("native_agent", "nativeAgent")):
-        from bot.models import normalize_native_agent_config
-
-        main_profile.native_agent = normalize_native_agent_config(
-            profile_data.get("native_agent", profile_data.get("nativeAgent"))
-        )
 
     if profile_data.get("remote_workspace"):
         from bot.remote_workspace.transport import normalize_remote_workspace

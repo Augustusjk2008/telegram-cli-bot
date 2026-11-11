@@ -10,7 +10,6 @@ import pytest
 from bot.cluster.runtime import AskAgentRequest, ClusterRunRequest, ClusterRuntime, derive_cluster_run_id
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile
-from bot.native_agent.service import NativeAgentService
 from bot.web import api_service as api
 from bot.web.api_common import WebApiError
 
@@ -19,7 +18,7 @@ from bot.web.api_common import WebApiError
 def control(tmp_path, monkeypatch):
     profile = BotProfile(
         alias="main", cli_type="codex", cli_path="codex", working_dir=str(tmp_path),
-        supported_execution_modes=["cli", "native_agent"],
+        supported_execution_modes=["cli"],
         agents=[AgentProfile(id="worker", name="Worker")],
     )
     manager = MultiBotManager(profile, str(tmp_path / "managed_bots.json"))
@@ -65,7 +64,7 @@ async def test_expected_none_and_omitted_create_have_distinct_meanings(control):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["cli", "native_agent"])
+@pytest.mark.parametrize("mode", ["cli"])
 async def test_bound_send_checks_conversation_before_mode_and_preserves_web_default(control, monkeypatch, mode):
     c = control
     await create(c, execution_mode=mode)
@@ -78,7 +77,6 @@ async def test_bound_send_checks_conversation_before_mode_and_preserves_web_defa
         yield {"type": "done"}
 
     monkeypatch.setattr(api, "_stream_cli_chat", fake_stream)
-    monkeypatch.setattr(api, "_stream_native_agent_chat", fake_stream)
     for expected in (None, "old-conversation"):
         result = await send(c, expected_conversation_id=expected, follow_current_conversation=True)
         assert result[0]["code"] == "conversation_changed"
@@ -125,24 +123,6 @@ async def test_snapshot_reads_explicit_conversation_without_history_repair(contr
     assert result["conversation_id"] is None and result["context_usage"] is None
     assert history.store.db_path.read_bytes() == before
     json.dumps(result)
-
-
-@pytest.mark.asyncio
-async def test_snapshot_approval_requires_live_permission_signal(control, monkeypatch):
-    c = control
-    await create(c, execution_mode="native_agent")
-    c.session.is_processing = True
-    c.session._execution_id = "current-execution"
-    c.session._execution_turn_id = "current-turn"
-    c.session.native_agent_server_key = "runtime"
-    runtime = SimpleNamespace(state=SimpleNamespace(pending_permission_ids=set()))
-    monkeypatch.setattr(api, "get_native_agent_service", lambda: SimpleNamespace(get_control_runtime=lambda _: runtime))
-    assert (await snapshot(c))["phase"] == "running"
-    runtime.state.pending_permission_ids.add("approval")
-    assert (await snapshot(c))["phase"] == "waiting_approval"
-    runtime.state.pending_permission_ids.clear()
-    assert (await snapshot(c))["phase"] == "running"
-    c.session.is_processing = False
 
 
 @pytest.mark.asyncio
@@ -250,33 +230,6 @@ async def test_stop_hold_survives_completion_duplicate_requests_and_repeated_can
 
 
 @pytest.mark.asyncio
-async def test_native_stop_uses_captured_runtime_and_rejects_replaced_execution(control, monkeypatch):
-    c = control
-    await create(c, execution_mode="native_agent")
-    service = NativeAgentService()
-    old = SimpleNamespace(abort=AsyncMock(return_value=True), state=SimpleNamespace(pending_permission_ids=set()))
-    replacement = SimpleNamespace(abort=AsyncMock(return_value=True))
-    service._runtime_registry = SimpleNamespace(get_by_runtime_id=Mock(return_value=old))
-    monkeypatch.setattr(api, "get_native_agent_service", lambda: service)
-    c.session.is_processing = True
-    c.session._execution_id = "execution"
-    c.session._execution_turn_id = "turn"
-    c.session.native_agent_run_id = "native-run"
-    c.session.native_agent_server_key = "native-runtime"
-    expected = await snapshot(c)
-    task = asyncio.create_task(stop(c, expected_control=expected))
-    await asyncio.sleep(0)
-    service._runtime_registry.get_by_runtime_id.return_value = replacement
-    assert (await task)["native_agent_aborted"]
-    old.abort.assert_awaited_once()
-    replacement.abort.assert_not_awaited()
-    c.session._execution_id = "next-execution"
-    assert not await service.abort(c.session, expected_execution_id="execution", captured_runtime=old)
-    old.abort.assert_awaited_once()
-    c.session.is_processing = False
-
-
-@pytest.mark.asyncio
 async def test_stale_process_cleanup_never_clears_replacement_execution(control, monkeypatch):
     c = control
     await create(c)
@@ -299,47 +252,6 @@ async def test_stale_process_cleanup_never_clears_replacement_execution(control,
     assert c.session._execution_id == "replacement"
     c.session.process = None
     c.session.is_processing = False
-
-
-@pytest.mark.asyncio
-async def test_pi_execution_identity_survives_disconnect_and_resume_until_producer_finishes(control, monkeypatch):
-    c = control
-    await create(c, execution_mode="native_agent")
-    service = NativeAgentService()
-    release = asyncio.Event()
-    executions = []
-
-    async def produce(**kwargs):
-        executions.append(c.session._execution_id)
-        c.session.is_processing = True
-        c.session._execution_turn_id = "turn"
-        try:
-            yield {"type": "status", "turn_id": "turn"}
-            await release.wait()
-            yield {"type": "done", "turn_id": "turn"}
-        finally:
-            c.session.is_processing = False
-
-    monkeypatch.setattr(service, "stream_chat", produce)
-    monkeypatch.setattr(api, "get_native_agent_service", lambda: service)
-    events = api.stream_chat(c.manager, "main", 42, "hello", follow_current_conversation=True, enable_reconnect=True)
-    first = await anext(events)
-    before = await snapshot(c)
-    await events.aclose()
-    assert c.session._execution_id == before["execution_id"]
-    assert c.session._lifecycle_operation == "chat"
-    resumed = api.stream_chat(
-        c.manager, "main", 42, "", follow_current_conversation=True,
-        resume_stream_id=first["stream_id"], resume_turn_id="turn",
-    )
-    assert (await anext(resumed))["turn_id"] == "turn"
-    assert (await snapshot(c))["execution_id"] == before["execution_id"]
-    release.set()
-    assert any([event["type"] == "done" async for event in resumed])
-    assert executions == [before["execution_id"]]
-    assert c.session._execution_id is None and c.session._lifecycle_operation == ""
-    for channel in service._turn_channels.values():
-        await channel.close()
 
 
 @pytest.mark.asyncio
@@ -418,43 +330,3 @@ async def test_stop_expected_conversation_none_rejects_existing_session(control)
     with pytest.raises(WebApiError) as err:
         await stop(c, expected_conversation_id=None)
     assert err.value.code == "conversation_changed"
-
-
-@pytest.mark.asyncio
-async def test_native_disconnect_abort_keeps_hold_through_duplicate_cancellation(control, monkeypatch):
-    c = control
-    await create(c, execution_mode="native_agent")
-    service = NativeAgentService()
-    entered, release = asyncio.Event(), asyncio.Event()
-
-    async def abort_runtime():
-        entered.set()
-        await release.wait()
-        return True
-
-    runtime = SimpleNamespace(abort=AsyncMock(side_effect=abort_runtime))
-    service._runtime_registry = SimpleNamespace(get_by_runtime_id=lambda _: runtime)
-    c.session.is_processing = True
-    c.session._execution_id = "execution"
-    c.session.native_agent_server_key = "runtime"
-    first = asyncio.create_task(service.abort(c.session, expected_execution_id="execution"))
-    await entered.wait()
-    second = asyncio.create_task(service.abort(c.session, expected_execution_id="execution"))
-    await asyncio.sleep(0)
-    c.session.is_processing = False
-    c.session._execution_id = None
-    c.session.native_agent_server_key = None
-    for _ in range(2):
-        first.cancel()
-        second.cancel()
-        await asyncio.sleep(0)
-        assert not first.done() and not second.done()
-        assert (await send(c))[0]["code"] == "session_busy"
-        with pytest.raises(WebApiError):
-            await create(c)
-        assert (await snapshot(c))["phase"] == "stopping"
-    release.set()
-    await asyncio.gather(first, second, return_exceptions=True)
-    runtime.abort.assert_awaited_once()
-    assert c.session._native_abort_task is None
-    await create(c)

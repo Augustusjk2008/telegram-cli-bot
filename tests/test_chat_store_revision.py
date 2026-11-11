@@ -309,20 +309,6 @@ def test_latest_answer_times_ignore_child_agent_turns(tmp_path: Path) -> None:
     assert store.get_latest_answer_times(bot_id=1, user_id=2) == main_times
 
 
-def test_history_revision_delta_emits_tombstones_for_discarded_turns(tmp_path: Path) -> None:
-    store = ChatStore(tmp_path)
-    first = _begin(store, text="first")
-    store.complete_turn(first, content="one", completion_state="completed")
-    second = _begin(store, conversation_id=first.conversation_id, text="second")
-    store.complete_turn(second, content="two", completion_state="completed")
-    before = store.get_conversation_revision(first.conversation_id)
-
-    assert store.mark_turns_after_discarded(first.conversation_id, first.turn_id) == 1
-    delta = store.get_history_delta(first.conversation_id, revision=before, limit=20)
-
-    assert set(delta["deleted_ids"]) == {second.user_message_id, second.assistant_message_id}
-    assert delta["items"] == []
-    assert delta["reset"] is False
 
 
 def test_history_delta_keeps_legacy_after_id_and_uses_revision_only_when_requested(monkeypatch) -> None:

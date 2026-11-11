@@ -51,7 +51,6 @@ import type {
   BotOverview,
   CodexVoiceConnection,
   CodexVoiceConnectionOptions,
-  BotExecutionConfigInput,
   BotWorkdirOpenResult,
   BotSummary,
   ChatAttachmentDeleteResult,
@@ -60,16 +59,6 @@ import type {
   ChatStatusUpdate,
   ChatTraceDetails,
   ChatTraceEvent,
-  NativeAgentPermissionReplyOptions,
-  NativeAgentConfigPayload,
-  NativeAgentHistoryChangesPayload,
-  NativeAgentHistoryDiffPayload,
-  NativeAgentHistoryRollbackResult,
-  NativeAgentModelOption,
-  NativeAgentPreflightResult,
-  NativeAgentModelsPayload,
-  NativeAgentModelUpdateResult,
-  NativeAgentModelUpdateOptions,
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CodexUsageConfig,
@@ -282,7 +271,7 @@ async function themeAssetDescriptor(file: File): Promise<ThemeIllustrationAsset>
   return { kind: "uploaded", assetId: `asset_${hash}`, mimeType: file.type as ThemeIllustrationAsset["mimeType"], width, height, sha256: hash };
 }
 import { WebBotClient } from "./webBotClient";
-import { EventType, type AgUiEvent } from "./agUiProtocol";
+
 import { mockBots } from "../mocks/bots";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
@@ -787,34 +776,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       restartRequired: true,
       rebuildRequired: false,
     },
-    {
-      key: "NATIVE_AGENT_ENABLED",
-      label: "启用原生 agent",
-      description: "启用后可创建原生 agent Bot。",
-      type: "boolean",
-      category: "native_agent",
-      value: true,
-      defaultValue: false,
-      source: "env",
-      sensitive: false,
-      masked: false,
-      restartRequired: true,
-      rebuildRequired: false,
-    },
-    {
-      key: "NATIVE_AGENT_COMMAND",
-      label: "原生 agent 命令",
-      description: "全局 Pi run 命令。",
-      type: "path",
-      category: "native_agent",
-      value: "pi",
-      defaultValue: "pi",
-      source: "env",
-      sensitive: false,
-      masked: false,
-      restartRequired: true,
-      rebuildRequired: false,
-    },
+
     {
       key: "WEB_ALLOWED_ORIGINS",
       label: "允许来源",
@@ -1845,7 +1807,7 @@ export class MockWebBotClient implements WebBotClient {
         promptPresets: clonePromptPresets(item.promptPresets),
         supportedExecutionModes: ["cli"],
         defaultExecutionMode: "cli",
-        nativeAgent: { provider: "", model: "", piAgent: "", baseUrl: "", hasApiKey: false, apiKeyMasked: "" },
+
         cluster: {
           ...DEFAULT_CLUSTER,
           modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -1856,28 +1818,7 @@ export class MockWebBotClient implements WebBotClient {
     ]),
   );
   private globalPromptPresets: PromptPreset[] = [];
-  private nativeAgentConfig: Record<string, unknown> = {
-    backend: "pi",
-    model: "jojocode_max/gpt-5.4",
-    reasoning_effort: "medium",
-    pi_agent: "main",
-    pi_command: "pi",
-    system_prompt: "",
-    workspace_history_enabled: true,
-  };
-  private nativeAgentModels: NativeAgentModelOption[] = [
-    {
-      id: "jojocode_max/gpt-5.4",
-      provider: "jojocode_max",
-      model: "gpt-5.4",
-      name: "gpt-5.4",
-      label: "jojocode_max / gpt-5.4",
-      contextWindow: 1000000,
-      outputLimit: 128000,
-      reasoningEfforts: ["low", "medium", "high"],
-      defaultReasoningEffort: "medium",
-    },
-  ];
+
   private currentPaths = new Map<string, string>();
   private cliParamsByBot = new Map<string, Partial<Record<CliType, CliParamsPayload>>>();
   private pluginSessions = new Map<
@@ -3018,83 +2959,6 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  private normalizeNativeAgentConfig(input: BotExecutionConfigInput["nativeAgent"] | CreateBotInput["nativeAgent"] | undefined, current?: BotSummary["nativeAgent"]): BotSummary["nativeAgent"] {
-    const piAgent = String(input?.piAgent ?? "").trim();
-    const model = String(input?.model || current?.model || "").trim();
-    const reasoningEffort = String(input?.reasoningEffort || current?.reasoningEffort || "").trim();
-    return {
-      provider: "",
-      model,
-      piAgent,
-      baseUrl: "",
-      hasApiKey: false,
-      apiKeyMasked: "",
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-    };
-  }
-
-  private extractNativeAgentModels(config: Record<string, unknown>): NativeAgentModelOption[] {
-    const configuredModels = Array.isArray(config.models) ? config.models : [];
-    const directItems = configuredModels
-      .map((value): NativeAgentModelOption | null => {
-        const item = value && typeof value === "object" ? value as Record<string, unknown> : {};
-        const id = String(item.id || "").trim();
-        const provider = String(item.provider || id.split("/")[0] || "").trim();
-        const model = String(item.model || id.split("/").slice(1).join("/") || "").trim();
-        const name = String(item.name || model || id).trim();
-        if (!provider || !model) {
-          return null;
-        }
-        const reasoningEfforts = Array.isArray(item.reasoning_efforts)
-          ? Array.from(new Set(item.reasoning_efforts.map((entry) => String(entry || "").trim()).filter(Boolean)))
-          : [];
-        return {
-          id: id || `${provider}/${model}`,
-          provider,
-          model,
-          name,
-          label: String(item.label || `${provider} / ${name}`),
-          ...(typeof item.context_window === "number" ? { contextWindow: item.context_window } : {}),
-          ...(typeof item.output_limit === "number" ? { outputLimit: item.output_limit } : {}),
-          ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
-          ...(item.default_reasoning_effort ? { defaultReasoningEffort: String(item.default_reasoning_effort) } : {}),
-        };
-      })
-      .filter((item): item is NativeAgentModelOption => Boolean(item));
-    if (directItems.length > 0) {
-      return directItems;
-    }
-    const providerMap = config.provider && typeof config.provider === "object"
-      ? config.provider as Record<string, unknown>
-      : {};
-    const items: NativeAgentModelOption[] = [];
-    for (const [provider, providerValue] of Object.entries(providerMap)) {
-      if (!providerValue || typeof providerValue !== "object") continue;
-      const models = (providerValue as Record<string, unknown>).models;
-      if (!models || typeof models !== "object") continue;
-      for (const [model, modelValue] of Object.entries(models as Record<string, unknown>)) {
-        const modelRecord = modelValue && typeof modelValue === "object" ? modelValue as Record<string, unknown> : {};
-        const limit = modelRecord.limit && typeof modelRecord.limit === "object" ? modelRecord.limit as Record<string, unknown> : {};
-        const options = modelRecord.options && typeof modelRecord.options === "object" ? modelRecord.options as Record<string, unknown> : {};
-        const name = String(modelRecord.name || model);
-        const reasoningEfforts = this.extractReasoningEfforts(modelRecord, options);
-        const defaultReasoningEffort = String(options.reasoningEffort || "").trim();
-        items.push({
-          id: `${provider}/${model}`,
-          provider,
-          model,
-          name,
-          label: `${provider} / ${name}`,
-          ...(typeof limit.context === "number" ? { contextWindow: limit.context } : {}),
-          ...(typeof limit.output === "number" ? { outputLimit: limit.output } : {}),
-          ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
-          ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
-        });
-      }
-    }
-    return items;
-  }
-
   private extractReasoningEfforts(modelRecord: Record<string, unknown>, options: Record<string, unknown>): string[] {
     const raw = modelRecord.reasoningEfforts
       ?? modelRecord.reasoning_efforts
@@ -3105,34 +2969,6 @@ export class MockWebBotClient implements WebBotClient {
       : [];
     const defaultReasoningEffort = String(options.reasoningEffort || "").trim();
     return efforts.length > 0 ? efforts : (defaultReasoningEffort ? [defaultReasoningEffort] : []);
-  }
-
-  private buildNativeAgentPreflight(): NativeAgentPreflightResult {
-    const workspaceHistoryEnabled = Boolean(this.nativeAgentConfig.workspace_history_enabled ?? true);
-    const checks = [
-      { key: "cwd", ok: true, severity: "info", message: "工作目录可访问: C:\\workspace", fix: "" },
-      { key: "node", ok: true, severity: "info", message: "Node.js 版本可用: v22.0.0", fix: "", version: "v22.0.0" },
-      { key: "pi", ok: true, severity: "info", message: "Pi CLI 可用: pi 1.0.0", fix: "", command: String(this.nativeAgentConfig.pi_command || "pi"), version: "pi 1.0.0" },
-      { key: "bash", ok: true, severity: "info", message: "bash 可用: GNU bash, version 5.2", fix: "" },
-      { key: "data_dir", ok: true, severity: "info", message: "数据目录可写: ~/.tcb/orbit-safe-claw", fix: "" },
-      workspaceHistoryEnabled
-        ? {
-            key: "workspace_history",
-            ok: false,
-            severity: "warning",
-            message: "workspace history 已开启，当前运行前检查已降级，不阻断基础 Pi 对话",
-            fix: "如需恢复回滚能力，确认 Pi workspace-history 插件可用后重新运行检查",
-          }
-        : { key: "workspace_history", ok: true, severity: "info", message: "workspace history 已关闭", fix: "" },
-    ];
-    const warning = checks.find((item) => item.severity === "warning" && !item.ok);
-    return {
-      ok: true,
-      code: "ok",
-      message: warning ? `Pi 运行前置检查通过，存在警告：${warning.message}` : "Pi 运行前置检查通过",
-      platform: "nt",
-      checks,
-    };
   }
 
   private getBotSummary(botAlias: string): BotSummary {
@@ -3185,7 +3021,7 @@ export class MockWebBotClient implements WebBotClient {
       isOwnedByCurrentUser: ownerAccountId !== "" && ownerAccountId === this.currentAccountId(),
       promptPresets: clonePromptPresets(base.promptPresets),
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
-      nativeAgent: this.normalizeNativeAgentConfig(base.nativeAgent, base.nativeAgent),
+
       cluster: base.cluster
         ? {
             ...base.cluster,
@@ -3390,7 +3226,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private getFavoriteKey(botAlias: string, agentId = "main", executionMode?: string) {
-    return `${this.getConversationKey(botAlias, agentId)}:${executionMode === "native_agent" ? "native_agent" : "cli"}`;
+    return `${this.getConversationKey(botAlias, agentId)}:${"cli"}`;
   }
 
   private getMessageKeyForFavorite(message: ChatMessage) {
@@ -3406,7 +3242,7 @@ export class MockWebBotClient implements WebBotClient {
     const source = [
       botAlias,
       agentId || "main",
-      executionMode === "native_agent" ? "native_agent" : "cli",
+      "cli",
       input.conversationId,
       input.messageId,
       input.messageKey,
@@ -3416,34 +3252,6 @@ export class MockWebBotClient implements WebBotClient {
       hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
     }
     return `fav-${Math.abs(hash).toString(36)}`;
-  }
-
-  private isNativeExecution(botAlias: string, executionMode?: string) {
-    const bot = this.getBotSummary(botAlias);
-    return executionMode === "native_agent"
-      || bot.defaultExecutionMode === "native_agent"
-      || (bot.supportedExecutionModes?.length === 1 && bot.supportedExecutionModes[0] === "native_agent");
-  }
-
-  private mockNativeMeta(linearIndex = 1): ChatMessage["meta"] {
-    return {
-      tracePresentation: "native_agent_flat",
-      nativeSource: {
-        provider: "原生 agent",
-        sessionId: "native-session-1",
-      },
-      contextUsage: {
-        provider: "native_agent",
-        sessionId: "native-session-1",
-        model: "claude-sonnet-4-5",
-        statusText: "上下文正常",
-      },
-      workspaceHistoryHead: `head-${linearIndex}`,
-      linearIndex,
-      rollbackSupported: true,
-      degraded: false,
-      degradedReason: "",
-    };
   }
 
   private ensureAgents(botAlias: string) {
@@ -4110,50 +3918,6 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async getNativeAgentConfig(): Promise<NativeAgentConfigPayload> {
-    if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权查看原生 Agent 配置", { status: 403, code: "forbidden" });
-    }
-    return {
-      config: JSON.parse(JSON.stringify(this.nativeAgentConfig)) as Record<string, unknown>,
-      backend: String(this.nativeAgentConfig.backend || "pi"),
-      configPath: "~/.pi/agent/settings.json",
-      modelsPath: "~/.pi/agent/models.json",
-      workspaceHistoryEnabled: Boolean(this.nativeAgentConfig.workspace_history_enabled ?? true),
-      models: this.nativeAgentModels.map((item) => ({ ...item })),
-      selectedModel: String(this.nativeAgentConfig.model || ""),
-      selectedReasoningEffort: String(this.nativeAgentConfig.reasoning_effort || ""),
-      needsRestart: false,
-      preflight: this.buildNativeAgentPreflight(),
-    };
-  }
-
-  async runNativeAgentPreflight(_options: { cwd?: string; piCommand?: string } = {}): Promise<NativeAgentPreflightResult> {
-    if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权运行原生 Agent 检查", { status: 403, code: "forbidden" });
-    }
-    return this.buildNativeAgentPreflight();
-  }
-
-  async updateNativeAgentConfig(config: Record<string, unknown>): Promise<NativeAgentConfigPayload> {
-    if (!this.hasAdminOps()) {
-      throw new WebApiClientError("无权保存原生 Agent 配置", { status: 403, code: "forbidden" });
-    }
-    this.nativeAgentConfig = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
-    this.nativeAgentModels = this.extractNativeAgentModels(this.nativeAgentConfig);
-    return {
-      config: JSON.parse(JSON.stringify(this.nativeAgentConfig)) as Record<string, unknown>,
-      backend: String(this.nativeAgentConfig.backend || "pi"),
-      configPath: "~/.pi/agent/settings.json",
-      modelsPath: "~/.pi/agent/models.json",
-      workspaceHistoryEnabled: Boolean(this.nativeAgentConfig.workspace_history_enabled),
-      models: this.nativeAgentModels.map((item) => ({ ...item })),
-      selectedModel: String(this.nativeAgentConfig.model || ""),
-      selectedReasoningEffort: String(this.nativeAgentConfig.reasoning_effort || ""),
-      needsRestart: true,
-    };
-  }
-
   async previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult> {
     if (!this.hasAdminOps()) {
       throw new WebApiClientError("无权预览环境配置", { status: 403, code: "forbidden" });
@@ -4344,11 +4108,7 @@ export class MockWebBotClient implements WebBotClient {
   async getClusterStatus(botAlias: string): Promise<ClusterStatus> {
     const bot = this.getBotSummary(botAlias);
     const cluster = bot.cluster || DEFAULT_CLUSTER;
-    const activeCliType = bot.defaultExecutionMode === "native_agent" || (
-      Array.isArray(bot.supportedExecutionModes)
-      && bot.supportedExecutionModes.length === 1
-      && bot.supportedExecutionModes[0] === "native_agent"
-    ) ? "pi" : bot.cliType;
+    const activeCliType = bot.cliType;
     const configuredCliTypes = Array.from(new Set([
       activeCliType,
       ...Object.values(cluster.tierConfigs || {})
@@ -4364,7 +4124,7 @@ export class MockWebBotClient implements WebBotClient {
         scope: "workspace",
         allowedTools: ["configure_team", "cluster_status", "list_agents", "new_agent_session", "ask_agent", "cancel_agent_task", "poll_agent_tasks", "wait_agent_messages"],
       };
-      if (cliType === "pi") return { state: "installed", message: "Pi 集群扩展已配置" };
+
       return { state: "runtime_ready", message: "运行态可用" };
     };
     const targets = Object.fromEntries(configuredCliTypes.map((cliType) => [cliType, targetStatus(cliType)]));
@@ -4382,7 +4142,7 @@ export class MockWebBotClient implements WebBotClient {
         claude: targets.claude || { state: "not_checked", message: "未使用" },
         deepseek: targets.deepseek || { state: "not_checked", message: "未使用" },
         antigravity: targets.antigravity || { state: "not_checked", message: "未使用" },
-        pi: targets.pi || { state: "not_checked", message: "未使用" },
+
         targets,
         byCliType: targets,
       },
@@ -4421,11 +4181,7 @@ export class MockWebBotClient implements WebBotClient {
     const cliType = bot.cliType;
     const launcherPath = "C:\\Users\\demo\\.tcb\\bin\\tcb-cluster-mcp.cmd";
     const configPath = "C:\\Users\\demo\\.tcb\\cluster-mcp\\config.json";
-    const activeCliType = bot.defaultExecutionMode === "native_agent" || (
-      Array.isArray(bot.supportedExecutionModes)
-      && bot.supportedExecutionModes.length === 1
-      && bot.supportedExecutionModes[0] === "native_agent"
-    ) ? "pi" : bot.cliType;
+    const activeCliType = bot.cliType;
     if (activeCliType === "deepseek") {
       return {
         serverName: "tcb-cluster",
@@ -4457,20 +4213,7 @@ export class MockWebBotClient implements WebBotClient {
         message: "Antigravity 工作区 MCP 已配置",
       };
     }
-    if (activeCliType === "pi") {
-      return {
-        serverName: "tcb-cluster",
-        launcherPath,
-        configPath,
-        tokenPath: "C:\\Users\\demo\\.tcb\\cluster-mcp\\token",
-        installCommand: [],
-        verifyCommand: [],
-        removeCommand: [],
-        piExtensionPath: "C:\\Users\\demo\\.pi\\agent\\extensions\\tcb-cluster.ts",
-        piExtensionName: "tcb-cluster.ts",
-        selfTestCommand: ["python", "bot\\cluster\\mcp_stdio.py", "--config", configPath, "--self-test"],
-      };
-    }
+
     return {
       serverName: "tcb-cluster",
       launcherPath,
@@ -4549,17 +4292,7 @@ export class MockWebBotClient implements WebBotClient {
       agentId,
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
-      ...(this.isNativeExecution(botAlias, executionMode) ? {
-        nativeSource: {
-          provider: "原生 agent",
-          sessionId: "native-session-1",
-        },
-        workspaceHistoryHead: "head-1",
-        linearIndex: 1,
-        rollbackSupported: true,
-        degraded: false,
-        degradedReason: "",
-      } : {}),
+
       ...(agentId === "main" ? {
         clusterTeam: { version: 1, assignments: [] },
         clusterTeamRevision: 0,
@@ -4598,17 +4331,7 @@ export class MockWebBotClient implements WebBotClient {
       agentId,
       cliType: bot.cliType,
       workingDir: bot.workingDir,
-      ...(this.isNativeExecution(botAlias, options.executionMode) ? {
-        nativeSource: {
-          provider: "原生 agent",
-          sessionId: "native-session-1",
-        },
-        workspaceHistoryHead: "head-1",
-        linearIndex: 1,
-        rollbackSupported: true,
-        degraded: false,
-        degradedReason: "",
-      } : {}),
+
       ...(agentId === "main" ? {
         clusterTeam: { version: 1, assignments: [] },
         clusterTeamRevision: 0,
@@ -4659,7 +4382,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async listFavoriteAnswers(botAlias: string, query = "", options: AgentScopedOptions = {}): Promise<FavoriteAnswerListResult> {
     const agentId = options.agentId || "main";
-    const executionMode = options.executionMode === "native_agent" ? "native_agent" : "cli";
+    const executionMode = "cli";
     const key = this.getFavoriteKey(botAlias, agentId, executionMode);
     const normalizedQuery = query.trim().toLowerCase();
     const items = (this.favoriteAnswersByBot.get(key) || [])
@@ -4670,7 +4393,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async favoriteAnswer(botAlias: string, input: FavoriteAnswerInput, options: AgentScopedOptions = {}): Promise<FavoriteAnswerItem> {
     const agentId = options.agentId || "main";
-    const executionMode = options.executionMode === "native_agent" ? "native_agent" : "cli";
+    const executionMode = "cli";
     const key = this.getFavoriteKey(botAlias, agentId, executionMode);
     const conversation = this.ensureConversations(botAlias, agentId, executionMode).find((item) => item.id === input.conversationId);
     if (!conversation) {
@@ -4712,7 +4435,7 @@ export class MockWebBotClient implements WebBotClient {
 
   async deleteFavoriteAnswer(botAlias: string, favoriteId: string, options: AgentScopedOptions = {}): Promise<{ deleted: boolean; favoriteId: string }> {
     const agentId = options.agentId || "main";
-    const executionMode = options.executionMode === "native_agent" ? "native_agent" : "cli";
+    const executionMode = "cli";
     const key = this.getFavoriteKey(botAlias, agentId, executionMode);
     const previous = this.favoriteAnswersByBot.get(key) || [];
     const next = previous.filter((item) => item.id !== favoriteId);
@@ -4869,65 +4592,6 @@ export class MockWebBotClient implements WebBotClient {
       toolCallCount: 0,
       processCount: 0,
       trace: [],
-    };
-  }
-
-  async getNativeAgentHistoryChanges(
-    _botAlias: string,
-    input: { conversationId: string; turnId: string; agentId?: string },
-  ): Promise<NativeAgentHistoryChangesPayload> {
-    const linearIndex = this.inferHistoryLinearIndex(input.turnId);
-    const files = linearIndex === 1
-      ? [
-          { path: "smoke/history.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
-        ]
-      : linearIndex === 3
-        ? [
-            { path: "smoke/history.txt", oldPath: "", status: "deleted", additions: 0, deletions: 2, binary: false },
-          ]
-        : [
-            { path: "smoke/history.txt", oldPath: "", status: "modified", additions: 1, deletions: 0, binary: false },
-            { path: "smoke/new.txt", oldPath: "", status: "added", additions: 1, deletions: 0, binary: false },
-          ];
-    return {
-      conversationId: input.conversationId,
-      turnId: input.turnId,
-      linearIndex,
-      baseHead: linearIndex > 1 ? `head-${linearIndex - 1}` : "",
-      head: `head-${linearIndex}`,
-      files,
-    };
-  }
-
-  async getNativeAgentHistoryDiff(
-    _botAlias: string,
-    input: { conversationId: string; turnId: string; path: string; agentId?: string },
-  ): Promise<NativeAgentHistoryDiffPayload> {
-    const linearIndex = this.inferHistoryLinearIndex(input.turnId);
-    const deleted = linearIndex === 3;
-    return {
-      conversationId: input.conversationId,
-      turnId: input.turnId,
-      path: input.path,
-      oldPath: "",
-      status: deleted ? "deleted" : linearIndex === 1 ? "added" : "modified",
-      diff: deleted
-        ? `diff --git a/${input.path} b/${input.path}\n@@ -1,2 +0,0 @@\n-A\n-B`
-        : `diff --git a/${input.path} b/${input.path}\n@@ -1 +1,2 @@\n A\n+B`,
-      truncated: false,
-      binary: false,
-    };
-  }
-
-  async rollbackNativeAgentHistory(
-    _botAlias: string,
-    input: { conversationId: string; targetTurnId: string; agentId?: string },
-  ): Promise<NativeAgentHistoryRollbackResult> {
-    return {
-      conversationId: input.conversationId,
-      currentTurnId: input.targetTurnId,
-      rollbackSupported: false,
-      message: "已撤回到所选会话点；该操作不可撤销",
     };
   }
 
@@ -5118,7 +4782,7 @@ export class MockWebBotClient implements WebBotClient {
     onStatus?: (status: ChatStatusUpdate) => void,
     onTrace?: (trace: ChatTraceEvent) => void,
     options?: ChatSendOptions,
-    onAgUiEvent?: (event: AgUiEvent) => void,
+
     _onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     _onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
@@ -5152,31 +4816,7 @@ export class MockWebBotClient implements WebBotClient {
       ].join("\n");
       onChunk(summary);
       onStatus?.({ elapsedSeconds: 1 });
-      onAgUiEvent?.({
-        type: EventType.RUN_STARTED,
-        threadId: "mock-thread",
-        runId: "mock-run",
-      });
-      onAgUiEvent?.({
-        type: EventType.TEXT_MESSAGE_START,
-        messageId: "mock-message",
-        role: "assistant",
-      });
-      onAgUiEvent?.({
-        type: EventType.TEXT_MESSAGE_CONTENT,
-        messageId: "mock-message",
-        delta: summary,
-      });
-      onAgUiEvent?.({
-        type: EventType.TEXT_MESSAGE_END,
-        messageId: "mock-message",
-      });
-      onAgUiEvent?.({
-        type: EventType.RUN_FINISHED,
-        threadId: "mock-thread",
-        runId: "mock-run",
-        outcome: { type: "success" },
-      });
+
       const assistantMessage: ChatMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
@@ -5190,41 +4830,15 @@ export class MockWebBotClient implements WebBotClient {
     }
 
     let streamed = "";
-    onAgUiEvent?.({
-      type: EventType.RUN_STARTED,
-      threadId: "mock-thread",
-      runId: "mock-run",
-    });
-    onAgUiEvent?.({
-      type: EventType.TEXT_MESSAGE_START,
-      messageId: "mock-message",
-      role: "assistant",
-    });
+
     await streamAssistantReply((chunk) => {
       streamed += chunk;
       onChunk(chunk);
       onStatus?.({
         elapsedSeconds: streamed.length > 0 ? 1 : 0,
       });
-      onAgUiEvent?.({
-        type: EventType.TEXT_MESSAGE_CONTENT,
-        messageId: "mock-message",
-        delta: chunk,
-      });
     });
-    onAgUiEvent?.({
-      type: EventType.TEXT_MESSAGE_END,
-      messageId: "mock-message",
-    });
-    onAgUiEvent?.({
-      type: EventType.RUN_FINISHED,
-      threadId: "mock-thread",
-      runId: "mock-run",
-      outcome: { type: "success" },
-    });
-    const nativeMeta = this.isNativeExecution(botAlias, options?.executionMode)
-      ? this.mockNativeMeta(this.getAgentMessages(botAlias, agentId).filter((item) => item.role === "assistant").length + 1)
-      : undefined;
+
     const assistantMessage = {
       id: Date.now().toString(),
       role: "assistant",
@@ -5232,7 +4846,6 @@ export class MockWebBotClient implements WebBotClient {
       createdAt: new Date().toISOString(),
       elapsedSeconds: 1,
       state: "done",
-      ...(nativeMeta ? { meta: nativeMeta } : {}),
     } satisfies ChatMessage;
     this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
     return assistantMessage;
@@ -6526,16 +6139,6 @@ export class MockWebBotClient implements WebBotClient {
     return "已发送终止任务请求";
   }
 
-  async replyNativeAgentPermission(
-    botAlias: string,
-    permissionId: string,
-    options: NativeAgentPermissionReplyOptions,
-  ): Promise<{ permissionId: string; approved: boolean }> {
-    void botAlias;
-    void options;
-    return { permissionId, approved: Boolean(options.approved) };
-  }
-
   async restartService(): Promise<void> {
     return;
   }
@@ -7824,17 +7427,6 @@ export class MockWebBotClient implements WebBotClient {
     return this.getBotSummary(botAlias);
   }
 
-  async updateBotExecutionConfig(botAlias: string, input: BotExecutionConfigInput): Promise<BotSummary> {
-    const current = this.getBotSummary(botAlias);
-    this.bots.set(botAlias, {
-      ...current,
-      supportedExecutionModes: input.supportedExecutionModes,
-      defaultExecutionMode: input.defaultExecutionMode,
-      nativeAgent: this.normalizeNativeAgentConfig(input.nativeAgent, current.nativeAgent),
-    });
-    return this.getBotSummary(botAlias);
-  }
-
   async updateBotWorkdir(
     botAlias: string,
     workingDir: string,
@@ -7931,7 +7523,7 @@ export class MockWebBotClient implements WebBotClient {
       busyAgentCount: 0,
       supportedExecutionModes: input.supportedExecutionModes || ["cli"],
       defaultExecutionMode: input.defaultExecutionMode || "cli",
-      nativeAgent: this.normalizeNativeAgentConfig(input.nativeAgent),
+
       cluster: {
         ...DEFAULT_CLUSTER,
         modelTiers: { ...DEFAULT_CLUSTER.modelTiers },
@@ -8130,53 +7722,6 @@ export class MockWebBotClient implements WebBotClient {
     const payload = buildMockCliParams(cliType);
     this.cliParamsByBot.set(botAlias, { ...saved, [cliType]: cloneCliParamsPayload(payload) });
     return cloneCliParamsPayload(payload);
-  }
-
-  async getNativeAgentModels(botAlias: string): Promise<NativeAgentModelsPayload> {
-    const bot = this.getBotSummary(botAlias);
-    const selectedModel = bot.nativeAgent?.model || this.nativeAgentModels[0]?.id || "";
-    const selectedItem = this.nativeAgentModels.find((item) => item.id === selectedModel);
-    return {
-      items: this.nativeAgentModels.map((item) => ({ ...item })),
-      selectedModel,
-      selectedReasoningEffort: this.resolveSelectedReasoningEffort(selectedItem, bot.nativeAgent?.reasoningEffort),
-    };
-  }
-
-  async updateNativeAgentModel(botAlias: string, model: string, options: NativeAgentModelUpdateOptions = {}): Promise<NativeAgentModelUpdateResult> {
-    const bot = this.getBotSummary(botAlias);
-    const selectedItem = this.nativeAgentModels.find((item) => item.id === model);
-    const reasoningEffort = this.resolveSelectedReasoningEffort(selectedItem, options.reasoningEffort);
-    const nextNativeAgent = {
-      ...(bot.nativeAgent || { provider: "", model: "", piAgent: "" }),
-      model,
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-    };
-    this.bots.set(bot.alias, {
-      ...bot,
-      nativeAgent: nextNativeAgent,
-    });
-    return {
-      items: this.nativeAgentModels.map((item) => ({ ...item })),
-      selectedModel: model,
-      selectedReasoningEffort: reasoningEffort,
-      bot: this.getBotSummary(bot.alias),
-    };
-  }
-
-  private resolveSelectedReasoningEffort(model: NativeAgentModelOption | undefined, selected: string | undefined): string {
-    const efforts = model?.reasoningEfforts || [];
-    if (efforts.length === 0) {
-      return "";
-    }
-    const normalized = String(selected || "").trim();
-    if (normalized && efforts.includes(normalized)) {
-      return normalized;
-    }
-    if (model?.defaultReasoningEffort && efforts.includes(model.defaultReasoningEffort)) {
-      return model.defaultReasoningEffort;
-    }
-    return efforts[0] || "";
   }
 
   async updateCliParam(botAlias: string, key: string, value: unknown, cliType?: string): Promise<CliParamsPayload> {
@@ -8396,7 +7941,6 @@ export class MockWebBotClient implements WebBotClient {
     };
     return this.getStorageMigrationSnapshot();
   }
-
 }
 
 export async function streamAssistantReply(onChunk: (chunk: string) => void) {

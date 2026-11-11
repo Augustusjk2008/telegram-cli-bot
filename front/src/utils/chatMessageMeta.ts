@@ -1,5 +1,5 @@
 import type { ChatEndlessEvent, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
-import { isDuplicateFinalProcessTrace, isNativeAgentMessage, mergeChatTraceEvents } from "./nativeAgentTranscript";
+import { isDuplicateFinalProcessTrace, mergeChatTraceEvents } from "./cliTranscript";
 
 function pickTraceCount(incomingValue?: number, baseValue?: number, summaryValue?: number) {
   if (typeof incomingValue === "number" && Number.isFinite(incomingValue)) {
@@ -88,14 +88,9 @@ function mergeEndlessEvents(
   return merged.length > 0 ? merged : undefined;
 }
 
-function isTerminalCompletionState(value?: string) {
-  const state = String(value || "").trim().toLowerCase();
-  return Boolean(state && !["streaming", "running", "in_progress", "in-progress"].includes(state));
-}
-
 export type MergeMessageMetaOptions = {
   reconcileTraceSnapshots?: boolean;
-  dedupeAnonymous?: boolean;
+
   traceMode?: "merge" | "replace";
 };
 
@@ -117,7 +112,6 @@ export function compactCompletedMessageMeta(meta?: ChatMessageMetaInfo, finalTex
   const {
     trace: _trace,
     traceLoadedCount: _traceLoadedCount,
-    agUiRunState: _agUiRunState,
     ...persistentMeta
   } = meta;
   const compactMeta: ChatMessageMetaInfo = {
@@ -139,18 +133,14 @@ export function mergeMessageMeta(
   streamedTrace?: ChatTraceEvent[],
   options: MergeMessageMetaOptions = {},
 ): ChatMessageMetaInfo | undefined {
-  const isNativeSource = isNativeAgentMessage(incoming) || isNativeAgentMessage(base);
-  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (isNativeSource ? "native_agent_flat" : undefined);
-  const nativeFlatTrace = tracePresentation === "native_agent_flat";
+  const tracePresentation = incoming?.tracePresentation || base?.tracePresentation || (undefined);
+
   const trace = options.traceMode === "replace"
     ? incoming?.trace || base?.trace || streamedTrace
     : mergeChatTraceEvents(
         [base?.trace, incoming?.trace, streamedTrace],
         {
-          nativeFlat: nativeFlatTrace,
-          autoNativeFlat: nativeFlatTrace,
           reconcileTraceSnapshots: options.reconcileTraceSnapshots,
-          dedupeAnonymous: options.dedupeAnonymous,
         },
       );
   const hasIncomingTraceSummary = options.traceMode === "replace"
@@ -167,19 +157,7 @@ export function mergeMessageMeta(
   const hasEndlessMeta = Boolean(endlessEvents)
     || typeof incoming?.endlessContinueCount === "number"
     || typeof base?.endlessContinueCount === "number";
-  const incomingRunState = incoming?.agUiRunState && typeof incoming.agUiRunState === "object"
-    ? incoming.agUiRunState as { completed?: boolean }
-    : undefined;
-  const baseRunState = base?.agUiRunState && typeof base.agUiRunState === "object"
-    ? base.agUiRunState as { completed?: boolean }
-    : undefined;
-  const transientRunState = incoming?.agUiRunState || base?.agUiRunState;
-  const agUiRunState = isNativeSource
-    && !isTerminalCompletionState(incoming?.completionState)
-    && !incomingRunState?.completed
-    && !baseRunState?.completed
-    ? transientRunState
-    : undefined;
+
   const meta: ChatMessageMetaInfo = {
     completionState: incoming?.completionState || base?.completionState,
     summaryKind: incoming?.summaryKind || base?.summaryKind,
@@ -194,14 +172,9 @@ export function mergeMessageMeta(
     endlessEvents,
     endlessContinueCount: hasEndlessMeta ? endlessContinueCount : undefined,
     endlessGroupId: incoming?.endlessGroupId || base?.endlessGroupId,
-    agUiRunState,
+
     tracePresentation,
     trace,
-    workspaceHistoryHead: incoming?.workspaceHistoryHead ?? base?.workspaceHistoryHead,
-    linearIndex: incoming?.linearIndex ?? base?.linearIndex,
-    rollbackSupported: incoming?.rollbackSupported ?? base?.rollbackSupported,
-    degraded: incoming?.degraded ?? base?.degraded,
-    degradedReason: incoming?.degradedReason ?? base?.degradedReason,
   };
 
   return Object.values(meta).some((value) => typeof value !== "undefined") ? meta : undefined;

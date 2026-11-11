@@ -76,7 +76,6 @@ import {
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
   type WorkbenchActivityId,
-  type WorkbenchProductMode,
 } from "./workbenchTypes";
 
 const RASTER_IMAGE_PREVIEW_RE = /\.(?:png|jpe?g|gif|webp)$/i;
@@ -151,10 +150,9 @@ type Props = {
   announcementAction?: ReactNode;
   chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
-  productMode?: WorkbenchProductMode;
-  soloAvailable?: boolean;
+
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
-  onProductModeChange?: (mode: WorkbenchProductMode) => void;
+
   onViewModeChange?: (viewMode: ViewMode) => void;
   onOpenBotSwitcher?: (anchorRect?: DOMRect) => void;
   onOpenBotManager?: () => void;
@@ -193,10 +191,9 @@ export function DesktopWorkbench({
   announcementAction,
   chatPaneContent,
   chatStatus: externalChatStatus,
-  productMode,
-  soloAvailable = false,
+
   onUnreadResult,
-  onProductModeChange,
+
   onViewModeChange,
   onOpenBotSwitcher,
   onOpenBotManager,
@@ -721,7 +718,6 @@ export function DesktopWorkbench({
       setSidebarView("files");
     }
   }, [layoutState.sidebarView, setSidebarView, structureOnly, remoteSidebarUnavailable]);
-
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1479,9 +1475,7 @@ export function DesktopWorkbench({
             onResetTemplate={resetLayoutTemplate}
           />
         )}
-        productMode={productMode}
-        soloAvailable={soloAvailable}
-        onProductModeChange={onProductModeChange}
+
         onToggleSidebar={toggleSidebar}
         onToggleEditor={toggleEditor}
         onToggleTerminal={toggleTerminal}

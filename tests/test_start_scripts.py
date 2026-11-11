@@ -179,32 +179,6 @@ Write-Host "verified=$result"
     assert "portable host log output" in result.stdout and f"verified={code}" in result.stdout
 
 
-def test_portable_pi_initialization_preserves_user_settings_and_models(tmp_path):
-    script = _portable_script(tmp_path)
-    agent = script.parent / "data/pi-home/.pi/agent"
-    agent.mkdir(parents=True)
-    settings, models = agent / "settings.json", agent / "models.json"
-    settings.write_bytes(b'{"shellPath":"custom", "custom":true}')
-    models.write_bytes(b'{"providers":{"private":{"apiKey":"secret"}}}')
-    original = settings.read_bytes(), models.read_bytes()
-    command = f'''
-$ast = [System.Management.Automation.Language.Parser]::ParseFile({_ps_quote(script)}, [ref]$null, [ref]$null)
-$fn = $ast.Find({{ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-PortablePiShellPath' }}, $true)
-Invoke-Expression $fn.Extent.Text
-$script:Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
-Set-PortablePiShellPath -PackageRoot {_ps_quote(script.parent)}
-'''
-    result = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert (settings.read_bytes(), models.read_bytes()) == original
-    settings.unlink()
-    models.unlink()
-    result = subprocess.run([POWERSHELL, "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(models.read_text())["providers"] == {}
-    assert "tools" in json.loads(settings.read_text())["shellPath"]
-
-
 def test_portable_start_uses_package_storage_locator_after_migration(tmp_path):
     script = _portable_script(tmp_path)
     package = script.parent
@@ -282,7 +256,7 @@ def test_source_recovery_bypasses_damaged_application_imports(simulated_install)
     assert json.loads((root / "handoff.json").read_text())[0] == "supervise"
 
 
-def test_portable_manifest_creation_registers_extensions_and_refuses_pi_configs(tmp_path):
+def test_portable_manifest_creation_records_distribution_identity(tmp_path):
     if not POWERSHELL:
         pytest.skip("PowerShell unavailable")
     builder = ROOT / ".release-local/portable-win/build-portable.ps1"
@@ -300,19 +274,13 @@ function Invoke-CheckedCommand {{
     $Arguments | ConvertTo-Json | Set-Content -LiteralPath {_ps_quote(arguments_file)}
 }}
 Write-DistributionMarker -Root {_ps_quote(package)} -PackageKind 'portable' -Platform 'windows-x64' -Version '2.0.0'
-$agent = Join-Path {_ps_quote(package)} 'data/pi-home/.pi/agent'
-New-Item -ItemType Directory -Path $agent -Force | Out-Null
-Set-Content -LiteralPath (Join-Path $agent 'models.json') -Value '{{"private":"preserved"}}'
-$rejected = $false
-try {{ Write-DistributionMarker -Root {_ps_quote(package)} -PackageKind 'portable' -Platform 'windows-x64' -Version '2.0.0' }} catch {{ $rejected = $true }}
-if (-not $rejected) {{ throw 'Pi configuration entered the release' }}
 '''
     result = subprocess.run([POWERSHELL, "-NoProfile", "-Command", code], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     arguments = json.loads(arguments_file.read_text(encoding="utf-8-sig"))
     assert arguments[1] == "create"
-    assert [arguments[i + 1] for i, value in enumerate(arguments) if value == "--managed-data-file"] == [
-        "data/pi-home/.pi/agent/extensions/workspace-history.ts", "data/pi-home/.pi/agent/extensions/tcb-cluster.ts"]
+    marker = json.loads((package / ".distribution.json").read_text(encoding="utf-8-sig"))
+    assert marker["packageKind"] == "portable" and marker["version"] == "2.0.0"
 
 
 def test_windows_launchers_read_state_as_utf8_and_survive_self_replacement():

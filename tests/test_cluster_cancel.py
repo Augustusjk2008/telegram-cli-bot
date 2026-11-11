@@ -259,7 +259,6 @@ async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypa
     monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
     api_service._CLUSTER_RUN_CONTROLS.clear()
     run, task = _run_with_task(runtime)
-    run.execution_mode = "native_agent"
     run.allow_unsafe_cli = True
 
     async def fake_stream_cli_chat(*_args, **kwargs):
@@ -268,12 +267,8 @@ async def test_cluster_agent_task_does_not_complete_after_stream_cancel(monkeypa
         runtime.cancel_run_tasks(run.run_id, "stop")
         yield {"type": "done", "output": "late output", "returncode": 0}
 
-    async def unexpected_native_stream(*_args, **_kwargs):
-        raise AssertionError("排队任务必须继续使用入队时的 CLI 模式")
-        yield
 
     monkeypatch.setattr(api_service, "_stream_cli_chat", fake_stream_cli_chat)
-    monkeypatch.setattr(api_service, "_stream_native_agent_chat", unexpected_native_stream)
 
     await api_service._run_cluster_agent_task(object(), run.run_id, task.task_id)
 

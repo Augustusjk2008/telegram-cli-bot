@@ -28,11 +28,6 @@ PROTECTED = {
     ".web_tunnel_state.json", ".web_lan_chat.json", ".web_lan_chat_messages.json",
     ".update-baseline.json", ".release-local",
 }
-# The portable builder registers only these bundled extensions under user data.
-MANAGED_DATA_FILES = {
-    "data/pi-home/.pi/agent/extensions/tcb-cluster.ts",
-    "data/pi-home/.pi/agent/extensions/workspace-history.ts",
-}
 VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$")
 
 
@@ -85,13 +80,10 @@ def normalize_path(value: str) -> str:
     return raw
 
 
-def protected(path: str, managed=()) -> bool:
+def protected(path: str) -> bool:
     normalized = normalize_path(path).casefold()
     if "__pycache__" in normalized.split("/") or normalized.endswith((".pyc", ".pyo")):
         return True
-    allowed = {str(p).casefold() for p in managed}
-    if normalized in allowed and normalized in {p.casefold() for p in MANAGED_DATA_FILES}:
-        return False
     return normalized.split("/", 1)[0] in PROTECTED or normalized.startswith(".update-") and normalized != MANIFEST
 
 
@@ -209,17 +201,17 @@ def inspect_package(package: Path, *, staging_dir: Path | None = None, expected_
         if not isinstance(declared, dict) or not declared:
             raise ValueError("更新清单缺少文件哈希")
         managed = manifest.get("managed_data_files", [])
-        if not isinstance(managed, list) or any(not isinstance(p, str) or p not in MANAGED_DATA_FILES for p in managed):
+        if not isinstance(managed, list) or managed:
             raise ValueError("更新清单包含未授权的数据目录文件")
         normalized = {}
         for path, digest in declared.items():
             name = normalize_path(path)
-            if name != path or name.casefold() in normalized or protected(name, managed):
+            if name != path or name.casefold() in normalized or protected(name):
                 raise ValueError(f"更新清单包含重复或受保护路径: {path}")
             if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise ValueError(f"文件哈希无效: {path}")
             normalized[name.casefold()] = name
-        expected_files = {name for name in entry_map if name != MANIFEST and not protected(name, managed)}
+        expected_files = {name for name in entry_map if name != MANIFEST and not protected(name)}
         if set(declared) != expected_files:
             raise ValueError("归档程序文件与更新清单不一致")
         if staging_dir:
@@ -319,10 +311,9 @@ def ownership_plan(root: Path, manifest: dict) -> tuple[list[str], list[str]]:
     if not isinstance(old, dict):
         raise ValueError("当前安装的文件所有权清单无效")
     paths = [*manifest["files"], MANIFEST]
-    managed = manifest.get("managed_data_files", [])
     old_by_key = {os.path.normcase(p): digest for p, digest in old.items()}
     new_keys = {os.path.normcase(p) for p in manifest["files"]}
-    deleted = [p for p in old if os.path.normcase(p) not in new_keys and not protected(p, managed)]
+    deleted = [p for p in old if os.path.normcase(p) not in new_keys and not protected(p)]
     git_root = (root / ".git").exists()
     tracked = set(_git(root, "ls-files", "-z").split("\0")) if git_root else set()
     changed = set(_git(root, "diff", "--name-only", "-z", "HEAD").split("\0")) if git_root else set()
@@ -357,7 +348,7 @@ def ownership_plan(root: Path, manifest: dict) -> tuple[list[str], list[str]]:
     return paths, deleted
 
 
-def create_manifest(root: Path, source_root: Path, *, managed_data_files=()) -> dict:
+def create_manifest(root: Path, source_root: Path) -> dict:
     identity = verify_source_identity(source_root)
     marker = _json_bytes((root / MARKER).read_bytes(), MARKER)
     version = normalize_version((root / "VERSION").read_text(encoding="utf-8-sig"))
@@ -370,7 +361,7 @@ def create_manifest(root: Path, source_root: Path, *, managed_data_files=()) -> 
         if not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
-        if relative == MANIFEST or protected(relative, managed_data_files):
+        if relative == MANIFEST or protected(relative):
             continue
         files[normalize_path(relative)] = file_hash(path)
     frontend_files = {p: digest for p, digest in files.items() if p.startswith("front/dist/")}
@@ -391,7 +382,7 @@ def create_manifest(root: Path, source_root: Path, *, managed_data_files=()) -> 
         "package_kind": marker.get("packageKind") or marker.get("package_kind"),
         "platform": marker.get("platform"),
         "architecture": "universal" if "universal" in marker.get("platform", "") else "x64",
-        "files": files, "managed_data_files": list(managed_data_files),
+        "files": files,
         "dependencies": {"requirements_sha256": files.get("requirements.txt", "")},
         "frontend": {**build, "base_path": build.get("base_path", "/"), "files": frontend_files},
         "migrations": {"backward_compatible": True,
@@ -408,7 +399,7 @@ def create_baseline(root: Path, package: Path) -> None:
     files, version = {}, ""
     with archive_entries(package) as entries:
         for name, _, _, opener in entries:
-            if protected(name, MANAGED_DATA_FILES):
+            if protected(name):
                 continue
             with opener() as handle:
                 digest = hashlib.sha256()
@@ -432,7 +423,6 @@ def main(argv=None) -> int:
     create = commands.add_parser("create")
     create.add_argument("--root", type=Path, required=True)
     create.add_argument("--source-root", type=Path, required=True)
-    create.add_argument("--managed-data-file", action="append", default=[])
     verify = commands.add_parser("verify")
     verify.add_argument("packages", nargs="+", type=Path)
     verify.add_argument("--commit", default="")
@@ -445,7 +435,7 @@ def main(argv=None) -> int:
             identity = verify_source_identity(args.source_root) if args.verify else source_identity(args.source_root)
             print(identity["commit"] + " " + identity["fingerprint"] if args.plain else json.dumps(identity))
         elif args.command == "create":
-            create_manifest(args.root, args.source_root, managed_data_files=args.managed_data_file)
+            create_manifest(args.root, args.source_root)
         else:
             if args.source_root:
                 verify_source_identity(args.source_root)

@@ -1,9 +1,7 @@
 import { expect, test } from "vitest";
 import { mergeMessagesPreservingClientState } from "../screens/ChatScreen";
-import type { ChatMessage, ChatMessageMetaInfo, ChatTraceEvent } from "../services/types";
+import type { ChatMessage, } from "../services/types";
 import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
-import { createAgUiRunState } from "../utils/agUiRunReducer";
-import { mergeChatTraceEvents } from "../utils/nativeAgentTranscript";
 
 test("idle history merge preserves message references when nothing changed", () => {
   const previousItems: ChatMessage[] = [
@@ -107,33 +105,10 @@ test("history merge keeps multiple user messages in one turn distinct", () => {
   expect(merged.map((item) => item.id)).toEqual(["user-original", "user-steer", "assistant-steered"]);
 });
 
-test("server trace snapshot upgrades anonymous live events without doubling them", () => {
-  const live: ChatMessageMetaInfo = {
-    tracePresentation: "native_agent_flat",
-    traceCount: 2,
-    trace: [
-      { kind: "commentary", summary: "同一过程", source: "native_agent", rawType: "message.text.reclassified" },
-      { kind: "commentary", summary: "同一过程", source: "native_agent", rawType: "message.text.reclassified" },
-    ],
-  };
-  const persisted: ChatMessageMetaInfo = {
-    tracePresentation: "native_agent_flat",
-    traceCount: 2,
-    trace: [
-      { id: "trace-1", ordinal: 1, kind: "commentary", summary: "同一过程", source: "native_agent", rawType: "message.text.reclassified" },
-      { id: "trace-2", ordinal: 2, kind: "commentary", summary: "同一过程", source: "native_agent", rawType: "message.text.reclassified" },
-    ],
-  };
-  const merged = mergeMessageMeta(live, persisted, undefined, { reconcileTraceSnapshots: true });
-
-  expect(merged?.trace).toHaveLength(2);
-  expect(merged?.trace?.map((item) => item.id)).toEqual(["trace-1", "trace-2"]);
-});
-
 test("trace snapshot load progress is independent from merged trace length", () => {
   const merged = mergeMessageMeta(
     {
-      tracePresentation: "native_agent_flat",
+      tracePresentation: "generic",
       traceCount: 8,
       traceLoadedCount: 4,
       trace: Array.from({ length: 12 }, (_, index) => ({
@@ -150,32 +125,10 @@ test("trace snapshot load progress is independent from merged trace length", () 
   expect(merged?.traceLoadedCount).toBe(9);
 });
 
-test("completed trace metadata drops the transient AG-UI run state", () => {
-  const runningState = createAgUiRunState();
-  runningState.running = true;
-  runningState.messageId = "assistant-1";
-
-  const merged = mergeMessageMeta(
-    {
-      tracePresentation: "native_agent_flat",
-      agUiRunState: runningState,
-      traceCount: 1,
-      trace: [{ kind: "commentary", summary: "过程" }],
-    },
-    {
-      completionState: "completed",
-      traceCount: 1,
-      trace: [{ kind: "commentary", summary: "过程" }],
-    },
-  );
-
-  expect(merged?.agUiRunState).toBeUndefined();
-});
-
 test("completed message compaction releases full trace payloads but preserves summaries", () => {
   const compact = compactCompletedMessageMeta({
     completionState: "completed",
-    tracePresentation: "native_agent_flat",
+    tracePresentation: "generic",
     traceLoadedCount: 2,
     trace: [
       {
@@ -192,18 +145,16 @@ test("completed message compaction releases full trace payloads but preserves su
         payload: { arguments: { command: "dir" } },
       },
     ],
-    agUiRunState: { completed: true, entries: ["live-only-large-payload"] },
   });
 
   expect(compact?.trace).toBeUndefined();
   expect(compact?.traceLoadedCount).toBeUndefined();
-  expect(compact?.agUiRunState).toBeUndefined();
   expect(compact).toMatchObject({
     completionState: "completed",
     traceCount: 2,
     toolCallCount: 1,
     processCount: 1,
-    tracePresentation: "native_agent_flat",
+    tracePresentation: "generic",
   });
 });
 
@@ -241,34 +192,4 @@ test("completed trace metadata excludes the duplicated final commentary from pro
   }, "最终回答");
 
   expect(compact?.processCount).toBe(1);
-});
-
-test("anonymous native trace replay dedupe is opt-in and preserves stable events", () => {
-  const anonymous = [
-    { kind: "commentary", summary: "同一过程", source: "native" },
-    { kind: "commentary", summary: "同一过程", source: "native" },
-  ];
-
-  expect(mergeChatTraceEvents([anonymous], { nativeFlat: true }) || []).toHaveLength(2);
-  expect(mergeChatTraceEvents([anonymous], { nativeFlat: true, dedupeAnonymous: true }) || []).toHaveLength(1);
-  expect(mergeChatTraceEvents([[{
-    id: "trace-1",
-    kind: "commentary",
-    summary: "同一过程",
-    source: "native",
-  }, {
-    id: "trace-2",
-    kind: "commentary",
-    summary: "同一过程",
-    source: "native",
-  }]], { nativeFlat: true, dedupeAnonymous: true }) || []).toHaveLength(2);
-});
-
-test("preserves distinct numeric native trace ids", () => {
-  const trace = [
-    { id: 1, kind: "commentary", summary: "同一过程", source: "native" },
-    { id: 2, kind: "commentary", summary: "同一过程", source: "native" },
-  ] as unknown as ChatTraceEvent[];
-
-  expect(mergeChatTraceEvents([trace], { nativeFlat: true, dedupeAnonymous: true }) || []).toHaveLength(2);
 });

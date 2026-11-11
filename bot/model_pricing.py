@@ -50,7 +50,7 @@ def _model_price(model: str) -> tuple[str, dict[str, Any]] | None:
     except (OSError, ValueError):
         return None
     prices = _read_prices(path, stat.st_mtime_ns, stat.st_size)
-    # Pi 的配置使用 provider/model；完整 ID 的显式单价优先。
+    # 优先匹配完整模型 ID，其次匹配 provider/model 中的模型名。
     for key in dict.fromkeys((model.strip(), model.strip().rsplit("/", 1)[-1])):
         if key in prices:
             return key, prices[key]
@@ -104,11 +104,6 @@ def estimate_usage_cost(
             cache_write = _token_count(usage, "cache_creation_input_tokens", default=cache_write)
             if cache_write_1h > cache_write:
                 return None
-        elif protocol == "pi":
-            ordinary_input = _token_count(usage, "input")
-            output = _token_count(usage, "output")
-            cache_read = _token_count(usage, "cacheRead", default=0)
-            cache_write = _token_count(usage, "cacheWrite", default=0)
         else:
             return None
 

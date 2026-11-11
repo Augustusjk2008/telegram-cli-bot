@@ -1,9 +1,7 @@
 from types import SimpleNamespace
 
-import pytest
 
 from bot.models import UserSession
-from bot.web import api_service
 from bot.web.api_service import _apply_cluster_prompt
 
 
@@ -209,48 +207,3 @@ def test_cluster_prompt_can_force_full_guidance_for_same_turn_session_retry() ->
 
     assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" in retry
     assert "Current run_id: run-1" in retry
-
-
-@pytest.mark.asyncio
-async def test_native_chat_keeps_full_cluster_prompt_as_new_session_fallback(monkeypatch) -> None:
-    profile = _profile()
-    profile.alias = "main"
-    profile.cli_type = "codex"
-    session = _session()
-    session.native_agent_session_id = "pi-session-1"
-    calls: list[dict[str, object]] = []
-    run_ids = iter(["run-1", "run-1"])
-
-    class FakeService:
-        async def run_chat(self, **kwargs):
-            kwargs["prompt_text"], kwargs["fresh_session_prompt_text"] = kwargs["prompt_factory"](kwargs["user_text"])
-            calls.append(kwargs)
-            return {"output": "done"}
-
-    async def ensure_conversation(*_args, **_kwargs):
-        return "conversation-1", {}
-
-    monkeypatch.setattr(
-        api_service,
-        "get_chat_session_for_alias",
-        lambda *_args: (profile, SimpleNamespace(id="main"), session),
-    )
-    monkeypatch.setattr(api_service, "_ensure_cluster_main_conversation", ensure_conversation)
-    monkeypatch.setattr(
-        api_service,
-        "_start_cluster_run_if_requested",
-        lambda **_kwargs: SimpleNamespace(run_id=next(run_ids)),
-    )
-    monkeypatch.setattr(api_service, "get_native_agent_service", lambda: FakeService())
-    monkeypatch.setattr(api_service, "_history_service_for_execution_mode", lambda *_args: object())
-    monkeypatch.setattr(api_service._CLUSTER_RUNTIME, "finish_run", lambda *_args: None)
-    monkeypatch.setattr(api_service, "_cleanup_cluster_run_control_if_idle", lambda *_args: None)
-
-    await api_service._run_native_agent_chat(None, "main", 1001, "第一轮")
-    await api_service._run_native_agent_chat(None, "main", 1001, "第二轮")
-
-    assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" in str(calls[0]["prompt_text"])
-    assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" not in str(calls[1]["prompt_text"])
-    assert "Current run_id: run-1" in str(calls[1]["prompt_text"])
-    assert "Do not delegate tasks that are simple, cannot run in parallel, or cost more to delegate" in str(calls[1]["fresh_session_prompt_text"])
-    assert "Current run_id: run-1" in str(calls[1]["fresh_session_prompt_text"])
