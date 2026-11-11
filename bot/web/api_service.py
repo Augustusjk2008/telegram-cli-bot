@@ -207,6 +207,7 @@ _CODEX_EMPTY_PARSED: dict[str, Optional[str]] = {
 from bot.web.auth_store import CAP_RUN_PLUGINS, CAP_TERMINAL_EXEC, CAP_VIEW_PLUGINS, CAP_WRITE_FILES
 from bot.web.files_service import (
     change_working_directory,
+    compress_directory,
     copy_path,
     create_directory,
     create_workdir_directory,

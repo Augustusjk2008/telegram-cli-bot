@@ -162,6 +162,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/files/create", server.create_text_file_view)
     app.router.add_post("/api/bots/{alias}/files/rename", server.rename_path_view)
     app.router.add_post("/api/bots/{alias}/files/copy", server.copy_path_view)
+    app.router.add_post("/api/bots/{alias}/files/compress", server.compress_directory_view)
     app.router.add_post("/api/bots/{alias}/files/move", server.move_path_view)
     app.router.add_post("/api/bots/{alias}/files/delete", server.delete_path_view)
     app.router.add_get("/api/bots/{alias}/files/download", server.download_file)

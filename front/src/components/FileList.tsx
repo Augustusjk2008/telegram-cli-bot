@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, FileText, Folder, MoreHorizontal, Pencil, SquarePen, Trash2 } from "lucide-react";
+import { Archive, Download, FileText, Folder, MoreHorizontal, Pencil, SquarePen, Trash2 } from "lucide-react";
 import { toolbarButtonClass } from "./ToolbarButton";
 import { FileEntry } from "../services/types";
 
@@ -9,12 +9,14 @@ type Props = {
   onFileClick: (name: string) => void;
   onEdit?: (file: FileEntry) => void;
   onRename?: (file: FileEntry) => void;
+  onCompress?: (file: FileEntry) => void;
+  compressing?: boolean;
   onDownload?: (file: FileEntry) => void;
   onDelete?: (file: FileEntry) => void;
   allowDelete?: boolean;
 };
 
-export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onDownload, onDelete, allowDelete = true }: Props) {
+export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onCompress, compressing = false, onDownload, onDelete, allowDelete = true }: Props) {
   const [openActionsFor, setOpenActionsFor] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
 
@@ -52,9 +54,10 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
         const actionsOpen = openActionsFor === file.name;
         const canEdit = !file.isDir && Boolean(onEdit);
         const canRename = Boolean(onRename);
+        const canCompress = file.isDir && Boolean(onCompress);
         const canDownload = !file.isDir && Boolean(onDownload);
         const canDelete = allowDelete && Boolean(onDelete);
-        const hasActions = canEdit || canRename || canDownload || canDelete;
+        const hasActions = canEdit || canRename || canCompress || canDownload || canDelete;
 
         return <li key={file.name} className={`relative flex items-center gap-1 p-1 ${actionsOpen ? "z-20" : ""}`}>
           <button
@@ -129,6 +132,22 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onD
                     >
                       <Pencil className="h-4 w-4 text-[var(--accent)]" />
                       重命名
+                    </button>
+                  ) : null}
+                  {canCompress ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      aria-label={`压缩 ${file.name}`}
+                      disabled={compressing}
+                      onClick={() => {
+                        setOpenActionsFor(null);
+                        onCompress?.(file);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm text-[var(--text)] hover:bg-[var(--workbench-hover-bg)] disabled:opacity-50"
+                    >
+                      <Archive className="h-4 w-4 text-[var(--accent)]" />
+                      压缩
                     </button>
                   ) : null}
                   {canDownload ? (

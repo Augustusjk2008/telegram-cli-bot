@@ -2486,6 +2486,10 @@ export type FileCopyResult = {
   lastModifiedNs: string;
 };
 
+export type FileCompressResult = FileCreateResult & {
+  sourcePath: string;
+};
+
 export type FileRenameResult = {
   oldPath: string;
   path: string;

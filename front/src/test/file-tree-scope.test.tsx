@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { FileTreeRevealResult } from "../services/types";
+import type { FileCompressResult, FileTreeRevealResult } from "../services/types";
 import { useFileTree } from "../workbench/useFileTree";
 
 
@@ -60,6 +60,51 @@ test("an old workspace reveal cannot mutate the new workspace tree", async () =>
   expect(result.current.selectedPath).toBe("");
   expect(result.current.highlightedPath).toBe("");
   expect(result.current.branches.old).toBeUndefined();
+});
+
+test("compressing a nested folder refreshes its parent and selects the sibling ZIP", async () => {
+  const client = new MockWebBotClient();
+  const list = vi.spyOn(client, "listFiles").mockImplementation(async (_alias, path) => ({
+    workingDir: path || "/workspace",
+    entries: path === "/workspace/docs"
+      ? [{ name: "资料.v1", isDir: true }, { name: "资料.v1.zip", isDir: false }]
+      : [{ name: "docs", isDir: true }],
+  }));
+  const compress = vi.spyOn(client, "compressDirectory").mockResolvedValue({
+    sourcePath: "docs/资料.v1", path: "docs/资料.v1.zip", fileSizeBytes: 128, lastModifiedNs: "1780000000000000001",
+  });
+  const { result } = renderHook(() => useFileTree("main", client));
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  await act(() => result.current.toggleDirectory("docs"));
+  list.mockClear();
+  await act(() => result.current.compressDirectory("docs/资料.v1"));
+  expect(compress).toHaveBeenCalledWith("main", "docs/资料.v1");
+  expect(list).toHaveBeenCalledExactlyOnceWith("main", "/workspace/docs", { includeChildCounts: true });
+  expect(result.current.selectedPath).toBe("docs/资料.v1.zip");
+  expect(result.current.expandedPaths).toEqual(["docs"]);
+});
+
+test("a compression finishing in the previous workspace cannot replace the current listing", async () => {
+  const client = new MockWebBotClient();
+  const compression = deferred<FileCompressResult>();
+  const list = vi.spyOn(client, "listFiles")
+    .mockResolvedValueOnce({ workingDir: "/workspace-a", entries: [{ name: "docs", isDir: true }] })
+    .mockResolvedValue({ workingDir: "/workspace-b", entries: [{ name: "src", isDir: true }] });
+  vi.spyOn(client, "compressDirectory").mockReturnValue(compression.promise);
+  const { result, rerender } = renderHook(({ botAlias }) => useFileTree(botAlias, client), { initialProps: { botAlias: "main" } });
+  await waitFor(() => expect(result.current.rootPath).toBe("/workspace-a"));
+  let pending!: Promise<FileCompressResult>;
+  act(() => { pending = result.current.compressDirectory("docs"); });
+  rerender({ botAlias: "other" });
+  await waitFor(() => expect(result.current.rootPath).toBe("/workspace-b"));
+  list.mockClear();
+  await act(async () => {
+    compression.resolve({ sourcePath: "docs", path: "docs.zip", fileSizeBytes: 128, lastModifiedNs: "1" });
+    await pending;
+  });
+  expect(list).not.toHaveBeenCalled();
+  expect(result.current.rootEntries.map((entry) => entry.name)).toEqual(["src"]);
+  expect(result.current.selectedPath).toBe("");
 });
 
 test("an active file-tree download can be cancelled without surfacing an error", async () => {

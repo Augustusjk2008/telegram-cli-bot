@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileMoveResult, FileRenameResult, FileUploadProgress, RemoteWorkspace } from "../services/types";
+import type { FileCompressResult, FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileMoveResult, FileRenameResult, FileUploadProgress, RemoteWorkspace } from "../services/types";
 import { joinRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage, isAbortError } from "../utils/errorMessage";
@@ -68,6 +68,7 @@ export type UseFileTreeResult = {
   createFile: (filename: string, content?: string, parentPath?: string) => Promise<FileCreateResult>;
   renameFile: (path: string, newName: string) => Promise<FileRenameResult>;
   copyFile: (path: string) => Promise<FileCopyResult>;
+  compressDirectory: (path: string) => Promise<FileCompressResult>;
   moveFile: (path: string, targetParentPath: string) => Promise<FileMoveResult>;
   deletePath: (path: string, options?: FileDeleteOptions) => Promise<void>;
   downloadFile: (path: string) => Promise<void>;
@@ -619,6 +620,19 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     return result;
   }
 
+  async function compressDirectory(path: string) {
+    const generation = loadGenerationRef.current;
+    const result = await client.compressDirectory(botAlias, path);
+    if (loadGenerationRef.current === generation) {
+      await loadBranch(rootPath, parentTreePath(path), { force: true, generation });
+      if (loadGenerationRef.current === generation) {
+        selectPath(result.path);
+        highlightPath(result.path);
+      }
+    }
+    return result;
+  }
+
   async function moveFile(path: string, targetParentPath: string) {
     const result = await client.movePath(botAlias, path, targetParentPath);
     const sourceParentPath = parentTreePath(path);
@@ -781,6 +795,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     createFile,
     renameFile,
     copyFile,
+    compressDirectory,
     moveFile,
     deletePath,
     downloadFile,

@@ -51,6 +51,7 @@ import type {
   FileTreeRevealResult,
   ExternalSourceReadResult,
   FileCopyResult,
+  FileCompressResult,
   FileCreateResult,
   FileDeleteOptions,
   FileDownloadProgress,
@@ -373,6 +374,7 @@ export interface WebBotClient {
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
   copyPath(botAlias: string, path: string): Promise<FileCopyResult>;
+  compressDirectory(botAlias: string, path: string): Promise<FileCompressResult>;
   movePath(botAlias: string, path: string, targetParentPath: string): Promise<FileMoveResult>;
   quickOpenWorkspace(botAlias: string, query: string, limit?: number): Promise<WorkspaceQuickOpenResult>;
   searchWorkspace(botAlias: string, query: string, limit?: number, signal?: AbortSignal): Promise<WorkspaceSearchResult>;

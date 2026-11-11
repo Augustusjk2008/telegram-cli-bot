@@ -224,6 +224,7 @@ from .api_service import (
     create_directory,
     create_workdir_directory,
     create_text_file,
+    compress_directory,
     copy_path,
     delete_path,
     dispose_plugin_view,
@@ -4773,6 +4774,20 @@ class WebApiServer:
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
         data = copy_path(
+            self.manager,
+            alias,
+            self._chat_user_id(auth),
+            body.get("path", ""),
+            allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+        )
+        return _json({"ok": True, "data": _serialize_file_version_fields(data)})
+
+    async def compress_directory_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_WRITE_FILES)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        data = await asyncio.to_thread(
+            compress_directory,
             self.manager,
             alias,
             self._chat_user_id(auth),

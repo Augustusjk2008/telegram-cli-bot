@@ -321,6 +321,7 @@ export function FilesScreen({
   const [downloadProgress, setDownloadProgress] = useState<ActiveDownload | null>(null);
   const [uploadProgress, setUploadProgress] = useState<ActiveUpload | null>(null);
   const [statusText, setStatusText] = useState("");
+  const [compressingName, setCompressingName] = useState("");
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const listingRequestSeqRef = useRef(0);
   const previewRequestSeqRef = useRef(0);
@@ -656,6 +657,32 @@ export function FilesScreen({
     } catch (err) {
       setError(err instanceof Error ? err.message : file.isDir ? "删除文件夹失败" : "删除文件失败");
       setStatusText("");
+    }
+  };
+
+  const handleCompressEntry = async (file: FileEntry) => {
+    if (!canManageFiles || !file.isDir || isVirtualRoot || compressingName) {
+      return;
+    }
+    const requestSeq = listingRequestSeqRef.current;
+    setCompressingName(file.name);
+    setError("");
+    setStatusText("");
+    try {
+      const result = await client.compressDirectory(botAlias, file.name);
+      if (requestSeq !== listingRequestSeqRef.current) {
+        return;
+      }
+      await loadListing();
+      if (listingRequestSeqRef.current === requestSeq + 1) {
+        setStatusText(`已生成 ${result.path}`);
+      }
+    } catch (err) {
+      if (requestSeq === listingRequestSeqRef.current) {
+        setError(err instanceof Error ? err.message : "压缩文件夹失败");
+      }
+    } finally {
+      setCompressingName("");
     }
   };
 
@@ -1305,6 +1332,11 @@ export function FilesScreen({
               {error}
             </SurfacePanel>
           ) : null}
+          {compressingName ? (
+            <div role="status" className="mb-4 text-sm text-[var(--muted)]">
+              正在压缩 {compressingName}…
+            </div>
+          ) : null}
           {statusText ? (
             <SurfacePanel role="status" className="mb-4 border-[var(--feedback-success-border-light)] bg-[var(--feedback-success-background-subtle)] px-4 py-3 text-sm text-[var(--feedback-success-text-deep)] shadow-none">
               {statusText}
@@ -1340,6 +1372,8 @@ export function FilesScreen({
               onFileClick={(name) => void handleFileClick(name)}
               onEdit={canMutateFiles ? (file) => void handleOpenEditor(file.name) : undefined}
               onRename={canManageFiles ? (file) => void handleOpenRenameDialog(file.name, file.isDir) : undefined}
+              onCompress={canManageFiles && !isVirtualRoot ? (file) => void handleCompressEntry(file) : undefined}
+              compressing={Boolean(compressingName)}
               onDownload={canPreviewFiles ? (file) => void handleDownloadEntry(file) : undefined}
               onDelete={canManageFiles ? (file) => void handleDeleteEntry(file) : undefined}
               allowDelete={canManageFiles && !isVirtualRoot}

@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -735,6 +736,83 @@ def copy_path(
         "path": target_relative_path,
         "file_size_bytes": os.path.getsize(target_path),
         "last_modified_ns": stat_file_version(target_path),
+    }
+
+
+def _check_compress_entry(path: str) -> os.stat_result:
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        _raise(400, "unsupported_compress_entry", "压缩文件夹不能包含符号链接或目录联接")
+    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        _raise(400, "unsupported_compress_entry", "压缩文件夹只能包含普通文件和目录")
+    return info
+
+
+def compress_directory(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    path: str,
+    *,
+    allow_external_paths: bool = False,
+) -> dict[str, Any]:
+    ensure_file_browser_supported(manager, alias)
+    session = get_session_for_alias(manager, alias, user_id)
+    browser_dir = require_real_browser_directory(get_browser_directory(session))
+    source_rel = str(path or "").strip().replace("\\", "/")
+    if not source_rel:
+        _raise(400, "invalid_compress_path", "缺少待压缩文件夹路径")
+
+    source_path = resolve_safe_write_path(browser_dir, source_rel, allow_external_paths=allow_external_paths)
+    unresolved_source = os.path.abspath(os.path.join(os.path.realpath(browser_dir), os.path.expanduser(source_rel)))
+    if os.path.normcase(unresolved_source) != os.path.normcase(source_path):
+        _raise(400, "unsupported_compress_entry", "待压缩路径不能经过符号链接或目录联接")
+    if os.path.normcase(source_path) == os.path.normcase(os.path.realpath(browser_dir)) or not os.path.basename(source_path):
+        _raise(400, "invalid_compress_path", "请选择浏览目录中的文件夹")
+    if not os.path.lexists(source_path):
+        _raise(404, "dir_not_found", "文件夹不存在")
+
+    target_path = source_path + ".zip"
+    parent_dir = os.path.dirname(source_path)
+    temporary_path = ""
+    try:
+        if not stat.S_ISDIR(_check_compress_entry(source_path).st_mode):
+            _raise(400, "not_directory", "只能压缩文件夹")
+        if os.path.lexists(target_path) and not stat.S_ISREG(_check_compress_entry(target_path).st_mode):
+            _raise(409, "compress_target_exists", "压缩目标已存在且不是普通文件")
+        with tempfile.NamedTemporaryFile(
+            "wb", dir=parent_dir, prefix=f".{os.path.basename(target_path)}.", suffix=".tmp", delete=False,
+        ) as handle:
+            temporary_path = handle.name
+            with zipfile.ZipFile(handle, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
+                pending = [source_path]
+                while pending:
+                    entry_path = pending.pop()
+                    info = _check_compress_entry(entry_path)
+                    archive.write(entry_path, os.path.relpath(entry_path, parent_dir))
+                    if stat.S_ISDIR(info.st_mode):
+                        with os.scandir(entry_path) as entries:
+                            pending.extend(entry.path for entry in entries)
+        result_stat = os.stat(temporary_path)
+        os.replace(temporary_path, target_path)
+        temporary_path = ""
+    except WebApiError:
+        raise
+    except Exception as exc:
+        _raise(500, "compress_directory_failed", f"压缩文件夹失败: {exc}")
+    finally:
+        if temporary_path:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+
+    invalidate_workspace_indexes(manager, alias, user_id, browser_dir)
+    return {
+        "source_path": source_rel,
+        "path": os.path.relpath(target_path, browser_dir).replace("\\", "/"),
+        "file_size_bytes": result_stat.st_size,
+        "last_modified_ns": result_stat.st_mtime_ns,
     }
 
 

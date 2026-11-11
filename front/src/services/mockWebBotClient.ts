@@ -106,6 +106,7 @@ import type {
   FileTreeRevealResult,
   ExternalSourceReadResult,
   FileCopyResult,
+  FileCompressResult,
   FileCreateResult,
   FileDownloadProgress,
   FileUploadProgress,
@@ -6256,6 +6257,31 @@ export class MockWebBotClient implements WebBotClient {
       sourcePath: this.relativeMockPath(botAlias, sourceFullPath),
       path: this.relativeMockPath(botAlias, targetFullPath),
       fileSizeBytes: source.size || new TextEncoder().encode(content).length,
+      lastModifiedNs: String(version),
+    };
+  }
+
+  async compressDirectory(botAlias: string, path: string): Promise<FileCompressResult> {
+    const sourceFullPath = this.resolveFileTreePath(botAlias, path);
+    const { dir, name } = this.splitMockFilePath(sourceFullPath);
+    const botFiles = (mockFiles[botAlias] ||= {});
+    const entries = botFiles[dir] || [];
+    if (!entries.some((entry) => entry.name === name && entry.isDir)) {
+      throw new Error("请选择文件夹进行压缩");
+    }
+    const archiveName = `${name}.zip`;
+    if (entries.some((entry) => entry.name === archiveName && entry.isDir)) {
+      throw new Error("同名路径已被文件夹占用");
+    }
+    const version = this.setFileState(botAlias, dir, archiveName, "");
+    const nextEntries = entries.filter((entry) => entry.name !== archiveName);
+    nextEntries.push({ name: archiveName, isDir: false, size: 0, updatedAt: new Date().toISOString() });
+    this.sortFileEntries(nextEntries);
+    botFiles[dir] = nextEntries;
+    return {
+      sourcePath: this.relativeMockPath(botAlias, sourceFullPath),
+      path: this.relativeMockPath(botAlias, `${sourceFullPath}.zip`),
+      fileSizeBytes: 0,
       lastModifiedNs: String(version),
     };
   }

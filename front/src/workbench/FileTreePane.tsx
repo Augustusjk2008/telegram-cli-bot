@@ -128,7 +128,7 @@ function joinAbsoluteTreePath(rootPath: string, path: string, remote = false, pl
 }
 
 function resolveContextMenuPosition(x: number, y: number, isDir: boolean) {
-  const estimatedHeight = isDir ? 164 : 224;
+  const estimatedHeight = isDir ? 204 : 224;
   return {
     x: clamp(x, TREE_CONTEXT_MENU_PADDING_PX, window.innerWidth - TREE_CONTEXT_MENU_WIDTH_PX - TREE_CONTEXT_MENU_PADDING_PX),
     y: clamp(y, TREE_CONTEXT_MENU_PADDING_PX, window.innerHeight - estimatedHeight - TREE_CONTEXT_MENU_PADDING_PX),
@@ -965,6 +965,7 @@ export function FileTreePane({
   const [draggedEntryPath, setDraggedEntryPath] = useState("");
   const [dropTargetPath, setDropTargetPath] = useState("");
   const [actionError, setActionError] = useState("");
+  const [compressingPath, setCompressingPath] = useState("");
   const [showEntryMetadata, setShowEntryMetadata] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [externalPath, setExternalPath] = useState("");
@@ -1264,6 +1265,22 @@ export function FileTreePane({
       await onRefreshGitDecorations();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "复制失败");
+    }
+  }
+
+  async function handleCompressDirectory(entry: FileTreeNode) {
+    if (!canManageFiles || !entry.isDir || compressingPath) {
+      return;
+    }
+    setCompressingPath(entry.path);
+    setActionError("");
+    try {
+      await tree.compressDirectory(entry.path);
+      await onRefreshGitDecorations();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "压缩文件夹失败");
+    } finally {
+      setCompressingPath("");
     }
   }
 
@@ -1888,6 +1905,11 @@ export function FileTreePane({
           dropTargetPath === ROOT_DROP_TARGET && "bg-[var(--accent-soft)] outline outline-1 outline-[var(--accent)]",
         )}
       >
+        {compressingPath ? (
+          <div role="status" className="px-3 py-2 text-xs text-[var(--muted)]">
+            正在压缩 {compressingPath}…
+          </div>
+        ) : null}
         {actionError ? (
           <div className="mb-2 rounded border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-2 py-1.5 text-[12px] text-[var(--status-danger)]">
             {actionError}
@@ -1978,6 +2000,20 @@ export function FileTreePane({
                     className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
                   >
                     改名
+                  </button>
+                ) : null}
+                {canManageFiles ? (
+                  <button
+                    type="button"
+                    disabled={Boolean(compressingPath)}
+                    onClick={() => {
+                      const entry = contextMenu.entry;
+                      closeContextMenu();
+                      void handleCompressDirectory(entry);
+                    }}
+                    className="flex w-full rounded-sm px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)] disabled:opacity-50"
+                  >
+                    压缩
                   </button>
                 ) : null}
               </>

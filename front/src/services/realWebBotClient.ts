@@ -182,6 +182,7 @@ import type {
   FileOpenTarget,
   FileTreeRevealResult,
   FileCopyResult,
+  FileCompressResult,
   FileCreateResult,
   FileDeleteOptions,
   FileDownloadProgress,
@@ -1056,6 +1057,10 @@ type RawFileCopyResult = {
   path: string;
   file_size_bytes: number;
   last_modified_ns: string | number;
+};
+
+type RawFileCompressResult = RawFileCreateResult & {
+  source_path: string;
 };
 
 type RawFileRenameResult = {
@@ -7214,6 +7219,20 @@ export class RealWebBotClient implements WebBotClient {
       headers: {
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({ path }),
+    });
+    return {
+      sourcePath: data.source_path,
+      path: data.path,
+      fileSizeBytes: data.file_size_bytes,
+      lastModifiedNs: String(data.last_modified_ns),
+    };
+  }
+
+  async compressDirectory(botAlias: string, path: string): Promise<FileCompressResult> {
+    const data = await this.requestJson<RawFileCompressResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/compress`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path }),
     });
     return {
