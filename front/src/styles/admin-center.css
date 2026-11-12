@@ -503,8 +503,33 @@
 
 .admin-toggle-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 212px));
-  gap: 2px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 176px), 1fr));
+  gap: 8px;
+}
+
+.admin-permission-lock {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px dashed var(--accent-outline);
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.admin-permission-lock::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
 }
 
 /* A compact on/off row: label text on the left, a switch (restyled checkbox) on the right. */
@@ -588,6 +613,88 @@
   opacity: 1;
 }
 
+/* User permissions use the label itself as the control so the whole item reads as one toggle. */
+.admin-permission-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: linear-gradient(145deg, var(--fill-subtle), color-mix(in srgb, var(--fill-subtle) 72%, var(--bg)));
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out), color 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.admin-permission-toggle:hover {
+  border-color: var(--hairline-strong);
+  background: var(--fill-hover);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.admin-permission-toggle:has(> input:checked) {
+  border-color: var(--accent-outline);
+  background: linear-gradient(145deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 58%, var(--fill-subtle)));
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), var(--glow-halo);
+}
+
+.admin-permission-toggle:has(> input:checked)::after {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.admin-permission-toggle:has(> input:focus-visible) {
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.admin-permission-toggle:has(> input:disabled) {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.admin-permission-toggle:has(> input:disabled):hover {
+  border-color: var(--hairline);
+  background: linear-gradient(145deg, var(--fill-subtle), color-mix(in srgb, var(--fill-subtle) 72%, var(--bg)));
+  color: var(--muted);
+  transform: none;
+}
+
+.admin-content input[type="checkbox"].admin-permission-toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+}
+
+.admin-permission-toggle-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .admin-choice {
   border: 1px solid var(--hairline);

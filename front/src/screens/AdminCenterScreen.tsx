@@ -1286,38 +1286,47 @@ export function AdminCenterScreen({
                       </button>
                     </div>
                   </div>
-                  <p className="admin-group-caption">账号能力</p>
-                  <div className="admin-toggle-grid">
-                    {ACCOUNT_CAPABILITY_OPTIONS.map((capability) => (
-                      <label key={`${user.accountId}-${capability.id}`} className="admin-toggle">
-                        <input
-                          type="checkbox"
-                          aria-label={`${user.username} 账号能力 ${capability.label}`}
-                          checked={user.capabilities.includes(capability.id)}
-                          disabled={user.role === "admin"}
-                          onChange={(event) => void updateUserCapabilityGrant(user, capability.id, event.target.checked)}
-                        />
-                        <span className="admin-toggle-label">{capability.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                  {bots.length ? <p className="admin-group-caption">可操作 Bot</p> : null}
-                  <div className="admin-toggle-grid">
-                    {bots.map((bot) => (
-                      <label key={`${user.accountId}-${bot.alias}`} className="admin-toggle">
-                        <input
-                          type="checkbox"
-                          aria-label={`${user.username} 可操作 Bot ${bot.alias}`}
-                          checked={user.allowedBots.includes(bot.alias)}
-                          onChange={(event) => void updateUserBotGrant(user, bot.alias, event.target.checked)}
-                        />
-                        <span className="admin-toggle-label">{bot.alias}</span>
-                        {user.ownedBots.includes(bot.alias) ? (
-                          <span className="orbit-chip" data-tone="accent">创建者</span>
-                        ) : null}
-                      </label>
-                    ))}
-                  </div>
+                  {user.role === "admin" ? (
+                    <div className="admin-permission-lock" role="status">
+                      管理员拥有全部账号能力和 Bot 权限
+                    </div>
+                  ) : (
+                    <>
+                      <p className="admin-group-caption">账号能力</p>
+                      <div className="admin-toggle-grid">
+                        {ACCOUNT_CAPABILITY_OPTIONS.map((capability) => (
+                          <label key={`${user.accountId}-${capability.id}`} className="admin-permission-toggle">
+                            <input
+                              className="admin-permission-toggle-input"
+                              type="checkbox"
+                              aria-label={`${user.username} 账号能力 ${capability.label}`}
+                              checked={user.capabilities.includes(capability.id)}
+                              onChange={(event) => void updateUserCapabilityGrant(user, capability.id, event.target.checked)}
+                            />
+                            <span className="admin-permission-toggle-label" title={capability.label}>{capability.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      {bots.length ? <p className="admin-group-caption">可操作 Bot</p> : null}
+                      <div className="admin-toggle-grid">
+                        {bots.map((bot) => (
+                          <label key={`${user.accountId}-${bot.alias}`} className="admin-permission-toggle">
+                            <input
+                              className="admin-permission-toggle-input"
+                              type="checkbox"
+                              aria-label={`${user.username} 可操作 Bot ${bot.alias}`}
+                              checked={user.allowedBots.includes(bot.alias)}
+                              onChange={(event) => void updateUserBotGrant(user, bot.alias, event.target.checked)}
+                            />
+                            <span className="admin-permission-toggle-label" title={bot.alias}>{bot.alias}</span>
+                            {user.ownedBots.includes(bot.alias) ? (
+                              <span className="orbit-chip" data-tone="accent">创建者</span>
+                            ) : null}
+                          </label>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </article>
               ))}
               {users.length === 0 ? <p className="text-sm text-[var(--muted)]">暂无用户</p> : null}
