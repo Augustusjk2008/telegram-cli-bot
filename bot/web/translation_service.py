@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-import uuid
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -20,68 +19,12 @@ from bot.web.translation_config import PROMPT_TARGET_LANGUAGE, TranslationConfig
 
 TranslationUpdate = Callable[[dict[str, Any]], Awaitable[Any]]
 
-# 明确可识别的控制内容先替换为随机占位符，避免依赖模型逐字保留。
-_PROTECTED_RE = re.compile(
-    r"(?P<fence>^[ \t]{0,3}(?P<backticks>`{3,})[^\n]*\n"
-    r"[\s\S]*?(?:^[ \t]{0,3}(?P=backticks)`*[ \t]*(?=\r?$)|\Z)"
-    r"|^[ \t]{0,3}(?P<tildes>~{3,})[^\n]*\n"
-    r"[\s\S]*?(?:^[ \t]{0,3}(?P=tildes)~*[ \t]*(?=\r?$)|\Z))"
-    r"|(?P<attachment>^(?:Attachment path:|附件路径为[:：])[^\r\n]*)"
-    r"|(?P<protocol><(?P<tag>tcb_[\w-]+)\b[^>]*>[\s\S]*?</(?P=tag)>)"
-    r"|(?P<inline>(?<!`)(?P<ticks>`+)(?!`)[^\n]*?(?<!`)(?P=ticks)(?!`))"
-    r"|(?P<indented>^(?:(?: {4}|\t)[^\r\n]+(?:\r?\n|$))+)"
-    r"|(?P<command>^[ \t]*(?:(?:\$|PS [^>\n]+>) +[^\r\n]+|"
-    r"(?:git|python[\d.]*|pip[\d.]*|npm|npx|pnpm|yarn|uv|bash|pwsh|powershell|"
-    r"cmd|curl|wget|docker|kubectl|cargo|node|pytest|rg|cd|ls|mkdir|"
-    r"Get-[\w-]+|Set-[\w-]+|Remove-[\w-]+)[ \t]+[^\r\n]+|"
-    r"(?:go (?:build|test|run|mod|get|fmt|vet)|make (?:all|build|clean|test|check|install))"
-    r"\b[^\r\n]*))"
-    r"|(?P<link_target>\]\([ \t]*(?:<[^>\n]+>|(?:[^\s()]|\([^()\n]*\))+?)"
-    r"(?:[ \t]+[\"'][^\n]*?[\"'])?[ \t]*\))"
-    r"|(?P<quoted_path>\"(?:[A-Za-z]:[\\/]|\\\\|/|\.{1,2}/|~/)[^\"\n]+\""
-    r"|'(?:[A-Za-z]:[\\/]|\\\\|/|\.{1,2}/|~/)[^'\n]+')"
-    r"|(?P<url>\b[a-zA-Z][\w+.-]*://[^\s<>\"'，。！？；、）]+|"
-    r"\b(?:mailto|sandbox):[^\s<>\"'，。！？；、）]+)"
-    r"|(?P<path>(?<![\w])(?:[A-Za-z]:[\\/]|\\\\|\.{1,2}[/\\]|~/|/)"
-    r"[^\s<>\"'`，。！？；、）\]\)]+|"
-    r"(?<![\w])(?:[\w.@-]+[/\\])+[\w.@-]+)"
-    r"|(?P<placeholder><\|[^\n]*?\|>|</?[A-Za-z_][^>\n]*>|"
-    r"\{\{[^\n]*?\}\}|\$\{[^}\n]+\}|\$[A-Za-z_]\w*|%[A-Za-z_]\w*%|\[\[[^\n]*?\]\])",
-    re.MULTILINE,
-)
-
-
 class _TranslationFailure(Exception):
     pass
 
 
 def source_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _protect(text: str) -> tuple[str, dict[str, str], str]:
-    prefix = f"__TCB_TRANSLATION_{uuid.uuid4().hex}_"
-    while prefix in text:
-        prefix = f"__TCB_TRANSLATION_{uuid.uuid4().hex}_"
-    originals: dict[str, str] = {}
-
-    def substitute(match: re.Match[str]) -> str:
-        token = f"{prefix}{len(originals)}__"
-        originals[token] = match.group(0)
-        return token
-
-    return _PROTECTED_RE.sub(substitute, text), originals, prefix
-
-
-def _restore(text: str, originals: dict[str, str], prefix: str) -> str:
-    for token in originals:
-        if text.count(token) != 1:
-            raise _TranslationFailure("protected_content_mismatch")
-    for token, original in originals.items():
-        text = text.replace(token, original)
-    if prefix in text:
-        raise _TranslationFailure("protected_content_mismatch")
-    return text
 
 
 def _extract_text(raw: Any) -> str:
@@ -176,7 +119,6 @@ class TranslationService:
 
     async def _request(self, text: str, config: TranslationConfig, prompt: str) -> str:
         async with self._semaphore:
-            protected, originals, prefix = _protect(text)
             if str(config.method or "llm").strip().lower() == "cli":
                 cli_prompt = (
                     f"{prompt}\n\n"
@@ -185,7 +127,7 @@ class TranslationService:
                     "your translation, or exactly <skip translation> / <translation failed>\n"
                     "</TRANSLATION>\n\n"
                     "Input text:\n"
-                    f"{protected}"
+                    f"{text}"
                 )
                 raw_text, returncode = await run_cli_prompt(
                     cli_type=config.cli_type,
@@ -211,7 +153,7 @@ class TranslationService:
                         "stream": False,
                         "messages": [
                             {"role": "system", "content": prompt},
-                            {"role": "user", "content": protected},
+                            {"role": "user", "content": text},
                         ],
                     },
                     timeout_seconds=config.request_timeout_seconds,
@@ -222,7 +164,7 @@ class TranslationService:
                 raise _TranslationFailure("translation_skipped")
             if marker == "<translation failed>":
                 raise _TranslationFailure("translation_failed")
-            return _restore(translated, originals, prefix)
+            return translated
 
     def submit_answer(
         self, *, text: str, config: TranslationConfig, message_id: str,

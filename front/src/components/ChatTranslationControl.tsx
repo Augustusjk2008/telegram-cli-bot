@@ -17,7 +17,6 @@ const translationFailureReasons: Record<string, string> = {
   invalid_response: "翻译服务返回的内容格式无效",
   empty_response: "翻译服务未返回译文",
   truncated: "译文因长度限制被截断",
-  protected_content_mismatch: "译文未完整保留代码、路径等受保护内容",
   translation_error: "翻译服务发生内部错误",
   cli_not_found: "未找到翻译 CLI",
   cli_failed: "翻译 CLI 执行失败",
