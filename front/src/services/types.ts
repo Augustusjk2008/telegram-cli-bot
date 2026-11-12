@@ -2984,6 +2984,7 @@ export type GitCommitMessageCliConfig = {
   method?: "cli" | "llm";
   cliType: CliType;
   cliPath: string;
+  timeoutSeconds: number;
   params: Record<string, unknown>;
   defaults: Record<string, unknown>;
   schema: Record<string, CliParamField>;
@@ -2993,6 +2994,7 @@ export type GitCommitMessageCliConfigUpdateInput = Partial<{
   method: "cli" | "llm";
   cliType: CliType;
   cliPath: string;
+  timeoutSeconds: number;
   params: Record<string, unknown>;
 }>;
 

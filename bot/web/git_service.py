@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -75,7 +76,6 @@ from .git_commit_message import (
 )
 from .openai_compatible_client import OpenAICompatibleClientError
 
-GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS = 30 * 60
 GIT_COMMIT_MESSAGE_DIFF_SAMPLE_MAX_FILES = 32
 GIT_SMART_COMMIT_UNTRACKED_PREVIEW_LIMIT = 4096
 GIT_OVERVIEW_UNTRACKED_STATS_MAX_BYTES = 512 * 1024
@@ -1881,6 +1881,7 @@ async def _generate_git_commit_message_from_context(
     cli_config = manager.get_git_commit_cli_config(alias)
     if str(cli_config.method or "cli").strip().lower() == "llm":
         prompt_text = build_commit_message_prompt(**context)
+        timeout_seconds = float(cli_config.timeout_seconds)
         try:
             from bot.web.translation_service import get_translation_service
 
@@ -1888,8 +1889,9 @@ async def _generate_git_commit_message_from_context(
                 run_llm_commit_message(
                     prompt_text=prompt_text,
                     config=get_translation_service().config_store.get_config(),
+                    timeout_seconds=timeout_seconds,
                 ),
-                timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             )
         except TimeoutError:
             _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
@@ -1916,6 +1918,7 @@ async def _generate_git_commit_message_from_context(
         _raise(400, "cli_not_found", f"未找到 CLI 可执行文件: {cli_path}")
 
     prompt_text = build_commit_message_prompt(**context)
+    timeout_seconds = float(cli_config.timeout_seconds)
     env = _build_git_commit_cli_env()
     params_config = with_global_extra_args(cli_config.cli_params, config.CLI_GLOBAL_EXTRA_ARGS)
     if cli_type == "codex_server":
@@ -1930,7 +1933,7 @@ async def _generate_git_commit_message_from_context(
                     resolved_cli=resolved_cli, prompt_text=prompt_text, repo_root=repo_root,
                     env=env, params_config=params_config,
                 ),
-                timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             )
         except TimeoutError:
             _raise(504, "git_commit_message_timeout", "生成 commit message 超时")
@@ -1971,7 +1974,7 @@ async def _generate_git_commit_message_from_context(
         try:
             raw_output, returncode = await asyncio.wait_for(
                 _communicate_process(process, input_text=prompt_text + "\n" if use_stdin else None),
-                timeout=GIT_COMMIT_MESSAGE_TIMEOUT_SECONDS,
+                timeout=timeout_seconds,
             )
         except TimeoutError:
             _terminate_process_sync(process)
@@ -2018,6 +2021,7 @@ async def update_git_commit_message_cli_config(
     cli_type: Any = None,
     cli_path: Any = None,
     params: Any = None,
+    timeout_seconds: Any = None,
     key: Any = None,
     value: Any = None,
 ) -> dict[str, Any]:
@@ -2026,6 +2030,16 @@ async def update_git_commit_message_cli_config(
     next_cli_type = str(cli_type or current.cli_type or profile.cli_type).strip().lower()
     next_cli_path = str(cli_path if cli_path is not None else current.cli_path).strip()
     next_params = CliParamsConfig.from_dict(current.cli_params.to_dict())
+
+    resolved_timeout = current.timeout_seconds if timeout_seconds is None else timeout_seconds
+    if isinstance(resolved_timeout, bool):
+        _raise(400, "invalid_git_commit_timeout", "Git commit message 超时必须是有限正数")
+    try:
+        resolved_timeout = float(resolved_timeout)
+    except (TypeError, ValueError, OverflowError):
+        _raise(400, "invalid_git_commit_timeout", "Git commit message 超时必须是有限正数")
+    if not math.isfinite(resolved_timeout) or resolved_timeout <= 0:
+        _raise(400, "invalid_git_commit_timeout", "Git commit message 超时必须是有限正数")
 
     if params is not None:
         if not isinstance(params, dict):
@@ -2055,6 +2069,7 @@ async def update_git_commit_message_cli_config(
             cli_type=next_cli_type,
             cli_path=next_cli_path,
             cli_params=next_params,
+            timeout_seconds=resolved_timeout,
         )
     except ValueError as exc:
         _raise(400, "invalid_git_commit_cli_config", str(exc))

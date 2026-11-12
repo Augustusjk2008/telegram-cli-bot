@@ -97,6 +97,7 @@ export function GitCommitCliConfigPanel({
   const [methodDraft, setMethodDraft] = useState<"cli" | "llm">("cli");
   const [cliTypeDraft, setCliTypeDraft] = useState<CliType>("codex");
   const [cliPathDraft, setCliPathDraft] = useState("");
+  const [timeoutDraft, setTimeoutDraft] = useState("1800");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -124,6 +125,7 @@ export function GitCommitCliConfigPanel({
         setMethodDraft(payload.method || "cli");
         setCliTypeDraft(payload.cliType);
         setCliPathDraft(payload.cliPath);
+        setTimeoutDraft(String(payload.timeoutSeconds || 1800));
         setDraftValues(buildDraftValues(payload));
       })
       .catch((err) => {
@@ -150,11 +152,14 @@ export function GitCommitCliConfigPanel({
     if (cliTypeDraft !== config.cliType || cliPathDraft !== config.cliPath) {
       return true;
     }
+    if (Number(timeoutDraft) !== config.timeoutSeconds) {
+      return true;
+    }
     if (methodDraft !== (config.method || "cli")) {
       return true;
     }
     return entries.some(([key]) => baseDrafts[key] !== (draftValues[key] ?? ""));
-  }, [baseDrafts, cliPathDraft, cliTypeDraft, config, draftValues, entries, methodDraft]);
+  }, [baseDrafts, cliPathDraft, cliTypeDraft, config, draftValues, entries, methodDraft, timeoutDraft]);
 
   async function save() {
     if (!config || !canManage) {
@@ -162,6 +167,11 @@ export function GitCommitCliConfigPanel({
     }
     if (methodDraft === "cli" && cliTypeDraft === "deepseek") {
       setError("DeepSeek Harness 暂不支持生成提交信息，请选择其他 CLI");
+      return;
+    }
+    const timeoutSeconds = Number(timeoutDraft);
+    if (!timeoutDraft.trim() || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+      setError("生成超时必须是大于 0 的有限数值");
       return;
     }
     setSaving(true);
@@ -180,12 +190,14 @@ export function GitCommitCliConfigPanel({
         method: methodDraft,
         cliType: cliTypeDraft,
         cliPath: cliPathDraft.trim(),
+        timeoutSeconds,
         ...(Object.keys(nextParams).length > 0 ? { params: nextParams } : {}),
       });
       setConfig(next);
       setMethodDraft(next.method || "cli");
       setCliTypeDraft(next.cliType);
       setCliPathDraft(next.cliPath);
+      setTimeoutDraft(String(next.timeoutSeconds || 1800));
       setDraftValues(buildDraftValues(next));
       setNotice("Commit Message CLI 配置已保存");
     } catch (err) {
@@ -208,6 +220,7 @@ export function GitCommitCliConfigPanel({
       setMethodDraft(next.method || "cli");
       setCliTypeDraft(next.cliType);
       setCliPathDraft(next.cliPath);
+      setTimeoutDraft(String(next.timeoutSeconds || 1800));
       setDraftValues(buildDraftValues(next));
       setNotice("Commit Message CLI 已恢复默认值");
     } catch (err) {
@@ -416,6 +429,21 @@ export function GitCommitCliConfigPanel({
               })}
             </>
           )}
+
+          <label className="block min-w-0 space-y-0.5">
+            <span className={fieldLabelClassName}>生成超时（秒）</span>
+            <input
+              aria-label="Commit Message 生成超时（秒）"
+              type="number"
+              min="0.1"
+              step="any"
+              value={timeoutDraft}
+              disabled={!canManage}
+              onChange={(event) => setTimeoutDraft(event.target.value)}
+              className={gitInputClassName}
+            />
+            <span className="block text-[11px] leading-4 text-[var(--muted)]">超时后终止后台 LLM 请求或 CLI 进程。</span>
+          </label>
 
           <div className="flex min-w-0 items-center gap-1.5">
             {statusNode ?? <span className="flex-1" />}

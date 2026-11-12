@@ -1,6 +1,7 @@
 """BotProfile 和 UserSession 数据类"""
 
 import logging
+import math
 import subprocess
 import threading
 import time
@@ -252,14 +253,15 @@ class GitCommitMessageCliConfig:
     """Git commit message 生成配置。
 
     ``method`` defaults to the historical CLI implementation.  The LLM
-    implementation reuses the global OpenAI-compatible translation settings,
-    so the persisted Git config only needs to record the selected method.
+    implementation reuses the global OpenAI-compatible translation endpoint,
+    while the timeout is stored with this Git configuration for both methods.
     """
 
     cli_type: str = CLI_TYPE
     cli_path: str = CLI_PATH
     cli_params: CliParamsConfig = field(default_factory=CliParamsConfig)
     method: str = "cli"
+    timeout_seconds: float = 30 * 60
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -267,6 +269,7 @@ class GitCommitMessageCliConfig:
             "cli_type": self.cli_type,
             "cli_path": self.cli_path,
             "cli_params": self.cli_params.to_dict(),
+            "timeout_seconds": self.timeout_seconds,
         }
 
     @classmethod
@@ -277,11 +280,19 @@ class GitCommitMessageCliConfig:
         method = str(data.get("method", data.get("provider", "cli")) or "cli").strip().lower()
         if method not in {"cli", "llm"}:
             method = "cli"
+        timeout_value = data.get("timeout_seconds", 30 * 60)
+        try:
+            timeout_seconds = float(timeout_value)
+            if isinstance(timeout_value, bool) or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            timeout_seconds = 30 * 60
         return cls(
             method=method,
             cli_type=cli_type,
             cli_path=str(data.get("cli_path") or default_cli_path(cli_type)),
             cli_params=CliParamsConfig.from_dict(data.get("cli_params")),
+            timeout_seconds=timeout_seconds,
         )
 
 

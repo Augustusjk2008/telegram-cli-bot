@@ -1,9 +1,12 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from bot.models import BotProfile, GitCommitMessageCliConfig
 from bot.web.git_commit_message import extract_commit_message, run_llm_commit_message
+from bot.web import git_service
+from bot.web.api_common import WebApiError
 from bot.web.translation_config import TranslationConfig, TranslationConfigError, TranslationConfigStore
 from bot.web.translation_service import TranslationService
 import bot.web.chat_translation as chat_translation
@@ -99,9 +102,12 @@ def test_translation_settings_describe_every_cli_without_host_controlled_paramet
 
 @pytest.mark.asyncio
 async def test_git_commit_message_can_use_llm_method(monkeypatch):
+    observed = {}
+
     class _FakeLlmClient:
         async def post_chat_completion(self, **kwargs):
             assert kwargs["body"]["model"] == "commit-model"
+            observed["timeout_seconds"] = kwargs["timeout_seconds"]
             return {"choices": [{"message": {"content": "<COMMIT_MESSAGE>\nfeat: test\n</COMMIT_MESSAGE>"}}]}
 
         async def close(self):
@@ -113,11 +119,79 @@ async def test_git_commit_message_can_use_llm_method(monkeypatch):
         api_key="secret",
         model="commit-model",
     )
-    response = await run_llm_commit_message(prompt_text="prompt", config=config)
+    response = await run_llm_commit_message(prompt_text="prompt", config=config, timeout_seconds=0.25)
     assert extract_commit_message(response) == "feat: test"
+    assert observed["timeout_seconds"] == 0.25
+
+
+@pytest.mark.asyncio
+async def test_git_commit_llm_timeout_closes_the_client(monkeypatch):
+    closed = asyncio.Event()
+
+    class _HangingLlmClient:
+        async def post_chat_completion(self, **_kwargs):
+            await asyncio.sleep(60)
+
+        async def close(self):
+            closed.set()
+
+    monkeypatch.setattr("bot.web.git_commit_message.OpenAICompatibleClient", _HangingLlmClient)
+    config = TranslationConfig(base_url="https://example.test/v1", api_key="secret", model="commit-model")
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            run_llm_commit_message(prompt_text="prompt", config=config, timeout_seconds=60),
+            timeout=0.01,
+        )
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_git_commit_cli_timeout_terminates_the_process(monkeypatch, tmp_path):
+    terminated = False
+
+    class _Manager:
+        main_profile = BotProfile(alias="main", cli_type="claude", cli_path="claude", working_dir=str(tmp_path))
+        managed_profiles = {}
+
+        def get_git_commit_cli_config(self, _alias):
+            return GitCommitMessageCliConfig(
+                method="cli",
+                cli_type="claude",
+                cli_path="claude",
+                timeout_seconds=0.01,
+            )
+
+    async def hanging_communicate(*_args, **_kwargs):
+        await asyncio.sleep(60)
+
+    def terminate(_process):
+        nonlocal terminated
+        terminated = True
+
+    monkeypatch.setattr(git_service, "resolve_cli_executable", lambda *_args: "claude")
+    monkeypatch.setattr(git_service, "build_cli_command", lambda **_kwargs: (["claude"], False))
+    monkeypatch.setattr(git_service, "_start_cli_process", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(git_service, "_communicate_process", hanging_communicate)
+    monkeypatch.setattr(git_service, "_terminate_process_sync", terminate)
+    monkeypatch.setattr(git_service, "close_process_streams", lambda *_args: None)
+
+    with pytest.raises(WebApiError) as exc_info:
+        await git_service._generate_git_commit_message_from_context(
+            _Manager(),
+            "main",
+            1,
+            repo_root=str(tmp_path),
+            context={"status_text": " M file.txt", "diff_text": "diff", "use_staged_diff": False, "diff_truncated": False},
+        )
+
+    assert exc_info.value.status == 504
+    assert exc_info.value.code == "git_commit_message_timeout"
+    assert terminated is True
 
 
 def test_git_commit_method_round_trips_with_legacy_cli_fields():
     config = GitCommitMessageCliConfig.from_dict({"method": "llm", "cli_type": "codex", "cli_path": "codex"})
     assert config.method == "llm"
     assert GitCommitMessageCliConfig.from_dict(config.to_dict()).method == "llm"
+    assert GitCommitMessageCliConfig.from_dict(config.to_dict()).timeout_seconds == 1800

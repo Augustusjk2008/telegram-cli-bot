@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import zlib
 from collections.abc import Mapping, Sequence
@@ -747,6 +748,7 @@ class MultiBotManager:
         cli_type: str | None = None,
         cli_path: str | None = None,
         cli_params: CliParamsConfig | None = None,
+        timeout_seconds: float | None = None,
     ) -> GitCommitMessageCliConfig:
         normalized_alias = str(alias or "").strip().lower()
         async with self._lock:
@@ -760,11 +762,21 @@ class MultiBotManager:
                 raise ValueError("Git commit CLI 不支持 Antigravity CLI")
             if resolved_method == "cli" and resolved_cli_type == "deepseek":
                 raise ValueError("Git commit CLI 不支持 DeepSeek Harness")
+            raw_timeout = current.timeout_seconds if timeout_seconds is None else timeout_seconds
+            if isinstance(raw_timeout, bool):
+                raise ValueError("Git commit message 超时必须是有限正数")
+            try:
+                resolved_timeout = float(raw_timeout)
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError("Git commit message 超时必须是有限正数") from None
+            if not math.isfinite(resolved_timeout) or resolved_timeout <= 0:
+                raise ValueError("Git commit message 超时必须是有限正数")
             next_config = GitCommitMessageCliConfig(
                 method=resolved_method,
                 cli_type=resolved_cli_type,
                 cli_path=str(cli_path if cli_path is not None else current.cli_path or profile.cli_path).strip(),
                 cli_params=cli_params or current.cli_params,
+                timeout_seconds=resolved_timeout,
             )
             if resolved_method == "cli" and not next_config.cli_path:
                 raise ValueError("cli_path 不能为空")

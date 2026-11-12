@@ -96,9 +96,12 @@ test("Git config selector saves codex server with the codex executable", async (
   render(<GitCommitCliConfigPanel botAlias="main" client={client} />);
   await user.selectOptions(await screen.findByLabelText("Commit Message CLI 类型"), "codex_server");
   expect(screen.getByLabelText("Commit Message CLI 路径")).toHaveValue("codex");
+  const timeout = screen.getByLabelText("Commit Message 生成超时（秒）");
+  await user.clear(timeout);
+  await user.type(timeout, "12");
   await user.click(screen.getByRole("button", { name: "保存" }));
   await screen.findByText("Commit Message CLI 配置已保存");
-  expect(await client.getGitCommitMessageConfig("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex" });
+  expect(await client.getGitCommitMessageConfig("main")).toMatchObject({ cliType: "codex_server", cliPath: "codex", timeoutSeconds: 12 });
 });
 
 test("Git config keeps an unsupported DeepSeek selection explicit until a supported CLI is saved", async () => {

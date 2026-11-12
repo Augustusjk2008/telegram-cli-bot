@@ -606,6 +606,7 @@ function buildMockGitCommitMessageConfig(cliType: CliType, cliPath?: string): Gi
     method: "cli",
     cliType: payload.cliType,
     cliPath: cliPath?.trim() || defaultCliPathForType(payload.cliType),
+    timeoutSeconds: 1800,
     params: { ...payload.params },
     defaults: { ...payload.defaults },
     schema: { ...payload.schema },
@@ -7167,6 +7168,7 @@ export class MockWebBotClient implements WebBotClient {
       ...base,
       method: input.method || current.method,
       cliPath: input.cliPath !== undefined ? input.cliPath.trim() || defaultCliPathForType(nextCliType) : base.cliPath,
+      timeoutSeconds: input.timeoutSeconds !== undefined ? input.timeoutSeconds : current.timeoutSeconds,
       params: {
         ...base.params,
         ...this.gitCommitParamsByCli[nextCliType],

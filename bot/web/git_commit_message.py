@@ -91,7 +91,7 @@ def _extract_chat_completion_text(raw: Any) -> str:
     return ""
 
 
-async def run_llm_commit_message(*, prompt_text: str, config: Any) -> str:
+async def run_llm_commit_message(*, prompt_text: str, config: Any, timeout_seconds: float | None = None) -> str:
     if not getattr(config, "llm_configured", False):
         raise ValueError("未配置可用的 LLM API，请先在聊天翻译设置中填写 Base URL、API Key 和模型")
     client = OpenAICompatibleClient()
@@ -107,7 +107,7 @@ async def run_llm_commit_message(*, prompt_text: str, config: Any) -> str:
                     {"role": "user", "content": prompt_text},
                 ],
             },
-            timeout_seconds=config.request_timeout_seconds,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else config.request_timeout_seconds,
         )
     finally:
         await client.close()

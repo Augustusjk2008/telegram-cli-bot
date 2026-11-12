@@ -141,6 +141,7 @@ const localGitCapabilities: GitCapabilities = {
 const commitMessageConfig: GitCommitMessageCliConfig = {
   cliType: "codex",
   cliPath: "codex",
+  timeoutSeconds: 1800,
   params: {},
   defaults: {},
   schema: {},

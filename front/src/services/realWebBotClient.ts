@@ -1388,6 +1388,7 @@ type RawGitCommitMessageCliConfig = {
   method?: "cli" | "llm";
   cli_type?: CliType;
   cli_path?: string;
+  timeout_seconds?: number;
   params?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
   schema?: RawCliParamsPayload["schema"];
@@ -3483,6 +3484,7 @@ function mapGitCommitMessageCliConfig(raw: RawGitCommitMessageCliConfig): GitCom
     method: raw.method === "llm" ? "llm" : "cli",
     cliType,
     cliPath: raw.cli_path || defaultCliPathForType(cliType),
+    timeoutSeconds: Number(raw.timeout_seconds ?? 1800),
     params: raw.params || {},
     defaults: raw.defaults || {},
     schema: raw.schema || {},
@@ -7457,6 +7459,7 @@ export class RealWebBotClient implements WebBotClient {
           ...(input.method ? { method: input.method } : {}),
           ...(input.cliType ? { cli_type: input.cliType } : {}),
           ...(input.cliPath !== undefined ? { cli_path: input.cliPath } : {}),
+          ...(input.timeoutSeconds !== undefined ? { timeout_seconds: input.timeoutSeconds } : {}),
           ...(input.params ? { params: input.params } : {}),
         }),
       },

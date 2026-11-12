@@ -4287,6 +4287,7 @@ class WebApiServer:
             cli_type=body.get("cli_type"),
             cli_path=body.get("cli_path"),
             params=body.get("params"),
+            timeout_seconds=body.get("timeout_seconds"),
             key=body.get("key"),
             value=body.get("value"),
         )
