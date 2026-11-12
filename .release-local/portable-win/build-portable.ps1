@@ -421,7 +421,10 @@ param(
     [string]$Mode = "default",
 
     [Parameter(DontShow = $true)]
-    [switch]$ServiceProcess
+    [switch]$ServiceProcess,
+
+    [Parameter(DontShow = $true)]
+    [long]$LauncherWindowHandle = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -734,16 +737,89 @@ if __name__ == "__main__":
 
     $startBat = @'
 @echo off
+setlocal EnableDelayedExpansion
+set "ERRORLEVEL="
 chcp 65001 >nul
+
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" %*
-set "EXIT_CODE=%ERRORLEVEL%"
-if not "%EXIT_CODE%"=="0" (
-    echo [ERROR] Service exited with code: %EXIT_CODE%
-    pause
+set "SCRIPT_PATH=%SCRIPT_DIR%start.ps1"
+set "CLI_BRIDGE_START_ARGS=%*"
+set "CLI_BRIDGE_START_MODE=%~1"
+
+if not exist ".env" (
+    echo [INFO] .env not found. Running install.bat...
+    if not exist "install.bat" (
+        echo [ERROR] Missing .env and install.bat was not found.
+        pause
+        exit /b 1
+    )
+
+    set "CLI_BRIDGE_INSTALLER_NO_PAUSE=1"
+    call "%SCRIPT_DIR%install.bat"
+    set "EXIT_CODE=!ERRORLEVEL!"
+    if not "!EXIT_CODE!"=="0" (
+        echo [ERROR] install.bat exited with code: !EXIT_CODE!
+        pause
+        exit /b !EXIT_CODE!
+    )
+
+    if not exist ".env" (
+        echo [ERROR] install.bat completed, but .env is still missing.
+        pause
+        exit /b 1
+    )
 )
-exit /b %EXIT_CODE%
+
+set "PS_EXE="
+where pwsh >nul 2>nul
+if not errorlevel 1 set "PS_EXE=pwsh"
+
+if not defined PS_EXE (
+    where powershell >nul 2>nul
+    if not errorlevel 1 set "PS_EXE=powershell"
+)
+
+if not defined PS_EXE (
+    echo [ERROR] PowerShell was not found. Install pwsh or Windows PowerShell.
+    pause
+    exit /b 1
+)
+
+set "CLI_BRIDGE_PS_EXE=%PS_EXE%"
+:START_SERVICE
+echo [INFO] Starting service with %PS_EXE%...
+
+rem An update can replace this file while the service runs, and cmd.exe re-reads
+rem batch files by byte offset. Keep the launch and everything after it in one
+rem block that is parsed before the service starts.
+(
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference = 'Stop';" ^
+  "$hostExe = $env:CLI_BRIDGE_PS_EXE;" ^
+  "$scriptPath = $env:SCRIPT_PATH;" ^
+  "$mode = $env:CLI_BRIDGE_START_MODE;" ^
+  "$nativeMember = '[System.Runtime.InteropServices.DllImport(' + [char]34 + 'kernel32.dll' + [char]34 + ')] public static extern System.IntPtr GetConsoleWindow();';" ^
+  "Add-Type -Name NativeMethods -Namespace TcbLauncher -MemberDefinition $nativeMember;" ^
+  "$launcherWindowHandle = [TcbLauncher.NativeMethods]::GetConsoleWindow().ToInt64();" ^
+  "$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent());" ^
+  "$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator);" ^
+  "$argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath);" ^
+  "if ($mode) { $argumentList += @('-Mode', $mode) };" ^
+  "$argumentList += @('-LauncherWindowHandle', [string]$launcherWindowHandle);" ^
+  "if ($isAdmin) { & $hostExe @argumentList; exit $LASTEXITCODE }" ^
+  "Write-Host '[INFO] Requesting administrator privileges...';" ^
+  "$proc = Start-Process -FilePath $hostExe -Verb RunAs -WorkingDirectory (Split-Path -Parent $scriptPath) -ArgumentList $argumentList -Wait -PassThru;" ^
+  "if ($null -eq $proc) { exit 1 }" ^
+  "exit $proc.ExitCode"
+set "EXIT_CODE=!ERRORLEVEL!"
+if not "!EXIT_CODE!"=="0" (
+    echo [ERROR] Service exited with code: !EXIT_CODE!
+    if "!EXIT_CODE!"=="78" echo [INFO] The update needs manual recovery. Details are recorded in the update task.
+    pause >nul
+)
+exit /b !EXIT_CODE!
+)
 '@
     Set-Content -LiteralPath (Join-Path $PackageRoot "start.bat") -Value $startBat -Encoding ASCII
 
