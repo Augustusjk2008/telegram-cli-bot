@@ -508,10 +508,12 @@ PowerShell 引导入口的基线参数为 `-BaselinePackage` 和 `-BaselineSha25
 首次安装生成的 `.env` 默认包含：
 
 ```env
-APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
+APP_UPDATE_REPOSITORY=https://github.com/Augustusjk2008/telegram-cli-bot
 ```
 
-使用自己的 Release 仓库时，将其改成对应的 `owner/repo`。
+可在管理中心「环境配置 → 更新」的「更新源地址」中填写完整 HTTP(S) 最新 Release 接口地址，例如 `https://updates.example.com/releases/latest`；请求会直接使用该地址，支持自定义域名和代理地址。接口需返回 GitHub Releases 格式的 JSON，包含 `tag_name`、`assets`（每项含 `name` 和完整 `browser_download_url`），可包含 `body` 和 `html_url`。下载包及其同名 `.sha256` 文件使用返回的资产地址。
+
+GitHub 仓库完整地址（支持 `.git`、`/releases` 和 `/releases/latest` 后缀）会自动转换为最新 Release 接口；原有 `owner/repo` 写法继续可用。保存配置后重启后端生效。
 
 ## 项目结构
 

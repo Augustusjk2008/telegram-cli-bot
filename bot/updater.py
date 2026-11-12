@@ -1,4 +1,4 @@
-"""GitHub Release based updater."""
+"""Release based updater with configurable HTTP(S) sources."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import tempfile
 import time
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -269,15 +270,43 @@ def apply_pending_update(repo_root: Path, log_callback: Any | None = None) -> di
         return {"applied": False, "reason": "explicit_application_required", "status": status}
     return {"applied": False, "reason": "no_pending_update"}
 
-def _fetch_latest_release() -> dict[str, Any]:
-    repository = str(APP_UPDATE_REPOSITORY or "").strip()
+def _release_api_url(repository: str) -> str:
+    repository = str(repository or "").strip()
     if not repository:
         raise RuntimeError("未配置 APP_UPDATE_REPOSITORY")
 
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        return f"https://api.github.com/repos/{repository}/releases/latest"
+
+    try:
+        parsed = urllib.parse.urlsplit(repository)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or any(char.isspace() for char in repository)
+        ):
+            raise ValueError("invalid update URL")
+        parsed.port  # Validate any explicit port before making a request.
+    except ValueError as exc:
+        raise RuntimeError("更新源须为完整 HTTP(S) 地址或 owner/repo") from exc
+
+    if parsed.hostname.lower() in {"github.com", "www.github.com"}:
+        match = re.fullmatch(
+            r"/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?(?:/releases(?:/latest)?)?/?",
+            parsed.path,
+        )
+        if not match:
+            raise RuntimeError("GitHub 仓库地址应为 https://github.com/owner/repo")
+        return f"https://api.github.com/repos/{match[1]}/{match[2]}/releases/latest"
+
+    return repository
+
+
+def _fetch_latest_release() -> dict[str, Any]:
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{repository}/releases/latest",
+        _release_api_url(APP_UPDATE_REPOSITORY),
         headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": "application/json",
             "User-Agent": f"cli-bridge/{APP_VERSION}",
         },
     )

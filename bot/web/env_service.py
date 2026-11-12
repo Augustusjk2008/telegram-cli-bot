@@ -141,7 +141,11 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("TCB_LSP_IDLE_TIMEOUT_SECONDS", "语言服务空闲回收", "语言服务空闲回收秒数。", "number", "300", "language-server", min_value=30),
     EnvField("TCB_LSP_MAX_RUNTIMES", "语言服务实例上限", "可同时保留的语言服务运行时数量上限。", "number", "8", "language-server", min_value=1, max_value=128, integer=True),
     EnvField("TCB_LSP_EXTERNAL_SOURCES_ENABLED", "允许外部依赖源码", "允许后续语言服务导航读取经认可的外部依赖源码；默认关闭。", "boolean", "false", "language-server"),
-    EnvField("APP_UPDATE_REPOSITORY", "更新仓库", "GitHub Releases 仓库 slug。", "string", "Augustusjk2008/telegram-cli-bot", "updates"),
+    EnvField(
+        "APP_UPDATE_REPOSITORY", "更新源地址",
+        "完整 HTTP(S) 最新 Release 接口地址，或 GitHub 仓库地址；兼容 owner/repo。自定义接口需返回 GitHub Releases 格式的 JSON。",
+        "string", config.DEFAULT_APP_UPDATE_REPOSITORY, "updates",
+    ),
     EnvField("CHAT_COMPLETION_NOTIFY_ENABLED", "聊天完成通知", "聊天完成后是否发送通知。", "boolean", "true", "notifications"),
     EnvField("PUSHPLUS_ENABLED", "PushPlus 开关", "是否启用 PushPlus 推送。", "boolean", "false", "notifications"),
     EnvField("PUSHPLUS_TOKEN", "PushPlus Token", "PushPlus 发送 token。", "password", "", "notifications", sensitive=True, max_length=8192),

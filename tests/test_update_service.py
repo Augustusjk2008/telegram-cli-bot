@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import hashlib
 from pathlib import Path
@@ -8,13 +9,14 @@ import subprocess
 import sys
 import threading
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from bot import app_settings, updater
 from bot.update_service import UpdateService, UpdateServiceError
 from bot.update_state import UpdateConflict, UpdateStore
+from bot.web.env_service import EnvConfigService
 
 
 @pytest.fixture
@@ -104,6 +106,59 @@ def test_check_does_not_overwrite_settings_and_failure_marks_cache(service, monk
     with pytest.raises(UpdateServiceError):
         service.start_online()
     assert service.status()["job"] is None
+
+
+@pytest.mark.parametrize("source, expected_url", [
+    ("owner/repo", "https://api.github.com/repos/owner/repo/releases/latest"),
+    ("https://github.com/owner/repo", "https://api.github.com/repos/owner/repo/releases/latest"),
+    ("https://github.com/owner/repo.git/", "https://api.github.com/repos/owner/repo/releases/latest"),
+    ("https://github.com/owner/repo/releases", "https://api.github.com/repos/owner/repo/releases/latest"),
+    ("https://www.github.com/owner/repo/releases/latest", "https://api.github.com/repos/owner/repo/releases/latest"),
+    ("https://api.github.com/repos/owner/repo/releases/latest", "https://api.github.com/repos/owner/repo/releases/latest"),
+    ("https://code.example.com/api/v1/repos/team/orbit/releases/latest", "https://code.example.com/api/v1/repos/team/orbit/releases/latest"),
+    ("https://proxy.example.com/https://api.github.com/repos/owner/repo/releases/latest?channel=stable&v=1%2B2",
+     "https://proxy.example.com/https://api.github.com/repos/owner/repo/releases/latest?channel=stable&v=1%2B2"),
+    ("http://updates.internal:8080/orbit/latest.json", "http://updates.internal:8080/orbit/latest.json"),
+])
+def test_check_uses_update_source_saved_in_environment(service, monkeypatch, source, expected_url):
+    monkeypatch.delenv("APP_UPDATE_REPOSITORY", raising=False)
+    env_service = EnvConfigService(service.repo_root)
+    env_service.patch({"values": {"APP_UPDATE_REPOSITORY": source}})
+    saved = next(item["value"] for item in env_service.snapshot()["items"] if item["key"] == "APP_UPDATE_REPOSITORY")
+    monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", saved)
+    release = {
+        "tag_name": "v99.0.0", "html_url": "https://code.example.com/releases/v99.0.0", "body": "Update notes",
+        "assets": [{"name": "orbit-linux.tar.gz", "browser_download_url": "https://downloads.example.com/orbit-linux.tar.gz"}],
+    }
+    opener = Mock()
+    opener.open.return_value = io.BytesIO(json.dumps(release).encode("utf-8"))
+    monkeypatch.setattr(updater, "_build_url_opener", lambda: opener)
+
+    state = service.check()
+
+    assert state["last_check"]["ok"] is True, state["update_last_error"]
+    assert state["last_check"]["release"] == release
+    assert state["last_available_version"] == "99.0.0"
+    opener.open.assert_called_once()
+    assert opener.open.call_args.args[0].full_url == expected_url
+    assert opener.open.call_args.args[0].get_header("Accept") == "application/json"
+    assert opener.open.call_args.kwargs == {"timeout": 20}
+
+
+@pytest.mark.parametrize("source", [
+    "", "file:///tmp/latest.json", "ftp://updates.example.com/latest.json", "https:///latest.json",
+    "https://[invalid/latest.json", "https://updates.example.com:invalid/latest.json", "github.com/owner/repo",
+])
+def test_check_rejects_invalid_update_source_before_network_access(service, monkeypatch, source):
+    monkeypatch.setattr(updater, "APP_UPDATE_REPOSITORY", source)
+    create_opener = Mock()
+    monkeypatch.setattr(updater, "_build_url_opener", create_opener)
+
+    state = service.check()
+
+    assert state["last_check"]["ok"] is False
+    assert state["update_last_error"]
+    create_opener.assert_not_called()
 
 
 def _fake_preparation(monkeypatch, service, *, block=None, started=None):

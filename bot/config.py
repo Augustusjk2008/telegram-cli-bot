@@ -196,7 +196,7 @@ def _effective_frontend_base_path(name: str, web_base_path: str) -> str:
     return web_base_path
 
 
-DEFAULT_APP_UPDATE_REPOSITORY = "Augustusjk2008/telegram-cli-bot"
+DEFAULT_APP_UPDATE_REPOSITORY = "https://github.com/Augustusjk2008/telegram-cli-bot"
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity", "deepseek"}

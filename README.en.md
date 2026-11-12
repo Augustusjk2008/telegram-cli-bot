@@ -476,10 +476,12 @@ The PowerShell bootstrap uses `-BaselinePackage` and `-BaselineSha256` for the b
 The generated `.env` includes:
 
 ```env
-APP_UPDATE_REPOSITORY=Augustusjk2008/telegram-cli-bot
+APP_UPDATE_REPOSITORY=https://github.com/Augustusjk2008/telegram-cli-bot
 ```
 
-To use your own release repository, change the value to the corresponding `owner/repo`.
+In Admin Center → Environment → Updates, set the update source address to a full HTTP(S) latest-release API URL, such as `https://updates.example.com/releases/latest`. Requests use that URL directly, including custom domains and proxy addresses. The endpoint must return GitHub Releases-compatible JSON with `tag_name` and `assets` (each with `name` and an absolute `browser_download_url`); `body` and `html_url` are optional. The package and its matching `.sha256` file are downloaded from the returned asset URLs.
+
+Full GitHub repository URLs (including `.git`, `/releases` and `/releases/latest` suffixes) resolve to the latest-release API. Existing `owner/repo` values remain supported. Restart the backend after saving the configuration.
 
 ## Project Layout
 
