@@ -22,17 +22,45 @@ function createAdminClient() {
   });
 }
 
-test("管理中心可以直接请求重启后端", async () => {
+test.each(["重启后端", "重启服务"] as const)("管理中心%s必须确认，取消或 Escape 不会请求重启", async (buttonLabel) => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const restart = vi.spyOn(client, "restartService");
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
 
   await screen.findByText("用户权限");
-  await user.click(screen.getByRole("button", { name: "重启后端" }));
+  if (buttonLabel === "重启服务") {
+    await user.click(screen.getByRole("tab", { name: "环境配置" }));
+    await user.click(await screen.findByRole("button", { name: "Web" }));
+    const port = await screen.findByRole("spinbutton", { name: "Web 端口" });
+    await user.clear(port);
+    await user.type(port, "8766");
+    await user.click(screen.getByRole("button", { name: "保存环境配置" }));
+    await screen.findByText("环境配置已保存");
+  }
+
+  const restartButton = screen.getByRole("button", { name: buttonLabel });
+  await user.click(restartButton);
+  const dialog = screen.getByRole("dialog", { name: "确认重启后端" });
+  expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(dialog).toHaveTextContent("中断正在运行的智能体任务");
+  expect(restart).not.toHaveBeenCalled();
+
+  await user.click(within(dialog).getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog", { name: "确认重启后端" })).not.toBeInTheDocument();
+  expect(restart).not.toHaveBeenCalled();
+
+  await user.click(restartButton);
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "确认重启后端" })).not.toBeInTheDocument();
+  expect(restart).not.toHaveBeenCalled();
+
+  await user.click(restartButton);
+  await user.click(screen.getByRole("button", { name: "确认重启" }));
 
   expect(restart).toHaveBeenCalledTimes(1);
-  expect(await screen.findByText("已请求重启后端")).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "确认重启后端" })).not.toBeInTheDocument();
+  expect(await screen.findByText(`已请求${buttonLabel}`)).toBeInTheDocument();
 });
 
 async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdateStatus> {

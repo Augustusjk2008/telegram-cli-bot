@@ -8,6 +8,7 @@ import {
 } from "../components/admin/AnnouncementAdminPanel";
 import { cliTypeLabel } from "../utils/cliType";
 import { ChatTranslationSettingsPanel } from "../components/ChatTranslationSettingsPanel";
+import { ChatConfirmDialog } from "../components/ChatConfirmDialog";
 import { GlobalPromptPresetsPanel } from "../components/GlobalPromptPresetsPanel";
 import { GlobalUiSettingsPanel } from "../components/GlobalUiSettingsPanel";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
@@ -341,6 +342,7 @@ export function AdminCenterScreen({
   const [envSystemReloading, setEnvSystemReloading] = useState(false);
   const [envRestarting, setEnvRestarting] = useState(false);
   const [serviceRestarting, setServiceRestarting] = useState(false);
+  const [restartConfirmTarget, setRestartConfirmTarget] = useState<"service" | "env" | null>(null);
   const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
     users: false,
@@ -1163,8 +1165,8 @@ export function AdminCenterScreen({
           <div className="admin-cover-actions">
             <button
               type="button"
-              onClick={() => void requestServiceRestart()}
-              disabled={serviceRestarting}
+              onClick={() => setRestartConfirmTarget("service")}
+              disabled={serviceRestarting || envRestarting}
               className="orbit-btn admin-btn--warning"
             >
               <RefreshCw className={`h-4 w-4${serviceRestarting ? " animate-spin" : ""}`} />
@@ -1927,8 +1929,8 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 {envSavedImpact.restartRequiredKeys.length ? (
                   <button
                     type="button"
-                    onClick={() => void requestEnvRestart()}
-                    disabled={envRestarting}
+                    onClick={() => setRestartConfirmTarget("env")}
+                    disabled={envRestarting || serviceRestarting}
                     className="orbit-btn admin-btn--warning-solid"
                   >
                     {envRestarting ? "请求中..." : "重启服务"}
@@ -2265,6 +2267,24 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
         ) : null}
         </div>
       </div>
+      {restartConfirmTarget ? (
+        <ChatConfirmDialog
+          label="确认重启后端"
+          title="确认重启后端？"
+          description="重启会中断正在运行的智能体任务，Web 和 Telegram 将暂时断开连接。确认现在重启后端吗？"
+          confirmLabel="确认重启"
+          tone="danger"
+          onConfirm={() => {
+            setRestartConfirmTarget(null);
+            if (restartConfirmTarget === "env") {
+              void requestEnvRestart();
+            } else {
+              void requestServiceRestart();
+            }
+          }}
+          onCancel={() => setRestartConfirmTarget(null)}
+        />
+      ) : null}
     </main>
   );
 }
