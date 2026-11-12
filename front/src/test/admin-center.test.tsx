@@ -22,24 +22,14 @@ function createAdminClient() {
   });
 }
 
-test.each(["重启后端", "重启服务"] as const)("管理中心%s必须确认，取消或 Escape 不会请求重启", async (buttonLabel) => {
+test("管理中心重启后端必须确认，取消或 Escape 不会请求重启", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
   const restart = vi.spyOn(client, "restartService");
   render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
 
   await screen.findByText("用户权限");
-  if (buttonLabel === "重启服务") {
-    await user.click(screen.getByRole("tab", { name: "环境配置" }));
-    await user.click(await screen.findByRole("button", { name: "Web" }));
-    const port = await screen.findByRole("spinbutton", { name: "Web 端口" });
-    await user.clear(port);
-    await user.type(port, "8766");
-    await user.click(screen.getByRole("button", { name: "保存环境配置" }));
-    await screen.findByText("环境配置已保存");
-  }
-
-  const restartButton = screen.getByRole("button", { name: buttonLabel });
+  const restartButton = screen.getByRole("button", { name: "重启后端" });
   await user.click(restartButton);
   const dialog = screen.getByRole("dialog", { name: "确认重启后端" });
   expect(dialog).toHaveAttribute("aria-modal", "true");
@@ -60,7 +50,30 @@ test.each(["重启后端", "重启服务"] as const)("管理中心%s必须确认
 
   expect(restart).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("dialog", { name: "确认重启后端" })).not.toBeInTheDocument();
-  expect(await screen.findByText(`已请求${buttonLabel}`)).toBeInTheDocument();
+  expect(await screen.findByText("已请求重启后端")).toBeInTheDocument();
+});
+
+test("环境配置区分重加载 .env、重启和重新 build，保存后不显示额外重启提示", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "环境配置" }));
+  await user.click(await screen.findByRole("button", { name: "Web" }));
+
+  const tokenItem = screen.getByText("Web API 口令").closest("article");
+  const portItem = screen.getByText("Web 端口").closest("article");
+  expect(tokenItem).toHaveTextContent("重加载.env生效");
+  expect(portItem).toHaveTextContent("重启生效");
+
+  const port = screen.getByRole("spinbutton", { name: "Web 端口" });
+  await user.clear(port);
+  await user.type(port, "8766");
+  await user.click(screen.getByRole("button", { name: "保存环境配置" }));
+  await screen.findByText("环境配置已保存");
+  expect(screen.queryByText(/需重加载\.env:/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重启服务" })).not.toBeInTheDocument();
 });
 
 async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdateStatus> {

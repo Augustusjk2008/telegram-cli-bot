@@ -192,7 +192,7 @@ def test_env_service_reload_runtime_reports_reload_and_restart_impact(
 
     assert result["changedKeys"] == ["VITE_BASE_PATH", "PUSHPLUS_TOKEN"]
     assert result["reloadedKeys"] == result["changedKeys"]
-    assert result["restartRequiredKeys"] == ["VITE_BASE_PATH", "PUSHPLUS_TOKEN"]
+    assert result["restartRequiredKeys"] == ["VITE_BASE_PATH"]
     assert result["rebuildRequiredKeys"] == ["VITE_BASE_PATH"]
     assert result["projectEnvReloaded"] is True
     assert result["systemEnvironmentReloaded"] is False
@@ -217,6 +217,7 @@ def test_env_service_system_reload_reports_windows_support(
     assert result["projectEnvReloaded"] is True
     assert result["systemEnvironmentReloaded"] is True
     assert result["systemEnvironmentSupported"] is True
+    assert result["restartRequiredKeys"] == []
 
 
 def test_env_service_rejects_fixed_forward_and_quick_tunnel(tmp_path: Path) -> None:

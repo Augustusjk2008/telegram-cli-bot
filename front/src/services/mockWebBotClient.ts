@@ -783,7 +783,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: true,
       masked: true,
-      restartRequired: true,
+      restartRequired: false,
       rebuildRequired: false,
     },
     {
@@ -797,7 +797,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: false,
       masked: false,
-      restartRequired: true,
+      restartRequired: false,
       rebuildRequired: false,
     },
     {
@@ -839,7 +839,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: false,
       masked: false,
-      restartRequired: true,
+      restartRequired: false,
       rebuildRequired: true,
     },
     {
@@ -853,7 +853,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: false,
       masked: false,
-      restartRequired: true,
+      restartRequired: false,
       rebuildRequired: true,
     },
     {
@@ -955,13 +955,13 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: true,
       masked: true,
-      restartRequired: true,
+      restartRequired: false,
       rebuildRequired: false,
     },
     {
       key: "TCB_DIAG_ENABLED",
       label: "诊断日志",
-      description: "开启后重启生效。",
+      description: "开启后重新加载 .env 生效。",
       type: "boolean",
       category: "diagnostics",
       value: false,
@@ -969,7 +969,7 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: false,
       masked: false,
-      restartRequired: true,
+      restartRequired: false,
       rebuildRequired: false,
     },
     {

@@ -340,10 +340,8 @@ export function AdminCenterScreen({
   const [envSaving, setEnvSaving] = useState(false);
   const [envReloading, setEnvReloading] = useState(false);
   const [envSystemReloading, setEnvSystemReloading] = useState(false);
-  const [envRestarting, setEnvRestarting] = useState(false);
   const [serviceRestarting, setServiceRestarting] = useState(false);
-  const [restartConfirmTarget, setRestartConfirmTarget] = useState<"service" | "env" | null>(null);
-  const [envSavedImpact, setEnvSavedImpact] = useState<EnvConfigPatchResult | null>(null);
+  const [restartConfirmTarget, setRestartConfirmTarget] = useState<"service" | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Record<AdminCenterTab, boolean>>({
     users: false,
     invites: false,
@@ -998,10 +996,8 @@ export function AdminCenterScreen({
     setError("");
     setNotice("");
     try {
-      const result = await client.updateEnvConfig(buildEnvPatchInput());
-      setEnvSavedImpact(result);
+      await client.updateEnvConfig(buildEnvPatchInput());
       await loadEnvConfig("环境配置已保存", true);
-      setEnvSavedImpact(result);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "保存环境配置失败"));
     } finally {
@@ -1014,10 +1010,8 @@ export function AdminCenterScreen({
     setError("");
     setNotice("");
     try {
-      const result = await client.reloadEnvConfig();
-      setEnvSavedImpact(result);
+      await client.reloadEnvConfig();
       await loadEnvConfig("已重新加载项目 .env", true);
-      setEnvSavedImpact(result);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "重新加载环境配置失败"));
     } finally {
@@ -1031,30 +1025,14 @@ export function AdminCenterScreen({
     setNotice("");
     try {
       const result = await client.reloadSystemEnvConfig();
-      setEnvSavedImpact(result);
       const message = result.systemEnvironmentSupported === false
         ? "当前运行环境不支持重新加载 Windows 系统环境变量"
         : "已重新加载 Windows 系统环境变量和项目 .env";
       await loadEnvConfig(message, true);
-      setEnvSavedImpact(result);
     } catch (nextError) {
       setError(getErrorMessage(nextError, "重新加载系统环境变量失败"));
     } finally {
       setEnvSystemReloading(false);
-    }
-  };
-
-  const requestEnvRestart = async () => {
-    setEnvRestarting(true);
-    setError("");
-    setNotice("");
-    try {
-      await client.restartService();
-      setNotice("已请求重启服务");
-    } catch (nextError) {
-      setError(getErrorMessage(nextError, "请求重启服务失败"));
-    } finally {
-      setEnvRestarting(false);
     }
   };
 
@@ -1166,7 +1144,7 @@ export function AdminCenterScreen({
             <button
               type="button"
               onClick={() => setRestartConfirmTarget("service")}
-              disabled={serviceRestarting || envRestarting}
+              disabled={serviceRestarting}
               className="orbit-btn admin-btn--warning"
             >
               <RefreshCw className={`h-4 w-4${serviceRestarting ? " animate-spin" : ""}`} />
@@ -1877,7 +1855,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">环境配置</h2>
                 <p className="text-sm text-[var(--muted)]">保存写入 .env；可分别重新加载项目 .env 或 Windows 用户/系统环境变量。</p>
-                <p className="mt-1 text-xs text-[var(--muted)]">只影响当前进程和之后创建的子进程；监听地址/端口、前端 VITE_*、隧道和已建立的原生会话仍按提示重启或重新 build。</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">只影响当前进程和之后创建的子进程；监听地址/端口、前端 VITE_*、隧道和已建立的原生会话仍按字段标签重启或重新 build。</p>
                 <p className="mt-1 break-all text-xs text-[var(--muted)]">文件: {envConfig?.envPath || ".env"}</p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1918,26 +1896,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                 </button>
               </div>
             </div>
-
-            {envSavedImpact && (envSavedImpact.restartRequiredKeys.length || envSavedImpact.rebuildRequiredKeys.length) ? (
-              <div className="admin-tint flex flex-wrap items-center justify-between gap-3 px-3 py-3 text-sm" data-tone="warning">
-                <span>
-                  {envSavedImpact.restartRequiredKeys.length ? `需重启: ${envSavedImpact.restartRequiredKeys.join(", ")}` : ""}
-                  {envSavedImpact.restartRequiredKeys.length && envSavedImpact.rebuildRequiredKeys.length ? "；" : ""}
-                  {envSavedImpact.rebuildRequiredKeys.length ? `需重新 build: ${envSavedImpact.rebuildRequiredKeys.join(", ")}` : ""}
-                </span>
-                {envSavedImpact.restartRequiredKeys.length ? (
-                  <button
-                    type="button"
-                    onClick={() => setRestartConfirmTarget("env")}
-                    disabled={envRestarting || serviceRestarting}
-                    className="orbit-btn admin-btn--warning-solid"
-                  >
-                    {envRestarting ? "请求中..." : "重启服务"}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
 
             {envConflictMessage ? (
               <div className="admin-tint px-3 py-3 text-sm" data-tone="danger">
@@ -2020,7 +1978,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="font-medium text-[var(--text)]">{item.label}</h3>
                             <span className="orbit-chip">{item.key}</span>
-                            {item.restartRequired ? <span className="orbit-chip" data-tone="warning">重启生效</span> : null}
+                            {item.restartRequired ? <span className="orbit-chip" data-tone="warning">重启生效</span> : !item.rebuildRequired ? <span className="orbit-chip" data-tone="success">重加载.env生效</span> : null}
                             {item.rebuildRequired ? <span className="orbit-chip" data-tone="info">需 build</span> : null}
                           </div>
                           <p className="text-sm text-[var(--muted)]">{item.description}</p>
@@ -2276,11 +2234,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
           tone="danger"
           onConfirm={() => {
             setRestartConfirmTarget(null);
-            if (restartConfirmTarget === "env") {
-              void requestEnvRestart();
-            } else {
-              void requestServiceRestart();
-            }
+            void requestServiceRestart();
           }}
           onCancel={() => setRestartConfirmTarget(null)}
         />
