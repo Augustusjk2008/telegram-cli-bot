@@ -1286,9 +1286,9 @@ export function AdminCenterScreen({
                       </button>
                     </div>
                   </div>
-                  {user.role === "admin" ? (
+                  {user.role === "admin" || user.disabled ? (
                     <div className="admin-permission-lock" role="status">
-                      管理员拥有全部账号能力和 Bot 权限
+                      {user.disabled ? "账号已停用，启用后可配置权限" : "管理员拥有全部账号能力和 Bot 权限"}
                     </div>
                   ) : (
                     <>
