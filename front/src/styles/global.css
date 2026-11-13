@@ -235,17 +235,82 @@ select:disabled {
   line-height: var(--chat-body-line-height);
 }
 
+/* Split view: the transcript is laid out as screen-height columns and two neighbours are shown
+   at a time (see ChatSplitColumns), so the left column continues at the top of the right one. */
+.chat-split-track {
+  width: 100%;
+}
+
+.chat-split-viewport {
+  position: sticky;
+  top: var(--chat-split-top, 0px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: var(--chat-split-viewport-height, 100%);
+}
+
+.chat-split-pager {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-message-column-flow {
+  height: 100%;
   column-count: 2;
   column-gap: clamp(1.5rem, 3vw, 3rem);
-  column-fill: balance;
+  column-fill: auto;
   column-rule: 1px solid var(--workbench-hairline);
 }
 
+/* A box that scrolls sideways cannot be split across columns. Code blocks wrap instead, so
+   they continue in the next column line by line. */
+.chat-message-column-flow .chat-markdown-content pre {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-message-column-flow .chat-markdown-content :is(div, pre, blockquote) {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* Tables, diagrams and images stay in one piece (Firefox does not split tables), so they
+   must fit inside one column; a taller table scrolls inside its own box. */
+.chat-message-column-flow .chat-markdown-content :is(div.overflow-x-auto, .overflow-auto) {
+  max-height: calc(var(--chat-split-column-height, 100vh) - 3rem);
+  overflow-y: auto;
+}
+
+.chat-message-column-flow .chat-markdown-content img {
+  max-height: calc(var(--chat-split-column-height, 100vh) - 3rem);
+  width: auto;
+}
+
+/* Columns break between lines of text, so a long message continues in the next column. */
 .chat-message-column-flow > [data-testid="chat-message-row"] {
-  break-inside: avoid;
   margin-bottom: 0.75rem;
-  page-break-inside: avoid;
+  orphans: 2;
+  widows: 2;
+}
+
+/* A sender line or a heading stays with the text that follows it. */
+.chat-message-column-flow :is(.chat-message-meta, h1, h2, h3, h4, h5, h6) {
+  break-after: avoid;
+}
+
+/* A box with overflow: hidden cannot be split across columns; clip looks the same and can. */
+.chat-message-column-flow .overflow-hidden,
+.chat-message-column-flow .chat-message-bubble-delight {
+  overflow: clip;
+}
+
+/* Close the border and rounded corners on both sides of a column break. */
+.chat-message-column-flow .chat-message-bubble-delight {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 @keyframes endlessLetterBounce {

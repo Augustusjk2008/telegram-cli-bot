@@ -25,6 +25,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
+import { ChatSplitColumns } from "../components/ChatSplitColumns";
 import { ChatConfirmDialog } from "../components/ChatConfirmDialog";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
@@ -1601,10 +1602,16 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
       if (index < 0 || !scrollElement) {
         return false;
       }
+      if (splitView) {
+        // The split layout follows the browser's own scroll to the column holding the row.
+        const row = scrollElement.querySelectorAll<HTMLElement>("[data-testid='chat-message-row']")[index];
+        row?.scrollIntoView?.({ block: "nearest", inline: "start" });
+        return Boolean(row);
+      }
       scrollElement.scrollTop = Math.max(0, index * 160 - scrollElement.clientHeight / 2);
       return true;
     },
-  }), [rows, scrollContainerRef]);
+  }), [rows, scrollContainerRef, splitView]);
 
   if (
     splitView
@@ -2798,6 +2805,16 @@ export function ChatScreen({
     scheduleRevealScroll();
   }, [isVisible, isStreaming, lastItem?.id, lastItem?.state, lastItem?.text, loading, items.length, scheduleRevealScroll, scrollToBottom]);
 
+  // Switching layouts replaces the scroll content; a view that was following the newest message keeps following it.
+  useLayoutEffect(() => {
+    if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
+      return;
+    }
+    forceAutoScrollRef.current = true;
+    scrollToBottom();
+    scheduleRevealScroll();
+  }, [scheduleRevealScroll, scrollToBottom, splitView]);
+
   useEffect(() => {
     if (!isVisible || loading || typeof window.ResizeObserver !== "function") {
       return;
@@ -2821,7 +2838,8 @@ export function ChatScreen({
     return () => {
       observer.disconnect();
     };
-  }, [isVisible, loading, scheduleRevealScroll, scrollToBottom]);
+    // splitView swaps the scroll content element, so the observer has to move with it.
+  }, [isVisible, loading, scheduleRevealScroll, scrollToBottom, splitView]);
 
   function updateAutoScrollStickiness() {
     const container = scrollContainerRef.current;
@@ -5060,11 +5078,39 @@ export function ChatScreen({
       executingPlanMessageId={executingPlanMessageId}
       planExecuteError={planExecuteError}
       handleExecutePlan={handleExecutePlan}
-      wideMessages={!embedded}
+      wideMessages={!embedded || splitView}
       splitView={splitView}
       mobileLayout={mobileLayout}
     />
   );
+
+  const transcriptNotices = (
+    <>
+      {loading ? (
+        <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
+      ) : null}
+      {error ? (
+        <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
+          {error}
+        </div>
+      ) : null}
+      {selectionNotice ? (
+        <div data-testid="deepseek-selection-notice" className="rounded-lg border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-3 py-2 text-sm text-[var(--status-info)] shadow-[var(--shadow-surface)]">
+          {selectionNotice}
+        </div>
+      ) : null}
+      {items.length === 0 && !isStreaming && !loading ? (
+        <div className="mt-10 rounded-lg border border-dashed border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-10 text-center text-sm text-[var(--muted)]">
+          暂无消息，开始聊天吧
+        </div>
+      ) : null}
+    </>
+  );
+  const transcriptTrailingNotice = clusterTaskError ? (
+    <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
+      {clusterTaskError}
+    </div>
+  ) : null;
 
   return (
     <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
@@ -5160,37 +5206,23 @@ export function ChatScreen({
             ? `theme-illustration-content chat-illustration-scroll relative h-full overflow-y-auto ${mobileLayout ? "px-2 pb-24 pt-2" : "px-3 pb-24 pt-3"}`
             : `theme-illustration-content chat-illustration-scroll relative h-full overflow-y-auto ${mobileLayout ? "p-2" : "p-3"}`}
         >
-        <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
-          {loading ? (
-            <div className="mt-10 rounded-lg border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-8 text-center text-sm text-[var(--muted)] shadow-[var(--shadow-surface)]">加载中...</div>
-          ) : null}
-          {error ? (
-            <div data-testid="chat-error-banner" className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
-              {error}
-            </div>
-          ) : null}
-          {selectionNotice ? (
-            <div data-testid="deepseek-selection-notice" className="rounded-lg border border-[var(--status-info-border)] bg-[var(--status-info-bg)] px-3 py-2 text-sm text-[var(--status-info)] shadow-[var(--shadow-surface)]">
-              {selectionNotice}
-            </div>
-          ) : null}
-          {items.length === 0 && !isStreaming && !loading ? (
-            <div className="mt-10 rounded-lg border border-dashed border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)] px-4 py-10 text-center text-sm text-[var(--muted)]">
-              暂无消息，开始聊天吧
-            </div>
-          ) : null}
-          {splitView ? (
-            <div data-testid="chat-message-column-flow" className="chat-message-column-flow">
-              {chatMessageList}
-            </div>
-          ) : chatMessageList}
-          {clusterTaskError ? (
-            <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
-              {clusterTaskError}
-            </div>
-          ) : null}
-          <div ref={bottomAnchorRef} aria-hidden="true" />
-        </div>
+        {splitView ? (
+          <ChatSplitColumns
+            scrollContainerRef={scrollContainerRef}
+            contentRef={scrollContentRef}
+            before={transcriptNotices}
+            after={transcriptTrailingNotice}
+          >
+            {chatMessageList}
+          </ChatSplitColumns>
+        ) : (
+          <div ref={scrollContentRef} data-testid="chat-scroll-content" className={messageContentWidthClass}>
+            {transcriptNotices}
+            {chatMessageList}
+            {transcriptTrailingNotice}
+            <div ref={bottomAnchorRef} aria-hidden="true" />
+          </div>
+        )}
         </section>
       </div>
       {clusterMode && clusterTeamView ? (
