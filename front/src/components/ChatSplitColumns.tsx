@@ -1,14 +1,12 @@
 import { useLayoutEffect, useRef, type ReactNode, type Ref, type RefObject } from "react";
 
-// Vertical scroll distance that stands for one column. It only has to be larger than the
-// chat's stick-to-bottom tolerance, so that one column before the end is not "at the bottom".
-const SCROLL_STEP_PX = 160;
-// A mouse wheel notch moves one column. Touchpads send many small deltas instead, which add up.
-const WHEEL_NOTCH_MIN_PX = 50;
-const TOUCHPAD_STEP_PX = 200;
-const WHEEL_IDLE_RESET_MS = 250;
-const EXTERNAL_SCROLL_SETTLE_MS = 150;
-const COLUMN_SLIDE_MS = 180;
+// Away from the end, a growing transcript only refreshes the scroll range this often.
+const RANGE_REFRESH_INTERVAL_MS = 300;
+const RANGE_SEARCH_LIMIT = 8;
+// Free space tolerated under the last line before the range is tightened. Column breaks leave
+// up to a line or two unused, and a range that is still good must not move: any change in the
+// scroll height makes a chat that follows new messages jump back to the end.
+const RANGE_END_SLACK_PX = 48;
 
 type Props = {
   scrollContainerRef: RefObject<HTMLElement | null>;
@@ -17,6 +15,13 @@ type Props = {
   after?: ReactNode;
   children: ReactNode;
 };
+
+const rowRevealers = new WeakMap<Element, (row: Element) => boolean>();
+
+/** Scrolls a split chat so the given message row starts at the top of the left column. */
+export function revealSplitChatRow(scroller: Element, row: Element) {
+  return rowRevealers.get(scroller)?.(row) ?? false;
+}
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (typeof ref === "function") {
@@ -31,86 +36,80 @@ function clamp(value: number, min: number, max: number) {
 }
 
 /**
- * Lays the transcript out as screen-height columns and shows two neighbours at a time, so
- * the bottom of the left column continues at the top of the right one. The chat's scroll
- * container keeps scrolling vertically: its position selects which pair of columns is shown.
+ * Shows the transcript as one strip folded into two screen-height columns: the left column
+ * starts at the scroll position and the right column continues where the left one ends.
+ *
+ * The chat's scroll container still scrolls vertically. Its position is applied as a negative
+ * offset in front of the transcript, and the browser re-divides the text between the columns,
+ * so the left column moves pixel by pixel and whole lines hop over from the right column.
  */
 export function ChatSplitColumns({ scrollContainerRef, contentRef, before, after, children }: Props) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const pagerRef = useRef<HTMLDivElement | null>(null);
   const flowRef = useRef<HTMLDivElement | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     const scroller = scrollContainerRef.current;
     const track = trackRef.current;
     const pager = pagerRef.current;
     const flow = flowRef.current;
-    if (!scroller || !track || !pager || !flow) {
+    const strip = stripRef.current;
+    const end = endRef.current;
+    if (!scroller || !track || !pager || !flow || !strip || !end) {
       return;
     }
 
-    let columnCount = 2;
-    let firstRow = flow.firstElementChild;
+    let maxOffset = 0;
+    let appliedOffset = 0;
+    let firstRow = strip.firstElementChild;
+    let measured: { offset: number; end: number; columnHeight: number; pitch: number } | null = null;
     let measureFrame: number | null = null;
-    let settleTimer: number | null = null;
-    let wheelDistance = 0;
-    let lastWheelAt = 0;
-    let shownColumn = 0;
-    let pointerInside = false;
-    let slide: Animation | null = null;
+    let refreshTimer: number | null = null;
+    let lastRefreshAt = 0;
 
-    const columnGap = () => Number.parseFloat(window.getComputedStyle(flow).columnGap) || 0;
-    const columnPitch = () => (pager.clientWidth + columnGap()) / 2;
-    const lastLeftColumn = () => Math.max(0, columnCount - 2);
-    const leftColumn = () => clamp(Math.round(scroller.scrollTop / SCROLL_STEP_PX), 0, lastLeftColumn());
-    const prefersReducedMotion = () => (
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    );
+    const columnPitch = () => (pager.clientWidth + (Number.parseFloat(window.getComputedStyle(flow).columnGap) || 0)) / 2;
 
-    // The pager jumps straight to its column; a neighbouring column slides in on top of that,
-    // so the pager's own scroll position is never mid-way.
-    const showColumns = (animate: boolean) => {
-      const column = leftColumn();
-      const pitch = columnPitch();
-      const distance = column - shownColumn;
-      shownColumn = column;
-      pager.scrollLeft = column * pitch;
-      slide?.cancel();
-      slide = null;
-      if (animate && Math.abs(distance) === 1 && !prefersReducedMotion() && typeof flow.animate === "function") {
-        slide = flow.animate(
-          [{ transform: `translateX(${distance * pitch}px)` }, { transform: "translateX(0)" }],
-          { duration: COLUMN_SLIDE_MS, easing: "ease-out" },
-        );
+    const applyOffset = (offset: number) => {
+      if (offset !== appliedOffset) {
+        strip.style.marginTop = `${-offset}px`;
+        appliedOffset = offset;
       }
     };
 
-    const measure = () => {
-      measureFrame = null;
-      const scrollerStyle = window.getComputedStyle(scroller);
-      const paddingTop = Number.parseFloat(scrollerStyle.paddingTop) || 0;
-      const paddingBottom = Number.parseFloat(scrollerStyle.paddingBottom) || 0;
-      const viewportHeight = Math.max(0, scroller.clientHeight - paddingTop - paddingBottom);
-      track.style.setProperty("--chat-split-top", `${paddingTop}px`);
-      track.style.setProperty("--chat-split-viewport-height", `${viewportHeight}px`);
-      track.style.setProperty("--chat-split-column-height", `${pager.clientHeight}px`);
+    // Distance along the strip from the top of the left column to the top of a box.
+    const stripPosition = (rect: DOMRect, columnHeight: number, pitch: number) => {
+      const origin = flow.getBoundingClientRect();
+      return Math.max(0, Math.round((rect.left - origin.left) / pitch)) * columnHeight + (rect.top - origin.top);
+    };
 
-      const pitch = columnPitch();
-      const previousLeftColumn = leftColumn();
-      columnCount = pitch > 0 ? Math.max(2, Math.round((pager.scrollWidth + columnGap()) / pitch)) : 2;
-      track.style.height = `${viewportHeight + lastLeftColumn() * SCROLL_STEP_PX}px`;
+    const endPositionAt = (offset: number, columnHeight: number, pitch: number) => {
+      applyOffset(offset);
+      return stripPosition(end.getBoundingClientRect(), columnHeight, pitch);
+    };
 
-      // Older turns were added in front: keep showing what was on screen before.
-      const nextFirstRow = flow.firstElementChild;
-      if (firstRow && nextFirstRow !== firstRow && firstRow.isConnected && pitch > 0) {
-        const anchor = firstRow.getClientRects()[0];
-        if (anchor) {
-          const anchorColumn = Math.round((anchor.left - flow.getBoundingClientRect().left) / pitch);
-          scroller.scrollTop = clamp(anchorColumn + previousLeftColumn, 0, lastLeftColumn()) * SCROLL_STEP_PX;
+    // The largest offset is the one where the transcript ends at the bottom of the right column.
+    // Column breaks shift with the offset, so it is found by trying offsets rather than by sum.
+    // Starting from the previous answer keeps it unchanged while it still fits.
+    const findMaxOffset = (start: number, columnHeight: number, pitch: number) => {
+      const visible = columnHeight * 2;
+      let offset = Math.max(0, start);
+      let endPosition = endPositionAt(offset, columnHeight, pitch);
+      let tightened = false;
+      for (let attempt = 0; attempt < RANGE_SEARCH_LIMIT; attempt += 1) {
+        if (endPosition > visible + 0.5) {
+          offset += endPosition - visible;
+        } else if (offset > 0 && !tightened && endPosition < visible - RANGE_END_SLACK_PX) {
+          offset = Math.max(0, offset - (visible - endPosition));
+          tightened = true;
+        } else {
+          break;
         }
+        endPosition = endPositionAt(offset, columnHeight, pitch);
       }
-      firstRow = nextFirstRow;
-      showColumns(false);
+      // Whole pixels keep the scroll height, and with it the sticky column area, off half-pixels.
+      return Math.ceil(offset);
     };
 
     const scheduleMeasure = () => {
@@ -119,133 +118,135 @@ export function ChatSplitColumns({ scrollContainerRef, contentRef, before, after
       }
     };
 
-    const step = (columns: number) => {
-      scroller.scrollTop = clamp(leftColumn() + columns, 0, lastLeftColumn()) * SCROLL_STEP_PX;
-      showColumns(true);
-    };
+    function measure() {
+      measureFrame = null;
+      const scrollerStyle = window.getComputedStyle(scroller!);
+      const paddingTop = Number.parseFloat(scrollerStyle.paddingTop) || 0;
+      const paddingBottom = Number.parseFloat(scrollerStyle.paddingBottom) || 0;
+      const viewportHeight = Math.max(0, scroller!.clientHeight - paddingTop - paddingBottom);
+      track!.style.setProperty("--chat-split-viewport-height", `${viewportHeight}px`);
 
-    const nestedScrollerConsumes = (target: EventTarget | null, deltaY: number) => {
-      let element = target instanceof Element ? target : null;
-      while (element && element !== pager) {
-        if (element.scrollHeight > element.clientHeight + 1) {
-          const overflowY = window.getComputedStyle(element).overflowY;
-          if (overflowY === "auto" || overflowY === "scroll") {
-            const canScroll = deltaY < 0
-              ? element.scrollTop > 0
-              : element.scrollTop + element.clientHeight < element.scrollHeight - 1;
-            if (canScroll) {
-              return true;
-            }
-          }
-        }
-        element = element.parentElement;
-      }
-      return false;
-    };
-
-    const handleWheel = (event: WheelEvent) => {
-      if (event.ctrlKey || event.metaKey || !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      const columnHeight = pager!.clientHeight;
+      const pitch = columnPitch();
+      track!.style.setProperty("--chat-split-column-height", `${columnHeight}px`);
+      if (columnHeight <= 0 || pitch <= 0) {
+        maxOffset = 0;
+        measured = null;
+        track!.style.height = `${viewportHeight}px`;
         return;
       }
-      if (nestedScrollerConsumes(event.target, event.deltaY)) {
+
+      const current = clamp(scroller!.scrollTop, 0, maxOffset);
+      const endPosition = endPositionAt(current, columnHeight, pitch);
+      const nextFirstRow = strip!.firstElementChild;
+      const sameGeometry = measured?.columnHeight === columnHeight && measured.pitch === pitch;
+      if (sameGeometry && nextFirstRow === firstRow && measured?.offset === current && measured.end === endPosition) {
         return;
       }
-      event.preventDefault();
+
       const now = performance.now();
-      if (now - lastWheelAt > WHEEL_IDLE_RESET_MS) {
-        wheelDistance = 0;
-      }
-      lastWheelAt = now;
-      const unit = event.deltaMode === 1 ? 32 : event.deltaMode === 2 ? scroller.clientHeight : 1;
-      const distance = event.deltaY * unit;
-      if (Math.abs(distance) >= WHEEL_NOTCH_MIN_PX) {
-        wheelDistance = 0;
-        step(distance > 0 ? 1 : -1);
-        return;
-      }
-      wheelDistance += distance;
-      if (Math.abs(wheelDistance) >= TOUCHPAD_STEP_PX) {
-        step(wheelDistance > 0 ? 1 : -1);
-        wheelDistance = 0;
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
-        return;
-      }
-      const target = event.target instanceof Element ? event.target : null;
-      // The transcript is not focusable, so keys pressed after clicking it arrive at the body.
-      const aimedAtTranscript = target && (scroller.contains(target) || (target === document.body && pointerInside));
-      if (!aimedAtTranscript || target.closest("input, textarea, select, [contenteditable='true']")) {
-        return;
-      }
-      let columns = 0;
-      if (event.key === "PageDown") columns = 2;
-      else if (event.key === "PageUp") columns = -2;
-      else if (!event.shiftKey && (event.key === "ArrowDown" || event.key === "ArrowRight")) columns = 1;
-      else if (!event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowLeft")) columns = -1;
-      else if (event.key === "Home") columns = -columnCount;
-      else if (event.key === "End") columns = columnCount;
-      if (!columns) {
-        return;
-      }
-      event.preventDefault();
-      step(columns);
-    };
-
-    const handleScrollerScroll = () => showColumns(true);
-    const handlePointerDown = (event: PointerEvent) => {
-      pointerInside = event.target instanceof Node && scroller.contains(event.target);
-    };
-
-    // Find-in-page, focus moves and selection drags scroll the pager themselves. Once that
-    // settles, adopt the nearest column so the vertical position stays the source of truth.
-    const handlePagerScroll = () => {
-      if (settleTimer !== null) {
-        window.clearTimeout(settleTimer);
-      }
-      settleTimer = window.setTimeout(() => {
-        settleTimer = null;
-        const pitch = columnPitch();
-        if (pitch <= 0 || Math.abs(pager.scrollLeft - shownColumn * pitch) < 1) {
-          return;
+      const nearEnd = current >= maxOffset - columnHeight;
+      if (sameGeometry && nextFirstRow === firstRow && !nearEnd && now - lastRefreshAt < RANGE_REFRESH_INTERVAL_MS) {
+        if (refreshTimer === null) {
+          refreshTimer = window.setTimeout(() => {
+            refreshTimer = null;
+            scheduleMeasure();
+          }, RANGE_REFRESH_INTERVAL_MS);
         }
-        scroller.scrollTop = clamp(Math.round(pager.scrollLeft / pitch), 0, lastLeftColumn()) * SCROLL_STEP_PX;
-        showColumns(false);
-      }, EXTERNAL_SCROLL_SETTLE_MS);
+        return;
+      }
+      lastRefreshAt = now;
+
+      // Older turns were added in front: keep the previous first row where it was on screen.
+      let target: number | null = null;
+      if (firstRow && firstRow !== end && nextFirstRow !== firstRow && firstRow.isConnected) {
+        const rect = firstRow.getClientRects()[0];
+        if (rect) {
+          let inserted = current + stripPosition(rect, columnHeight, pitch);
+          applyOffset(inserted);
+          const settled = firstRow.getClientRects()[0];
+          if (settled) {
+            inserted += stripPosition(settled, columnHeight, pitch);
+          }
+          target = inserted + current;
+        }
+      }
+      firstRow = nextFirstRow;
+
+      maxOffset = findMaxOffset(maxOffset + (target === null ? 0 : target - current), columnHeight, pitch);
+      track!.style.height = `${viewportHeight + maxOffset}px`;
+      if (target !== null) {
+        scroller!.scrollTop = Math.min(target, maxOffset);
+      }
+      const offset = clamp(scroller!.scrollTop, 0, maxOffset);
+      measured = { offset, end: endPositionAt(offset, columnHeight, pitch), columnHeight, pitch };
+    }
+
+    const handleScroll = () => applyOffset(clamp(scroller.scrollTop, 0, maxOffset));
+
+    // Find-in-page and focus moves scroll the pager itself to reach text in a later column.
+    // Turn that into ordinary scrolling so the two visible columns stay the start of the strip.
+    const handlePagerScroll = () => {
+      if (!pager.scrollLeft && !pager.scrollTop) {
+        return;
+      }
+      const pitch = columnPitch();
+      const distance = (pitch > 0 ? (pager.scrollLeft / pitch) * pager.clientHeight : 0) + pager.scrollTop;
+      pager.scrollLeft = 0;
+      pager.scrollTop = 0;
+      scroller.scrollTop += distance;
+    };
+
+    const revealRow = (row: Element) => {
+      const columnHeight = pager.clientHeight;
+      const pitch = columnPitch();
+      const rect = row.getClientRects()[0];
+      if (!rect || columnHeight <= 0 || pitch <= 0) {
+        return false;
+      }
+      let target = appliedOffset + stripPosition(rect, columnHeight, pitch);
+      applyOffset(clamp(target, 0, maxOffset));
+      const settled = row.getClientRects()[0];
+      if (settled) {
+        target = appliedOffset + stripPosition(settled, columnHeight, pitch);
+      }
+      scroller.scrollTop = clamp(target, 0, maxOffset);
+      handleScroll();
+      return true;
     };
 
     measure();
+    rowRevealers.set(scroller, revealRow);
     const resizeObserver = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(scheduleMeasure) : null;
     resizeObserver?.observe(scroller);
     resizeObserver?.observe(pager);
-    const mutationObserver = typeof window.MutationObserver === "function" ? new window.MutationObserver(scheduleMeasure) : null;
-    mutationObserver?.observe(flow, { attributes: true, characterData: true, childList: true, subtree: true });
-    flow.addEventListener("load", scheduleMeasure, true);
+    const mutationObserver = typeof window.MutationObserver === "function"
+      ? new window.MutationObserver((records) => {
+          // The strip's own style only changes when the offset above is applied.
+          if (records.some((record) => record.target !== strip || record.type !== "attributes")) {
+            scheduleMeasure();
+          }
+        })
+      : null;
+    mutationObserver?.observe(strip, { attributes: true, characterData: true, childList: true, subtree: true });
+    strip.addEventListener("load", scheduleMeasure, true);
     void document.fonts?.ready.then(scheduleMeasure);
-    scroller.addEventListener("wheel", handleWheel, { passive: false });
-    document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    scroller.addEventListener("scroll", handleScrollerScroll, { passive: true });
+    scroller.addEventListener("scroll", handleScroll, { passive: true });
     pager.addEventListener("scroll", handlePagerScroll, { passive: true });
 
     return () => {
+      rowRevealers.delete(scroller);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
-      flow.removeEventListener("load", scheduleMeasure, true);
-      scroller.removeEventListener("wheel", handleWheel);
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      scroller.removeEventListener("scroll", handleScrollerScroll);
+      strip.removeEventListener("load", scheduleMeasure, true);
+      scroller.removeEventListener("scroll", handleScroll);
       pager.removeEventListener("scroll", handlePagerScroll);
       if (measureFrame !== null) {
         window.cancelAnimationFrame(measureFrame);
       }
-      if (settleTimer !== null) {
-        window.clearTimeout(settleTimer);
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
       }
-      slide?.cancel();
     };
   }, [scrollContainerRef]);
 
@@ -262,7 +263,10 @@ export function ChatSplitColumns({ scrollContainerRef, contentRef, before, after
         {before}
         <div ref={pagerRef} className="chat-split-pager">
           <div ref={flowRef} data-testid="chat-message-column-flow" className="chat-message-column-flow">
-            {children}
+            <div ref={stripRef}>
+              {children}
+              <div ref={endRef} aria-hidden="true" />
+            </div>
           </div>
         </div>
         {after}

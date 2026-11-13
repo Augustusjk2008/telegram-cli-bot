@@ -39,6 +39,8 @@ async function openSplitChat(page: Page) {
     await route.fulfill({ json: { ok: true, data } });
   });
   await page.addInitScript(() => localStorage.setItem("web-view-mode", "desktop"));
+  // Positions are compared to the pixel, so the message entrance animation must not be running.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1920, height: 1000 });
   await page.goto("./");
   await expect(page.getByTestId("chat-message-row").first()).toBeVisible();
@@ -50,6 +52,7 @@ async function openSplitChat(page: Page) {
 }
 
 // Paragraph numbers whose text is on screen, per column, plus whether any line is cut off.
+// Lines leaving through the top of the left column are ordinary scrolling, not a cut.
 async function readColumns(page: Page) {
   return page.getByTestId("chat-message-column-flow").evaluate((flow) => {
     const pager = flow.parentElement as HTMLElement;
@@ -57,43 +60,56 @@ async function readColumns(page: Page) {
     const middle = frame.left + frame.width / 2;
     const left: number[] = [];
     const right: number[] = [];
+    const tops: Record<number, number> = {};
     let cutLines = 0;
     for (const paragraph of flow.querySelectorAll("p")) {
       const number = Number(/段落(\d+)号/.exec(paragraph.textContent || "")?.[1]);
       if (!number) continue;
       for (const rect of paragraph.getClientRects()) {
-        if (rect.right <= frame.left || rect.left >= frame.right) continue;
-        if (rect.bottom > frame.bottom + 1 || rect.top < frame.top - 1) cutLines += 1;
-        (rect.left < middle ? left : right).push(number);
+        if (rect.right <= frame.left || rect.left >= frame.right || rect.bottom <= frame.top) continue;
+        const inRight = rect.left >= middle;
+        if (rect.bottom > frame.bottom + 2 || (inRight && rect.top < frame.top - 2)) cutLines += 1;
+        (inRight ? right : left).push(number);
+        if (!inRight && rect.top >= frame.top) tops[number] ??= rect.top;
       }
     }
-    return { left, right, cutLines };
+    return { left, right, tops, cutLines };
   });
+}
+
+function expectContinuous(columns: { left: number[]; right: number[]; cutLines: number }) {
+  expect(columns.cutLines).toBe(0);
+  expect(columns.left.length).toBeGreaterThan(0);
+  // The right column starts where the left one stops (a paragraph may straddle the two).
+  const seam = Math.min(...columns.right) - Math.max(...columns.left);
+  expect(seam).toBeGreaterThanOrEqual(0);
+  expect(seam).toBeLessThanOrEqual(1);
 }
 
 test("split chat continues the left column at the top of the right column", async ({ page }) => {
   await openSplitChat(page);
+  const scroller = page.getByTestId("chat-scroll-container");
 
   // It opens on the newest text: the final paragraph is in view.
   await expect.poll(async () => Math.max(...(await readColumns(page)).right, 0)).toBe(PARAGRAPH_COUNT);
   const newest = await readColumns(page);
-  expect(newest.cutLines).toBe(0);
-  expect(newest.left.length).toBeGreaterThan(0);
-  // The right column starts where the left one stops (a paragraph may straddle the two).
-  expect(Math.min(...newest.right) - Math.max(...newest.left)).toBeGreaterThanOrEqual(0);
-  expect(Math.min(...newest.right) - Math.max(...newest.left)).toBeLessThanOrEqual(1);
+  expectContinuous(newest);
 
-  // One wheel notch moves back one column: the old left column becomes the right one.
-  const scroller = page.getByTestId("chat-scroll-container");
+  // Scrolling is pixel-smooth: one wheel notch moves the left column by 100px, not by a column.
+  const tracked = Number(Object.keys(newest.tops).sort((a, b) => Number(a) - Number(b))[2]);
   const box = await scroller.boundingBox();
-  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.move(box!.x + box!.width / 4, box!.y + box!.height / 2);
   await page.mouse.wheel(0, -100);
-  await expect.poll(async () => Math.min(...(await readColumns(page)).right)).toBe(Math.min(...newest.left));
-  const earlier = await readColumns(page);
-  expect(earlier.cutLines).toBe(0);
-  expect(Math.max(...earlier.right)).toBe(Math.max(...newest.left));
-  expect(Math.min(...earlier.right) - Math.max(...earlier.left)).toBeLessThanOrEqual(1);
+  await expect.poll(async () => Math.round((await readColumns(page)).tops[tracked] - newest.tops[tracked])).toBe(100);
+  expectContinuous(await readColumns(page));
 
-  await page.mouse.wheel(0, 100);
-  await expect.poll(async () => Math.max(...(await readColumns(page)).right)).toBe(PARAGRAPH_COUNT);
+  // The whole transcript stays reachable with the columns continuous all the way to the start.
+  const range = await scroller.evaluate((element) => element.scrollHeight - element.clientHeight);
+  for (let top = range; top > 0; top -= 400) {
+    await scroller.evaluate((element, value) => { element.scrollTop = value; }, top);
+    expectContinuous(await readColumns(page));
+  }
+  await scroller.evaluate((element) => { element.scrollTop = 0; });
+  await expect.poll(async () => Math.min(...(await readColumns(page)).left)).toBe(1);
+  expectContinuous(await readColumns(page));
 });

@@ -25,7 +25,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
-import { ChatSplitColumns } from "../components/ChatSplitColumns";
+import { ChatSplitColumns, revealSplitChatRow } from "../components/ChatSplitColumns";
 import { ChatConfirmDialog } from "../components/ChatConfirmDialog";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
@@ -1603,10 +1603,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         return false;
       }
       if (splitView) {
-        // The split layout follows the browser's own scroll to the column holding the row.
         const row = scrollElement.querySelectorAll<HTMLElement>("[data-testid='chat-message-row']")[index];
-        row?.scrollIntoView?.({ block: "nearest", inline: "start" });
-        return Boolean(row);
+        return row ? revealSplitChatRow(scrollElement, row) : false;
       }
       scrollElement.scrollTop = Math.max(0, index * 160 - scrollElement.clientHeight / 2);
       return true;

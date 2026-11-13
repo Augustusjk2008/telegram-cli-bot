@@ -235,15 +235,16 @@ select:disabled {
   line-height: var(--chat-body-line-height);
 }
 
-/* Split view: the transcript is laid out as screen-height columns and two neighbours are shown
-   at a time (see ChatSplitColumns), so the left column continues at the top of the right one. */
+/* Split view: the transcript is one strip folded into two screen-height columns, so the left
+   column continues at the top of the right one (see ChatSplitColumns for the scrolling). */
 .chat-split-track {
   width: 100%;
 }
 
 .chat-split-viewport {
   position: sticky;
-  top: var(--chat-split-top, 0px);
+  /* Sticky offsets start at the scroll container's content edge, inside its padding. */
+  top: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -289,11 +290,12 @@ select:disabled {
   width: auto;
 }
 
-/* Columns break between lines of text, so a long message continues in the next column. */
-.chat-message-column-flow > [data-testid="chat-message-row"] {
+/* Columns break between any two lines of text, so while scrolling the right column gives up
+   one line at a time instead of holding back a whole short paragraph. */
+.chat-message-column-flow [data-testid="chat-message-row"] {
   margin-bottom: 0.75rem;
-  orphans: 2;
-  widows: 2;
+  orphans: 1;
+  widows: 1;
 }
 
 /* A sender line or a heading stays with the text that follows it. */
