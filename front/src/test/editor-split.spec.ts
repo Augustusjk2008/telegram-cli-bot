@@ -137,3 +137,22 @@ test("opening a different file to the right saves the focused file and closing t
   await page.keyboard.press("Control+z");
   await expect(left.locator(".cm-content")).toHaveText("const other = 30;");
 });
+
+test("the tab menu opens at the pointer and opening a tree file brings a hidden editor back", async ({ page }) => {
+  const { left } = await openWorkbench(page);
+  const tab = (await left.getByRole("tab", { name: "alpha.ts", exact: true }).boundingBox())!;
+  const pointer = { x: Math.round(tab.x + tab.width - 4), y: Math.round(tab.y + 6) };
+  await page.mouse.click(pointer.x, pointer.y, { button: "right" });
+  const menu = page.getByRole("menu", { name: "标签页菜单" });
+  await expect(menu).toBeVisible();
+  const menuBox = (await menu.boundingBox())!;
+  expect({ x: menuBox.x, y: menuBox.y }).toEqual(pointer);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+
+  await page.getByRole("button", { name: "隐藏编辑/预览区", exact: true }).click();
+  await expect(left).toBeHidden();
+  await page.getByRole("button", { name: "打开 beta.ts", exact: true }).click();
+  await expect(left.locator(".cm-content")).toHaveText("const other = 10;");
+  await expect(page.getByRole("button", { name: "隐藏编辑/预览区", exact: true })).toBeVisible();
+});

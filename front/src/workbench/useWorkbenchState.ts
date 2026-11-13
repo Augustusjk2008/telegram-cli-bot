@@ -100,6 +100,10 @@ export function useWorkbenchState() {
     }));
   }
 
+  function showEditor() {
+    setPaneState((current) => (current.editorCollapsed ? { ...current, editorCollapsed: false } : current));
+  }
+
   function toggleChat() {
     setPaneState((current) => ({
       ...current,
@@ -149,6 +153,7 @@ export function useWorkbenchState() {
     toggleEditor,
     toggleTerminal,
     toggleChat,
+    showEditor,
     showChat,
     setSidebarView,
     restoreSidebarView,
