@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, History, LoaderCircle, Maximize2, Minimize2, Network, X } from "lucide-react";
+import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, X } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type {  DeepSeekProviderOption } from "../services/types";
@@ -16,6 +16,9 @@ type Props = {
   embedded?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
+  splitViewAvailable?: boolean;
+  splitView?: boolean;
+  onToggleSplitView?: () => void;
   onOpenHistoryPanel: () => void;
   mobileLayout?: boolean;
   modelDescription?: string;
@@ -53,6 +56,9 @@ export function ChatActionBar({
   embedded = false,
   focused = false,
   onToggleFocus,
+  splitViewAvailable = false,
+  splitView = false,
+  onToggleSplitView,
   onOpenHistoryPanel,
   mobileLayout = false,
   modelDescription,
@@ -307,6 +313,18 @@ export function ChatActionBar({
             </button>
           ) : null}
         </div>
+        {splitViewAvailable && onToggleSplitView ? (
+          <button
+            type="button"
+            aria-label={splitView ? "关闭聊天分栏" : "开启聊天分栏"}
+            aria-pressed={splitView}
+            title={splitView ? "关闭聊天分栏" : "开启聊天分栏"}
+            onClick={onToggleSplitView}
+            className={`${splitView ? activePlanButtonClassName : iconButtonClassName} ml-auto`}
+          >
+            <Columns2 className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
     </section>
   );

@@ -80,6 +80,84 @@ test("renders user Markdown, math and diagrams", async () => {
   expect(await within(message).findByLabelText("Mermaid 图表")).toContainHTML("<text>Start to End</text>");
 });
 
+test("defers rendering an oversized user message until it is expanded", async () => {
+  const longText = `${"前置内容 ".repeat(4500)}\n\n末尾标记-oversized-user-message`;
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "oversized-user-message",
+      role: "user",
+      text: longText,
+      createdAt: "2026-11-12T00:00:00Z",
+      state: "done",
+    }] }),
+  });
+
+  const user = userEvent.setup();
+  render(<ChatScreen botAlias="main" client={client} />);
+
+  const message = await screen.findByTestId("user-markdown-message");
+  expect(message).not.toHaveTextContent("末尾标记-oversized-user-message");
+  const expandButton = screen.getByRole("button", { name: "展开完整消息" });
+  expect(expandButton).toHaveAttribute("aria-expanded", "false");
+
+  await user.click(expandButton);
+
+  expect(screen.getByTestId("user-markdown-message")).toHaveTextContent("末尾标记-oversized-user-message");
+  expect(screen.getByRole("button", { name: "收起完整消息" })).toHaveAttribute("aria-expanded", "true");
+});
+
+test("shows the chat split control only while the desktop chat is wide", async () => {
+  let width = 1200;
+  const resizeCallbacks: ResizeObserverCallback[] = [];
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
+  class TestResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      resizeCallbacks.push(callback);
+    }
+
+    observe() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+
+  const client = createClient({
+    listMessages: async () => ({ items: [{
+      id: "split-user",
+      role: "user",
+      text: "第一条消息",
+      createdAt: "2026-11-12T00:00:00Z",
+      state: "done",
+    }, {
+      id: "split-assistant",
+      role: "assistant",
+      text: "第二条消息",
+      createdAt: "2026-11-12T00:00:01Z",
+      state: "done",
+    }] }),
+  });
+
+  const user = userEvent.setup();
+  render(<ChatScreen botAlias="main" client={client} embedded />);
+
+  const splitButton = await screen.findByRole("button", { name: "开启聊天分栏" });
+  await user.click(splitButton);
+  expect(screen.getByRole("button", { name: "关闭聊天分栏" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByTestId("chat-message-column-flow")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "关闭聊天分栏" }));
+  expect(screen.queryByTestId("chat-message-column-flow")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "开启聊天分栏" }));
+  expect(screen.getByTestId("chat-message-column-flow")).toBeInTheDocument();
+
+  width = 900;
+  act(() => resizeCallbacks.forEach((callback) => callback([], {} as ResizeObserver)));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: "关闭聊天分栏" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-message-column-flow")).not.toBeInTheDocument();
+  });
+});
+
 test("keeps endless mode running and shows the retry countdown without the failed result", async () => {
   const secondAttempt = deferred<ChatMessage>();
   const continueCallbacks: Array<(attempt: number) => void> = [];

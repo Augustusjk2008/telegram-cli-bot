@@ -235,6 +235,19 @@ select:disabled {
   line-height: var(--chat-body-line-height);
 }
 
+.chat-message-column-flow {
+  column-count: 2;
+  column-gap: clamp(1.5rem, 3vw, 3rem);
+  column-fill: balance;
+  column-rule: 1px solid var(--workbench-hairline);
+}
+
+.chat-message-column-flow > [data-testid="chat-message-row"] {
+  break-inside: avoid;
+  margin-bottom: 0.75rem;
+  page-break-inside: avoid;
+}
+
 @keyframes endlessLetterBounce {
   0%,
   68%,

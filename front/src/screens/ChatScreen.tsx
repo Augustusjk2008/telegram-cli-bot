@@ -202,6 +202,10 @@ const REVEAL_SCROLL_BOTTOM_THRESHOLD_PX = 8;
 const CHAT_INITIAL_VISIBLE_TURNS = 2;
 const CHAT_HISTORY_TOP_THRESHOLD_PX = 24;
 const CHAT_VIRTUALIZATION_THRESHOLD = 40;
+const CHAT_LONG_USER_MESSAGE_THRESHOLD = 4_000;
+const CHAT_LONG_USER_MESSAGE_PREVIEW_LENGTH = 2_000;
+// The embedded transcript is capped at max-w-5xl (1024px); leave room for gutters before offering two columns.
+const CHAT_SPLIT_MIN_WIDTH_PX = 1100;
 const USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 
 function useDocumentVisible() {
@@ -617,6 +621,17 @@ function parseUserMessageDisplay(text: string) {
     visibleText: visibleLines.join("\n").trim(),
     attachments,
   };
+}
+
+function previewLongUserMessage(text: string) {
+  if (text.length <= CHAT_LONG_USER_MESSAGE_PREVIEW_LENGTH) {
+    return text;
+  }
+  const preferredBreak = text.lastIndexOf("\n", CHAT_LONG_USER_MESSAGE_PREVIEW_LENGTH);
+  const end = preferredBreak >= CHAT_LONG_USER_MESSAGE_PREVIEW_LENGTH * 0.65
+    ? preferredBreak
+    : CHAT_LONG_USER_MESSAGE_PREVIEW_LENGTH;
+  return `${text.slice(0, end).trimEnd()}\n\n…`;
 }
 
 function getRenderedAttachmentStateKey(messageId: string, savedPath: string) {
@@ -1201,6 +1216,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const reduceMotion = useReducedMotion();
   const displayText = translatedMessageText(item);
   const [copiedQuestion, setCopiedQuestion] = useState(false);
+  const [userMessageExpanded, setUserMessageExpanded] = useState(false);
   const questionCopyFeedbackTimerRef = useRef<number | null>(null);
   useEffect(() => () => {
     if (questionCopyFeedbackTimerRef.current !== null) {
@@ -1240,7 +1256,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const messageName = isUser ? item.author?.username || "你" : assistantName;
   const messageAlign = isUser && isCurrentUserMessage ? "right" : "left";
   const parsedUserMessage = isUser ? parseUserMessageDisplay(item.text) : null;
-  const visibleUserText = isUser ? parseUserMessageDisplay(displayText).visibleText : "";
+  const fullVisibleUserText = isUser ? parseUserMessageDisplay(displayText).visibleText : "";
+  const isLongUserMessage = isUser && fullVisibleUserText.length > CHAT_LONG_USER_MESSAGE_THRESHOLD;
+  const visibleUserText = isLongUserMessage && !userMessageExpanded
+    ? previewLongUserMessage(fullVisibleUserText)
+    : fullVisibleUserText;
   const userAttachments = parsedUserMessage?.attachments || [];
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const trace = item.meta?.trace;
@@ -1391,6 +1411,19 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     })}
                   </div>
                 ) : null}
+                {isLongUserMessage ? (
+                  <button
+                    type="button"
+                    aria-expanded={userMessageExpanded}
+                    aria-label={userMessageExpanded ? "收起完整消息" : "展开完整消息"}
+                    onClick={() => setUserMessageExpanded((expanded) => !expanded)}
+                    className={isCurrentUserMessage
+                      ? "mt-2 inline-flex items-center rounded-md border border-[var(--accent-foreground)]/25 px-2 py-1 text-xs font-medium text-[var(--accent-foreground)]/85 transition-colors hover:bg-[var(--accent-foreground)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+                      : "mt-2 inline-flex items-center rounded-md border border-[var(--workbench-hairline)] px-2 py-1 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"}
+                  >
+                    {userMessageExpanded ? "收起完整消息" : "展开完整消息"}
+                  </button>
+                ) : null}
               </div>
             ) : isStreamingAssistant ? (
               <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
@@ -1469,6 +1502,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   planExecuteError: string;
   handleExecutePlan: (messageId: string, content: string) => void;
   wideMessages: boolean;
+  splitView: boolean;
   mobileLayout: boolean;
 }>(function ChatMessageList({
   rows,
@@ -1491,6 +1525,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   planExecuteError,
   handleExecutePlan,
   wideMessages,
+  splitView,
   mobileLayout,
 }, forwardedRef) {
   const virtualListRef = useRef<DynamicVirtualListHandle | null>(null);
@@ -1572,7 +1607,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   }), [rows, scrollContainerRef]);
 
   if (
-    !FRONTEND_FEATURE_FLAGS.dynamicChatVirtualization
+    splitView
+    || !FRONTEND_FEATURE_FLAGS.dynamicChatVirtualization
     || rows.length <= CHAT_VIRTUALIZATION_THRESHOLD
   ) {
     return <>{rows.map(renderRow)}</>;
@@ -1627,6 +1663,8 @@ export function ChatScreen({
   const [streamMode, setStreamMode] = useState<"" | "sse" | "poll">("");
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [chatWidth, setChatWidth] = useState(0);
+  const [splitView, setSplitView] = useState(false);
   const [error, setError] = useState("");
   const [selectionNotice, setSelectionNotice] = useState("");
   const [endlessModeConfirmOpen, setEndlessModeConfirmOpen] = useState(false);
@@ -1716,6 +1754,22 @@ export function ChatScreen({
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<ChatMessageListHandle | null>(null);
   const chatRootRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (mobileLayout || !isVisible || typeof window === "undefined" || typeof window.ResizeObserver !== "function") {
+      setChatWidth((current) => current === 0 ? current : 0);
+      setSplitView((current) => current ? false : current);
+      return;
+    }
+    const root = chatRootRef.current;
+    if (!root) {
+      return;
+    }
+    const updateWidth = () => setChatWidth(root.clientWidth);
+    updateWidth();
+    const observer = new window.ResizeObserver(updateWidth);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [isVisible, mobileLayout]);
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
@@ -2822,6 +2876,7 @@ export function ChatScreen({
     const container = scrollContainerRef.current;
     const virtualListOwnsPrepend = Boolean(
       FRONTEND_FEATURE_FLAGS.dynamicChatVirtualization
+      && !splitView
       && visibleItems.length > CHAT_VIRTUALIZATION_THRESHOLD
     );
     historyRevealPendingRef.current = true;
@@ -4775,6 +4830,12 @@ export function ChatScreen({
   const voiceInputLocked = voiceForegroundActive;
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const showActionBar = !isImmersive && !voiceForegroundActive;
+  const splitViewAvailable = !mobileLayout && chatWidth >= CHAT_SPLIT_MIN_WIDTH_PX;
+  useEffect(() => {
+    if (!splitViewAvailable) {
+      setSplitView(false);
+    }
+  }, [splitViewAvailable]);
   const immersiveButtonStorageKey = immersiveButtonPositionStorageKey(botAlias, storageScope);
   const canManagePromptPresets = !readOnly && (botOverview?.effectiveCapabilities
     ? botOverview.effectiveCapabilities.includes("admin_ops")
@@ -4977,6 +5038,33 @@ export function ChatScreen({
       onConfirm={handleConfirmEndlessMode}
     />
   ) : null;
+  const chatMessageList = (
+    <ChatMessageList
+      ref={messageListRef}
+      rows={messageRowModels}
+      scrollContainerRef={scrollContainerRef}
+      endlessModeActive={endlessModeActive}
+      endlessRetryAtMs={endlessRetryDeadlineMs}
+      assistantName={assistantName}
+      allowTrace={allowTrace}
+      traceLoadState={traceLoadState}
+      handleLoadMessageTrace={loadMessageTrace}
+      handleDeleteAttachment={handleDeleteAttachment}
+      handleFileLinkClick={handleFileLinkClick}
+      handleCopyFinalAnswer={handleCopyFinalAnswer}
+      handleTranslationViewChange={handleTranslationViewChange}
+      handleRetryAnswerTranslation={handleRetryAnswerTranslation}
+      handleContinueFinalAnswer={handleContinueFinalAnswer}
+      handleFastForward={handleOpenEndlessMode}
+      handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
+      executingPlanMessageId={executingPlanMessageId}
+      planExecuteError={planExecuteError}
+      handleExecutePlan={handleExecutePlan}
+      wideMessages={!embedded}
+      splitView={splitView}
+      mobileLayout={mobileLayout}
+    />
+  );
 
   return (
     <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
@@ -4992,6 +5080,9 @@ export function ChatScreen({
           embedded={embedded}
           focused={focused}
           onToggleFocus={onToggleFocus}
+          splitViewAvailable={splitViewAvailable}
+          splitView={splitView}
+          onToggleSplitView={() => setSplitView((current) => !current)}
           onOpenHistoryPanel={() => void handleOpenHistoryPanel("history")}
           mobileLayout={mobileLayout}
           providerOptions={deepSeekProviderOptions}
@@ -5088,30 +5179,11 @@ export function ChatScreen({
               暂无消息，开始聊天吧
             </div>
           ) : null}
-          <ChatMessageList
-            ref={messageListRef}
-            rows={messageRowModels}
-            scrollContainerRef={scrollContainerRef}
-            endlessModeActive={endlessModeActive}
-            endlessRetryAtMs={endlessRetryDeadlineMs}
-            assistantName={assistantName}
-            allowTrace={allowTrace}
-            traceLoadState={traceLoadState}
-            handleLoadMessageTrace={loadMessageTrace}
-            handleDeleteAttachment={handleDeleteAttachment}
-            handleFileLinkClick={handleFileLinkClick}
-            handleCopyFinalAnswer={handleCopyFinalAnswer}
-            handleTranslationViewChange={handleTranslationViewChange}
-            handleRetryAnswerTranslation={handleRetryAnswerTranslation}
-            handleContinueFinalAnswer={handleContinueFinalAnswer}
-            handleFastForward={handleOpenEndlessMode}
-            handleToggleFavoriteAnswer={handleToggleFavoriteAnswer}
-            executingPlanMessageId={executingPlanMessageId}
-            planExecuteError={planExecuteError}
-            handleExecutePlan={handleExecutePlan}
-            wideMessages={!embedded}
-            mobileLayout={mobileLayout}
-          />
+          {splitView ? (
+            <div data-testid="chat-message-column-flow" className="chat-message-column-flow">
+              {chatMessageList}
+            </div>
+          ) : chatMessageList}
           {clusterTaskError ? (
             <div className="rounded-lg border border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-sm text-[var(--status-danger)] shadow-[var(--shadow-surface)]">
               {clusterTaskError}
