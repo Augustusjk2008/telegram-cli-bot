@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Columns2, Code2, Eye, Maximize2, Minimize2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
 import { GitDiffViewer } from "../components/GitDiffViewer";
@@ -265,10 +266,15 @@ export function EditorPane({
   const tabMenuTriggerRef = useRef<HTMLElement | null>(null);
   const [pluginMenuOpen, setPluginMenuOpen] = useState(false);
 
-  function openTabMenu(path: string, anchor: HTMLElement) {
-    const trigger = anchor.querySelector<HTMLElement>('[role="tab"]') || anchor;
+  // A right-click opens the menu at the pointer; the keyboard opens it under the tab.
+  function openTabMenu(path: string, anchor: HTMLElement, pointer?: { x: number; y: number }) {
+    tabMenuTriggerRef.current = anchor.querySelector<HTMLElement>('[role="tab"]') || anchor;
+    if (pointer) {
+      setMenuPosition(pointer);
+      setMenuPath(path);
+      return;
+    }
     const bounds = anchor.getBoundingClientRect();
-    tabMenuTriggerRef.current = trigger;
     setMenuPosition({ x: bounds.left, y: bounds.bottom + 4 });
     setMenuPath((current) => current === path ? "" : path);
   }
@@ -377,7 +383,7 @@ export function EditorPane({
                 data-editor-tab-active={isActive ? "true" : "false"}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  openTabMenu(tab.path, event.currentTarget);
+                  openTabMenu(tab.path, event.currentTarget, { x: event.clientX, y: event.clientY });
                 }}
                 className={clsx(
                   "editor-tab group relative flex h-full shrink-0 items-center gap-1 border-r border-[var(--border)] px-2",
@@ -432,13 +438,19 @@ export function EditorPane({
                 >
                   ×
                 </button>
-                {menuPath === tab.path ? (
+                {/* Portalled: the glass editor pane would otherwise be the containing block of this fixed menu. */}
+                {menuPath === tab.path && typeof document !== "undefined" ? createPortal(
                   <div
                     ref={tabMenuRef}
                     role="menu"
                     aria-label="标签页菜单"
-                    className="desktop-workbench-menu fixed z-40 max-h-[calc(100dvh-16px)] w-44 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-card)]"
+                    className="desktop-workbench-menu fixed z-40 max-h-[calc(100dvh-16px)] w-44 overflow-y-auto rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 text-[var(--text)] shadow-[var(--shadow-card)]"
                     style={{ left: menuPosition.x, top: menuPosition.y }}
+                    onContextMenu={(event) => {
+                      // React events bubble through the portal to the tab, which would reopen the menu.
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
                   >
                     {tab.kind === "file" && onOpenToRight ? (
                       <button
@@ -504,7 +516,8 @@ export function EditorPane({
                         在文件树中定位
                       </button>
                     ) : null}
-                  </div>
+                  </div>,
+                  document.body,
                 ) : null}
               </div>
             );

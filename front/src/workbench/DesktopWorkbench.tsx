@@ -213,6 +213,7 @@ export function DesktopWorkbench({
     toggleEditor,
     toggleTerminal,
     toggleChat,
+    showEditor,
     showChat,
     setSidebarView,
     restoreSidebarView,
@@ -1266,10 +1267,13 @@ export function DesktopWorkbench({
         <FileTreePane
           tree={fileTree}
           themeName={themeName}
+          // Opening a file from the tree means the user wants to see it: bring a hidden editor back.
           onOpenFile={(path) => {
+            if (canPreviewFiles) showEditor();
             void openWorkspaceFile(path);
           }}
           onOpenFileToRight={canPreviewFiles ? (path) => {
+            showEditor();
             void openWorkspaceFile(path, undefined, 1, "", () => true, previewScopeIdentityRef.current, "right");
           } : undefined}
           onCreatedFile={(path, content, lastModifiedNs) => {
@@ -1294,9 +1298,11 @@ export function DesktopWorkbench({
             tabs.closeDeletedPath(path);
           }}
           onRequestPreview={(path) => {
+            if (canPreviewFiles) showEditor();
             void loadPreview(path, "preview");
           }}
           onRequestDiff={(path, absolutePath) => {
+            if (canPreviewFiles) showEditor();
             const gitPath = resolveRepoRelativeDiffPath(path, absolutePath, gitRepoPath);
             void openGitDiffInEditor(path, false, gitPath);
           }}
