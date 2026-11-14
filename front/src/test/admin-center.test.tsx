@@ -62,9 +62,8 @@ test("环境配置区分重加载 .env、重启和重新 build，保存后不显
   await user.click(screen.getByRole("tab", { name: "环境配置" }));
   await user.click(await screen.findByRole("button", { name: "Web" }));
 
-  const tokenItem = screen.getByText("Web API 口令").closest("article");
   const portItem = screen.getByText("Web 端口").closest("article");
-  expect(tokenItem).toHaveTextContent("重加载.env生效");
+  expect(screen.queryByText("Web API 口令")).not.toBeInTheDocument();
   expect(portItem).toHaveTextContent("重启生效");
 
   const port = screen.getByRole("spinbutton", { name: "Web 端口" });

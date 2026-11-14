@@ -175,38 +175,11 @@ version_ge() {
   return 0
 }
 
-generate_token() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY'
-import secrets
-print(secrets.token_hex(12))
-PY
-    return 0
-  fi
-  if command -v python >/dev/null 2>&1; then
-    python - <<'PY'
-import secrets
-print(secrets.token_hex(12))
-PY
-    return 0
-  fi
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 12
-    return 0
-  fi
-  if command -v shasum >/dev/null 2>&1; then
-    printf '%s-%s\n' "$(date +%s)" "$RANDOM" | shasum -a 256 | awk '{print substr($1, 1, 24)}'
-    return 0
-  fi
-  printf '%s%06d%06d\n' "$(date +%s)" "$RANDOM" "$RANDOM" | cut -c1-24
-}
-
 update_env_values() {
   local env_path="$1"
   local cli_type="$2"
   local cli_path="$3"
   local working_dir="$4"
-  local token="$5"
   local updater_python
 
   if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
@@ -217,7 +190,7 @@ update_env_values() {
     updater_python="python"
   fi
 
-  "$updater_python" - "$env_path" "$cli_type" "$cli_path" "$working_dir" "$token" <<'PY'
+  "$updater_python" - "$env_path" "$cli_type" "$cli_path" "$working_dir" <<'PY'
 from pathlib import Path
 import sys
 
@@ -226,7 +199,6 @@ updates = {
     "CLI_TYPE": sys.argv[2],
     "CLI_PATH": sys.argv[3],
     "WORKING_DIR": sys.argv[4],
-    "WEB_API_TOKEN": sys.argv[5],
 }
 lines = env_path.read_text(encoding="utf-8").splitlines()
 seen = set()
@@ -369,7 +341,7 @@ select_default_cli_type() {
 }
 
 ensure_env_file() {
-  local cli_type cli_path token
+  local cli_type cli_path
   if [[ -f .env ]]; then
     info "保留现有 .env"
     return 0
@@ -378,8 +350,7 @@ ensure_env_file() {
   cp .env.example .env
   cli_type="$(select_default_cli_type)"
   cli_path="$cli_type"
-  token="$(generate_token)"
-  update_env_values ".env" "$cli_type" "$cli_path" "$SCRIPT_DIR" "$token"
+  update_env_values ".env" "$cli_type" "$cli_path" "$SCRIPT_DIR"
 
   info ".env 已根据 .env.example 自动生成"
 }

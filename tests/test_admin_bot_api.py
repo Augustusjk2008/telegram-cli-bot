@@ -62,7 +62,6 @@ def _build_server(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> WebApiServer:
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", BotPermissionStore(tmp_path / "permissions.json"))
     return WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())

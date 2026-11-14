@@ -2519,7 +2519,6 @@ export type SessionState = {
   username: string;
   role: AccountRole;
   capabilities: Capability[];
-  tokenProtected?: boolean;
   allowedUserIds?: number[];
   isLocalAdmin?: boolean;
 };

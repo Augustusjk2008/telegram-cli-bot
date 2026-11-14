@@ -77,7 +77,6 @@ async def test_chat_stream_sends_sse_headers_and_ready_comment(
     expected_stream_protocol_version: int,
 ) -> None:
     manager = _build_manager(tmp_path)
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     monkeypatch.setattr("bot.web.server._BOT_PERMISSION_STORE", BotPermissionStore(tmp_path / "permissions.json"))
     server = WebApiServer(manager, host="127.0.0.1", port=8765, tunnel_service=DummyTunnelService())

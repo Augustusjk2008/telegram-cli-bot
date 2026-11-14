@@ -485,7 +485,7 @@ def test_supervisor_stop_signal_terminates_host_before_returning_zero(installati
 
 
 def test_update_runner_job_log_redacts_credentials(monkeypatch):
-    monkeypatch.setenv("WEB_API_TOKEN", "secret-token")
+    monkeypatch.setenv("TCB_HUB_NODE_TOKEN", "secret-token")
     assert "secret-token" not in runner._redact_text("authorization: Bearer secret-token")
     assert "[REDACTED]" in runner._redact_text("authorization: Bearer secret-token")
 

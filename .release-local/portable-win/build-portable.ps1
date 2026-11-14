@@ -397,7 +397,6 @@ WORKING_DIR=.
 WEB_ENABLED=true
 WEB_HOST=127.0.0.1
 WEB_PORT=8765
-WEB_API_TOKEN=
 WEB_PUBLIC_URL=
 WEB_TUNNEL_MODE=disabled
 WEB_TUNNEL_AUTOSTART=false
@@ -499,49 +498,6 @@ function Import-DotEnv {
     }
 }
 
-function New-PortableWebToken {
-    $bytes = New-Object byte[] 32
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $rng.GetBytes($bytes)
-    } finally {
-        $rng.Dispose()
-    }
-    return ([Convert]::ToBase64String($bytes)).TrimEnd("=") -replace "\+", "-" -replace "/", "_"
-}
-
-function Ensure-PortableWebToken {
-    param([string]$Path)
-
-    if ($env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1") {
-        return
-    }
-
-    $lines = @()
-    if (Test-Path -LiteralPath $Path) {
-        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8)
-    }
-    $tokenIndex = -1
-    $currentToken = ""
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        if ($lines[$index] -match "^\s*WEB_API_TOKEN\s*=\s*(?<value>.*)$") {
-            $tokenIndex = $index
-            $currentToken = $Matches["value"].Trim()
-            break
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($currentToken) -and $currentToken -ne "__GENERATE_ON_FIRST_START__") {
-        return
-    }
-    $token = New-PortableWebToken
-    if ($tokenIndex -ge 0) {
-        $lines[$tokenIndex] = "WEB_API_TOKEN=$token"
-    } else {
-        $lines += "WEB_API_TOKEN=$token"
-    }
-    [System.IO.File]::WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)
-}
-
 function Set-PortableRuntimeEnv {
     param([string]$PackageRoot)
 
@@ -612,7 +568,6 @@ $migrationExitCode = Invoke-RepoModule -Module "bot.env_migration" -Arguments @(
 if ($migrationExitCode -ne 0) {
     throw "Copy .env failed."
 }
-Ensure-PortableWebToken -Path $envPath
 Import-DotEnv -Path $envPath
 if ($Mode -eq "service") {
     $env:CLI_BRIDGE_SERVICE_MODE = "1"
@@ -853,11 +808,11 @@ Orbit Safe Claw Windows 绿色版
 使用:
 1. 直接运行 start.bat
 2. 浏览器打开 http://127.0.0.1:8765
-3. 使用 .env 内的 WEB_API_TOKEN 登录；首次启动会自动生成并写入本机 .env
+3. 在浏览器中完成账号注册或登录
 
 说明:
 - 绿色包无需安装 Python / Node / Git
-- 登录口令仅保存在本机解压目录的 .env
+- 账号数据保存在本机运行数据目录
 - 包内已带 Python、Node 22、Git 和前端构建产物
 - 请安装并配置所需的 Codex、Claude、Antigravity 或 DeepSeek Harness CLI
 - 可在 Web 设置页或 .env 修改 CLI_TYPE / CLI_PATH

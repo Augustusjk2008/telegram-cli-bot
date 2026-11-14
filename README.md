@@ -309,7 +309,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 > [!WARNING]
 > Orbit Safe Claw 可以读写工作区、执行终端命令并操作 Git。不要把未加保护的实例直接暴露到公网。
 
-- 为 `WEB_API_TOKEN` 使用高强度随机值，并限制管理员账号权限。
+- 使用账号登录并限制管理员账号权限。
 - 公网访问应经过可信反向代理、防火墙和 TLS；反向代理必须支持 WebSocket。
 - `.env`、真实 `managed_bots.json` 和 `~/.tcb/` 运行数据不得提交到仓库。
 - 建议将 `TCB_DATA_DIR` 放在工作区之外，避免 workspace rollback 影响运行状态。
@@ -327,10 +327,9 @@ WEB_ENABLED=true
 ENDLESS_CONTINUE_DELAY_SECONDS=120
 WEB_HOST=0.0.0.0
 WEB_PORT=8765
-WEB_API_TOKEN=<高强度随机口令>
 ```
 
-`WEB_API_TOKEN` 用于兼容 API token 认证；网页登录凭据通过账号注册设置。安装器创建的管理员账号和管理中心指定的管理员账号拥有本地管理员能力。
+网页登录凭据通过账号注册设置。安装器创建的管理员账号和管理中心指定的管理员账号拥有本地管理员能力。
 
 CLI 选择和默认命令如下；`CLI_PATH` / `cli_path` 也可填写对应可执行文件的完整路径。
 

@@ -286,7 +286,7 @@ The keyboard also provides status, stop, configuration, host, and help actions. 
 > [!WARNING]
 > Orbit Safe Claw can read and write workspace files, execute terminal commands, and operate Git. Never expose an unprotected instance directly to the public internet.
 
-- Use a strong random value for `WEB_API_TOKEN` and limit administrator privileges.
+- Use account login and limit administrator privileges.
 - Put public access behind a trusted reverse proxy, firewall, and TLS. The reverse proxy must support WebSocket.
 - Never commit `.env`, a real `managed_bots.json`, or runtime data under `~/.tcb/`.
 - Keep `TCB_DATA_DIR` outside the workspace to separate application data from project files.
@@ -303,10 +303,9 @@ WORKING_DIR=C:\Users\YourName\project
 WEB_ENABLED=true
 WEB_HOST=0.0.0.0
 WEB_PORT=8765
-WEB_API_TOKEN=<strong-random-token>
 ```
 
-`WEB_API_TOKEN` supports legacy API token authentication. Web login credentials are set during account registration.
+Web login credentials are set during account registration.
 
 CLI types and default commands are listed below. `CLI_PATH` / `cli_path` also accepts the executable's full path.
 

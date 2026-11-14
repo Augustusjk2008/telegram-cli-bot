@@ -220,12 +220,12 @@ def test_env_service_system_reload_reports_windows_support(
     monkeypatch.setattr(
         config,
         "reload_system_environment",
-        lambda path: {"supported": True, "changed_keys": ["PUSHPLUS_TOKEN", "WEB_API_TOKEN"]},
+        lambda path: {"supported": True, "changed_keys": ["PUSHPLUS_TOKEN", "WEB_ALLOWED_ORIGINS"]},
     )
 
     result = service.reload_system_runtime()
 
-    assert result["changedKeys"] == ["WEB_API_TOKEN", "PUSHPLUS_TOKEN"]
+    assert result["changedKeys"] == ["WEB_ALLOWED_ORIGINS", "PUSHPLUS_TOKEN"]
     assert result["reloadedKeys"] == result["changedKeys"]
     assert result["projectEnvReloaded"] is True
     assert result["systemEnvironmentReloaded"] is True

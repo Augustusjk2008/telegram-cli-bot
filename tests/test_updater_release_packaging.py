@@ -172,24 +172,19 @@ def test_updater_rejects_checksum_mismatch_and_archive_traversal(tmp_path: Path)
         updater._list_package_entry_paths(package_path)
 
 
-def test_portable_build_does_not_embed_fixed_web_token() -> None:
+def test_portable_build_uses_account_authentication() -> None:
     portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
 
     assert "WEB_HOST=127.0.0.1" in portable
-    assert "WEB_API_TOKEN=" in portable
-    assert "WEB_API_TOKEN=$Token" not in portable
-    assert "WEB_API_TOKEN: $Token" not in portable
-    assert "[完成] WEB_API_TOKEN" not in portable
-    assert "$token = New-WebToken" not in portable
-    assert "Write-PortableEnv -PackageRoot $packageRoot -Token" not in portable
-    assert "Write-PortableReadme -PackageRoot $packageRoot -Token" not in portable
+    legacy_web_token_key = "WEB_API_" + "TOKEN"
+    assert legacy_web_token_key not in portable
+    assert "New-PortableWebToken" not in portable
+    assert "Ensure-PortableWebToken" not in portable
 
     migration_index = portable.index('Invoke-RepoModule -Module "bot.env_migration"')
-    ensure_token_index = portable.index("Ensure-PortableWebToken -Path $envPath")
     import_index = portable.index("Import-DotEnv -Path $envPath")
-    assert migration_index < ensure_token_index < import_index
+    assert migration_index < import_index
     assert '$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"' in portable
-    assert portable.index('$env:TCB_PORTABLE_SMOKE_IMPORT_ONLY -eq "1"') < ensure_token_index
 
 
 def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_encodings() -> None:
@@ -200,7 +195,6 @@ def test_portable_build_writes_windows_scripts_and_python_files_with_compatible_
     assert "WriteAllText((Join-Path $PackageRoot \"start.ps1\"), $startPs1, $script:Utf8BomEncoding)" in portable
     assert "WriteAllText((Join-Path $PackageRoot \"install.ps1\"), $installPs1, $script:Utf8BomEncoding)" in portable
     assert "WriteAllText((Join-Path $PackageRoot \".env\"), $content, $script:Utf8NoBomEncoding)" in portable
-    assert "WriteAllLines($Path, [string[]]$lines, $script:Utf8NoBomEncoding)" in portable
     assert '[ValidateSet("default", "web", "service")]' in portable
     assert "[switch]$ServiceProcess" in portable
     assert '$env:CLI_BRIDGE_SERVICE_MODE = "1"' in portable

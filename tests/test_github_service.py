@@ -265,7 +265,6 @@ def _server(tmp_path, monkeypatch, profile: BotProfile):
     storage = tmp_path / "bots.json"
     storage.write_text('{"bots": []}', encoding="utf-8")
     manager = MultiBotManager(profile, str(storage))
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     server = WebApiServer(manager, host="127.0.0.1", port=8765)
     auth = AuthContext(user_id=42, token_used=True, account_id="member-a", capabilities={CAP_VIEW_FILE_TREE})

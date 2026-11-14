@@ -243,7 +243,6 @@ def _redact_text(value: object) -> str:
     text = str(value or "")
     for name in (
         "TELEGRAM_BOT_TOKEN",
-        "WEB_API_TOKEN",
         "TCB_HUB_NODE_TOKEN",
         "TCB_HUB_FRPS_TOKEN",
         "PUSHPLUS_TOKEN",

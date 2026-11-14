@@ -2093,9 +2093,6 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
                           className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-70"
                         />
                       )}
-                      {item.key === "WEB_API_TOKEN" && envSecretActions[item.key] === "clear" ? (
-                        <p className="text-xs text-[var(--feedback-error-text-deep)]">保存后将禁用口令登录。</p>
-                      ) : null}
                     </article>
                   );
                 })}

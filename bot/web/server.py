@@ -53,7 +53,6 @@ from bot.config import (
     TCB_NODE_ID,
     WEB_BASE_PATH,
     WEB_ALLOWED_ORIGINS,
-    WEB_API_TOKEN,
     WEB_DEFAULT_USER_ID,
     WEB_FIXED_PUBLIC_FORWARD_ENABLED,
     WEB_FIXED_PUBLIC_FORWARD_URL,
@@ -175,7 +174,6 @@ _RUNTIME_ENV_BINDINGS = (
     "PUSHPLUS_TOKEN",
     "PUSHPLUS_TOPIC",
     "WEB_ALLOWED_ORIGINS",
-    "WEB_API_TOKEN",
     "WEB_DEFAULT_USER_ID",
     "WEB_FIXED_PUBLIC_FORWARD_URL",
     "WEB_PUBLIC_URL",
@@ -578,7 +576,6 @@ def _serialize_auth_context(auth: AuthContext, *, token: str = "") -> dict[str, 
         "current_bot_alias": "",
         "current_path": "",
         "is_logged_in": True,
-        "token_protected": bool(WEB_API_TOKEN),
         "allowed_user_ids": ALLOWED_USER_IDS,
         "is_local_admin": auth.is_local_admin,
         "allowed_bots": ["*"] if auth.is_local_admin else sorted(auth.allowed_bot_aliases),
@@ -999,7 +996,7 @@ async def cors_middleware(request: web.Request, handler):
         elif origin and _normalize_origin(origin) in normalized:
             response.headers["Access-Control-Allow-Origin"] = origin
 
-        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
@@ -1015,7 +1012,7 @@ async def cors_middleware(request: web.Request, handler):
     elif not origin and "*" in normalized:
         response.headers["Access-Control-Allow-Origin"] = "*"
 
-    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token, X-User-Id"
+    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-API-Token"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Credentials"] = "true"
     if request.path.startswith("/api/"):
@@ -1258,51 +1255,17 @@ class WebApiServer:
                 return self._session_auth_context(session)
             if _is_loopback_auto_auth_allowed(request):
                 return self._local_admin_auth_context()
-            if token_info.source in {AUTH_TOKEN_SOURCE_AUTHORIZATION, AUTH_TOKEN_SOURCE_X_API_TOKEN} and WEB_API_TOKEN and raw_token == WEB_API_TOKEN:
-                return self._legacy_auth_context(request, token_used=True)
             raise WebApiError(401, "unauthorized", "访问令牌无效")
 
         if _is_loopback_auto_auth_allowed(request):
             return self._local_admin_auth_context()
-        if WEB_API_TOKEN:
-            raise WebApiError(401, "unauthorized", "访问令牌无效")
         if _WEB_AUTH_STORE.can_bootstrap_without_auth():
             raise WebApiError(401, "setup_required", "请从本机完成初始化")
         raise WebApiError(401, "unauthorized", "请先登录")
 
-    def _legacy_user_id(self, request: web.Request) -> int:
-        raw_user_id = request.headers.get("X-User-Id", "").strip() or request.query.get("user_id", "").strip()
-        if not raw_user_id:
-            return WEB_DEFAULT_USER_ID
-        try:
-            return int(raw_user_id)
-        except ValueError as exc:
-            raise WebApiError(400, "invalid_user_id", "X-User-Id 必须是整数") from exc
-
     def _ensure_allowed_user_id(self, user_id: int) -> None:
         if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
             raise WebApiError(403, "forbidden", f"用户 {user_id} 未授权")
-
-    def _legacy_auth_context(
-        self,
-        request: web.Request,
-        *,
-        token_used: bool,
-        username: str = "legacy",
-    ) -> AuthContext:
-        user_id = self._legacy_user_id(request)
-        self._ensure_allowed_user_id(user_id)
-        return AuthContext(
-            user_id=user_id,
-            token_used=token_used,
-            account_id="legacy-default",
-            username=username,
-            role="member",
-            capabilities=set(LOCAL_ADMIN_CAPABILITIES),
-            allowed_bot_aliases=set(),
-            owned_bot_aliases=set(),
-            is_local_admin=True,
-        )
 
     def _session_auth_context(self, session: WebAuthSession) -> AuthContext:
         if session.account.account_id == "local-admin":
@@ -5717,7 +5680,7 @@ class WebApiServer:
         logger.debug(
             "Web API 已启动: %s (token=%s, allowed_origins=%s, node_id=%s, base_path=%s, public_url=%s, fixed_public_url=%s)",
             local_url,
-            "已配置" if WEB_API_TOKEN else "未配置",
+            "account-auth",
             ",".join(WEB_ALLOWED_ORIGINS),
             TCB_NODE_ID or "",
             self._web_base_path() or "/",

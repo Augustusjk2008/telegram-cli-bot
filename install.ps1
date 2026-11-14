@@ -566,18 +566,6 @@ function Read-TextWithDefault {
     return $answer.Trim()
 }
 
-function New-WebToken {
-    $bytes = New-Object byte[] 24
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $rng.GetBytes($bytes)
-    } finally {
-        $rng.Dispose()
-    }
-
-    return ([Convert]::ToBase64String($bytes)).TrimEnd("=") -replace "[+/]", "A"
-}
-
 function Select-DefaultCli {
     param([object]$CliInfo)
 
@@ -665,8 +653,6 @@ function Configure-EnvFile {
 
     $selectedCli = Select-DefaultCli -CliInfo $CliInfo
     $workingDir = Read-TextWithDefault -Prompt "默认工作目录" -DefaultValue $script:RootDir
-    $token = New-WebToken
-    $token = Read-TextWithDefault -Prompt "WEB_API_TOKEN（回车使用自动生成值）" -DefaultValue $token
 
     Update-EnvFromTemplate -TemplatePath $templatePath -DestinationPath $envPath -Replacements @{
         "CLI_TYPE"                    = $selectedCli.Type
@@ -675,14 +661,12 @@ function Configure-EnvFile {
         "WEB_ENABLED"                 = "true"
         "WEB_HOST"                    = "0.0.0.0"
         "WEB_PORT"                    = "8765"
-        "WEB_API_TOKEN"               = $token
         "WEB_PUBLIC_URL"              = $TunnelConfig.PublicUrl
         "WEB_TUNNEL_MODE"             = $TunnelConfig.Mode
         "WEB_TUNNEL_CLOUDFLARED_PATH" = $TunnelConfig.CloudflaredPath
     }
 
     Write-Info (".env 已写入，默认 CLI: {0}" -f $selectedCli.Type)
-    Write-Info ("WEB_API_TOKEN: {0}" -f $token)
     Save-Summary -Key ".env" -Value ("已生成（CLI={0}，Tunnel={1}）" -f $selectedCli.Type, $TunnelConfig.Mode)
 }
 

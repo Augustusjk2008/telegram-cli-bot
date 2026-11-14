@@ -41,7 +41,6 @@ def api(tmp_path, monkeypatch):
         allowed_bots_for_account=lambda account: set(), owned_bot_aliases=lambda account: set(),
     ))
     monkeypatch.setattr(server_module, "_is_loopback_auto_auth_allowed", lambda request: False)
-    monkeypatch.setattr(server_module, "WEB_API_TOKEN", "")
     monkeypatch.setattr(server_module, "WEB_BASE_PATH", "/node/theme-test")
     monkeypatch.setattr(server_module, "WEB_PUBLIC_URL", "")
     return SimpleNamespace(server=server, app=server._build_app())

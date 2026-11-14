@@ -1022,7 +1022,6 @@ type RawAuthSession = {
   current_path?: string;
   is_logged_in?: boolean;
   token?: string;
-  token_protected?: boolean;
   allowed_user_ids?: number[];
   is_local_admin?: boolean;
 };
@@ -3147,7 +3146,6 @@ function mapSessionState(raw: RawAuthSession): SessionState {
     username: raw.username || "",
     role: raw.role || "member",
     capabilities: Array.isArray(raw.capabilities) ? raw.capabilities : [],
-    ...(typeof raw.token_protected === "boolean" ? { tokenProtected: raw.token_protected } : {}),
     ...(Array.isArray(raw.allowed_user_ids) ? { allowedUserIds: raw.allowed_user_ids } : {}),
     ...(typeof raw.is_local_admin === "boolean" ? { isLocalAdmin: raw.is_local_admin } : {}),
   };

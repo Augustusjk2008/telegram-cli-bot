@@ -391,7 +391,6 @@ async def test_legacy_rebuild_routes_create_a_session_for_the_requested_owner(tm
 
     storage = tmp_path / "bots.json"
     storage.write_text('{"bots": []}', encoding="utf-8")
-    monkeypatch.setattr("bot.web.server.WEB_API_TOKEN", "")
     monkeypatch.setattr("bot.web.server.WEB_BASE_PATH", "")
     manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
     server = WebApiServer(manager, host="127.0.0.1", port=8765)
