@@ -136,8 +136,7 @@ def test_schema_v7_migrates_existing_samples_to_codex_provider(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_claude_admin_routes_use_the_shared_service(tmp_path, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+async def test_claude_admin_routes_use_the_shared_service(tmp_path):
     service = CodexUsageService(
         db_path=tmp_path / "usage.sqlite3",
         claude_auth_status_reader=_SubscriptionAuthReader(),

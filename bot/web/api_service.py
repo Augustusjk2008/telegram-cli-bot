@@ -910,6 +910,7 @@ def _cluster_mcp_target_status(profile: BotProfile, cli_type: str, *, active_cli
             text=True,
             timeout=5,
             check=False,
+            env=config.build_cli_environment(),
             **build_hidden_process_kwargs(),
         )
     except FileNotFoundError:
@@ -1890,6 +1891,7 @@ def _get_antigravity_model_options(profile: BotProfile) -> list[str]:
             errors="replace",
             timeout=_ANTIGRAVITY_MODEL_DISCOVERY_TIMEOUT_SECONDS,
             check=False,
+            env=config.build_cli_environment(),
             **build_hidden_process_kwargs(),
         )
         discovered = (
@@ -3563,7 +3565,7 @@ async def kill_user_process(
 
 
 def _build_cli_env(cli_type: str) -> dict[str, str]:
-    env = os.environ.copy()
+    env = config.build_cli_environment()
     env["PYTHONUNBUFFERED"] = "1"
     if sys.platform == "win32":
         env["PYTHONIOENCODING"] = "utf-8"

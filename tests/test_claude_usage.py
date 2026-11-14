@@ -104,8 +104,7 @@ def test_claude_stream_parser_keeps_latest_rate_limit_event():
 
 
 @pytest.mark.asyncio
-async def test_claude_capture_records_subscription_windows_once(tmp_path, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+async def test_claude_capture_records_subscription_windows_once(tmp_path):
     reader = _AuthReader(_SUBSCRIPTION)
     service = CodexUsageService(
         store=CodexUsageStore(tmp_path / "usage.sqlite3"),
@@ -131,10 +130,9 @@ async def test_claude_capture_records_subscription_windows_once(tmp_path, monkey
     ("enabled", "env", "status"),
     [
         (False, {}, _SUBSCRIPTION),
-        (True, {"ANTHROPIC_BASE_URL": "https://relay.example/v1"}, _SUBSCRIPTION),
         (True, {}, ClaudeAuthStatus(True, "api_key", "firstParty", None)),
     ],
-    ids=["disabled", "custom-base-url", "api-key-login"],
+    ids=["disabled", "api-key-login"],
 )
 async def test_claude_capture_skips_non_subscription_sources(tmp_path, enabled, env, status):
     service = CodexUsageService(
@@ -148,21 +146,6 @@ async def test_claude_capture_skips_non_subscription_sources(tmp_path, enabled, 
 
     assert await capture.record_once(parsed) is False
     assert await service.available_range("claude") == (None, None)
-    service.close()
-
-
-@pytest.mark.asyncio
-async def test_claude_config_reports_base_url_provider(tmp_path, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://Relay.Example/v1/")
-    service = CodexUsageService(
-        store=CodexUsageStore(tmp_path / "usage.sqlite3"),
-        claude_auth_status_reader=_AuthReader(_SUBSCRIPTION),
-    )
-
-    provider = (await service.config_snapshot(provider="claude"))["current_provider"]
-
-    assert provider["kind"] == "base_url"
-    assert provider["base_url"] == "https://relay.example/v1"
     service.close()
 
 

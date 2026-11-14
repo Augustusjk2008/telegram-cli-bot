@@ -44,6 +44,7 @@ def test_env_schema_exposes_current_settings_and_hides_web_switch(tmp_path: Path
     fields = {field.key: field for field in ENV_SCHEMA}
 
     assert "WEB_ENABLED" not in fields
+    assert not {"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_BASE_URL"}.intersection(fields)
     assert fields["CLI_GLOBAL_EXTRA_ARGS"].type == "json"
     assert fields["MODEL_PRICES_FILE"].restart_required is False
     assert fields["TCB_STORAGE_MIGRATION_WORKERS"].max_value == 4

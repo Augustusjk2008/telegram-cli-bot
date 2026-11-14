@@ -29,7 +29,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlsplit
+
+from bot import config
 
 from .models import (
     CLAUDE_OVERAGE_RATE_LIMIT_ID,
@@ -45,7 +46,6 @@ CLAUDE_UNIFIED_WINDOWS = (
     ("seven_day", GENERAL_CLAUDE_RATE_LIMIT_ID, 7 * 24 * 60),
     ("seven_day_overage_included", CLAUDE_OVERAGE_RATE_LIMIT_ID, 7 * 24 * 60),
 )
-_OFFICIAL_API_HOSTS = frozenset({"api.anthropic.com"})
 _AUTH_STATUS_TIMEOUT_SECONDS = 5.0
 _AUTH_STATUS_CACHE_SECONDS = 600.0
 _AUTH_STATUS_FIELDS = ("loggedIn", "authMethod", "apiProvider", "subscriptionType")
@@ -117,38 +117,6 @@ def claude_config_dir(env: Mapping[str, str] | None) -> Path:
     source = os.environ if env is None else env
     configured = str(source.get("CLAUDE_CONFIG_DIR") or "").strip()
     return Path(configured).expanduser() if configured else Path.home() / ".claude"
-
-
-def _settings_base_url(config_dir: Path) -> str:
-    try:
-        settings = json.loads((config_dir / "settings.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ""
-    settings_env = settings.get("env") if isinstance(settings, Mapping) else None
-    if not isinstance(settings_env, Mapping):
-        return ""
-    return str(settings_env.get("ANTHROPIC_BASE_URL") or "").strip()
-
-
-def resolve_claude_base_url(env: Mapping[str, str] | None) -> str:
-    """Return the configured base URL; the process env wins over settings.json."""
-
-    source = os.environ if env is None else env
-    configured = str(source.get("ANTHROPIC_BASE_URL") or "").strip()
-    return configured or _settings_base_url(claude_config_dir(env))
-
-
-def _normalized_base_url(value: str) -> str | None:
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return None
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
-        return None
-    netloc = parts.hostname.lower()
-    if parts.port is not None:
-        netloc = f"{netloc}:{parts.port}"
-    return f"{parts.scheme}://{netloc}{parts.path.rstrip('/')}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +210,7 @@ def _run_auth_status(*, executable: str, env: Mapping[str, str] | None) -> str |
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=dict(env) if env is not None else None,
+            env=config.build_cli_environment(env),
             timeout=_AUTH_STATUS_TIMEOUT_SECONDS,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -258,13 +226,6 @@ def resolve_claude_provider(
 ) -> ProviderInfo:
     """Identify whether quota windows belong to a Claude subscription account."""
 
-    base_url = resolve_claude_base_url(env)
-    if base_url:
-        normalized = _normalized_base_url(base_url)
-        if normalized is None:
-            return ProviderInfo(key="unknown", kind="unknown", base_url=None, resolution="invalid_base_url")
-        if (urlsplit(normalized).hostname or "") not in _OFFICIAL_API_HOSTS:
-            return ProviderInfo(key=normalized, kind="base_url", base_url=normalized)
     if auth_status is not None and not auth_status.is_subscription:
         return ProviderInfo(
             key=f"claude_{auth_status.api_provider or auth_status.auth_method or 'unknown'}",
@@ -280,7 +241,6 @@ __all__ = [
     "ClaudeAuthStatus",
     "ClaudeAuthStatusReader",
     "claude_config_dir",
-    "resolve_claude_base_url",
     "resolve_claude_provider",
     "samples_from_rate_limit_info",
 ]

@@ -8,6 +8,7 @@ import math
 import os
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, List, Optional, Set
 
@@ -200,6 +201,19 @@ DEFAULT_APP_UPDATE_REPOSITORY = "https://github.com/Augustusjk2008/telegram-cli-
 
 # ============ 常量定义 ============
 SUPPORTED_CLI_TYPES = {"claude", "codex", "codex_server", "antigravity", "deepseek"}
+CLI_ENV_EXCLUDED_NAMES = frozenset({
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_BASE_URL",
+})
+
+
+def build_cli_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Build a child environment without unsupported Claude overrides."""
+    environment = dict(os.environ if source is None else source)
+    for name in CLI_ENV_EXCLUDED_NAMES:
+        environment.pop(name, None)
+    return environment
 
 
 def _refresh_environment_config() -> None:

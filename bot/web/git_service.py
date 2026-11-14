@@ -632,7 +632,7 @@ def _run_git_with_input(
 
 
 def _build_git_commit_cli_env() -> dict[str, str]:
-    env = os.environ.copy()
+    env = config.build_cli_environment()
     env["PYTHONUNBUFFERED"] = "1"
     if sys.platform == "win32":
         env["PYTHONIOENCODING"] = "utf-8"

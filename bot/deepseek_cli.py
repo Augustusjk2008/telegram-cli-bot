@@ -10,6 +10,7 @@ import threading
 import time
 from typing import Any
 
+from bot import config
 from bot.platform.executables import build_executable_invocation
 from bot.platform.processes import build_hidden_process_kwargs
 
@@ -439,6 +440,7 @@ def discover_deepseek_catalog(
                 errors="replace",
                 timeout=_DEEPSEEK_CATALOG_TIMEOUT_SECONDS,
                 check=False,
+                env=config.build_cli_environment(),
                 **build_hidden_process_kwargs(),
             )
             raw_stdout = completed.stdout or ""

@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from bot import config
+
 from .models import (
     KNOWN_CODEX_RATE_LIMIT_IDS,
     SECONDARY_CODEX_RATE_LIMIT_ID,
@@ -136,7 +138,7 @@ def resolve_account_rate_limits(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=dict(env) if env is not None else None,
+            env=config.build_cli_environment(env),
             bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )

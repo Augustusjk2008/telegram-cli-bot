@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from bot import config
 from bot.cli_params import CliParamsConfig
 from .client import CodexServerClient, CodexServerError, REALTIME_CONVERSATION_VERSION
 from .events import CodexServerEventMapper, TOKEN_FIELDS, tokens
@@ -530,7 +531,7 @@ class CodexServerRegistry:
         try:
             if closing:
                 await asyncio.shield(asyncio.wrap_future(closing))
-            env = {**os.environ, **request.env}
+            env = config.build_cli_environment({**os.environ, **request.env})
             request = replace(request, env=env, params_config=copy.deepcopy(request.params_config))
             params = convert_params(request.command, request.cwd, request.params_config)
             fingerprint = await asyncio.to_thread(_config_fingerprint, params, env)

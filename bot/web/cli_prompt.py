@@ -34,7 +34,7 @@ class CliPromptError(RuntimeError):
 
 
 def _build_env() -> dict[str, str]:
-    env = os.environ.copy()
+    env = config.build_cli_environment()
     env["PYTHONUNBUFFERED"] = "1"
     if os.name == "nt":
         env["PYTHONIOENCODING"] = "utf-8"

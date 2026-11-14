@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from bot import config
 from bot.cli import (
     ClaudeJsonStreamParser,
     CodexJsonStreamParser,
@@ -34,6 +35,17 @@ from bot.web.native_history_adapter import (
 
 
 ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
+
+
+def test_cli_environment_excludes_removed_anthropic_overrides():
+    environment = config.build_cli_environment({
+        "PATH": "path",
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_MODEL": "legacy-model",
+        "ANTHROPIC_BASE_URL": "https://relay.example/v1",
+    })
+
+    assert environment == {"PATH": "path"}
 
 
 @pytest.mark.parametrize(
