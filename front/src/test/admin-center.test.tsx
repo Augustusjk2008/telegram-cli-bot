@@ -74,6 +74,9 @@ test("环境配置区分重加载 .env、重启和重新 build，保存后不显
   await screen.findByText("环境配置已保存");
   expect(screen.queryByText(/需重加载\.env:/)).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "重启服务" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "语言服务" }));
+  expect(await screen.findByText("启用语言服务")).toBeInTheDocument();
 });
 
 async function updateFixture(phase: AppUpdatePhase = "ready"): Promise<AppUpdateStatus> {

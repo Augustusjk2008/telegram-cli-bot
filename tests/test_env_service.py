@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from bot import config
-from bot.web.env_service import EnvConfigService, EnvValidationError
+from bot.web.env_service import ENV_SCHEMA, EnvConfigService, EnvValidationError
 
 
 def _write_env(root: Path, text: str) -> None:
@@ -36,6 +36,18 @@ def test_cli_model_options_accepts_independent_json_rows(tmp_path: Path) -> None
     assert parsed["codex"] == ["codex-model", "none"]
     assert parsed["deepseek"] == ["dsh-model", "none"]
     assert config._parse_cli_model_options("legacy-a,legacy-b") == ["legacy-a", "legacy-b", "none"]
+
+
+def test_env_schema_exposes_current_settings_and_hides_web_switch(tmp_path: Path) -> None:
+    _write_env(tmp_path, "WEB_ENABLED=true\n")
+    service = EnvConfigService(tmp_path)
+    fields = {field.key: field for field in ENV_SCHEMA}
+
+    assert "WEB_ENABLED" not in fields
+    assert fields["CLI_GLOBAL_EXTRA_ARGS"].type == "json"
+    assert fields["MODEL_PRICES_FILE"].restart_required is False
+    assert fields["TCB_STORAGE_MIGRATION_WORKERS"].max_value == 4
+    assert "WEB_ENABLED" not in {item["key"] for item in service.snapshot()["items"]}
 
 
 def test_env_service_masks_telegram_token(

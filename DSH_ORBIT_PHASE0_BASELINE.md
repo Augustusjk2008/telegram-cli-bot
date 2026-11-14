@@ -28,6 +28,12 @@ Last updated: 2026-11-13 20:24 +08:00
 
 The bundle registers `orbit-workspace` through `sidebar.panellist` and the keyed `main` slot. Its page renders localized loading, error, disconnected, ready, and empty states, plus metadata-only capability diagnostics for Workspace, Session, Remote, credentials, and settings services. Client subscriptions refresh on connection reset and dispose with the bundle.
 
+For manual Web verification, use port `8766` because the Orbit host uses `8765`:
+
+```powershell
+dsh --profile orbit-phase0-web2 --no-open --port 8766
+```
+
 ## Runtime capability result
 
 The installed Web composition exposes the required Workspace, Session, and Remote building blocks. The current environment still lacks a completed live UI check for Workspace listing, Session open/create, prompt submission, stop, and incremental updates. The public Remote event path and project-only boundary also remain unverified.

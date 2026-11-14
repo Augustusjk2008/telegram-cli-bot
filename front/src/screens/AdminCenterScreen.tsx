@@ -107,10 +107,9 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
   telegram: "Telegram",
   web: "Web",
   tunnel: "Tunnel",
+  "language-server": "语言服务",
   updates: "更新",
-  update: "更新",
   notifications: "通知",
-  notification: "通知",
   diagnostics: "诊断",
   advanced: "高级",
   frontend: "前端构建项",
@@ -121,10 +120,9 @@ const ENV_CATEGORY_ORDER = [
   "telegram",
   "web",
   "tunnel",
+  "language-server",
   "updates",
-  "update",
   "notifications",
-  "notification",
   "diagnostics",
   "advanced",
   "frontend",
@@ -1864,7 +1862,7 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               <div>
                 <h2 className="text-base font-semibold text-[var(--text)]">环境配置</h2>
                 <p className="text-sm text-[var(--muted)]">保存写入 .env；可分别重新加载项目 .env 或 Windows 用户/系统环境变量。</p>
-                <p className="mt-1 text-xs text-[var(--muted)]">只影响当前进程和之后创建的子进程；监听地址/端口、前端 VITE_*、隧道和已建立的原生会话仍按字段标签重启或重新 build。</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">只影响当前进程和之后创建的子进程；监听地址/端口、前端 VITE_*、隧道和已建立的 CLI 会话仍按字段标签重启或重新 build。</p>
                 <p className="mt-1 break-all text-xs text-[var(--muted)]">文件: {envConfig?.envPath || ".env"}</p>
               </div>
               <div className="flex flex-wrap gap-2">
