@@ -92,7 +92,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
   announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
   notifications: { label: "通知", description: "任务完成推送的状态与测试" },
-  weixin: { label: "微信接入", description: "个人微信 iLink Bot 扫码、状态与私聊白名单" },
+  weixin: { label: "消息网关", description: "Telegram 与个人微信的接入配置、扫码和连接状态" },
   "lan-chat": { label: "联机聊天", description: "局域网内多实例联机聊天" },
   "cli-errors": { label: "错误", description: "CLI 执行错误的统计与最近记录" },
 };
@@ -107,8 +107,6 @@ const ADMIN_TAB_GROUPS: Array<{ label: string; tabs: AdminCenterTab[] }> = [
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
-  telegram: "Telegram",
-  weixin: "个人微信",
   web: "Web",
   tunnel: "Tunnel",
   "language-server": "语言服务",
@@ -121,8 +119,6 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
 
 const ENV_CATEGORY_ORDER = [
   "basic",
-  "telegram",
-  "weixin",
   "web",
   "tunnel",
   "language-server",
@@ -626,16 +622,18 @@ export function AdminCenterScreen({
     }
     try {
       const config = await client.getEnvConfig();
-      setEnvConfig(config);
-      setEnvDraft(Object.fromEntries(config.items.map((item) => [item.key, item.value])));
+      const visibleItems = config.items.filter((item) => item.category !== "telegram" && item.category !== "weixin");
+      const visibleConfig = { ...config, items: visibleItems };
+      setEnvConfig(visibleConfig);
+      setEnvDraft(Object.fromEntries(visibleItems.map((item) => [item.key, item.value])));
       setEnvSecretActions({});
       setEnvVisibleSecrets({});
       setEnvPreview(null);
       setLoadedTabs((prev) => ({ ...prev, env: true }));
-      if (config.items.length) {
+      if (visibleItems.length) {
         const firstCategory = ENV_CATEGORY_ORDER.find((category) =>
-          config.items.some((item) => item.category === category),
-        ) || config.items[0].category;
+          visibleItems.some((item) => item.category === category),
+        ) || visibleItems[0].category;
         setActiveEnvCategory((current) => current || firstCategory);
       }
       if (nextNotice) {

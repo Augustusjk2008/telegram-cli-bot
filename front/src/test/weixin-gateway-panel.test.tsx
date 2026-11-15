@@ -42,12 +42,12 @@ test("微信面板轮询扫码状态并在成功后提示重启，页面不显�
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
   render(<WeixinGatewayPanel client={client} onNotice={notice} />);
 
-  await screen.findByText("个人微信接入");
+  await screen.findByText("消息网关");
   await user.click(screen.getByRole("button", { name: "开始扫码" }));
   expect(await screen.findByAltText("微信扫码二维码")).toBeInTheDocument();
   expect(screen.queryByText("super-secret-token")).not.toBeInTheDocument();
   await vi.advanceTimersByTimeAsync(1_100);
-  await waitFor(() => expect(screen.getByText("配置已保存，需要重启应用。")));
+  await waitFor(() => expect(screen.getByText("微信配置已保存，需要重启应用。")));
   expect(notice).toHaveBeenCalledWith("微信扫码成功，配置已保存，需要重启应用。");
 });
 
@@ -65,7 +65,7 @@ test("微信面板展示过期状态并支持取消活动扫码", async () => {
   const cancel = vi.spyOn(client, "cancelWeixinSetup").mockResolvedValue(setup("cancelled"));
   render(<WeixinGatewayPanel client={client} />);
   const user = userEvent.setup();
-  await screen.findByText("个人微信接入");
+  await screen.findByText("消息网关");
   await user.click(screen.getByRole("button", { name: "开始扫码" }));
   expect(start).toHaveBeenCalledTimes(1);
   await user.click(await screen.findByRole("button", { name: "取消扫码" }));

@@ -461,7 +461,7 @@ test("全局配置保存全局提示词预设", async () => {
   await waitFor(() => expect(updateGlobal).toHaveBeenCalledTimes(1));
 });
 
-test("环境配置将 Telegram Token 标记为敏感项", async () => {
+test("消息网关配置将 Telegram Token 标记为敏感项", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
 
@@ -469,7 +469,10 @@ test("环境配置将 Telegram Token 标记为敏感项", async () => {
   await screen.findByText("用户权限");
   await user.click(screen.getByRole("tab", { name: "环境配置" }));
   await screen.findByRole("heading", { name: "环境配置" });
-  await user.click(screen.getByRole("button", { name: "Telegram" }));
+  expect(screen.queryByText("Telegram Bot Token")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Telegram" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "消息网关" }));
+  await screen.findByText("Telegram 配置");
 
   const tokenItem = screen.getByText("Telegram Bot Token").closest("article");
   expect(tokenItem).toBeInTheDocument();
