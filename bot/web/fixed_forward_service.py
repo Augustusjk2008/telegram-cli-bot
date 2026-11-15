@@ -111,6 +111,11 @@ def _is_frps_timeout_error(line: str) -> bool:
     )
 
 
+def _is_frpc_session_shutdown_error(line: str) -> bool:
+    text = line.lower()
+    return "connect to server error" in text and "session shutdown" in text
+
+
 class FixedForwardService:
     """Manages frpc for Hub fixed public forwarding."""
 
@@ -720,6 +725,8 @@ class FixedForwardService:
             return "frps 已存在同名 proxy，请确认是否有旧 frpc 进程或重复 TCB_NODE_ID"
         if _is_frps_timeout_error(line):
             return "frps 端口不通/安全组未放通"
+        if _is_frpc_session_shutdown_error(line):
+            return "frpc 与 frps 的连接已中断"
         return ""
 
     def _consume_output(self, process: subprocess.Popen, ready_event: threading.Event) -> None:

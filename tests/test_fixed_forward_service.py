@@ -150,6 +150,34 @@ async def test_proxy_exists_reuses_external_frpc_when_public_health_matches_afte
     await service.stop()
 
 
+@pytest.mark.asyncio
+async def test_session_shutdown_log_triggers_frpc_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    process = DummyProcess("connect to server error: session shutdown\n")
+
+    monkeypatch.setattr(service, "check_frps_connectivity", lambda: {"ok": True})
+    monkeypatch.setattr("bot.web.fixed_forward_service.subprocess.Popen", lambda *args, **kwargs: process)
+
+    terminated: list[DummyProcess] = []
+
+    def fake_terminate(target: DummyProcess) -> None:
+        target.terminated = True
+        target.returncode = 1
+        terminated.append(target)
+
+    monkeypatch.setattr("bot.web.fixed_forward_service.terminate_process_tree_sync", fake_terminate)
+
+    snapshot = await service.start()
+
+    assert snapshot["status"] == "error"
+    assert snapshot["last_error"] == "frpc 与 frps 的连接已中断"
+    assert terminated == [process]
+    await service.stop()
+
+
 def test_validate_config_allows_outer_reverse_proxy_prefix(tmp_path: Path) -> None:
     service = _service(
         tmp_path,
