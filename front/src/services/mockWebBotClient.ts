@@ -91,6 +91,8 @@ import type {
   EnvConfigPatchResult,
   EnvConfigPatchValue,
   EnvConfigSnapshot,
+  WeixinGatewayStatus,
+  WeixinSetup,
   FileOpenTarget,
   FileTreeRevealResult,
   ExternalSourceReadResult,
@@ -2618,6 +2620,15 @@ export class MockWebBotClient implements WebBotClient {
     }],
   ]);
   private envItems: EnvConfigItem[] = createMockEnvItems();
+  private weixinSetup: WeixinSetup | null = null;
+  private weixinStatus: WeixinGatewayStatus = {
+    enabled: false,
+    configured: false,
+    accountId: "",
+    allowedUserCount: 0,
+    connectionStatus: "disabled",
+    setup: null,
+  };
   private botOwners = new Map<string, string>([
     ["team2", "demo"],
   ]);
@@ -4021,6 +4032,58 @@ export class MockWebBotClient implements WebBotClient {
       systemEnvironmentReloaded: true,
       systemEnvironmentSupported: true,
     };
+  }
+
+  async getWeixinStatus(): Promise<WeixinGatewayStatus> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看微信接入状态", { status: 403, code: "forbidden" });
+    }
+    return { ...this.weixinStatus, setup: this.weixinSetup ? { ...this.weixinSetup } : null };
+  }
+
+  async startWeixinSetup(): Promise<WeixinSetup> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权开始微信扫码", { status: 403, code: "forbidden" });
+    }
+    if (this.weixinSetup && ["waiting_scan", "scanned"].includes(this.weixinSetup.status)) {
+      throw new WebApiClientError("已有一个微信扫码任务正在进行中", { status: 409, code: "weixin_setup_active" });
+    }
+    this.weixinSetup = {
+      setupId: `mock-weixin-${Date.now()}`,
+      status: "waiting_scan",
+      accountId: "",
+      enabled: false,
+      configured: false,
+      needsRestart: false,
+      expiresAt: Date.now() / 1000 + 300,
+      errorCode: "",
+      errorMessage: "",
+      qrCodeUrl: "https://weixin.example.invalid/qr",
+      qrCodeContent: "https://weixin.example.invalid/qr",
+      qrCodeImage: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='white'/><text x='12' y='80'>微信二维码</text></svg>",
+    };
+    this.weixinStatus = { ...this.weixinStatus, setup: { ...this.weixinSetup } };
+    return { ...this.weixinSetup };
+  }
+
+  async getWeixinSetup(setupId: string): Promise<WeixinSetup> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看微信扫码", { status: 403, code: "forbidden" });
+    }
+    if (!this.weixinSetup || this.weixinSetup.setupId !== setupId) {
+      throw new WebApiClientError("微信扫码任务不存在", { status: 404, code: "weixin_setup_not_found" });
+    }
+    return { ...this.weixinSetup };
+  }
+
+  async cancelWeixinSetup(setupId: string): Promise<WeixinSetup> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权取消微信扫码", { status: 403, code: "forbidden" });
+    }
+    const setup = await this.getWeixinSetup(setupId);
+    this.weixinSetup = { ...setup, status: "cancelled", errorCode: "weixin_setup_cancelled" };
+    this.weixinStatus = { ...this.weixinStatus, setup: { ...this.weixinSetup } };
+    return { ...this.weixinSetup };
   }
 
   async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {

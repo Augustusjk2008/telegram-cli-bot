@@ -254,6 +254,22 @@ Use `/host` (or the Host key) when the public entry fails. Telegram long-polls `
 
 The keyboard also provides status, stop, configuration, host, and help actions. Model choices follow the active CLI configuration. Changes apply to the next turn; active tasks keep their initial configuration. Telegram and Web share `(Bot, shared user, agent)` sessions and history, and Telegram cancellation uses the Web task and cluster cancellation flow. Open-Web actions require `WEB_PUBLIC_URL` or fixed public forwarding with the `/node/<node-id>/` prefix preserved. Check the token, allowlist, application restart, competing `getUpdates` clients, public URL, and WebSocket proxy when troubleshooting.
 
+### Personal Weixin iLink Gateway
+
+Orbit Safe Claw can connect a personal WeChat account through Tencent's iLink Bot API. Enterprise WeChat uses a separate adapter. An administrator can start QR login from the Admin Center's Weixin panel. After confirmation, the account ID, sensitive token, and API base URL are saved to the project `.env`; add the private-message allowlist and restart the application:
+
+```env
+WEIXIN_ENABLED=true
+WEIXIN_ACCOUNT_ID=<iLink Bot account ID from QR login>
+WEIXIN_TOKEN=<iLink Bot token from QR login>
+WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
+WEIXIN_ALLOWED_USER_IDS=<comma-separated Weixin private user IDs>
+```
+
+The gateway uses HTTP long polling and does not require a public webhook. It accepts private text messages from allowlisted Weixin users and supports `/start`, `/help`, `to <alias> <text>`, `to <alias> /new`, `/config`, `/status`, and `/stop`. Weixin, Web, and Telegram share `(bot_id, shared_user_id, agent_id)` sessions and history; final replies follow conversation bindings, while trace events, status previews, and cluster child-task progress stay out of Weixin.
+
+Ordinary WeChat groups, images, video, voice, files, cards, and message editing are outside the current scope. `WEIXIN_TOKEN` is excluded from API responses, frontend state, service logs, and the Weixin SQLite state database; the database stores the cursor, context tokens, conversation bindings, and recoverable delivery records. Telegram configuration, behavior, and its separate allowlist remain unchanged.
+
 ### Administration and Extensions
 
 - Admin Center manages user permissions, invite codes, announcements, updates, and runtime status.

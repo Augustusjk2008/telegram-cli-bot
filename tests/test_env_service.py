@@ -77,6 +77,25 @@ def test_env_service_masks_telegram_token(
     assert "TELEGRAM_BOT_TOKEN=123456:secret" in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
+def test_env_service_masks_weixin_token_and_keeps_allowlist_separate(tmp_path: Path) -> None:
+    _write_env(tmp_path, "")
+    service = EnvConfigService(tmp_path)
+    service.patch({
+        "values": {
+            "WEIXIN_ENABLED": True,
+            "WEIXIN_ACCOUNT_ID": "bot@im.bot",
+            "WEIXIN_TOKEN": "weixin-secret",
+            "WEIXIN_ALLOWED_USER_IDS": "user-a, user-b",
+        }
+    })
+    snapshot = {item["key"]: item for item in service.snapshot()["items"]}
+    assert snapshot["WEIXIN_ENABLED"]["value"] == "true"
+    assert snapshot["WEIXIN_ALLOWED_USER_IDS"]["value"] == "user-a,user-b"
+    assert snapshot["WEIXIN_TOKEN"]["value"] == ""
+    assert snapshot["WEIXIN_TOKEN"]["masked"] is True
+    assert "WEIXIN_TOKEN=weixin-secret" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
 def test_windows_registry_environment_merges_path_and_expands_values() -> None:
     class FakeKey:
         def __init__(self, values):

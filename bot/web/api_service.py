@@ -7341,8 +7341,10 @@ async def _notify_telegram_completion(
     alias: str,
     agent_id: str,
     source_chat_id: int | None,
+    source_channel: str = "",
+    source_external_id: str = "",
 ) -> None:
-    """Forward a persisted terminal reply without coupling Web to Telegram."""
+    """Fan out one persisted terminal reply to the active optional channels."""
     if str(event.get("type") or "") != "done":
         return
     if str(agent_id or "main").strip().lower() != "main":
@@ -7352,13 +7354,17 @@ async def _notify_telegram_completion(
     if event.get("cluster_child") or event.get("is_cluster_child") or event.get("internal"):
         return
     try:
-        from bot.telegram.notifications import (
-            TelegramCompletionNotification,
-            get_active_completion_notifier,
-        )
+        from bot.channel_notifications import CompletionNotification, get_active_channel_notifiers
+        from bot.telegram.notifications import get_active_completion_notifier
 
-        notifier = get_active_completion_notifier()
-        if notifier is None:
+        notifiers: list[Any] = []
+        legacy_notifier = get_active_completion_notifier()
+        if legacy_notifier is not None:
+            notifiers.append(legacy_notifier)
+        for candidate in get_active_channel_notifiers():
+            if candidate not in notifiers:
+                notifiers.append(candidate)
+        if not notifiers:
             return
         message = event.get("message") if isinstance(event.get("message"), dict) else {}
         message_meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
@@ -7416,22 +7422,24 @@ async def _notify_telegram_completion(
                 or event.get("error_message")
                 or "执行失败，请在 Web 查看任务详情。"
             )
-        await notifier.notify_completion(
-            TelegramCompletionNotification(
-                alias=alias,
-                agent_id=str(agent_id or "main"),
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                assistant_message_id=assistant_message_id,
-                content=content,
-                completion_state=completion_state,
-                context_usage=context_usage,
-                source_chat_id=source_chat_id,
-                endless_group_id=endless_group_id,
-                terminal_at=terminal_at,
-                endless_completion_token=endless_completion_token,
-            )
+        completion = CompletionNotification(
+            alias=alias,
+            agent_id=str(agent_id or "main"),
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            assistant_message_id=assistant_message_id,
+            content=content,
+            completion_state=completion_state,
+            context_usage=context_usage,
+            source_chat_id=source_chat_id,
+            source_channel=str(source_channel or "").strip().lower(),
+            source_external_id=str(source_external_id or "").strip(),
+            endless_group_id=endless_group_id,
+            terminal_at=terminal_at,
+            endless_completion_token=endless_completion_token,
         )
+        for notifier in notifiers:
+            await notifier.notify_completion(completion)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # Telegram is an optional side effect.
@@ -7449,6 +7457,8 @@ async def _stream_with_telegram_completion_notifications(
     alias: str,
     agent_id: str,
     source_chat_id: int | None,
+    source_channel: str = "",
+    source_external_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     async for event in events:
         await _notify_telegram_completion(
@@ -7456,6 +7466,8 @@ async def _stream_with_telegram_completion_notifications(
             alias=alias,
             agent_id=agent_id,
             source_chat_id=source_chat_id,
+            source_channel=source_channel,
+            source_external_id=source_external_id,
         )
         yield event
 
@@ -7858,6 +7870,8 @@ async def stream_chat(
     include_trace: bool = True,
     stream_protocol_version: int = 1,
     telegram_origin_chat_id: int | None = None,
+    source_channel: str = "",
+    source_external_id: str = "",
     endless_mode: bool = False,
     endless_group_id: str = "",
     endless_parent_message_id: str = "",
@@ -7958,6 +7972,12 @@ async def stream_chat(
                         alias=alias,
                         agent_id=agent_id,
                         source_chat_id=telegram_origin_chat_id,
+                        source_channel=("telegram" if telegram_origin_chat_id is not None else source_channel),
+                        source_external_id=(
+                            str(telegram_origin_chat_id)
+                            if telegram_origin_chat_id is not None
+                            else source_external_id
+                        ),
                     ):
                         yield event
             finally:

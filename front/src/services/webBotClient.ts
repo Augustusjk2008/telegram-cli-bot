@@ -46,6 +46,8 @@ import type {
   EnvConfigPatchInput,
   EnvConfigPatchResult,
   EnvConfigSnapshot,
+  WeixinGatewayStatus,
+  WeixinSetup,
   FileOpenTarget,
   FileTreeRevealResult,
   ExternalSourceReadResult,
@@ -212,6 +214,10 @@ export interface WebBotClient {
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   reloadEnvConfig(): Promise<EnvConfigPatchResult>;
   reloadSystemEnvConfig(): Promise<EnvConfigPatchResult>;
+  getWeixinStatus(): Promise<WeixinGatewayStatus>;
+  startWeixinSetup(): Promise<WeixinSetup>;
+  getWeixinSetup(setupId: string): Promise<WeixinSetup>;
+  cancelWeixinSetup(setupId: string): Promise<WeixinSetup>;
   getCliErrorStats(filters?: CliErrorStatsFilters): Promise<CliErrorStatsResult>;
   getCodexUsageConfig(): Promise<CodexUsageConfig>;
   updateCodexUsageConfig(input: { enabled: boolean }): Promise<CodexUsageConfig>;

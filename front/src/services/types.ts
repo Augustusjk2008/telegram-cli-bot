@@ -264,6 +264,39 @@ export type EnvConfigPatchResult = {
   systemEnvironmentSupported?: boolean;
 };
 
+export type WeixinSetupState =
+  | "idle"
+  | "waiting_scan"
+  | "scanned"
+  | "confirmed"
+  | "expired"
+  | "cancelled"
+  | "failed";
+
+export type WeixinSetup = {
+  setupId: string;
+  status: WeixinSetupState;
+  accountId: string;
+  enabled: boolean;
+  configured: boolean;
+  needsRestart: boolean;
+  expiresAt: number;
+  errorCode: string;
+  errorMessage: string;
+  qrCodeUrl?: string;
+  qrCodeContent?: string;
+  qrCodeImage?: string;
+};
+
+export type WeixinGatewayStatus = {
+  enabled: boolean;
+  configured: boolean;
+  accountId: string;
+  allowedUserCount: number;
+  connectionStatus: string;
+  setup: WeixinSetup | null;
+};
+
 export type StorageMigrationState =
   | "preparing"
   | "stopping"

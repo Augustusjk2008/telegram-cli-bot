@@ -277,6 +277,22 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 
 常见连接问题包括：Token 格式错误、用户 ID 未加入白名单、应用未重启、Bot 被其他轮询实例占用，以及公网地址或 WebSocket 反向代理未配置。遇到轮询冲突时先停止同一 Bot 的其他 `getUpdates` 客户端；遇到公网按钮不可用时先检查 `WEB_PUBLIC_URL`、固定转发配置和 `/node/<节点 ID>/` 路径。
 
+### 个人微信 iLink 接入
+
+Orbit Safe Claw 支持通过 Tencent iLink Bot 接入个人微信账号。企业微信使用独立适配器。管理员可以在 Admin Center 的“微信接入”面板开始扫码，成功后服务会把账号 ID、敏感 Token 和 API 地址保存到项目 `.env`；配置白名单后需要重启应用：
+
+```env
+WEIXIN_ENABLED=true
+WEIXIN_ACCOUNT_ID=<扫码返回的 iLink Bot 账号 ID>
+WEIXIN_TOKEN=<扫码返回的 iLink Bot Token>
+WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
+WEIXIN_ALLOWED_USER_IDS=<微信私聊用户 ID，逗号分隔>
+```
+
+网关使用 HTTP 长轮询，不需要公网 Webhook。它只接收白名单用户的个人私聊文本，支持 `/start`、`/help`、`to <alias> <正文>`、`to <alias> /new`、`/config`、`/status` 和 `/stop`。微信与 Web、Telegram 共用 `(bot_id, shared_user_id, agent_id)` 会话和历史，最终答复会按会话绑定投递；trace、状态预览和集群子任务不会直接推送。
+
+普通微信群、图片、视频、语音、文件、卡片和消息编辑暂不支持。`WEIXIN_TOKEN` 不会显示在 API 响应、前端页面、服务日志或微信 SQLite 状态库中；状态库只保存同步游标、context token、会话绑定和可恢复的投递记录。Telegram 的配置、行为和独立白名单保持不变。
+
 ### 管理与扩展
 
 - Admin Center 管理用户权限、唯一管理员账号、邀请码、公告、更新和运行状态，也可以请求重启后端。本地 `127.0.0.1` 登录可在没有指定管理员账号时把一个已有账号设为管理员；已有管理员时不能再指定第二个。

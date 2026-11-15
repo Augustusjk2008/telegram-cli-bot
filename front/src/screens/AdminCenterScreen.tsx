@@ -14,6 +14,7 @@ import { GlobalUiSettingsPanel } from "../components/GlobalUiSettingsPanel";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
+import { WeixinGatewayPanel } from "../components/admin/WeixinGatewayPanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
@@ -72,6 +73,7 @@ type AdminCenterTab =
   | "network-updates"
   | "announcements"
   | "notifications"
+  | "weixin"
   | "chat-translation"
   | "inline-completion"
   | "lan-chat"
@@ -90,6 +92,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
   announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
   notifications: { label: "通知", description: "任务完成推送的状态与测试" },
+  weixin: { label: "微信接入", description: "个人微信 iLink Bot 扫码、状态与私聊白名单" },
   "lan-chat": { label: "联机聊天", description: "局域网内多实例联机聊天" },
   "cli-errors": { label: "错误", description: "CLI 执行错误的统计与最近记录" },
 };
@@ -98,13 +101,14 @@ const ADMIN_TAB_GROUPS: Array<{ label: string; tabs: AdminCenterTab[] }> = [
   { label: "系统", tabs: ["global", "env", "network-updates", "storage"] },
   { label: "成员", tabs: ["users", "invites"] },
   { label: "智能与服务", tabs: [ "inline-completion", "chat-translation", "usage"] },
-  { label: "消息", tabs: ["announcements", "notifications", "lan-chat"] },
+  { label: "消息", tabs: ["announcements", "notifications", "weixin", "lan-chat"] },
   { label: "诊断", tabs: ["cli-errors"] },
 ];
 
 const ENV_CATEGORY_LABELS: Record<string, string> = {
   basic: "基础",
   telegram: "Telegram",
+  weixin: "个人微信",
   web: "Web",
   tunnel: "Tunnel",
   "language-server": "语言服务",
@@ -118,6 +122,7 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
 const ENV_CATEGORY_ORDER = [
   "basic",
   "telegram",
+  "weixin",
   "web",
   "tunnel",
   "language-server",
@@ -317,6 +322,7 @@ export function AdminCenterScreen({
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
+  const [weixinPanelKey, setWeixinPanelKey] = useState(0);
   const [chatTranslationPanelKey, setChatTranslationPanelKey] = useState(0);
   const [inlineCompletionPanelKey, setInlineCompletionPanelKey] = useState(0);
   const [testingPushPlus, setTestingPushPlus] = useState(false);
@@ -348,6 +354,7 @@ export function AdminCenterScreen({
     "network-updates": false,
     announcements: false,
     notifications: false,
+    weixin: false,
     "inline-completion": false,
     "chat-translation": false,
     "lan-chat": false,
@@ -376,6 +383,7 @@ export function AdminCenterScreen({
       "network-updates",
       "announcements",
       "notifications",
+      ...(canManageEnvConfig ? (["weixin"] as AdminCenterTab[]) : []),
       "inline-completion",
       "chat-translation",
       "lan-chat",
@@ -696,6 +704,11 @@ export function AdminCenterScreen({
       if (refresh) setNetworkUpdatesRefreshKey((previous) => previous + 1);
     } else if (activeTab === "notifications") {
       await loadNotificationSettings(nextNotice, refresh);
+    } else if (activeTab === "weixin" && canManageEnvConfig) {
+      setLoadedTabs((prev) => ({ ...prev, weixin: true }));
+      setWeixinPanelKey((prev) => prev + 1);
+      setLoading(false);
+      setRefreshing(false);
     } else if (activeTab === "chat-translation") {
       setLoadedTabs((prev) => ({ ...prev, "chat-translation": true }));
       setChatTranslationPanelKey((prev) => prev + 1);
@@ -1529,6 +1542,15 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
               </div>
             ) : null}
           </section>
+        ) : null}
+
+        {!loading && activeTab === "weixin" && canManageEnvConfig ? (
+          <WeixinGatewayPanel
+            key={weixinPanelKey}
+            client={client}
+            onNotice={setNotice}
+            onError={setError}
+          />
         ) : null}
 
         {!loading && activeTab === "usage" ? (

@@ -165,6 +165,9 @@ import type {
   EnvConfigPatchResult,
   EnvConfigPatchValue,
   EnvConfigSnapshot,
+  WeixinGatewayStatus,
+  WeixinSetup,
+  WeixinSetupState,
   FileOpenTarget,
   FileTreeRevealResult,
   FileCopyResult,
@@ -1114,6 +1117,42 @@ type RawEnvConfigPatchResult = {
   system_environment_reloaded?: boolean;
   systemEnvironmentSupported?: boolean;
   system_environment_supported?: boolean;
+};
+
+type RawWeixinSetup = {
+  setup_id?: string;
+  setupId?: string;
+  status?: string;
+  account_id?: string;
+  accountId?: string;
+  enabled?: boolean;
+  configured?: boolean;
+  needs_restart?: boolean;
+  needsRestart?: boolean;
+  expires_at?: number;
+  expiresAt?: number;
+  error_code?: string;
+  errorCode?: string;
+  error_message?: string;
+  errorMessage?: string;
+  qr_code_url?: string;
+  qrCodeUrl?: string;
+  qr_code_content?: string;
+  qrCodeContent?: string;
+  qr_code_image?: string;
+  qrCodeImage?: string;
+};
+
+type RawWeixinStatus = {
+  enabled?: boolean;
+  configured?: boolean;
+  account_id?: string;
+  accountId?: string;
+  allowed_user_count?: number;
+  allowedUserCount?: number;
+  connection_status?: string;
+  connectionStatus?: string;
+  setup?: RawWeixinSetup | null;
 };
 
 type RawAnnouncementSection = {
@@ -3132,6 +3171,37 @@ function mapEnvPatchResult(raw: RawEnvConfigPatchResult): EnvConfigPatchResult {
     ...(typeof raw.system_environment_supported === "boolean" || typeof raw.systemEnvironmentSupported === "boolean"
       ? { systemEnvironmentSupported: raw.system_environment_supported ?? raw.systemEnvironmentSupported }
       : {}),
+  };
+}
+
+function mapWeixinSetup(raw: RawWeixinSetup | null | undefined): WeixinSetup {
+  const value = raw || {};
+  const allowed: WeixinSetupState[] = ["idle", "waiting_scan", "scanned", "confirmed", "expired", "cancelled", "failed"];
+  const status = String(value.status || "idle");
+  return {
+    setupId: String(value.setup_id ?? value.setupId ?? ""),
+    status: (allowed.includes(status as WeixinSetupState) ? status : "failed") as WeixinSetupState,
+    accountId: String(value.account_id ?? value.accountId ?? ""),
+    enabled: Boolean(value.enabled),
+    configured: Boolean(value.configured),
+    needsRestart: Boolean(value.needs_restart ?? value.needsRestart),
+    expiresAt: Number(value.expires_at ?? value.expiresAt ?? 0),
+    errorCode: String(value.error_code ?? value.errorCode ?? ""),
+    errorMessage: String(value.error_message ?? value.errorMessage ?? ""),
+    ...(value.qr_code_url || value.qrCodeUrl ? { qrCodeUrl: String(value.qr_code_url ?? value.qrCodeUrl) } : {}),
+    ...(value.qr_code_content || value.qrCodeContent ? { qrCodeContent: String(value.qr_code_content ?? value.qrCodeContent) } : {}),
+    ...(value.qr_code_image || value.qrCodeImage ? { qrCodeImage: String(value.qr_code_image ?? value.qrCodeImage) } : {}),
+  };
+}
+
+function mapWeixinStatus(raw: RawWeixinStatus): WeixinGatewayStatus {
+  return {
+    enabled: Boolean(raw.enabled),
+    configured: Boolean(raw.configured),
+    accountId: String(raw.account_id ?? raw.accountId ?? ""),
+    allowedUserCount: Number(raw.allowed_user_count ?? raw.allowedUserCount ?? 0),
+    connectionStatus: String(raw.connection_status ?? raw.connectionStatus ?? "disabled"),
+    setup: raw.setup ? mapWeixinSetup(raw.setup) : null,
   };
 }
 
@@ -5172,6 +5242,22 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapEnvPatchResult(data);
+  }
+
+  async getWeixinStatus(): Promise<WeixinGatewayStatus> {
+    return mapWeixinStatus(await this.requestJson<RawWeixinStatus>("/api/admin/weixin/status"));
+  }
+
+  async startWeixinSetup(): Promise<WeixinSetup> {
+    return mapWeixinSetup(await this.requestJson<RawWeixinSetup>("/api/admin/weixin/setup", { method: "POST" }));
+  }
+
+  async getWeixinSetup(setupId: string): Promise<WeixinSetup> {
+    return mapWeixinSetup(await this.requestJson<RawWeixinSetup>(`/api/admin/weixin/setup/${encodeURIComponent(setupId)}`));
+  }
+
+  async cancelWeixinSetup(setupId: string): Promise<WeixinSetup> {
+    return mapWeixinSetup(await this.requestJson<RawWeixinSetup>(`/api/admin/weixin/setup/${encodeURIComponent(setupId)}`, { method: "DELETE" }));
   }
 
   async getCliErrorStats(filters: CliErrorStatsFilters = {}): Promise<CliErrorStatsResult> {

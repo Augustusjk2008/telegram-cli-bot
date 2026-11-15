@@ -102,6 +102,11 @@ ENV_SCHEMA: tuple[EnvField, ...] = (
     EnvField("TELEGRAM_BOT_TOKEN", "Telegram Bot Token", "由 BotFather 创建的 Telegram Bot Token。", "password", "", "telegram", sensitive=True, max_length=8192),
     EnvField("TELEGRAM_ALLOWED_USER_IDS", "Telegram 用户白名单", "允许操作 Telegram Bot 的数字用户 ID，逗号分隔；留空时关闭接入。", "csv", "", "telegram"),
     EnvField("TELEGRAM_BROADCAST_COMPLETIONS", "Telegram 最终回复广播", "开启后将 Web 或 Telegram 的最终回复发送给 TELEGRAM_ALLOWED_USER_IDS 中的所有私聊用户；保存后需重启应用。", "boolean", "false", "telegram"),
+    EnvField("WEIXIN_ENABLED", "启用个人微信", "启用个人微信 iLink Bot 私聊接入；修改后需重启应用。", "boolean", "false", "weixin"),
+    EnvField("WEIXIN_ACCOUNT_ID", "微信 iLink 账号 ID", "扫码登录成功后由 iLink 返回的 Bot 账号 ID；修改后需重启应用。", "string", "", "weixin", max_length=512),
+    EnvField("WEIXIN_TOKEN", "微信 iLink Token", "扫码登录成功后保存的 iLink Bot Token；作为敏感值处理，修改后需重启应用。", "password", "", "weixin", sensitive=True, max_length=8192),
+    EnvField("WEIXIN_BASE_URL", "微信 iLink 地址", "iLink Bot API 基础地址，默认使用腾讯服务；修改后需重启应用。", "string", "https://ilinkai.weixin.qq.com", "weixin", max_length=2048),
+    EnvField("WEIXIN_ALLOWED_USER_IDS", "微信私聊白名单", "允许发送私聊文本的微信用户 ID，逗号分隔；留空时关闭接入。", "csv", "", "weixin", max_length=8192),
     EnvField(
         "ENDLESS_CONTINUE_DELAY_SECONDS",
         "无尽模式错误等待",

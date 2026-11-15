@@ -7,10 +7,16 @@ import logging
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 from bot import config
+from bot.channel_notifications import (
+    CompletionNotification,
+    get_active_channel_notifier,
+    get_active_channel_notifiers,
+    register_channel_notifier,
+    unregister_channel_notifier,
+)
 
 from .client import TelegramClient, TelegramError
 from .state import NAVIGATION_TTL, TelegramState
@@ -20,29 +26,11 @@ logger = logging.getLogger(__name__)
 _DELIVERY_MAX_BACKOFF = 60.0
 
 
-@dataclass(frozen=True)
-class TelegramCompletionNotification:
-    alias: str
-    agent_id: str = "main"
-    conversation_id: str = ""
-    turn_id: str = ""
-    assistant_message_id: str = ""
-    content: str = ""
-    completion_state: str = "completed"
-    context_usage: dict[str, Any] | None = None
-    source_chat_id: int | None = None
-    endless_group_id: str = ""
-    terminal_at: str = ""
-    endless_completion_token: str = ""
-
-
-CompletionNotification = TelegramCompletionNotification
-
-_ACTIVE_NOTIFIERS: dict[str, "TelegramCompletionNotifier"] = {}
+TelegramCompletionNotification = CompletionNotification
 
 
 def register_completion_notifier(notifier: "TelegramCompletionNotifier") -> None:
-    _ACTIVE_NOTIFIERS[str(notifier.bot_id)] = notifier
+    register_channel_notifier("telegram", notifier, key=str(notifier.bot_id))
 
 
 def unregister_completion_notifier(
@@ -53,17 +41,16 @@ def unregister_completion_notifier(
     key = str(bot_id or getattr(notifier, "bot_id", "") or "")
     if not key:
         return
-    current = _ACTIVE_NOTIFIERS.get(key)
-    if notifier is None or current is notifier:
-        _ACTIVE_NOTIFIERS.pop(key, None)
+    unregister_channel_notifier("telegram", notifier, key=key)
 
 
 def get_active_completion_notifier(bot_id: str | None = None) -> "TelegramCompletionNotifier | None":
     if bot_id:
-        return _ACTIVE_NOTIFIERS.get(str(bot_id))
-    if not _ACTIVE_NOTIFIERS:
+        return get_active_channel_notifier("telegram", str(bot_id))
+    notifiers = get_active_channel_notifiers("telegram")
+    if not notifiers:
         return None
-    return _ACTIVE_NOTIFIERS[next(reversed(_ACTIVE_NOTIFIERS))]
+    return notifiers[-1]
 
 
 class TelegramDeliveryService:

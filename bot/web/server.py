@@ -110,6 +110,7 @@ from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
 from .runtime_diagnostics import EventLoopStallWatchdog, LoopLagTracker, RuntimeDiagnosticsRegistry
 from .env_service import EnvConfigService, EnvValidationError
+from bot.weixin.onboarding import WeixinOnboardingError, WeixinOnboardingService
 from .exposure_service import WebExposureService
 from .fixed_forward_service import FixedForwardService
 from .inline_completion_config import InlineCompletionConfigError, InlineCompletionConfigStore
@@ -1139,6 +1140,7 @@ class WebApiServer:
             messages_path=get_lan_chat_messages_path(),
         )
         self.env_config_service = EnvConfigService(_REPO_ROOT)
+        self.weixin_onboarding = WeixinOnboardingService(env_service=self.env_config_service, repo_root=_REPO_ROOT)
         if language_server_catalog is not None:
             self.language_server_catalog = language_server_catalog
             self.language_server_installer = language_server_installer or language_server_catalog.installer
@@ -5191,6 +5193,34 @@ class WebApiServer:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": self.env_config_service.snapshot()})
 
+    async def admin_weixin_setup(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = await self.weixin_onboarding.start_setup()
+        except WeixinOnboardingError as exc:
+            raise WebApiError(exc.status, exc.code, exc.message) from exc
+        return _json({"ok": True, "data": data}, status=202)
+
+    async def admin_weixin_setup_status(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = await self.weixin_onboarding.get_setup(request.match_info.get("setup_id", ""))
+        except WeixinOnboardingError as exc:
+            raise WebApiError(exc.status, exc.code, exc.message) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_weixin_setup_cancel(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        try:
+            data = await self.weixin_onboarding.cancel_setup(request.match_info.get("setup_id", ""))
+        except WeixinOnboardingError as exc:
+            raise WebApiError(exc.status, exc.code, exc.message) from exc
+        return _json({"ok": True, "data": data})
+
+    async def admin_weixin_status(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_ADMIN_OPS)
+        return _json({"ok": True, "data": self.weixin_onboarding.status()})
+
     async def admin_inline_completion_config_get(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
         return _json({"ok": True, "data": self.inline_completion_config_store.get_public_config()})
@@ -5753,7 +5783,13 @@ class WebApiServer:
 
     async def stop(self, *, preserve_tunnel: bool = False):
         if self._runner is None:
+            onboarding = getattr(self, "weixin_onboarding", None)
+            if onboarding is not None:
+                await onboarding.close()
             return
+        onboarding = getattr(self, "weixin_onboarding", None)
+        if onboarding is not None:
+            await onboarding.close()
         if self._restart_task is not None and not self._restart_task.done():
             self._restart_task.cancel()
         if self._restart_task is not None:

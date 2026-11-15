@@ -47,6 +47,7 @@ from bot.storage_lifecycle import stop_all_agent_processes
 from bot.storage_migration import StorageMigrationService
 from bot.storage_runtime import AsyncStorageMigrationService
 from bot.telegram.gateway import start_telegram_gateway
+from bot.weixin.gateway import start_weixin_gateway
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
@@ -529,6 +530,7 @@ async def run_all_bots():
         storage_migration_stop_all_agents=stop_all_agents_for_storage_migration,
     )
     telegram_gateway = None
+    weixin_gateway = None
     acceptance_task = asyncio.create_task(_wait_update_acceptance(
         startup_update_job, os.environ.get("CLI_BRIDGE_UPDATE_STATE_FILE", ""),
     )) if startup_update_job else None
@@ -542,9 +544,13 @@ async def run_all_bots():
                 manager, chat_url=web_server.chat_public_url, host=web_server,
             )
         except Exception:
-            if not os.environ.get("TCB_UPDATE_JOB_ID"):
-                raise
-            logger.exception("升级启动期间 Telegram 暂不可用，核心 Web 已启动")
+            logger.exception("Telegram 接入启动失败，核心 Web 继续运行")
+        try:
+            weixin_gateway = await start_weixin_gateway(
+                manager, chat_url=web_server.chat_public_url, host=web_server,
+            )
+        except Exception:
+            logger.exception("微信接入启动失败，核心 Web 继续运行")
         restart_wait = asyncio.create_task(config.RESTART_EVENT.wait())
         shutdown_wait = asyncio.create_task(config.SHUTDOWN_EVENT.wait())
         try:
@@ -561,6 +567,8 @@ async def run_all_bots():
         if acceptance_task is not None:
             acceptance_task.cancel()
             await asyncio.gather(acceptance_task, return_exceptions=True)
+        if weixin_gateway is not None:
+            await weixin_gateway.stop()
         if telegram_gateway is not None:
             await telegram_gateway.stop()
         await web_server.stop(preserve_tunnel=config.RESTART_REQUESTED)

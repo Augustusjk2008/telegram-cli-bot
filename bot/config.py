@@ -220,6 +220,7 @@ def _refresh_environment_config() -> None:
     """Refresh values derived from the current process environment."""
     global ALLOWED_USER_IDS, CLI_TYPE, CLI_PATH, TCB_CODEX_SERVER_VOICE_ENABLED
     global TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, TELEGRAM_BROADCAST_COMPLETIONS
+    global WEIXIN_ENABLED, WEIXIN_ACCOUNT_ID, WEIXIN_TOKEN, WEIXIN_BASE_URL, WEIXIN_ALLOWED_USER_IDS
     global CLI_MODEL_OPTIONS
     global CLI_GLOBAL_EXTRA_ARGS, MODEL_PRICES_FILE, WORKING_DIR, CLAUDE_DONE_DETECTOR_ENABLED
     global CLAUDE_DONE_QUIET_SECONDS, CLAUDE_DONE_SENTINEL_MODE, MANAGED_BOTS_FILE, WEB_ENABLED
@@ -259,6 +260,12 @@ def _refresh_environment_config() -> None:
         else:
             logging.warning("忽略无效的 TELEGRAM_ALLOWED_USER_IDS 项：需要正整数用户 ID")
     TELEGRAM_BROADCAST_COMPLETIONS = _get_project_bool("TELEGRAM_BROADCAST_COMPLETIONS", False)
+
+    WEIXIN_ENABLED = _get_project_bool("WEIXIN_ENABLED", False)
+    WEIXIN_ACCOUNT_ID = _get_project_config("WEIXIN_ACCOUNT_ID", "").strip()
+    WEIXIN_TOKEN = _get_project_config("WEIXIN_TOKEN", "").strip()
+    WEIXIN_BASE_URL = _get_project_config("WEIXIN_BASE_URL", "https://ilinkai.weixin.qq.com").strip() or "https://ilinkai.weixin.qq.com"
+    WEIXIN_ALLOWED_USER_IDS = set(_split_csv_env(_get_project_config("WEIXIN_ALLOWED_USER_IDS", "")))
 
     CLI_TYPE = _get_project_config("CLI_TYPE", "codex").strip().lower()
     configured_cli_path = _get_project_config("CLI_PATH", "").strip()
@@ -570,6 +577,7 @@ logging.getLogger("aiohttp").setLevel(logging.WARNING)
 _SERVICE_LOG_HANDLER_MARKER = "_tcb_service_log_handler"
 _SERVICE_LOG_SECRET_NAMES = (
     "TELEGRAM_BOT_TOKEN",
+    "WEIXIN_TOKEN",
     "TCB_HUB_NODE_TOKEN",
     "TCB_HUB_FRPS_TOKEN",
     "PUSHPLUS_TOKEN",

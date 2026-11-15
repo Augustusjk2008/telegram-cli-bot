@@ -2,7 +2,7 @@
 
 > **Sync rule:** `AGENTS.md` and `CLAUDE.md` must stay identical. When you edit one, apply the same change to the other in the same task.
 
-Orbit Safe Claw is a Windows-first Python web console for local Codex (`codex exec` or `codex app-server`), Claude, Antigravity (`agy`), and DeepSeek Harness (`dsh`). An optional single Telegram gateway shares the Web sessions. The following rules apply to the entire repository.
+Orbit Safe Claw is a Windows-first Python web console for local Codex (`codex exec` or `codex app-server`), Claude, Antigravity (`agy`), and DeepSeek Harness (`dsh`). Optional Telegram and personal Weixin iLink gateways share the Web sessions. The following rules apply to the entire repository.
 
 ## Sessions and Security Boundaries
 
@@ -47,7 +47,7 @@ The smoke test covers login-page input, tab switching, desktop/mobile layout and
 
 ## Repository Boundaries
 
-- `bot/` contains the backend, Web API, bot manager and plugin implementations; `front/` is the React/Vite frontend; `tests/` is the backend pytest.
+- `bot/` contains the backend, Web API, bot manager, plugin implementations and optional Telegram/Weixin gateways; `front/` is the React/Vite frontend; `tests/` is the backend pytest.
 - Do not commit or force-add `.env`, the real `managed_bots.json`, `docs/` runtime materials and release notes, or data under the user directory `.tcb/`.
 - `managed_bots.example.json` is for public examples only. Web Bot profiles share one optional Telegram gateway; there is no per-profile Telegram application lifecycle. Gateway configuration uses `TELEGRAM_ENABLED`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` and `TELEGRAM_BROADCAST_COMPLETIONS`.
 - Brand/logo consistently uses `front/public/assets/app-logo*.svg`; login, favicon, mobile shell, and workbench header remain consistent.
@@ -67,6 +67,7 @@ The smoke test covers login-page input, tab switching, desktop/mobile layout and
 - Cluster `run_id` is stable for the main conversation and team revision. Every MCP call passes it explicitly; after `configure_team` returns `changed=true`, subsequent calls use its returned ID. Ordinary turns and host restarts do not rotate it; in-memory tasks do not survive host restarts.
 - Endless mode groups automatic `Continue` attempts by `endless_group_id`. Retryable incomplete or error results wait for `ENDLESS_CONTINUE_DELAY_SECONDS` (default 120 seconds), persist `error` and `continue` events in ChatStore, and reuse one durable turn for the whole run. Legacy grouped turns are consolidated in the database; history loading returns the turn directly. Session state exposes whether endless mode is active and its attempt count; stopping or cancelling the run must end the continuation loop.
 - Telegram and Web share `(bot_id, shared_user_id, agent_id)` sessions. Telegram bindings also identify the conversation; delivery retries and broadcast expansion read persisted replies without replaying agent tasks. Keep the Telegram whitelist separate from Web user IDs and never expose the Bot token.
+- Personal Weixin iLink and Web/Telegram share `(bot_id, shared_user_id, agent_id)` sessions. Weixin uses QR onboarding, HTTP long polling, a separate `WEIXIN_ALLOWED_USER_IDS` private-message allowlist and a SQLite state store for cursors, context tokens, bindings and delivery recovery. Keep the Weixin token out of API responses, frontend state, logs and SQLite; ordinary groups and non-text media are outside the current scope.
 - The theme library is the shared set of packaged presets and is read-only for every account: creating, importing, updating or deleting themes and uploading theme assets return `theme_readonly`. Each signed-in account keeps its own selected theme, falling back to the default theme; the login page reads `/api/public/ui/themes` and stores its preview selection only in the browser. Guests cannot change the selection; selection changes check the library revision to avoid overwriting concurrent changes.
 - GitHub connections belong to the signed-in Web account (`bot/web/github_service.py`); tokens are encrypted under the app data `github/` directory and never returned to clients. Local fetch/pull/merge/push/publish pass the requester's token to Git only through environment-scoped `http.https://github.com/.extraheader`, never argv; SSH remote workspaces keep using the remote host's credentials and never receive the token.
 - Web terminal sessions are isolated by `(user_id, owner_id)`; each new tab must use an independent `owner_id`, and closing a tab must terminate the corresponding shell; the legacy client's `rebuild` endpoint is retained as a compatibility alias for creating sessions.
