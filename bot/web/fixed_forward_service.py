@@ -27,6 +27,9 @@ _DEFAULT_HEARTBEAT_INTERVAL = 30.0
 _DEFAULT_STARTUP_TIMEOUT = 2.0
 _DEFAULT_CONNECT_TIMEOUT = 5.0
 _DEFAULT_HEARTBEAT_TIMEOUT = 5.0
+_DEFAULT_RECONNECT_ATTEMPTS = 3
+_DEFAULT_RECONNECT_RETRY_DELAY = 5.0
+_DEFAULT_RECONNECT_INTERVAL = 10 * 60.0
 _ACTIVE_STATUSES = {"starting", "running"}
 
 
@@ -131,6 +134,9 @@ class FixedForwardService:
         startup_timeout: float = _DEFAULT_STARTUP_TIMEOUT,
         connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT,
         heartbeat_timeout: float = _DEFAULT_HEARTBEAT_TIMEOUT,
+        reconnect_attempts: int = _DEFAULT_RECONNECT_ATTEMPTS,
+        reconnect_retry_delay: float = _DEFAULT_RECONNECT_RETRY_DELAY,
+        reconnect_interval: float = _DEFAULT_RECONNECT_INTERVAL,
     ) -> None:
         self._host = str(host or "").strip() or "0.0.0.0"
         self._port = int(port)
@@ -149,9 +155,13 @@ class FixedForwardService:
         self._startup_timeout = max(0.0, float(startup_timeout))
         self._connect_timeout = max(0.1, float(connect_timeout))
         self._heartbeat_timeout = max(0.1, float(heartbeat_timeout))
+        self._reconnect_attempts = max(1, int(reconnect_attempts))
+        self._reconnect_retry_delay = max(0.1, float(reconnect_retry_delay))
+        self._reconnect_interval = max(1.0, float(reconnect_interval))
         self._local_url = _build_local_url(self._host, self._port)
 
         self._state_lock = threading.Lock()
+        self._lifecycle_lock = asyncio.Lock()
         self._process: subprocess.Popen | None = None
         self._expected_stop = False
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -250,6 +260,13 @@ class FixedForwardService:
         return result
 
     async def start(self) -> dict[str, Any]:
+        async with self._lifecycle_lock:
+            snapshot = await self._start_once()
+        if self._enabled and snapshot.get("status") in {"running", "error"}:
+            self._ensure_heartbeat_task()
+        return snapshot
+
+    async def _start_once(self) -> dict[str, Any]:
         if not self._enabled:
             self._set_snapshot(
                 status="stopped",
@@ -367,7 +384,16 @@ class FixedForwardService:
             self._snapshot["pid"] = process.pid
 
         threading.Thread(target=self._consume_output, args=(process, ready_event), daemon=True).start()
-        await asyncio.to_thread(ready_event.wait, self._startup_timeout)
+        try:
+            await asyncio.to_thread(ready_event.wait, self._startup_timeout)
+        except asyncio.CancelledError:
+            if process.poll() is None:
+                await asyncio.to_thread(terminate_process_tree_sync, process)
+            with self._state_lock:
+                if self._process is process:
+                    self._process = None
+                self._snapshot["pid"] = None
+            raise
 
         snapshot = self.snapshot()
         if snapshot.get("status") == "error":
@@ -421,6 +447,10 @@ class FixedForwardService:
 
     async def stop(self) -> dict[str, Any]:
         await self._stop_heartbeat_task()
+        async with self._lifecycle_lock:
+            return await self._stop_once()
+
+    async def _stop_once(self) -> dict[str, Any]:
         with self._state_lock:
             process = self._process
             self._expected_stop = True
@@ -752,6 +782,9 @@ class FixedForwardService:
                     frpc_external=False,
                     frpc_note="",
                 )
+                with self._state_lock:
+                    if self._process is process:
+                        self._process = None
         except Exception as exc:
             logger.warning("读取 frpc 输出失败: %s", exc)
             with self._state_lock:
@@ -803,10 +836,37 @@ class FixedForwardService:
             return
         self._heartbeat_task = loop.create_task(self._heartbeat_loop(), name="fixed-forward-heartbeat")
 
+    async def _try_reconnect(self) -> bool:
+        for attempt in range(1, self._reconnect_attempts + 1):
+            if attempt > 1:
+                await asyncio.sleep(self._reconnect_retry_delay)
+            logger.warning(
+                "frpc 已中断，开始自动重连 (%d/%d)",
+                attempt,
+                self._reconnect_attempts,
+            )
+            snapshot = await self.start()
+            if snapshot.get("status") == "running":
+                logger.info("frpc 自动重连成功 (%d/%d)", attempt, self._reconnect_attempts)
+                return True
+            if snapshot.get("status") == "stopped" and not self._enabled:
+                return False
+        return False
+
     async def _heartbeat_loop(self) -> None:
         while True:
             snapshot = self.snapshot()
-            if snapshot.get("status") != "running":
+            status = str(snapshot.get("status") or "")
+            if status == "error":
+                if await self._try_reconnect():
+                    continue
+                logger.warning(
+                    "frpc 自动重连失败，将在 %.0f 秒后再次尝试",
+                    self._reconnect_interval,
+                )
+                await asyncio.sleep(self._reconnect_interval)
+                continue
+            if status != "running":
                 return
             await asyncio.to_thread(self.send_heartbeat_once)
             await asyncio.sleep(self._heartbeat_interval)

@@ -430,7 +430,7 @@ server {
 }
 ```
 
-Allow inbound traffic on `18088` and `7000`. `WEB_BASE_PATH` must match the reverse-proxy path exactly. Rebuild the frontend and restart the web service after changing the path.
+Allow inbound traffic on `18088` and `7000`. `WEB_BASE_PATH` must match the reverse-proxy path exactly. Rebuild the frontend and restart the web service after changing the path. If a Web-managed frpc fails to start or exits unexpectedly, Orbit retries three times with a five-second delay; if it still cannot recover, it retries every ten minutes until it recovers or fixed forwarding is stopped manually.
 
 </details>
 

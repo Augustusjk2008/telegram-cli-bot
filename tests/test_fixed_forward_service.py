@@ -23,6 +23,9 @@ def _service(
     *,
     instance_id: str = "current-instance",
     public_url: str = "https://hub.example.test/node/node-a",
+    reconnect_attempts: int = 3,
+    reconnect_retry_delay: float = 5.0,
+    reconnect_interval: float = 10 * 60.0,
 ) -> FixedForwardService:
     return FixedForwardService(
         host="127.0.0.1",
@@ -37,6 +40,9 @@ def _service(
         runtime_dir=tmp_path,
         startup_timeout=0.01,
         instance_id=instance_id,
+        reconnect_attempts=reconnect_attempts,
+        reconnect_retry_delay=reconnect_retry_delay,
+        reconnect_interval=reconnect_interval,
     )
 
 
@@ -67,6 +73,7 @@ async def test_start_reuses_external_frpc_when_public_health_matches_current_ins
     assert snapshot["frpc_note"]
     assert snapshot["last_error"] == ""
     assert snapshot["frpc_last_error"] == ""
+    await service.stop()
 
 
 @pytest.mark.asyncio
@@ -102,6 +109,7 @@ async def test_proxy_exists_keeps_error_when_public_health_points_to_other_insta
     assert snapshot["frpc_external"] is False
     assert snapshot["frpc_managed"] is False
     assert terminated == [process]
+    await service.stop()
 
 
 @pytest.mark.asyncio
@@ -139,6 +147,7 @@ async def test_proxy_exists_reuses_external_frpc_when_public_health_matches_afte
     assert snapshot["last_error"] == ""
     assert snapshot["frpc_note"]
     assert terminated == [process]
+    await service.stop()
 
 
 def test_validate_config_allows_outer_reverse_proxy_prefix(tmp_path: Path) -> None:
@@ -148,3 +157,61 @@ def test_validate_config_allows_outer_reverse_proxy_prefix(tmp_path: Path) -> No
     )
 
     assert service._validate_config() == ""
+
+
+@pytest.mark.asyncio
+async def test_try_reconnect_retries_until_frpc_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, reconnect_retry_delay=0.1)
+    start_results = [
+        {"status": "error"},
+        {"status": "error"},
+        {"status": "running"},
+    ]
+    start_calls: list[int] = []
+    sleep_calls: list[float] = []
+
+    async def fake_start() -> dict[str, object]:
+        start_calls.append(1)
+        return start_results.pop(0)
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(service, "start", fake_start)
+    monkeypatch.setattr("bot.web.fixed_forward_service.asyncio.sleep", fake_sleep)
+
+    assert await service._try_reconnect() is True
+    assert len(start_calls) == 3
+    assert sleep_calls == [0.1, 0.1]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_loop_waits_ten_minutes_after_reconnect_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, reconnect_retry_delay=0.1, reconnect_interval=600.0)
+    service._set_snapshot(status="error")
+    start_calls: list[int] = []
+    sleep_calls: list[float] = []
+
+    async def fake_start() -> dict[str, object]:
+        start_calls.append(1)
+        return {"status": "error"}
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        if seconds == 600.0:
+            raise RuntimeError("stop recovery loop test")
+
+    monkeypatch.setattr(service, "start", fake_start)
+    monkeypatch.setattr("bot.web.fixed_forward_service.asyncio.sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop recovery loop test"):
+        await service._heartbeat_loop()
+
+    assert len(start_calls) == 3
+    assert sleep_calls == [0.1, 0.1, 600.0]
