@@ -54,6 +54,9 @@ TypeError: cannot read properties of undefined
 | `/config <别名> reasoning <值>` | 修改指定 Bot 的思考强度 |
 | `/config <别名> cluster on` | 开启指定 Bot 的集群 |
 | `/config <别名> cluster off` | 关闭指定 Bot 的集群 |
+| `/host` | 查看宿主和公网入口状态 |
+| `/host restart` | 请求重启后端并获取确认提示 |
+| `/host restart confirm` | 在确认有效期内执行后端重启 |
 
 配置命令会修改 Bot 配置，下一轮任务使用新值。模型和思考强度必须填写该 Bot 当前 CLI 支持的值。
 

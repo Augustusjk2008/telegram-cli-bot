@@ -27,6 +27,35 @@ class FakeWeixinClient:
         return None
 
 
+class FakeHost:
+    def __init__(self, *, refusal: str = "") -> None:
+        self.refusal = refusal
+        self.restart_requests = 0
+        self.status = {
+            "version": "9.9.9",
+            "pid": 4321,
+            "uptime_seconds": 3700,
+            "busy_reason": "",
+            "exposure": {
+                "mode": "fixed_public_forward",
+                "status": "running",
+                "public_url": "https://hub.example/node/n1",
+                "heartbeat_status": "online",
+                "heartbeat_last_at": "2026-11-15T12:00:00Z",
+            },
+        }
+
+    async def host_status(self):
+        return self.status
+
+    def host_restart_refusal(self):
+        return self.refusal
+
+    def request_host_restart(self):
+        self.restart_requests += 1
+        return self.refusal
+
+
 def make_message(message_id="1", text="to dev hello", *, peer_id="peer-1", message_type=1, group=False):
     return {
         "message_id": message_id,
@@ -99,4 +128,40 @@ async def test_control_commands_create_new_conversation_and_do_not_start_agent(g
     assert binding["alias"] == "dev"
     assert binding["conversation_id"]
     assert "已新建并切换会话" in gateway.client.messages[-1][1]
+    await gateway.stop()
+
+
+@pytest.mark.asyncio
+async def test_host_restart_requires_weixin_confirmation(gateway):
+    host = FakeHost()
+    gateway.host = host
+
+    task = gateway.receive_update(make_message(message_id="host-1", text="/host"))
+    await task
+    assert "宿主状态" in gateway.client.messages[-1][1]
+    assert "/host restart" in gateway.client.messages[-1][1]
+
+    task = gateway.receive_update(make_message(message_id="host-2", text="/host restart"))
+    await task
+    assert host.restart_requests == 0
+    assert "确认重启后端" in gateway.client.messages[-1][1]
+
+    task = gateway.receive_update(make_message(message_id="host-3", text="/host restart confirm"))
+    await task
+    assert host.restart_requests == 1
+    assert "已请求重启后端" in gateway.client.messages[-1][1]
+    await gateway.stop()
+
+
+@pytest.mark.asyncio
+async def test_host_restart_confirmation_expires(gateway):
+    host = FakeHost()
+    gateway.host = host
+    gateway._host_restart_confirmations["peer-1"] = 0.0
+
+    task = gateway.receive_update(make_message(message_id="host-expired", text="/host restart confirm"))
+    await task
+
+    assert host.restart_requests == 0
+    assert "没有待确认的重启请求" in gateway.client.messages[-1][1]
     await gateway.stop()

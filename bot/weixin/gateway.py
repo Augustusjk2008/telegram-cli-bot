@@ -18,6 +18,7 @@ from bot.telegram.ui import (
     configuration_text,
     conversation_label,
     help_text,
+    host_status_text,
     parse_config_text,
     parse_target_text,
     status_text,
@@ -34,6 +35,7 @@ from .state import WeixinState
 
 logger = logging.getLogger(__name__)
 _POLL_MAX_BACKOFF = 30.0
+_HOST_RESTART_CONFIRM_TTL = 5 * 60.0
 _TOKEN_USERS: set[str] = set()
 _ACTIVE_GATEWAYS: dict[str, "WeixinGateway"] = {}
 
@@ -108,6 +110,19 @@ def _text_from_message(message: dict[str, Any]) -> str | None:
     return "\n".join(texts) if texts else None
 
 
+def _parse_host_command(text: str) -> str | None:
+    parts = str(text or "").strip().lower().split()
+    if not parts or parts[0] != "/host":
+        return None
+    if len(parts) == 1:
+        return "status"
+    if parts == ["/host", "restart"]:
+        return "restart"
+    if parts == ["/host", "restart", "confirm"]:
+        return "restart_confirm"
+    return "invalid"
+
+
 class WeixinGateway:
     def __init__(
         self,
@@ -129,6 +144,7 @@ class WeixinGateway:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._running = False
         self._token = str(getattr(client, "token", "") or "")
+        self._host_restart_confirmations: dict[str, float] = {}
         self.completion_notifier = WeixinCompletionNotifier(
             state,
             client,
@@ -313,7 +329,65 @@ class WeixinGateway:
         self.state.update_message(message_id, status=status, delivery_status="sent", alias=alias)
 
     async def _help(self, message_id: str, peer_id: str) -> None:
-        await self._send(message_id, peer_id, [help_text(self._aliases())])
+        await self._send(
+            message_id,
+            peer_id,
+            [
+                help_text(self._aliases()),
+                "微信宿主控制：发送 /host 查看状态；发送 /host restart 后，再发送 /host restart confirm 确认重启。",
+            ],
+        )
+
+    async def _handle_host(self, message_id: str, peer_id: str, command: str) -> None:
+        if self.host is None:
+            await self._send(message_id, peer_id, ["当前宿主未提供远程运维控制。"], status="failed")
+            return
+        if command == "invalid":
+            await self._send(
+                message_id,
+                peer_id,
+                ["用法：/host 查看状态；/host restart 请求重启；/host restart confirm 确认重启。"],
+                status="handled",
+            )
+            return
+        if command == "status":
+            status = await self.host.host_status()
+            await self._send(
+                message_id,
+                peer_id,
+                [
+                    host_status_text(status),
+                    "发送 /host restart 请求重启后端。",
+                ],
+            )
+            return
+        if command == "restart":
+            refusal = self.host.host_restart_refusal()
+            if refusal:
+                await self._send(message_id, peer_id, [f"重启未执行：{refusal}。"], status="failed")
+                return
+            status = await self.host.host_status()
+            busy = str(status.get("busy_reason") or "").strip()
+            impact = f"当前：{busy}。重启会中断这些任务。" if busy else "当前没有运行中的任务。"
+            self._host_restart_confirmations[peer_id] = time.monotonic() + _HOST_RESTART_CONFIRM_TTL
+            await self._send(
+                message_id,
+                peer_id,
+                [f"确认重启后端？\n{impact}\n请在 5 分钟内发送：/host restart confirm"],
+            )
+            return
+
+        deadline = self._host_restart_confirmations.pop(peer_id, 0.0)
+        if deadline <= time.monotonic():
+            await self._send(message_id, peer_id, ["没有待确认的重启请求，请先发送 /host restart。"], status="failed")
+            return
+        refusal = self.host.host_restart_refusal()
+        if not refusal:
+            refusal = self.host.request_host_restart()
+        if refusal:
+            await self._send(message_id, peer_id, [f"重启未执行：{refusal}。"], status="failed")
+            return
+        await self._send(message_id, peer_id, ["已请求重启后端，恢复在线后请重新发送 /host 查看状态。"])
 
     async def _apply_configuration(self, alias: str, setting: str, value: str) -> str:
         configuration = await self._configuration(alias)
@@ -496,6 +570,10 @@ class WeixinGateway:
             lowered = normalized.lower()
             if lowered in {"/start", "/help"}:
                 await self._help(message_id, peer_id)
+                return
+            host_command = _parse_host_command(normalized)
+            if host_command is not None:
+                await self._handle_host(message_id, peer_id, host_command)
                 return
             if lowered == "/status":
                 await self._handle_status(message_id, peer_id)

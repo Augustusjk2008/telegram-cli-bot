@@ -266,7 +266,7 @@ WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
 WEIXIN_ALLOWED_USER_IDS=<comma-separated Weixin private user IDs>
 ```
 
-The gateway uses HTTP long polling and does not require a public webhook. It accepts private text messages from allowlisted Weixin users and supports `/start`, `/help`, `to <alias> <text>`, `to <alias> /new`, `/config <alias>`, `/status`, and `/stop`. Weixin, Web, and Telegram share `(bot_id, shared_user_id, agent_id)` sessions and history; final replies follow conversation bindings, while trace events, status previews, and cluster child-task progress stay out of Weixin.
+The gateway uses HTTP long polling and does not require a public webhook. It accepts private text messages from allowlisted Weixin users and supports `/start`, `/help`, `to <alias> <text>`, `to <alias> /new`, `/config <alias>`, `/status`, and `/stop`. Send `/host` to view host status; send `/host restart`, then `/host restart confirm` within five minutes to confirm a backend restart. Weixin, Web, and Telegram share `(bot_id, shared_user_id, agent_id)` sessions and history; final replies follow conversation bindings, while trace events, status previews, and cluster child-task progress stay out of Weixin.
 
 Ordinary WeChat groups, images, video, voice, files, cards, and message editing are outside the current scope. `WEIXIN_TOKEN` is excluded from API responses, frontend state, service logs, and the Weixin SQLite state database; the database stores the cursor, context tokens, conversation bindings, and recoverable delivery records. Telegram configuration, behavior, and its separate allowlist remain unchanged.
 

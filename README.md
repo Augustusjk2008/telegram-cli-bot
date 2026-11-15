@@ -289,7 +289,7 @@ WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
 WEIXIN_ALLOWED_USER_IDS=<微信私聊用户 ID，逗号分隔>
 ```
 
-网关使用 HTTP 长轮询，不需要公网 Webhook。它只接收白名单用户的个人私聊文本，支持 `/start`、`/help`、`to <alias> <正文>`、`to <alias> /new`、`/config <alias>`、`/status` 和 `/stop`。微信与 Web、Telegram 共用 `(bot_id, shared_user_id, agent_id)` 会话和历史，最终答复会按会话绑定投递；trace、状态预览和集群子任务不会直接推送。
+网关使用 HTTP 长轮询，不需要公网 Webhook。它只接收白名单用户的个人私聊文本，支持 `/start`、`/help`、`to <alias> <正文>`、`to <alias> /new`、`/config <alias>`、`/status` 和 `/stop`。发送 `/host` 可查看宿主状态，发送 `/host restart` 后再发送 `/host restart confirm` 可在 5 分钟内确认重启后端。微信与 Web、Telegram 共用 `(bot_id, shared_user_id, agent_id)` 会话和历史，最终答复会按会话绑定投递；trace、状态预览和集群子任务不会直接推送。
 
 普通微信群、图片、视频、语音、文件、卡片和消息编辑暂不支持。`WEIXIN_TOKEN` 不会显示在 API 响应、前端页面、服务日志或微信 SQLite 状态库中；状态库只保存同步游标、context token、会话绑定和可恢复的投递记录。Telegram 的配置、行为和独立白名单保持不变。
 
