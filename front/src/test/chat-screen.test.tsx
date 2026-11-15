@@ -98,7 +98,13 @@ test("defers rendering an oversized user message until it is expanded", async ()
   const message = await screen.findByTestId("user-markdown-message");
   expect(message).not.toHaveTextContent("末尾标记-oversized-user-message");
   const expandButton = screen.getByRole("button", { name: "展开完整消息" });
+  const copyButton = screen.getByRole("button", { name: "复制当前提问" });
   expect(expandButton).toHaveAttribute("aria-expanded", "false");
+  expect(expandButton.querySelector("svg")).toBeTruthy();
+  expect(expandButton).not.toHaveTextContent("展开完整消息");
+  expect(message).not.toContainElement(expandButton);
+  expect(expandButton.parentElement).toBe(copyButton.parentElement);
+  expect(expandButton.compareDocumentPosition(copyButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
   await user.click(expandButton);
 

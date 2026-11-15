@@ -20,7 +20,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { clsx } from "clsx";
-import { CheckCheck, Copy, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
+import { CheckCheck, ChevronDown, ChevronUp, Copy, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
@@ -1412,19 +1412,6 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     })}
                   </div>
                 ) : null}
-                {isLongUserMessage ? (
-                  <button
-                    type="button"
-                    aria-expanded={userMessageExpanded}
-                    aria-label={userMessageExpanded ? "收起完整消息" : "展开完整消息"}
-                    onClick={() => setUserMessageExpanded((expanded) => !expanded)}
-                    className={isCurrentUserMessage
-                      ? "mt-2 inline-flex items-center rounded-md border border-[var(--accent-foreground)]/25 px-2 py-1 text-xs font-medium text-[var(--accent-foreground)]/85 transition-colors hover:bg-[var(--accent-foreground)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
-                      : "mt-2 inline-flex items-center rounded-md border border-[var(--workbench-hairline)] px-2 py-1 text-xs font-medium text-[var(--muted)] transition-colors hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"}
-                  >
-                    {userMessageExpanded ? "收起完整消息" : "展开完整消息"}
-                  </button>
-                ) : null}
               </div>
             ) : isStreamingAssistant ? (
               <div className="inline-flex items-center gap-2 text-sm text-[var(--muted)]">
@@ -1446,6 +1433,19 @@ const ChatMessageRow = memo(function ChatMessageRow({
         {isUser ? (
           <div className={`mt-2 flex flex-wrap items-center gap-1.5 ${messageAlign === "right" ? "justify-end" : "justify-start"}`}>
             {translationControl}
+            {isLongUserMessage ? (
+              <button
+                type="button"
+                aria-expanded={userMessageExpanded}
+                aria-label={userMessageExpanded ? "收起完整消息" : "展开完整消息"}
+                onClick={() => setUserMessageExpanded((expanded) => !expanded)}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] text-[var(--muted)] hover:border-[var(--workbench-hover-border)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+              >
+                {userMessageExpanded
+                  ? <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" />
+                  : <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />}
+              </button>
+            ) : null}
             <button
               type="button"
               aria-label={copiedQuestion ? "已复制当前提问" : "复制当前提问"}
