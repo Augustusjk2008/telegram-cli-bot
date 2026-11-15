@@ -64,3 +64,81 @@ export function stageTransform(hotspot: HotspotRect | undefined, zoom: number | 
     y: clampOffset(hotspot.y + hotspot.h / 2),
   };
 }
+
+export type FrameSize = { width: number; height: number };
+export type FrameBox = { left: number; top: number; width: number; height: number };
+export type CalloutSide = "below" | "above" | "right" | "left" | "corner";
+export type CalloutPlacement = { left: number; top: number; side: CalloutSide };
+
+export const CALLOUT_GAP = 10;
+export const CALLOUT_MARGIN = 10;
+
+/** Hotspot rectangle in frame pixels after the stage transform (canvas origin top-left, translate in % of the frame). */
+export function hotspotFrameBox(hotspot: HotspotRect, transform: StageTransform, frame: FrameSize): FrameBox {
+  return {
+    left: (frame.width * (transform.x + transform.scale * hotspot.x)) / 100,
+    top: (frame.height * (transform.y + transform.scale * hotspot.y)) / 100,
+    width: (frame.width * transform.scale * hotspot.w) / 100,
+    height: (frame.height * transform.scale * hotspot.h) / 100,
+  };
+}
+
+function overlapArea(a: FrameBox, b: FrameBox): number {
+  const width = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const height = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+/**
+ * Position for the step callout: inside the frame, beside the hotspot, covering as little of it as possible.
+ * Candidates are tried below, above, right, left; ties keep that order. Without a hotspot: bottom-left corner.
+ */
+export function placeCallout(
+  target: FrameBox | null,
+  frame: FrameSize,
+  size: FrameSize,
+  gap = CALLOUT_GAP,
+  margin = CALLOUT_MARGIN,
+): CalloutPlacement {
+  // A callout larger than the frame pins to the margin.
+  const clampAxis = (value: number, length: number, available: number) => (
+    Math.min(Math.max(value, margin), Math.max(margin, available - length - margin))
+  );
+  const place = (left: number, top: number, side: CalloutSide): CalloutPlacement => ({
+    left: Math.round(clampAxis(left, size.width, frame.width)),
+    top: Math.round(clampAxis(top, size.height, frame.height)),
+    side,
+  });
+  if (!target) {
+    return place(margin, frame.height - size.height - margin, "corner");
+  }
+
+  // Zoom can push part of a large hotspot outside the frame; only the visible part matters.
+  const left = Math.max(target.left, 0);
+  const top = Math.max(target.top, 0);
+  const clipped = {
+    left,
+    top,
+    width: Math.min(target.left + target.width, frame.width) - left,
+    height: Math.min(target.top + target.height, frame.height) - top,
+  };
+  const visible = clipped.width > 0 && clipped.height > 0 ? clipped : target;
+
+  const candidates = [
+    place(target.left, target.top + target.height + gap, "below"),
+    place(target.left, target.top - gap - size.height, "above"),
+    place(target.left + target.width + gap, target.top, "right"),
+    place(target.left - gap - size.width, target.top, "left"),
+  ];
+  let best = candidates[0];
+  let bestOverlap = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const overlap = overlapArea({ left: candidate.left, top: candidate.top, ...size }, visible);
+    // Differences under half a square pixel are ties, so the candidate order decides.
+    if (overlap < bestOverlap - 0.5) {
+      best = candidate;
+      bestOverlap = overlap;
+    }
+  }
+  return best;
+}

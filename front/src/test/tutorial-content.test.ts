@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { TUTORIAL_CHAPTERS, TUTORIAL_SHOTS, tutorialShotKey } from "../tutorial/tutorialContent";
-import { MAX_STAGE_ZOOM, stageTransform } from "../tutorial/tutorialMotion";
+import { CALLOUT_MARGIN, MAX_STAGE_ZOOM, hotspotFrameBox, placeCallout, stageTransform } from "../tutorial/tutorialMotion";
 
 const assetRoot = path.resolve(process.cwd(), "public", "assets", "tutorial");
 const FILE_BUDGET = 400 * 1024;
@@ -91,5 +91,51 @@ describe("stageTransform", () => {
     }
     expect(stageTransform({ x: 45, y: 45, w: 10, h: 10 }, 1.5)).toEqual({ scale: 1.5, x: -25, y: -25 });
     expect(stageTransform(undefined, 1.8)).toEqual({ scale: 1, x: 0, y: 0 });
+  });
+});
+
+describe("placeCallout", () => {
+  const frame = { width: 775, height: 484 };
+  const size = { width: 300, height: 150 };
+  const insideFrame = ({ left, top }: { left: number; top: number }) => (
+    left >= CALLOUT_MARGIN
+    && top >= CALLOUT_MARGIN
+    && left + size.width <= frame.width - CALLOUT_MARGIN
+    && top + size.height <= frame.height - CALLOUT_MARGIN
+  );
+  const overlaps = (placement: { left: number; top: number }, target: { left: number; top: number; width: number; height: number }) => (
+    placement.left < target.left + target.width
+    && target.left < placement.left + size.width
+    && placement.top < target.top + target.height
+    && target.top < placement.top + size.height
+  );
+
+  it("keeps the callout inside the frame and off small hotspots in the corners and the centre", () => {
+    const targets = [
+      { left: 0, top: 0, width: 40, height: 30 },
+      { left: 735, top: 0, width: 40, height: 30 },
+      { left: 0, top: 454, width: 40, height: 30 },
+      { left: 735, top: 454, width: 40, height: 30 },
+      { left: 367, top: 227, width: 40, height: 30 },
+    ];
+    for (const target of targets) {
+      const placement = placeCallout(target, frame, size);
+      expect(insideFrame(placement), JSON.stringify(target)).toBe(true);
+      expect(overlaps(placement, target), JSON.stringify(target)).toBe(false);
+    }
+  });
+
+  it("prefers below, then above, then the sides, and falls back to the corner without a hotspot", () => {
+    expect(placeCallout({ left: 20, top: 10, width: 120, height: 30 }, frame, size).side).toBe("below");
+    expect(placeCallout({ left: 500, top: 400, width: 200, height: 60 }, frame, size).side).toBe("above");
+    expect(placeCallout({ left: 0, top: 0, width: 180, height: 484 }, frame, size).side).toBe("right");
+    expect(placeCallout(null, frame, size)).toEqual({ side: "corner", left: CALLOUT_MARGIN, top: 484 - 150 - CALLOUT_MARGIN });
+    expect(insideFrame(placeCallout({ left: -40, top: -30, width: 900, height: 600 }, frame, size))).toBe(true);
+  });
+
+  it("maps the hotspot through the stage transform into frame pixels", () => {
+    const hotspot = { x: 45, y: 45, w: 10, h: 10 };
+    expect(hotspotFrameBox(hotspot, stageTransform(hotspot, 1.5), { width: 800, height: 500 }))
+      .toEqual({ left: 340, top: 212.5, width: 120, height: 75 });
   });
 });

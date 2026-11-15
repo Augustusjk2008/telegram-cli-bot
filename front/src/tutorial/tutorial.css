@@ -1,11 +1,11 @@
 /*
  * Usage tutorial overlay. Imported by TutorialOverlay.tsx so it ships with the lazy tutorial chunk.
- * Colours come from theme tokens; the only fixed pair is the hotspot, which sits on screenshots
- * captured in one theme rather than on themed UI.
+ * Colours come from theme tokens; the only fixed pair serves the hotspot and the step callout, which sit on
+ * screenshots captured in one theme rather than on themed UI.
  */
 
 .tutorial-overlay {
-  /* Ring and badge on the light 阿波罗计划 screenshots; ink is the badge text and the ring's outer hairline. */
+  /* Ring, badge and callout on the light 阿波罗计划 screenshots; ink is their text and the ring's outer hairline. */
   --tut-hotspot-ring: #101623;
   --tut-hotspot-ink: #ffffff;
   overflow: hidden;
@@ -476,6 +476,72 @@
   transform: translate(-50%, -50%) scale(calc(1 / var(--tut-zoom, 1)));
 }
 
+/* The active step's title and body, drawn on the screenshot next to the hotspot (also listed on the right). */
+.tut-callout {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  width: min(300px, calc(100% - 20px));
+  max-height: calc(100% - 20px);
+  overflow: hidden;
+  padding: 9px 12px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tut-hotspot-ring) 94%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--tut-hotspot-ink) 18%, transparent),
+    0 10px 28px -8px rgb(0 0 0 / 0.45);
+  color: var(--tut-hotspot-ink);
+  font: 400 12.5px/1.6 var(--font-ui);
+  pointer-events: none;
+  animation: tutCalloutIn 200ms var(--ease-out) 240ms both;
+}
+
+/* Measured but not yet placed: keep it out of sight for the one layout pass before the position is known. */
+.tut-callout[data-placed="false"] {
+  visibility: hidden;
+  animation: none;
+}
+
+.tut-callout-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.tut-callout-badge {
+  display: grid;
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding-inline: 5px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--tut-hotspot-ink);
+  color: var(--tut-hotspot-ring);
+  font: 700 11px/1 var(--font-ui);
+}
+
+.tut-callout p + p:not(.tut-callout-head) {
+  margin-top: 3px;
+}
+
+.tut-callout code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tut-hotspot-ink) 16%, transparent);
+  font: 500 11.5px/1.5 var(--code-font-family);
+}
+
+@keyframes tutCalloutIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
 .tut-stage-error {
   position: absolute;
   inset: 0;
@@ -645,6 +711,11 @@
     border-top: 1px solid var(--hairline);
     border-left: 0;
   }
+
+  /* The step text sits directly under the small screenshot here; a callout would only crowd the frame. */
+  .tut-callout {
+    display: none;
+  }
 }
 
 @media (max-width: 720px) {
@@ -663,6 +734,7 @@
   .tut-stage-canvas,
   .tut-stage-image[data-loaded],
   .tut-hotspot,
+  .tut-callout,
   .tut-card,
   .tut-rail-item,
   .tut-step-head {

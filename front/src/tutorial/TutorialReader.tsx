@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Check, ChevronRight, LayoutGrid, Lightbulb, X } 
 import { AppLogo } from "../components/AppLogo";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
 import { TutorialStage } from "./TutorialStage";
+import { TutorialText } from "./TutorialText";
 import { tutorialHotspot, tutorialShotUrl, type TutorialChapter } from "./tutorialContent";
 
 type Props = {
@@ -15,17 +16,6 @@ type Props = {
   onShowCover: () => void;
   onClose: () => void;
 };
-
-/** Tiny inline formatter: `code` in backticks becomes <code>. The Markdown renderer is deliberately not used. */
-function TutorialText({ text }: { text: string }) {
-  return (
-    <>
-      {text.split("`").map((part, index) => (
-        index % 2 === 1 ? <code key={index}>{part}</code> : <Fragment key={index}>{part}</Fragment>
-      ))}
-    </>
-  );
-}
 
 export function TutorialReader({ chapters, chapter, stepIndex, completed, onOpenStep, onShowCover, onClose }: Props) {
   const reduceMotion = useReducedMotion();
@@ -99,6 +89,7 @@ export function TutorialReader({ chapters, chapter, stepIndex, completed, onOpen
         hotspot={tutorialHotspot(chapter.id, step.shot, step.hotspot)}
         zoom={step.zoom}
         badge={stepIndex + 1}
+        caption={{ title: step.title, body: step.body }}
         preloadSrc={nextStep ? tutorialShotUrl(chapter.id, nextStep.shot) : undefined}
       />
 

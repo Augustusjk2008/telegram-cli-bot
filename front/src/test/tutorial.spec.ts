@@ -61,6 +61,20 @@ test("opens from the logo, takes over from the workbench and closes back into it
   const image = guide.getByTestId("tutorial-stage-image");
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
   await expect(guide.getByTestId("tutorial-hotspot")).toBeVisible();
+  // The active step's text is also drawn on the screenshot: inside the frame, beside the hotspot.
+  const callout = guide.getByTestId("tutorial-callout");
+  await expect(callout).toContainText("发送消息");
+  await expect.poll(async () => {
+    const box = await callout.boundingBox();
+    const frame = await guide.locator(".tut-stage-frame").boundingBox();
+    const hotspot = await guide.getByTestId("tutorial-hotspot").boundingBox();
+    if (!box || !frame || !hotspot) return false;
+    const inside = box.x >= frame.x - 1 && box.y >= frame.y - 1
+      && box.x + box.width <= frame.x + frame.width + 1 && box.y + box.height <= frame.y + frame.height + 1;
+    const intersects = box.x < hotspot.x + hotspot.width && hotspot.x < box.x + box.width
+      && box.y < hotspot.y + hotspot.height && hotspot.y < box.y + box.height;
+    return inside && !intersects;
+  }).toBe(true);
   await expect.poll(() => hasHorizontalOverflow(page)).toBe(false);
   await testInfo.attach("reader", { body: await page.screenshot(), contentType: "image/png" });
 
@@ -69,6 +83,7 @@ test("opens from the logo, takes over from the workbench and closes back into it
   await page.keyboard.press("Control+P");
   await page.keyboard.press("ArrowRight");
   await expect(guide.getByRole("button", { name: "模型与附件" })).toHaveAttribute("aria-current", "step");
+  await expect(callout).toContainText("模型与附件");
   await expect(page.getByRole("dialog", { name: "命令面板" })).toHaveCount(0);
 
   await page.keyboard.press("Escape");
@@ -116,6 +131,8 @@ test("stacks the reader in a 1024 px wide window without horizontal overflow", a
   const image = guide.getByTestId("tutorial-stage-image");
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0);
   await expect(guide.getByRole("navigation", { name: "教程章节" })).toBeHidden();
+  // The step text sits directly under the screenshot here, so the on-screenshot callout is not shown.
+  await expect(guide.getByTestId("tutorial-callout")).toBeHidden();
   // Polled: the reader slides in, so geometry is only meaningful once it has settled.
   await expect.poll(async () => {
     const stage = await guide.getByTestId("tutorial-stage").boundingBox();
