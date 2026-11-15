@@ -179,6 +179,7 @@ class WeixinOnboardingService:
     async def _confirm(self, result: dict[str, Any]) -> None:
         token = str(result.get("bot_token") or result.get("token") or "").strip()
         account_id = str(result.get("ilink_bot_id") or result.get("account_id") or "").strip()
+        user_id = str(result.get("ilink_user_id") or result.get("user_id") or "").strip()
         base_url = str(result.get("baseurl") or result.get("base_url") or ILINK_BASE_URL).strip() or ILINK_BASE_URL
         if not token or not account_id:
             self._record["status"] = "failed"
@@ -186,14 +187,16 @@ class WeixinOnboardingService:
             self._record["error_message"] = "iLink 未返回完整登录凭据。"
             return
         try:
-            self.env_service.patch({
-                "values": {
-                    "WEIXIN_ENABLED": True,
-                    "WEIXIN_ACCOUNT_ID": account_id,
-                    "WEIXIN_TOKEN": token,
-                    "WEIXIN_BASE_URL": base_url,
-                }
-            })
+            values: dict[str, Any] = {
+                "WEIXIN_ENABLED": True,
+                "WEIXIN_ACCOUNT_ID": account_id,
+                "WEIXIN_TOKEN": token,
+                "WEIXIN_BASE_URL": base_url,
+            }
+            existing_allowed_ids = getattr(config, "WEIXIN_ALLOWED_USER_IDS", set()) or set()
+            if user_id and not existing_allowed_ids:
+                values["WEIXIN_ALLOWED_USER_IDS"] = [user_id]
+            self.env_service.patch({"values": values})
         except Exception as exc:
             self._record["status"] = "failed"
             self._record["error_code"] = "weixin_setup_save_failed"

@@ -21,6 +21,8 @@ managed_bots.json
 !/docs/plan/
 /docs/plan/*
 !/docs/plan/codex-server-voice-roadmap.md
+!/docs/user-guide/
+!/docs/user-guide/*
 .worktrees/
 .release-local/*
 !.release-local/

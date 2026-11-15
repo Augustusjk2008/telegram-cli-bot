@@ -279,7 +279,7 @@ Telegram 与 Web 共用 `(Bot, shared user, agent)` 会话和聊天历史。Tele
 
 ### 个人微信 iLink 接入
 
-Orbit Safe Claw 支持通过 Tencent iLink Bot 接入个人微信账号。企业微信使用独立适配器。管理员可以在 Admin Center 的“微信接入”面板开始扫码，成功后服务会把账号 ID、敏感 Token 和 API 地址保存到项目 `.env`；配置白名单后需要重启应用：
+Orbit Safe Claw 支持通过 Tencent iLink Bot 接入个人微信账号。企业微信使用独立适配器。管理员可以在 Admin Center 的“微信接入”面板开始扫码，成功后服务会把 Bot 账号 ID、敏感 Token 和 API 地址保存到项目 `.env`；如果私聊白名单为空，扫码用户的 iLink ID 会自动加入白名单。配置变更后需要重启应用：
 
 ```env
 WEIXIN_ENABLED=true
@@ -289,9 +289,11 @@ WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
 WEIXIN_ALLOWED_USER_IDS=<微信私聊用户 ID，逗号分隔>
 ```
 
-网关使用 HTTP 长轮询，不需要公网 Webhook。它只接收白名单用户的个人私聊文本，支持 `/start`、`/help`、`to <alias> <正文>`、`to <alias> /new`、`/config`、`/status` 和 `/stop`。微信与 Web、Telegram 共用 `(bot_id, shared_user_id, agent_id)` 会话和历史，最终答复会按会话绑定投递；trace、状态预览和集群子任务不会直接推送。
+网关使用 HTTP 长轮询，不需要公网 Webhook。它只接收白名单用户的个人私聊文本，支持 `/start`、`/help`、`to <alias> <正文>`、`to <alias> /new`、`/config <alias>`、`/status` 和 `/stop`。微信与 Web、Telegram 共用 `(bot_id, shared_user_id, agent_id)` 会话和历史，最终答复会按会话绑定投递；trace、状态预览和集群子任务不会直接推送。
 
 普通微信群、图片、视频、语音、文件、卡片和消息编辑暂不支持。`WEIXIN_TOKEN` 不会显示在 API 响应、前端页面、服务日志或微信 SQLite 状态库中；状态库只保存同步游标、context token、会话绑定和可恢复的投递记录。Telegram 的配置、行为和独立白名单保持不变。
+
+日常使用方法见[《个人微信 iLink 使用说明》](docs/user-guide/weixin-ilink-guide.md)。
 
 ### 管理与扩展
 

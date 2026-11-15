@@ -256,7 +256,7 @@ The keyboard also provides status, stop, configuration, host, and help actions. 
 
 ### Personal Weixin iLink Gateway
 
-Orbit Safe Claw can connect a personal WeChat account through Tencent's iLink Bot API. Enterprise WeChat uses a separate adapter. An administrator can start QR login from the Admin Center's Weixin panel. After confirmation, the account ID, sensitive token, and API base URL are saved to the project `.env`; add the private-message allowlist and restart the application:
+Orbit Safe Claw can connect a personal WeChat account through Tencent's iLink Bot API. Enterprise WeChat uses a separate adapter. An administrator can start QR login from the Admin Center's Weixin panel. After confirmation, the Bot account ID, sensitive token, and API base URL are saved to the project `.env`; when the private-message allowlist is empty, the scanning user's iLink ID is added automatically. Restart the application after configuration changes:
 
 ```env
 WEIXIN_ENABLED=true
@@ -266,7 +266,7 @@ WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
 WEIXIN_ALLOWED_USER_IDS=<comma-separated Weixin private user IDs>
 ```
 
-The gateway uses HTTP long polling and does not require a public webhook. It accepts private text messages from allowlisted Weixin users and supports `/start`, `/help`, `to <alias> <text>`, `to <alias> /new`, `/config`, `/status`, and `/stop`. Weixin, Web, and Telegram share `(bot_id, shared_user_id, agent_id)` sessions and history; final replies follow conversation bindings, while trace events, status previews, and cluster child-task progress stay out of Weixin.
+The gateway uses HTTP long polling and does not require a public webhook. It accepts private text messages from allowlisted Weixin users and supports `/start`, `/help`, `to <alias> <text>`, `to <alias> /new`, `/config <alias>`, `/status`, and `/stop`. Weixin, Web, and Telegram share `(bot_id, shared_user_id, agent_id)` sessions and history; final replies follow conversation bindings, while trace events, status previews, and cluster child-task progress stay out of Weixin.
 
 Ordinary WeChat groups, images, video, voice, files, cards, and message editing are outside the current scope. `WEIXIN_TOKEN` is excluded from API responses, frontend state, service logs, and the Weixin SQLite state database; the database stores the cursor, context tokens, conversation bindings, and recoverable delivery records. Telegram configuration, behavior, and its separate allowlist remain unchanged.
 
