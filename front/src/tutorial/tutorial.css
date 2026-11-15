@@ -1,0 +1,671 @@
+/*
+ * Usage tutorial overlay. Imported by TutorialOverlay.tsx so it ships with the lazy tutorial chunk.
+ * Colours come from theme tokens; the only fixed pair is the hotspot, which sits on screenshots
+ * captured in one theme rather than on themed UI.
+ */
+
+.tutorial-overlay {
+  --tut-hotspot-ring: #ffffff;
+  --tut-hotspot-ink: #0b0d12;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-ui);
+  outline: none;
+}
+
+/* The popover class is carried for its button typography only; a full-screen surface has no radius or shadow. */
+:root[data-style-profile="paper"] .tutorial-overlay.desktop-workbench-popover {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.tutorial-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay-backdrop-50);
+}
+
+.tutorial-surface {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(70% 55% at 0% 0%, color-mix(in srgb, var(--glow-color) 7%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom)),
+    var(--bg);
+}
+
+.tutorial-content,
+.tutorial-view {
+  position: absolute;
+  inset: 0;
+}
+
+.tutorial-reveal-edge {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* Only visible while the reveal or collapse animation drives it. */
+.tutorial-reveal-edge g {
+  opacity: 0;
+}
+
+.tutorial-reveal-edge circle {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.tutorial-reveal-edge-line {
+  stroke: var(--accent);
+  stroke-width: 1.5px;
+}
+
+.tutorial-reveal-edge-glow {
+  stroke: var(--glow-color);
+  stroke-width: 22px;
+  stroke-opacity: 0.16;
+}
+
+/* ------------------------------------------------------------------ unfold */
+
+@keyframes tutFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes tutRise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes tutRingDraw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+.tutorial-overlay[data-motion="full"][data-phase="opening"] .tutorial-scrim {
+  animation: tutFadeIn var(--tut-scrim-ms) linear both;
+}
+
+.tutorial-overlay[data-motion="full"][data-phase="opening"] .tut-cover--intro .tut-hero-ring circle {
+  animation: tutRingDraw var(--tut-ring-ms) var(--ease-out) var(--tut-ring-delay) both;
+}
+
+.tutorial-overlay[data-motion="full"][data-phase="opening"] .tut-cover--intro .tut-intro-item {
+  animation: tutRise 280ms var(--ease-out) var(--tut-content-delay) both;
+}
+
+.tutorial-overlay[data-motion="full"][data-phase="opening"] .tut-cover--intro .tut-chapter-slot {
+  animation: tutRise 280ms var(--ease-out) calc(var(--tut-content-delay) + var(--tut-i) * var(--tut-card-stagger)) both;
+}
+
+/* Collapse: content leaves first, then the circle closes and the scrim clears. */
+.tutorial-overlay[data-motion="full"][data-phase="closing"] .tutorial-content {
+  opacity: 0;
+  transition: opacity var(--tut-close-content-ms) linear;
+}
+
+.tutorial-overlay[data-motion="full"][data-phase="closing"] .tutorial-scrim {
+  opacity: 0;
+  transition: opacity 240ms linear calc(var(--tut-close-total-ms) - 260ms);
+}
+
+/* Reduced motion: one opacity cross-fade in each direction, no clip-path and no travel. */
+.tutorial-overlay[data-motion="reduced"][data-phase="opening"] {
+  animation: tutFadeIn var(--tut-reduced-ms) linear both;
+}
+
+.tutorial-overlay[data-motion="reduced"][data-phase="closing"] {
+  opacity: 0;
+  transition: opacity var(--tut-reduced-ms) linear;
+}
+
+/* ------------------------------------------------------------------- cover */
+
+.tut-cover {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.tut-close {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  z-index: 1;
+}
+
+.tut-cover-inner {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: clamp(56px, 9vh, 96px) 40px 56px;
+}
+
+.tut-hero {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.tut-hero-mark {
+  position: relative;
+  display: grid;
+  flex: none;
+  width: 120px;
+  height: 120px;
+  place-items: center;
+}
+
+.tut-hero-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.tut-hero-ring circle {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke-width: 1.25;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+
+.tut-hero-logo {
+  display: inline-flex;
+  transform-origin: center;
+  filter: drop-shadow(0 0 calc(var(--glow-strength) * 14px) color-mix(in srgb, var(--glow-color) 45%, transparent));
+}
+
+.tut-hero-title {
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.tut-hero-sub {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.tut-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.tut-chapters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 12px;
+  margin-top: 44px;
+}
+
+.tut-chapter-slot {
+  display: flex;
+  min-width: 0;
+}
+
+.tut-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 138px;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--fill-subtle);
+  color: var(--text);
+  text-align: left;
+  transition: background-color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+}
+
+.tut-card:not(:disabled):hover {
+  border-color: var(--hairline-strong);
+  background: var(--fill-hover);
+}
+
+.tut-card:focus-visible,
+.tut-rail-item:focus-visible,
+.tut-step-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tut-card:disabled {
+  background: transparent;
+  color: var(--muted);
+}
+
+.tut-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tut-card-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tut-card:disabled .tut-card-icon {
+  background: var(--fill-subtle);
+  color: var(--muted);
+}
+
+.tut-card-number,
+.tut-rail-number {
+  color: var(--muted);
+  font: 500 11.5px/1 var(--code-font-family);
+}
+
+.tut-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.tut-card-summary {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.tut-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.tut-card-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--status-success);
+}
+
+/* ------------------------------------------------------------------ reader */
+
+.tut-reader {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr) clamp(300px, 27vw, 420px);
+}
+
+.tut-reader-bar {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 14px 0 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tut-reader-brand {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.tut-reader-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tut-reader-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font: 500 12px/1 var(--code-font-family);
+  white-space: nowrap;
+}
+
+.tut-rail {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 14px 10px;
+  border-right: 1px solid var(--hairline);
+}
+
+.tut-rail ol {
+  display: grid;
+  gap: 2px;
+}
+
+.tut-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  text-align: left;
+  transition: background-color 140ms var(--ease-out);
+}
+
+.tut-rail-item:not(:disabled):hover {
+  background: var(--fill-hover);
+}
+
+.tut-rail-item[aria-current="true"] {
+  background: var(--accent-soft);
+}
+
+.tut-rail-item[aria-current="true"] .tut-rail-number {
+  color: var(--accent);
+}
+
+.tut-rail-item:disabled {
+  color: var(--muted);
+}
+
+.tut-rail-note {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tut-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 24px 28px;
+  container-type: size;
+}
+
+.tut-stage-frame {
+  position: relative;
+  flex: none;
+  width: min(100cqw, 100cqh * 1.6);
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-overlay);
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+}
+
+.tut-stage-canvas {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  transition: transform 420ms var(--ease-out);
+}
+
+.tut-stage-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+}
+
+.tut-stage-image[data-loaded] {
+  transition: opacity 200ms linear;
+}
+
+.tut-stage-image[data-loaded="false"] {
+  opacity: 0;
+}
+
+.tut-hotspot {
+  position: absolute;
+  border: calc(2px / var(--tut-zoom, 1)) solid var(--tut-hotspot-ring);
+  border-radius: calc(8px / var(--tut-zoom, 1));
+  /* Spotlight: the outer shadow dims everything else and is clipped by the frame. */
+  box-shadow:
+    0 0 0 calc(1px / var(--tut-zoom, 1)) color-mix(in srgb, var(--tut-hotspot-ink) 70%, transparent),
+    0 0 0 4000px color-mix(in srgb, var(--tut-hotspot-ink) 46%, transparent);
+  animation: tutFadeIn 220ms linear both;
+  transition:
+    left 340ms var(--ease-out),
+    top 340ms var(--ease-out),
+    width 340ms var(--ease-out),
+    height 340ms var(--ease-out);
+}
+
+.tut-hotspot-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  padding-inline: 6px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--tut-hotspot-ring);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--tut-hotspot-ink) 60%, transparent);
+  color: var(--tut-hotspot-ink);
+  font: 700 12px/1 var(--font-ui);
+  transform: translate(-50%, -50%) scale(calc(1 / var(--tut-zoom, 1)));
+}
+
+.tut-stage-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.tut-steps {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--hairline);
+}
+
+.tut-step-list {
+  flex: 1;
+  min-height: 0;
+  /* The step body slides in sideways; it must not flash a horizontal scrollbar. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 16px 14px 8px;
+}
+
+.tut-step + .tut-step {
+  margin-top: 2px;
+}
+
+.tut-step-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  text-align: left;
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+
+.tut-step-head:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+.tut-step[data-active="true"] .tut-step-head {
+  color: var(--text);
+}
+
+.tut-step-number {
+  display: grid;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--muted);
+  font: 600 11.5px/1 var(--font-ui);
+}
+
+.tut-step[data-active="true"] .tut-step-number {
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--accent-foreground);
+}
+
+.tut-step-body {
+  padding: 2px 10px 14px 40px;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+.tut-step-body p + p {
+  margin-top: 6px;
+}
+
+.tut-step-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--fill-pressed);
+  font: 500 12.5px/1.5 var(--code-font-family);
+}
+
+.tut-step-points {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-left: 16px;
+  color: var(--muted);
+  list-style: disc;
+}
+
+.tut-step-points li::marker {
+  color: var(--hairline-strong);
+}
+
+.tut-step-keys {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+.tut-step-keys .orbit-kbd {
+  height: 22px;
+  padding-inline: 7px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.tut-step-tip {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--fill-subtle);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.tut-step-tip > svg {
+  margin-top: 4px;
+  color: var(--accent);
+}
+
+.tut-steps-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* Forced desktop mode on a narrow window: no rail, stage above the steps. */
+@media (max-width: 1099px) {
+  .tut-reader {
+    grid-template-rows: 52px auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tut-rail {
+    display: none;
+  }
+
+  .tut-stage {
+    padding: 16px 20px;
+    container-type: inline-size;
+  }
+
+  .tut-stage-frame {
+    width: min(100cqw, 46vh * 1.6);
+  }
+
+  .tut-steps {
+    border-top: 1px solid var(--hairline);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .tut-cover-inner {
+    padding-inline: 20px;
+  }
+
+  .tut-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tut-stage-canvas,
+  .tut-stage-image[data-loaded],
+  .tut-hotspot,
+  .tut-card,
+  .tut-rail-item,
+  .tut-step-head {
+    animation: none;
+    transition: none;
+  }
+}

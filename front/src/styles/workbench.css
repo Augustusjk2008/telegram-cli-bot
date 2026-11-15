@@ -133,6 +133,8 @@
 }
 
 .desktop-workbench-root [data-testid="workbench-focus-backdrop"] {
+  /* An overlay, not a grid row: the chrome rule above would otherwise make it push the header down. */
+  position: absolute;
   backdrop-filter: none;
 }
 
@@ -276,6 +278,70 @@
 .workbench-activity-button,
 .workbench-pane-header button {
   border-radius: var(--desktop-workbench-control-radius);
+}
+
+/* The header logo opens the usage tutorial. */
+.workbench-topbar-logo {
+  position: relative;
+  padding: 0;
+}
+
+.workbench-topbar-logo .app-logo {
+  transition: transform 160ms var(--ease-out);
+}
+
+.workbench-topbar-logo:hover .app-logo {
+  transform: scale(1.08);
+}
+
+.workbench-topbar-logo:active .app-logo {
+  transform: scale(0.96);
+}
+
+.workbench-topbar-logo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* First-run hint: a thin ring pulses three times, then leaves the logo alone. */
+.workbench-topbar-logo[data-tutorial-hint="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  animation: tutorialHintPulse 2.2s var(--ease-out) 1.2s 3;
+}
+
+@keyframes tutorialHintPulse {
+  0% {
+    opacity: 0.85;
+    transform: scale(0.72);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workbench-topbar-logo .app-logo {
+    transition: none;
+  }
+
+  .workbench-topbar-logo[data-tutorial-hint="true"]::after {
+    inset: auto 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border: 0;
+    background: var(--accent);
+    opacity: 1;
+    animation: none;
+  }
 }
 
 .workbench-status-chip {

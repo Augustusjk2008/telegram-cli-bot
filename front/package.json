@@ -15,7 +15,8 @@
     "test:gate": "vitest run --maxWorkers=1 --fileParallelism=false",
     "test": "vitest run",
     "e2e": "playwright test",
-    "e2e:smoke": "playwright test src/test/browser-smoke.spec.ts"
+    "e2e:smoke": "playwright test src/test/browser-smoke.spec.ts",
+    "tutorial:shots": "node scripts/tutorial-shots.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

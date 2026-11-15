@@ -274,6 +274,7 @@ async function themeAssetDescriptor(file: File): Promise<ThemeIllustrationAsset>
 }
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
+import { readMockChatScript } from "../mocks/chatScript";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
 import {
@@ -4782,12 +4783,15 @@ export class MockWebBotClient implements WebBotClient {
     return pending;
   }
 
-  async getMessageTrace(_botAlias: string, _messageId: string): Promise<ChatTraceDetails> {
+  async getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails> {
+    // Only scripted turns (mocks/chatScript.ts) store a trace; every other message has none.
+    const meta = this.getAgentMessages(botAlias).find((message) => message.id === messageId)?.meta;
+    const trace = meta?.trace ?? [];
     return {
-      traceCount: 0,
-      toolCallCount: 0,
-      processCount: 0,
-      trace: [],
+      traceCount: trace.length,
+      toolCallCount: meta?.toolCallCount ?? 0,
+      processCount: meta?.processCount ?? 0,
+      trace,
     };
   }
 
@@ -5021,22 +5025,47 @@ export class MockWebBotClient implements WebBotClient {
       return assistantMessage;
     }
 
+    // Opt-in scripted turn (see mocks/chatScript.ts); without it the stock reply below is unchanged.
+    const script = readMockChatScript();
+    const scriptedTrace = script?.trace ?? [];
+    for (const event of scriptedTrace) {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      onTrace?.(event);
+    }
     let streamed = "";
-    await streamAssistantReply((chunk) => {
+    const emitChunk = (chunk: string) => {
       streamed += chunk;
       onChunk(chunk);
       onStatus?.({
         elapsedSeconds: streamed.length > 0 ? 1 : 0,
+        ...(script?.contextUsage ? { contextUsage: script.contextUsage } : {}),
       });
-    });
-    const assistantMessage = {
+    };
+    if (script) {
+      for (const chunk of script.chunks) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        emitChunk(chunk);
+      }
+    } else {
+      await streamAssistantReply(emitChunk);
+    }
+    const assistantMessage: ChatMessage = {
       id: Date.now().toString(),
       role: "assistant",
       text: streamed || "Mock response",
       createdAt: new Date().toISOString(),
       elapsedSeconds: 1,
       state: "done",
-    } satisfies ChatMessage;
+      ...(script ? {
+        meta: {
+          trace: scriptedTrace,
+          traceCount: scriptedTrace.length,
+          toolCallCount: scriptedTrace.filter((event) => event.kind === "tool_call").length,
+          processCount: scriptedTrace.filter((event) => ["commentary", "reasoning", "status"].includes(event.kind)).length,
+          ...(script.contextUsage ? { contextUsage: script.contextUsage } : {}),
+        },
+      } : {}),
+    };
     this.appendAgentChatMessage(botAlias, agentId, assistantMessage);
     return assistantMessage;
   }

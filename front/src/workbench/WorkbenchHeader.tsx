@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import type { ViewMode } from "../app/layoutMode";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
-import { AppLogo } from "../components/AppLogo";
+import { TutorialLauncher } from "../tutorial/TutorialLauncher";
 import { WORKBENCH_PANE_ICONS } from "./workbenchPaneIcons";
 import type { } from "./workbenchTypes";
 
@@ -122,9 +122,7 @@ export function WorkbenchHeader({
       className="workbench-topbar relative z-20 flex min-h-9 items-center justify-between gap-2 px-2 py-1"
     >
       <div className="workbench-topbar-context flex min-w-0 flex-1 items-center gap-2">
-        <span className="workbench-topbar-logo flex h-7 w-7 shrink-0 items-center justify-center">
-          <AppLogo size={24} decorative />
-        </span>
+        <TutorialLauncher />
         <button
           type="button"
           aria-label={`切换 Bot: ${currentBot}`}

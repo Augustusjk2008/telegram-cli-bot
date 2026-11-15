@@ -63,6 +63,15 @@ async function chooseLayoutMenuItem(page: Page, name: string) {
 const leftOf = (a: Box, b: Box) => a.x + a.width <= b.x + 1;
 const above = (a: Box, b: Box) => a.y + a.height <= b.y + 1;
 
+test("focusing a pane keeps the header compact and lets the pane fill the workbench", async ({ page }) => {
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "聚焦文件区", exact: true }).click();
+  await expect(page.getByTestId("desktop-workbench-root")).toHaveAttribute("data-has-focus", "true");
+  // The focus backdrop is an overlay; as a grid row it used to push the header into the stretching row.
+  await expect.poll(async () => (await page.getByTestId("desktop-workbench-titlebar").boundingBox())?.height ?? 0).toBeLessThan(80);
+  await expect.poll(async () => (await page.getByTestId(PANES.sidebar).boundingBox())?.height ?? 0).toBeGreaterThan(700);
+});
+
 test("presets, drag-to-swap and reset persist in the browser", async ({ page }) => {
   await openWorkbench(page);
   const grid = page.getByTestId("desktop-workbench-columns");
