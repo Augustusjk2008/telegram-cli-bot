@@ -4492,7 +4492,7 @@ export class MockWebBotClient implements WebBotClient {
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
       ...(agentId === "main" ? {
-        clusterTeam: { version: 1, assignments: [] },
+        clusterTeam: readMockChatScript()?.clusterTeam ?? { version: 1, assignments: [] },
         clusterTeamRevision: 0,
       } : {}),
       createdAt: messages[0]?.createdAt || now,
@@ -4530,7 +4530,7 @@ export class MockWebBotClient implements WebBotClient {
       cliType: bot.cliType,
       workingDir: bot.workingDir,
       ...(agentId === "main" ? {
-        clusterTeam: { version: 1, assignments: [] },
+        clusterTeam: readMockChatScript()?.clusterTeam ?? { version: 1, assignments: [] },
         clusterTeamRevision: 0,
       } : {}),
       createdAt: now,

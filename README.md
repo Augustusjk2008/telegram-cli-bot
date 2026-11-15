@@ -205,6 +205,7 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 - **Debug**：面向 Python、C/C++、Godot 和通用 DAP 的调试入口。
 - **Plugins**：PDF、DOCX、PPTX、CSV、Vivado waveform 等可扩展视图。
 - **布局**：顶部「窗口布局」提供经典、底部通栏、四列并排、右侧堆叠预设，可拖动交换窗口位置，设置按浏览器保存。
+- **使用教程**：点击桌面工作台左上角的图标，打开应用内使用教程，按章节用截图说明各项功能的用法。
 
 ### GitHub 账号与远端仓库
 
@@ -576,6 +577,8 @@ npm run build
 $env:PLAYWRIGHT_BASE_URL = "http://127.0.0.1:8765"
 npm run e2e:smoke
 ```
+
+应用内教程的截图和热点数据由 `npm run tutorial:shots`（在 `front/` 下执行）从 mock 数据重新生成，不需要启动任何服务。
 
 编码 Agent 不得自行启动开发、预览或临时 HTTP 服务。纯文档变更核对源码、命令和链接即可；按修改范围选择已有测试，避免为普通文案新增测试。
 

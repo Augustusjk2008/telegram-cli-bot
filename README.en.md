@@ -188,6 +188,7 @@ Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and r
 - **Debug**: debugging entry points for Python, C/C++, Godot, and generic DAP adapters.
 - **Plugins**: extensible viewers for PDF, DOCX, PPTX, CSV, Vivado waveforms, and more.
 - **Layout**: the header's layout menu offers Classic, Bottom panel, Four columns and Side stack presets; panes can be swapped by dragging, and the arrangement is saved per browser.
+- **Tutorial**: click the logo in the upper-left corner of the desktop workbench to open the in-app usage tutorial, which explains each feature chapter by chapter with screenshots (content is in Chinese).
 
 ### GitHub Accounts and Remote Repositories
 
@@ -542,6 +543,8 @@ Browser tests reuse an application already started by the user. Windows defaults
 $env:PLAYWRIGHT_BASE_URL = "http://127.0.0.1:8765"
 npm run e2e:smoke
 ```
+
+The in-app tutorial's screenshots and hotspot data are regenerated from mock data with `npm run tutorial:shots` (run from `front/`); it does not start any server.
 
 Coding agents must not start development, preview, or temporary HTTP servers. Documentation-only changes need source, command, and link checks; select existing tests according to the affected behavior and avoid new tests for ordinary copy.
 

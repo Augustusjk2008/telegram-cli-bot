@@ -44,7 +44,8 @@ export function TutorialStage({ src, alt, hotspot, zoom, badge, preloadSrc }: Pr
             <img className="tut-stage-image" src={layers.previous} alt="" aria-hidden="true" draggable={false} />
           ) : null}
           <img
-            key={src}
+            // Remount per screenshot so each one fades in. The key differs from the hotspot's: both are siblings.
+            key={`image:${src}`}
             className="tut-stage-image"
             data-testid="tutorial-stage-image"
             data-loaded={loaded === src ? "true" : "false"}
@@ -57,7 +58,7 @@ export function TutorialStage({ src, alt, hotspot, zoom, badge, preloadSrc }: Pr
           {hotspot && loaded === src ? (
             <div
               // Remount per screenshot: within one screenshot the hotspot slides, across screenshots it fades in place.
-              key={src}
+              key={`hotspot:${src}`}
               className="tut-hotspot"
               data-testid="tutorial-hotspot"
               style={{ left: `${hotspot.x}%`, top: `${hotspot.y}%`, width: `${hotspot.w}%`, height: `${hotspot.h}%` }}

@@ -22,10 +22,13 @@ function assetFiles(dir: string): string[] {
 describe("tutorial content", () => {
   it("keeps chapter and step ids unique and step fields within their limits", () => {
     const chapterIds = TUTORIAL_CHAPTERS.map((chapter) => chapter.id);
-    expect(new Set(chapterIds).size).toBe(chapterIds.length);
+    expect(chapterIds).toEqual(["start", "chat", "layout", "files", "terminal", "git", "cluster", "remote", "gateways", "admin", "tips"]);
     for (const chapter of TUTORIAL_CHAPTERS) {
       const stepIds = chapter.steps.map((step) => step.id);
       expect(new Set(stepIds).size, `${chapter.id} step ids`).toBe(stepIds.length);
+      // No placeholder chapters: each one has between three and seven steps.
+      expect(stepIds.length, `${chapter.id} step count`).toBeGreaterThanOrEqual(3);
+      expect(stepIds.length, `${chapter.id} step count`).toBeLessThanOrEqual(7);
     }
     for (const { chapter, step } of steps) {
       const label = `${chapter.id}/${step.id}`;

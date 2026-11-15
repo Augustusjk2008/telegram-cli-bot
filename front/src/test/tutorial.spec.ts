@@ -79,6 +79,24 @@ test("opens from the logo, takes over from the workbench and closes back into it
   await expect(page.getByRole("dialog", { name: "命令面板" })).toBeVisible();
 });
 
+test("loads the first screenshot of every chapter", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openWorkbench(page);
+  const guide = await openGuide(page);
+  await guide.getByRole("button", { name: "从头开始", exact: true }).click();
+  const rail = guide.getByRole("navigation", { name: "教程章节" });
+  const chapters = rail.getByRole("button");
+  await expect(chapters).toHaveCount(11);
+  const image = guide.getByTestId("tutorial-stage-image");
+  for (let index = 0; index < 11; index += 1) {
+    await expect(chapters.nth(index)).toBeEnabled();
+    await chapters.nth(index).click();
+    await expect(chapters.nth(index)).toHaveAttribute("aria-current", "true");
+    await expect(image).toHaveAttribute("data-loaded", "true");
+    expect(await image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(2880);
+  }
+});
+
 test("opens and closes with a plain fade under reduced motion", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openWorkbench(page);

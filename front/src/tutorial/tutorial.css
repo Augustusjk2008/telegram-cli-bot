@@ -5,8 +5,9 @@
  */
 
 .tutorial-overlay {
-  --tut-hotspot-ring: #ffffff;
-  --tut-hotspot-ink: #0b0d12;
+  /* Ring and badge on the light 阿波罗计划 screenshots; ink is the badge text and the ring's outer hairline. */
+  --tut-hotspot-ring: #101623;
+  --tut-hotspot-ink: #ffffff;
   overflow: hidden;
   color: var(--text);
   font-family: var(--font-ui);
@@ -448,8 +449,8 @@
   border-radius: calc(8px / var(--tut-zoom, 1));
   /* Spotlight: the outer shadow dims everything else and is clipped by the frame. */
   box-shadow:
-    0 0 0 calc(1px / var(--tut-zoom, 1)) color-mix(in srgb, var(--tut-hotspot-ink) 70%, transparent),
-    0 0 0 4000px color-mix(in srgb, var(--tut-hotspot-ink) 46%, transparent);
+    0 0 0 calc(1px / var(--tut-zoom, 1)) color-mix(in srgb, var(--tut-hotspot-ink) 80%, transparent),
+    0 0 0 4000px color-mix(in srgb, var(--tut-hotspot-ring) 40%, transparent);
   animation: tutFadeIn 220ms linear both;
   transition:
     left 340ms var(--ease-out),
@@ -469,7 +470,7 @@
   place-items: center;
   border-radius: 999px;
   background: var(--tut-hotspot-ring);
-  box-shadow: 0 1px 4px color-mix(in srgb, var(--tut-hotspot-ink) 60%, transparent);
+  box-shadow: 0 0 0 1.5px var(--tut-hotspot-ink);
   color: var(--tut-hotspot-ink);
   font: 700 12px/1 var(--font-ui);
   transform: translate(-50%, -50%) scale(calc(1 / var(--tut-zoom, 1)));

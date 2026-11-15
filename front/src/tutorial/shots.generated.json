@@ -1,4 +1,66 @@
 {
+  "admin/home": {
+    "hotspots": {
+      "nav": {
+        "x": 6,
+        "y": 30.1,
+        "w": 16.1,
+        "h": 69.9
+      },
+      "theme": {
+        "x": 25,
+        "y": 45.5,
+        "w": 63.5,
+        "h": 9.7
+      }
+    }
+  },
+  "admin/invites": {
+    "hotspots": {
+      "invites": {
+        "x": 24,
+        "y": 38.9,
+        "w": 67.6,
+        "h": 19.9
+      }
+    }
+  },
+  "admin/network": {
+    "hotspots": {
+      "tunnel": {
+        "x": 27,
+        "y": 38.2,
+        "w": 60.4,
+        "h": 26.2
+      },
+      "update": {
+        "x": 27,
+        "y": 69,
+        "w": 65.4,
+        "h": 31
+      }
+    }
+  },
+  "admin/plugins": {
+    "hotspots": {
+      "plugins": {
+        "x": 0.1,
+        "y": 5.1,
+        "w": 23.1,
+        "h": 92.4
+      }
+    }
+  },
+  "admin/users": {
+    "hotspots": {
+      "users": {
+        "x": 24,
+        "y": 38.2,
+        "w": 67.3,
+        "h": 37.3
+      }
+    }
+  },
   "chat/answer": {
     "hotspots": {
       "answer": {
@@ -61,6 +123,218 @@
       }
     }
   },
+  "cluster/settings": {
+    "hotspots": {
+      "mode": {
+        "x": 4.4,
+        "y": 17.7,
+        "w": 17.9,
+        "h": 28.7
+      }
+    }
+  },
+  "cluster/team": {
+    "hotspots": {
+      "team": {
+        "x": 72.4,
+        "y": 66.2,
+        "w": 27.4,
+        "h": 18.1
+      }
+    }
+  },
+  "cluster/tiers": {
+    "hotspots": {
+      "tiers": {
+        "x": 4.4,
+        "y": 14.7,
+        "w": 17.9,
+        "h": 83.5
+      }
+    }
+  },
+  "cluster/toggle": {
+    "hotspots": {
+      "toggle": {
+        "x": 78,
+        "y": 5.9,
+        "w": 5.3,
+        "h": 4.9
+      }
+    }
+  },
+  "files/menu": {
+    "hotspots": {
+      "menu": {
+        "x": 12.9,
+        "y": 49.9,
+        "w": 10.8,
+        "h": 28.9
+      }
+    }
+  },
+  "files/preview": {
+    "hotspots": {
+      "preview": {
+        "x": 22.9,
+        "y": 5.1,
+        "w": 49.7,
+        "h": 48
+      }
+    }
+  },
+  "files/search": {
+    "hotspots": {
+      "search": {
+        "x": 0.1,
+        "y": 5.1,
+        "w": 23.1,
+        "h": 92.4
+      }
+    }
+  },
+  "files/split": {
+    "hotspots": {
+      "editor": {
+        "x": 22.9,
+        "y": 5.1,
+        "w": 49.7,
+        "h": 48
+      },
+      "statusbar": {
+        "x": 0,
+        "y": 96.2,
+        "w": 100,
+        "h": 3.8
+      }
+    }
+  },
+  "files/tree": {
+    "hotspots": {
+      "actions": {
+        "x": 11.2,
+        "y": 5.6,
+        "w": 11.1,
+        "h": 4.4
+      },
+      "tree": {
+        "x": 4,
+        "y": 13.8,
+        "w": 18.8,
+        "h": 41.8
+      }
+    }
+  },
+  "gateways/page": {
+    "hotspots": {
+      "tab": {
+        "x": 6.6,
+        "y": 86.2,
+        "w": 14.9,
+        "h": 4.8
+      },
+      "weixin": {
+        "x": 24,
+        "y": 45.3,
+        "w": 68.5,
+        "h": 14.9
+      }
+    }
+  },
+  "gateways/telegram": {
+    "hotspots": {
+      "telegram": {
+        "x": 24,
+        "y": 10.2,
+        "w": 68.5,
+        "h": 31.2
+      }
+    }
+  },
+  "gateways/weixin": {
+    "hotspots": {
+      "weixin": {
+        "x": 24,
+        "y": 41.8,
+        "w": 68.5,
+        "h": 45
+      }
+    }
+  },
+  "git/branches": {
+    "hotspots": {
+      "graph": {
+        "x": 3.8,
+        "y": 41.8,
+        "w": 14.3,
+        "h": 29.4
+      }
+    }
+  },
+  "git/diff": {
+    "hotspots": {
+      "diff": {
+        "x": 22.9,
+        "y": 5.1,
+        "w": 49.7,
+        "h": 48
+      }
+    }
+  },
+  "git/github": {
+    "hotspots": {
+      "panel": {
+        "x": 4.7,
+        "y": 45.9,
+        "w": 17.2,
+        "h": 22.8
+      }
+    }
+  },
+  "git/overview": {
+    "hotspots": {
+      "sync": {
+        "x": 11.5,
+        "y": 6.1,
+        "w": 11.1,
+        "h": 4.4
+      },
+      "commit": {
+        "x": 4.1,
+        "y": 11.6,
+        "w": 18.2,
+        "h": 14.2
+      },
+      "changes": {
+        "x": 4.4,
+        "y": 21.3,
+        "w": 16,
+        "h": 20.3
+      }
+    }
+  },
+  "git/remotes": {
+    "hotspots": {
+      "branches": {
+        "x": 3.5,
+        "y": 49.7,
+        "w": 19.6,
+        "h": 20.7
+      },
+      "remotes": {
+        "x": 3.8,
+        "y": 70.2,
+        "w": 18.9,
+        "h": 7.3
+      },
+      "stash": {
+        "x": 3.8,
+        "y": 83,
+        "w": 18.9,
+        "h": 8.2
+      }
+    }
+  },
   "layout/focus": {
     "hotspots": {
       "button": {
@@ -114,6 +388,171 @@
         "y": 6,
         "w": 25.4,
         "h": 5.6
+      }
+    }
+  },
+  "remote/auth": {
+    "hotspots": {
+      "auth": {
+        "x": 72.9,
+        "y": 57.4,
+        "w": 24.2,
+        "h": 25.9
+      },
+      "connect": {
+        "x": 86.4,
+        "y": 85.5,
+        "w": 10.6,
+        "h": 4.9
+      }
+    }
+  },
+  "remote/form": {
+    "hotspots": {
+      "location": {
+        "x": 85.1,
+        "y": 28.6,
+        "w": 12.7,
+        "h": 4.4
+      },
+      "connection": {
+        "x": 72.9,
+        "y": 37.4,
+        "w": 24.2,
+        "h": 26.3
+      }
+    }
+  },
+  "start/create": {
+    "hotspots": {
+      "form": {
+        "x": 72,
+        "y": 21.5,
+        "w": 26.4,
+        "h": 75.7
+      }
+    }
+  },
+  "start/login": {
+    "hotspots": {
+      "form": {
+        "x": 69.8,
+        "y": 27.8,
+        "w": 24.9,
+        "h": 48.2
+      }
+    }
+  },
+  "start/manager": {
+    "hotspots": {
+      "list": {
+        "x": 0.8,
+        "y": 34.5,
+        "w": 70.1,
+        "h": 64.3
+      }
+    }
+  },
+  "start/switcher": {
+    "hotspots": {
+      "panel": {
+        "x": 4,
+        "y": 5.9,
+        "w": 65.7,
+        "h": 38
+      }
+    }
+  },
+  "start/workbench": {
+    "hotspots": {
+      "context": {
+        "x": 0.3,
+        "y": 0.3,
+        "w": 25.1,
+        "h": 4.9
+      },
+      "rail": {
+        "x": 0.6,
+        "y": 11.8,
+        "w": 3.3,
+        "h": 32
+      },
+      "statusbar": {
+        "x": 0,
+        "y": 96.2,
+        "w": 100,
+        "h": 3.8
+      }
+    }
+  },
+  "terminal/actions": {
+    "hotspots": {
+      "dialog": {
+        "x": 19.4,
+        "y": 21.8,
+        "w": 61,
+        "h": 56.3
+      }
+    }
+  },
+  "terminal/tabs": {
+    "hotspots": {
+      "strip": {
+        "x": 24.4,
+        "y": 53.2,
+        "w": 21,
+        "h": 4.6
+      },
+      "close": {
+        "x": 39.2,
+        "y": 53.3,
+        "w": 2.8,
+        "h": 4.4
+      },
+      "actions": {
+        "x": 23.5,
+        "y": 91.9,
+        "w": 12.5,
+        "h": 4.9
+      }
+    }
+  },
+  "tips/answer": {
+    "hotspots": {
+      "continue": {
+        "x": 87.7,
+        "y": 48.4,
+        "w": 2.5,
+        "h": 4
+      }
+    }
+  },
+  "tips/gateway": {
+    "hotspots": {}
+  },
+  "tips/shortcuts": {
+    "hotspots": {
+      "card": {
+        "x": 25.7,
+        "y": 38.8,
+        "w": 14.9,
+        "h": 10
+      },
+      "focus": {
+        "x": 69.1,
+        "y": 53.2,
+        "w": 3.1,
+        "h": 4.9
+      }
+    }
+  },
+  "tips/slash": {
+    "hotspots": {
+      "composer": {
+        "x": 73.1,
+        "y": 84.1,
+        "w": 26,
+        "h": 12.2
       }
     }
   }

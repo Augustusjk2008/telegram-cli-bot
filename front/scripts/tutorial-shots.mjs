@@ -7,12 +7,15 @@
 // The browser is fed straight from the build directory, so no server or listening port is involved,
 // and `front/dist` is never touched. Scenes live in tutorial-scenes.mjs. Review PNGs are written to
 // test-results/tutorial-shots (git-ignored; a Playwright run clears that directory).
+//
+// Repeated runs give identical files except for one known wobble: the header's search text can land
+// one device pixel to the side for a whole page session, which changes the shots of that chapter.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
-import { FIXED_TIME, SCENES } from "./tutorial-scenes.mjs";
+import { CAPTURE_THEME_ID, FIXED_TIME, SCENES, TERMINAL_OUTPUTS } from "./tutorial-scenes.mjs";
 
 const frontRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const assetRoot = path.join(frontRoot, "public", "assets", "tutorial");
@@ -59,7 +62,11 @@ function launchOptions() {
   return process.platform === "win32" ? { channel: "chrome" } : {};
 }
 
-async function openWorkbench(browser, distDir) {
+/**
+ * Opens the mock app. `user` is the login name (the mock treats "127.0.0.1" as the local administrator);
+ * `loggedOut` stops at the login page.
+ */
+async function openWorkbench(browser, distDir, { user = "demo", loggedOut = false } = {}) {
   const context = await browser.newContext({
     viewport: VIEWPORT,
     deviceScaleFactor: DEVICE_SCALE_FACTOR,
@@ -67,18 +74,40 @@ async function openWorkbench(browser, distDir) {
     timezoneId: "Asia/Shanghai",
     reducedMotion: "reduce",
   });
-  await context.addInitScript(() => {
+  await context.addInitScript((themeId) => {
     try {
       localStorage.setItem("web-view-mode", "desktop");
       // The tutorial's own first-run hint must not appear on the logo in its screenshots.
       localStorage.setItem("web-tutorial-state", JSON.stringify({ v: 1, seen: true, chapterId: "", stepIndex: 0, completed: [] }));
+      // Theme: the mock client reads its stored library selection, the login page its own preview key.
+      localStorage.setItem("web-mock-ui-themes:global:v1", JSON.stringify({ selectedThemeId: themeId }));
+      localStorage.setItem("web-ui-theme:login:v1:/", themeId);
     } catch {
       // Storage is unavailable before navigation to the fake origin.
     }
-  });
+  }, CAPTURE_THEME_ID);
   const page = await context.newPage();
   await page.clock.setFixedTime(FIXED_TIME);
-  await page.routeWebSocket("**/*", (socket) => socket.close());
+  // No socket reaches a real host. The terminal has no mock shell, so its socket is answered here with
+  // canned output (legacy protocol: one JSON greeting, then raw terminal data); keystrokes are ignored.
+  let terminalCount = 0;
+  await page.routeWebSocket("**/*", (socket) => {
+    if (!new URL(socket.url()).pathname.endsWith("/terminal/ws")) {
+      socket.close();
+      return;
+    }
+    const output = TERMINAL_OUTPUTS[terminalCount % TERMINAL_OUTPUTS.length];
+    terminalCount += 1;
+    let greeted = false;
+    socket.onMessage(() => {
+      if (greeted) {
+        return;
+      }
+      greeted = true;
+      socket.send(JSON.stringify({ pty_mode: true }));
+      socket.send(output);
+    });
+  });
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== ORIGIN) {
@@ -93,8 +122,12 @@ async function openWorkbench(browser, distDir) {
     await route.fulfill({ path: file });
   });
   await page.goto(`${ORIGIN}/`);
+  if (loggedOut) {
+    await page.locator('input[name="username"]').waitFor();
+    return { context, page };
+  }
   // The mock build accepts any credentials; the announcement dialog opens after login and blocks clicks.
-  await page.locator('input[name="username"]').fill("demo");
+  await page.locator('input[name="username"]').fill(user);
   await page.locator('input[name="password"]').fill("demo-password");
   await page.locator("form").getByRole("button", { name: "登录", exact: true }).click();
   await page.getByRole("button", { name: "关闭", exact: true }).click();
@@ -138,6 +171,8 @@ async function measureHotspot(page, name, resolve) {
 
 /** Waits for finite animations and transitions to end, so no shot is taken mid-movement. */
 async function settle(page) {
+  // Park the pointer in the header's empty corner: no hover styles or tooltips in the shot.
+  await page.mouse.move(0, 0);
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const moving = await page.evaluate(() => document.getAnimations().some((animation) => (
       animation.playState === "running" && Number.isFinite(animation.effect?.getComputedTiming().endTime)
@@ -226,10 +261,12 @@ async function main() {
       for (const scene of SCENES.filter((item) => item.chapter === chapter)) {
         const key = `${scene.chapter}/${scene.shot}`;
         try {
-          // One context per chapter; a scene that needs a clean workbench asks for a fresh one.
-          if (!session || scene.fresh) {
+          // One context per chapter; a scene that needs a clean workbench, another account or the
+          // login page gets a fresh one.
+          const entry = `${scene.user || "demo"}:${scene.loggedOut ? "out" : "in"}`;
+          if (!session || scene.fresh || session.entry !== entry) {
             await session?.context.close();
-            session = await openWorkbench(browser, distDir);
+            session = { ...await openWorkbench(browser, distDir, { user: scene.user, loggedOut: scene.loggedOut }), entry };
           }
           const { page } = session;
           await scene.run(page);

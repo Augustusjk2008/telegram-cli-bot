@@ -30,7 +30,6 @@ it("opens the guide from the logo, owns the keyboard while open and hands the wo
   expect(guide).toHaveAttribute("aria-modal", "true");
   expect(workbench).toHaveAttribute("inert");
   expect(within(within(guide).getByRole("list", { name: "教程章节" })).getAllByRole("listitem")).toHaveLength(11);
-  expect(within(guide).getByRole("button", { name: /^快速上手/ })).toBeDisabled();
 
   fireEvent.click(within(guide).getByRole("button", { name: /^对话/ }));
   expect(within(guide).getByRole("button", { name: "发送消息", current: "step" })).toBeInTheDocument();
