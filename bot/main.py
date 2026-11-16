@@ -48,6 +48,7 @@ from bot.storage_migration import StorageMigrationService
 from bot.storage_runtime import AsyncStorageMigrationService
 from bot.telegram.gateway import start_telegram_gateway
 from bot.weixin.gateway import start_weixin_gateway
+from bot.scheduler.service import start_scheduler_service
 from bot.version import APP_VERSION
 from bot.web import WebApiServer
 from bot.web.runtime_binding import RuntimeWebBind, WebPortInUseError, resolve_runtime_web_bind
@@ -531,6 +532,7 @@ async def run_all_bots():
     )
     telegram_gateway = None
     weixin_gateway = None
+    scheduler_service = None
     acceptance_task = asyncio.create_task(_wait_update_acceptance(
         startup_update_job, os.environ.get("CLI_BRIDGE_UPDATE_STATE_FILE", ""),
     )) if startup_update_job else None
@@ -551,6 +553,12 @@ async def run_all_bots():
             )
         except Exception:
             logger.exception("微信接入启动失败，核心 Web 继续运行")
+        try:
+            scheduler_service = await start_scheduler_service(
+                manager, capability_resolver=web_server.account_capabilities,
+            )
+        except Exception:
+            logger.exception("定时任务服务启动失败，核心 Web 继续运行")
         restart_wait = asyncio.create_task(config.RESTART_EVENT.wait())
         shutdown_wait = asyncio.create_task(config.SHUTDOWN_EVENT.wait())
         try:
@@ -567,6 +575,8 @@ async def run_all_bots():
         if acceptance_task is not None:
             acceptance_task.cancel()
             await asyncio.gather(acceptance_task, return_exceptions=True)
+        if scheduler_service is not None:
+            await scheduler_service.stop()
         if weixin_gateway is not None:
             await weixin_gateway.stop()
         if telegram_gateway is not None:

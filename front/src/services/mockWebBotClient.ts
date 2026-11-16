@@ -27,6 +27,12 @@ import type {
   CreateAnnouncementInput,
   AnnouncementItem,
   AnnouncementListResult,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskListResult,
+  ScheduledTaskPatchInput,
+  ScheduledTaskRun,
+  ScheduledTaskTrigger,
   Capability,
   AppUpdateDownloadProgress,
   AppUpdatePackageKind,
@@ -1915,6 +1921,148 @@ type MockThemeLibraryState = ThemeLibrary & {
   selectedThemeIds?: Record<string, string>;
 };
 
+const MOCK_SCHEDULE_LIMITS = {
+  minIntervalMinutes: 5,
+  maxPromptChars: 20000,
+  maxWaitMinutes: 120,
+  maxMisfireGraceMinutes: 1440,
+};
+
+/** Mock-only next fire time, computed in the browser's local zone; the real backend honours `timezone`. */
+function mockScheduleNextRunAt(trigger: ScheduledTaskTrigger, enabled: boolean, now = new Date()): string | null {
+  if (!enabled) return null;
+  if (trigger.type === "interval") {
+    const anchor = trigger.anchor ? new Date(trigger.anchor).getTime() : now.getTime();
+    const step = Math.max(1, trigger.minutes) * 60_000;
+    const elapsed = Math.max(0, now.getTime() - anchor);
+    return new Date(anchor + (Math.floor(elapsed / step) + 1) * step).toISOString();
+  }
+  if (trigger.type === "once") {
+    const at = new Date(trigger.at);
+    return Number.isNaN(at.getTime()) || at.getTime() <= now.getTime() ? null : at.toISOString();
+  }
+  const [hours, minutes] = trigger.time.split(":").map((part) => Number(part));
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const candidate = new Date(now);
+    candidate.setDate(now.getDate() + offset);
+    candidate.setHours(hours || 0, minutes || 0, 0, 0);
+    const isoWeekday = candidate.getDay() === 0 ? 7 : candidate.getDay();
+    if (candidate.getTime() > now.getTime() && trigger.weekdays.includes(isoWeekday as 1)) {
+      return candidate.toISOString();
+    }
+  }
+  return null;
+}
+
+function cloneScheduledTaskRun(run: ScheduledTaskRun): ScheduledTaskRun {
+  return { ...run };
+}
+
+function cloneScheduledTask(item: ScheduledTask): ScheduledTask {
+  return {
+    ...item,
+    trigger: item.trigger.type === "daily"
+      ? { ...item.trigger, weekdays: [...item.trigger.weekdays] }
+      : { ...item.trigger },
+    createdBy: { ...item.createdBy },
+    lastRun: item.lastRun ? cloneScheduledTaskRun(item.lastRun) : null,
+  };
+}
+
+function seedMockScheduledTasks(): { items: ScheduledTask[]; runs: Map<string, ScheduledTaskRun[]> } {
+  const createdBy = { accountId: "127.0.0.1", username: "127.0.0.1" };
+  const morningRun: ScheduledTaskRun = {
+    id: "run_demo_morning_1",
+    scheduleId: "sch_demo_morning",
+    plannedAt: "2026-11-16T01:00:00Z",
+    trigger: "schedule",
+    status: "completed",
+    reasonCode: "",
+    reasonMessage: "",
+    botAlias: "main",
+    conversationId: "conv_demo_morning_1",
+    turnId: "turn_demo_morning_1",
+    assistantMessageId: "msg_demo_morning_1",
+    preview: "昨日共合并 4 个 PR，CI 全部通过；待处理 issue 2 个。",
+    unsafeDowngraded: false,
+    createdAt: "2026-11-16T01:00:00Z",
+    startedAt: "2026-11-16T01:00:02Z",
+    finishedAt: "2026-11-16T01:03:41Z",
+  };
+  const auditRun: ScheduledTaskRun = {
+    id: "run_demo_audit_1",
+    scheduleId: "sch_demo_audit",
+    plannedAt: "2026-11-15T22:00:00Z",
+    trigger: "schedule",
+    status: "skipped",
+    reasonCode: "bot_busy",
+    reasonMessage: "目标 Bot 忙碌，已按策略跳过本次运行",
+    botAlias: "team2",
+    conversationId: "",
+    turnId: "",
+    assistantMessageId: "",
+    preview: "",
+    unsafeDowngraded: false,
+    createdAt: "2026-11-15T22:00:00Z",
+    startedAt: "",
+    finishedAt: "2026-11-15T22:00:00Z",
+  };
+  const morningTrigger: ScheduledTaskTrigger = { type: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] };
+  const auditTrigger: ScheduledTaskTrigger = { type: "interval", minutes: 240, anchor: "2026-11-15T18:00:00+08:00" };
+  return {
+    items: [
+      {
+        id: "sch_demo_morning",
+        name: "每日晨报",
+        enabled: true,
+        revision: 3,
+        botAlias: "main",
+        agentId: "main",
+        prompt: "汇总昨天仓库的合并记录、CI 结果和待处理 issue，输出一份简短晨报。",
+        trigger: morningTrigger,
+        timezone: "Asia/Shanghai",
+        busyPolicy: "wait",
+        maxWaitMinutes: 15,
+        misfireGraceMinutes: 30,
+        allowUnsafeCli: false,
+        nextRunAt: mockScheduleNextRunAt(morningTrigger, true),
+        disabledReason: "",
+        createdBy,
+        createdAt: "2026-11-10T08:00:00Z",
+        updatedAt: "2026-11-12T08:00:00Z",
+        activeRunId: "",
+        lastRun: morningRun,
+      },
+      {
+        id: "sch_demo_audit",
+        name: "依赖安全巡检",
+        enabled: false,
+        revision: 1,
+        botAlias: "team2",
+        agentId: "main",
+        prompt: "检查依赖锁文件中的已知漏洞，列出需要升级的包和建议版本。",
+        trigger: auditTrigger,
+        timezone: "Asia/Shanghai",
+        busyPolicy: "skip",
+        maxWaitMinutes: 15,
+        misfireGraceMinutes: 30,
+        allowUnsafeCli: false,
+        nextRunAt: null,
+        disabledReason: "",
+        createdBy,
+        createdAt: "2026-11-11T08:00:00Z",
+        updatedAt: "2026-11-15T22:00:00Z",
+        activeRunId: "",
+        lastRun: auditRun,
+      },
+    ],
+    runs: new Map([
+      ["sch_demo_morning", [morningRun]],
+      ["sch_demo_audit", [auditRun]],
+    ]),
+  };
+}
+
 export class MockWebBotClient implements WebBotClient {
   private static uiThemeMemory: MockThemeLibraryState | null = null;
   private static uiThemeAssets = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
@@ -2652,6 +2800,8 @@ export class MockWebBotClient implements WebBotClient {
       usage: [{ usedAt: "2026-04-22T02:00:00Z", usedBy: "alice" }],
     },
   ];
+  private scheduledTasks = seedMockScheduledTasks();
+  private scheduledTaskSeq = 0;
   private announcements: AnnouncementItem[] = [
     {
       id: "ann-2026-05-13-demo",
@@ -3729,6 +3879,193 @@ export class MockWebBotClient implements WebBotClient {
     const before = this.announcements.length;
     this.announcements = this.announcements.filter((item) => item.id !== id);
     return { deleted: this.announcements.length !== before };
+  }
+
+  private requireScheduleAdmin() {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权管理定时任务", { status: 403, code: "forbidden" });
+    }
+  }
+
+  private canAllowUnsafeScheduledCli() {
+    return this.isLocalAdminSession() || this.session.capabilities.includes("run_unsafe_cli");
+  }
+
+  private findScheduledTask(id: string) {
+    const item = this.scheduledTasks.items.find((candidate) => candidate.id === id);
+    if (!item) throw new WebApiClientError("定时任务不存在", { status: 404, code: "schedule_not_found" });
+    return item;
+  }
+
+  private validateScheduledTask(input: ScheduledTaskInput) {
+    const invalid = (message: string) => new WebApiClientError(message, { status: 400, code: "invalid_schedule" });
+    if (!input.name.trim()) throw invalid("请填写任务名称");
+    if (!this.bots.has(input.botAlias)) throw invalid("目标 Bot 不存在");
+    if (!input.prompt.trim()) throw invalid("请填写指令内容");
+    if (input.prompt.length > MOCK_SCHEDULE_LIMITS.maxPromptChars) throw invalid("指令内容过长");
+    if (input.trigger.type === "daily" && !input.trigger.weekdays.length) throw invalid("至少选择一天");
+    if (input.trigger.type === "interval" && input.trigger.minutes < MOCK_SCHEDULE_LIMITS.minIntervalMinutes) {
+      throw invalid(`间隔不能少于 ${MOCK_SCHEDULE_LIMITS.minIntervalMinutes} 分钟`);
+    }
+    if (input.allowUnsafeCli && !this.canAllowUnsafeScheduledCli()) {
+      throw new WebApiClientError("当前账号无权为定时任务启用高风险 CLI", { status: 403, code: "schedule_unsafe_forbidden" });
+    }
+  }
+
+  async listScheduledTasks(): Promise<ScheduledTaskListResult> {
+    this.requireScheduleAdmin();
+    return {
+      items: this.scheduledTasks.items.map((item) => cloneScheduledTask(item)),
+      defaultTimezone: "Asia/Shanghai",
+      canAllowUnsafeCli: this.canAllowUnsafeScheduledCli(),
+      targets: Array.from(this.bots.values())
+        .filter((bot) => !bot.archived)
+        .map((bot) => ({ alias: bot.alias, cliType: bot.cliType })),
+      limits: { ...MOCK_SCHEDULE_LIMITS },
+    };
+  }
+
+  async createScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask> {
+    this.requireScheduleAdmin();
+    this.validateScheduledTask(input);
+    const now = new Date().toISOString();
+    this.scheduledTaskSeq += 1;
+    const trigger: ScheduledTaskTrigger = input.trigger.type === "interval" && !input.trigger.anchor
+      ? { ...input.trigger, anchor: now }
+      : input.trigger;
+    const item: ScheduledTask = {
+      ...input,
+      trigger,
+      id: `sch_mock_${Date.now().toString(36)}_${this.scheduledTaskSeq}`,
+      revision: 1,
+      agentId: "main",
+      nextRunAt: mockScheduleNextRunAt(trigger, input.enabled),
+      disabledReason: "",
+      createdBy: { accountId: this.session.accountId, username: this.session.username },
+      createdAt: now,
+      updatedAt: now,
+      activeRunId: "",
+      lastRun: null,
+    };
+    this.scheduledTasks.items = [...this.scheduledTasks.items, item];
+    this.scheduledTasks.runs.set(item.id, []);
+    return cloneScheduledTask(item);
+  }
+
+  async updateScheduledTask(id: string, input: ScheduledTaskPatchInput): Promise<ScheduledTask> {
+    this.requireScheduleAdmin();
+    const current = this.findScheduledTask(id);
+    if (input.revision !== current.revision) {
+      throw new WebApiClientError("定时任务已被其他人修改", { status: 409, code: "schedule_conflict" });
+    }
+    const { revision: _revision, ...fields } = input;
+    const merged: ScheduledTaskInput = {
+      name: current.name,
+      botAlias: current.botAlias,
+      prompt: current.prompt,
+      trigger: current.trigger,
+      timezone: current.timezone,
+      busyPolicy: current.busyPolicy,
+      maxWaitMinutes: current.maxWaitMinutes,
+      misfireGraceMinutes: current.misfireGraceMinutes,
+      allowUnsafeCli: current.allowUnsafeCli,
+      enabled: current.enabled,
+      ...fields,
+    };
+    this.validateScheduledTask({ ...merged, allowUnsafeCli: fields.allowUnsafeCli === true && merged.allowUnsafeCli });
+    const next: ScheduledTask = {
+      ...current,
+      ...merged,
+      revision: current.revision + 1,
+      nextRunAt: mockScheduleNextRunAt(merged.trigger, merged.enabled),
+      disabledReason: merged.enabled ? "" : current.disabledReason,
+      updatedAt: new Date().toISOString(),
+    };
+    this.scheduledTasks.items = this.scheduledTasks.items.map((item) => (item.id === id ? next : item));
+    return cloneScheduledTask(next);
+  }
+
+  async deleteScheduledTask(id: string): Promise<{ deleted: boolean; id: string }> {
+    this.requireScheduleAdmin();
+    this.findScheduledTask(id);
+    this.scheduledTasks.items = this.scheduledTasks.items.filter((item) => item.id !== id);
+    this.scheduledTasks.runs.delete(id);
+    return { deleted: true, id };
+  }
+
+  private recordScheduledTaskRun(id: string, run: ScheduledTaskRun) {
+    const runs = this.scheduledTasks.runs.get(id) || [];
+    this.scheduledTasks.runs.set(id, [run, ...runs.filter((item) => item.id !== run.id)].slice(0, 50));
+    this.scheduledTasks.items = this.scheduledTasks.items.map((item) => (item.id === id
+      ? {
+        ...item,
+        lastRun: run,
+        activeRunId: ["pending", "waiting", "running"].includes(run.status) ? run.id : "",
+      }
+      : item));
+  }
+
+  async runScheduledTaskNow(id: string): Promise<ScheduledTaskRun> {
+    this.requireScheduleAdmin();
+    const item = this.findScheduledTask(id);
+    if (item.activeRunId) {
+      throw new WebApiClientError("该定时任务已有运行中的记录", { status: 409, code: "schedule_run_active" });
+    }
+    const now = new Date().toISOString();
+    this.scheduledTaskSeq += 1;
+    const run: ScheduledTaskRun = {
+      id: `run_mock_${Date.now().toString(36)}_${this.scheduledTaskSeq}`,
+      scheduleId: id,
+      plannedAt: now,
+      trigger: "manual",
+      status: "running",
+      reasonCode: "",
+      reasonMessage: "",
+      botAlias: item.botAlias,
+      conversationId: `conv_mock_${this.scheduledTaskSeq}`,
+      turnId: "",
+      assistantMessageId: "",
+      preview: "",
+      unsafeDowngraded: false,
+      createdAt: now,
+      startedAt: now,
+      finishedAt: "",
+    };
+    this.recordScheduledTaskRun(id, run);
+    globalThis.setTimeout(() => {
+      const latest = this.scheduledTasks.runs.get(id)?.find((candidate) => candidate.id === run.id);
+      if (!latest || latest.status !== "running") return;
+      this.recordScheduledTaskRun(id, {
+        ...latest,
+        status: "completed",
+        preview: "（演示）已按指令完成本次运行。",
+        finishedAt: new Date().toISOString(),
+      });
+    }, 4000);
+    return cloneScheduledTaskRun(run);
+  }
+
+  async listScheduledTaskRuns(id: string, limit = 20): Promise<ScheduledTaskRun[]> {
+    this.requireScheduleAdmin();
+    this.findScheduledTask(id);
+    return (this.scheduledTasks.runs.get(id) || []).slice(0, Math.max(1, limit)).map(cloneScheduledTaskRun);
+  }
+
+  async cancelScheduledTaskRun(id: string, runId: string): Promise<ScheduledTaskRun> {
+    this.requireScheduleAdmin();
+    this.findScheduledTask(id);
+    const run = this.scheduledTasks.runs.get(id)?.find((candidate) => candidate.id === runId);
+    if (!run) throw new WebApiClientError("运行记录不存在", { status: 404, code: "schedule_run_not_found" });
+    if (!["pending", "waiting", "running"].includes(run.status)) return cloneScheduledTaskRun(run);
+    const cancelled: ScheduledTaskRun = {
+      ...run,
+      status: "cancelled",
+      reasonCode: "cancelled",
+      reasonMessage: "已由管理员取消",
+      finishedAt: new Date().toISOString(),
+    };
+    this.recordScheduledTaskRun(id, cancelled);
+    return cloneScheduledTaskRun(cancelled);
   }
 
   async listRegisterCodes(): Promise<RegisterCodeItem[]> {

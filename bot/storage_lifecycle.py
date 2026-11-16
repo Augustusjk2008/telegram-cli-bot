@@ -19,8 +19,18 @@ async def stop_all_agent_processes(server: Any | None = None) -> dict[str, Any]:
 
     from bot.codex_server.runtime import get_codex_server_registry
     from bot.models import flush_pending_session_persistence
+    from bot.scheduler.service import get_active_scheduler_service
     from bot.session_store import close_session_store
     from bot.sessions import sessions, sessions_lock
+
+    errors: list[str] = []
+    # Stop firing scheduled runs first so none starts while sessions stop.
+    scheduler = get_active_scheduler_service()
+    if scheduler is not None:
+        try:
+            await scheduler.pause("storage_migration", "存储迁移已停止全部智能体")
+        except Exception as exc:
+            errors.append(str(exc))
 
     with sessions_lock:
         sessions_to_stop = list(sessions.values())
@@ -39,7 +49,6 @@ async def stop_all_agent_processes(server: Any | None = None) -> dict[str, Any]:
             logger.exception("停止会话进程失败: %s", getattr(session, "bot_alias", ""))
             raise
 
-    errors: list[str] = []
     results = await asyncio.gather(
         *(stop_session(session) for session in sessions_to_stop),
         return_exceptions=True,

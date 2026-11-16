@@ -161,6 +161,16 @@ bash install.sh
 - Codex (exec / app-server), Claude, Antigravity, and DeepSeek Harness CLI sessions retain streaming text, status events, traces, and completion events. Model lists and parameters are saved separately for each CLI type.
 - Endless mode stores retryable errors and `Continue` events in one durable turn. Legacy grouped turns are consolidated in the database when history storage is opened, so reloading history returns the turn directly with its continue count.
 
+### Scheduled Tasks
+
+Administrators can schedule work for a Bot under Admin Center → 定时任务 (Scheduled tasks). When a schedule fires, the host opens a new conversation for the Bot's main agent and sends a fixed instruction. This works like sending `/new` and then a message from Weixin: the Bot's active conversation switches to the new one, and earlier history is kept.
+
+- Triggers: a fixed time on every day or on selected weekdays, an interval in minutes (at least 5), or a single run. Times are evaluated in the chosen IANA timezone.
+- When the Bot is busy, a run either waits for it to become idle (up to 15 minutes by default) or is skipped. A schedule never overlaps itself, and at most 2 scheduled runs execute at once.
+- A fire missed while the host was down runs once if the host is back within the grace window (10 minutes by default); later than that, it is recorded as missed. No run starts while the host is draining for an update, restarting or migrating storage. Runs still active when the host stops are recorded as interrupted.
+- Only an account with the `run_unsafe_cli` capability can let a schedule use unsafe CLI flags. The authorizing account is re-checked before every run, and the run falls back to safe flags if that capability was removed.
+- Schedules and run history live in `scheduler/scheduler.sqlite3` under the app data directory. Replies are stored in the normal chat history, and Telegram/Weixin completion broadcasts behave as they do for any other turn.
+
 ### SSH remote workspaces
 
 When creating an agent, select **Remote SSH**, choose Linux / POSIX or Windows, enter the SSH connection details, verify the first connection's host key fingerprint, and browse to a remote directory. Remote agents support chat, a file tree, UTF-8 text editing, file uploads, and independent SSH terminal tabs. The remote host needs SSH/SFTP; AI CLIs run on the Orbit host. DeepSeek Harness currently supports local workspaces only.

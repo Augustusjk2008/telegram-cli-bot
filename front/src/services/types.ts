@@ -88,6 +88,107 @@ export type AnnouncementListResult = {
   hasUnseen: boolean;
 };
 
+/** ISO weekdays: 1 = Monday … 7 = Sunday. */
+export type ScheduledTaskWeekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export type ScheduledTaskTrigger =
+  | { type: "daily"; time: string; weekdays: ScheduledTaskWeekday[] }
+  | { type: "interval"; minutes: number; anchor?: string }
+  | { type: "once"; at: string };
+
+export type ScheduledTaskTriggerType = ScheduledTaskTrigger["type"];
+export type ScheduledTaskBusyPolicy = "wait" | "skip";
+export type ScheduledTaskDisabledReason = "" | "bot_removed" | "once_finished";
+export type ScheduledTaskRunTrigger = "schedule" | "manual";
+export type ScheduledTaskRunStatus =
+  | "pending"
+  | "waiting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "skipped"
+  | "missed"
+  | "interrupted";
+
+export type ScheduledTaskRun = {
+  id: string;
+  scheduleId: string;
+  plannedAt: string;
+  trigger: ScheduledTaskRunTrigger;
+  status: ScheduledTaskRunStatus;
+  reasonCode: string;
+  reasonMessage: string;
+  botAlias: string;
+  conversationId: string;
+  turnId: string;
+  assistantMessageId: string;
+  preview: string;
+  unsafeDowngraded: boolean;
+  createdAt: string;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type ScheduledTask = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  revision: number;
+  botAlias: string;
+  agentId: string;
+  prompt: string;
+  trigger: ScheduledTaskTrigger;
+  timezone: string;
+  busyPolicy: ScheduledTaskBusyPolicy;
+  maxWaitMinutes: number;
+  misfireGraceMinutes: number;
+  allowUnsafeCli: boolean;
+  nextRunAt: string | null;
+  disabledReason: ScheduledTaskDisabledReason;
+  createdBy: { accountId: string; username: string };
+  createdAt: string;
+  updatedAt: string;
+  activeRunId: string;
+  lastRun: ScheduledTaskRun | null;
+};
+
+export type ScheduledTaskTarget = {
+  alias: string;
+  cliType: string;
+};
+
+export type ScheduledTaskLimits = {
+  minIntervalMinutes: number;
+  maxPromptChars: number;
+  maxWaitMinutes: number;
+  maxMisfireGraceMinutes: number;
+};
+
+export type ScheduledTaskListResult = {
+  items: ScheduledTask[];
+  defaultTimezone: string;
+  canAllowUnsafeCli: boolean;
+  targets: ScheduledTaskTarget[];
+  limits: ScheduledTaskLimits;
+};
+
+export type ScheduledTaskInput = {
+  name: string;
+  botAlias: string;
+  prompt: string;
+  trigger: ScheduledTaskTrigger;
+  timezone: string;
+  busyPolicy: ScheduledTaskBusyPolicy;
+  maxWaitMinutes: number;
+  misfireGraceMinutes: number;
+  allowUnsafeCli: boolean;
+  enabled: boolean;
+};
+
+/** PATCH carries any subset of the create fields plus the revision it was edited from. */
+export type ScheduledTaskPatchInput = Partial<ScheduledTaskInput> & { revision: number };
+
 export type AdminUser = {
   accountId: string;
   username: string;

@@ -305,6 +305,10 @@ def get_announcements_reads_path() -> Path:
     return get_app_data_root() / "announcements" / "reads.json"
 
 
+def get_scheduler_db_path() -> Path:
+    return get_app_data_root() / "scheduler" / "scheduler.sqlite3"
+
+
 def get_lan_chat_config_path() -> Path:
     return get_app_data_root() / "lan_chat" / "config.json"
 

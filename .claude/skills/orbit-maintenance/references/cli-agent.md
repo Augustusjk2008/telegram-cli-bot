@@ -15,6 +15,7 @@
 - CLI types are `claude`, `codex`, `codex_server`, `antigravity` and `deepseek`; the default commands of the last three are `codex`, `agy` and `dsh` respectively.
 - `codex_server` reuses the stdio JSON-RPC process of `codex app-server` through `bot/codex_server/client.py` and `runtime.py`; the Web entry still goes through the shared CLI SSE/persistence chain. Its parameters are stored separately from `codex`, and its history data shares the `codex` provider.
 - Antigravity uses `agy -p ... --output-format stream-json` and maintains `antigravity_conversation_id`; both the local CLI cluster and the remote workspace MCP have entry points, and remote Antigravity clusters are rejected in `_effective_cli_params()`.
+- Scheduled tasks (`bot/scheduler/service.py`) drive the same shared chain as the Weixin gateway: `create_conversation(follow_current_conversation=True)` followed by `stream_chat(expected_conversation_id=..., source_channel="schedule")`; error events with `session_busy`/`conversation_changed` after the conversation was created are recorded as `preempted`. Tests: `tests/test_scheduler_service.py`, `tests/test_scheduler_triggers.py`.
 - DeepSeek Harness uses the local headless JSON CLI and supports local clusters; for the detailed protocol, patch and support boundaries see [deepseek-harness.md](deepseek-harness.md).
 
 ## Behavior that must be preserved

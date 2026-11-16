@@ -15,6 +15,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { WeixinGatewayPanel } from "../components/admin/WeixinGatewayPanel";
+import { ScheduledTasksPanel } from "../components/admin/ScheduledTasksPanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
   AdminUser,
@@ -70,6 +71,7 @@ type AdminCenterTab =
   | "invites"
   | "cli-errors"
   | "usage"
+  | "schedules"
   | "network-updates"
   | "announcements"
   | "notifications"
@@ -90,6 +92,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   "inline-completion": { label: "补全", description: "编辑器 AI 行内补全服务" },
   "chat-translation": { label: "翻译", description: "聊天消息翻译服务" },
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
+  schedules: { label: "定时任务", description: "按计划新建会话并向智能体发送固定指令" },
   announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
   notifications: { label: "通知", description: "任务完成推送的状态与测试" },
   weixin: { label: "消息网关", description: "Telegram 与个人微信的接入配置、扫码和连接状态" },
@@ -100,7 +103,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
 const ADMIN_TAB_GROUPS: Array<{ label: string; tabs: AdminCenterTab[] }> = [
   { label: "系统", tabs: ["global", "env", "network-updates", "storage"] },
   { label: "成员", tabs: ["users", "invites"] },
-  { label: "智能与服务", tabs: [ "inline-completion", "chat-translation", "usage"] },
+  { label: "智能与服务", tabs: ["inline-completion", "chat-translation", "usage", "schedules"] },
   { label: "消息", tabs: ["announcements", "notifications", "weixin", "lan-chat"] },
   { label: "诊断", tabs: ["cli-errors"] },
 ];
@@ -319,6 +322,7 @@ export function AdminCenterScreen({
   const [announcementDeletingId, setAnnouncementDeletingId] = useState("");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsStatus | null>(null);
   const [weixinPanelKey, setWeixinPanelKey] = useState(0);
+  const [schedulesRefreshKey, setSchedulesRefreshKey] = useState(0);
   const [chatTranslationPanelKey, setChatTranslationPanelKey] = useState(0);
   const [inlineCompletionPanelKey, setInlineCompletionPanelKey] = useState(0);
   const [testingPushPlus, setTestingPushPlus] = useState(false);
@@ -347,6 +351,7 @@ export function AdminCenterScreen({
     invites: false,
     "cli-errors": false,
     usage: false,
+    schedules: false,
     "network-updates": false,
     announcements: false,
     notifications: false,
@@ -376,6 +381,7 @@ export function AdminCenterScreen({
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
       "usage",
+      ...(canManageEnvConfig ? (["schedules"] as AdminCenterTab[]) : []),
       "network-updates",
       "announcements",
       "notifications",
@@ -695,6 +701,12 @@ export function AdminCenterScreen({
       if (refresh) {
         setUsagePanelKey((current) => current + 1);
       }
+    } else if (activeTab === "schedules" && canManageEnvConfig) {
+      // The panel loads and polls on its own; a manual refresh re-reads it without closing the editor.
+      setLoadedTabs((prev) => ({ ...prev, schedules: true }));
+      if (refresh) setSchedulesRefreshKey((previous) => previous + 1);
+      setLoading(false);
+      setRefreshing(false);
     } else if (activeTab === "network-updates") {
       // Both panels load and poll on their own; a manual refresh re-reads them together.
       setLoadedTabs((prev) => ({ ...prev, "network-updates": true }));
@@ -1549,6 +1561,10 @@ PUSHPLUS_TOPIC=可选群组编码`}</code>
             onNotice={setNotice}
             onError={setError}
           />
+        ) : null}
+
+        {!loading && activeTab === "schedules" && canManageEnvConfig ? (
+          <ScheduledTasksPanel client={client} refreshKey={schedulesRefreshKey} onNotice={setNotice} />
         ) : null}
 
         {!loading && activeTab === "usage" ? (

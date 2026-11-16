@@ -25,6 +25,14 @@ import type {
   AnnouncementItem,
   AnnouncementListResult,
   AnnouncementSeverity,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskListResult,
+  ScheduledTaskPatchInput,
+  ScheduledTaskRun,
+  ScheduledTaskRunStatus,
+  ScheduledTaskTrigger,
+  ScheduledTaskWeekday,
   AppUpdateDownloadProgress,
   AppUpdateJob,
   AppUpdateLauncher,
@@ -3320,6 +3328,147 @@ function mapAnnouncementInput(input: CreateAnnouncementInput): Record<string, un
   };
 }
 
+const SCHEDULED_TASK_RUN_STATUSES: readonly ScheduledTaskRunStatus[] = [
+  "pending",
+  "waiting",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "skipped",
+  "missed",
+  "interrupted",
+];
+
+function scheduleRecord(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+}
+
+function scheduleText(value: unknown) {
+  return typeof value === "string" ? value : value === null || value === undefined ? "" : String(value);
+}
+
+function scheduleNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function mapScheduledTaskTrigger(raw: unknown): ScheduledTaskTrigger {
+  const value = scheduleRecord(raw);
+  if (value.type === "interval") {
+    const anchor = scheduleText(value.anchor);
+    return { type: "interval", minutes: scheduleNumber(value.minutes), ...(anchor ? { anchor } : {}) };
+  }
+  if (value.type === "once") {
+    return { type: "once", at: scheduleText(value.at) };
+  }
+  const weekdays = Array.isArray(value.weekdays)
+    ? value.weekdays
+      .map((day) => Number(day))
+      .filter((day): day is ScheduledTaskWeekday => Number.isInteger(day) && day >= 1 && day <= 7)
+    : [];
+  return { type: "daily", time: scheduleText(value.time), weekdays };
+}
+
+function serializeScheduledTaskTrigger(trigger: ScheduledTaskTrigger): Record<string, unknown> {
+  if (trigger.type === "interval") {
+    return { type: "interval", minutes: trigger.minutes, ...(trigger.anchor ? { anchor: trigger.anchor } : {}) };
+  }
+  if (trigger.type === "once") {
+    return { type: "once", at: trigger.at };
+  }
+  return { type: "daily", time: trigger.time, weekdays: [...trigger.weekdays] };
+}
+
+function mapScheduledTaskRun(raw: unknown): ScheduledTaskRun {
+  const value = scheduleRecord(raw);
+  const status = scheduleText(value.status) as ScheduledTaskRunStatus;
+  return {
+    id: scheduleText(value.id),
+    scheduleId: scheduleText(value.schedule_id),
+    plannedAt: scheduleText(value.planned_at),
+    trigger: value.trigger === "manual" ? "manual" : "schedule",
+    status: SCHEDULED_TASK_RUN_STATUSES.includes(status) ? status : "pending",
+    reasonCode: scheduleText(value.reason_code),
+    reasonMessage: scheduleText(value.reason_message),
+    botAlias: scheduleText(value.bot_alias),
+    conversationId: scheduleText(value.conversation_id),
+    turnId: scheduleText(value.turn_id),
+    assistantMessageId: scheduleText(value.assistant_message_id),
+    preview: scheduleText(value.preview),
+    unsafeDowngraded: Boolean(value.unsafe_downgraded),
+    createdAt: scheduleText(value.created_at),
+    startedAt: scheduleText(value.started_at),
+    finishedAt: scheduleText(value.finished_at),
+  };
+}
+
+function mapScheduledTask(raw: unknown): ScheduledTask {
+  const value = scheduleRecord(raw);
+  const createdBy = scheduleRecord(value.created_by);
+  const disabledReason = scheduleText(value.disabled_reason);
+  return {
+    id: scheduleText(value.id),
+    name: scheduleText(value.name),
+    enabled: Boolean(value.enabled),
+    revision: scheduleNumber(value.revision),
+    botAlias: scheduleText(value.bot_alias),
+    agentId: scheduleText(value.agent_id) || "main",
+    prompt: scheduleText(value.prompt),
+    trigger: mapScheduledTaskTrigger(value.trigger),
+    timezone: scheduleText(value.timezone),
+    busyPolicy: value.busy_policy === "skip" ? "skip" : "wait",
+    maxWaitMinutes: scheduleNumber(value.max_wait_minutes),
+    misfireGraceMinutes: scheduleNumber(value.misfire_grace_minutes),
+    allowUnsafeCli: Boolean(value.allow_unsafe_cli),
+    nextRunAt: scheduleText(value.next_run_at) || null,
+    disabledReason: disabledReason === "bot_removed" || disabledReason === "once_finished" ? disabledReason : "",
+    createdBy: { accountId: scheduleText(createdBy.account_id), username: scheduleText(createdBy.username) },
+    createdAt: scheduleText(value.created_at),
+    updatedAt: scheduleText(value.updated_at),
+    activeRunId: scheduleText(value.active_run_id),
+    lastRun: value.last_run ? mapScheduledTaskRun(value.last_run) : null,
+  };
+}
+
+function mapScheduledTaskList(raw: unknown): ScheduledTaskListResult {
+  const value = scheduleRecord(raw);
+  const limits = scheduleRecord(value.limits);
+  return {
+    items: Array.isArray(value.items) ? value.items.map((item) => mapScheduledTask(item)) : [],
+    defaultTimezone: scheduleText(value.default_timezone) || "Asia/Shanghai",
+    canAllowUnsafeCli: Boolean(value.can_allow_unsafe_cli),
+    targets: Array.isArray(value.targets)
+      ? value.targets.map((item) => {
+        const target = scheduleRecord(item);
+        return { alias: scheduleText(target.alias), cliType: scheduleText(target.cli_type) };
+      }).filter((target) => target.alias)
+      : [],
+    limits: {
+      minIntervalMinutes: scheduleNumber(limits.min_interval_minutes, 5),
+      maxPromptChars: scheduleNumber(limits.max_prompt_chars, 20000),
+      maxWaitMinutes: scheduleNumber(limits.max_wait_minutes, 120),
+      maxMisfireGraceMinutes: scheduleNumber(limits.max_misfire_grace_minutes, 1440),
+    },
+  };
+}
+
+/** Only the fields present in `input` are sent, so PATCH stays a partial update. */
+function serializeScheduledTaskInput(input: Partial<ScheduledTaskInput>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (input.name !== undefined) body.name = input.name;
+  if (input.botAlias !== undefined) body.bot_alias = input.botAlias;
+  if (input.prompt !== undefined) body.prompt = input.prompt;
+  if (input.trigger !== undefined) body.trigger = serializeScheduledTaskTrigger(input.trigger);
+  if (input.timezone !== undefined) body.timezone = input.timezone;
+  if (input.busyPolicy !== undefined) body.busy_policy = input.busyPolicy;
+  if (input.maxWaitMinutes !== undefined) body.max_wait_minutes = input.maxWaitMinutes;
+  if (input.misfireGraceMinutes !== undefined) body.misfire_grace_minutes = input.misfireGraceMinutes;
+  if (input.allowUnsafeCli !== undefined) body.allow_unsafe_cli = input.allowUnsafeCli;
+  if (input.enabled !== undefined) body.enabled = input.enabled;
+  return body;
+}
+
 function mapUserBotPermissions(raw: { account_id?: string; allowed_bots?: string[] }): UserBotPermissions {
   return {
     accountId: String(raw.account_id || ""),
@@ -4991,6 +5140,59 @@ export class RealWebBotClient implements WebBotClient {
       method: "DELETE",
     });
     return { deleted: Boolean(data.deleted) };
+  }
+
+  async listScheduledTasks(): Promise<ScheduledTaskListResult> {
+    return mapScheduledTaskList(await this.requestJson<unknown>("/api/admin/schedules"));
+  }
+
+  async createScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask> {
+    const data = await this.requestJson<unknown>("/api/admin/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(serializeScheduledTaskInput(input)),
+    });
+    return mapScheduledTask(data);
+  }
+
+  async updateScheduledTask(id: string, input: ScheduledTaskPatchInput): Promise<ScheduledTask> {
+    const { revision, ...fields } = input;
+    const data = await this.requestJson<unknown>(`/api/admin/schedules/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...serializeScheduledTaskInput(fields), revision }),
+    });
+    return mapScheduledTask(data);
+  }
+
+  async deleteScheduledTask(id: string): Promise<{ deleted: boolean; id: string }> {
+    const data = await this.requestJson<{ deleted?: boolean; id?: string }>(`/api/admin/schedules/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    return { deleted: Boolean(data.deleted), id: String(data.id || id) };
+  }
+
+  async runScheduledTaskNow(id: string): Promise<ScheduledTaskRun> {
+    const data = await this.requestJson<{ run?: unknown }>(`/api/admin/schedules/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+    });
+    return mapScheduledTaskRun(data.run);
+  }
+
+  async listScheduledTaskRuns(id: string, limit = 20): Promise<ScheduledTaskRun[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const data = await this.requestJson<{ items?: unknown[] }>(
+      `/api/admin/schedules/${encodeURIComponent(id)}/runs?${params.toString()}`,
+    );
+    return Array.isArray(data.items) ? data.items.map((item) => mapScheduledTaskRun(item)) : [];
+  }
+
+  async cancelScheduledTaskRun(id: string, runId: string): Promise<ScheduledTaskRun> {
+    const data = await this.requestJson<{ run?: unknown }>(
+      `/api/admin/schedules/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/cancel`,
+      { method: "POST" },
+    );
+    return mapScheduledTaskRun(data.run);
   }
 
   async listRegisterCodes(): Promise<RegisterCodeItem[]> {

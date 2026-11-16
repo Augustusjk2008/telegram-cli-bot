@@ -12,6 +12,11 @@ import type {
   AnnouncementItem,
   AnnouncementListResult,
   CreateAnnouncementInput,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskListResult,
+  ScheduledTaskPatchInput,
+  ScheduledTaskRun,
   BotOverview,
   CodexVoiceConnection,
   CodexVoiceConnectionOptions,
@@ -190,6 +195,13 @@ export interface WebBotClient {
   markAnnouncementsSeen(latestId: string): Promise<AnnouncementListResult>;
   upsertAnnouncement(input: CreateAnnouncementInput): Promise<AnnouncementItem>;
   deleteAnnouncement(id: string): Promise<{ deleted: boolean }>;
+  listScheduledTasks(): Promise<ScheduledTaskListResult>;
+  createScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;
+  updateScheduledTask(id: string, input: ScheduledTaskPatchInput): Promise<ScheduledTask>;
+  deleteScheduledTask(id: string): Promise<{ deleted: boolean; id: string }>;
+  runScheduledTaskNow(id: string): Promise<ScheduledTaskRun>;
+  listScheduledTaskRuns(id: string, limit?: number): Promise<ScheduledTaskRun[]>;
+  cancelScheduledTaskRun(id: string, runId: string): Promise<ScheduledTaskRun>;
   listRegisterCodes(): Promise<RegisterCodeItem[]>;
   createRegisterCode(maxUses?: number): Promise<RegisterCodeCreateResult>;
   updateRegisterCode(codeId: string, input: { maxUsesDelta?: number; disabled?: boolean }): Promise<RegisterCodeItem>;

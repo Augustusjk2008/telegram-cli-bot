@@ -14,5 +14,6 @@ from . import (
     github_routes,
     lan_chat_routes,
     plugin_routes,
+    schedule_routes,
     terminal_routes,
 )

@@ -61,6 +61,39 @@ describe("RealWebBotClient", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/update/jobs/current");
   });
 
+  test("maps scheduled tasks from snake_case and sends partial PATCH bodies with the revision", async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({
+      items: [{
+        id: "sch_1", name: "晨报", enabled: true, revision: 4, bot_alias: "main", agent_id: "main", prompt: "汇总",
+        trigger: { type: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5] }, timezone: "Asia/Shanghai",
+        busy_policy: "skip", max_wait_minutes: 15, misfire_grace_minutes: 30, allow_unsafe_cli: false,
+        next_run_at: null, disabled_reason: "bot_removed", created_by: { account_id: "a1", username: "root" },
+        created_at: "2026-11-16T00:00:00Z", updated_at: "2026-11-16T00:00:00Z", active_run_id: "run_1",
+        last_run: { id: "run_1", schedule_id: "sch_1", planned_at: "2026-11-16T01:00:00Z", trigger: "manual", status: "waiting",
+          reason_code: "bot_busy", reason_message: "等待空闲", bot_alias: "main", conversation_id: "", turn_id: "", assistant_message_id: "",
+          preview: "", unsafe_downgraded: true, created_at: "2026-11-16T01:00:00Z", started_at: "", finished_at: "" },
+      }],
+      default_timezone: "Asia/Shanghai", can_allow_unsafe_cli: true, targets: [{ alias: "main", cli_type: "codex" }],
+      limits: { min_interval_minutes: 5, max_prompt_chars: 20000, max_wait_minutes: 120, max_misfire_grace_minutes: 1440 },
+    }));
+    const client = new RealWebBotClient();
+    const list = await client.listScheduledTasks();
+    expect(list).toMatchObject({
+      canAllowUnsafeCli: true,
+      targets: [{ alias: "main", cliType: "codex" }],
+      limits: { minIntervalMinutes: 5, maxPromptChars: 20000, maxWaitMinutes: 120, maxMisfireGraceMinutes: 1440 },
+      items: [{ botAlias: "main", busyPolicy: "skip", nextRunAt: null, disabledReason: "bot_removed", activeRunId: "run_1",
+        createdBy: { accountId: "a1", username: "root" },
+        lastRun: { scheduleId: "sch_1", trigger: "manual", status: "waiting", reasonCode: "bot_busy", unsafeDowngraded: true } }],
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonOk({ id: "sch_1", revision: 5, trigger: { type: "interval", minutes: 60 } }));
+    await client.updateScheduledTask("sch_1", { enabled: false, maxWaitMinutes: 20, revision: 4 });
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/admin/schedules/sch_1");
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "PATCH" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toEqual({ enabled: false, max_wait_minutes: 20, revision: 4 });
+  });
+
   test("binds update actions to job and revision, preserving the node prefix and upload multipart", async () => {
     window.history.replaceState(null, "", "/node/update-host/");
     vi.stubGlobal("__PUBLIC_ENV__", { VITE_API_BASE_URL: "/node/update-host" });

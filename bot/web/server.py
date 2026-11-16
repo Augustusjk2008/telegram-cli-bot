@@ -197,6 +197,7 @@ from .routes import (
     plugin_routes,
     terminal_routes,
     remote_routes,
+    schedule_routes,
     translation_routes,
     theme_routes,
 )
@@ -1283,6 +1284,10 @@ class WebApiServer:
             owned_bot_aliases=_BOT_PERMISSION_STORE.owned_bot_aliases(session.account.account_id),
             is_local_admin=session.account.account_id == "local-admin" or session.account.role == ROLE_ADMIN,
         )
+
+    def account_capabilities(self, account_id: str) -> frozenset[str] | None:
+        """Current capabilities of an account, for background work authorized earlier."""
+        return _WEB_AUTH_STORE.current_capabilities(account_id)
 
     def _local_admin_auth_context(self) -> AuthContext:
         self._ensure_allowed_user_id(WEB_DEFAULT_USER_ID)
@@ -5509,6 +5514,7 @@ class WebApiServer:
             lan_chat_routes,
             translation_routes,
             theme_routes,
+            schedule_routes,
         ):
             module.register(app, self)
         app.router.add_get("/api/admin/update/jobs/current", self.admin_get_update)

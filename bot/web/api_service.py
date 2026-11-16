@@ -109,6 +109,8 @@ from .chat_translation import (
     input_is_preparing, input_translation_pending, prepare_chat_input, submit_answer_translation, translate_chat_input,
     translation_snapshot,
 )
+from bot.scheduler import notify_bot_removed as notify_scheduler_bot_removed
+from bot.scheduler import notify_bot_renamed as notify_scheduler_bot_renamed
 from bot.platform.output import strip_ansi_escape
 from bot.platform.executables import build_executable_invocation
 from bot.platform.processes import (
@@ -8180,6 +8182,7 @@ async def remove_managed_bot(manager: MultiBotManager, alias: str) -> dict[str, 
         await manager.remove_bot(alias)
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))
+    notify_scheduler_bot_removed(alias)
     return {"removed": True, "alias": alias}
 
 
@@ -8221,6 +8224,7 @@ async def remove_managed_bot_with_history(
         await manager.remove_bot(alias)
     except ValueError as exc:
         _raise(400, "invalid_bot_config", str(exc))
+    notify_scheduler_bot_removed(profile.alias)
     return {
         "removed": True,
         "alias": alias,
@@ -8290,6 +8294,7 @@ async def rename_managed_bot(manager: MultiBotManager, alias: str, new_alias: st
         new_alias=profile.alias,
     )
     _CLUSTER_RUNTIME.rename_bot_alias(old_alias, profile.alias)
+    notify_scheduler_bot_renamed(old_alias, profile.alias)
     return {"bot": build_bot_summary(manager, profile.alias)}
 
 

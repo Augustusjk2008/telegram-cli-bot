@@ -552,6 +552,24 @@ class WebAuthStore:
         self._sessions.pop(token, None)
         return None
 
+    def current_capabilities(self, account_id: str) -> frozenset[str] | None:
+        """Current capabilities of a stored account; ``None`` when missing or disabled."""
+        normalized = str(account_id or "").strip()
+        if not normalized:
+            return None
+        if normalized == "local-admin":
+            return LOCAL_ADMIN_CAPABILITIES
+        if normalized == "guest":
+            return GUEST_CAPABILITIES
+        with self._lock:
+            for item in self._items(self._read_json(self.users_path)):
+                if str(item.get("account_id") or "").strip() != normalized:
+                    continue
+                if bool(item.get("disabled")):
+                    return None
+                return self._capabilities_for_item(item)
+        return None
+
     def build_local_admin_session(self, username: str = "127.0.0.1") -> WebAuthSession:
         return self._issue_session(
             WebAccount(
