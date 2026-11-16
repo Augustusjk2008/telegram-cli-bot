@@ -79,6 +79,8 @@ class CliStreamParseResult:
     rate_limit_observed_at: Optional[datetime] = None
     # Claude ``result.modelUsage[model].contextWindow`` keyed by model id.
     context_windows: Optional[Dict[str, int]] = None
+    # Claude Code's own cost for this invocation: ``{"models": [...], "total": USD}``.
+    reported_cost: Optional[Dict[str, Any]] = None
 
 
 class DeepSeekJsonStreamParser:
@@ -300,6 +302,36 @@ def _parse_claude_context_windows(line: str) -> Optional[Dict[str, int]]:
     return windows or None
 
 
+def _parse_claude_result_cost(line: str) -> Optional[Tuple[Optional[int], Optional[Dict[str, float]]]]:
+    """Read the cost Claude Code reports for the work since its previous result event.
+
+    Returns ``(result_index, {model: costUSD})`` for a result event, with ``None`` costs
+    when the event does not carry a usable value. ``total_cost_usd`` and ``modelUsage``
+    are deliberately ignored: they also include cost restored from the resumed session.
+    """
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return None
+    index = event.get("result_index")
+    index = index if type(index) is int and index >= 0 else None
+    usage = event.get("model_usage_since_last_result")
+    if not isinstance(usage, dict):
+        return index, None
+    costs: Dict[str, float] = {}
+    for model, entry in usage.items():
+        cost = entry.get("costUSD") if isinstance(entry, dict) else None
+        if (
+            not isinstance(model, str) or isinstance(cost, bool) or not isinstance(cost, (int, float))
+            or not math.isfinite(cost) or cost < 0
+        ):
+            return index, None
+        costs[model.strip()] = float(cost)
+    return index, costs
+
+
 class CodexJsonStreamParser:
     def __init__(
         self,
@@ -395,6 +427,9 @@ class ClaudeJsonStreamParser:
         self.rate_limit_info: Optional[Dict[str, Any]] = None
         self.rate_limit_observed_at: Optional[datetime] = None
         self.context_windows: Optional[Dict[str, int]] = None
+        # 一次调用可产生多个 result（后台任务通知会再次唤醒），按 result_index 去重后累加。
+        self._result_costs: Dict[Any, Dict[str, float]] = {}
+        self._result_cost_missing = False
         self.total_bytes = 0
 
     def consume_line(self, line: str) -> Dict[str, Optional[str]]:
@@ -419,6 +454,13 @@ class ClaudeJsonStreamParser:
             context_windows = _parse_claude_context_windows(stripped)
             if context_windows:
                 self.context_windows = context_windows
+            result_cost = _parse_claude_result_cost(stripped)
+            if result_cost is not None:
+                index, costs = result_cost
+                if costs is None:
+                    self._result_cost_missing = True
+                else:
+                    self._result_costs[index if index is not None else ("seq", len(self._result_costs))] = costs
         if parsed["session_id"]:
             self.session_id = parsed["session_id"]
         if parsed["completed_text"]:
@@ -430,6 +472,15 @@ class ClaudeJsonStreamParser:
         if not stripped.startswith("{"):
             self._plain.append(stripped, separator="\n")
         return parsed
+
+    @property
+    def reported_cost(self) -> Optional[Dict[str, Any]]:
+        # 任一 result 缺少可用金额时整体放弃，避免把部分金额当作整轮费用。
+        if not self._result_costs or self._result_cost_missing:
+            return None
+        models = list(dict.fromkeys(model for costs in self._result_costs.values() for model in costs if model))
+        total = math.fsum(cost for costs in self._result_costs.values() for cost in costs.values())
+        return {"models": models, "total": round(total, 10)}
 
     def _observe_rate_limit_event(self, line: str) -> None:
         try:
@@ -477,6 +528,7 @@ class ClaudeJsonStreamParser:
             rate_limit_info=self.rate_limit_info,
             rate_limit_observed_at=self.rate_limit_observed_at,
             context_windows=dict(self.context_windows) if self.context_windows else None,
+            reported_cost=self.reported_cost,
         )
 
 

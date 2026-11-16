@@ -827,6 +827,45 @@ async def test_stream_cli_chat_persists_terminal_estimated_cost_once_per_turn(
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_uses_claude_reported_cost_for_every_result(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = usage_manager.main_profile
+    profile.cli_type = "claude"
+    _, _, session = api_service.get_chat_session_for_alias(usage_manager, "main", 1001)
+    session.claude_session_id = "cost-session"
+    monkeypatch.setattr(api_service, "estimate_usage_cost", Mock(side_effect=AssertionError("price table not used")))
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "claude")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["claude"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service, "_reconcile_native_trace_before_completion", AsyncMock())
+
+    def result(index, cost):
+        return {
+            "type": "result", "result": "done", "session_id": "cost-session", "result_index": index,
+            "total_cost_usd": 50.0, "usage": {"input_tokens": 1, "output_tokens": 1},
+            "modelUsage": {"claude-opus-5-5": {"costUSD": 50.0}},
+            "model_usage_since_last_result": {"claude-opus-5-5": {"costUSD": cost}},
+        }
+
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        json.dumps(event) + "\n" for event in [
+            {"type": "system", "subtype": "init", "session_id": "cost-session"}, result(0, 2.5), result(1, 0.25),
+        ]
+    ])
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert done["message"]["meta"]["context_usage"]["estimated_cost"] == {
+        "model": "claude-opus-5-5", "currency": "USD", "scope": "turn", "source": "claude_reported", "total": 2.75,
+    }
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

@@ -303,6 +303,42 @@ class TestIncrementalCliParsers:
 
         assert parser.result().context_windows == {"claude-fable-5-2": 1_000_000}
 
+    def test_claude_parser_sums_reported_cost_across_result_events(self):
+        def result(index, since_last, **extra):
+            # total_cost_usd 与 modelUsage 含 --resume 恢复的历史费用，不能当作本轮金额。
+            return json.dumps({
+                "type": "result", "result": "done", "result_index": index, "total_cost_usd": 99.0,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "modelUsage": {"claude-fable-5-2": {"costUSD": 99.0}},
+                "model_usage_since_last_result": since_last, **extra,
+            })
+
+        parser = ClaudeJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+        assert parser.result().reported_cost is None
+        first = result(0, {"claude-fable-5-2": {"costUSD": 1.25}, "claude-haiku-5-5": {"costUSD": 0.5}})
+        parser.consume_line(first)
+        parser.consume_line(first)
+        # 后台任务通知再次唤醒同一进程，产生第二个 result。
+        parser.consume_line(result(1, {"claude-fable-5-2": {"costUSD": 0.25}}))
+
+        assert parser.result().reported_cost == {
+            "models": ["claude-fable-5-2", "claude-haiku-5-5"], "total": 2.0,
+        }
+
+    @pytest.mark.parametrize("since_last", [
+        None, [], {"claude-fable-5-2": {}}, {"claude-fable-5-2": {"costUSD": True}},
+        {"claude-fable-5-2": {"costUSD": -1}}, {"claude-fable-5-2": {"costUSD": "1"}},
+    ])
+    def test_claude_parser_drops_reported_cost_when_any_result_lacks_it(self, since_last):
+        parser = ClaudeJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
+        for index, usage in enumerate(({"claude-fable-5-2": {"costUSD": 1.0}}, since_last)):
+            parser.consume_line(json.dumps({
+                "type": "result", "result_index": index, "modelUsage": {},
+                "model_usage_since_last_result": usage,
+            }))
+
+        assert parser.result().reported_cost is None
+
     def test_codex_parser_keeps_final_text_and_bounded_raw_tail(self):
         parser = CodexJsonStreamParser(raw_tail_max_bytes=96, final_text_max_bytes=1024)
 

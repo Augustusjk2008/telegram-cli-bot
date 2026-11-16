@@ -1229,10 +1229,10 @@ export type ChatMessageEstimatedCost = {
   currency: string;
   scope: "session" | "turn" | "request";
   total: number;
-  input: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  output?: number;
   isPartial?: boolean;
 };
 

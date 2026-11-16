@@ -66,19 +66,21 @@ export function mapEstimatedCost(value: unknown): ChatMessageEstimatedCost | und
   const cacheRead = firstNumber(raw, "cacheRead", "cache_read");
   const cacheWrite = firstNumber(raw, "cacheWrite", "cache_write");
   const output = firstNumber(raw, "output");
+  // Claude 自报费用只有总额；其余来源按价格表给出完整分项。
+  const parts = [input, cacheRead, cacheWrite, output];
+  const hasParts = parts.every((part) => part !== undefined);
   if (
     !model || !currency
     || (scope !== "session" && scope !== "turn" && scope !== "request")
     || total === undefined || total < 0
-    || input === undefined || input < 0
-    || cacheRead === undefined || cacheRead < 0
-    || cacheWrite === undefined || cacheWrite < 0
-    || output === undefined || output < 0
+    || (!hasParts && parts.some((part) => part !== undefined))
+    || parts.some((part) => part !== undefined && part < 0)
   ) {
     return undefined;
   }
   return {
-    model, currency, scope, total, input, cacheRead, cacheWrite, output,
+    model, currency, scope, total,
+    ...(hasParts ? { input, cacheRead, cacheWrite, output } : {}),
     ...((raw.isPartial ?? raw.is_partial) === true ? { isPartial: true } : {}),
   };
 }

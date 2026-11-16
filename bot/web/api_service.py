@@ -6394,7 +6394,18 @@ async def _stream_cli_chat(
                 cost_model = str(parsed.model or (context_usage or {}).get("model") or turn_model).strip()
                 cost_session_id = parsed.session_id or _current_native_session_id(session, cli_type)
                 estimated_cost = None
-                if (
+                if parsed.reported_cost is not None:
+                    # Claude Code 自报的本次调用费用：含后台任务续跑、子代理和所有模型。
+                    estimated_cost = {
+                        "model": ", ".join(parsed.reported_cost["models"]) or cost_model,
+                        "currency": "USD",
+                        "scope": "turn",
+                        "source": "claude_reported",
+                        "total": parsed.reported_cost["total"],
+                    }
+                    if cleanup_abort or not usage_complete:
+                        estimated_cost["is_partial"] = True
+                elif (
                     cli_type != "antigravity" and cost_model
                     and parsed.terminal_usage is not None and parsed.terminal_usage_complete
                 ):

@@ -503,6 +503,21 @@ test("shows the Codex cost difference in message details while retaining raw his
   expect(items[1].meta?.contextUsage?.estimatedCost?.total).toBe(15);
 });
 
+test("shows a Claude-reported cost that has a total but no price breakdown", async () => {
+  const items: ChatMessage[] = [{
+    id: "claude-cost", turnId: "turn-claude-cost", conversationId: "cost-conversation",
+    role: "assistant", text: "Claude reply", createdAt: "2026-11-17T00:00:00Z", state: "done",
+    meta: { contextUsage: {
+      provider: "claude", contextLeftPercent: 72,
+      estimatedCost: { model: "claude-opus-5-5", currency: "USD", scope: "turn", total: 2.75 },
+    } },
+  }];
+  render(<ChatScreen botAlias="main" client={createClient({ listMessages: async () => ({ items }) })} />);
+  const row = await screen.findByTestId("chat-message-row");
+  fireEvent.click(within(row).getByTestId("chat-message-context-usage-bottom"));
+  expect(screen.getByRole("tooltip")).toHaveTextContent("cost: USD 2.75");
+});
+
 test("does not report a hidden cancelled reply as unread", async () => {
   const user = userEvent.setup();
   const onUnreadResult = vi.fn();
