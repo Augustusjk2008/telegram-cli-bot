@@ -391,6 +391,76 @@
       }
     }
   },
+  "practice/cluster": {
+    "hotspots": {
+      "team": {
+        "x": 72.4,
+        "y": 66.2,
+        "w": 27.4,
+        "h": 18.1
+      }
+    }
+  },
+  "practice/context": {
+    "hotspots": {
+      "ctx": {
+        "x": 74.6,
+        "y": 48.5,
+        "w": 11.5,
+        "h": 17.5
+      }
+    }
+  },
+  "practice/memory": {
+    "hotspots": {
+      "file": {
+        "x": 22.9,
+        "y": 5.1,
+        "w": 49.7,
+        "h": 48
+      }
+    }
+  },
+  "practice/pace": {
+    "hotspots": {
+      "editor": {
+        "x": 74.2,
+        "y": 37.9,
+        "w": 16.4,
+        "h": 42.2
+      }
+    }
+  },
+  "practice/plan": {
+    "hotspots": {
+      "card": {
+        "x": 73.3,
+        "y": 32.8,
+        "w": 25.7,
+        "h": 41.4
+      }
+    }
+  },
+  "practice/prompt": {
+    "hotspots": {
+      "composer": {
+        "x": 73.1,
+        "y": 71.7,
+        "w": 26,
+        "h": 24.7
+      }
+    }
+  },
+  "practice/workspace": {
+    "hotspots": {
+      "workdir": {
+        "x": 72,
+        "y": 82.8,
+        "w": 26,
+        "h": 10.8
+      }
+    }
+  },
   "remote/auth": {
     "hotspots": {
       "auth": {

@@ -96,6 +96,45 @@ const DEMO_PRESETS = [
   { title: "补充测试", content: "为刚才的改动补充单元测试，运行并报告结果。" },
 ];
 
+// The "用好 Agent" chapter: a task description written the recommended way, and the plan it leads to.
+const PRACTICE_PROMPT = [
+  "目标：登录后应回到登录前打开的页面，现在总是跳回首页。",
+  "范围：front/src/screens/LoginScreen.tsx 和路由守卫，不改后端接口。",
+  "完成标准：补一个回归测试，运行 npm test 并报告结果。",
+].join("\n");
+
+const PRACTICE_PLAN_REQUEST = "登录后回到原页面：先给出修改方案";
+
+const PRACTICE_PLAN = `# 登录后回到原页面
+
+## 目标
+登录后回到原页面，不再跳回首页。
+
+## 步骤
+1. 补一个回归测试复现问题。
+2. 路由守卫记录原页面并跳回。
+3. 运行 npm test，清理无用代码。
+
+## 执行方式
+逐步执行：每完成一步运行验证、汇报结果并暂停，等我确认后再继续。
+`;
+
+const PRACTICE_AGENTS_MD = `# 项目约定
+
+## 常用命令
+- 安装依赖：npm ci
+- 运行测试：npm test
+- 构建：npm run build
+
+## 代码约定
+- 页面组件放在 front/src/screens/，测试放在 front/src/test/。
+- 修改接口时同步更新 docs/api.md。
+
+## 注意
+- 不要修改 .env 和 data/ 下的文件。
+- 完成后运行测试并报告结果。
+`;
+
 async function fillDemoQuestion(page) {
   await composer(page).locator('textarea[name="message"]').fill(DEMO_QUESTION);
 }
@@ -531,6 +570,122 @@ export const SCENES = [
     },
     hotspots: {
       tiers: (page) => sidebar(page).getByRole("heading", { name: "集群模型档位", exact: true }).locator("xpath=.."),
+    },
+  },
+
+  // -------------------------------------------------------------- practice
+  {
+    chapter: "practice",
+    shot: "workspace",
+    fresh: true,
+    async run(page) {
+      await openAgentManager(page);
+      await exact(page, "新增智能体").click();
+      await page.getByLabel("新智能体别名", { exact: true }).fill("shop-web");
+      await page.getByLabel("新智能体工作目录", { exact: true }).fill("/Users/demo/projects/shop-web");
+    },
+    hotspots: {
+      workdir: (page) => page.getByLabel("新智能体工作目录", { exact: true }).locator("xpath=ancestor::div[contains(@class, 'am-create-row')][1]"),
+    },
+  },
+  {
+    chapter: "practice",
+    shot: "prompt",
+    fresh: true,
+    async run(page) {
+      await composer(page).locator('textarea[name="message"]').fill(PRACTICE_PROMPT);
+    },
+    hotspots: {
+      composer: (page) => composer(page),
+    },
+  },
+  {
+    chapter: "practice",
+    shot: "plan",
+    async run(page) {
+      await composer(page).locator('textarea[name="message"]').fill(PRACTICE_PLAN_REQUEST);
+      await chatPane(page).getByRole("button", { name: "计划模式", exact: true }).click();
+      await chatPane(page).getByRole("button", { name: "发送", exact: true }).click();
+      await chatPane(page).getByRole("button", { name: "执行方案", exact: true }).waitFor();
+    },
+    hotspots: {
+      card: (page) => lastAssistantRow(page),
+    },
+  },
+  {
+    chapter: "practice",
+    shot: "pace",
+    async run(page) {
+      await chatPane(page).getByRole("button", { name: "修改方案", exact: true }).click();
+      const editor = chatPane(page).getByLabel("方案内容", { exact: true });
+      await editor.fill(PRACTICE_PLAN);
+      await editor.blur();
+      // As if the user dragged the resize handle: the whole plan is visible instead of its last lines.
+      await editor.evaluate((element) => {
+        element.style.height = `${element.scrollHeight + 4}px`;
+        element.scrollTop = 0;
+        element.scrollIntoView({ block: "end" });
+      });
+    },
+    hotspots: {
+      editor: (page) => chatPane(page).getByLabel("方案内容", { exact: true }),
+    },
+  },
+  {
+    chapter: "practice",
+    shot: "cluster",
+    fresh: true,
+    async run(page) {
+      await page.evaluate((script) => {
+        window.__ORBIT_MOCK_CHAT_SCRIPT__ = script;
+      }, { ...DEMO_CHAT_SCRIPT, clusterTeam: DEMO_CLUSTER_TEAM });
+      await exact(page, "开启集群模式").click();
+      await exact(page, "关闭集群模式").waitFor();
+      await chatPane(page).getByRole("button", { name: "计划模式", exact: true }).click();
+      await exact(page, "历史会话").click();
+      await exact(page, "新会话").first().click();
+      await exact(page, "展开集群编组").click();
+      await page.getByTestId("cluster-team-assignment").first().waitFor();
+    },
+    hotspots: {
+      team: (page) => page.getByTestId("cluster-team-panel"),
+    },
+  },
+  {
+    chapter: "practice",
+    shot: "context",
+    fresh: true,
+    async run(page) {
+      await sendDemoQuestion(page);
+      const ctx = chatPane(page).getByRole("button", { name: /^View context details/ });
+      await ctx.waitFor();
+      await ctx.focus();
+      await page.getByRole("tooltip").waitFor();
+    },
+    hotspots: {
+      ctx: (page) => [chatPane(page).getByRole("button", { name: /^View context details/ }), page.getByRole("tooltip")],
+    },
+  },
+  {
+    chapter: "practice",
+    shot: "memory",
+    fresh: true,
+    async run(page) {
+      await exact(page, "新建文件").click();
+      await page.getByRole("dialog").getByRole("textbox").fill("AGENTS.md");
+      await page.getByRole("dialog").getByRole("button", { name: "创建", exact: true }).click();
+      await exact(page, "打开 AGENTS.md").waitFor();
+      await exact(page, "打开 AGENTS.md").click();
+      await editorPane(page).getByText("AGENTS.md").first().waitFor();
+      await writeEditorText(page, PRACTICE_AGENTS_MD);
+      // Reopen the tab: the editor keeps a "已保存" notice over the first line after a save.
+      await editorPane(page).getByText("已保存", { exact: true }).waitFor();
+      await exact(page, "关闭 AGENTS.md").click();
+      await exact(page, "打开 AGENTS.md").click();
+      await editorPane(page).getByText("# 项目约定").first().waitFor();
+    },
+    hotspots: {
+      file: (page) => editorPane(page),
     },
   },
 
