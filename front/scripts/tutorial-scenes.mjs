@@ -746,17 +746,6 @@ export const SCENES = [
       telegram: (page) => page.getByText("Telegram 配置", { exact: true }).locator("xpath=.."),
     },
   },
-  {
-    chapter: "gateways",
-    shot: "weixin",
-    user: "127.0.0.1",
-    async run(page) {
-      await page.getByText("个人微信配置", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start" }));
-    },
-    hotspots: {
-      weixin: (page) => page.getByText("个人微信配置", { exact: true }).locator("xpath=.."),
-    },
-  },
 
   // ----------------------------------------------------------------- admin
   {

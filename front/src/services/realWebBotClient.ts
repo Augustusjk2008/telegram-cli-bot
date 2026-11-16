@@ -5432,9 +5432,12 @@ export class RealWebBotClient implements WebBotClient {
     return mapEnvPatchResult(data);
   }
 
-  async reloadEnvConfig(): Promise<EnvConfigPatchResult> {
+  async reloadEnvConfig(keys?: string[]): Promise<EnvConfigPatchResult> {
     const data = await this.requestJson<RawEnvConfigPatchResult>("/api/admin/env/reload", {
       method: "POST",
+      ...(keys
+        ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) }
+        : {}),
     });
     return mapEnvPatchResult(data);
   }

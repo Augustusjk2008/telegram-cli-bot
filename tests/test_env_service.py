@@ -230,6 +230,29 @@ def test_env_service_reload_runtime_reports_reload_and_restart_impact(
     assert result["systemEnvironmentReloaded"] is False
 
 
+def test_env_service_scoped_reload_applies_only_requested_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_env(tmp_path, "PUSHPLUS_TOPIC=new-topic\nWEB_PORT=9999\n")
+    service = EnvConfigService(tmp_path)
+    monkeypatch.setattr(config, "_INITIAL_PROCESS_ENV_KEYS", set())
+    monkeypatch.setattr(config, "_RUNTIME_SYSTEM_ENV_NAMES", {})
+    monkeypatch.setattr(config, "_DOTENV_VALUES", {"PUSHPLUS_TOPIC": "old-topic", "WEB_PORT": "8765"})
+    monkeypatch.setattr(config, "_refresh_environment_config", lambda: None)
+    monkeypatch.setenv("PUSHPLUS_TOPIC", "old-topic")
+    monkeypatch.setenv("WEB_PORT", "8765")
+
+    result = service.reload_runtime(["PUSHPLUS_TOPIC"])
+
+    assert result["changedKeys"] == ["PUSHPLUS_TOPIC"]
+    assert os.environ["PUSHPLUS_TOPIC"] == "new-topic"
+    assert os.environ["WEB_PORT"] == "8765"
+    assert config._DOTENV_VALUES == {"PUSHPLUS_TOPIC": "new-topic", "WEB_PORT": "8765"}
+    with pytest.raises(EnvValidationError):
+        service.reload_runtime(["NOT_A_SCHEMA_KEY"])
+
+
 def test_env_service_system_reload_reports_windows_support(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

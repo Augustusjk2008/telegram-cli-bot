@@ -448,10 +448,19 @@ class EnvConfigService:
             "backupPath": "",
         }
 
-    def reload_runtime(self) -> dict[str, Any]:
-        """Reload the project .env into the current process environment."""
+    def reload_runtime(self, keys: list[str] | None = None) -> dict[str, Any]:
+        """Reload the project .env into the current process environment.
+
+        `keys` limits the reload to those schema keys, e.g. after a page saves its own fields.
+        """
         try:
-            result = config.reload_project_env(self.env_path)
+            if keys is None:
+                result = config.reload_project_env(self.env_path)
+            else:
+                unknown = [key for key in keys if key not in _FIELD_BY_KEY]
+                if unknown:
+                    raise EnvValidationError("invalid_env_key", f"不支持重新加载配置: {unknown[0]}", {"key": unknown[0]})
+                result = config.reload_project_env(self.env_path, keys=set(keys))
         except (OSError, TypeError, ValueError, OverflowError) as exc:
             raise EnvValidationError("invalid_env_runtime", f"重新加载环境变量失败: {exc}") from exc
 

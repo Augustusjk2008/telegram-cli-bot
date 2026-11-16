@@ -224,7 +224,8 @@ export interface WebBotClient {
   getEnvConfig(): Promise<EnvConfigSnapshot>;
   previewEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
   updateEnvConfig(input: EnvConfigPatchInput): Promise<EnvConfigPatchResult>;
-  reloadEnvConfig(): Promise<EnvConfigPatchResult>;
+  /** Reload the project .env into the running host; `keys` limits the reload to those schema keys. */
+  reloadEnvConfig(keys?: string[]): Promise<EnvConfigPatchResult>;
   reloadSystemEnvConfig(): Promise<EnvConfigPatchResult>;
   getWeixinStatus(): Promise<WeixinGatewayStatus>;
   startWeixinSetup(): Promise<WeixinSetup>;

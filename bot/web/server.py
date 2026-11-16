@@ -5319,8 +5319,15 @@ class WebApiServer:
 
     async def admin_env_reload(self, request: web.Request) -> web.Response:
         await self._with_capability(request, CAP_ADMIN_OPS)
+        keys: list[str] | None = None
+        if request.body_exists:
+            raw_keys = (await self._parse_json(request)).get("keys")
+            if raw_keys is not None:
+                if not isinstance(raw_keys, list) or not all(isinstance(key, str) for key in raw_keys):
+                    raise WebApiError(400, "invalid_request", "keys 必须是字符串数组")
+                keys = raw_keys
         try:
-            data = self.env_config_service.reload_runtime()
+            data = self.env_config_service.reload_runtime(keys)
             self._apply_runtime_env_bindings()
         except EnvValidationError as exc:
             raise WebApiError(400, exc.code, exc.message, exc.data) from exc

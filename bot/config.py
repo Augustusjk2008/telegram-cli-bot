@@ -423,12 +423,17 @@ def _read_windows_environment(registry: Any | None = None) -> dict[str, str] | N
     return _expand_windows_environment_values(merged)
 
 
-def reload_project_env(env_path: str | os.PathLike[str] | None = None) -> dict[str, list[str]]:
+def reload_project_env(
+    env_path: str | os.PathLike[str] | None = None,
+    keys: Optional[Set[str]] = None,
+) -> dict[str, list[str]]:
     """Reload project dotenv values while preserving startup process overrides.
 
     A running process has its own environment block. Values inherited from the
     launcher are kept authoritative; values previously loaded from `.env` are
     refreshed so future child processes can see edits without a process restart.
+    When `keys` is given, only those keys are refreshed; other `.env` edits stay
+    unapplied until a full reload.
     """
     global _DOTENV_VALUES
     if dotenv_values is None:
@@ -441,10 +446,16 @@ def reload_project_env(env_path: str | os.PathLike[str] | None = None) -> dict[s
         if value is not None
     }
     previous_dotenv_values = dict(_DOTENV_VALUES)
+    if keys is not None:
+        parsed_values = {
+            **{key: value for key, value in previous_dotenv_values.items() if key not in keys},
+            **{key: value for key, value in parsed_values.items() if key in keys},
+        }
     managed_keys = {
         key
         for key in (set(previous_dotenv_values) | set(parsed_values))
-        if key.casefold() not in _INITIAL_PROCESS_ENV_KEYS
+        if (keys is None or key in keys)
+        and key.casefold() not in _INITIAL_PROCESS_ENV_KEYS
         and key.casefold() not in _RUNTIME_SYSTEM_ENV_NAMES
     }
     before_values = {key: os.environ.get(key) for key in managed_keys}

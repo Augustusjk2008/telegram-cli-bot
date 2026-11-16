@@ -477,6 +477,35 @@ test("消息网关配置将 Telegram Token 标记为敏感项", async () => {
   const tokenItem = screen.getByText("Telegram Bot Token").closest("article");
   expect(tokenItem).toBeInTheDocument();
   expect(tokenItem?.querySelector('input[type="password"]')).not.toBeNull();
+  // Weixin credentials come from QR onboarding, so the gateway page no longer offers a form for them.
+  expect(screen.queryByText("个人微信配置")).not.toBeInTheDocument();
+  expect(screen.queryByText("微信 iLink Token")).not.toBeInTheDocument();
+});
+
+test("通知配置在通知页保存并只重新加载通知项，环境配置不再列出通知分类", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const update = vi.spyOn(client, "updateEnvConfig");
+  const reload = vi.spyOn(client, "reloadEnvConfig");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  await user.click(screen.getByRole("tab", { name: "环境配置" }));
+  await screen.findByRole("heading", { name: "环境配置" });
+  expect(screen.queryByRole("button", { name: "通知" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: "通知" }));
+  await screen.findByRole("heading", { name: "通知配置" });
+  expect(screen.getByText(/^Topic:/)).toHaveTextContent("Topic: 未设置");
+  await user.type(screen.getByLabelText("PushPlus Topic"), "team-a");
+  await user.click(screen.getByRole("button", { name: "修改" }));
+  await user.type(screen.getByLabelText("PushPlus Token"), "new-token");
+  await user.click(screen.getByRole("button", { name: "保存通知配置" }));
+
+  expect(await screen.findByText("通知配置已保存并生效")).toBeInTheDocument();
+  expect(update).toHaveBeenCalledWith({ values: { PUSHPLUS_TOKEN: "new-token", PUSHPLUS_TOPIC: "team-a" } });
+  expect(reload).toHaveBeenCalledWith(["CHAT_COMPLETION_NOTIFY_ENABLED", "PUSHPLUS_ENABLED", "PUSHPLUS_TOKEN", "PUSHPLUS_TOPIC"]);
+  expect(screen.getByText(/^Topic:/)).toHaveTextContent("Topic: 已设置");
 });
 
 test("数据迁移先预览并明确确认停止全部智能体", async () => {

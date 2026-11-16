@@ -1067,6 +1067,34 @@ function createMockEnvItems(): EnvConfigItem[] {
       rebuildRequired: false,
     },
     {
+      key: "CHAT_COMPLETION_NOTIFY_ENABLED",
+      label: "聊天完成通知",
+      description: "聊天完成后是否发送通知。",
+      type: "boolean",
+      category: "notifications",
+      value: true,
+      defaultValue: true,
+      source: "default",
+      sensitive: false,
+      masked: false,
+      restartRequired: false,
+      rebuildRequired: false,
+    },
+    {
+      key: "PUSHPLUS_ENABLED",
+      label: "PushPlus 开关",
+      description: "是否启用 PushPlus 推送。",
+      type: "boolean",
+      category: "notifications",
+      value: true,
+      defaultValue: false,
+      source: "env",
+      sensitive: false,
+      masked: false,
+      restartRequired: false,
+      rebuildRequired: false,
+    },
+    {
       key: "PUSHPLUS_TOKEN",
       label: "PushPlus Token",
       description: "推送通知 token。",
@@ -1077,6 +1105,20 @@ function createMockEnvItems(): EnvConfigItem[] {
       source: "env",
       sensitive: true,
       masked: true,
+      restartRequired: false,
+      rebuildRequired: false,
+    },
+    {
+      key: "PUSHPLUS_TOPIC",
+      label: "PushPlus Topic",
+      description: "PushPlus 群组 topic。",
+      type: "string",
+      category: "notifications",
+      value: "",
+      defaultValue: "",
+      source: "default",
+      sensitive: false,
+      masked: false,
       restartRequired: false,
       rebuildRequired: false,
     },
@@ -4375,10 +4417,12 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async getNotificationSettings(): Promise<NotificationSettingsStatus> {
+    const value = (key: string) => this.envItems.find((item) => item.key === key);
+    const token = value("PUSHPLUS_TOKEN");
     return {
-      pushPlusEnabled: true,
-      pushPlusConfigured: true,
-      pushPlusTopicConfigured: false,
+      pushPlusEnabled: value("PUSHPLUS_ENABLED")?.value === true,
+      pushPlusConfigured: Boolean(token?.masked || token?.value),
+      pushPlusTopicConfigured: Boolean(value("PUSHPLUS_TOPIC")?.value),
     };
   }
 
@@ -4411,7 +4455,7 @@ export class MockWebBotClient implements WebBotClient {
     return this.buildEnvPatchResult(input, true);
   }
 
-  async reloadEnvConfig(): Promise<EnvConfigPatchResult> {
+  async reloadEnvConfig(_keys?: string[]): Promise<EnvConfigPatchResult> {
     if (!this.hasAdminOps()) {
       throw new WebApiClientError("无权重新加载环境配置", { status: 403, code: "forbidden" });
     }

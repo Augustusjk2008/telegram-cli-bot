@@ -15,6 +15,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bell, Eye, EyeOff, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { AiInlineCompletionSettingsPanel } from "../components/AiInlineCompletionSettingsPanel";
 import { WeixinGatewayPanel } from "../components/admin/WeixinGatewayPanel";
+import { NotificationSettingsForm, NOTIFICATION_ENV_CATEGORY } from "../components/admin/NotificationSettingsForm";
 import { ScheduledTasksPanel } from "../components/admin/ScheduledTasksPanel";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import type {
@@ -94,8 +95,8 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
   schedules: { label: "定时任务", description: "按计划新建会话并向智能体发送固定指令" },
   announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
-  notifications: { label: "通知", description: "任务完成推送的状态与测试" },
-  weixin: { label: "消息网关", description: "Telegram 与个人微信的接入配置、扫码和连接状态" },
+  notifications: { label: "通知", description: "任务完成推送的配置、状态与测试" },
+  weixin: { label: "消息网关", description: "Telegram 接入配置，以及个人微信扫码和连接状态" },
   "lan-chat": { label: "联机聊天", description: "局域网内多实例联机聊天" },
   "cli-errors": { label: "错误", description: "CLI 执行错误的统计与最近记录" },
 };
@@ -114,7 +115,6 @@ const ENV_CATEGORY_LABELS: Record<string, string> = {
   tunnel: "Tunnel",
   "language-server": "语言服务",
   updates: "更新",
-  notifications: "通知",
   diagnostics: "诊断",
   advanced: "高级",
   frontend: "前端构建项",
@@ -126,11 +126,13 @@ const ENV_CATEGORY_ORDER = [
   "tunnel",
   "language-server",
   "updates",
-  "notifications",
   "diagnostics",
   "advanced",
   "frontend",
 ];
+
+// These .env categories are edited on their own pages (消息网关 / 通知) or written by Weixin QR onboarding.
+const ENV_CATEGORIES_MANAGED_ELSEWHERE = new Set(["telegram", "weixin", NOTIFICATION_ENV_CATEGORY]);
 
 const ACCOUNT_CAPABILITY_OPTIONS: Array<{ id: Capability; label: string }> = [
   { id: "chat_send", label: "聊天" },
@@ -628,7 +630,7 @@ export function AdminCenterScreen({
     }
     try {
       const config = await client.getEnvConfig();
-      const visibleItems = config.items.filter((item) => item.category !== "telegram" && item.category !== "weixin");
+      const visibleItems = config.items.filter((item) => !ENV_CATEGORIES_MANAGED_ELSEWHERE.has(item.category));
       const visibleConfig = { ...config, items: visibleItems };
       setEnvConfig(visibleConfig);
       setEnvDraft(Object.fromEntries(visibleItems.map((item) => [item.key, item.value])));
@@ -1495,6 +1497,14 @@ export function AdminCenterScreen({
               </p>
             </div>
 
+            {canManageEnvConfig ? (
+              <NotificationSettingsForm
+                client={client}
+                onSaved={(message) => loadNotificationSettings(message, true)}
+                onError={setError}
+              />
+            ) : null}
+
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1510,14 +1520,6 @@ export function AdminCenterScreen({
                 className="orbit-btn orbit-btn--secondary"
               >
                 PushPlus 配置教程
-              </button>
-              <button
-                type="button"
-                onClick={() => openEnvCategory("notifications")}
-                disabled={!canManageEnvConfig}
-                className="orbit-btn orbit-btn--secondary"
-              >
-                打开环境配置
               </button>
             </div>
 
@@ -1542,13 +1544,9 @@ export function AdminCenterScreen({
                   <li>完成实名制认证</li>
                   <li>登录 PushPlus 网站</li>
                   <li>复制 token</li>
-                  <li>在环境配置的通知分类写入变量</li>
+                  <li>在本页「通知配置」中打开 PushPlus 开关，填入 Token；群组推送再填写 Topic</li>
+                  <li>保存后立即生效，可点击「测试 PushPlus 推送」验证</li>
                 </ol>
-                <pre className="admin-well mt-3 overflow-x-auto p-3 text-xs text-[var(--text)]">
-                  <code>{`PUSHPLUS_ENABLED=true
-PUSHPLUS_TOKEN=你的token
-PUSHPLUS_TOPIC=可选群组编码`}</code>
-                </pre>
               </div>
             ) : null}
           </section>
