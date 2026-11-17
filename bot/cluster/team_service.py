@@ -61,6 +61,7 @@ def _run_request(
         main_conversation_id=run.main_conversation_id,
         team_revision=team_revision,
         team=team,
+        cost_user=str(getattr(run, "cost_user", "") or ""),
     )
 
 

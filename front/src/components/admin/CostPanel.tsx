@@ -411,10 +411,7 @@ function CostTopTurns({ turns, currency }: { turns: CostStatsTopTurn[]; currency
                 <tr key={`${turn.turnId}:${turn.recordedAt}`}>
                   <th scope="row" title={turn.recordedAt}>{formatTurnTime(turn.recordedAt)}</th>
                   <td data-align="start">{costDimensionLabel("user", turn.user)}</td>
-                  <td data-align="start" title={`Bot ${costDimensionLabel("bot", turn.bot)}`}>
-                    {costDimensionLabel("agent", turn.agent)}
-                    <span className="cost-stats-subtle"> @{costDimensionLabel("bot", turn.bot)}</span>
-                  </td>
+                  <td data-align="start">{costDimensionLabel("bot", turn.bot)}</td>
                   <td className="cost-stats-model" data-align="start" title={turn.model}>{turn.model}</td>
                   <td>
                     {formatCostAmount(turn.amount, currency)}

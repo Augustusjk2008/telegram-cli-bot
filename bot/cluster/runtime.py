@@ -24,6 +24,8 @@ class ClusterRunRequest:
     main_conversation_id: str = ""
     team_revision: int = 0
     team: dict[str, Any] | None = None
+    # Account the run's cost statistics are attributed to; refreshed by every main turn.
+    cost_user: str = ""
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,8 @@ class ClusterAgentTask:
     wakeup_sent: bool = False
     # The main agent already read this terminal result, so no completion notice is needed.
     result_observed: bool = False
+    # Cost statistics account snapshotted from the run when the task was queued.
+    cost_user: str = ""
 
     @property
     def execution_snapshot(self) -> ClusterExecutionSnapshot | None:
@@ -116,6 +120,7 @@ class ClusterRun:
     message_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     pending_parent_wakeup_task_ids: set[str] = field(default_factory=set)
     parent_wakeup_task: asyncio.Task | None = None
+    cost_user: str = ""
 
 
 class ClusterToolError(RuntimeError):
@@ -196,6 +201,7 @@ class ClusterRuntime:
         run.mentions = [dict(item) for item in request.mentions]
         run.allow_unsafe_cli = bool(request.allow_unsafe_cli)
         run.team = copy.deepcopy(request.team) if isinstance(request.team, dict) else {"version": 1, "assignments": []}
+        run.cost_user = str(request.cost_user or "").strip()
         run.status = "running"
         run.updated_at = self._now_iso()
         return run
@@ -217,6 +223,7 @@ class ClusterRuntime:
             started_at=now,
             updated_at=now,
             events=[{"kind": "run_started", "created_at": now}],
+            cost_user=str(request.cost_user or "").strip(),
         )
         self._runs[run.run_id] = run
         return run
@@ -482,6 +489,7 @@ class ClusterRuntime:
             parent_conversation_id=str(parent_conversation_id or "").strip(),
             parent_turn_id=str(parent_turn_id or "").strip(),
             parent_generation=self.parent_generation(run.main_conversation_id),
+            cost_user=run.cost_user,
         )
         run.tasks[task.task_id] = task
         run.events.append({

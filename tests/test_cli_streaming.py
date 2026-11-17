@@ -246,6 +246,7 @@ async def test_run_cli_chat_consumes_stream_until_done(
         "cluster_run_id": "clr_test",
         "cluster_mentions": [{"agent_id": "worker"}],
         "include_trace": False,
+        "cost_stats_user": None,
     }
     assert observed["closed"] is True
     assert result == {

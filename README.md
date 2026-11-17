@@ -313,7 +313,7 @@ WEIXIN_ALLOWED_USER_IDS=<微信私聊用户 ID，逗号分隔>
 - 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用发布包内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077`、`deepseek-big-fish` 或 `k-on-light-music` 资源；透明度范围为 `0` 到 `0.25`。
 - 预置主题的插画资源由发布包中的插画目录和前端资源提供，插画属于主题外观的一部分；主题包导出会保留这些资源。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示；Claude 订阅额度单独采集。
-- Cost 页面按时间范围统计 Codex 与 Claude 的每轮费用，可按用户、智能体、Bot 和模型拆分查看。
+- Cost 页面按时间范围统计 Codex 与 Claude 的每轮费用，可按用户、智能体和模型拆分查看。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 
 ## 支持矩阵
@@ -501,9 +501,11 @@ Claude 额度与 Codex 共用 Usage 页面，可在页内切换查看；Claude �
 - Claude 采用 Claude Code 自报的金额，含后台任务续跑、子代理和所用的全部模型。
 - Codex 按价格表估算；exec 模式上报的是会话累计金额，统计时记录相对同一会话上一轮的增量，累计值回落时以当前金额为准。app-server 模式直接记录每轮金额。
 
-页面可选择时间范围（今天、近 7/30/90 天、全部或自定义日期）和时间粒度（自动、时、日、周、月），按用户、智能体、Bot 或模型查看堆叠趋势图、排行和最贵的轮次，并与上一周期对比；图表可切换为表格。多种币种分开显示，不做汇率换算。时间按服务端本地时间分段。
+集群子 Agent 的费用直接计入所属智能体，不单独展示；用户归为发起该集群任务的账号，主 Agent 处理子任务结果的自动续跑轮次同样归到该账号。
 
-数据默认保存在 `~/.tcb/orbit-safe-claw/cost-stats/cost.sqlite3`，只保存金额、模型、Bot、智能体、操作账号和会话标识，不保存提示词或回复内容。查询在 SQLite 中一次聚合，结果在内存中短暂缓存，写入新记录后失效。
+页面可选择时间范围（今天、近 7/30/90 天、全部或自定义日期）和时间粒度（自动、时、日、周、月），按用户、智能体或模型查看堆叠趋势图、排行和最贵的轮次，并与上一周期对比；图表可切换为表格。多种币种分开显示，不做汇率换算。时间按服务端本地时间分段。
+
+数据默认保存在 `~/.tcb/orbit-safe-claw/cost-stats/cost.sqlite3`，只保存金额、模型、智能体、操作账号和会话标识，不保存提示词或回复内容。查询在 SQLite 中一次聚合，结果在内存中短暂缓存，写入新记录后失效。
 
 </details>
 

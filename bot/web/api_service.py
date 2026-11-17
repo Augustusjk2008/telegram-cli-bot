@@ -3942,6 +3942,11 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
         if not claimed_tasks:
             return False
         message = _cluster_parent_wakeup_message(claimed_tasks)
+        # Cost of reading the results belongs to whoever queued the work, not to an empty author.
+        wakeup_cost_user = next(
+            (str(task.cost_user) for task in claimed_tasks if str(getattr(task, "cost_user", "") or "").strip()),
+            str(getattr(live_run, "cost_user", "") or ""),
+        )
         for task in claimed_tasks:
             task.wakeup_pending = False
             task.wakeup_sent = True
@@ -3961,6 +3966,7 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
             expected_conversation_id=parent_conversation_id,
             cluster_run_id=run.run_id,
             allow_unsafe_cli=run.allow_unsafe_cli,
+            cost_stats_user=wakeup_cost_user,
         )
     except WebApiError as exc:
         if exc.code in {"session_busy", "conversation_changed", "execution_changed", "conversation_switch_blocked"}:
@@ -4138,6 +4144,7 @@ def _start_cluster_run_if_requested(
     main_conversation_id: str = "",
     team_state: dict[str, Any] | None = None,
     parent_request_id: str = "",
+    cost_user: str = "",
 ):
     del cluster  # Legacy clients may still send this field; orchestration is Bot-scoped.
     if not profile.cluster.enabled:
@@ -4160,6 +4167,7 @@ def _start_cluster_run_if_requested(
             if isinstance(saved_team_state.get("cluster_team"), dict)
             else {"version": 1, "assignments": []}
         ),
+        cost_user=str(cost_user or "").strip(),
     )
     run = _CLUSTER_RUNTIME.ensure_run(
         request,
@@ -4364,6 +4372,7 @@ async def _run_cluster_agent_task(
                     cluster_run_id=run_id,
                     suppress_agent_prompt=dynamic_cluster_task,
                     translate_chat=False,
+                    cost_stats_user=getattr(live_task, "cost_user", ""),
                 )
                 async for event in event_stream:
                     if _cluster_task_is_cancelled(run_id, task_id, control):
@@ -4530,6 +4539,12 @@ def _cost_stats_user(request: _ChatRunRequest | None) -> str:
     if request.actor_user_id is not None:
         return str(request.actor_user_id)
     return ""
+
+
+def _cost_stats_user_from_actor(actor: dict[str, Any] | None) -> str:
+    """Cost statistics account of a chat actor, normalized like a chat run request."""
+
+    return _cost_stats_user(_build_chat_run_request("", 0, "", actor=actor))
 
 
 def _cost_stats_number(value: Any) -> float | None:
@@ -6113,6 +6128,7 @@ async def _stream_cli_chat(
     stream_protocol_version: int = 1,
     suppress_agent_prompt: bool = False,
     translate_chat: bool = True,
+    cost_stats_user: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
@@ -6289,7 +6305,8 @@ async def _stream_cli_chat(
                 "cli_type": cli_type,
                 "bot_alias": alias,
                 "agent_id": agent_id,
-                "user": _cost_stats_user(request),
+                # Cluster child tasks have no request; they carry the run starter's account.
+                "user": _cost_stats_user(request) or str(cost_stats_user or "").strip(),
             }
             cost_previous_total = await _codex_cost_previous_total(service, session, cli_type)
 
@@ -7263,6 +7280,7 @@ async def run_cli_chat(
     allow_unsafe_cli: bool = False,
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
+    cost_stats_user: str | None = None,
 ) -> dict[str, Any]:
     last_event: dict[str, Any] | None = None
     events = _stream_cli_chat(
@@ -7277,6 +7295,7 @@ async def run_cli_chat(
         cluster_run_id=cluster_run_id,
         cluster_mentions=cluster_mentions,
         include_trace=False,
+        cost_stats_user=cost_stats_user,
     )
     try:
         async for event in events:
@@ -7913,6 +7932,7 @@ async def run_chat(
     internal_continuation: bool = False,
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
     cluster_run_id: str = "",
+    cost_stats_user: str | None = None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
@@ -7948,6 +7968,7 @@ async def run_chat(
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
             parent_request_id=str(session._execution_id or ""),
+            cost_user=_cost_stats_user_from_actor(actor),
         )
         request = _build_chat_run_request(
             alias,
@@ -7969,6 +7990,7 @@ async def run_chat(
                 cluster_run_id=cluster_run.run_id if cluster_run else cluster_run_id,
                 cluster_mentions=list(mentions or []),
                 allow_unsafe_cli=allow_unsafe_cli,
+                cost_stats_user=cost_stats_user,
             )
         finally:
             if cluster_run:
@@ -8053,6 +8075,7 @@ async def stream_chat(
                 main_conversation_id=main_conversation_id,
                 team_state=cluster_team_state,
                 parent_request_id=str(session._execution_id or ""),
+                cost_user=_cost_stats_user_from_actor(actor),
             )
             request = _build_chat_run_request(
                 alias,

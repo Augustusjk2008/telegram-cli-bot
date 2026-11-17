@@ -97,7 +97,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   "inline-completion": { label: "补全", description: "编辑器 AI 行内补全服务" },
   "chat-translation": { label: "翻译", description: "聊天消息翻译服务" },
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
-  cost: { label: "Cost", description: "Codex 与 Claude 的费用统计，可按用户、智能体、Bot 与模型拆分" },
+  cost: { label: "Cost", description: "Codex 与 Claude 的费用统计，可按用户、智能体与模型拆分" },
   schedules: { label: "定时任务", description: "按计划新建会话并向智能体发送固定指令" },
   announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
   notifications: { label: "通知", description: "任务完成推送的配置、状态与测试" },

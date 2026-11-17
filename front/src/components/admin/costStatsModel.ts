@@ -1,12 +1,15 @@
 import type { CostStats, CostStatsGranularity, CostStatsProvider } from "../../services/types";
 
 /** The breakdowns the panel can pivot the cube by without another request. */
-export type CostGroupDimension = "user" | "agent" | "bot" | "model";
+export type CostGroupDimension = "user" | "bot" | "model";
 
+/**
+ * Labels follow the rest of the UI, where a Bot is shown as "智能体". Cluster child
+ * tasks are deliberately not a dimension: their cost is summed into their Bot.
+ */
 export const COST_GROUP_DIMENSIONS: ReadonlyArray<{ key: CostGroupDimension; label: string }> = [
   { key: "user", label: "用户" },
-  { key: "agent", label: "智能体" },
-  { key: "bot", label: "Bot" },
+  { key: "bot", label: "智能体" },
   { key: "model", label: "模型" },
 ];
 

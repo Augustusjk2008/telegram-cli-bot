@@ -288,7 +288,7 @@ Ordinary WeChat groups, images, video, voice, files, cards, and message editing 
 - A theme `appearance` may include an `illustrations` object for workbench, chat, topbar, and management decoration. For example: `{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`. `setId` uses the release package's built-in `none`, `forest-grove`, `tidal-grove`, `desert-dusk`, `alpine-fog`, `moonlit-garden`, `armor-core-hud`, `apollo-plan`, `mint-citrus`, `cyberpunk-2077`, `deepseek-big-fish`, or `k-on-light-music` resources, and opacity is limited to `0` through `0.25`.
 - Preset illustration resources are shipped in the release package through the illustration catalog and frontend assets, and remain part of each preset appearance when themes are exported.
 - Codex CLI usage can be aggregated by local calendar day, provider, and model; Claude subscription quota is tracked separately.
-- The Cost page totals per-turn Codex and Claude cost over a chosen date range, broken down by user, agent, Bot, or model.
+- The Cost page totals per-turn Codex and Claude cost over a chosen date range, broken down by user, Bot, or model.
 - Cloudflare quick tunnels and fixed public forwarding support controlled mobile access.
 
 ## Support Matrix
@@ -467,9 +467,11 @@ The Cost page sits to the right of Usage in the Admin Center, with separate Code
 - Claude uses the cost Claude Code reports itself, including continuations after background tasks, subagents, and every model used.
 - Codex is priced from the price table. Codex exec reports a running total for the session, so the statistics record the increase over the previous turn of the same session; when the running total drops, the current amount stands on its own. Codex app-server amounts are recorded per turn as reported.
 
-Choose a date range (today, last 7/30/90 days, all, or custom dates) and a granularity (auto, hour, day, week, month), then view a stacked trend, a ranking, and the most expensive turns by user, agent, Bot, or model, compared with the previous period of the same length; the chart can switch to a table. Different currencies are shown separately and never converted. Buckets follow server-local time.
+Cluster sub-agent costs are added to their Bot and are not shown separately. They are attributed to the account that queued them, as are the main agent's automatic wake-up turns that process their results.
 
-Data is stored in `~/.tcb/orbit-safe-claw/cost-stats/cost.sqlite3` by default and holds only amounts, models, Bots, agents, acting accounts, and session identifiers, never prompts or replies. Each query is aggregated once in SQLite and briefly cached in memory until a new record is written.
+Choose a date range (today, last 7/30/90 days, all, or custom dates) and a granularity (auto, hour, day, week, month), then view a stacked trend, a ranking, and the most expensive turns by user, Bot, or model, compared with the previous period of the same length; the chart can switch to a table. Different currencies are shown separately and never converted. Buckets follow server-local time.
+
+Data is stored in `~/.tcb/orbit-safe-claw/cost-stats/cost.sqlite3` by default and holds only amounts, models, Bots, acting accounts, and session identifiers, never prompts or replies. Each query is aggregated once in SQLite and briefly cached in memory until a new record is written.
 
 </details>
 

@@ -178,8 +178,7 @@
   gap: 0.4rem;
 }
 
-.cost-stats-caption,
-.cost-stats-subtle {
+.cost-stats-caption {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 500;
