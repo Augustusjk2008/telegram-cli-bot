@@ -78,3 +78,14 @@ def clean_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             session.terminate_process()
         except Exception:
             pass
+
+
+@pytest.fixture(autouse=True)
+def isolated_cost_stats_service():
+    """Never let the cost statistics singleton outlive a test or reach a real data root."""
+
+    import bot.cost_stats as cost_stats
+
+    cost_stats.close_cost_stats_service_sync()
+    yield
+    cost_stats.close_cost_stats_service_sync()

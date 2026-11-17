@@ -734,6 +734,38 @@ describe("RealWebBotClient", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/auth/me", expect.any(Object));
   });
 
+  test("maps the cost cube and drops malformed rows instead of misplacing them", async () => {
+    fetchMock.mockResolvedValue(jsonOk({
+      range: { start_date: "2026-11-16", end_date: "2026-11-17" },
+      granularity: "day",
+      enabled: { codex: true, claude: "yes" },
+      time_basis: { mode: "server_local", utc_offset: "+13:00", today: "2026-11-17" },
+      available_range: { first_date: "2026-11-16", last_date: null },
+      buckets: ["2026-11-16", "2026-11-17"],
+      dimensions: { provider: ["claude"], bot: ["main"], agent: ["main"], user: ["alice"], model: ["m"], currency: ["USD"] },
+      rows: [
+        [1, 0, 0, 0, 0, 0, 0, 2.5, 3, 1],
+        [2, 0, 0, 0, 0, 0, 0, 1, 1, 0],
+        [0, 0, 0, 0, 0, 0, 0, -1, 1, 0],
+        [0, 0, 0, 0, 0, 0, 0, "1", 1, 0],
+        [0, 0, 0, 0, 0, 0, 0, 1, 1],
+      ],
+      previous_period: { start_date: "2026-11-14", end_date: "2026-11-15", totals: [{ provider: "claude", currency: "USD", amount: 4, turns: 2 }] },
+      top_turns: [{ provider: "claude", recorded_at: "2026-11-17T09:00:00+13:00", amount: 2.5, is_partial: true, turn_id: "t" }],
+    }));
+
+    const stats = await new RealWebBotClient().getCostStats({ startDate: "2026-11-16", endDate: "2026-11-17", granularity: "auto" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/cost-stats/stats?start_date=2026-11-16&end_date=2026-11-17",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(stats.enabled).toEqual({ codex: true, claude: false });
+    expect(stats.rows).toEqual([[1, 0, 0, 0, 0, 0, 0, 2.5, 3, 1]]);
+    expect(stats.previousPeriod.totals).toEqual([{ provider: "claude", currency: "USD", amount: 4, turns: 2 }]);
+    expect(stats.topTurns[0]).toMatchObject({ amount: 2.5, isPartial: true, turnId: "t", user: "" });
+  });
+
   test("maps valid Codex rate limit samples and filters invalid samples", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       rate_limit_samples: [

@@ -34,6 +34,7 @@ from aiohttp import web
 from bot import config
 from bot.chat_identity import chat_session_user_id
 from bot.codex_usage import close_codex_usage_service_sync, get_codex_usage_service
+from bot.cost_stats import close_cost_stats_service_sync, get_cost_stats_service
 from bot.config import (
     ALLOWED_USER_IDS,
     CHAT_COMPLETION_NOTIFY_ENABLED,
@@ -188,6 +189,7 @@ from .routes import (
     chat_routes,
     cluster_routes,
     codex_usage_routes,
+    cost_stats_routes,
     debug_routes,
     files_routes,
     html_preview_routes,
@@ -1216,6 +1218,7 @@ class WebApiServer:
         self.inline_completion_config_store = InlineCompletionConfigStore()
         self.inline_completion_service = InlineCompletionService(config_store=self.inline_completion_config_store)
         self.codex_usage_service = get_codex_usage_service()
+        self.cost_stats_service = get_cost_stats_service()
         loop_lag_threshold_ms = diag_loop_lag_ms()
         self._loop_lag_tracker = LoopLagTracker(threshold_ms=loop_lag_threshold_ms)
         loop_stall_threshold_ms = max(
@@ -1241,6 +1244,7 @@ class WebApiServer:
         )
         self._runtime_diagnostics.register("language_servers", self.language_server_manager.diagnostics)
         self._runtime_diagnostics.register("codex_usage", self.codex_usage_service.diagnostics)
+        self._runtime_diagnostics.register("cost_stats", self.cost_stats_service.diagnostics)
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:
             self._runtime_diagnostics.register("plugins", plugin_service.snapshot_cache_diagnostics)
@@ -5507,6 +5511,7 @@ class WebApiServer:
             announcement_routes,
             cluster_routes,
             codex_usage_routes,
+            cost_stats_routes,
             chat_routes,
             terminal_routes,
             remote_routes,
@@ -5880,6 +5885,7 @@ class WebApiServer:
         from bot.codex_server.runtime import get_codex_server_registry
         await get_codex_server_registry().aclose()
         await asyncio.to_thread(close_codex_usage_service_sync)
+        await asyncio.to_thread(close_cost_stats_service_sync)
         await asyncio.to_thread(close_session_store)
         self._runner = None
         self._site = None

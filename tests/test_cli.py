@@ -332,8 +332,9 @@ class TestIncrementalCliParsers:
     def test_claude_parser_drops_reported_cost_when_any_result_lacks_it(self, since_last):
         parser = ClaudeJsonStreamParser(raw_tail_max_bytes=1024, final_text_max_bytes=1024)
         for index, usage in enumerate(({"claude-fable-5-2": {"costUSD": 1.0}}, since_last)):
+            # No modelUsage: the cost must be read from the result event on its own.
             parser.consume_line(json.dumps({
-                "type": "result", "result_index": index, "modelUsage": {},
+                "type": "result", "result_index": index, "total_cost_usd": 1.0,
                 "model_usage_since_last_result": usage,
             }))
 

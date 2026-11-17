@@ -454,6 +454,9 @@ class ClaudeJsonStreamParser:
             context_windows = _parse_claude_context_windows(stripped)
             if context_windows:
                 self.context_windows = context_windows
+        # Every result event carries total_cost_usd; one without the per-result amount
+        # must mark the reported total incomplete rather than be skipped.
+        if '"total_cost_usd"' in stripped or '"model_usage_since_last_result"' in stripped:
             result_cost = _parse_claude_result_cost(stripped)
             if result_cost is not None:
                 index, costs = result_cost

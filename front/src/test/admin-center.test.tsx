@@ -849,3 +849,37 @@ test("公告条目保留换行与空格，发布时忽略空段落并重置草�
   await waitFor(() => expect(screen.getByLabelText("公告标题")).toHaveValue(""));
   expect(screen.getByLabelText("公告发布者")).toHaveValue("CLI Bridge");
 });
+
+test("Cost 页面在 Usage 右侧，切换维度只在本地重算，粒度与开关各发一次请求", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const getStats = vi.spyOn(client, "getCostStats");
+  const updateConfig = vi.spyOn(client, "updateCostStatsConfig");
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await screen.findByText("用户权限");
+  const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+  expect(tabs.indexOf("Cost")).toBe(tabs.indexOf("Usage") + 1);
+
+  await user.click(screen.getByRole("tab", { name: "Cost" }));
+  await screen.findByRole("heading", { name: "Cost", level: 2 });
+  expect(await screen.findByRole("heading", { name: "按用户排行" })).toBeInTheDocument();
+  expect(getStats).toHaveBeenCalledTimes(1);
+  expect(getStats).toHaveBeenLastCalledWith({ startDate: "2026-06-27", endDate: "2026-07-26" });
+
+  await user.click(screen.getByRole("button", { name: "按模型" }));
+  expect(screen.getByRole("heading", { name: "按模型排行" })).toBeInTheDocument();
+  expect(screen.getByRole("list", { name: "模型图例" })).toHaveTextContent("gpt-6-sol");
+  await user.click(screen.getByRole("tab", { name: "Claude" }));
+  expect(screen.getByRole("list", { name: "模型图例" })).toHaveTextContent("claude-fable-5-2");
+  expect(getStats).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole("button", { name: "周" }));
+  await waitFor(() => expect(getStats).toHaveBeenLastCalledWith({
+    startDate: "2026-06-27", endDate: "2026-07-26", granularity: "week",
+  }));
+
+  await user.click(screen.getByRole("checkbox", { name: "启用 Claude 费用统计" }));
+  await waitFor(() => expect(updateConfig).toHaveBeenCalledWith({ provider: "claude", enabled: false }));
+  expect(await screen.findByText("Claude 费用统计已关闭，历史记录仍可查询。")).toBeInTheDocument();
+});

@@ -288,6 +288,7 @@ Ordinary WeChat groups, images, video, voice, files, cards, and message editing 
 - A theme `appearance` may include an `illustrations` object for workbench, chat, topbar, and management decoration. For example: `{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`. `setId` uses the release package's built-in `none`, `forest-grove`, `tidal-grove`, `desert-dusk`, `alpine-fog`, `moonlit-garden`, `armor-core-hud`, `apollo-plan`, `mint-citrus`, `cyberpunk-2077`, `deepseek-big-fish`, or `k-on-light-music` resources, and opacity is limited to `0` through `0.25`.
 - Preset illustration resources are shipped in the release package through the illustration catalog and frontend assets, and remain part of each preset appearance when themes are exported.
 - Codex CLI usage can be aggregated by local calendar day, provider, and model; Claude subscription quota is tracked separately.
+- The Cost page totals per-turn Codex and Claude cost over a chosen date range, broken down by user, agent, Bot, or model.
 - Cloudflare quick tunnels and fixed public forwarding support controlled mobile access.
 
 ## Support Matrix
@@ -455,6 +456,20 @@ Usage is aggregated by date, provider, and model. Data is stored in `~/.tcb/orbi
 Claude quota shares the Usage page with Codex, with an in-page switcher between the two; Claude has its own collection switch, also disabled by default, and shares the same database with separate data. It records the last `rate_limit_event` from each stream-json turn of a regular Claude CLI process: the 5-hour, weekly, and overage-included weekly windows, with the weekly trend shown. The plan type comes from `claude auth status --json`; only the login method, API provider, and subscription type are kept. Turns without stream-json output or API-key or Bedrock/Vertex logins are not recorded.
 
 Machines signed in to the same account can merge their quota curves. **Export samples** on the Usage page downloads the Codex and Claude samples stored on this host within the currently queried date range (server-local days, matching the chart) as one JSON file; **Import samples** on another host merges that file into the same curves. A sample is identified by its quota window and millisecond timestamp, so importing a file twice, or receiving a host's own samples back through another host, adds nothing. Imported samples keep the label of the machine that took them (`TCB_NODE_ID`, otherwise the hostname), which the chart tooltip shows; **Remove imported** deletes them without touching samples collected locally. Quota percentages from different accounts cannot be merged, so import only files from hosts using the same account.
+
+</details>
+
+<details>
+<summary><strong>Codex and Claude cost statistics</strong></summary>
+
+The Cost page sits to the right of Usage in the Admin Center, with separate Codex and Claude views and a separate statistics switch for each, both disabled by default. Once enabled, Orbit records one cost estimate per turn when the turn ends (the same figure shown in message details); history is not backfilled. While disabled, nothing is read from or written to the database, and existing records remain queryable. Interrupted or failed turns are recorded as partial estimates from the usage reported so far.
+
+- Claude uses the cost Claude Code reports itself, including continuations after background tasks, subagents, and every model used.
+- Codex is priced from the price table. Codex exec reports a running total for the session, so the statistics record the increase over the previous turn of the same session; when the running total drops, the current amount stands on its own. Codex app-server amounts are recorded per turn as reported.
+
+Choose a date range (today, last 7/30/90 days, all, or custom dates) and a granularity (auto, hour, day, week, month), then view a stacked trend, a ranking, and the most expensive turns by user, agent, Bot, or model, compared with the previous period of the same length; the chart can switch to a table. Different currencies are shown separately and never converted. Buckets follow server-local time.
+
+Data is stored in `~/.tcb/orbit-safe-claw/cost-stats/cost.sqlite3` by default and holds only amounts, models, Bots, agents, acting accounts, and session identifiers, never prompts or replies. Each query is aggregated once in SQLite and briefly cached in memory until a new record is written.
 
 </details>
 

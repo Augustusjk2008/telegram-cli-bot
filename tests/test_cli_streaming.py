@@ -865,6 +865,113 @@ async def test_stream_cli_chat_uses_claude_reported_cost_for_every_result(
     }
 
 
+def _cost_stats_rows(path, columns: str) -> list[tuple]:
+    import sqlite3
+
+    with sqlite3.connect(path) as connection:
+        return connection.execute(f"SELECT {columns} FROM cost_events ORDER BY event_id").fetchall()
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_records_claude_reported_cost_for_the_acting_user(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    import bot.cost_stats as cost_stats
+    from bot.cost_stats.service import CostStatsService
+
+    stats = CostStatsService(db_path=tmp_path / "cost-stats" / "cost.sqlite3")
+    monkeypatch.setattr(cost_stats, "_service", stats)
+    await stats.set_enabled("claude", True)
+    profile = usage_manager.main_profile
+    profile.cli_type = "claude"
+    _, _, session = api_service.get_chat_session_for_alias(usage_manager, "main", 1001)
+    session.claude_session_id = "cost-session"
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "claude")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["claude"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service, "_reconcile_native_trace_before_completion", AsyncMock())
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout([
+        json.dumps(event) + "\n" for event in [
+            {"type": "system", "subtype": "init", "session_id": "cost-session"},
+            {"type": "result", "result": "done", "session_id": "cost-session", "result_index": 0,
+             "total_cost_usd": 50.0, "usage": {"input_tokens": 1, "output_tokens": 1},
+             "modelUsage": {"claude-opus-5-5": {"costUSD": 50.0}},
+             "model_usage_since_last_result": {"claude-opus-5-5": {"costUSD": 2.75}}},
+        ]
+    ])
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    request = api_service._ChatRunRequest(bot_alias="main", user_id=1001, text="hello", actor_username="alice")
+
+    events = [
+        event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello", request=request)
+    ]
+
+    done = next(event for event in events if event["type"] == "done")
+    assert _cost_stats_rows(
+        stats.db_path,
+        "provider, cli_type, bot_alias, agent_id, user, model, currency, amount, baseline, is_partial, source, "
+        "turn_id, native_session_id",
+    ) == [(
+        "claude", "claude", "main", "main", "alice", "claude-opus-5-5", "USD", 2.75, None, 0, "claude_reported",
+        done["turn_id"], "cost-session",
+    )]
+
+
+@pytest.mark.asyncio
+async def test_stream_cli_chat_records_codex_exec_cost_as_running_total_increase(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    import bot.cost_stats as cost_stats
+    from bot.cost_stats.service import CostStatsService
+
+    stats = CostStatsService(db_path=tmp_path / "cost-stats" / "cost.sqlite3")
+    monkeypatch.setattr(cost_stats, "_service", stats)
+    usage_manager.main_profile.cli_params.set_param("codex", "model", "gpt-5.5")
+    totals = iter([0.04, 0.10, 0.15])
+    monkeypatch.setattr(
+        api_service,
+        "estimate_usage_cost",
+        lambda model, _usage, **_kwargs: {"model": model, "currency": "USD", "scope": "turn", "total": next(totals)},
+    )
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service, "_reconcile_native_trace_before_completion", AsyncMock())
+
+    async def run_turn() -> None:
+        process = _UsageProcess()
+        process.stdout = _StreamingStdout([
+            json.dumps(event) + "\n" for event in [
+                {"type": "thread.started", "thread_id": "cost-session"},
+                {"type": "item.completed", "item": {"type": "assistant_message", "text": "done"}},
+                {"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 20}},
+            ]
+        ])
+        monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+        events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
+        assert any(event["type"] == "done" for event in events)
+
+    await run_turn()
+    assert not stats.db_path.exists()
+
+    await stats.set_enabled("codex", True)
+    # The first recorded turn subtracts the chat history total, later ones the stored total.
+    await run_turn()
+    await run_turn()
+
+    rows = _cost_stats_rows(stats.db_path, "provider, cli_type, user, model, amount, baseline, raw_total")
+    assert rows == [
+        ("codex", "codex", "", "gpt-5.5", pytest.approx(0.06), 0.04, 0.10),
+        ("codex", "codex", "", "gpt-5.5", pytest.approx(0.05), 0.10, 0.15),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
     usage_manager: MultiBotManager,

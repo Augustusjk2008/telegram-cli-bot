@@ -8,6 +8,7 @@ import hmac
 import inspect
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -99,6 +100,10 @@ from bot.codex_usage import (
     record_codex_rate_limit_capture as _record_codex_rate_limit_capture,
     start_claude_rate_limit_capture as _start_claude_rate_limit_capture,
     start_codex_rate_limit_capture as _start_codex_rate_limit_capture,
+)
+from bot.cost_stats import (
+    cost_stats_enabled as _cost_stats_enabled,
+    record_turn_cost as _record_turn_cost,
 )
 from bot.manager import MultiBotManager
 from bot.messages import msg
@@ -4515,6 +4520,97 @@ def _current_native_session_id(session: UserSession, cli_type: str) -> str:
     return ""
 
 
+def _cost_stats_user(request: _ChatRunRequest | None) -> str:
+    if request is None:
+        return ""
+    if request.actor_username:
+        return request.actor_username
+    if request.actor_account_id:
+        return request.actor_account_id
+    if request.actor_user_id is not None:
+        return str(request.actor_user_id)
+    return ""
+
+
+def _cost_stats_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+async def _codex_cost_previous_total(
+    service: Any,
+    session: UserSession,
+    cli_type: str,
+) -> tuple[float, str] | None:
+    """Running total of the session's previous Codex exec turn, for the first recorded turn.
+
+    Reads chat history only while Codex cost statistics are enabled.
+    """
+
+    if cli_type != "codex":
+        return None
+    native_session_id = _current_native_session_id(session, cli_type)
+    if not native_session_id:
+        return None
+    try:
+        if not await _cost_stats_enabled("codex"):
+            return None
+        usage = await service.get_latest_native_session_context_usage_async(
+            native_provider="codex",
+            native_session_id=native_session_id,
+        )
+        if not isinstance(usage, dict):
+            return None
+        provider = str(usage.get("provider") or "")
+        source = str(usage.get("source") or "")
+        cost = usage.get("estimated_cost")
+        # App-server turns and partial estimates carry per-turn amounts, not running totals.
+        if provider == "codex_server" or source.startswith("codex_server") or not isinstance(cost, dict):
+            return None
+        if cost.get("is_partial"):
+            return None
+        total = _cost_stats_number(cost.get("total"))
+        currency = str(cost.get("currency") or "").strip().upper()
+        return (total, currency) if total is not None and currency else None
+    except Exception:
+        logger.debug("读取 Codex 上一轮累计费用失败", exc_info=True)
+        return None
+
+
+async def _record_cli_turn_cost(
+    base: dict[str, Any],
+    estimated_cost: dict[str, Any],
+    *,
+    previous: tuple[float, str] | None,
+    turn_handle: Any,
+    native_session_id: str | None,
+) -> None:
+    """Best-effort statistics write; a disabled provider returns without disk access."""
+
+    try:
+        currency = str(estimated_cost.get("currency") or "").strip().upper()
+        is_partial = bool(estimated_cost.get("is_partial"))
+        # Codex exec reports a running session total, except for partial per-turn estimates.
+        cumulative = base["cli_type"] == "codex" and not is_partial
+        await _record_turn_cost(
+            **base,
+            model=str(estimated_cost.get("model") or ""),
+            currency=currency,
+            total=estimated_cost.get("total"),
+            cumulative=cumulative,
+            previous_total=previous[0] if cumulative and previous and previous[1] == currency else None,
+            is_partial=is_partial,
+            source=estimated_cost.get("source"),
+            conversation_id=getattr(turn_handle, "conversation_id", None),
+            turn_id=getattr(turn_handle, "turn_id", None),
+            native_session_id=native_session_id,
+        )
+    except Exception:
+        logger.warning("费用统计记录失败，CLI 流程将继续", exc_info=True)
+
+
 def _cluster_prompt_context_id(session: UserSession, provider: str) -> str:
     normalized = str(provider or "").strip().lower()
     with session._lock:
@@ -6184,6 +6280,19 @@ async def _stream_cli_chat(
             session_compaction_count = _context_compaction_count(previous_usage)
             session_compaction_baseline = session_compaction_count
 
+        cost_record_base: dict[str, Any] | None = None
+        cost_previous_total: tuple[float, str] | None = None
+        if cli_data_provider(cli_type) in {"codex", "claude"}:
+            cost_record_base = {
+                "invocation_id": uuid.uuid4().hex,
+                "provider": cli_data_provider(cli_type),
+                "cli_type": cli_type,
+                "bot_alias": alias,
+                "agent_id": agent_id,
+                "user": _cost_stats_user(request),
+            }
+            cost_previous_total = await _codex_cost_previous_total(service, session, cli_type)
+
         for attempt_index in range(max_attempts):
             check_chat_stopped(session)
             attempt = _prepare_cli_attempt_state(session, cli_type)
@@ -6428,6 +6537,14 @@ async def _stream_cli_chat(
                     not usage_complete or cleanup_abort or parsed.terminal_status != "completed" or process.returncode != 0
                 ):
                     estimated_cost = {**estimated_cost, "is_partial": True}
+                if cost_record_base is not None:
+                    await _record_cli_turn_cost(
+                        cost_record_base,
+                        estimated_cost,
+                        previous=cost_previous_total,
+                        turn_handle=turn_handle,
+                        native_session_id=cost_session_id,
+                    )
                 return {
                     **(context_usage or {
                         "provider": cli_type,

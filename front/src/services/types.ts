@@ -601,6 +601,69 @@ export type ClaudeUsageStatsQuery = CodexUsageStatsQuery;
 export type ClaudeUsageStatsRange = CodexUsageStatsRange;
 export type ClaudeUsageStats = CodexUsageStats;
 
+export type CostStatsProvider = "codex" | "claude";
+export type CostStatsGranularity = "hour" | "day" | "week" | "month";
+export type CostStatsDimension = "provider" | "bot" | "agent" | "user" | "model" | "currency";
+
+export type CostStatsConfig = {
+  enabled: Record<CostStatsProvider, boolean>;
+  timeBasis: CodexUsageTimeBasis;
+  availableRange: CodexUsageAvailableRange;
+};
+
+export type CostStatsQuery = {
+  startDate?: string;
+  endDate?: string;
+  granularity?: CostStatsGranularity | "auto";
+};
+
+/**
+ * One aggregated cell: indexes into `buckets` and `dimensions`, then the measures.
+ * `[bucket, provider, bot, agent, user, model, currency, amount, turns, partialTurns]`
+ */
+export type CostStatsRow = readonly [
+  number, number, number, number, number, number, number, number, number, number,
+];
+
+export type CostStatsPeriodTotal = {
+  provider: string;
+  currency: string;
+  amount: number;
+  turns: number;
+};
+
+export type CostStatsTopTurn = {
+  provider: string;
+  recordedAt: string;
+  bot: string;
+  agent: string;
+  user: string;
+  model: string;
+  currency: string;
+  amount: number;
+  isPartial: boolean;
+  conversationId: string;
+  turnId: string;
+};
+
+export type CostStats = {
+  range: CodexUsageStatsRange;
+  granularity: CostStatsGranularity;
+  enabled: Record<CostStatsProvider, boolean>;
+  timeBasis: CodexUsageTimeBasis;
+  availableRange: CodexUsageAvailableRange;
+  /** Every bucket of the range in order, including the ones without data. */
+  buckets: string[];
+  dimensions: Record<CostStatsDimension, string[]>;
+  rows: CostStatsRow[];
+  previousPeriod: {
+    startDate: string;
+    endDate: string;
+    totals: CostStatsPeriodTotal[];
+  };
+  topTurns: CostStatsTopTurn[];
+};
+
 export type RemoteWorkspace = {
   platform?: "posix" | "windows";
   connectionId: string;

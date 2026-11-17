@@ -8,6 +8,7 @@ from . import (
     chat_routes,
     cluster_routes,
     codex_usage_routes,
+    cost_stats_routes,
     debug_routes,
     files_routes,
     git_routes,

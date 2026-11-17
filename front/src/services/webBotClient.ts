@@ -38,6 +38,10 @@ import type {
   ClaudeUsageConfig,
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
+  CostStats,
+  CostStatsConfig,
+  CostStatsProvider,
+  CostStatsQuery,
   UsageSamplesExportResult,
   UsageSamplesImportResult,
   CliParamsPayload,
@@ -242,6 +246,10 @@ export interface WebBotClient {
   exportUsageSamples(range: CodexUsageStatsRange): Promise<UsageSamplesExportResult>;
   importUsageSamples(file: File): Promise<UsageSamplesImportResult>;
   deleteImportedUsageSamples(): Promise<{ deleted: number }>;
+  getCostStatsConfig(): Promise<CostStatsConfig>;
+  updateCostStatsConfig(input: { provider: CostStatsProvider; enabled: boolean }): Promise<CostStatsConfig>;
+  /** One aggregated cube for both providers; the panel pivots it locally. */
+  getCostStats(query?: CostStatsQuery): Promise<CostStats>;
   listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]>;
   listPlugins(refresh?: boolean): Promise<PluginSummary[]>;
   listInstallablePlugins(): Promise<InstallablePluginSummary[]>;

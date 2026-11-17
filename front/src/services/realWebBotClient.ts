@@ -113,6 +113,13 @@ import type {
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
   UsageSamplesExportResult,
+  CostStats,
+  CostStatsConfig,
+  CostStatsDimension,
+  CostStatsGranularity,
+  CostStatsProvider,
+  CostStatsQuery,
+  CostStatsRow,
   UsageSamplesImportResult,
   CliParamsPayload,
   DeepSeekModelOption,
@@ -1673,6 +1680,38 @@ type RawCodexUsageConfig = {
   current_provider?: RawCodexUsageProvider;
   time_basis?: RawCodexUsageTimeBasis;
   available_range?: RawCodexUsageAvailableRange;
+};
+
+type RawCostStatsConfig = {
+  enabled?: Record<string, unknown>;
+  time_basis?: RawCodexUsageTimeBasis;
+  available_range?: RawCodexUsageAvailableRange;
+};
+
+type RawCostStats = RawCostStatsConfig & {
+  range?: { start_date?: string; end_date?: string };
+  granularity?: string;
+  buckets?: unknown;
+  dimensions?: Record<string, unknown>;
+  rows?: unknown;
+  previous_period?: {
+    start_date?: string;
+    end_date?: string;
+    totals?: Array<{ provider?: string; currency?: string; amount?: unknown; turns?: unknown }>;
+  };
+  top_turns?: Array<{
+    provider?: string;
+    recorded_at?: string;
+    bot?: string;
+    agent?: string;
+    user?: string;
+    model?: string;
+    currency?: string;
+    amount?: unknown;
+    is_partial?: unknown;
+    conversation_id?: string;
+    turn_id?: string;
+  }>;
 };
 
 type RawCodexUsageStats = {
@@ -4177,6 +4216,76 @@ function mapUsageSamplesImport(raw: RawUsageSamplesImport): UsageSamplesImportRe
 // would otherwise surface as an unreadable response.
 const MAX_USAGE_SAMPLES_IMPORT_BYTES = 24 * 1024 * 1024;
 
+const COST_STATS_DIMENSIONS: CostStatsDimension[] = ["provider", "bot", "agent", "user", "model", "currency"];
+const COST_STATS_GRANULARITIES: CostStatsGranularity[] = ["hour", "day", "week", "month"];
+
+function mapCostStatsEnabled(raw: Record<string, unknown> | undefined): Record<CostStatsProvider, boolean> {
+  return { codex: raw?.codex === true, claude: raw?.claude === true };
+}
+
+function mapCostStatsConfig(raw: RawCostStatsConfig): CostStatsConfig {
+  return {
+    enabled: mapCostStatsEnabled(raw.enabled),
+    timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
+    availableRange: mapCodexUsageAvailableRange(raw.available_range),
+  };
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item ?? "")) : [];
+}
+
+function mapCostStats(raw: RawCostStats): CostStats {
+  const buckets = stringList(raw.buckets);
+  const dimensions = Object.fromEntries(
+    COST_STATS_DIMENSIONS.map((key) => [key, stringList(raw.dimensions?.[key])]),
+  ) as Record<CostStatsDimension, string[]>;
+  // 行内下标越界或度量非法时整行丢弃，避免图表按错位的维度聚合。
+  const limits = [buckets.length, ...COST_STATS_DIMENSIONS.map((key) => dimensions[key].length)];
+  const rows = (Array.isArray(raw.rows) ? raw.rows : []).filter((row): row is CostStatsRow => (
+    Array.isArray(row) && row.length === 10
+    && row.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)
+    && limits.every((limit, index) => Number.isInteger(row[index]) && row[index] < limit)
+  ));
+  const granularity = COST_STATS_GRANULARITIES.find((item) => item === raw.granularity) || "day";
+  return {
+    range: {
+      startDate: String(raw.range?.start_date || ""),
+      endDate: String(raw.range?.end_date || ""),
+    },
+    granularity,
+    enabled: mapCostStatsEnabled(raw.enabled),
+    timeBasis: mapCodexUsageTimeBasis(raw.time_basis),
+    availableRange: mapCodexUsageAvailableRange(raw.available_range),
+    buckets,
+    dimensions,
+    rows,
+    previousPeriod: {
+      startDate: String(raw.previous_period?.start_date || ""),
+      endDate: String(raw.previous_period?.end_date || ""),
+      totals: (raw.previous_period?.totals || []).map((item) => ({
+        provider: String(item.provider || ""),
+        currency: String(item.currency || ""),
+        amount: numberOrZero(item.amount),
+        turns: numberOrZero(item.turns),
+      })),
+    },
+    topTurns: (raw.top_turns || []).map((item) => ({
+      provider: String(item.provider || ""),
+      recordedAt: String(item.recorded_at || ""),
+      bot: String(item.bot || ""),
+      agent: String(item.agent || ""),
+      user: String(item.user || ""),
+      model: String(item.model || ""),
+      currency: String(item.currency || ""),
+      amount: numberOrZero(item.amount),
+      isPartial: item.is_partial === true,
+      conversationId: String(item.conversation_id || ""),
+      turnId: String(item.turn_id || ""),
+    })),
+  };
+}
+
 function mapCodexUsageStats(raw: RawCodexUsageStats): CodexUsageStats {
   return {
     range: {
@@ -5571,6 +5680,30 @@ export class RealWebBotClient implements WebBotClient {
       method: "DELETE",
     });
     return { deleted: countValue(data.deleted) };
+  }
+
+  async getCostStatsConfig(): Promise<CostStatsConfig> {
+    return mapCostStatsConfig(await this.requestJson<RawCostStatsConfig>("/api/admin/cost-stats/config"));
+  }
+
+  async updateCostStatsConfig(input: { provider: CostStatsProvider; enabled: boolean }): Promise<CostStatsConfig> {
+    const data = await this.requestJson<RawCostStatsConfig>("/api/admin/cost-stats/config", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ provider: input.provider, enabled: input.enabled }),
+    });
+    return mapCostStatsConfig(data);
+  }
+
+  async getCostStats(queryInput: CostStatsQuery = {}): Promise<CostStats> {
+    const params = new URLSearchParams();
+    if (queryInput.startDate) params.set("start_date", queryInput.startDate);
+    if (queryInput.endDate) params.set("end_date", queryInput.endDate);
+    if (queryInput.granularity && queryInput.granularity !== "auto") params.set("granularity", queryInput.granularity);
+    const query = params.toString();
+    return mapCostStats(await this.requestJson<RawCostStats>(`/api/admin/cost-stats/stats${query ? `?${query}` : ""}`));
   }
 
   async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {

@@ -313,6 +313,7 @@ WEIXIN_ALLOWED_USER_IDS=<微信私聊用户 ID，逗号分隔>
 - 主题的 `appearance` 支持可选的 `illustrations` 配置，用于工作区、聊天区、顶部栏和管理界面的装饰插画。例如：`{"setId":"forest-grove","opacity":0.12,"surfaces":{"workbench":true,"chat":true,"topbar":true,"management":false}}`。`setId` 使用发布包内置的 `none`、`forest-grove`、`tidal-grove`、`desert-dusk`、`alpine-fog`、`moonlit-garden`、`armor-core-hud`、`apollo-plan`、`mint-citrus`、`cyberpunk-2077`、`deepseek-big-fish` 或 `k-on-light-music` 资源；透明度范围为 `0` 到 `0.25`。
 - 预置主题的插画资源由发布包中的插画目录和前端资源提供，插画属于主题外观的一部分；主题包导出会保留这些资源。
 - Codex CLI 用量统计可按本地自然日、Provider 和模型聚合展示；Claude 订阅额度单独采集。
+- Cost 页面按时间范围统计 Codex 与 Claude 的每轮费用，可按用户、智能体、Bot 和模型拆分查看。
 - Cloudflare quick tunnel 和固定公网转发可用于受控的移动端访问。
 
 ## 支持矩阵
@@ -489,6 +490,20 @@ server {
 Claude 额度与 Codex 共用 Usage 页面，可在页内切换查看；Claude 采集开关独立，同样默认关闭，与 Codex 共用数据库但数据隔离。它记录普通 Claude CLI 进程每轮 stream-json 输出中的最后一条 `rate_limit_event`，包括 5 小时、每周和含超额的每周窗口，并展示每周趋势。套餐类型来自 `claude auth status --json`，只保留登录方式、API Provider 和订阅类型。没有 stream-json 输出的轮次、API Key 或 Bedrock/Vertex 登录，都不会被记录。
 
 多台机器登录同一账号时，可以合并额度曲线：在 Usage 页面点击“导出样本”，把当前查询时间范围内（按服务端本地日期，与曲线一致）本机保存的 Codex 与 Claude 额度样本下载为一个 JSON 文件，再到另一台机器点击“导入样本”，即可合并到同一条曲线。样本按额度窗口和毫秒级采样时间识别，重复导入同一文件，或本机样本经其他机器导回，都不会产生重复点。导入的样本保留采样机器的标签（优先 `TCB_NODE_ID`，否则为主机名），并显示在曲线悬浮提示中；“移除导入”只删除导入的样本，不影响本机采集的数据。不同账号的额度百分比无法合并，请只导入同一账号机器导出的文件。
+
+</details>
+
+<details>
+<summary><strong>Codex / Claude 费用统计</strong></summary>
+
+管理中心的 Cost 页面位于 Usage 右侧，Codex 和 Claude 分页显示，各有独立的统计开关，默认均关闭。开启后，Orbit 在每轮对话结束时记录一条该轮的费用估算（与消息详情中显示的金额同一来源），不回填历史；关闭时不读写数据库，已有记录仍可查询。中断或失败的轮次按已上报用量记为部分估算。
+
+- Claude 采用 Claude Code 自报的金额，含后台任务续跑、子代理和所用的全部模型。
+- Codex 按价格表估算；exec 模式上报的是会话累计金额，统计时记录相对同一会话上一轮的增量，累计值回落时以当前金额为准。app-server 模式直接记录每轮金额。
+
+页面可选择时间范围（今天、近 7/30/90 天、全部或自定义日期）和时间粒度（自动、时、日、周、月），按用户、智能体、Bot 或模型查看堆叠趋势图、排行和最贵的轮次，并与上一周期对比；图表可切换为表格。多种币种分开显示，不做汇率换算。时间按服务端本地时间分段。
+
+数据默认保存在 `~/.tcb/orbit-safe-claw/cost-stats/cost.sqlite3`，只保存金额、模型、Bot、智能体、操作账号和会话标识，不保存提示词或回复内容。查询在 SQLite 中一次聚合，结果在内存中短暂缓存，写入新记录后失效。
 
 </details>
 

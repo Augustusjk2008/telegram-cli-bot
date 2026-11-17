@@ -75,6 +75,10 @@ import type {
   ClaudeUsageStats,
   ClaudeUsageStatsQuery,
   UsageSamplesExportResult,
+  CostStats,
+  CostStatsConfig,
+  CostStatsProvider,
+  CostStatsQuery,
   UsageSamplesImportResult,
   CliType,
   CliParamsPayload,
@@ -280,6 +284,7 @@ async function themeAssetDescriptor(file: File): Promise<ThemeIllustrationAsset>
 }
 import { WebBotClient } from "./webBotClient";
 import { mockBots } from "../mocks/bots";
+import { buildMockCostStats } from "../mocks/costStats";
 import { readMockChatScript } from "../mocks/chatScript";
 import { mockChatMessages } from "../mocks/chat";
 import { mockFiles } from "../mocks/files";
@@ -2482,6 +2487,12 @@ export class MockWebBotClient implements WebBotClient {
       },
     ],
   };
+  private costStatsConfig: CostStatsConfig = {
+    enabled: { codex: true, claude: true },
+    timeBasis: { mode: "server_local", utcOffset: "+08:00", today: "2026-07-26" },
+    availableRange: { firstDate: "2026-04-28", lastDate: "2026-07-26" },
+  };
+
   private codexUsageConfig: CodexUsageConfig = {
     enabled: false,
     currentProvider: {
@@ -6903,6 +6914,31 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("无权移除额度样本", { status: 403, code: "forbidden" });
     }
     return { deleted: 0 };
+  }
+
+  async getCostStatsConfig(): Promise<CostStatsConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看费用统计", { status: 403, code: "forbidden" });
+    }
+    return structuredClone(this.costStatsConfig);
+  }
+
+  async updateCostStatsConfig(input: { provider: CostStatsProvider; enabled: boolean }): Promise<CostStatsConfig> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权修改费用统计设置", { status: 403, code: "forbidden" });
+    }
+    this.costStatsConfig = {
+      ...this.costStatsConfig,
+      enabled: { ...this.costStatsConfig.enabled, [input.provider]: input.enabled },
+    };
+    return this.getCostStatsConfig();
+  }
+
+  async getCostStats(query: CostStatsQuery = {}): Promise<CostStats> {
+    if (!this.hasAdminOps()) {
+      throw new WebApiClientError("无权查看费用统计", { status: 403, code: "forbidden" });
+    }
+    return buildMockCostStats(query, this.costStatsConfig);
   }
 
   async getUpdateStatus(): Promise<AppUpdateStatus> {

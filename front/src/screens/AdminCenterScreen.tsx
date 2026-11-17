@@ -48,6 +48,9 @@ import { ThemeIllustrationLayer } from "../theme/ThemeIllustrationLayer";
 import "../styles/admin-center.css";
 import type { UsagePanelProvider } from "../components/admin/UsagePanel";
 
+const CostPanel = lazy(() => import("../components/admin/CostPanel").then((module) => ({
+  default: module.CostPanel,
+})));
 const UsagePanel = lazy(() => import("../components/admin/UsagePanel").then((module) => ({
   default: module.UsagePanel,
 })));
@@ -72,6 +75,7 @@ type AdminCenterTab =
   | "invites"
   | "cli-errors"
   | "usage"
+  | "cost"
   | "schedules"
   | "network-updates"
   | "announcements"
@@ -93,6 +97,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   "inline-completion": { label: "补全", description: "编辑器 AI 行内补全服务" },
   "chat-translation": { label: "翻译", description: "聊天消息翻译服务" },
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
+  cost: { label: "Cost", description: "Codex 与 Claude 的费用统计，可按用户、智能体、Bot 与模型拆分" },
   schedules: { label: "定时任务", description: "按计划新建会话并向智能体发送固定指令" },
   announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
   notifications: { label: "通知", description: "任务完成推送的配置、状态与测试" },
@@ -104,7 +109,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
 const ADMIN_TAB_GROUPS: Array<{ label: string; tabs: AdminCenterTab[] }> = [
   { label: "系统", tabs: ["global", "env", "network-updates", "storage"] },
   { label: "成员", tabs: ["users", "invites"] },
-  { label: "智能与服务", tabs: ["inline-completion", "chat-translation", "usage", "schedules"] },
+  { label: "智能与服务", tabs: ["inline-completion", "chat-translation", "usage", "cost", "schedules"] },
   { label: "消息", tabs: ["announcements", "notifications", "weixin", "lan-chat"] },
   { label: "诊断", tabs: ["cli-errors"] },
 ];
@@ -318,6 +323,7 @@ export function AdminCenterScreen({
   const [cliErrorHours, setCliErrorHours] = useState(24);
   const [usagePanelKey, setUsagePanelKey] = useState(0);
   const [usageProvider, setUsageProvider] = useState<UsagePanelProvider>("codex");
+  const [costPanelKey, setCostPanelKey] = useState(0);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [announcementDraft, setAnnouncementDraft] = useState<AnnouncementDraft>(() => createAnnouncementDraft());
   const [announcementSaving, setAnnouncementSaving] = useState(false);
@@ -353,6 +359,7 @@ export function AdminCenterScreen({
     invites: false,
     "cli-errors": false,
     usage: false,
+    cost: false,
     schedules: false,
     "network-updates": false,
     announcements: false,
@@ -383,6 +390,7 @@ export function AdminCenterScreen({
       ...(canManageRegisterCodes ? (["invites"] as AdminCenterTab[]) : []),
       "cli-errors",
       "usage",
+      "cost",
       ...(canManageEnvConfig ? (["schedules"] as AdminCenterTab[]) : []),
       "network-updates",
       "announcements",
@@ -702,6 +710,11 @@ export function AdminCenterScreen({
       setLoadedTabs((prev) => ({ ...prev, usage: true }));
       if (refresh) {
         setUsagePanelKey((current) => current + 1);
+      }
+    } else if (activeTab === "cost") {
+      setLoadedTabs((prev) => ({ ...prev, cost: true }));
+      if (refresh) {
+        setCostPanelKey((current) => current + 1);
       }
     } else if (activeTab === "schedules" && canManageEnvConfig) {
       // The panel loads and polls on its own; a manual refresh re-reads it without closing the editor.
@@ -1584,6 +1597,24 @@ export function AdminCenterScreen({
           ) : (
             <section className="admin-island orbit-island orbit-island--reading text-sm text-[var(--muted)]">
               正在加载 Usage 面板…
+            </section>
+          )
+        ) : null}
+
+        {!loading && activeTab === "cost" ? (
+          loadedTabs.cost ? (
+            <Suspense fallback={(
+              <section className="admin-island orbit-island orbit-island--reading text-sm text-[var(--muted)]">
+                正在加载 Cost 面板…
+              </section>
+            )}>
+              <div className="admin-embed">
+                <CostPanel client={client} refreshKey={costPanelKey} />
+              </div>
+            </Suspense>
+          ) : (
+            <section className="admin-island orbit-island orbit-island--reading text-sm text-[var(--muted)]">
+              正在加载 Cost 面板…
             </section>
           )
         ) : null}

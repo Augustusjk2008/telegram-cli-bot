@@ -1,0 +1,581 @@
+/*
+ * Cost panel. The shell (heading, provider tabs, toolbar, date form, alerts)
+ * reuses UsagePanel.css; this file only adds the dashboard pieces.
+ *
+ * Series colors are a validated categorical set (CVD-safe adjacent pairs in
+ * both modes). Slot order is the safety mechanism, so keep it; slot 0 is the
+ * neutral "其他" bucket. Light slots 3–5 sit below 3:1 on light surfaces, so
+ * every series also has a legend entry, a ranking row and a table view.
+ */
+.cost-stats-panel {
+  --cost-series-0: #a8a69e;
+  --cost-series-1: #2a78d6;
+  --cost-series-2: #eb6834;
+  --cost-series-3: #1baf7a;
+  --cost-series-4: #eda100;
+  --cost-series-5: #e87ba4;
+  --cost-up: var(--status-danger, #d03b3b);
+  --cost-down: var(--status-success, #0ca30c);
+}
+
+:root[data-color-scheme="dark"] .cost-stats-panel {
+  --cost-series-0: #6b6a64;
+  --cost-series-1: #3987e5;
+  --cost-series-2: #d95926;
+  --cost-series-3: #199e70;
+  --cost-series-4: #c98500;
+  --cost-series-5: #d55181;
+}
+
+.cost-stats-panel [data-slot="0"] { --cost-series: var(--cost-series-0); }
+.cost-stats-panel [data-slot="1"] { --cost-series: var(--cost-series-1); }
+.cost-stats-panel [data-slot="2"] { --cost-series: var(--cost-series-2); }
+.cost-stats-panel [data-slot="3"] { --cost-series: var(--cost-series-3); }
+.cost-stats-panel [data-slot="4"] { --cost-series: var(--cost-series-4); }
+.cost-stats-panel [data-slot="5"] { --cost-series: var(--cost-series-5); }
+
+@media (forced-colors: active) {
+  .cost-stats-panel [data-slot] {
+    forced-color-adjust: none;
+  }
+}
+
+/* ------------------------------------------------------------- toolbar */
+
+/* The switch is the row's only item; keep it on the right like on the Usage page. */
+.cost-stats-panel .codex-usage-switch {
+  margin-left: auto;
+}
+
+.cost-stats-content {
+  display: grid;
+  gap: 0.625rem;
+  min-width: 0;
+  transition: opacity 160ms var(--ease-out, ease);
+}
+
+/* Refetch keeps the previous frame, dimmed, instead of flashing a skeleton. */
+.cost-stats-content[data-querying],
+.cost-stats-empty[data-querying] {
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------------ summary */
+
+.cost-stats-summary {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1.7fr) repeat(4, minmax(7.5rem, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.cost-stats-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.2rem;
+  min-width: 0;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: var(--radius-card, 0.5rem);
+  background: var(--surface);
+  padding: 0.65rem 0.75rem;
+}
+
+.cost-stats-tile dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.cost-stats-tile dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1.3rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-stats-tile p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-stats-tile-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--accent) 16%, transparent) 0%, transparent 60%),
+    var(--surface);
+}
+
+.cost-stats-tile-hero dd {
+  font-size: clamp(2rem, 3.6vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.cost-stats-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Higher cost is the bad direction; the arrow and sign carry it without color. */
+.cost-stats-delta[data-direction="up"] {
+  background: color-mix(in srgb, var(--cost-up) 14%, transparent);
+  color: color-mix(in srgb, var(--cost-up) 80%, var(--text));
+}
+
+.cost-stats-delta[data-direction="down"] {
+  background: color-mix(in srgb, var(--cost-down) 14%, transparent);
+  color: color-mix(in srgb, var(--cost-down) 75%, var(--text));
+}
+
+.cost-stats-delta[data-direction="flat"] {
+  background: var(--fill-subtle, var(--bg));
+  color: var(--text);
+}
+
+/* --------------------------------------------------------------- cards */
+
+.cost-stats-card {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.cost-stats-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.cost-stats-card-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.cost-stats-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.cost-stats-caption,
+.cost-stats-subtle {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.cost-stats-swatch {
+  display: inline-block;
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 2px;
+  background: var(--cost-series);
+}
+
+.cost-stats-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+}
+
+.cost-stats-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.cost-stats-legend li span:not(.cost-stats-swatch) {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-stats-legend b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- chart */
+
+.cost-stats-chart {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  border-radius: var(--radius-md, 0.4rem);
+}
+
+.cost-stats-chart:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cost-stats-chart svg {
+  display: block;
+  overflow: visible;
+}
+
+.cost-stats-grid {
+  stroke: var(--hairline, var(--border));
+  stroke-width: 1;
+}
+
+.cost-stats-axis {
+  stroke: var(--hairline-strong, var(--border));
+  stroke-width: 1;
+}
+
+.cost-stats-tick {
+  fill: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-band {
+  fill: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.cost-stats-bar rect,
+.cost-stats-bar path {
+  fill: var(--cost-series);
+  transition: opacity 120ms var(--ease-out, ease);
+}
+
+.cost-stats-chart:has(.cost-stats-bar[data-active]) .cost-stats-bar:not([data-active]) :is(rect, path) {
+  opacity: 0.55;
+}
+
+.cost-stats-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.cost-stats-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 0.2rem;
+  min-width: 10rem;
+  max-width: 18rem;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius-md, 0.4rem);
+  background: var(--island-solid, var(--surface));
+  box-shadow: var(--shadow-float, 0 6px 20px rgb(0 0 0 / 0.14));
+  padding: 0.45rem 0.6rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  pointer-events: none;
+  transform: translateX(0.75rem);
+}
+
+.cost-stats-tooltip[data-align="end"] {
+  transform: translateX(calc(-100% - 0.75rem));
+}
+
+.cost-stats-tooltip time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-tooltip strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-tooltip ul {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cost-stats-tooltip li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.cost-stats-tooltip li span:not(.cost-stats-line-key) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-stats-tooltip b {
+  margin-left: auto;
+  padding-left: 0.6rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-line-key {
+  display: inline-block;
+  flex: none;
+  width: 0.7rem;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--cost-series);
+}
+
+/* --------------------------------------------------------------- tables */
+
+.cost-stats-table-scroll {
+  max-height: 22rem;
+  overflow: auto;
+  border: 1px solid var(--hairline, var(--border));
+  border-radius: var(--radius-md, 0.4rem);
+}
+
+.cost-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.cost-stats-table th,
+.cost-stats-table td {
+  border-bottom: 1px solid var(--hairline, var(--border));
+  padding: 0.35rem 0.55rem;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-table th:first-child,
+.cost-stats-table td:first-child,
+.cost-stats-table [data-align="start"] {
+  text-align: left;
+}
+
+.cost-stats-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--island-solid, var(--surface));
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.cost-stats-table tbody th {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.cost-stats-table td {
+  color: var(--text);
+}
+
+.cost-stats-table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.cost-stats-table tbody tr:hover {
+  background: var(--fill-hover, var(--surface-strong));
+}
+
+.cost-stats-model {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cost-stats-partial {
+  margin-left: 0.35rem;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: 999px;
+  padding: 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+
+/* -------------------------------------------------------------- ranking */
+
+.cost-stats-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 0.625rem;
+  align-items: start;
+}
+
+.cost-stats-ranking {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cost-stats-ranking li {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cost-stats-ranking-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.cost-stats-ranking-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-stats-ranking-head b {
+  color: var(--text);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-ranking-track {
+  height: 0.4rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--fill-subtle, var(--bg));
+}
+
+.cost-stats-ranking-track span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--cost-series);
+  transition: width 240ms var(--ease-out, ease);
+}
+
+.cost-stats-ranking p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-stats-more,
+.cost-stats-enable {
+  justify-self: start;
+  border: 1px solid var(--hairline-strong, var(--border));
+  border-radius: var(--radius-control, 0.3rem);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.25rem 0.7rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cost-stats-more:hover,
+.cost-stats-enable:hover:not(:disabled) {
+  background: var(--fill-hover, var(--surface-strong));
+}
+
+.cost-stats-more:focus-visible,
+.cost-stats-enable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cost-stats-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.6rem;
+  padding: 1.5rem 0.75rem;
+  text-align: center;
+}
+
+.cost-stats-empty p {
+  margin: 0;
+}
+
+.cost-stats-enable {
+  justify-self: center;
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-foreground, #fff);
+}
+
+.cost-stats-enable:hover:not(:disabled) {
+  background: var(--accent-strong, var(--accent));
+}
+
+.cost-stats-enable:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ----------------------------------------------------------- responsive */
+
+@media (max-width: 1100px) {
+  .cost-stats-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .cost-stats-tile-hero {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .cost-stats-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cost-stats-card-head,
+  .cost-stats-controls {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .cost-stats-controls .codex-usage-segmented {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cost-stats-content,
+  .cost-stats-bar rect,
+  .cost-stats-bar path,
+  .cost-stats-ranking-track span {
+    transition: none;
+  }
+}
