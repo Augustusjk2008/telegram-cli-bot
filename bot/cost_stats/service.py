@@ -254,22 +254,6 @@ class CostStatsService:
                     for provider, currency, amount, turns in cube.previous_totals
                 ],
             },
-            "top_turns": [
-                {
-                    "provider": turn["provider"],
-                    "recorded_at": _local_timestamp(turn["recorded_at_ms"]),
-                    "bot": turn["bot"],
-                    "agent": turn["agent"],
-                    "user": turn["user"],
-                    "model": turn["model"],
-                    "currency": turn["currency"],
-                    "amount": round(turn["amount"], 6),
-                    "is_partial": turn["is_partial"],
-                    "conversation_id": turn["conversation_id"],
-                    "turn_id": turn["turn_id"],
-                }
-                for turn in sorted(cube.top_turns, key=lambda item: -item["amount"])
-            ],
         }
 
     # -- diagnostics and lifecycle ---------------------------------------
@@ -413,10 +397,6 @@ def _encode_cube(
         for key, totals in sorted(folded.items())
     ]
     return dimensions, rows
-
-
-def _local_timestamp(epoch_ms: int) -> str:
-    return datetime.fromtimestamp(epoch_ms / 1000).astimezone().isoformat(timespec="seconds")
 
 
 def _time_basis_payload(now: datetime | None = None) -> dict[str, str]:

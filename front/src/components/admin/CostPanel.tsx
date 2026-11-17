@@ -4,7 +4,6 @@ import type {
   CostStatsConfig,
   CostStatsGranularity,
   CostStatsProvider,
-  CostStatsTopTurn,
 } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { getErrorMessage } from "../../utils/errorMessage";
@@ -383,50 +382,6 @@ function CostRanking({ view, currency, dimensionLabel }: { view: CostView; curre
   );
 }
 
-function formatTurnTime(value: string) {
-  return value.length >= 16 ? `${value.slice(5, 10)} ${value.slice(11, 16)}` : value;
-}
-
-function CostTopTurns({ turns, currency }: { turns: CostStatsTopTurn[]; currency: string }) {
-  return (
-    <section className="codex-usage-section cost-stats-card" aria-labelledby="cost-stats-top-turns-title">
-      <div className="codex-usage-section-heading">
-        <h3 id="cost-stats-top-turns-title">最贵的轮次</h3>
-        <span className="cost-stats-caption">所选范围内前 {numberFormat.format(turns.length)} 轮</span>
-      </div>
-      {turns.length ? (
-        <div className="cost-stats-table-scroll">
-          <table className="cost-stats-table">
-            <thead>
-              <tr>
-                <th scope="col">时间</th>
-                <th scope="col" data-align="start">用户</th>
-                <th scope="col" data-align="start">智能体</th>
-                <th scope="col" data-align="start">模型</th>
-                <th scope="col">费用</th>
-              </tr>
-            </thead>
-            <tbody>
-              {turns.map((turn) => (
-                <tr key={`${turn.turnId}:${turn.recordedAt}`}>
-                  <th scope="row" title={turn.recordedAt}>{formatTurnTime(turn.recordedAt)}</th>
-                  <td data-align="start">{costDimensionLabel("user", turn.user)}</td>
-                  <td data-align="start">{costDimensionLabel("bot", turn.bot)}</td>
-                  <td className="cost-stats-model" data-align="start" title={turn.model}>{turn.model}</td>
-                  <td>
-                    {formatCostAmount(turn.amount, currency)}
-                    {turn.isPartial ? <span className="cost-stats-partial" title="该轮被中断，金额为已上报用量的估算">估算</span> : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : <p className="codex-usage-empty-state">暂无记录</p>}
-    </section>
-  );
-}
-
 /* ------------------------------------------------------------------ panel */
 
 export function CostPanel({ client, refreshKey = 0 }: CostPanelProps) {
@@ -557,11 +512,6 @@ export function CostPanel({ client, refreshKey = 0 }: CostPanelProps) {
     () => (stats ? buildCostView(stats, { provider, currency, dimension }) : null),
     [currency, dimension, provider, stats],
   );
-  const topTurns = useMemo(
-    () => (stats?.topTurns || []).filter((turn) => turn.provider === provider && turn.currency === currency),
-    [currency, provider, stats],
-  );
-
   const enabled = config?.enabled[provider] ?? false;
   const providerName = PROVIDER_LABELS[provider];
   const dimensionLabel = COST_GROUP_DIMENSIONS.find((item) => item.key === dimension)?.label || "";
@@ -741,10 +691,7 @@ export function CostPanel({ client, refreshKey = 0 }: CostPanelProps) {
                   : <CostTrendChart view={view} granularity={stats.granularity} currency={currency} dimensionLabel={dimensionLabel} />}
               </section>
 
-              <div className="cost-stats-columns">
-                <CostRanking key={`${provider}:${dimension}`} view={view} currency={currency} dimensionLabel={dimensionLabel} />
-                <CostTopTurns turns={topTurns} currency={currency} />
-              </div>
+              <CostRanking key={`${provider}:${dimension}`} view={view} currency={currency} dimensionLabel={dimensionLabel} />
             </div>
           ) : null}
 

@@ -751,7 +751,6 @@ describe("RealWebBotClient", () => {
         [0, 0, 0, 0, 0, 0, 0, 1, 1],
       ],
       previous_period: { start_date: "2026-11-14", end_date: "2026-11-15", totals: [{ provider: "claude", currency: "USD", amount: 4, turns: 2 }] },
-      top_turns: [{ provider: "claude", recorded_at: "2026-11-17T09:00:00+13:00", amount: 2.5, is_partial: true, turn_id: "t" }],
     }));
 
     const stats = await new RealWebBotClient().getCostStats({ startDate: "2026-11-16", endDate: "2026-11-17", granularity: "auto" });
@@ -763,7 +762,6 @@ describe("RealWebBotClient", () => {
     expect(stats.enabled).toEqual({ codex: true, claude: false });
     expect(stats.rows).toEqual([[1, 0, 0, 0, 0, 0, 0, 2.5, 3, 1]]);
     expect(stats.previousPeriod.totals).toEqual([{ provider: "claude", currency: "USD", amount: 4, turns: 2 }]);
-    expect(stats.topTurns[0]).toMatchObject({ amount: 2.5, isPartial: true, turnId: "t", user: "" });
   });
 
   test("maps valid Codex rate limit samples and filters invalid samples", async () => {

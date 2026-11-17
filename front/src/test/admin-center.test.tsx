@@ -864,6 +864,7 @@ test("Cost 页面在 Usage 右侧，切换维度只在本地重算，粒度与�
   await user.click(screen.getByRole("tab", { name: "Cost" }));
   await screen.findByRole("heading", { name: "Cost", level: 2 });
   expect(await screen.findByRole("heading", { name: "按用户排行" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "最贵的轮次" })).not.toBeInTheDocument();
   expect(getStats).toHaveBeenCalledTimes(1);
   expect(getStats).toHaveBeenLastCalledWith({ startDate: "2026-06-27", endDate: "2026-07-26" });
 

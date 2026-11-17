@@ -405,29 +405,7 @@
   background: var(--fill-hover, var(--surface-strong));
 }
 
-.cost-stats-model {
-  max-width: 11rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cost-stats-partial {
-  margin-left: 0.35rem;
-  border: 1px solid var(--hairline-strong, var(--border));
-  border-radius: 999px;
-  padding: 0 0.35rem;
-  color: var(--muted);
-  font-size: 0.65rem;
-}
-
 /* -------------------------------------------------------------- ranking */
-
-.cost-stats-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
-  gap: 0.625rem;
-  align-items: start;
-}
 
 .cost-stats-ranking {
   display: grid;

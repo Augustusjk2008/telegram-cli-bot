@@ -61,7 +61,8 @@ async def test_disabled_statistics_record_nothing_and_create_no_database(tmp_pat
     assert not path.exists()
     assert load.call_count == 1
     assert stats["enabled"] == {"claude": False, "codex": False}
-    assert stats["rows"] == [] and stats["top_turns"] == []
+    assert stats["rows"] == []
+    assert "top_turns" not in stats
     assert stats["available_range"] == {"first_date": None, "last_date": None}
     assert len(stats["buckets"]) == 7
 
@@ -229,7 +230,7 @@ async def test_query_builds_an_encoded_cube_for_every_granularity(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_query_reports_previous_period_and_top_turns(tmp_path):
+async def test_query_reports_previous_period_without_top_turns(tmp_path):
     service = await _enabled_service(tmp_path)
     for index in range(12):
         await service.record_turn(**_event(invocation_id=f"c{index}", total=float(index),
@@ -247,12 +248,7 @@ async def test_query_reports_previous_period_and_top_turns(tmp_path):
         "end_date": "2026-11-09",
         "totals": [{"provider": "claude", "currency": "USD", "amount": 4.0, "turns": 2}],
     }
-    top = stats["top_turns"]
-    assert [turn["amount"] for turn in top] == [11.0, 10.0, 9.0, 8.0, 7.5, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0]
-    assert sum(turn["provider"] == "claude" for turn in top) == 10
-    assert top[0]["recorded_at"].startswith("2026-11-16T09:11:00")
-    assert set(top[0]) == {"provider", "recorded_at", "bot", "agent", "user", "model", "currency", "amount",
-                           "is_partial", "conversation_id", "turn_id"}
+    assert "top_turns" not in stats
     assert stats["available_range"] == {"first_date": "2026-11-02", "last_date": "2026-11-16"}
 
 
@@ -311,7 +307,7 @@ async def test_cost_stats_routes_require_admin_and_validate_input(tmp_path):
         assert response.status == 200
         stats = (await response.json())["data"]
         assert set(stats) == {"range", "granularity", "enabled", "time_basis", "available_range", "buckets",
-                              "dimensions", "rows", "previous_period", "top_turns"}
+                              "dimensions", "rows", "previous_period"}
         assert stats["dimensions"]["provider"] == ["claude", "codex"]
 
     assert all(call.args[1] == CAP_ADMIN_OPS for call in server._with_capability.await_args_list)

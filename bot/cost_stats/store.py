@@ -11,7 +11,6 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 COST_PROVIDERS: tuple[str, ...] = ("claude", "codex")
-TOP_TURN_LIMIT = 10
 _MAX_EVENT_ID = (1 << 63) - 1
 
 _ENABLED_KEY_PREFIX = "enabled:"
@@ -67,7 +66,6 @@ class CostCube:
     groups: tuple[tuple[Any, ...], ...]
     # (provider, currency, amount, turns)
     previous_totals: tuple[tuple[str, str, float, int], ...]
-    top_turns: tuple[dict[str, Any], ...]
     available_range: tuple[date | None, date | None]
 
 
@@ -512,7 +510,7 @@ class CostStatsStore:
             def read() -> CostCube:
                 connection = self._get_connection(create=False)
                 if connection is None:
-                    return CostCube((), (), (), (None, None))
+                    return CostCube((), (), (None, None))
                 groups = connection.execute(
                     f"""
                     SELECT {bucket_columns}, provider, bot_alias, agent_id, user, model, currency,
@@ -534,42 +532,12 @@ class CostStatsStore:
                     """,
                     (*COST_PROVIDERS, day_number(previous_start), day_number(previous_end)),
                 ).fetchall()
-                top_turns: list[dict[str, Any]] = []
-                for provider in COST_PROVIDERS:
-                    rows = connection.execute(
-                        """
-                        SELECT recorded_at_ms, bot_alias, agent_id, user, model, currency, amount,
-                               is_partial, conversation_id, turn_id
-                        FROM cost_events
-                        WHERE provider = ? AND day >= ? AND day <= ?
-                        ORDER BY amount DESC, recorded_at_ms DESC
-                        LIMIT ?
-                        """,
-                        (provider, start, end, TOP_TURN_LIMIT),
-                    ).fetchall()
-                    top_turns.extend(
-                        {
-                            "provider": provider,
-                            "recorded_at_ms": int(row[0]),
-                            "bot": row[1],
-                            "agent": row[2],
-                            "user": row[3],
-                            "model": row[4],
-                            "currency": row[5],
-                            "amount": float(row[6]),
-                            "is_partial": bool(row[7]),
-                            "conversation_id": row[8],
-                            "turn_id": row[9],
-                        }
-                        for row in rows
-                    )
                 return CostCube(
                     groups=tuple(tuple(row) for row in groups),
                     previous_totals=tuple(
                         (str(row[0]), str(row[1]), float(row[2]), int(row[3]))
                         for row in previous_totals
                     ),
-                    top_turns=tuple(top_turns),
                     available_range=self._available_range(connection),
                 )
 

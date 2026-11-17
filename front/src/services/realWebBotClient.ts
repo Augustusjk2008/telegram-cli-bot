@@ -1699,19 +1699,6 @@ type RawCostStats = RawCostStatsConfig & {
     end_date?: string;
     totals?: Array<{ provider?: string; currency?: string; amount?: unknown; turns?: unknown }>;
   };
-  top_turns?: Array<{
-    provider?: string;
-    recorded_at?: string;
-    bot?: string;
-    agent?: string;
-    user?: string;
-    model?: string;
-    currency?: string;
-    amount?: unknown;
-    is_partial?: unknown;
-    conversation_id?: string;
-    turn_id?: string;
-  }>;
 };
 
 type RawCodexUsageStats = {
@@ -4270,19 +4257,6 @@ function mapCostStats(raw: RawCostStats): CostStats {
         turns: numberOrZero(item.turns),
       })),
     },
-    topTurns: (raw.top_turns || []).map((item) => ({
-      provider: String(item.provider || ""),
-      recordedAt: String(item.recorded_at || ""),
-      bot: String(item.bot || ""),
-      agent: String(item.agent || ""),
-      user: String(item.user || ""),
-      model: String(item.model || ""),
-      currency: String(item.currency || ""),
-      amount: numberOrZero(item.amount),
-      isPartial: item.is_partial === true,
-      conversationId: String(item.conversation_id || ""),
-      turnId: String(item.turn_id || ""),
-    })),
   };
 }
 

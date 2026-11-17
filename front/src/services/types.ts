@@ -632,20 +632,6 @@ export type CostStatsPeriodTotal = {
   turns: number;
 };
 
-export type CostStatsTopTurn = {
-  provider: string;
-  recordedAt: string;
-  bot: string;
-  agent: string;
-  user: string;
-  model: string;
-  currency: string;
-  amount: number;
-  isPartial: boolean;
-  conversationId: string;
-  turnId: string;
-};
-
 export type CostStats = {
   range: CodexUsageStatsRange;
   granularity: CostStatsGranularity;
@@ -661,7 +647,6 @@ export type CostStats = {
     endDate: string;
     totals: CostStatsPeriodTotal[];
   };
-  topTurns: CostStatsTopTurn[];
 };
 
 export type RemoteWorkspace = {

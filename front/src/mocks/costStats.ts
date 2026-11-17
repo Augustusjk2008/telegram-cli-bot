@@ -2,7 +2,6 @@ import type {
   CostStats,
   CostStatsConfig,
   CostStatsGranularity,
-  CostStatsProvider,
   CostStatsQuery,
   CostStatsRow,
 } from "../services/types";
@@ -63,7 +62,6 @@ export function buildMockCostStats(query: CostStatsQuery, config: CostStatsConfi
   const bucketIndex = new Map(buckets.map((bucket, index) => [bucket, index]));
 
   const cells = new Map<string, number[]>();
-  const topTurns: CostStats["topTurns"] = [];
   for (let day = start; day <= Math.min(end, parseDay(today)); day += DAY_MS) {
     const dayNumber = Math.round(day / DAY_MS);
     const weekend = [0, 6].includes(new Date(day).getUTCDay());
@@ -85,19 +83,6 @@ export function buildMockCostStats(query: CostStatsQuery, config: CostStatsConfi
           cell[8] += turns;
           cell[9] += activity > 0.97 ? 1 : 0;
           cells.set(key, cell);
-          topTurns.push({
-            provider,
-            recordedAt: `${formatDay(day)}T${String(hour).padStart(2, "0")}:${String(Math.floor(activity * 59)).padStart(2, "0")}:00${config.timeBasis.utcOffset}`,
-            bot: BOTS[botIndex],
-            agent,
-            user,
-            model: MODELS[modelIndex],
-            currency: "USD",
-            amount: Number((amount / turns * (1 + noise(seed + 5))).toFixed(4)),
-            isPartial: activity > 0.97,
-            conversationId: `conv_mock_${seed}`,
-            turnId: `turn_mock_${seed}`,
-          });
         });
       });
     });
@@ -128,9 +113,5 @@ export function buildMockCostStats(query: CostStatsQuery, config: CostStatsConfi
       endDate: formatDay(start - DAY_MS),
       totals,
     },
-    topTurns: (PROVIDERS as CostStatsProvider[]).flatMap((provider) => topTurns
-      .filter((turn) => turn.provider === provider)
-      .sort((left, right) => right.amount - left.amount)
-      .slice(0, 10)),
   };
 }

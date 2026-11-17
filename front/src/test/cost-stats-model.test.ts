@@ -24,7 +24,6 @@ function stats(rows: CostStatsRow[]): CostStats {
       endDate: "2026-11-14",
       totals: [{ provider: "claude", currency: "USD", amount: 5, turns: 2 }],
     },
-    topTurns: [],
   };
 }
 
