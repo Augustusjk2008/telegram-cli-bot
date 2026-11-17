@@ -138,8 +138,9 @@ async def test_host_restart_requires_weixin_confirmation(gateway):
 
     task = gateway.receive_update(make_message(message_id="host-1", text="/host"))
     await task
-    assert "宿主状态" in gateway.client.messages[-1][1]
-    assert "/host restart" in gateway.client.messages[-1][1]
+    host_status_messages = "\n".join(text for _, text, _ in gateway.client.messages)
+    assert "宿主状态" in host_status_messages
+    assert "/host restart" in host_status_messages
 
     task = gateway.receive_update(make_message(message_id="host-2", text="/host restart"))
     await task

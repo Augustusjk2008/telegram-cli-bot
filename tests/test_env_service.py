@@ -77,7 +77,18 @@ def test_env_service_masks_telegram_token(
     assert "TELEGRAM_BOT_TOKEN=123456:secret" in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
-def test_env_service_masks_weixin_token_and_keeps_allowlist_separate(tmp_path: Path) -> None:
+def test_env_service_masks_weixin_token_and_keeps_allowlist_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "WEIXIN_ENABLED",
+        "WEIXIN_ACCOUNT_ID",
+        "WEIXIN_TOKEN",
+        "WEIXIN_BASE_URL",
+        "WEIXIN_ALLOWED_USER_IDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
     _write_env(tmp_path, "")
     service = EnvConfigService(tmp_path)
     service.patch({
