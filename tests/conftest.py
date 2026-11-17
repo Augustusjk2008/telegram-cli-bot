@@ -33,6 +33,10 @@ for _name in (
 ):
     os.environ.pop(_name, None)
 
+# Codex exec turns read the thread's rollout to price the turn; never let the suite
+# open a developer's real Codex state.
+os.environ.pop("CODEX_HOME", None)
+
 os.environ.setdefault(
     "TCB_DATA_DIR",
     str(Path(tempfile.gettempdir()) / f"orbit-safe-claw-pytest-data-{os.getpid()}"),

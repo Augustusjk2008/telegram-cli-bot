@@ -4554,14 +4554,19 @@ def _cost_stats_number(value: Any) -> float | None:
     return number if math.isfinite(number) and number >= 0 else None
 
 
+_CODEX_PREVIOUS_TOTAL_SCAN_LIMIT = 20
+
+
 async def _codex_cost_previous_total(
     service: Any,
     session: UserSession,
     cli_type: str,
 ) -> tuple[float, str] | None:
-    """Running total of the session's previous Codex exec turn, for the first recorded turn.
+    """Running total of the session's latest Codex exec turn that reported one.
 
-    Reads chat history only while Codex cost statistics are enabled.
+    Used as the baseline of the first cumulative record of a session. Turns without a
+    cost, partial estimates, per-turn amounts and app-server turns are skipped. Reads
+    chat history only while Codex cost statistics are enabled.
     """
 
     if cli_type != "codex":
@@ -4572,23 +4577,26 @@ async def _codex_cost_previous_total(
     try:
         if not await _cost_stats_enabled("codex"):
             return None
-        usage = await service.get_latest_native_session_context_usage_async(
+        usages = await service.list_recent_native_session_context_usages_async(
             native_provider="codex",
             native_session_id=native_session_id,
+            limit=_CODEX_PREVIOUS_TOTAL_SCAN_LIMIT,
         )
-        if not isinstance(usage, dict):
-            return None
-        provider = str(usage.get("provider") or "")
-        source = str(usage.get("source") or "")
-        cost = usage.get("estimated_cost")
-        # App-server turns and partial estimates carry per-turn amounts, not running totals.
-        if provider == "codex_server" or source.startswith("codex_server") or not isinstance(cost, dict):
-            return None
-        if cost.get("is_partial"):
-            return None
-        total = _cost_stats_number(cost.get("total"))
-        currency = str(cost.get("currency") or "").strip().upper()
-        return (total, currency) if total is not None and currency else None
+        for usage in usages or []:
+            if not isinstance(usage, dict):
+                continue
+            provider = str(usage.get("provider") or "")
+            source = str(usage.get("source") or "")
+            cost = usage.get("estimated_cost")
+            if provider == "codex_server" or source.startswith("codex_server") or not isinstance(cost, dict):
+                continue
+            if cost.get("is_partial") or cost.get("basis") == "turn":
+                continue
+            total = _cost_stats_number(cost.get("total"))
+            currency = str(cost.get("currency") or "").strip().upper()
+            if total is not None and currency:
+                return total, currency
+        return None
     except Exception:
         logger.debug("读取 Codex 上一轮累计费用失败", exc_info=True)
         return None
@@ -4607,8 +4615,13 @@ async def _record_cli_turn_cost(
     try:
         currency = str(estimated_cost.get("currency") or "").strip().upper()
         is_partial = bool(estimated_cost.get("is_partial"))
-        # Codex exec reports a running session total, except for partial per-turn estimates.
-        cumulative = base["cli_type"] == "codex" and not is_partial
+        # Only the Codex exec fallback priced from the thread's terminal usage is a running
+        # total; per-turn amounts (``basis == "turn"``) and partial estimates stand on their own.
+        cumulative = (
+            base["cli_type"] == "codex"
+            and not is_partial
+            and estimated_cost.get("basis") != "turn"
+        )
         await _record_turn_cost(
             **base,
             model=str(estimated_cost.get("model") or ""),
@@ -6520,6 +6533,17 @@ async def _stream_cli_chat(
                 cost_model = str(parsed.model or (context_usage or {}).get("model") or turn_model).strip()
                 cost_session_id = parsed.session_id or _current_native_session_id(session, cli_type)
                 estimated_cost = None
+                codex_turn_cost = None
+                if cli_type == "codex" and parsed.reported_cost is None:
+                    # Codex exec's terminal usage is the thread's running total; price this
+                    # turn's own token increases from the rollout instead.
+                    try:
+                        codex_turn_cost = await asyncio.wait_for(
+                            asyncio.to_thread(turn_cost.estimate_turn, cost_session_id),
+                            timeout=3.0,
+                        )
+                    except Exception:
+                        logger.debug("读取 Codex 本轮费用失败", exc_info=True)
                 if parsed.reported_cost is not None:
                     # Claude Code 自报的本次调用费用：含后台任务续跑、子代理和所有模型。
                     estimated_cost = {
@@ -6531,6 +6555,14 @@ async def _stream_cli_chat(
                     }
                     if cleanup_abort or not usage_complete:
                         estimated_cost["is_partial"] = True
+                elif codex_turn_cost is not None:
+                    estimated_cost = {**codex_turn_cost, "basis": "turn"}
+                    returncode = getattr(process, "returncode", None)
+                    if (
+                        parsed.terminal_usage is None or not parsed.terminal_usage_complete
+                        or cleanup_abort or not usage_complete or returncode not in (None, 0)
+                    ):
+                        estimated_cost["is_partial"] = True
                 elif (
                     cli_type != "antigravity" and cost_model
                     and parsed.terminal_usage is not None and parsed.terminal_usage_complete
@@ -6538,7 +6570,7 @@ async def _stream_cli_chat(
                     estimated_cost = estimate_usage_cost(
                         cost_model, parsed.terminal_usage, protocol=cli_data_provider(cli_type), scope="turn",
                     )
-                elif cli_type not in {"antigravity", "deepseek"} and parsed.terminal_usage is None:
+                elif cli_type not in {"antigravity", "deepseek", "codex"} and parsed.terminal_usage is None:
                     try:
                         estimated_cost = await asyncio.wait_for(
                             asyncio.to_thread(turn_cost.estimate_partial, cost_session_id),

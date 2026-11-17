@@ -3083,6 +3083,38 @@ class ChatStore:
         context_usage = _parse_json_dict(row["context_usage_json"])
         return context_usage or None
 
+    def list_recent_native_session_context_usages(
+        self,
+        *,
+        native_provider: str,
+        native_session_id: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return the newest stored context usages of a native session, newest first."""
+
+        normalized_provider = str(native_provider or "").strip().lower()
+        normalized_session_id = str(native_session_id or "").strip()
+        if not normalized_provider or not normalized_session_id:
+            return []
+        conn = self._connect(create=False)
+        if conn is None:
+            return []
+        with closing(conn):
+            rows = conn.execute(
+                """
+                SELECT context_usage_json
+                FROM turns
+                WHERE native_provider = ?
+                  AND native_session_id = ?
+                  AND context_usage_json IS NOT NULL
+                  AND context_usage_json <> ''
+                ORDER BY completed_at DESC, started_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_provider, normalized_session_id, max(1, int(limit))),
+            ).fetchall()
+        return [usage for row in rows if (usage := _parse_json_dict(row["context_usage_json"]))]
+
     def append_trace_event(
         self,
         turn_id: str,

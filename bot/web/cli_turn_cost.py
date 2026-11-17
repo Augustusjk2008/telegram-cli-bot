@@ -12,7 +12,11 @@ from bot.web.native_history_locator import locate_codex_transcript
 
 
 class CliTurnCost:
-    """终态汇总缺失时，仅对本轮已上报的用量计价。"""
+    """仅对本轮已上报的用量计价。
+
+    Codex exec 的终态用量是整个线程的累计值；按本轮 rollout 中计数器的增量计价，
+    才是本轮自身的费用，且每段按当时的模型计价。
+    """
 
     def __init__(self, cli_type: str, model: str) -> None:
         self.cli_type = cli_type
@@ -45,10 +49,20 @@ class CliTurnCost:
         )
 
     def estimate_partial(self, session_id: str) -> dict[str, Any] | None:
+        """Cost of an unfinished turn, marked partial."""
+
+        cost = self.estimate_turn(session_id)
+        return None if cost is None else {**cost, "is_partial": True}
+
+    def estimate_turn(self, session_id: str) -> dict[str, Any] | None:
+        """This turn's own cost, or ``None`` when its usage is unknown."""
+
         if self.cli_type == "codex":
             usages = self._codex_usages(session_id)
         else:
             usages = list(self._messages.values())
+        if not usages:
+            return None
         costs = [
             cost for model, usage in usages
             if (cost := estimate_usage_cost(model, usage, protocol=self.cli_type, scope="turn")) is not None
@@ -59,19 +73,20 @@ class CliTurnCost:
             "model": ", ".join(dict.fromkeys(cost["model"] for cost in costs)),
             "currency": costs[0]["currency"],
             "scope": "turn",
-            "is_partial": True,
             **{
                 key: float(sum(Decimal(str(cost[key])) for cost in costs))
                 for key in ("input", "cache_read", "cache_write", "output", "total")
             },
         }
 
-    def _codex_usages(self, session_id: str) -> list[tuple[str, dict[str, int]]]:
+    def _codex_usages(self, session_id: str) -> list[tuple[str, dict[str, int]]] | None:
+        """Per-model token increases logged during this turn; ``None`` when unknown."""
+
         if not session_id:
-            return []
+            return None
         ref = locate_codex_transcript(session_id)
         if ref is None:
-            return []
+            return None
         fields = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
         previous = dict.fromkeys(fields, 0)
         usages: dict[str, dict[str, int]] = {}
@@ -82,7 +97,8 @@ class CliTurnCost:
             with ref.path.open("r", encoding="utf-8", errors="replace") as handle:
                 for line in handle:
                     if time.monotonic() >= deadline:
-                        break
+                        # A truncated scan would under-report the turn, so its cost stays unknown.
+                        return None
                     if not any(name in line for name in ('"token_count"', '"task_started"', '"turn_context"')):
                         continue
                     try:
@@ -124,5 +140,5 @@ class CliTurnCost:
                     for key in fields:
                         collected[key] += delta[key]
         except OSError:
-            pass
+            return None
         return list(usages.items())

@@ -82,6 +82,7 @@ export function mapEstimatedCost(value: unknown): ChatMessageEstimatedCost | und
     model, currency, scope, total,
     ...(hasParts ? { input, cacheRead, cacheWrite, output } : {}),
     ...((raw.isPartial ?? raw.is_partial) === true ? { isPartial: true } : {}),
+    ...(raw.basis === "turn" ? { basis: "turn" as const } : {}),
   };
 }
 

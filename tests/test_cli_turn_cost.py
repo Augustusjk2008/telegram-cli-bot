@@ -17,7 +17,8 @@ def prices(tmp_path, monkeypatch):
     path = tmp_path / "prices.csv"
     path.write_text(
         "model,currency,input_per_million,cache_read_per_million,cache_write_per_million,output_per_million\n"
-        "test-model,USD,2,0.2,2.5,10\n",
+        "test-model,USD,2,0.2,2.5,10\n"
+        "test-model-b,USD,4,0.4,5,20\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(path))
@@ -103,3 +104,34 @@ def test_claude_missing_or_unpriced_usage_is_not_reported_as_zero():
     for usage in [{}, {"input_tokens": 1000}, {"input_tokens": 1000, "output_tokens": 100}]:
         turn.observe(json.dumps({"type": "assistant", "message": {"id": "message", "usage": usage}}))
         assert turn.estimate_partial("") is None
+
+
+def turn_context(time, model):
+    return {"type": "turn_context", "timestamp": f"2026-09-08T08:{time}Z", "payload": {"model": model}}
+
+
+def test_codex_turn_cost_prices_each_turn_at_its_own_model(tmp_path, monkeypatch):
+    turn = codex_turn(tmp_path, monkeypatch, [
+        turn_context("00:00", "test-model"), rollout_event("00:00", "task_started"),
+        token_event("00:01", 1000, 100),
+        turn_context("01:00", "test-model-b"), rollout_event("01:00", "task_started"),
+        token_event("01:01", 3000, 300),
+    ])
+    expected = estimate_usage_cost("test-model-b", {
+        "input_tokens": 2000, "output_tokens": 200, "cached_input_tokens": 0,
+    }, protocol="codex", scope="turn")
+    assert turn.estimate_turn("session") == expected
+    assert "is_partial" not in turn.estimate_turn("session")
+
+
+def test_codex_turn_cost_is_unknown_when_the_scan_runs_out_of_time(tmp_path, monkeypatch):
+    turn = codex_turn(tmp_path, monkeypatch, [
+        rollout_event("00:00", "task_started"), token_event("00:01", 1000, 100),
+        rollout_event("01:00", "task_started"), token_event("01:01", 2000, 200),
+        token_event("01:02", 3000, 300),
+    ])
+    assert turn.estimate_turn("session") is not None
+    clock = iter([0.0, *[0.0] * 4, 10.0])
+    monkeypatch.setattr(cli_turn_cost.time, "monotonic", lambda: next(clock, 10.0))
+    # Stopping after the first increase would under-report the turn instead of falling back.
+    assert turn.estimate_turn("session") is None

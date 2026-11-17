@@ -1297,6 +1297,8 @@ export type ChatMessageEstimatedCost = {
   cacheWrite?: number;
   output?: number;
   isPartial?: boolean;
+  /** `turn`: the amount is this turn's own cost; never subtract another turn from it. */
+  basis?: "turn";
 };
 
 export type ChatMessageTokenUsage = {

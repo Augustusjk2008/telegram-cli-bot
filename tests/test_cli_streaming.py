@@ -974,6 +974,116 @@ async def test_stream_cli_chat_records_codex_exec_cost_as_running_total_increase
 
 
 @pytest.mark.asyncio
+async def test_codex_exec_turn_after_a_stopped_turn_is_priced_from_its_own_tokens(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import bot.cost_stats as cost_stats
+    from bot import config
+    from bot.cost_stats.service import CostStatsService
+    from bot.web import cli_turn_cost
+
+    prices = tmp_path / "prices.csv"
+    prices.write_text(
+        "model,currency,input_per_million,cache_read_per_million,cache_write_per_million,output_per_million\n"
+        "gpt-test,USD,1,0,0,0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "MODEL_PRICES_FILE", str(prices))
+    stats = CostStatsService(db_path=tmp_path / "cost-stats" / "cost.sqlite3")
+    monkeypatch.setattr(cost_stats, "_service", stats)
+    usage_manager.main_profile.cli_params.set_param("codex", "model", "gpt-test")
+    rollout = tmp_path / "rollout.jsonl"
+    monkeypatch.setattr(cli_turn_cost, "locate_codex_transcript", lambda _session: SimpleNamespace(path=rollout))
+
+    def stamp(offset_seconds: float = 0.0) -> str:
+        moment = datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)
+        return moment.isoformat().replace("+00:00", "Z")
+
+    def log(*events: dict) -> None:
+        with rollout.open("a", encoding="utf-8") as handle:
+            for event in events:
+                handle.write(json.dumps(event) + "\n")
+
+    def task_started(time: str) -> dict:
+        return {"type": "event_msg", "timestamp": time, "payload": {"type": "task_started"}}
+
+    def token_count(time: str, input_tokens: int) -> dict:
+        return {"type": "event_msg", "timestamp": time, "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": input_tokens, "output_tokens": 0},
+        }}}
+
+    # Earlier turns of the thread already used $58.74.
+    log(task_started(stamp(-60)), token_count(stamp(-59), 58_740_000))
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=None))
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service, "_reconcile_native_trace_before_completion", AsyncMock())
+
+    async def run_turn(*, running_total: int | None) -> dict:
+        def popen(*_args, **_kwargs):
+            started = stamp()
+            if running_total is None:
+                log(task_started(started))
+            else:
+                log(task_started(started), token_count(stamp(), running_total))
+            lines = [
+                {"type": "thread.started", "thread_id": "cost-session"},
+                {"type": "item.completed", "item": {"type": "assistant_message", "text": "done"}},
+            ]
+            if running_total is not None:
+                lines.append({"type": "turn.completed", "usage": {"input_tokens": running_total, "output_tokens": 0}})
+            process = _UsageProcess()
+            process.stdout = _StreamingStdout([json.dumps(line) + "\n" for line in lines])
+            return process
+
+        monkeypatch.setattr(api_service.subprocess, "Popen", popen)
+        events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
+        done = next(event for event in events if event["type"] == "done")
+        return done["message"]["meta"].get("context_usage") or {}
+
+    stopped = await run_turn(running_total=None)
+    assert "estimated_cost" not in stopped
+    # Statistics are enabled only now, so this is the first recorded turn of a long session.
+    await stats.set_enabled("codex", True)
+    completed = await run_turn(running_total=59_790_000)
+
+    cost = completed["estimated_cost"]
+    assert cost["basis"] == "turn"
+    assert "is_partial" not in cost
+    assert cost["total"] == pytest.approx(1.05)
+    assert _cost_stats_rows(stats.db_path, "amount, baseline, cumulative") == [(pytest.approx(1.05), None, 0)]
+
+
+@pytest.mark.asyncio
+async def test_codex_previous_total_skips_turns_without_a_running_total(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _, _, session = api_service.get_chat_session_for_alias(usage_manager, "main", 1001)
+    session.codex_session_id = "cost-session"
+    service = Mock()
+    service.list_recent_native_session_context_usages_async = AsyncMock(return_value=[
+        {"provider": "codex"},
+        {"provider": "codex", "estimated_cost": {"currency": "USD", "total": 9.0, "basis": "turn"}},
+        {"provider": "codex", "estimated_cost": {"currency": "USD", "total": 8.0, "is_partial": True}},
+        {"provider": "codex_server", "estimated_cost": {"currency": "USD", "total": 7.0}},
+        {"provider": "codex", "estimated_cost": {"currency": "USD", "total": 5.5}},
+    ])
+    monkeypatch.setattr(api_service, "_cost_stats_enabled", AsyncMock(return_value=False))
+    assert await api_service._codex_cost_previous_total(service, session, "codex") is None
+    service.list_recent_native_session_context_usages_async.assert_not_awaited()
+
+    monkeypatch.setattr(api_service, "_cost_stats_enabled", AsyncMock(return_value=True))
+    assert await api_service._codex_cost_previous_total(service, session, "codex") == (5.5, "USD")
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_handles_antigravity_jsonl_usage_and_conversation(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,
