@@ -52,7 +52,7 @@ test("opens from the logo, takes over from the workbench and closes back into it
 
   expect(await guide.boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 900 });
   await expect(guide).toHaveAttribute("data-motion", "full");
-  await expect(guide.getByRole("listitem")).toHaveCount(12);
+  await expect(guide.getByRole("listitem")).toHaveCount(13);
   await expect.poll(() => hasHorizontalOverflow(page)).toBe(false);
   await testInfo.attach("cover", { body: await page.screenshot(), contentType: "image/png" });
 
@@ -101,9 +101,9 @@ test("loads the first screenshot of every chapter", async ({ page }) => {
   await guide.getByRole("button", { name: "从头开始", exact: true }).click();
   const rail = guide.getByRole("navigation", { name: "教程章节" });
   const chapters = rail.getByRole("button");
-  await expect(chapters).toHaveCount(12);
+  await expect(chapters).toHaveCount(13);
   const image = guide.getByTestId("tutorial-stage-image");
-  for (let index = 0; index < 12; index += 1) {
+  for (let index = 0; index < 13; index += 1) {
     await expect(chapters.nth(index)).toBeEnabled();
     await chapters.nth(index).click();
     await expect(chapters.nth(index)).toHaveAttribute("aria-current", "true");

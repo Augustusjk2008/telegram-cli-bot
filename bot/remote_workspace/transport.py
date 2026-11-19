@@ -280,16 +280,51 @@ class RemoteConnection:
             transport = self._client.get_transport()
             return bool(transport and transport.is_active() and transport.is_authenticated())
 
+    def _new_client(self) -> paramiko.SSHClient:
+        client = paramiko.SSHClient()
+        expected = self.config["host_key_fingerprint"]
+        if not expected:
+            client.load_system_host_keys()
+            if os.path.isfile("/etc/ssh/ssh_known_hosts"):
+                client.load_system_host_keys("/etc/ssh/ssh_known_hosts")
+        client.set_missing_host_key_policy(_HostKeyPolicy(expected))
+        return client
+
+    def _connect_keyboard_interactive(self) -> paramiko.SSHClient:
+        """Connect when the server accepts a password as keyboard-interactive."""
+        client = self._new_client()
+        try:
+            client.connect(
+                hostname=self.config["host"], port=self.config["port"], username=self.config["username"],
+                password=None, passphrase=self._passphrase,
+                key_filename=self.config["key_filename"] or None,
+                allow_agent=True, look_for_keys=True,
+                timeout=IO_TIMEOUT, banner_timeout=IO_TIMEOUT, auth_timeout=IO_TIMEOUT,
+                channel_timeout=IO_TIMEOUT,
+            )
+        except paramiko.BadHostKeyException:
+            client.close()
+            raise
+        except paramiko.SSHException:
+            transport = client.get_transport()
+            if not transport or not transport.is_active() or self._password is None:
+                client.close()
+                raise
+
+            def answer_password(_title, _instructions, prompts):
+                return [self._password for _prompt, _echo in prompts]
+
+            try:
+                transport.auth_interactive(self.config["username"], answer_password)
+            except Exception:
+                client.close()
+                raise
+        return client
+
     def _connect(self) -> None:
         self._disconnect()
-        client = paramiko.SSHClient()
+        client = self._new_client()
         try:
-            expected = self.config["host_key_fingerprint"]
-            if not expected:
-                client.load_system_host_keys()
-                if os.path.isfile("/etc/ssh/ssh_known_hosts"):
-                    client.load_system_host_keys("/etc/ssh/ssh_known_hosts")
-            client.set_missing_host_key_policy(_HostKeyPolicy(expected))
             client.connect(
                 hostname=self.config["host"], port=self.config["port"], username=self.config["username"],
                 password=self._password, passphrase=self._passphrase,
@@ -307,7 +342,29 @@ class RemoteConnection:
             raise RemoteWorkspaceError(409, "host_key_mismatch", "The SSH host key has changed", {
                 "host_key_fingerprint": _fingerprint(exc.key),
             }) from exc
-        except (paramiko.AuthenticationException, paramiko.PasswordRequiredException) as exc:
+        except paramiko.AuthenticationException as exc:
+            transport = client.get_transport()
+            interactive_fallback = bool(
+                self._password is not None
+                and (not transport or not transport.is_active())
+            )
+            client.close()
+            if interactive_fallback:
+                try:
+                    client = self._connect_keyboard_interactive()
+                    transport = client.get_transport()
+                    transport.set_keepalive(30)
+                    self.config["host_key_fingerprint"] = _fingerprint(transport.get_remote_server_key())
+                    self._client = client
+                    return
+                except paramiko.BadHostKeyException as fallback_exc:
+                    raise RemoteWorkspaceError(409, "host_key_mismatch", "The SSH host key has changed", {
+                        "host_key_fingerprint": _fingerprint(fallback_exc.key),
+                    }) from fallback_exc
+            missing = self._password is None and self._passphrase is None
+            raise RemoteWorkspaceError(401, "remote_auth_required" if missing else "remote_auth_failed",
+                                       "SSH authentication required; enter a password or unlock your SSH key" if missing else "SSH authentication failed") from exc
+        except paramiko.PasswordRequiredException as exc:
             client.close()
             missing = self._password is None and self._passphrase is None
             raise RemoteWorkspaceError(401, "remote_auth_required" if missing else "remote_auth_failed",

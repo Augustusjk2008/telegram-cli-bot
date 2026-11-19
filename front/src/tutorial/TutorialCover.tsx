@@ -110,7 +110,7 @@ export function TutorialCover({ chapters, progress, introOrigin, onOpenStep, onC
                 >
                   <span className="tut-card-top">
                     <span className="tut-card-icon"><Icon className="h-4 w-4" aria-hidden="true" /></span>
-                    <span className="tut-card-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="tut-card-number" aria-hidden="true">{String(index).padStart(2, "0")}</span>
                   </span>
                   <span className="tut-card-title">{chapter.title}</span>
                   <span className="tut-card-summary">{chapter.summary}</span>

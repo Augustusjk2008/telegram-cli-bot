@@ -360,6 +360,65 @@ def test_saved_password_restores_after_restart_and_explicit_login_can_forget_it(
     restarted.close_all()
 
 
+def test_password_falls_back_to_keyboard_interactive_when_password_method_closes_transport(monkeypatch):
+    clients = []
+
+    class Transport:
+        def __init__(self, active=True):
+            self.active = active
+            self.authenticated = False
+
+        def is_active(self):
+            return self.active
+
+        def is_authenticated(self):
+            return self.authenticated
+
+        def set_keepalive(self, _seconds):
+            pass
+
+        def get_remote_server_key(self):
+            return KEY
+
+        def auth_interactive(self, _username, handler):
+            replies = handler("", "", [("Password: ", False)])
+            assert replies == ["secret"]
+            self.authenticated = True
+
+    class Client:
+        def __init__(self):
+            self.transport = Transport()
+            self.policy = None
+            clients.append(self)
+
+        def set_missing_host_key_policy(self, policy):
+            self.policy = policy
+
+        def connect(self, **kwargs):
+            if kwargs["password"] == "secret":
+                self.transport.active = False
+                raise paramiko.AuthenticationException("transport shut down")
+            raise paramiko.AuthenticationException("keyboard-interactive required")
+
+        def get_transport(self):
+            return self.transport
+
+        def close(self):
+            self.transport.active = False
+
+    monkeypatch.setattr(remote.paramiko, "SSHClient", Client)
+    connection = remote.RemoteConnection({
+        "host": "host.test", "port": 22, "username": "dev", "root": ROOT,
+        "host_key_fingerprint": FINGERPRINT, "key_filename": "",
+    }, password="secret")
+
+    connection._connect()
+    assert len(clients) == 2
+    assert clients[0].transport.active is False
+    assert clients[1].transport.authenticated is True
+    connection.close()
+
+
 @pytest.mark.parametrize("remember", [True, False])
 def test_failed_login_preserves_saved_password_and_existing_connection(ssh, remember):
     config, existing = connected(ssh, password="original", remember_password=True)

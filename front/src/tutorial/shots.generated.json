@@ -381,6 +381,18 @@
       }
     }
   },
+  "overview/architecture": {
+    "hotspots": {}
+  },
+  "overview/login": {
+    "hotspots": {}
+  },
+  "overview/manager": {
+    "hotspots": {}
+  },
+  "overview/workbench": {
+    "hotspots": {}
+  },
   "practice/cluster": {
     "hotspots": {
       "team": {
