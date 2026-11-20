@@ -120,6 +120,30 @@ test("remote create requires explicit host key trust and a chosen directory, wit
   expect(JSON.stringify(localStorage)).not.toContain("secret-value");
 });
 
+test("remote reconnect can replace a changed host key while keeping the bound connection", async () => {
+  const client = new MockWebBotClient();
+  vi.spyOn(client, "getRemoteCredentialStatus").mockResolvedValue({ passwordSaved: false });
+  const connect = vi.spyOn(client, "connectRemote")
+    .mockRejectedValueOnce(new WebApiClientError("Host key changed", {
+      code: "host_key_mismatch", status: 409, data: { host_key_fingerprint: "SHA256:new" },
+    }))
+    .mockResolvedValue(remote);
+  const done = vi.fn();
+  render(<RemoteConnectionForm client={client} botAlias="remote" initial={remote} onConnected={done} />);
+
+  await waitFor(() => expect(screen.getByLabelText("SSH 密码")).not.toBeDisabled());
+  fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "secret-value" } });
+  fireEvent.click(screen.getByRole("button", { name: "测试并连接 SSH" }));
+  expect(await screen.findByText("SHA256:new")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "替换主机密钥并连接" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "替换主机密钥并连接" }));
+
+  await waitFor(() => expect(done).toHaveBeenCalledWith(remote));
+  expect(connect).toHaveBeenLastCalledWith(expect.objectContaining({
+    hostKeyFingerprint: "SHA256:new", replaceHostKey: true,
+  }), "remote");
+});
+
 test("maps public remote config and exact wire payloads, preserving local runtime path", async () => {
   const fetch = vi.fn().mockResolvedValue(ok(wire));
   vi.stubGlobal("fetch", fetch);
@@ -129,6 +153,8 @@ test("maps public remote config and exact wire payloads, preserving local runtim
   await client.connectRemote({ ...remote, password: "temporary" }, "remote/name");
   expect(fetch.mock.lastCall![0]).toBe("/api/bots/remote%2Fname/remote/connect");
   expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({ password: "temporary", host_key_fingerprint: "SHA256:abc" });
+  await client.connectRemote({ ...remote, replaceHostKey: true }, "remote/name");
+  expect(JSON.parse(fetch.mock.lastCall![1].body)).toEqual({ host_key_fingerprint: "SHA256:abc", replace_host_key: true });
   await client.disconnectRemote("remote/name");
   expect(fetch.mock.lastCall![0]).toBe("/api/bots/remote%2Fname/remote/disconnect");
   expect(fetch.mock.lastCall![1].method).toBe("POST");

@@ -838,9 +838,12 @@ class RemoteWorkspaceService:
         if not isinstance(owner_id, int) or isinstance(owner_id, bool):
             _invalid("Invalid owner ID")
         config = _config(payload, verified=bool(connection_id))
-        for field in ("remember_password", "use_saved_password"):
+        for field in ("remember_password", "use_saved_password", "replace_host_key"):
             if field in payload and not isinstance(payload[field], bool):
                 _invalid(f"Invalid {field}")
+        replace_host_key = payload.get("replace_host_key") is True
+        if replace_host_key and not connection_id:
+            _invalid("Replacing a host key requires an authorized connection")
         if connection_id and config["connection_id"] != connection_id:
             _invalid("Reauthentication requires the saved connection configuration")
         config["connection_id"] = connection_id or uuid.uuid4().hex
@@ -854,8 +857,12 @@ class RemoteWorkspaceService:
         with self._lock:
             existing = self._connections.get(pool_id)
             generation = self._generation
+            changed_identity = [
+                key for key in _IDENTITY_FIELDS
+                if existing and existing.config.get(key) != config.get(key)
+            ]
             if existing and (
-                any(existing.config.get(key) != config.get(key) for key in _IDENTITY_FIELDS)
+                (changed_identity and not (replace_host_key and changed_identity == ["host_key_fingerprint"]))
                 or config["root"] not in self._roots[pool_id]
             ):
                 raise RemoteWorkspaceError(409, "remote_connection_mismatch", "Cannot change a saved connection identity or root")

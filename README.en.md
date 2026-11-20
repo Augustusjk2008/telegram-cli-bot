@@ -173,7 +173,7 @@ Administrators can schedule work for a Bot under Admin Center → 定时任务 (
 
 ### SSH remote workspaces
 
-When creating an agent, select **Remote SSH**, choose Linux / POSIX or Windows, enter the SSH connection details, verify the first connection's host key fingerprint, and browse to a remote directory. Remote agents support chat, a file tree, UTF-8 text editing, file uploads, and independent SSH terminal tabs. The remote host needs SSH/SFTP; AI CLIs run on the Orbit host. DeepSeek Harness currently supports local workspaces only.
+When creating an agent, select **Remote SSH**, choose Linux / POSIX or Windows, enter the SSH connection details, verify the first connection's host key fingerprint, and browse to a remote directory. After the remote device is replaced, SSH sign-in again shows the new fingerprint and can update the existing connection binding after explicit confirmation, keeping the same agent. Remote agents support chat, a file tree, UTF-8 text editing, file uploads, and independent SSH terminal tabs. The remote host needs SSH/SFTP; AI CLIs run on the Orbit host. DeepSeek Harness currently supports local workspaces only.
 
 Local control directories default to `~/.tcb/orbit-safe-claw/remote-workspaces/` (respecting `TCB_DATA_DIR`) and contain generated `AGENTS.md` and `CLAUDE.md` instructions. Project files stay remote. Agent tools, file operations, and terminals reuse SSH connections; tools support command batches, bounded file ranges, and exact text edits.
 

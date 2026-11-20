@@ -30,6 +30,7 @@ export function remoteConnectionBody(input: RemoteConnectionInput, reconnect = f
     ...(input.keyFilename ? { key_filename: input.keyFilename } : {}),
     ...(input.passphrase ? { passphrase: input.passphrase } : {}),
     ...(input.hostKeyFingerprint ? { host_key_fingerprint: input.hostKeyFingerprint } : {}),
+    ...(input.replaceHostKey !== undefined ? { replace_host_key: input.replaceHostKey } : {}),
   };
 }
 

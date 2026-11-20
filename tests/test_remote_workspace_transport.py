@@ -419,6 +419,23 @@ def test_password_falls_back_to_keyboard_interactive_when_password_method_closes
     connection.close()
 
 
+def test_authorized_host_key_replacement_keeps_connection_id_and_roots(ssh, monkeypatch):
+    config, existing = connected(ssh)
+    new_fingerprint = "SHA256:" + "B" * 43
+    monkeypatch.setattr(remote, "_fingerprint", lambda _key: new_fingerprint)
+
+    replaced = ssh.service.connect(
+        7,
+        {**config, "host_key_fingerprint": new_fingerprint, "password": "fresh", "replace_host_key": True},
+        connection_id=config["connection_id"],
+    )
+
+    assert replaced["connection_id"] == config["connection_id"]
+    assert replaced["host_key_fingerprint"] == new_fingerprint
+    assert ssh.service.get(replaced) is not existing
+    assert existing._closed
+
+
 @pytest.mark.parametrize("remember", [True, False])
 def test_failed_login_preserves_saved_password_and_existing_connection(ssh, remember):
     config, existing = connected(ssh, password="original", remember_password=True)
