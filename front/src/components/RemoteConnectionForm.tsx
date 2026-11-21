@@ -26,6 +26,7 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
   const [keyFilename, setKeyFilename] = useState(initial?.keyFilename || "");
   const [passphrase, setPassphrase] = useState("");
   const [fingerprint, setFingerprint] = useState("");
+  const [replaceHostKey, setReplaceHostKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ids = useId();
@@ -72,15 +73,21 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
         ...(auth === "password" ? { ...(password ? { password } : {}), ...(useSavedPassword ? { useSavedPassword: true } : {}) } : {}),
         ...(auth === "key" ? { keyFilename: keyFilename.trim(), passphrase } : {}),
         ...(confirmedFingerprint ? { hostKeyFingerprint: confirmedFingerprint } : {}),
+        ...(confirmedFingerprint && replaceHostKey ? { replaceHostKey: true } : {}),
       }, botAlias);
       setPassword("");
       setPassphrase("");
       setPasswordSaved(auth === "password" && rememberPassword);
+      setReplaceHostKey(false);
       onConnected(result);
     } catch (err) {
-      if (err instanceof WebApiClientError && err.code === "remote_host_key_unknown") {
-        const data = err.data as { fingerprint?: string } | undefined;
-        if (data?.fingerprint) setFingerprint(data.fingerprint);
+      if (err instanceof WebApiClientError && (err.code === "remote_host_key_unknown" || err.code === "host_key_mismatch")) {
+        const data = err.data as { fingerprint?: string; host_key_fingerprint?: string } | undefined;
+        const nextFingerprint = data?.fingerprint || data?.host_key_fingerprint;
+        if (nextFingerprint) {
+          setReplaceHostKey(err.code === "host_key_mismatch");
+          setFingerprint(nextFingerprint);
+        }
         else setError(err.message);
       } else if (useSavedPassword && err instanceof WebApiClientError && err.status === 401) {
         setPasswordSaved(false);
@@ -134,12 +141,12 @@ export function RemoteConnectionForm({ client, botAlias, initial, onConnected }:
       </button></div>
     </fieldset>
     {fingerprint && <div role="alert" className="remote-fingerprint">
-      <p className="remote-connect-caption"><ShieldCheck size={15} aria-hidden="true" />确认主机密钥</p>
-      <p>首次连接 {username}@{host}:{port}。请核对服务器主机密钥指纹：</p>
+      <p className="remote-connect-caption"><ShieldCheck size={15} aria-hidden="true" />{replaceHostKey ? "替换已绑定的主机密钥" : "确认主机密钥"}</p>
+      <p>{replaceHostKey ? `服务器设备已更换。请确认这是新的 ${username}@${host}:${port}，再替换绑定指纹：` : `首次连接 ${username}@${host}:${port}。请核对服务器主机密钥指纹：`}</p>
       <code>{fingerprint}</code>
       <div className="flex flex-wrap gap-2">
-        <button className={remoteButtonClass} type="button" disabled={busy} onClick={() => void connect(fingerprint)}>信任此主机密钥并连接</button>
-        <button className={remoteButtonClass} type="button" disabled={busy} onClick={() => setFingerprint("")}>取消</button>
+        <button className={remoteButtonClass} type="button" disabled={busy} onClick={() => void connect(fingerprint)}>{replaceHostKey ? "替换主机密钥并连接" : "信任此主机密钥并连接"}</button>
+        <button className={remoteButtonClass} type="button" disabled={busy} onClick={() => { setFingerprint(""); setReplaceHostKey(false); }}>取消</button>
       </div>
     </div>}
     {error && <p role="alert" className="remote-connect-error"><TriangleAlert size={15} aria-hidden="true" />{error}</p>}

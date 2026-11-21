@@ -11,6 +11,7 @@ import {
   Settings2,
   SquareTerminal,
   Target,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { withPublicBase } from "../utils/publicBase";
@@ -71,6 +72,66 @@ export function findTutorialChapter(chapterId: string): TutorialChapter | undefi
 
 /** Chapters in cover order. */
 export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
+  {
+    id: "overview",
+    title: "项目概览",
+    summary: "从项目接入到交付，把 Agent 能力放进一条完整工作流。",
+    icon: Workflow,
+    steps: [
+      {
+        id: "architecture",
+        title: "整体架构",
+        body: [
+          "Orbit Safe Claw 位于浏览器、项目工作区和 AI 执行引擎之间，把文件、终端、聊天、Git 与协作能力放在同一个入口。",
+          "你可以为每个项目绑定一个智能体，按自己的 CLI、工作目录和权限边界运行任务。",
+        ],
+        shot: "architecture",
+        alt: "Orbit Safe Claw 架构图：浏览器工作台连接项目工作区、AI 执行引擎、Git、消息网关和集群协作",
+      },
+      {
+        id: "login",
+        title: "从登录开始",
+        body: [
+          "登录页负责账号接入和主题预览。注册、登录和 guest 只读访问都从这里进入。",
+          "进入工作台后，当前账号能看到的智能体、文件、终端和管理入口会按权限呈现。",
+        ],
+        points: [
+          "主题预览只保存在当前浏览器。",
+          "注册码和账号权限由服务端管理。",
+        ],
+        shot: "login",
+        alt: "Orbit Safe Claw 完整登录页：左侧品牌介绍和右侧登录表单",
+      },
+      {
+        id: "workbench",
+        title: "一个完整工作台",
+        body: [
+          "主页面把文件、编辑器、终端和聊天放在一张工作台里，任务可以从阅读代码一直推进到验证和交付。",
+          "聊天中的过程详情、工具调用、上下文用量和历史会话，让每一次执行都能被查看和接续。",
+        ],
+        points: [
+          "本地和远程 SSH 工作区使用一致的主流程。",
+          "布局、窗口位置和主题可以按使用习惯调整。",
+        ],
+        shot: "workbench",
+        alt: "Orbit Safe Claw 完整主页面：左侧文件区、中间编辑器和终端、右侧聊天窗口",
+      },
+      {
+        id: "agents",
+        title: "一套智能体管理",
+        body: [
+          "智能体管理页集中维护本地与远程工作区的 Agent，查看它们的类型、状态、工作目录和连接信息。",
+          "从这里新增智能体、进入项目或编辑配置，把不同项目和不同执行引擎分开管理。",
+        ],
+        points: [
+          "支持 Codex、Claude、Antigravity 和 DeepSeek Harness。",
+          "管理员可以进一步配置账号权限、插件、网关和更新。",
+        ],
+        shot: "manager",
+        alt: "Orbit Safe Claw 完整智能体管理页：统计卡片、智能体列表和详情面板",
+      },
+    ],
+  },
   {
     id: "start",
     title: "快速上手",

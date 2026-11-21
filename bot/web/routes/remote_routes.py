@@ -317,18 +317,31 @@ def register(app: web.Application, server) -> None:
         if not profile.remote_workspace:
             raise WebApiError(400, "not_remote_workspace", "当前智能体没有远程工作区")
         body = await server._parse_json(request)
-        # Reauthentication keeps the saved target; target changes go through bot editing.
+        # Reauthentication keeps the saved target; only an explicitly confirmed host key may change here.
         config = {**profile.remote_workspace}
-        for field in ("key_filename", "host_key_fingerprint", "platform"):
+        if "replace_host_key" in body and not isinstance(body["replace_host_key"], bool):
+            raise WebApiError(400, "invalid_remote_host_key_replacement", "replace_host_key 必须是布尔值")
+        replace_host_key = body.get("replace_host_key") is True
+        for field in ("key_filename", "platform"):
             if field in body and body[field] != config.get(field, "posix" if field == "platform" else ""):
                 raise WebApiError(409, "remote_connection_bound", "重新登录使用已绑定的主机密钥和私钥路径；更换连接配置请编辑智能体")
+        if "host_key_fingerprint" in body and body["host_key_fingerprint"] != config.get("host_key_fingerprint"):
+            if not replace_host_key:
+                raise WebApiError(409, "remote_connection_bound", "更换已绑定的主机密钥需要明确确认")
+            config["host_key_fingerprint"] = body["host_key_fingerprint"]
+        elif replace_host_key:
+            raise WebApiError(400, "invalid_remote_host_key_replacement", "替换主机密钥需要新的指纹")
         for field in ("password", "passphrase", "remember_password", "use_saved_password"):
             if field in body:
                 config[field] = body[field]
+        if replace_host_key:
+            config["replace_host_key"] = True
         result = await asyncio.to_thread(
             get_remote_workspace_service().connect, auth.user_id, config,
             connection_id=config["connection_id"],
         )
+        if replace_host_key:
+            await server.manager.set_bot_remote_workspace(server._manager_alias(request), result)
         return _response(result)
 
     async def credentials(request):

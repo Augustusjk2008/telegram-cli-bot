@@ -70,7 +70,7 @@ export function TutorialReader({ chapters, chapter, stepIndex, completed, onOpen
                   onClick={() => onOpenStep(item.id, 0)}
                   className="tut-rail-item text-[13px] font-normal"
                 >
-                  <span className="tut-rail-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="tut-rail-number" aria-hidden="true">{String(index).padStart(2, "0")}</span>
                   <span className="min-w-0 flex-1 truncate">{item.title}</span>
                   {pending ? <span className="tut-rail-note">编写中</span> : null}
                   {completed.includes(item.id) ? (

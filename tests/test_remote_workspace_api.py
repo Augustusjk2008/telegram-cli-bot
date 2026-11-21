@@ -779,6 +779,32 @@ async def test_credentials_status_and_saved_password_reconnect_require_bot_autho
 
 
 @pytest.mark.asyncio
+async def test_reconnect_can_explicitly_replace_host_key_without_changing_bot_identity(tmp_path, monkeypatch):
+    server, auth = _server(tmp_path, monkeypatch)
+    new_fingerprint = "SHA256:" + "b" * 43
+    result = {**CONFIG, "host_key_fingerprint": new_fingerprint}
+    service = Mock()
+    service.connect.return_value = result
+    monkeypatch.setattr(remote_routes, "get_remote_workspace_service", lambda: service)
+    server.manager.set_bot_remote_workspace = AsyncMock()
+
+    async with TestClient(TestServer(server._build_app())) as client:
+        response = await client.post("/api/bots/main/remote/connect", json={
+            "host_key_fingerprint": new_fingerprint,
+            "replace_host_key": True,
+            "password": "secret",
+        })
+
+    assert response.status == 200
+    service.connect.assert_called_once_with(
+        auth.user_id,
+        {**CONFIG, "host_key_fingerprint": new_fingerprint, "replace_host_key": True, "password": "secret"},
+        connection_id=CONFIG["connection_id"],
+    )
+    server.manager.set_bot_remote_workspace.assert_awaited_once_with("main", result)
+
+
+@pytest.mark.asyncio
 async def test_agent_bridge_scopes_tokens_and_rejects_changed_workspaces(tmp_path, monkeypatch):
     from bot.remote_workspace.chat import prepare_remote_chat
     from bot.remote_workspace import tools

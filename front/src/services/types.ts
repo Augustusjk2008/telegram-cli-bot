@@ -697,6 +697,7 @@ export type RemoteConnectionInput = {
   keyFilename?: string;
   passphrase?: string;
   hostKeyFingerprint?: string;
+  replaceHostKey?: boolean;
 };
 
 export type BotSummary = {

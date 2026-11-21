@@ -197,6 +197,233 @@ async function openAdminCenter(page, tab) {
 }
 
 export const SCENES = [
+  // ------------------------------------------------------------- overview
+  {
+    chapter: "overview",
+    shot: "architecture",
+    fresh: true,
+    async run(page) {
+      await page.evaluate(() => {
+        const style = document.createElement("style");
+        style.textContent = `
+          #orbit-overview-architecture {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            overflow: hidden;
+            color: #172033;
+            background: #f8f6f0;
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+          }
+          #orbit-overview-architecture .oa-header {
+            padding: 54px 86px 0;
+          }
+          #orbit-overview-architecture .oa-kicker {
+            color: #e46f42;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+          }
+          #orbit-overview-architecture h1 {
+            margin: 10px 0 8px;
+            font-size: 42px;
+            font-weight: 750;
+            letter-spacing: -.04em;
+          }
+          #orbit-overview-architecture .oa-subtitle {
+            margin: 0;
+            color: #637087;
+            font-size: 18px;
+          }
+          #orbit-overview-architecture .oa-canvas {
+            position: relative;
+            height: 680px;
+            margin: 36px 86px 0;
+          }
+          #orbit-overview-architecture .oa-card,
+          #orbit-overview-architecture .oa-core {
+            position: absolute;
+            border: 1px solid #cbd2dc;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, .82);
+            box-shadow: 0 14px 32px rgba(72, 86, 110, .08);
+          }
+          #orbit-overview-architecture .oa-card {
+            width: 286px;
+            padding: 22px 24px;
+          }
+          #orbit-overview-architecture .oa-card h2,
+          #orbit-overview-architecture .oa-core h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+            font-weight: 700;
+          }
+          #orbit-overview-architecture .oa-card p,
+          #orbit-overview-architecture .oa-core p {
+            margin: 7px 0;
+            color: #637087;
+            font-size: 15px;
+            line-height: 1.5;
+          }
+          #orbit-overview-architecture .oa-node {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin-top: 10px;
+            padding: 9px 11px;
+            border-radius: 10px;
+            background: #edf2f7;
+            font-size: 14px;
+            font-weight: 600;
+          }
+          #orbit-overview-architecture .oa-dot {
+            width: 9px;
+            height: 9px;
+            flex: 0 0 auto;
+            border-radius: 50%;
+            background: #e46f42;
+          }
+          #orbit-overview-architecture .oa-core {
+            top: 174px;
+            left: 50%;
+            width: 330px;
+            padding: 28px 30px;
+            border-color: #e46f42;
+            background: #fffaf2;
+            transform: translateX(-50%);
+            text-align: center;
+          }
+          #orbit-overview-architecture .oa-core .oa-logo {
+            display: grid;
+            width: 56px;
+            height: 56px;
+            margin: 0 auto 16px;
+            place-items: center;
+            border: 1px solid #e46f42;
+            border-radius: 16px;
+            color: #e46f42;
+            font-size: 26px;
+            font-weight: 800;
+          }
+          #orbit-overview-architecture .oa-core h2 {
+            font-size: 24px;
+          }
+          #orbit-overview-architecture .oa-left { top: 16px; left: 0; }
+          #orbit-overview-architecture .oa-right { top: 16px; right: 0; }
+          #orbit-overview-architecture .oa-bottom-left { bottom: 20px; left: 148px; }
+          #orbit-overview-architecture .oa-bottom-right { bottom: 20px; right: 148px; }
+          #orbit-overview-architecture .oa-line {
+            position: absolute;
+            z-index: 0;
+            height: 1px;
+            background: #c8d0dc;
+            transform-origin: left center;
+          }
+          #orbit-overview-architecture .oa-line.one { top: 204px; left: 286px; width: 310px; transform: rotate(0deg); }
+          #orbit-overview-architecture .oa-line.two { top: 204px; right: 286px; width: 310px; transform: rotate(180deg); }
+          #orbit-overview-architecture .oa-line.three { top: 350px; left: 50%; width: 1px; height: 260px; }
+          #orbit-overview-architecture .oa-pill {
+            position: absolute;
+            top: 326px;
+            left: 50%;
+            z-index: 1;
+            padding: 8px 14px;
+            border: 1px solid #c8d0dc;
+            border-radius: 999px;
+            background: #f8f6f0;
+            color: #637087;
+            font-size: 13px;
+            font-weight: 650;
+            transform: translateX(-50%);
+          }
+          #orbit-overview-architecture .oa-footer {
+            position: absolute;
+            right: 86px;
+            bottom: 34px;
+            left: 86px;
+            display: flex;
+            justify-content: space-between;
+            color: #637087;
+            font-size: 14px;
+          }
+        `;
+        const overlay = document.createElement("div");
+        overlay.id = "orbit-overview-architecture";
+        overlay.innerHTML = `
+          <header class="oa-header">
+            <div class="oa-kicker">Orbit Safe Claw</div>
+            <h1>一套工作台，连接整个交付链路</h1>
+            <p class="oa-subtitle">从项目工作区到 AI 执行引擎，再到协作与交付，所有关键环节都在同一条工作流里。</p>
+          </header>
+          <main class="oa-canvas">
+            <span class="oa-line one"></span><span class="oa-line two"></span><span class="oa-line three"></span>
+            <div class="oa-card oa-left">
+              <h2>项目工作区</h2>
+              <p>按项目隔离上下文、文件和会话。</p>
+              <div class="oa-node"><span class="oa-dot"></span>本地目录</div>
+              <div class="oa-node"><span class="oa-dot"></span>远程 SSH</div>
+            </div>
+            <div class="oa-card oa-right">
+              <h2>AI 执行引擎</h2>
+              <p>按智能体选择合适的 CLI 和模型。</p>
+              <div class="oa-node"><span class="oa-dot"></span>Codex / Claude</div>
+              <div class="oa-node"><span class="oa-dot"></span>Antigravity / DeepSeek</div>
+            </div>
+            <div class="oa-core">
+              <div class="oa-logo">OS</div>
+              <h2>Orbit Safe Claw</h2>
+              <p>文件 · 编辑器 · 终端 · 对话</p>
+              <p>把需求变成可检查、可协作、可交付的改动。</p>
+            </div>
+            <div class="oa-pill">统一入口 · 清晰过程 · 可控权限</div>
+            <div class="oa-card oa-bottom-left">
+              <h2>协作与交付</h2>
+              <div class="oa-node"><span class="oa-dot"></span>计划与集群协作</div>
+              <div class="oa-node"><span class="oa-dot"></span>Git diff、提交与同步</div>
+            </div>
+            <div class="oa-card oa-bottom-right">
+              <h2>连接到更多地方</h2>
+              <div class="oa-node"><span class="oa-dot"></span>Telegram / 微信网关</div>
+              <div class="oa-node"><span class="oa-dot"></span>历史会话与长期记忆</div>
+            </div>
+          </main>
+          <footer class="oa-footer"><span>项目总览</span><span>从第一次登录开始，逐步建立你的 AI 开发工作流</span></footer>
+        `;
+        document.body.append(style, overlay);
+      });
+    },
+    hotspots: {},
+  },
+  {
+    chapter: "overview",
+    shot: "login",
+    loggedOut: true,
+    async run(page) {
+      await page.locator('input[name="username"]').waitFor();
+    },
+    hotspots: {},
+  },
+  {
+    chapter: "overview",
+    shot: "workbench",
+    fresh: true,
+    async run(page) {
+      await exact(page, "打开 README.md").click();
+      await editorPane(page).getByText("README.md").first().waitFor();
+    },
+    hotspots: {},
+  },
+  {
+    chapter: "overview",
+    shot: "manager",
+    fresh: true,
+    async run(page) {
+      await openAgentManager(page);
+    },
+    hotspots: {},
+  },
+
   // ----------------------------------------------------------------- start
   {
     chapter: "start",
