@@ -153,6 +153,8 @@ export type ThemeLibrary = {
   selectedThemeId: string;
   themes: UiTheme[];
   error?: string;
+  /** Server digest of `themes`; sent back so an unchanged theme list is not downloaded again. */
+  themesDigest?: string;
 };
 
 export type ThemeCreateInput = {

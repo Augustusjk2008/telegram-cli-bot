@@ -1766,6 +1766,58 @@ def test_compact_cli_done_event_preserves_v1_empty_and_mismatched_output(
 
 
 @pytest.mark.asyncio
+async def test_stream_cli_chat_publishes_sync_hints_for_other_viewers(
+    usage_manager: MultiBotManager,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bot.web import chat_sync_events
+
+    capture = _UsageCapture()
+    process = _UsageProcess()
+    process.stdout = _StreamingStdout(
+        [
+            '{"type":"thread.started","thread_id":"sync-thread"}\n',
+            '{"type":"item.completed","item":{"type":"assistant_message","text":"done"}}\n',
+            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+        ]
+    )
+
+    async def start_capture(*, env, command):
+        return capture
+
+    hints: list[tuple[str, str, str]] = []
+    session_was_idle: list[bool] = []
+
+    def record_hint(alias: str, agent_id: str, reason: str) -> None:
+        hints.append((alias, agent_id, reason))
+        if reason == "turn_finished":
+            session = api_service.get_chat_session_for_alias(usage_manager, alias, 1001, agent_id)[2]
+            session_was_idle.append(not session.is_processing)
+
+    previous = chat_sync_events.set_chat_sync_publisher(record_hint)
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", start_capture)
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_service.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    try:
+        events = [event async for event in api_service._stream_cli_chat(usage_manager, "main", 1001, "hello")]
+        await api_service.create_conversation(usage_manager, "main", 1001)
+    finally:
+        chat_sync_events.set_chat_sync_publisher(previous)
+
+    assert events[-1]["type"] == "done"
+    lifecycle = [hint for hint in hints if hint[2] != "progress"]
+    # The turn reports its start once the user message is stored, and its end exactly once.
+    assert lifecycle == [
+        ("main", "main", "turn_started"),
+        ("main", "main", "turn_finished"),
+        ("main", "main", "conversation"),
+    ]
+    assert session_was_idle == [True]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("include_trace", "expected_trace"), [(True, True), (False, False)])
 async def test_stream_cli_chat_normalizes_slash_and_preserves_ids_on_legacy_sse_events(
     usage_manager: MultiBotManager,

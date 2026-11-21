@@ -1304,6 +1304,47 @@ describe("RealWebBotClient", () => {
     expect(message.meta?.trace).toHaveLength(1);
   });
 
+  test("asks for compact trace events and reads one full event on demand", async () => {
+    const preview = {
+      id: "trace_1",
+      kind: "tool_result",
+      summary: "head",
+      call_id: "toolu_1",
+      payload: { content: "head" },
+      content_truncated: true,
+      payload_chars: 90_000,
+      summary_chars: 80_000,
+    };
+    fetchMock
+      .mockResolvedValueOnce(streamOk(
+        `event: trace\ndata: ${JSON.stringify({ event: { ...preview, id: undefined } })}\n\n`,
+        "event: done\ndata: {\"output\":\"ok\"}\n\n",
+      ))
+      .mockResolvedValueOnce(jsonOk({ trace: [preview] }))
+      .mockResolvedValueOnce(jsonOk({ trace: [{ ...preview, content_truncated: false, payload: { content: "full" } }] }))
+      .mockResolvedValueOnce(jsonOk({ event: { id: "trace_1", kind: "tool_result", summary: "full summary", payload: { content: "full" } } }));
+    const client = new RealWebBotClient();
+
+    const streamed: Array<{ payloadChars?: number; summaryChars?: number }> = [];
+    await client.sendMessage("main", "hi", () => undefined, undefined, (trace) => streamed.push(trace));
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({ trace_payload: "compact" });
+    expect(streamed).toEqual([expect.objectContaining({ payloadChars: 90_000, summaryChars: 80_000 })]);
+
+    const compact = await client.getMessageTrace("main", "msg-1", { agentId: "reviewer" });
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/bots/main/history/msg-1/trace?agent_id=reviewer&payload=compact");
+    expect(compact.trace[0]).toMatchObject({ payloadChars: 90_000, summaryChars: 80_000 });
+
+    const full = await client.getMessageTrace("main", "msg-1", { fullPayload: true });
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/bots/main/history/msg-1/trace");
+    expect(full.trace[0]).not.toHaveProperty("payloadChars");
+
+    const detail = await client.getMessageTraceEvent("main", "msg-1", { id: "trace_1", kind: "tool_result", callId: "toolu_1" });
+    expect(fetchMock.mock.calls[3][0]).toBe(
+      "/api/bots/main/history/msg-1/trace/event?id=trace_1&kind=tool_result&call_id=toolu_1",
+    );
+    expect(detail).toMatchObject({ summary: "full summary", payload: { content: "full" } });
+  });
+
   test("scopes CLI history and conversations by agent", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonOk({ items: [] }))

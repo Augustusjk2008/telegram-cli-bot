@@ -1,3 +1,31 @@
+/**
+ * Copies text that is still being prepared. The clipboard write starts inside the
+ * user gesture (browsers reject writes that begin after an awaited request), with
+ * the regular copy as the fallback.
+ */
+export async function copyDeferredText(pendingText: Promise<string>): Promise<boolean> {
+  const clipboard = globalThis.navigator?.clipboard;
+  if (clipboard?.write && typeof ClipboardItem !== "undefined") {
+    try {
+      await clipboard.write([
+        new ClipboardItem({
+          "text/plain": pendingText.then((text) => new Blob([text], { type: "text/plain" })),
+        }),
+      ]);
+      return true;
+    } catch {
+      // Fall back for browsers that do not accept a pending clipboard item.
+    }
+  }
+  let text = "";
+  try {
+    text = await pendingText;
+  } catch {
+    return false;
+  }
+  return text ? copyText(text) : false;
+}
+
 export async function copyText(text: string): Promise<boolean> {
   try {
     const clipboard = globalThis.navigator?.clipboard;

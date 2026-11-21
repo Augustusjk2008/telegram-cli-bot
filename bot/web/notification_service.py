@@ -13,6 +13,13 @@ from aiohttp import web
 from aiohttp.client_exceptions import ClientConnectionResetError
 
 from bot.config import PUSHPLUS_PREVIEW_CHARS
+from bot.web.chat_sync_events import (
+    CHAT_SYNC_REASON_CLUSTER,
+    CHAT_SYNC_REASON_CONVERSATION,
+    CHAT_SYNC_REASON_PROGRESS,
+    CHAT_SYNC_REASON_TURN_FINISHED,
+    CHAT_SYNC_REASON_TURN_STARTED,
+)
 from bot.web.pushplus_client import PushPlusClient
 
 logger = logging.getLogger(__name__)
@@ -21,6 +28,22 @@ _CLIENT_DISCONNECT_ERRORS = (
     ConnectionResetError,
     BrokenPipeError,
 )
+
+# Feature names announced in the socket's hello message.
+NOTIFICATION_FEATURE_CHAT_SYNC = "chat_sync"
+# Later reasons win when several hints for one session are coalesced.
+_CHAT_SYNC_REASON_PRIORITY = {
+    CHAT_SYNC_REASON_PROGRESS: 1,
+    CHAT_SYNC_REASON_CLUSTER: 2,
+    CHAT_SYNC_REASON_CONVERSATION: 3,
+    CHAT_SYNC_REASON_TURN_STARTED: 4,
+    CHAT_SYNC_REASON_TURN_FINISHED: 5,
+}
+_CHAT_SYNC_LIFECYCLE_REASONS = frozenset({
+    CHAT_SYNC_REASON_CONVERSATION,
+    CHAT_SYNC_REASON_TURN_STARTED,
+    CHAT_SYNC_REASON_TURN_FINISHED,
+})
 
 
 @dataclass(eq=False)
@@ -32,6 +55,9 @@ class NotificationConnection:
     connected_at: float
     last_seen_at: float
     presence: dict[str, Any] = field(default_factory=dict)
+    # Decides which Bots this account may see; chat sync hints are only sent for those.
+    can_view_bot: Callable[[str], bool] | None = None
+    bot_access_cache: dict[str, tuple[bool, float]] = field(default_factory=dict)
 
 
 class ChatNotificationService:
@@ -44,6 +70,9 @@ class ChatNotificationService:
         dedupe_ttl_seconds: float = 600.0,
         preview_chars: int = PUSHPLUS_PREVIEW_CHARS,
         now: Callable[[], float] | None = None,
+        chat_sync_min_interval_seconds: float = 1.0,
+        chat_sync_settle_seconds: float = 0.05,
+        bot_access_ttl_seconds: float = 10.0,
     ) -> None:
         self.enabled = bool(enabled)
         self.pushplus = pushplus
@@ -54,6 +83,17 @@ class ChatNotificationService:
         self._connections: dict[str, set[NotificationConnection]] = {}
         self._event_seen_at: OrderedDict[str, float] = OrderedDict()
         self._push_tasks: set[asyncio.Task[Any]] = set()
+        # Progress hints are limited to one per interval and session; lifecycle hints
+        # only wait for the settle delay, which lets the change commit and coalesces bursts.
+        self.chat_sync_min_interval_seconds = max(0.0, float(chat_sync_min_interval_seconds))
+        self.chat_sync_settle_seconds = max(0.0, float(chat_sync_settle_seconds))
+        self.chat_sync_send_timeout_seconds = 10.0
+        self.bot_access_ttl_seconds = max(0.0, float(bot_access_ttl_seconds))
+        self._chat_sync_pending: dict[tuple[str, str], str] = {}
+        self._chat_sync_timers: dict[tuple[str, str], asyncio.TimerHandle] = {}
+        self._chat_sync_due_at: dict[tuple[str, str], float] = {}
+        self._chat_sync_sent_at: dict[tuple[str, str], float] = {}
+        self._chat_sync_tasks: set[asyncio.Task[Any]] = set()
 
     def register(
         self,
@@ -62,6 +102,7 @@ class ChatNotificationService:
         user_id: int,
         username: str,
         ws: web.WebSocketResponse,
+        can_view_bot: Callable[[str], bool] | None = None,
     ) -> NotificationConnection:
         now = self._now()
         connection = NotificationConnection(
@@ -71,6 +112,7 @@ class ChatNotificationService:
             ws=ws,
             connected_at=now,
             last_seen_at=now,
+            can_view_bot=can_view_bot,
         )
         self._connections.setdefault(connection.account_id, set()).add(connection)
         return connection
@@ -89,6 +131,10 @@ class ChatNotificationService:
         connection.last_seen_at = self._now()
         if isinstance(presence, dict):
             connection.presence = dict(presence)
+        # A page whose timers were frozen misses heartbeats and is dropped as stale while its
+        # socket stays open; it must count again as soon as it reports back.
+        if not bool(getattr(connection.ws, "closed", False)):
+            self._connections.setdefault(connection.account_id, set()).add(connection)
 
     def _is_connection_alive(self, connection: NotificationConnection, now: float) -> bool:
         if bool(getattr(connection.ws, "closed", False)):
@@ -103,8 +149,10 @@ class ChatNotificationService:
         for connection in connections:
             if self._is_connection_alive(connection, now):
                 active.append(connection)
-            else:
+            elif bool(getattr(connection.ws, "closed", False)):
                 stale.append(connection)
+            # An open socket whose page stopped sending heartbeats (frozen timers) is only
+            # skipped here: it still receives chat sync hints and counts again once it reports back.
         for connection in stale:
             self.unregister(connection)
         return active
@@ -276,7 +324,119 @@ class ChatNotificationService:
             self._schedule_pushplus(event)
         return event
 
+    def _connection_can_view_bot(self, connection: NotificationConnection, bot_alias: str, now: float) -> bool:
+        if connection.can_view_bot is None:
+            return False
+        cached = connection.bot_access_cache.get(bot_alias)
+        if cached is not None and now - cached[1] <= self.bot_access_ttl_seconds:
+            return cached[0]
+        try:
+            allowed = bool(connection.can_view_bot(bot_alias))
+        except Exception as exc:
+            logger.debug("检查通知连接的 Bot 权限失败 account=%s error=%s", connection.account_id, exc)
+            allowed = False
+        connection.bot_access_cache[bot_alias] = (allowed, now)
+        return allowed
+
+    def queue_chat_sync(self, bot_alias: str, agent_id: str = "main", reason: str = "") -> None:
+        """Schedule one coalesced ``chat_sync`` hint for a session. Call on the event loop."""
+        alias = str(bot_alias or "").strip().lower()
+        if not alias or not self._connections:
+            return
+        key = (alias, str(agent_id or "main").strip().lower() or "main")
+        normalized_reason = str(reason or "")
+        pending = self._chat_sync_pending.get(key)
+        if pending is None or (
+            _CHAT_SYNC_REASON_PRIORITY.get(normalized_reason, 0) >= _CHAT_SYNC_REASON_PRIORITY.get(pending, 0)
+        ):
+            self._chat_sync_pending[key] = normalized_reason
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        due_at = now + self.chat_sync_settle_seconds
+        if normalized_reason not in _CHAT_SYNC_LIFECYCLE_REASONS:
+            due_at = max(due_at, self._chat_sync_sent_at.get(key, float("-inf")) + self.chat_sync_min_interval_seconds)
+        timer = self._chat_sync_timers.get(key)
+        if timer is not None:
+            if due_at >= self._chat_sync_due_at.get(key, float("inf")):
+                return
+            # A lifecycle hint must not wait behind a rate-limited progress hint.
+            timer.cancel()
+        self._chat_sync_due_at[key] = due_at
+        self._chat_sync_timers[key] = loop.call_later(max(0.0, due_at - now), self._flush_chat_sync, key)
+
+    def _flush_chat_sync(self, key: tuple[str, str]) -> None:
+        self._chat_sync_timers.pop(key, None)
+        self._chat_sync_due_at.pop(key, None)
+        reason = self._chat_sync_pending.pop(key, None)
+        if reason is None:
+            return
+        loop = asyncio.get_running_loop()
+        self._chat_sync_sent_at[key] = loop.time()
+        if len(self._chat_sync_sent_at) > 512:
+            for stale_key in list(self._chat_sync_sent_at)[:256]:
+                if stale_key not in self._chat_sync_timers:
+                    self._chat_sync_sent_at.pop(stale_key, None)
+        event = {"type": "chat_sync", "botAlias": key[0], "agentId": key[1], "reason": reason}
+        task = loop.create_task(self._deliver_chat_sync(event))
+        self._chat_sync_tasks.add(task)
+        task.add_done_callback(self._chat_sync_tasks.discard)
+
+    async def _send_chat_sync(self, connection: NotificationConnection, event: dict[str, Any]) -> bool:
+        """Send one hint; False means the socket is gone and should leave the registry."""
+        try:
+            # One congested socket must not hold back the hint for every other page.
+            await asyncio.wait_for(connection.ws.send_json(event), timeout=self.chat_sync_send_timeout_seconds)
+        except asyncio.TimeoutError:
+            # Still open, only slow: this hint is dropped and the page's fallback poll covers it.
+            logger.debug("聊天同步提示投递超时 account=%s", connection.account_id)
+        except _CLIENT_DISCONNECT_ERRORS:
+            return False
+        except Exception as exc:
+            logger.debug("聊天同步提示投递失败 account=%s error=%s", connection.account_id, exc)
+            return False
+        return True
+
+    async def _deliver_chat_sync(self, event: dict[str, Any]) -> int:
+        now = self._now()
+        # Every open socket gets the hint: the client slows its polling while the socket is
+        # open, so the heartbeat presence window used for completion notices does not apply.
+        connections = [
+            connection
+            for account_connections in list(self._connections.values())
+            for connection in list(account_connections)
+        ]
+        closed = [connection for connection in connections if bool(getattr(connection.ws, "closed", False))]
+        targets = [
+            connection
+            for connection in connections
+            if not bool(getattr(connection.ws, "closed", False))
+            and self._connection_can_view_bot(connection, event["botAlias"], now)
+        ]
+        results = await asyncio.gather(*(self._send_chat_sync(connection, event) for connection in targets))
+        for connection in closed:
+            self.unregister(connection)
+        for connection, usable in zip(targets, results):
+            if not usable:
+                self.unregister(connection)
+        return sum(1 for usable in results if usable)
+
+    async def drain_chat_sync(self) -> None:
+        """Wait for hints that are already being delivered (used by tests)."""
+        if self._chat_sync_tasks:
+            await asyncio.gather(*list(self._chat_sync_tasks), return_exceptions=True)
+
     async def close(self) -> None:
+        for timer in self._chat_sync_timers.values():
+            timer.cancel()
+        self._chat_sync_timers.clear()
+        self._chat_sync_due_at.clear()
+        self._chat_sync_pending.clear()
+        sync_tasks = list(self._chat_sync_tasks)
+        self._chat_sync_tasks.clear()
+        for task in sync_tasks:
+            task.cancel()
+        if sync_tasks:
+            await asyncio.gather(*sync_tasks, return_exceptions=True)
         tasks = list(self._push_tasks)
         self._push_tasks.clear()
         for task in tasks:

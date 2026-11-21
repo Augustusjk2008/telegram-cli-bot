@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from typing import Any
 
 from aiohttp import web
 
@@ -13,13 +16,48 @@ from bot.web.theme_asset_store import ThemeAssetStoreError
 from bot.web.theme_store import THEME_READONLY_MESSAGE, ThemeStoreError
 
 
+def _themes_digest(themes: list[Any]) -> str:
+    canonical = json.dumps(themes, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
+def _library_response_data(data: Any, known_digest: str) -> Any:
+    """Tag the library with a digest of its themes and omit themes the client already holds.
+
+    The theme library is a read-only set of packaged presets, so a client that sends
+    the digest it cached only needs the per-account selection and revision back.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("themes"), list):
+        return data
+    digest = _themes_digest(data["themes"])
+    result = {**data, "themesDigest": digest}
+    if known_digest and known_digest == digest and not result.get("error"):
+        result.pop("themes")
+        result["themesUnchanged"] = True
+    return result
+
+
+def _json(data: Any) -> web.Response:
+    response = web.json_response(
+        {"ok": True, "data": data},
+        dumps=lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+    )
+    response.enable_compression()
+    return response
+
+
 async def _dispatch(request: web.Request, operation: str) -> web.Response:
     server = request.app[SERVER_APP_KEY]
     auth = None if operation == "public_list" else await server._with_auth(request)
+    known_digest = str(request.query.get("themes_digest") or "").strip()
     try:
         if operation in {"list", "public_list"}:
             account_id = None if operation == "public_list" else auth.account_id
-            data = await asyncio.to_thread(server.theme_store.list_library, account_id)
+
+            def read_library() -> Any:
+                return _library_response_data(server.theme_store.list_library(account_id), known_digest)
+
+            data = await asyncio.to_thread(read_library)
         else:
             if auth.role == ROLE_GUEST or auth.account_id == "guest":
                 raise WebApiError(403, "theme_readonly", "请登录正式账户后管理主题")
@@ -31,12 +69,15 @@ async def _dispatch(request: web.Request, operation: str) -> web.Response:
             if operation in {"update", "delete"}:
                 args.append(request.match_info["theme_id"])
             if operation == "select":
-                data = await asyncio.to_thread(method, payload, auth.account_id)
+                def select_theme() -> Any:
+                    return _library_response_data(method(payload, auth.account_id), known_digest)
+
+                data = await asyncio.to_thread(select_theme)
             else:
                 data = await asyncio.to_thread(method, *args, payload)
     except ThemeStoreError as exc:
         raise WebApiError(exc.status, exc.code, exc.message, exc.data) from exc
-    return web.json_response({"ok": True, "data": data})
+    return _json(data)
 
 
 async def get_themes(request: web.Request) -> web.Response:

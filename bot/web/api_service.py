@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import hmac
 import inspect
 import json
@@ -26,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
 from bot import app_settings
 from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
@@ -56,6 +57,7 @@ from bot.cluster.runtime import (
     ClusterRunRequest,
     ClusterToolError,
     derive_cluster_run_id,
+    set_task_change_listener,
 )
 from bot.cluster.team_service import ClusterTeamService
 from bot.cluster.setup import (
@@ -144,6 +146,14 @@ from bot.sessions import (
 )
 from bot.utils import is_dangerous_command, split_command_argv
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
+from bot.web.chat_sync_events import (
+    CHAT_SYNC_REASON_CLUSTER,
+    CHAT_SYNC_REASON_CONVERSATION,
+    CHAT_SYNC_REASON_PROGRESS,
+    CHAT_SYNC_REASON_TURN_FINISHED,
+    CHAT_SYNC_REASON_TURN_STARTED,
+    publish_chat_sync,
+)
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
 from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore, is_cli_history_provider
@@ -246,8 +256,32 @@ from bot.web.terminal_actions import (
 
 logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_ResultT = TypeVar("_ResultT")
 _CLUSTER_RUNTIME = ClusterRuntime()
 _CLUSTER_TEAM_SERVICE = ClusterTeamService()
+# Child task state shows in the main conversation's team dock; tell open pages when it changes.
+set_task_change_listener(lambda alias: publish_chat_sync(alias, "main", CHAT_SYNC_REASON_CLUSTER))
+
+
+def _publishes_conversation_sync(function: Callable[..., Awaitable[_ResultT]]) -> Callable[..., Awaitable[_ResultT]]:
+    """After a conversation or session change succeeds, hint other pages of that session to sync."""
+    signature = inspect.signature(function)
+
+    @functools.wraps(function)
+    async def wrapper(*args: Any, **kwargs: Any) -> _ResultT:
+        result = await function(*args, **kwargs)
+        try:
+            arguments = signature.bind_partial(*args, **kwargs).arguments
+            publish_chat_sync(
+                str(arguments.get("alias") or ""),
+                str(arguments.get("agent_id") or "main"),
+                CHAT_SYNC_REASON_CONVERSATION,
+            )
+        except Exception:  # pragma: no cover - a hint must never fail the operation
+            logger.debug("发布会话变更同步提示失败", exc_info=True)
+        return result
+
+    return wrapper
 
 
 @dataclass
@@ -784,7 +818,9 @@ def get_overview(
             {
                 "run_id": active_cluster_run.run_id,
                 "status": active_cluster_run.status,
-                "tasks": _CLUSTER_RUNTIME.build_task_status(active_cluster_run.run_id, include_output=True),
+                # Task outputs are read on demand through the cluster tasks endpoint;
+                # the overview is polled, so it only carries task status.
+                "tasks": _CLUSTER_RUNTIME.build_task_status(active_cluster_run.run_id, include_output=False),
                 "team": active_cluster_status["team"],
                 "team_revision": active_cluster_status["team_revision"],
                 "capacity": active_cluster_status["capacity"],
@@ -2522,6 +2558,7 @@ def _create_conversation_locked(
     }
 
 
+@_publishes_conversation_sync
 async def create_conversation(
     manager: MultiBotManager,
     alias: str,
@@ -2657,6 +2694,7 @@ def _select_conversation_locked(
     }
 
 
+@_publishes_conversation_sync
 async def select_conversation(
     manager: MultiBotManager,
     alias: str,
@@ -2798,6 +2836,7 @@ def _delete_conversation_locked(
     }
 
 
+@_publishes_conversation_sync
 async def delete_conversation(
     manager: MultiBotManager,
     alias: str,
@@ -2902,6 +2941,7 @@ def _archive_conversation_locked(
     }
 
 
+@_publishes_conversation_sync
 async def archive_conversation(
     manager: MultiBotManager,
     alias: str,
@@ -3158,6 +3198,7 @@ def delete_all_conversations(
     }
 
 
+@_publishes_conversation_sync
 async def delete_all_conversations_async(
     manager: MultiBotManager,
     alias: str,
@@ -3244,13 +3285,45 @@ def get_history_trace(
     message_id: str,
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    compact: bool = False,
 ) -> dict[str, Any]:
     profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
-    data = service.get_message_trace(profile, session, message_id)
+    data = service.get_message_trace(profile, session, message_id, compact=compact)
     if data is None:
         _raise(404, "trace_not_found", "未找到对应消息的过程详情")
+    return data
+
+
+def get_history_trace_event(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    message_id: str,
+    agent_id: str = "main",
+    execution_mode: str = "",
+    *,
+    event_id: str = "",
+    kind: str = "",
+    call_id: str = "",
+) -> dict[str, Any]:
+    if not str(event_id or "").strip() and not (str(kind or "").strip() and str(call_id or "").strip()):
+        _raise(400, "missing_trace_event_ref", "缺少过程事件标识")
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    service = _history_service_for_execution_mode(session, resolved_execution_mode)
+    data = service.get_message_trace_event(
+        profile,
+        session,
+        message_id,
+        event_id=event_id,
+        kind=kind,
+        call_id=call_id,
+    )
+    if data is None:
+        _raise(404, "trace_event_not_found", "未找到对应的过程事件")
     return data
 
 
@@ -3315,6 +3388,7 @@ def _reset_user_session_locked(manager: MultiBotManager, alias: str, user_id: in
     return {"reset": removed}
 
 
+@_publishes_conversation_sync
 async def reset_user_session(
     manager: MultiBotManager,
     alias: str,
@@ -6227,6 +6301,7 @@ async def _stream_cli_chat(
     sqlite_flush_count = 0
     completion_state_for_diag = ""
     normal_return_for_diag = False
+    turn_finished_published = False
     active_lifecycle: _CliProcessLifecycle | None = None
     active_server_reader: _CodexServerOutputReader | None = None
     turn_handle = None
@@ -6476,6 +6551,8 @@ async def _stream_cli_chat(
             }
 
             if not meta_sent:
+                # Other pages and channels watching this session can pick up the new turn now.
+                publish_chat_sync(alias, session.agent_id, CHAT_SYNC_REASON_TURN_STARTED)
                 yield {
                     "type": "meta",
                     **turn_event_ids,
@@ -6500,6 +6577,7 @@ async def _stream_cli_chat(
                 service,
                 turn_handle,
                 loop=loop,
+                on_preview_persisted=lambda: publish_chat_sync(alias, session.agent_id, CHAT_SYNC_REASON_PROGRESS),
             )
             thread_id: Optional[str] = None
             last_status_signature: tuple[int, Optional[str], tuple[tuple[str, str], ...] | None] | None = None
@@ -6866,6 +6944,10 @@ async def _stream_cli_chat(
                     if ready_status is not None:
                         yield ready_status
 
+                    # Trace queued behind a running flush has no later event to trigger its own
+                    # flush while tools run; store it now so viewers can read those events back.
+                    persistence_buffer.maybe_flush()
+
                     if drained:
                         await asyncio.sleep(0)
                     else:
@@ -7197,6 +7279,8 @@ async def _stream_cli_chat(
                 sqlite_flush_count=sqlite_flush_count,
             )
             normal_return_for_diag = True
+            publish_chat_sync(alias, session.agent_id, CHAT_SYNC_REASON_TURN_FINISHED)
+            turn_finished_published = True
             yield done_event
             return
     except ChatInputCancelled:
@@ -7296,6 +7380,9 @@ async def _stream_cli_chat(
                     _reset_session_runtime_flags(session)
                     if owns_execution:
                         _finish_control_execution(session, execution_id)
+            if not turn_finished_published:
+                # Covers every other exit (error, cancel, abandoned stream) once the session is idle again.
+                publish_chat_sync(alias, getattr(session, "agent_id", agent_id), CHAT_SYNC_REASON_TURN_FINISHED)
         if not normal_return_for_diag:
             await _reconcile_idle_cli_turns(session)
 
@@ -7801,6 +7888,8 @@ async def _stream_endless_attempts(
                 turn_id=turn_id,
                 assistant_message_id=assistant_message_id,
             )
+            # Pages that watch this run without the stream show the retry record from history.
+            publish_chat_sync(alias, getattr(session, "agent_id", "main"), CHAT_SYNC_REASON_PROGRESS)
         except Exception as exc:
             logger.warning(
                 "无尽模式事件持久化失败 alias=%s kind=%s error=%s",
@@ -8185,6 +8274,8 @@ async def stream_chat(
                 _finish_cluster_parent_turn(manager, wakeup_run_id)
         if endless_started and session is not None:
             _set_endless_session_state(session, active=False, processing=False)
+            # The run's endless state ends after its last attempt already reported its own end.
+            publish_chat_sync(alias, agent_id, CHAT_SYNC_REASON_TURN_FINISHED)
 
 
 async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: int, command: str) -> dict[str, Any]:

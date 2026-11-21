@@ -1,11 +1,22 @@
 import type { ReactNode } from "react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, LoaderCircle } from "lucide-react";
 import { ChatMarkdownMessage } from "./ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
-import type { ChatMessage, ChatMessageContextUsage } from "../services/types";
-import type { CliTranscriptEntry } from "../utils/cliTranscript";
+import type { ChatMessage, ChatMessageContextUsage, ChatTraceEvent } from "../services/types";
+import {
+  isTraceContentTruncated,
+  restoreTranscriptEntryDetails,
+  traceDetailKey,
+  traceEntryBody,
+  type CliTranscriptEntry,
+} from "../utils/cliTranscript";
 import { ChatFinalAnswerActions } from "./ChatFinalAnswerActions";
+
+/** Reads the full version of a trace event that arrived as a capped preview. */
+export type TraceEventDetailLoader = (trace: ChatTraceEvent) => Promise<ChatTraceEvent | null>;
+
+const TraceEventDetailContext = createContext<TraceEventDetailLoader | undefined>(undefined);
 
 type Props = {
   entries: CliTranscriptEntry[];
@@ -20,6 +31,9 @@ type Props = {
   isTraceLoading?: boolean;
   traceLoadError?: string;
   onLoadTrace?: () => void;
+  onLoadTraceEventDetail?: TraceEventDetailLoader;
+  /** Reads the whole trace with full payloads, for copying a transcript that holds previews. */
+  onLoadFullTrace?: () => Promise<ChatTraceEvent[] | null | undefined>;
   onFileLinkClick?: (href: string) => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
   onContinue?: () => void;
@@ -72,8 +86,8 @@ function compact(value: string, fallback: string) {
   return text || fallback;
 }
 
-function EntryBody({ entry }: { entry: CliTranscriptEntry }) {
-  const body = (entry.body || "").trim();
+function EntryBody({ body: rawBody }: { body?: string }) {
+  const body = (rawBody || "").trim();
   if (!body) {
     return null;
   }
@@ -406,6 +420,50 @@ const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
   rowClassName: string;
 }) {
   const [expanded, setExpanded] = useState(!entry.collapsedByDefault);
+  // A large payload arrives as a preview; the full text is read once the entry is opened
+  // and swapped in place, so the box keeps its size and scroll position.
+  const loadDetail = useContext(TraceEventDetailContext);
+  const trace = entry.trace;
+  const traceRef = useRef(trace);
+  traceRef.current = trace;
+  // Only a capped payload changes what this row shows: the summary line is clipped to one
+  // line either way, and kinds without a body have nothing to load.
+  const detailKey = trace && typeof trace.payloadChars === "number" && typeof traceEntryBody(trace) === "string"
+    ? traceDetailKey(trace)
+    : "";
+  const [detail, setDetail] = useState<{ key: string; body?: string } | null>(null);
+  const [failedDetailKey, setFailedDetailKey] = useState("");
+  const [detailRetry, setDetailRetry] = useState(0);
+  const loadedDetailKey = detail?.key || "";
+  useEffect(() => {
+    const current = traceRef.current;
+    if (!expanded || !detailKey || !loadDetail || !current || loadedDetailKey === detailKey) {
+      return;
+    }
+    let cancelled = false;
+    setFailedDetailKey("");
+    loadDetail(current).then(
+      (full) => {
+        if (cancelled) {
+          return;
+        }
+        if (full) {
+          setDetail({ key: detailKey, body: traceEntryBody(full) });
+        } else {
+          setFailedDetailKey(detailKey);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setFailedDetailKey(detailKey);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [detailKey, detailRetry, expanded, loadDetail, loadedDetailKey]);
+  const body = detail && detail.key === detailKey ? detail.body : entry.body;
   return (
     <details
       className={rowClassName}
@@ -419,7 +477,19 @@ const ToolTranscriptEntryRow = memo(function ToolTranscriptEntryRow({
         <span className="font-medium text-[var(--text)]">{entry.label}</span>
         {entry.summary ? <span className="ml-2">{entry.summary}</span> : null}
       </summary>
-      {expanded ? <EntryBody entry={entry} /> : null}
+      {expanded ? <EntryBody body={body} /> : null}
+      {expanded && detailKey && failedDetailKey === detailKey ? (
+        <div className="mt-1 flex items-center gap-2 text-xs text-[var(--feedback-error-text-deep)]">
+          <span>完整内容加载失败</span>
+          <button
+            type="button"
+            onClick={() => setDetailRetry((value) => value + 1)}
+            className="inline-flex rounded-md border border-[var(--feedback-error-border-light)] px-2 py-0.5 text-xs text-[var(--feedback-error-text-deep)] hover:bg-[var(--feedback-error-background-subtle)]"
+          >
+            重试
+          </button>
+        </div>
+      ) : null}
     </details>
   );
 });
@@ -527,6 +597,8 @@ export function CliTranscript({
   isTraceLoading = false,
   traceLoadError = "",
   onLoadTrace,
+  onLoadTraceEventDetail,
+  onLoadFullTrace,
   onFileLinkClick,
   onCopyFinalAnswer,
   onContinue,
@@ -557,6 +629,42 @@ export function CliTranscript({
   }, [isTraceLoading, onLoadTrace, shouldLazyLoadTrace, totalTraceCount, traceExpanded, traceLoadError]);
 
   const renderItems = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  const hasContentPreviews = useMemo(
+    () => entries.some((entry) => Boolean(entry.trace && isTraceContentTruncated(entry.trace))),
+    [entries],
+  );
+  const previewSignature = useMemo(
+    () => entries
+      .filter((entry) => Boolean(entry.trace && isTraceContentTruncated(entry.trace)))
+      .map((entry) => traceDetailKey(entry.trace as ChatTraceEvent))
+      .join("\n"),
+    [entries],
+  );
+  const fullTraceRef = useRef<{ signature: string; trace: ChatTraceEvent[] } | null>(null);
+  // Copying must include complete tool output, so previews are replaced from the full trace
+  // first; if that cannot be done the copy fails instead of handing out cut-off text.
+  const formatWithFullTrace = (fullTrace: ChatTraceEvent[]) => {
+    const fullEntries = restoreTranscriptEntryDetails(entries, fullTrace);
+    if (fullEntries.some((entry) => Boolean(entry.trace && isTraceContentTruncated(entry.trace)))) {
+      throw new Error("transcript incomplete");
+    }
+    return formatTranscriptFullAnswer(groupTranscriptEntries(fullEntries), resultText, originalResultText);
+  };
+  const buildFullAnswerText = () => {
+    if (!hasContentPreviews || !onLoadFullTrace) {
+      return formatTranscriptFullAnswer(renderItems, resultText, originalResultText);
+    }
+    const loaded = fullTraceRef.current;
+    if (loaded && loaded.signature === previewSignature) {
+      // Already downloaded by an earlier click: answer synchronously, inside the user gesture.
+      return formatWithFullTrace(loaded.trace);
+    }
+    return onLoadFullTrace().then((fullTrace) => {
+      const text = formatWithFullTrace(fullTrace || []);
+      fullTraceRef.current = { signature: previewSignature, trace: fullTrace || [] };
+      return text;
+    });
+  };
   const shouldFilterDuplicateFinal = state !== "streaming" && Boolean(normalizedDisplayText(originalResultText));
   const displayRenderItems = useMemo(() => (
     shouldFilterDuplicateFinal
@@ -647,6 +755,7 @@ export function CliTranscript({
   );
 
   return (
+    <TraceEventDetailContext.Provider value={onLoadTraceEventDetail}>
     <div data-testid="cli-transcript" className="min-w-0 text-sm text-[var(--text)]">
       {mobileLayout && state === "streaming" ? (
         <div data-testid="cli-streaming-status" role="status" className="flex min-w-0 items-start gap-1.5 py-1 text-xs text-[var(--muted)]">
@@ -716,7 +825,7 @@ export function CliTranscript({
               contextUsage={contextUsage}
               endlessContinueCount={endlessContinueCount}
               favorite={favorite}
-              buildFullAnswerText={showCopyFinalAnswer ? () => formatTranscriptFullAnswer(renderItems, resultText, originalResultText) : undefined}
+              buildFullAnswerText={showCopyFinalAnswer ? buildFullAnswerText : undefined}
               onContinue={onContinue}
               onFastForward={onFastForward}
               onCopyFinalAnswer={onCopyFinalAnswer}
@@ -740,5 +849,6 @@ export function CliTranscript({
         </div>
       ) : null}
     </div>
+    </TraceEventDetailContext.Provider>
   );
 }

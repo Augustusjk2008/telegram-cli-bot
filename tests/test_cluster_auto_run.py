@@ -346,6 +346,48 @@ def test_cluster_status_reports_team_capacity_and_free_slots() -> None:
     ]
 
 
+def test_overview_reports_cluster_task_status_without_task_output(monkeypatch, tmp_path) -> None:
+    import json
+
+    import bot.web.api_service as api_service
+    from bot.manager import MultiBotManager
+
+    storage = tmp_path / "managed_bots.json"
+    storage.write_text(json.dumps({"bots": []}), encoding="utf-8")
+    profile = BotProfile(
+        alias="main",
+        cli_type="codex",
+        cli_path="codex",
+        working_dir=str(tmp_path),
+        agents=[AgentProfile(id="worker", name="Worker")],
+        cluster=BotClusterConfig(enabled=True),
+    )
+    manager = MultiBotManager(profile, str(storage))
+    runtime = ClusterRuntime()
+    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
+    run = runtime.start_run(
+        ClusterRunRequest(bot_alias="main", user_id=1, profile=profile, main_conversation_id="conv_main", team_revision=0)
+    )
+    task = runtime.create_agent_task(
+        run.run_id,
+        AskAgentRequest(agent_id="worker", message="work", model_tier="medium", timeout_seconds=60, allow_write=False),
+    )
+    runtime.complete_agent_task(run.run_id, task.task_id, "a long child-agent report")
+    monkeypatch.setattr(api_service, "_find_active_cluster_run_for_session", lambda *_args: run)
+
+    overview = api_service.get_overview(manager, "main", 1)
+
+    # The overview is polled; task output is read through the cluster tasks endpoint instead.
+    tasks = overview["active_cluster_run"]["tasks"]
+    assert tasks["completed_count"] == 1
+    assert tasks["tasks"][0]["task_id"] == task.task_id
+    assert tasks["tasks"][0]["status"] == "completed"
+    assert "output" not in tasks["tasks"][0]
+    assert api_service.get_cluster_task_status(manager, "main", 1, run.run_id)["tasks"][0]["output"] == (
+        "a long child-agent report"
+    )
+
+
 def test_bot_activity_uses_current_cluster_role_name(monkeypatch, tmp_path) -> None:
     import bot.web.api_service as api_service
 

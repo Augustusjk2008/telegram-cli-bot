@@ -27,8 +27,11 @@ import type {
   ChatMessage,
   ChatTranslation,
   ChatStatusUpdate,
+  ChatSyncEvent,
   ChatTraceDetails,
   ChatTraceEvent,
+  ChatTraceEventRef,
+  ChatTraceRequestOptions,
   CliErrorStatsFilters,
   CliErrorStatsResult,
   CodexUsageConfig,
@@ -187,14 +190,15 @@ export interface WebBotClient {
   loginGuest(): Promise<SessionState>;
   restoreSession(token?: string): Promise<SessionState>;
   logout(): Promise<void>;
-  listPublicUiThemes(): Promise<ThemeLibrary>;
-  listUiThemes(): Promise<ThemeLibrary>;
+  /** `known` is the library already held; its themes are reused when the server reports them unchanged. */
+  listPublicUiThemes(known?: ThemeLibrary): Promise<ThemeLibrary>;
+  listUiThemes(known?: ThemeLibrary): Promise<ThemeLibrary>;
   createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary>;
   importUiThemes(input: ThemeImportInput): Promise<ThemeLibrary>;
   uploadThemeAsset(file: File): Promise<ThemeIllustrationAsset>;
   updateUiTheme(id: string, input: ThemeUpdateInput): Promise<ThemeLibrary>;
   deleteUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
-  selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary>;
+  selectUiTheme(id: string, expectedRevision: number, known?: ThemeLibrary): Promise<ThemeLibrary>;
   listAnnouncements(): Promise<AnnouncementListResult>;
   markAnnouncementsSeen(latestId: string): Promise<AnnouncementListResult>;
   upsertAnnouncement(input: CreateAnnouncementInput): Promise<AnnouncementItem>;
@@ -302,7 +306,14 @@ export interface WebBotClient {
   listMessages(botAlias: string, options?: AgentScopedOptions): Promise<HistorySnapshotResult>;
   listMessageDelta(botAlias: string, afterId: string, limit?: number, options?: HistoryDeltaOptions): Promise<HistoryDeltaResult>;
   retryAnswerTranslation(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTranslation>;
-  getMessageTrace(botAlias: string, messageId: string, options?: AgentScopedOptions): Promise<ChatTraceDetails>;
+  getMessageTrace(botAlias: string, messageId: string, options?: ChatTraceRequestOptions): Promise<ChatTraceDetails>;
+  /** Reads one full trace event whose summary or payload arrived as a capped preview. */
+  getMessageTraceEvent?(
+    botAlias: string,
+    messageId: string,
+    ref: ChatTraceEventRef,
+    options?: AgentScopedOptions,
+  ): Promise<ChatTraceEvent | null>;
   sendMessage(
     botAlias: string,
     text: string,
@@ -490,6 +501,10 @@ export interface WebBotClient {
     options?: NotificationSubscriptionOptions,
   ): NotificationSubscription;
   sendNotificationPresenceUpdate?(presence: NotificationPresenceUpdate): void;
+  /** Receives `chat_sync` hints carried by the notifications socket; returns an unsubscribe function. */
+  subscribeChatSync?(listener: (event: ChatSyncEvent) => void): () => void;
+  /** True while a notifications socket is open on a host that pushes `chat_sync` hints. */
+  isChatSyncActive?(): boolean;
   updateBotCli(botAlias: string, cliType: string, cliPath: string): Promise<BotSummary>;
   updateBotWorkdir(botAlias: string, workingDir: string, options?: UpdateBotWorkdirOptions): Promise<BotSummary>;
   addBot(input: CreateBotInput): Promise<BotSummary>;

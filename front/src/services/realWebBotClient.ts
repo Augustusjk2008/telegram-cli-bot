@@ -90,7 +90,10 @@ import type {
   ChatMessage,
   ChatMessageContextUsage,
   ChatEndlessEvent,
+  ChatSyncEvent,
   ChatTraceDetails,
+  ChatTraceEventRef,
+  ChatTraceRequestOptions,
   ChatMessageMetaInfo,
   ChatStatusUpdate,
   ChatTraceEvent,
@@ -756,6 +759,9 @@ type RawChatTraceEvent = {
   call_id?: string;
   callId?: string;
   payload?: unknown;
+  content_truncated?: boolean;
+  payload_chars?: number;
+  summary_chars?: number;
 };
 
 type RawChatMessageMeta = {
@@ -2594,6 +2600,14 @@ function mapTraceEvent(raw?: RawChatTraceEvent | null): ChatTraceEvent | null {
   }
   if (typeof raw.payload !== "undefined") {
     event.payload = raw.payload;
+  }
+  if (raw.content_truncated) {
+    if (typeof raw.payload_chars === "number" && Number.isFinite(raw.payload_chars)) {
+      event.payloadChars = raw.payload_chars;
+    }
+    if (typeof raw.summary_chars === "number" && Number.isFinite(raw.summary_chars)) {
+      event.summaryChars = raw.summary_chars;
+    }
   }
   return event;
 }
@@ -4695,6 +4709,43 @@ export class RealWebBotClient implements WebBotClient {
   private token = "";
   private notificationPresence: NotificationPresenceUpdate | null = null;
   private notificationPresenceSenders = new Set<(presence: NotificationPresenceUpdate) => void>();
+  private chatSyncListeners = new Set<(event: ChatSyncEvent) => void>();
+  // Open notification sockets whose host announced the `chat_sync` feature.
+  private chatSyncSockets = new Set<WebSocket>();
+
+  private emitChatSync(event: ChatSyncEvent) {
+    this.chatSyncListeners.forEach((listener) => {
+      try {
+        listener(event);
+      } catch {
+        // One failing chat must not stop the others from syncing.
+      }
+    });
+  }
+
+  private setChatSyncSocket(socket: WebSocket, active: boolean) {
+    const wasActive = this.chatSyncSockets.size > 0;
+    if (active) {
+      this.chatSyncSockets.add(socket);
+    } else {
+      this.chatSyncSockets.delete(socket);
+    }
+    const isActive = this.chatSyncSockets.size > 0;
+    if (wasActive !== isActive) {
+      this.emitChatSync({ type: "status", active: isActive });
+    }
+  }
+
+  subscribeChatSync(listener: (event: ChatSyncEvent) => void): () => void {
+    this.chatSyncListeners.add(listener);
+    return () => {
+      this.chatSyncListeners.delete(listener);
+    };
+  }
+
+  isChatSyncActive(): boolean {
+    return this.chatSyncSockets.size > 0;
+  }
 
   private headers(extraHeaders: HeadersInit = {}) {
     return {
@@ -5010,7 +5061,8 @@ export class RealWebBotClient implements WebBotClient {
         }
       }
       notifyStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
-      socket = new WebSocket(buildWebSocketUrl("/api/notifications/ws"));
+      const currentSocket = new WebSocket(buildWebSocketUrl("/api/notifications/ws"));
+      socket = currentSocket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
         notifyStatus("open");
@@ -5023,6 +5075,21 @@ export class RealWebBotClient implements WebBotClient {
       socket.addEventListener("message", (event) => {
         try {
           const payload = JSON.parse(event.data);
+          if (payload?.type === "hello") {
+            // Only a host that announces the feature pushes hints; others keep being polled.
+            this.setChatSyncSocket(
+              currentSocket,
+              Array.isArray(payload.features) && payload.features.includes("chat_sync"),
+            );
+          } else if (payload?.type === "chat_sync") {
+            this.emitChatSync({
+              type: "change",
+              botAlias: String(payload.botAlias || ""),
+              agentId: String(payload.agentId || "main"),
+              reason: String(payload.reason || ""),
+            });
+            return;
+          }
           if (isWebNotificationEvent(payload)) {
             onEvent(payload);
           }
@@ -5031,6 +5098,7 @@ export class RealWebBotClient implements WebBotClient {
         }
       });
       socket.addEventListener("close", () => {
+        this.setChatSyncSocket(currentSocket, false);
         clearHeartbeatTimer();
         if (closedByClient) {
           notifyStatus("closed");
@@ -5056,6 +5124,9 @@ export class RealWebBotClient implements WebBotClient {
         clearReconnectTimer();
         clearHeartbeatTimer();
         this.notificationPresenceSenders.delete(trackedSendPresence);
+        if (socket) {
+          this.setChatSyncSocket(socket, false);
+        }
         if (socket && socket.readyState !== WebSocket.CLOSED) {
           socket.close();
         } else {
@@ -5134,12 +5205,37 @@ export class RealWebBotClient implements WebBotClient {
     }
   }
 
-  async listPublicUiThemes(): Promise<ThemeLibrary> {
-    return this.requestJson<ThemeLibrary>("/api/public/ui/themes");
+  /**
+   * The theme list is a read-only set of packaged presets. When the caller already
+   * holds it, send its digest so the server can answer with the account state only.
+   */
+  private async requestThemeLibrary(path: string, known?: ThemeLibrary, init?: RequestInit): Promise<ThemeLibrary> {
+    const knownDigest = known?.themesDigest && Array.isArray(known.themes) && known.themes.length > 0
+      ? known.themesDigest
+      : "";
+    const data = await this.requestJson<ThemeLibrary & { themesUnchanged?: boolean }>(
+      knownDigest ? `${path}?themes_digest=${encodeURIComponent(knownDigest)}` : path,
+      init,
+    );
+    if (Array.isArray(data?.themes)) {
+      return data;
+    }
+    if (data?.themesUnchanged && known && data.themesDigest === knownDigest) {
+      const { themesUnchanged: _themesUnchanged, ...library } = data;
+      return { ...library, themes: known.themes };
+    }
+    if (knownDigest && (!init || String(init.method || "GET").toUpperCase() === "GET")) {
+      return this.requestJson<ThemeLibrary>(path, init);
+    }
+    return data;
   }
 
-  async listUiThemes(): Promise<ThemeLibrary> {
-    return this.requestJson<ThemeLibrary>("/api/ui/themes");
+  async listPublicUiThemes(known?: ThemeLibrary): Promise<ThemeLibrary> {
+    return this.requestThemeLibrary("/api/public/ui/themes", known);
+  }
+
+  async listUiThemes(known?: ThemeLibrary): Promise<ThemeLibrary> {
+    return this.requestThemeLibrary("/api/ui/themes", known);
   }
 
   async createUiTheme(input: ThemeCreateInput): Promise<ThemeLibrary> {
@@ -5183,8 +5279,8 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async selectUiTheme(id: string, expectedRevision: number): Promise<ThemeLibrary> {
-    return this.requestJson<ThemeLibrary>("/api/ui/theme-selection", {
+  async selectUiTheme(id: string, expectedRevision: number, known?: ThemeLibrary): Promise<ThemeLibrary> {
+    return this.requestThemeLibrary("/api/ui/theme-selection", known, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ themeId: id, expectedRevision }),
@@ -6241,14 +6337,39 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  async getMessageTrace(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTraceDetails> {
+  async getMessageTrace(botAlias: string, messageId: string, options: ChatTraceRequestOptions = {}): Promise<ChatTraceDetails> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
+    if (!options.fullPayload) {
+      // Large summaries and payloads arrive as previews; getMessageTraceEvent reads one in full.
+      params.set("payload", "compact");
+    }
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawChatTraceDetails>(
       `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
     );
     return mapChatTraceDetails(data);
+  }
+
+  async getMessageTraceEvent(
+    botAlias: string,
+    messageId: string,
+    ref: ChatTraceEventRef,
+    options: AgentScopedOptions = {},
+  ): Promise<ChatTraceEvent | null> {
+    const params = new URLSearchParams();
+    appendAgentParam(params, options.agentId);
+    if (ref.id) {
+      params.set("id", ref.id);
+    }
+    if (ref.kind && ref.callId) {
+      params.set("kind", ref.kind);
+      params.set("call_id", ref.callId);
+    }
+    const data = await this.requestJson<{ event?: RawChatTraceEvent }>(
+      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace/event?${params.toString()}`,
+    );
+    return mapTraceEvent(data.event);
   }
 
   async sendMessage(
@@ -6272,6 +6393,8 @@ export class RealWebBotClient implements WebBotClient {
       body: JSON.stringify({
         message: text,
         stream_protocol_version: 2,
+        // Trace events carry capped previews; expanded entries read the full event on demand.
+        trace_payload: "compact",
         ...(options?.taskMode ? { task_mode: options.taskMode } : {}),
         ...(options?.taskPayload ? { task_payload: options.taskPayload } : {}),
         ...(options?.visibleText ? { visible_text: options.visibleText } : {}),

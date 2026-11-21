@@ -106,6 +106,7 @@ from bot.update_service import get_update_service, UpdateServiceError, ACTIVE_PH
 from bot.update_state import UpdateConflict
 from .announcement_store import AnnouncementStore
 from .theme_store import ThemeStore
+from .trace_compaction import compact_trace_event
 from .async_chat_store import ChatStoreOverloadedError, chat_store_executor_diagnostics, run_chat_store_io
 from .cli_error_stats import collect_cli_error_stats
 from .diagnostics import diag_enabled, diag_log_event, diag_log_slow, diag_loop_lag_ms
@@ -118,7 +119,8 @@ from .inline_completion_config import InlineCompletionConfigError, InlineComplet
 from .inline_completion_service import InlineCompletionService, InlineCompletionServiceError
 from .translation_service import get_translation_service
 from .lan_chat_service import LanChatService
-from .notification_service import ChatNotificationService
+from .chat_sync_events import clear_chat_sync_publisher, set_chat_sync_publisher
+from .notification_service import NOTIFICATION_FEATURE_CHAT_SYNC, ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
 from .pushplus_client import PushPlusClient
 from .auth_store import (
@@ -238,6 +240,7 @@ from .api_service import (
     get_history,
     get_history_delta,
     get_history_trace,
+    get_history_trace_event,
     get_overview,
     get_codex_server_voice_session,
     open_codex_server_voice_runtime,
@@ -2627,6 +2630,8 @@ class WebApiServer:
         stream_protocol_version = normalize_stream_protocol_version(
             body.get("stream_protocol_version", body.get("streamProtocolVersion"))
         )
+        # Transport-only projection: persistence and other channels keep full trace events.
+        compact_trace = str(body.get("trace_payload", body.get("tracePayload")) or "").strip().lower() == "compact"
 
         response = web.StreamResponse(
             status=200,
@@ -2693,6 +2698,8 @@ class WebApiServer:
                 if client_disconnected:
                     continue
                 try:
+                    if compact_trace and event_type == "trace":
+                        event = {**event, "event": compact_trace_event(event.get("event"))}
                     encoded_event = _format_sse(event["type"], event)
                     if event.get("sequence") is not None:
                         encoded_event = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded_event
@@ -3262,19 +3269,26 @@ class WebApiServer:
         current_task = asyncio.current_task()
         if current_task is not None:
             self._notification_tasks.add(current_task)
+        can_read_chat = bool({CAP_VIEW_BOT_STATUS, CAP_VIEW_CHAT_HISTORY} & set(auth.capabilities))
         connection = self._notification_service.register(
             account_id=auth.account_id,
             user_id=auth.user_id,
             username=auth.username,
             ws=ws,
+            # Permissions are re-read per hint (briefly cached), so a revoked Bot stops receiving them.
+            can_view_bot=lambda alias: can_read_chat and self._can_operate_bot(auth, alias),
         )
         try:
-            await ws.send_json({
+            hello: dict[str, Any] = {
                 "type": "hello",
                 "accountId": auth.account_id,
                 "userId": auth.user_id,
                 "username": auth.username,
-            })
+            }
+            if getattr(self, "_chat_sync_loop", None) is not None:
+                # Clients that see this feature sync chats on `chat_sync` hints and poll slowly.
+                hello["features"] = [NOTIFICATION_FEATURE_CHAT_SYNC]
+            await ws.send_json(hello)
             async for message in ws:
                 if message.type != WSMsgType.TEXT:
                     if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
@@ -4130,6 +4144,8 @@ class WebApiServer:
         agent_id = self._request_agent_id(request)
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
+        # Clients that can read single events on demand ask for capped payloads.
+        compact = str(request.query.get("payload") or "").strip().lower() == "compact"
         data = await run_chat_store_io(
             get_history_trace,
             self.manager,
@@ -4138,7 +4154,29 @@ class WebApiServer:
             message_id,
             agent_id=agent_id,
             execution_mode=execution_mode,
+            compact=compact,
             write_key=f"{alias}:{chat_user_id}:{agent_id}",
+        )
+        return _json({"ok": True, "data": data})
+
+    async def get_history_trace_event_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_CHAT_TRACE)
+        alias = self._manager_alias(request)
+        message_id = request.match_info.get("message_id", "")
+        agent_id = self._request_agent_id(request)
+        execution_mode = self._request_execution_mode(request, include_body=False)
+        chat_user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            get_history_trace_event,
+            self.manager,
+            alias,
+            chat_user_id,
+            message_id,
+            agent_id=agent_id,
+            execution_mode=execution_mode,
+            event_id=str(request.query.get("id") or ""),
+            kind=str(request.query.get("kind") or ""),
+            call_id=str(request.query.get("call_id") or ""),
         )
         return _json({"ok": True, "data": data})
 
@@ -5701,6 +5739,24 @@ class WebApiServer:
             return response
         return web.Response(text="Not found", status=404)
 
+    def _publish_chat_sync(self, alias: str, agent_id: str, reason: str) -> None:
+        """Forward a session-changed hint to the notification sockets from any thread."""
+        loop = getattr(self, "_chat_sync_loop", None)
+        if loop is None or loop.is_closed():
+            return
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            self._notification_service.queue_chat_sync(alias, agent_id, reason)
+        else:
+            loop.call_soon_threadsafe(self._notification_service.queue_chat_sync, alias, agent_id, reason)
+
+    def _enable_chat_sync(self) -> None:
+        self._chat_sync_loop = asyncio.get_running_loop()
+        set_chat_sync_publisher(self._publish_chat_sync)
+
     async def start(self):
         if self._runner is not None:
             return
@@ -5709,6 +5765,7 @@ class WebApiServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host=self._host, port=self._port)
         await self._site.start()
+        self._enable_chat_sync()
         self._start_loop_stall_watchdog()
         self._loop_lag_task = asyncio.create_task(self._watch_loop_lag(), name="web-loop-lag-watch")
         self._update_task = asyncio.create_task(self._auto_update_loop())
@@ -5867,6 +5924,8 @@ class WebApiServer:
             task.cancel()
         if chat_stream_tasks:
             await asyncio.gather(*chat_stream_tasks, return_exceptions=True)
+        clear_chat_sync_publisher(self._publish_chat_sync)
+        self._chat_sync_loop = None
         await self._notification_service.close()
         plugin_service = getattr(self.manager, "plugin_service", None)
         if plugin_service is not None:

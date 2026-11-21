@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from bot.cli import cli_data_provider
 from bot.models import BotProfile, UserSession
@@ -34,9 +34,12 @@ class StreamingPersistenceBuffer:
         preview_flush_interval_seconds: float = 2.0,
         max_batch_events: int = 32,
         max_batch_bytes: int = 16 * 1024,
+        on_preview_persisted: Callable[[], None] | None = None,
     ) -> None:
         self._service = service
         self._handle = handle
+        # Called from the flush thread after a new preview is stored (other viewers can sync).
+        self._on_preview_persisted = on_preview_persisted
         self._loop = loop
         self._loop_time = loop.time
         self._flush_interval_seconds = max(0.05, float(flush_interval_seconds))
@@ -177,6 +180,11 @@ class StreamingPersistenceBuffer:
         if preview:
             self._service.replace_assistant_preview(self._handle, preview)
             self.preview_flush_count += 1
+            if self._on_preview_persisted is not None:
+                try:
+                    self._on_preview_persisted()
+                except Exception:  # pragma: no cover - observers must not fail persistence
+                    pass
         if trace:
             self._service.append_trace_events(self._handle, trace)
             self.trace_flush_count += 1
@@ -898,6 +906,8 @@ class ChatHistoryService:
         profile: BotProfile,
         session: UserSession,
         message_id: str,
+        *,
+        compact: bool = False,
     ) -> dict[str, Any] | None:
         try:
             context = self.store.get_trace_recovery_context(message_id)
@@ -907,9 +917,33 @@ class ChatHistoryService:
             return None
         self._recover_trace_for_context(context)
         try:
-            return self.store.get_message_trace(message_id)
+            return self.store.get_message_trace(message_id, compact=compact)
         except KeyError:
             return None
+
+    def get_message_trace_event(
+        self,
+        profile: BotProfile,
+        session: UserSession,
+        message_id: str,
+        *,
+        event_id: str = "",
+        kind: str = "",
+        call_id: str = "",
+    ) -> dict[str, Any] | None:
+        """Read one full trace event; the counterpart of a compact trace snapshot or stream."""
+        try:
+            data = self.store.get_message_trace_event(
+                message_id,
+                event_id=event_id,
+                kind=kind,
+                call_id=call_id,
+            )
+        except KeyError:
+            return None
+        if not self._matches_native_provider(data.pop("native_provider", "")):
+            return None
+        return data
 
     async def get_message_trace_async(
         self,

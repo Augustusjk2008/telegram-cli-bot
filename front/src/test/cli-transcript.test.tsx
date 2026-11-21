@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it,  } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CliTranscript } from "../components/CliTranscript";
-import type { CliTranscriptEntry } from "../utils/cliTranscript";
+import { buildCliTranscriptEntries, mergeChatTraceEvents, type CliTranscriptEntry } from "../utils/cliTranscript";
+import type { ChatTraceEvent } from "../services/types";
 
 function processEntry(
   id: string,
@@ -202,4 +203,230 @@ describe("CliTranscript", () => {
     expect(within(retryGroups[0]).getByText("第二次失败")).toBeInTheDocument();
   });
 
+});
+
+describe("CliTranscript with capped trace previews", () => {
+  const previewTrace: ChatTraceEvent = {
+    id: "trace-result",
+    kind: "tool_result",
+    summary: "输出开头",
+    callId: "call-1",
+    payload: { output: "输出开头" },
+    payloadChars: 90_000,
+    summaryChars: 80_000,
+  };
+  const fullTrace: ChatTraceEvent = {
+    id: "trace-result",
+    kind: "tool_result",
+    summary: "输出开头……完整摘要",
+    callId: "call-1",
+    payload: { output: "输出开头……完整输出" },
+  };
+  const entries = () => buildCliTranscriptEntries({ trace: [previewTrace] });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the preview at once and swaps in the full payload when the entry is opened", async () => {
+    const loadDetail = vi.fn(async () => fullTrace);
+    render(
+      <CliTranscript entries={entries()} resultText="" state="streaming" traceLoaded onLoadTraceEventDetail={loadDetail} />,
+    );
+    const transcript = screen.getByTestId("cli-transcript");
+    // Nothing is fetched while the entry stays collapsed.
+    expect(loadDetail).not.toHaveBeenCalled();
+
+    const row = transcript.querySelector("details") as HTMLDetailsElement;
+    row.open = true;
+    fireEvent(row, new Event("toggle"));
+
+    expect(row.querySelector("pre")).toHaveTextContent("输出开头");
+    await waitFor(() => expect(row.querySelector("pre")).toHaveTextContent("输出开头……完整输出"));
+    expect(loadDetail).toHaveBeenCalledTimes(1);
+    expect(loadDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "trace-result", callId: "call-1" }));
+
+    // Closing and reopening reuses the loaded payload.
+    row.open = false;
+    fireEvent(row, new Event("toggle"));
+    row.open = true;
+    fireEvent(row, new Event("toggle"));
+    expect(row.querySelector("pre")).toHaveTextContent("输出开头……完整输出");
+    expect(loadDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the preview and offers a retry when the full payload cannot be read", async () => {
+    const loadDetail = vi.fn<(trace: ChatTraceEvent) => Promise<ChatTraceEvent | null>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(fullTrace);
+    render(
+      <CliTranscript entries={entries()} resultText="" state="streaming" traceLoaded onLoadTraceEventDetail={loadDetail} />,
+    );
+    const row = screen.getByTestId("cli-transcript").querySelector("details") as HTMLDetailsElement;
+    row.open = true;
+    fireEvent(row, new Event("toggle"));
+
+    await screen.findByText("完整内容加载失败");
+    expect(row.querySelector("pre")).toHaveTextContent("输出开头");
+    fireEvent.click(within(row).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(row.querySelector("pre")).toHaveTextContent("输出开头……完整输出"));
+    expect(screen.queryByText("完整内容加载失败")).not.toBeInTheDocument();
+  });
+
+  it("copies the complete transcript by reading the full trace first", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const loadFullTrace = vi.fn(async () => [fullTrace]);
+    render(
+      <CliTranscript
+        entries={entries()}
+        resultText="最终回答"
+        state="done"
+        traceLoaded
+        onCopyFinalAnswer={() => true}
+        onLoadFullTrace={loadFullTrace}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "复制完整回答" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(loadFullTrace).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith(
+      "[工具结果] 输出开头……完整摘要\n输出开头……完整输出\n\n[最终回答]\n最终回答",
+    );
+  });
+
+  it("does not copy a cut-off transcript when the full trace cannot be read", async () => {
+    const writeText = vi.fn(async (_text: string) => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const loadFullTrace = vi.fn<() => Promise<ChatTraceEvent[] | null>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([fullTrace]);
+    render(
+      <CliTranscript
+        entries={entries()}
+        resultText="最终回答"
+        state="done"
+        traceLoaded
+        onCopyFinalAnswer={() => true}
+        onLoadFullTrace={loadFullTrace}
+      />,
+    );
+    const copyButton = () => screen.getByRole("button", { name: /复制完整回答/ });
+
+    // A failed download and a trace that does not resolve the preview both leave the clipboard alone.
+    fireEvent.click(copyButton());
+    await waitFor(() => expect(loadFullTrace).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    fireEvent.click(copyButton());
+    await waitFor(() => expect(loadFullTrace).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(writeText).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "已复制完整回答" })).not.toBeInTheDocument();
+
+    fireEvent.click(copyButton());
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).toContain("输出开头……完整输出");
+    await screen.findByRole("button", { name: "已复制完整回答" });
+  });
+
+  it("starts the clipboard write inside the click when the browser accepts a pending item", async () => {
+    const write = vi.fn(async (items: Array<{ data: Record<string, Promise<Blob>> }>) => {
+      await items[0].data["text/plain"];
+    });
+    class FakeClipboardItem {
+      constructor(public data: Record<string, Promise<Blob>>) {}
+    }
+    vi.stubGlobal("ClipboardItem", FakeClipboardItem);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { write, writeText: vi.fn() } });
+    let releaseTrace!: (trace: ChatTraceEvent[]) => void;
+    const loadFullTrace = vi.fn(() => new Promise<ChatTraceEvent[]>((resolve) => { releaseTrace = resolve; }));
+    render(
+      <CliTranscript
+        entries={entries()}
+        resultText="最终回答"
+        state="done"
+        traceLoaded
+        onCopyFinalAnswer={() => true}
+        onLoadFullTrace={loadFullTrace}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "复制完整回答" }));
+    // The write is issued before the download finishes; further clicks do not start another download.
+    expect(write).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "复制完整回答" }));
+    expect(loadFullTrace).toHaveBeenCalledTimes(1);
+
+    await act(async () => { releaseTrace([fullTrace]); });
+    await screen.findByRole("button", { name: "已复制完整回答" });
+    const blob = await write.mock.calls[0][0][0].data["text/plain"];
+    expect(await blob.text()).toBe("[工具结果] 输出开头……完整摘要\n输出开头……完整输出\n\n[最终回答]\n最终回答");
+  });
+
+  it("opens rows whose body is already complete without any request", async () => {
+    const loadDetail = vi.fn(async () => fullTrace);
+    const summaryOnly: ChatTraceEvent = {
+      id: "trace-summary-only", kind: "tool_result", summary: "摘要开头", callId: "call-3",
+      payload: { output: "完整的短输出" }, summaryChars: 9_000,
+    };
+    const noBody: ChatTraceEvent = {
+      id: "trace-unknown", kind: "unknown", summary: "未知事件", payload: { detail: "开头" }, payloadChars: 9_000,
+    };
+    for (const trace of [summaryOnly, noBody]) {
+      const view = render(
+        <CliTranscript
+          entries={buildCliTranscriptEntries({ trace: [trace] })}
+          resultText=""
+          state="streaming"
+          traceLoaded
+          onLoadTraceEventDetail={loadDetail}
+        />,
+      );
+      const row = view.container.querySelector("details") as HTMLDetailsElement;
+      row.open = true;
+      fireEvent(row, new Event("toggle"));
+      await act(async () => {});
+      view.unmount();
+    }
+    expect(loadDetail).not.toHaveBeenCalled();
+  });
+
+  it("copies without any request when nothing in the transcript is a preview", async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const loadFullTrace = vi.fn(async () => [fullTrace]);
+    render(
+      <CliTranscript
+        entries={buildCliTranscriptEntries({ trace: [fullTrace] })}
+        resultText="最终回答"
+        state="done"
+        traceLoaded
+        onCopyFinalAnswer={() => true}
+        onLoadFullTrace={loadFullTrace}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "复制完整回答" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(loadFullTrace).not.toHaveBeenCalled();
+  });
+
+  it("keeps the richer version when a preview meets another copy of the same event", () => {
+    const smaller: ChatTraceEvent = { kind: "tool_call", summary: "ls", callId: "call-2", payload: { command: "ls" } };
+    const preview: ChatTraceEvent = {
+      kind: "tool_call",
+      summary: "写入文件",
+      callId: "call-2",
+      payload: { content: "开头" },
+      payloadChars: 50_000,
+    };
+
+    // A later, smaller copy must not displace the preview of a much larger payload.
+    expect(mergeChatTraceEvents([[preview], [smaller]])?.[0]).toMatchObject({ summary: "写入文件", payloadChars: 50_000 });
+    expect(mergeChatTraceEvents([[smaller], [preview]])?.[0]).toMatchObject({ summary: "写入文件", payloadChars: 50_000 });
+  });
 });

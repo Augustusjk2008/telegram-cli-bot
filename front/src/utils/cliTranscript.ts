@@ -40,6 +40,11 @@ function stringifyValue(value: unknown) {
   }
 }
 
+/** True when the server sent a capped preview of this event's summary or payload. */
+export function isTraceContentTruncated(trace: ChatTraceEvent) {
+  return typeof trace.payloadChars === "number" || typeof trace.summaryChars === "number";
+}
+
 function payloadText(trace: ChatTraceEvent) {
   const payload = asRecord(trace.payload);
   const wrappedPayloadText = (
@@ -140,9 +145,13 @@ function traceReconciliationKey(trace: ChatTraceEvent) {
 }
 
 function traceRichness(trace: ChatTraceEvent) {
+  // A capped preview still competes with its original size, so merging a preview
+  // against another version of the event keeps choosing the richer one.
+  const payloadLength = typeof trace.payloadChars === "number" ? trace.payloadChars : payloadText(trace).length;
+  const summaryLength = typeof trace.summaryChars === "number" ? trace.summaryChars : trace.summary.trim().length;
   return (
-    payloadText(trace).length * 10
-    + trace.summary.trim().length * 5
+    payloadLength * 10
+    + summaryLength * 5
     + (pickString(trace.toolName, trace.title) ? 2 : 0)
     + (typeof trace.payload !== "undefined" ? 1 : 0)
   );
@@ -169,7 +178,9 @@ function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent): Cha
   const toolName = pickString(primary.toolName, secondary.toolName);
   const callId = pickString(primary.callId, secondary.callId);
   const createdAt = pickString(current.createdAt, incoming.createdAt);
-  const payload = typeof primary.payload !== "undefined" ? primary.payload : secondary.payload;
+  const payloadSource = typeof primary.payload !== "undefined" ? primary : secondary;
+  const summarySource = primary.summary ? primary : secondary;
+  const payload = payloadSource.payload;
 
   if (id) {
     merged.id = id;
@@ -200,6 +211,12 @@ function mergeTraceEvent(current: ChatTraceEvent, incoming: ChatTraceEvent): Cha
   }
   if (typeof payload !== "undefined") {
     merged.payload = payload;
+    if (typeof payloadSource.payloadChars === "number") {
+      merged.payloadChars = payloadSource.payloadChars;
+    }
+  }
+  if (merged.summary && typeof summarySource.summaryChars === "number") {
+    merged.summaryChars = summarySource.summaryChars;
   }
   return merged;
 }
@@ -317,10 +334,64 @@ export function mergeChatTraceEvents(
   return merged.length > 0 ? merged : undefined;
 }
 
+/** Body text shown when a tool call or tool result entry is expanded. */
+export function traceEntryBody(trace: ChatTraceEvent) {
+  return entryKind(trace) === "tool" || trace.kind === "tool_result" ? payloadText(trace) : undefined;
+}
+
+function traceEntrySummary(trace: ChatTraceEvent) {
+  return trace.summary || trace.title || trace.toolName || "";
+}
+
+/** Identifies the content of a capped event, so a loaded full version is reused only while it still applies. */
+export function traceDetailKey(trace: ChatTraceEvent) {
+  return [
+    identifierText(trace.id),
+    trace.kind,
+    asString(trace.callId).trim(),
+    typeof trace.payloadChars === "number" ? trace.payloadChars : "",
+    typeof trace.summaryChars === "number" ? trace.summaryChars : "",
+  ].join("|");
+}
+
+/**
+ * Rebuilds entries that hold capped previews from the full trace, for output that
+ * must be complete (copying a transcript). Entries without a match stay as they are.
+ */
+export function restoreTranscriptEntryDetails(
+  entries: CliTranscriptEntry[],
+  fullTrace: ChatTraceEvent[],
+): CliTranscriptEntry[] {
+  const byId = new Map<string, ChatTraceEvent>();
+  const byCall = new Map<string, ChatTraceEvent>();
+  for (const event of fullTrace) {
+    const id = identifierText(event.id);
+    const callKey = traceCallKey(event);
+    if (id) byId.set(id, event);
+    if (callKey) byCall.set(callKey, event);
+  }
+  return entries.map((entry) => {
+    const trace = entry.trace;
+    if (!trace || !isTraceContentTruncated(trace)) {
+      return entry;
+    }
+    const full = byId.get(identifierText(trace.id)) || byCall.get(traceCallKey(trace));
+    if (!full || isTraceContentTruncated(full)) {
+      return entry;
+    }
+    return {
+      ...entry,
+      summary: traceEntrySummary(full) || entry.summary,
+      body: traceEntryBody(full),
+      trace: full,
+    };
+  });
+}
+
 function traceToEntry(trace: ChatTraceEvent, index: number, seq = traceOrder(trace, index)): CliTranscriptEntry {
   const kind = entryKind(trace);
-  const body = kind === "tool" || trace.kind === "tool_result" ? payloadText(trace) : undefined;
-  const summary = trace.summary || trace.title || trace.toolName || "";
+  const body = traceEntryBody(trace);
+  const summary = traceEntrySummary(trace);
   return {
     id: trace.id || `${trace.kind || "trace"}-${seq}-${index}`,
     seq,

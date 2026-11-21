@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from bot.cluster.config import MODEL_TIER_KEYS, ClusterExecutionSnapshot, resolve_cluster_execution
 from bot.models import BotProfile
@@ -156,6 +156,25 @@ def _int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
 def _model_tier(value: Any) -> str:
     candidate = str(value or "").strip().lower()
     return candidate if candidate in MODEL_TIER_KEYS else "medium"
+
+
+_task_change_listener: Callable[[str], None] | None = None
+
+
+def set_task_change_listener(listener: Callable[[str], None] | None) -> None:
+    """Register a callback that receives the Bot alias whenever a child task changes state."""
+    global _task_change_listener
+    _task_change_listener = listener
+
+
+def _notify_task_changed(run: "ClusterRun") -> None:
+    listener = _task_change_listener
+    if listener is None:
+        return
+    try:
+        listener(str(run.bot_alias or ""))
+    except Exception:  # pragma: no cover - observers must not affect task bookkeeping
+        pass
 
 
 class ClusterRuntime:
@@ -360,6 +379,8 @@ class ClusterRuntime:
         item = {"created_at": self._now_iso(), **dict(event)}
         run.events.append(item)
         run.updated_at = item["created_at"]
+        if str(item.get("kind") or "").startswith("agent_task_"):
+            _notify_task_changed(run)
 
     def finish_run(self, run_id: str, status: str = "completed") -> None:
         run = self.get_run(run_id)
@@ -503,6 +524,7 @@ class ClusterRuntime:
             "created_at": now,
         })
         run.updated_at = now
+        _notify_task_changed(run)
         return task
 
     def mark_agent_task_running(self, run_id: str, task_id: str) -> ClusterAgentTask:

@@ -78,9 +78,10 @@ function useAppearanceState() {
     const startedRevision = libraryRef.current.revision;
     setLoading(true);
     try {
+      const known = libraryRef.current;
       const next = await (activeSession.previewOnly
-        ? activeSession.client.listPublicUiThemes()
-        : activeSession.client.listUiThemes());
+        ? activeSession.client.listPublicUiThemes(known)
+        : activeSession.client.listUiThemes(known));
       if (generation !== generationRef.current || requestSequence !== reloadSequenceRef.current) return;
       validateLibrary(next);
       if (libraryRef.current.revision === startedRevision || next.revision >= libraryRef.current.revision) {
@@ -181,7 +182,7 @@ function useAppearanceState() {
       try { localStorage.setItem(loginThemeKey(), id); } catch { /* Keep the selection for this page when storage is unavailable. */ }
       return libraryRef.current;
     }
-    return mutate((client, revision) => client.selectUiTheme(id, revision));
+    return mutate((client, revision) => client.selectUiTheme(id, revision, libraryRef.current));
   }, [mutate]);
   const openManager = useCallback(() => { if (sessionRef.current && !sessionRef.current.previewOnly && sessionRef.current.canManage !== false) setManagerOpen(true); }, []);
   const closeManager = useCallback(() => setManagerOpen(false), []);

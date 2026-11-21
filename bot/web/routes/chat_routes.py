@@ -13,6 +13,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots/{alias}/history", server.get_history_view)
     app.router.add_get("/api/bots/{alias}/history/delta", server.get_history_delta_view)
     app.router.add_get("/api/bots/{alias}/history/{message_id}/trace", server.get_history_trace_view)
+    app.router.add_get("/api/bots/{alias}/history/{message_id}/trace/event", server.get_history_trace_event_view)
     app.router.add_get("/api/bots/{alias}/favorites", server.get_favorites_view)
     app.router.add_post("/api/bots/{alias}/favorites", server.post_favorite_view)
     app.router.add_delete("/api/bots/{alias}/favorites/{favorite_id}", server.delete_favorite_view)

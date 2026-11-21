@@ -84,6 +84,7 @@ import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import { extractPlanDraft, extractPlanTitle, stripPlanDraftTags } from "../utils/planDraft";
 import {
   buildCliTranscriptEntries,
+  traceDetailKey,
 } from "../utils/cliTranscript";
 import { fallbackAgents } from "../utils/defaultAgents";
 import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
@@ -196,6 +197,23 @@ const INITIAL_IDLE_CHAT_POLL_DELAY_MS = 5000;
 const IDLE_CHAT_POLL_INTERVAL_MS = 10_000;
 const CLUSTER_TASK_POLL_INTERVAL_MS = 1200;
 const SSE_STALL_RECOVERY_DELAY_MS = 2500;
+// Repeated stalls back off, so a slow or buffered link is not loaded with recovery requests.
+const SSE_STALL_RECOVERY_MAX_DELAY_MS = 10_000;
+// While the server pushes `chat_sync` hints, timers are only the fallback for a missed hint.
+const SSE_STALL_RECOVERY_PUSH_MAX_DELAY_MS = 30_000;
+const ACTIVE_CHAT_POLL_PUSH_FALLBACK_MS = 5000;
+const IDLE_CHAT_POLL_PUSH_FALLBACK_MS = 60_000;
+const CLUSTER_TASK_POLL_PUSH_FALLBACK_MS = 5000;
+// The page that streamed a turn already holds its result; skip the hint about that turn ending.
+const LOCAL_TURN_SYNC_HINT_QUIET_MS = 2000;
+// A sync that has not answered for this long no longer holds back the next one.
+const CHAT_SYNC_IN_FLIGHT_LIMIT_MS = 10_000;
+// State fetched this recently is not fetched again just because the hint socket connected.
+const CHAT_SYNC_CATCH_UP_MIN_AGE_MS = 5000;
+const TRACE_EVENT_DETAIL_RETRIES = 2;
+const TRACE_EVENT_DETAIL_RETRY_DELAY_MS = 700;
+const TRACE_EVENT_DETAIL_CACHE_MAX_ENTRIES = 40;
+const TRACE_EVENT_DETAIL_CACHE_MAX_CHARS = 8_000_000;
 const CHAT_ATTACHMENT_LINE_RE = /^(?:Attachment path:|附件路径为[:：])\s*(.+?)\s*$/;
 const MODEL_OPTION_NONE = "none";
 const REVEAL_SCROLL_MAX_FRAMES = 6;
@@ -886,6 +904,25 @@ function visibleTurnCountForMessage(items: readonly ChatMessage[], messageIndex:
   return Math.max(CHAT_INITIAL_VISIBLE_TURNS, starts.length - targetTurnIndex);
 }
 
+type TraceEventDetailCache = Map<string, { event: ChatTraceEvent; chars: number }>;
+
+/** Keeps recently opened full trace events so reopening an entry does not download it again. */
+function rememberTraceEventDetail(cache: TraceEventDetailCache, key: string, event: ChatTraceEvent, chars: number) {
+  cache.delete(key);
+  cache.set(key, { event, chars });
+  let total = 0;
+  for (const entry of cache.values()) {
+    total += entry.chars;
+  }
+  for (const [oldestKey, entry] of cache) {
+    if (cache.size <= 1 || (cache.size <= TRACE_EVENT_DETAIL_CACHE_MAX_ENTRIES && total <= TRACE_EVENT_DETAIL_CACHE_MAX_CHARS)) {
+      break;
+    }
+    cache.delete(oldestKey);
+    total -= entry.chars;
+  }
+}
+
 function appendTraceToMessage(item: ChatMessage, traceEvent: ChatTraceEvent): ChatMessage {
   return {
     ...item,
@@ -1172,6 +1209,8 @@ type ChatMessageRowProps = {
   allowTrace: boolean;
   traceLoadState: Record<string, { loading: boolean; error?: string }>;
   onLoadMessageTrace: (messageId: string) => void;
+  onLoadMessageTraceEvent: (messageId: string, trace: ChatTraceEvent) => Promise<ChatTraceEvent | null>;
+  onLoadFullMessageTrace: (messageId: string) => Promise<ChatTraceEvent[] | null>;
   deletedAttachmentKeys: Record<string, boolean>;
   deletingAttachmentKeys: Record<string, boolean>;
   onDeleteAttachment: (messageId: string, savedPath: string) => void;
@@ -1198,6 +1237,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
   allowTrace,
   traceLoadState,
   onLoadMessageTrace,
+  onLoadMessageTraceEvent,
+  onLoadFullMessageTrace,
   deletedAttachmentKeys,
   deletingAttachmentKeys,
   onDeleteAttachment,
@@ -1241,6 +1282,14 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const handleLoadMessageTrace = useCallback(() => {
     onLoadMessageTrace(item.id);
   }, [item.id, onLoadMessageTrace]);
+  const handleLoadTraceEventDetail = useCallback(
+    (trace: ChatTraceEvent) => onLoadMessageTraceEvent(item.id, trace),
+    [item.id, onLoadMessageTraceEvent],
+  );
+  const handleLoadFullTrace = useCallback(
+    () => onLoadFullMessageTrace(item.id),
+    [item.id, onLoadFullMessageTrace],
+  );
 
   if (item.role === "system") {
     return (
@@ -1340,6 +1389,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 isTraceLoading={Boolean(messageTraceLoadState?.loading)}
                 traceLoadError={messageTraceLoadState?.error}
                 onLoadTrace={handleLoadMessageTrace}
+                onLoadTraceEventDetail={handleLoadTraceEventDetail}
+                onLoadFullTrace={handleLoadFullTrace}
                 onFileLinkClick={onFileLinkClick}
                 onCopyFinalAnswer={canCopyFinalAnswer ? () => onCopyFinalAnswer(displayText) : undefined}
                 onContinue={canContinue ? onContinueFinalAnswer : undefined}
@@ -1491,6 +1542,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   allowTrace: boolean;
   traceLoadState: Record<string, { loading: boolean; error?: string }>;
   handleLoadMessageTrace: (messageId: string) => void;
+  handleLoadMessageTraceEvent: (messageId: string, trace: ChatTraceEvent) => Promise<ChatTraceEvent | null>;
+  handleLoadFullMessageTrace: (messageId: string) => Promise<ChatTraceEvent[] | null>;
   handleDeleteAttachment: (messageId: string, savedPath: string) => void;
   handleFileLinkClick: (href: string) => void;
   handleTranslationViewChange: (id: string, view: "original" | "translated") => void;
@@ -1514,6 +1567,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   allowTrace,
   traceLoadState,
   handleLoadMessageTrace,
+  handleLoadMessageTraceEvent,
+  handleLoadFullMessageTrace,
   handleDeleteAttachment,
   handleFileLinkClick,
   handleCopyFinalAnswer,
@@ -1541,6 +1596,8 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
         allowTrace={allowTrace}
         traceLoadState={traceLoadState}
         onLoadMessageTrace={handleLoadMessageTrace}
+        onLoadMessageTraceEvent={handleLoadMessageTraceEvent}
+        onLoadFullMessageTrace={handleLoadFullMessageTrace}
         deletedAttachmentKeys={row.deletedAttachmentKeys}
         deletingAttachmentKeys={row.deletingAttachmentKeys}
         onDeleteAttachment={handleDeleteAttachment}
@@ -1584,7 +1641,9 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
     handleDeleteAttachment,
     handleExecutePlan,
     handleFileLinkClick,
+    handleLoadFullMessageTrace,
     handleLoadMessageTrace,
+    handleLoadMessageTraceEvent,
     handleToggleFavoriteAnswer,
     planExecuteError,
     traceLoadState,
@@ -1701,6 +1760,7 @@ export function ChatScreen({
   const [deletedAttachmentKeys, setDeletedAttachmentKeys] = useState<Record<string, boolean>>({});
   const [deletingAttachmentKeys, setDeletingAttachmentKeys] = useState<Record<string, boolean>>({});
   const [traceLoadState, setTraceLoadState] = useState<Record<string, { loading: boolean; error?: string }>>({});
+  const [chatSyncPushActive, setChatSyncPushActive] = useState(false);
   const [favoriteItems, setFavoriteItems] = useState<FavoriteAnswerItem[]>([]);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
   const [favoriteError, setFavoriteError] = useState("");
@@ -1786,6 +1846,7 @@ export function ChatScreen({
   const streamModeRef = useRef(streamMode);
   const itemsRef = useRef<ChatMessage[]>([]);
   const traceLoadStateRef = useRef<Record<string, { loading: boolean; error?: string }>>({});
+  const traceEventDetailCacheRef = useRef<TraceEventDetailCache>(new Map());
   const workingDirRef = useRef("");
   const botOverviewRef = useRef<BotOverview | null>(null);
   const clusterSaveScopeRef = useRef({ botAlias, client });
@@ -1797,6 +1858,20 @@ export function ChatScreen({
   const assistantPollTimerRef = useRef<number | null>(null);
   const sseRecoveryTimerRef = useRef<number | null>(null);
   const sseLastActivityAtRef = useRef<number | null>(null);
+  // Stall recoveries since the last real SSE event; drives the watchdog backoff.
+  const sseStallCountRef = useRef(0);
+  const sseRecoveryRunningRef = useRef(false);
+  const sseRecoveryStartedAtRef = useRef(0);
+  const sseRecoveryQueuedRef = useRef(false);
+  const runSseRecoveryRef = useRef<((fromHint?: boolean) => void) | null>(null);
+  // Time of the last event that really arrived on the stream (recoveries do not count).
+  const sseLastEventAtRef = useRef(0);
+  const chatSyncPushActiveRef = useRef(false);
+  const chatSyncStateSyncRunningRef = useRef(false);
+  const chatSyncStateSyncStartedAtRef = useRef(0);
+  const chatSyncStateSyncQueuedRef = useRef(false);
+  const lastStateSyncAtRef = useRef(0);
+  const localStreamEndedAtRef = useRef(0);
   const sseAbortControllerRef = useRef<AbortController | null>(null);
   const endlessModeRef = useRef(false);
   const endlessModeTargetRef = useRef<ChatMessage | null>(null);
@@ -2185,7 +2260,7 @@ export function ChatScreen({
         clusterTaskPollTimerRef.current = window.setTimeout(() => {
           clusterTaskPollTimerRef.current = null;
           void pollClusterTasks();
-        }, CLUSTER_TASK_POLL_INTERVAL_MS);
+        }, chatSyncPushActiveRef.current ? CLUSTER_TASK_POLL_PUSH_FALLBACK_MS : CLUSTER_TASK_POLL_INTERVAL_MS);
       }
     } catch (err) {
       if (clusterRunIdRef.current !== runId || !isForegroundRef.current) {
@@ -2201,7 +2276,7 @@ export function ChatScreen({
         clusterTaskPollTimerRef.current = window.setTimeout(() => {
           clusterTaskPollTimerRef.current = null;
           void pollClusterTasks();
-        }, CLUSTER_TASK_POLL_INTERVAL_MS);
+        }, chatSyncPushActiveRef.current ? CLUSTER_TASK_POLL_PUSH_FALLBACK_MS : CLUSTER_TASK_POLL_INTERVAL_MS);
       }
     }
   }, [botAlias, clearClusterTaskState, client, stopClusterTaskPoll]);
@@ -2234,13 +2309,17 @@ export function ChatScreen({
     if (!isForegroundRef.current) {
       return;
     }
+    // A watched turn is refreshed by `chat_sync` hints; the timer only covers a missed hint.
+    const effectiveDelayMs = chatSyncPushActiveRef.current && delayMs === ACTIVE_CHAT_POLL_INTERVAL_MS
+      ? ACTIVE_CHAT_POLL_PUSH_FALLBACK_MS
+      : delayMs;
     assistantPollTimerRef.current = window.setTimeout(() => {
       assistantPollTimerRef.current = null;
       if (!isForegroundRef.current) {
         return;
       }
       void pollAssistantStateRef.current?.();
-    }, delayMs);
+    }, effectiveDelayMs);
   }, [stopAssistantPoll]);
 
   const scheduleSseRecoveryWatch = useCallback(() => {
@@ -2250,9 +2329,25 @@ export function ChatScreen({
     }
 
     const lastActivityAt = sseLastActivityAtRef.current ?? Date.now();
-    const delayMs = Math.max(200, SSE_STALL_RECOVERY_DELAY_MS - (Date.now() - lastActivityAt));
-    sseRecoveryTimerRef.current = window.setTimeout(() => {
-      sseRecoveryTimerRef.current = null;
+    const stallDelayMs = Math.min(
+      SSE_STALL_RECOVERY_DELAY_MS * 2 ** sseStallCountRef.current,
+      chatSyncPushActiveRef.current ? SSE_STALL_RECOVERY_PUSH_MAX_DELAY_MS : SSE_STALL_RECOVERY_MAX_DELAY_MS,
+    );
+    const delayMs = Math.max(200, stallDelayMs - (Date.now() - lastActivityAt));
+    // `fromHint`: asked for by a `chat_sync` hint instead of the timer; such a check must not
+    // count as another stall, or a few hints would push the timer fallback to its cap.
+    const runRecovery = (fromHint = false) => {
+      if (
+        sseRecoveryRunningRef.current
+        && Date.now() - sseRecoveryStartedAtRef.current < CHAT_SYNC_IN_FLIGHT_LIMIT_MS
+      ) {
+        // A hint that arrives mid-recovery may describe a newer state; check once more afterwards.
+        sseRecoveryQueuedRef.current = true;
+        return;
+      }
+      stopSseRecoveryWatch();
+      sseRecoveryRunningRef.current = true;
+      sseRecoveryStartedAtRef.current = Date.now();
       const sendVersion = assistantSendVersionRef.current;
 
       void (async () => {
@@ -2323,6 +2418,9 @@ export function ChatScreen({
             setIsStreaming(true);
             setStreamMode("sse");
             setStreamStartedAtMs((prev) => prev ?? resolveStreamStartMs(activeMessages));
+            if (!fromHint) {
+              sseStallCountRef.current += 1;
+            }
             sseLastActivityAtRef.current = Date.now();
             scheduleSseRecoveryWatch();
             return;
@@ -2338,14 +2436,32 @@ export function ChatScreen({
             void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId });
           }
         } catch {
+          if (!fromHint) {
+            sseStallCountRef.current += 1;
+          }
           sseLastActivityAtRef.current = Date.now();
           scheduleSseRecoveryWatch();
         }
-      })();
+      })().finally(() => {
+        sseRecoveryRunningRef.current = false;
+        if (sseRecoveryQueuedRef.current) {
+          sseRecoveryQueuedRef.current = false;
+          if (isSseStreaming() && isForegroundRef.current) {
+            runSseRecoveryRef.current?.(true);
+          }
+        }
+      });
+    };
+    runSseRecoveryRef.current = runRecovery;
+    sseRecoveryTimerRef.current = window.setTimeout(() => {
+      sseRecoveryTimerRef.current = null;
+      runRecovery();
     }, delayMs);
   }, [abortActiveSseRequest, applyHistoryView, botAlias, client, restoreClusterRunFromOverview, scheduleAssistantPoll, stopSseRecoveryWatch, streamBatcher]);
 
   const markSseActivity = useCallback(() => {
+    sseStallCountRef.current = 0;
+    sseLastEventAtRef.current = Date.now();
     sseLastActivityAtRef.current = Date.now();
     if (isSseStreaming()) {
       scheduleSseRecoveryWatch();
@@ -2373,6 +2489,7 @@ export function ChatScreen({
         return;
       }
 
+      lastStateSyncAtRef.current = Date.now();
       setBotOverview(overview);
       setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
       restoreClusterRunFromOverview(overview);
@@ -2554,6 +2671,7 @@ export function ChatScreen({
           historyScopeForSnapshot(botAlias, nextAgentId, nextExecutionMode, snapshot, overview),
           snapshot,
         );
+        lastStateSyncAtRef.current = Date.now();
         setAgents(nextAgents);
         setConversations(conversationData.items);
         setBotOverview(overview);
@@ -2707,6 +2825,103 @@ export function ChatScreen({
     return true;
   };
 
+  // `chat_sync` hints from the notifications socket replace most polling: a hint for this
+  // session triggers the same sync the timers run, and the timers stretch to a fallback.
+  useEffect(() => {
+    const applyPushActive = (active: boolean) => {
+      chatSyncPushActiveRef.current = active;
+      setChatSyncPushActive(active);
+    };
+    if (typeof client.subscribeChatSync !== "function") {
+      applyPushActive(false);
+      return;
+    }
+    applyPushActive(client.isChatSyncActive?.() ?? false);
+    const normalizedAlias = botAlias.trim().toLowerCase();
+    const canSync = () => isForegroundRef.current && !loadingRef.current && hasActivatedRef.current;
+    const syncState = () => {
+      if (
+        chatSyncStateSyncRunningRef.current
+        && Date.now() - chatSyncStateSyncStartedAtRef.current < CHAT_SYNC_IN_FLIGHT_LIMIT_MS
+      ) {
+        chatSyncStateSyncQueuedRef.current = true;
+        return;
+      }
+      chatSyncStateSyncRunningRef.current = true;
+      chatSyncStateSyncStartedAtRef.current = Date.now();
+      // This sync takes the place of the pending timer; it schedules the next one itself.
+      stopAssistantPoll();
+      void Promise.resolve(pollAssistantStateRef.current?.()).catch(() => undefined).finally(() => {
+        chatSyncStateSyncRunningRef.current = false;
+        if (chatSyncStateSyncQueuedRef.current) {
+          chatSyncStateSyncQueuedRef.current = false;
+          if (canSync() && !isSseStreaming()) {
+            syncState();
+          }
+        }
+      });
+    };
+    const unsubscribe = client.subscribeChatSync((event) => {
+      if (event.type === "status") {
+        applyPushActive(event.active);
+        if (!canSync()) {
+          return;
+        }
+        if (event.active) {
+          // Hints sent while the socket was down are lost, so catch up once.
+          if (!isSseStreaming() && Date.now() - lastStateSyncAtRef.current >= CHAT_SYNC_CATCH_UP_MIN_AGE_MS) {
+            syncState();
+          }
+        } else if (streamModeRef.current === "poll") {
+          scheduleAssistantPoll(ACTIVE_CHAT_POLL_INTERVAL_MS);
+        }
+        return;
+      }
+      if (event.botAlias.trim().toLowerCase() !== normalizedAlias || !canSync()) {
+        return;
+      }
+      const agentId = (activeAgentIdRef.current || "main").toLowerCase();
+      if (event.reason === "cluster") {
+        // Child task state is shown in the team dock of this Bot's conversations.
+        if (clusterRunIdRef.current) {
+          void pollClusterTasks();
+        }
+        if (agentId === "main" && !isSseStreaming()) {
+          syncState();
+        }
+        return;
+      }
+      if (event.agentId.toLowerCase() !== agentId) {
+        return;
+      }
+      if (isSseStreaming()) {
+        // A live stream already carries these changes; only a stalled one needs the hint.
+        const now = Date.now();
+        if (now - sseLastEventAtRef.current < SSE_STALL_RECOVERY_DELAY_MS) {
+          return;
+        }
+        // The end of the turn is checked at once; progress no more often than the watchdog did.
+        if (
+          event.reason !== "progress"
+          || now - sseRecoveryStartedAtRef.current >= SSE_STALL_RECOVERY_DELAY_MS
+        ) {
+          runSseRecoveryRef.current?.(true);
+        }
+        return;
+      }
+      if (
+        (event.reason === "turn_finished" || event.reason === "progress")
+        && Date.now() - localStreamEndedAtRef.current < LOCAL_TURN_SYNC_HINT_QUIET_MS
+      ) {
+        return;
+      }
+      syncState();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [botAlias, client, pollClusterTasks, scheduleAssistantPoll, stopAssistantPoll]);
+
   useChatHistorySync({
     enabled: isForeground && !loading,
     isStreaming,
@@ -2719,7 +2934,7 @@ export function ChatScreen({
       JSON.stringify([botAlias, storageScope, activeAgentId, executionMode, item.id, item.translation?.source_digest])
     )),
     initialDelayMs: INITIAL_IDLE_CHAT_POLL_DELAY_MS,
-    idleIntervalMs: IDLE_CHAT_POLL_INTERVAL_MS,
+    idleIntervalMs: chatSyncPushActive ? IDLE_CHAT_POLL_PUSH_FALLBACK_MS : IDLE_CHAT_POLL_INTERVAL_MS,
   });
 
   const lastItem = items[items.length - 1];
@@ -3213,6 +3428,46 @@ export function ChatScreen({
         },
       }));
     }
+  }, [botAlias, client]);
+
+  const loadMessageTraceEvent = useCallback(async (messageId: string, trace: ChatTraceEvent) => {
+    if (typeof client.getMessageTraceEvent !== "function") {
+      return null;
+    }
+    const cache = traceEventDetailCacheRef.current;
+    const cacheKey = `${botAlias}|${messageId}|${traceDetailKey(trace)}`;
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached.event;
+    }
+    const options = agentOptions(activeAgentIdRef.current, executionModeRef.current);
+    const ref = { id: trace.id, kind: trace.kind, callId: trace.callId };
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const detail = await client.getMessageTraceEvent(botAlias, messageId, ref, options);
+        if (detail) {
+          rememberTraceEventDetail(cache, cacheKey, detail, (trace.payloadChars || 0) + (trace.summaryChars || 0));
+        }
+        return detail;
+      } catch (err) {
+        // An event that was just streamed reaches the history store a moment later.
+        const notStoredYet = (err as { code?: string } | null)?.code === "trace_event_not_found";
+        if (!notStoredYet || attempt >= TRACE_EVENT_DETAIL_RETRIES) {
+          throw err;
+        }
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, TRACE_EVENT_DETAIL_RETRY_DELAY_MS);
+        });
+      }
+    }
+  }, [botAlias, client]);
+
+  const loadFullMessageTrace = useCallback(async (messageId: string) => {
+    const details = await client.getMessageTrace(botAlias, messageId, {
+      ...(agentOptions(activeAgentIdRef.current, executionModeRef.current) || {}),
+      fullPayload: true,
+    });
+    return details.trace;
   }, [botAlias, client]);
 
   const loadConversations = useCallback(async (query = "") => {
@@ -3922,6 +4177,11 @@ export function ChatScreen({
     setIsStreaming(true);
     setStreamMode("sse");
     setStreamStartedAtMs(localStartedAtMs);
+    // A check still in flight belongs to the previous stream and must not hold this one back.
+    sseStallCountRef.current = 0;
+    sseRecoveryRunningRef.current = false;
+    sseRecoveryQueuedRef.current = false;
+    sseLastEventAtRef.current = localStartedAtMs;
     sseLastActivityAtRef.current = localStartedAtMs;
     emitBotActivityForActiveAgent("busy");
     let streamTurnId = "";
@@ -4247,6 +4507,7 @@ export function ChatScreen({
         setIsStreaming(false);
         setStreamMode("");
         setStreamStartedAtMs(null);
+        localStreamEndedAtRef.current = Date.now();
         emitBotActivityForActiveAgent("idle");
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
@@ -5065,6 +5326,8 @@ export function ChatScreen({
       allowTrace={allowTrace}
       traceLoadState={traceLoadState}
       handleLoadMessageTrace={loadMessageTrace}
+      handleLoadMessageTraceEvent={loadMessageTraceEvent}
+      handleLoadFullMessageTrace={loadFullMessageTrace}
       handleDeleteAttachment={handleDeleteAttachment}
       handleFileLinkClick={handleFileLinkClick}
       handleCopyFinalAnswer={handleCopyFinalAnswer}

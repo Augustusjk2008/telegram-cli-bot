@@ -30,6 +30,34 @@ test("theme requests use the global API without account-specific headers", async
   }
 });
 
+test("a held theme list is reused when the server reports its digest unchanged", async () => {
+  const full = { ...builtinLibrary(), themesDigest: "digest-1" };
+  const { themes: _themes, ...accountState } = full;
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => new Response(JSON.stringify({
+    ok: true,
+    data: String(input).includes("themes_digest=digest-1")
+      ? { ...accountState, revision: 5, selectedThemeId: "paper-daylight", themesUnchanged: true }
+      : full,
+  }), { headers: { "Content-Type": "application/json" } }));
+  const client = new RealWebBotClient();
+
+  const first = await client.listUiThemes();
+  expect(fetch.mock.calls[0][0]).toMatch(/\/api\/ui\/themes$/);
+  const second = await client.listUiThemes(first);
+  expect(fetch.mock.calls[1][0]).toMatch(/\/api\/ui\/themes\?themes_digest=digest-1$/);
+  expect(second.themes).toBe(first.themes);
+  expect(second.revision).toBe(5);
+  expect(second).not.toHaveProperty("themesUnchanged");
+
+  const selected = await client.selectUiTheme("paper-daylight", 5, second);
+  expect(fetch.mock.calls[2][0]).toMatch(/\/api\/ui\/theme-selection\?themes_digest=digest-1$/);
+  expect(selected.themes).toBe(first.themes);
+
+  // A library without a digest (older host) is requested in full, as before.
+  await client.listPublicUiThemes(builtinLibrary());
+  expect(fetch.mock.calls[3][0]).toMatch(/\/api\/public\/ui\/themes$/);
+});
+
 test("legacy imported themes receive the default illustration configuration", async () => {
   const document = await readThemeFile({
     text: async () => JSON.stringify({

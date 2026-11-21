@@ -1003,6 +1003,11 @@ export type AgentScopedOptions = {
   executionMode?: ChatExecutionMode;
 };
 
+export type ChatTraceRequestOptions = AgentScopedOptions & {
+  /** Read every payload in full instead of capped previews (used when copying a whole transcript). */
+  fullPayload?: boolean;
+};
+
 export type WorkdirChangeConflict = {
   currentWorkingDir: string;
   requestedWorkingDir: string;
@@ -1265,6 +1270,19 @@ export type ChatTraceEvent = {
   toolName?: string;
   callId?: string;
   payload?: unknown;
+  /**
+   * Set when the server sent a capped preview of `payload` / `summary`: the original
+   * size in characters. The full event is read on demand with `getMessageTraceEvent`.
+   */
+  payloadChars?: number;
+  summaryChars?: number;
+};
+
+/** Addresses one trace event: its row id, or kind + callId for an event streamed before it had one. */
+export type ChatTraceEventRef = {
+  id?: string;
+  kind?: string;
+  callId?: string;
 };
 
 export type ChatMessageNativeSource = {
@@ -1632,6 +1650,15 @@ export type WebNotificationEvent =
     };
 
 export type NotificationSocketStatus = "connecting" | "open" | "closed" | "reconnecting" | "error";
+
+/**
+ * Server hints that a chat session changed (`change`), and whether such hints are
+ * currently being delivered (`status`). Chats sync on a hint and poll slowly while
+ * hints are active; without them they keep the regular polling intervals.
+ */
+export type ChatSyncEvent =
+  | { type: "change"; botAlias: string; agentId: string; reason: string }
+  | { type: "status"; active: boolean };
 
 export type NotificationSubscriptionOptions = {
   onStatus?: (status: NotificationSocketStatus) => void;

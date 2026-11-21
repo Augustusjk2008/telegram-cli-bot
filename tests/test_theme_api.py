@@ -143,3 +143,46 @@ async def test_corrupt_runtime_selection_is_reported_without_replacing_packaged_
     assert status == 200
     assert payload["data"]["error"]
     assert len(payload["data"]["themes"]) == 8
+
+
+@pytest.mark.asyncio
+async def test_known_themes_digest_omits_the_theme_list_but_keeps_account_state(api):
+    _, listed = await request(api, "GET")
+    digest = listed["data"]["themesDigest"]
+    assert digest and listed["data"]["themes"]
+
+    status, cached = await request(api, "GET", f"/api/ui/themes?themes_digest={digest}")
+    assert status == 200
+    assert "themes" not in cached["data"]
+    assert cached["data"]["themesUnchanged"] is True
+    assert cached["data"]["themesDigest"] == digest
+    assert cached["data"]["selectedThemeId"] == listed["data"]["selectedThemeId"]
+    assert cached["data"]["revision"] == listed["data"]["revision"]
+
+    status, public = await request(api, "GET", f"/api/public/ui/themes?themes_digest={digest}", token="")
+    assert status == 200 and "themes" not in public["data"]
+
+    status, stale = await request(api, "GET", "/api/ui/themes?themes_digest=outdated")
+    assert status == 200 and stale["data"]["themes"] == listed["data"]["themes"]
+    assert "themesUnchanged" not in stale["data"]
+
+    selected_id = listed["data"]["themes"][-1]["id"]
+    status, selected = await request(api, "PATCH", f"/api/ui/theme-selection?themes_digest={digest}", body={
+        "themeId": selected_id,
+        "expectedRevision": listed["data"]["revision"],
+    })
+    assert status == 200 and "themes" not in selected["data"]
+    assert selected["data"]["selectedThemeId"] == selected_id
+
+
+@pytest.mark.asyncio
+async def test_unreadable_selection_always_returns_the_full_fallback_library(api):
+    _, listed = await request(api, "GET")
+    path = api.server.theme_store.library_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{broken", encoding="utf-8")
+
+    status, payload = await request(api, "GET", f"/api/ui/themes?themes_digest={listed['data']['themesDigest']}")
+
+    assert status == 200 and payload["data"]["error"]
+    assert payload["data"]["themes"]

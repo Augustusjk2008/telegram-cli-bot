@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CheckCheck, ClipboardList, Copy, FastForward, Gauge, Play, Star } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
-import { copyText } from "../utils/clipboard";
+import { copyDeferredText, copyText } from "../utils/clipboard";
 import { ChatContextUsageBadge, formatContextUsageDetails } from "./ChatContextUsageBadge";
 
 type Props = {
@@ -11,7 +11,8 @@ type Props = {
   endlessContinueCount?: number;
   favorite?: boolean;
   fullAnswerText?: string;
-  buildFullAnswerText?: () => string;
+  /** May resolve later when parts of the transcript have to be read from the server first. */
+  buildFullAnswerText?: () => string | Promise<string>;
   onContinue?: () => void;
   onFastForward?: () => void;
   onCopyFinalAnswer?: () => boolean | void | Promise<boolean | void>;
@@ -37,6 +38,7 @@ export function ChatFinalAnswerActions({
   const copyFeedbackTimerRef = useRef<number | null>(null);
   const contextCopyFeedbackTimerRef = useRef<number | null>(null);
   const fullAnswerCopyFeedbackTimerRef = useRef<number | null>(null);
+  const fullAnswerCopyPendingRef = useRef(false);
   const contextDetails = formatContextUsageDetails(contextUsage, { endlessContinueCount });
   const fullAnswer = (fullAnswerText || "").trim();
   const canBuildFullAnswer = typeof buildFullAnswerText === "function";
@@ -97,11 +99,28 @@ export function ChatFinalAnswerActions({
     if (copiedFullAnswer) {
       return;
     }
-    const value = (fullAnswer || buildFullAnswerText?.() || "").trim();
-    if (!value) {
+    if (fullAnswerCopyPendingRef.current) {
       return;
     }
-    const ok = await copyText(value);
+    let ok = false;
+    try {
+      const built = fullAnswer || buildFullAnswerText?.() || "";
+      if (typeof built === "string") {
+        const value = built.trim();
+        if (!value) {
+          return;
+        }
+        ok = await copyText(value);
+      } else {
+        // The transcript is still being completed from the server; repeated clicks wait for it.
+        fullAnswerCopyPendingRef.current = true;
+        ok = await copyDeferredText(built.then((text) => text.trim()));
+      }
+    } catch {
+      ok = false;
+    } finally {
+      fullAnswerCopyPendingRef.current = false;
+    }
     if (!ok) {
       return;
     }

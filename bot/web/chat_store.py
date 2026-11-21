@@ -24,6 +24,7 @@ from bot.runtime_paths import (
     normalize_workspace_dir,
 )
 from bot.web.diagnostics import diag_log_slow
+from bot.web.trace_compaction import compact_trace_events, estimate_json_chars
 
 LOCAL_HISTORY_BACKEND = "local_v1"
 CLI_HISTORY_PROVIDERS = ("", "codex", "codex_server", "claude", "antigravity", "deepseek")
@@ -5087,7 +5088,8 @@ class ChatStore:
                 )
                 return int(result.rowcount or 0)
 
-    def get_message_trace(self, message_id: str) -> dict[str, Any]:
+    def get_message_trace(self, message_id: str, *, compact: bool = False) -> dict[str, Any]:
+        """Return the turn's normalized trace; ``compact`` caps large summaries and payloads."""
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
@@ -5150,7 +5152,102 @@ class ChatStore:
                     "trace_count": len(trace),
                     "tool_call_count": tool_call_count,
                     "process_count": process_count,
-                    "trace": trace,
+                    "trace": compact_trace_events(trace) if compact else trace,
+                }
+
+    def get_message_trace_event(
+        self,
+        message_id: str,
+        *,
+        event_id: str = "",
+        kind: str = "",
+        call_id: str = "",
+    ) -> dict[str, Any]:
+        """Return one full trace event of the message's turn.
+
+        The event is addressed by its row ``id`` or, for tool events that were
+        streamed before they had one, by ``kind`` and ``call_id``. Rows that share
+        a tool ``call_id`` are one entry in the transcript, so they resolve to the
+        version it displays: the ranked result for tool results (as the normalized
+        trace does), otherwise the richest row.
+        """
+        normalized_event_id = str(event_id or "").strip()
+        normalized_kind = str(kind or "").strip()
+        normalized_call_id = str(call_id or "").strip()
+        conn = self._connect(create=False)
+        if conn is None:
+            raise KeyError(message_id)
+        columns = "id, ordinal, kind, raw_type, title, tool_name, call_id, summary, payload_json, created_at"
+        with closing(conn):
+            with conn:
+                row = conn.execute(
+                    """
+                    SELECT m.turn_id, t.native_provider
+                    FROM messages AS m
+                    JOIN turns AS t ON t.id = m.turn_id
+                    WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
+                    """,
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(message_id)
+                turn_id = str(row["turn_id"])
+                target = None
+                if normalized_event_id:
+                    target = conn.execute(
+                        f"SELECT {columns} FROM trace_events WHERE turn_id = ? AND id = ?",
+                        (turn_id, normalized_event_id),
+                    ).fetchone()
+                if target is not None:
+                    normalized_kind = str(target["kind"] or "")
+                    normalized_call_id = str(target["call_id"] or "")
+                candidates = [target] if target is not None else []
+                if normalized_call_id and normalized_kind in {"tool_call", "tool_result"}:
+                    candidates = conn.execute(
+                        f"""
+                        SELECT {columns}
+                        FROM trace_events
+                        WHERE turn_id = ? AND kind = ? AND call_id = ?
+                        ORDER BY ordinal ASC, created_at ASC, id ASC
+                        """,
+                        (turn_id, normalized_kind, normalized_call_id),
+                    ).fetchall()
+                if not candidates:
+                    raise KeyError(normalized_event_id or normalized_call_id or message_id)
+                events = [
+                    {
+                        "id": candidate["id"],
+                        "ordinal": int(candidate["ordinal"]),
+                        "kind": candidate["kind"],
+                        "raw_type": candidate["raw_type"],
+                        "title": candidate["title"],
+                        "tool_name": candidate["tool_name"],
+                        "call_id": candidate["call_id"],
+                        "summary": candidate["summary"],
+                        "payload": _parse_json(candidate["payload_json"]),
+                        "created_at": candidate["created_at"],
+                    }
+                    for candidate in candidates
+                ]
+                if normalized_kind == "tool_result":
+                    selected = max(events, key=_tool_result_rank)
+                else:
+                    # Same weighting the Web client uses when it merges versions of one call.
+                    selected = max(
+                        events,
+                        key=lambda item: (
+                            estimate_json_chars(item.get("payload")) * 10 + len(str(item.get("summary") or "")) * 5,
+                            int(item.get("ordinal") or 0),
+                        ),
+                    )
+                event = dict(selected)
+                event.pop("ordinal", None)
+                if event["kind"] == "tool_call" and str(event.get("raw_type") or "") in PROCESS_TRACE_RAW_TYPES:
+                    event["kind"] = "event"
+                return {
+                    "message_id": message_id,
+                    "native_provider": str(row["native_provider"] or ""),
+                    "event": event,
                 }
 
     def get_trace_recovery_context(self, message_id: str) -> dict[str, Any]:
