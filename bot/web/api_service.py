@@ -327,8 +327,7 @@ class _ChatRunRequest:
     endless_mode: bool = False
     endless_group_id: str = ""
     endless_parent_message_id: str = ""
-    # Set by the Continue button: the fixed control word goes to the agent
-    # untranslated, while answer translation keeps the normal settings.
+    # Preserve fixed prompts from the Continue button and cluster completion notices.
     skip_input_translation: bool = False
     actor_user_id: int | None = None
     actor_account_id: str | None = None
@@ -4037,6 +4036,7 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
             mentions=list(run.mentions or []),
             execution_mode=run.execution_mode,
             internal_continuation=True,
+            skip_input_translation=True,
             expected_conversation_id=parent_conversation_id,
             cluster_run_id=run.run_id,
             allow_unsafe_cli=run.allow_unsafe_cli,
@@ -8054,6 +8054,7 @@ async def run_chat(
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
     cluster_run_id: str = "",
     cost_stats_user: str | None = None,
+    skip_input_translation: bool = False,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
@@ -8097,6 +8098,7 @@ async def run_chat(
             user_text,
             task_mode=task_mode,
             task_payload=task_payload,
+            skip_input_translation=skip_input_translation,
             visible_text=visible_text,
             actor=actor,
         )

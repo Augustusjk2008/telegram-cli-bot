@@ -162,6 +162,7 @@ async def test_child_finishing_right_after_parent_turn_wakes_parent_without_outp
     assert "poll_agent_tasks" in prompt
     assert not re.search(r"[　-〿一-鿿＀-￯]", prompt.replace("后端分析", ""))
     assert kwargs["internal_continuation"] is True
+    assert kwargs["skip_input_translation"] is True
     assert kwargs["expected_conversation_id"] == "conv_main"
     assert kwargs["cluster_run_id"] == run.run_id
     assert task.wakeup_sent is True
