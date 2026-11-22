@@ -1731,7 +1731,7 @@ export function ChatScreen({
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [chatWidth, setChatWidth] = useState(0);
-  const [chatFontSizeOffset, setChatFontSizeOffset] = useState(0);
+  const [chatZoomPercent, setChatZoomPercent] = useState(100);
   const [splitView, setSplitView] = useState(false);
   const [error, setError] = useState("");
   const [selectionNotice, setSelectionNotice] = useState("");
@@ -1823,11 +1823,8 @@ export function ChatScreen({
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<ChatMessageListHandle | null>(null);
   const chatRootRef = useRef<HTMLElement | null>(null);
-  const adjustChatFontSize = useCallback((delta: number) => {
-    setChatFontSizeOffset((current) => Math.max(-4, Math.min(4, current + delta)));
-  }, []);
   useEffect(() => {
-    setChatFontSizeOffset(0);
+    setChatZoomPercent(100);
   }, [accountId, botAlias]);
   useEffect(() => {
     if (mobileLayout || !isVisible || typeof window === "undefined" || typeof window.ResizeObserver !== "function") {
@@ -1839,12 +1836,15 @@ export function ChatScreen({
     if (!root) {
       return;
     }
-    const updateWidth = () => setChatWidth(root.clientWidth);
+    const updateWidth = () => {
+      const visualWidth = root.getBoundingClientRect().width;
+      setChatWidth(visualWidth || root.clientWidth);
+    };
     updateWidth();
     const observer = new window.ResizeObserver(updateWidth);
     observer.observe(root);
     return () => observer.disconnect();
-  }, [isVisible, mobileLayout]);
+  }, [chatZoomPercent, isVisible, mobileLayout]);
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
@@ -5392,7 +5392,7 @@ export function ChatScreen({
     <main
       ref={chatRootRef}
       className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}
-      style={{ "--chat-font-size-scale": String(1 + chatFontSizeOffset / 15) } as CSSProperties}
+      style={{ zoom: chatZoomPercent / 100 } as CSSProperties}
     >
       {showActionBar ? (
         <ChatActionBar
@@ -5410,10 +5410,9 @@ export function ChatScreen({
           splitView={splitView}
           onToggleSplitView={() => setSplitView((current) => !current)}
           onOpenHistoryPanel={() => void handleOpenHistoryPanel("history")}
-          chatFontSizeOffset={chatFontSizeOffset}
-          onDecreaseChatFontSize={() => adjustChatFontSize(-1)}
-          onResetChatFontSize={() => setChatFontSizeOffset(0)}
-          onIncreaseChatFontSize={() => adjustChatFontSize(1)}
+          chatZoomPercent={chatZoomPercent}
+          onChatZoomChange={setChatZoomPercent}
+          onResetChatZoom={() => setChatZoomPercent(100)}
           mobileLayout={mobileLayout}
           providerOptions={deepSeekProviderOptions}
           selectedProvider={selectedDeepSeekProvider}

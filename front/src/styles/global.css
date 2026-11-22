@@ -231,7 +231,7 @@ select:disabled {
 
 .chat-body-content {
   font-family: var(--chat-body-font-family);
-  font-size: calc(var(--chat-body-font-size) * var(--chat-font-size-scale, 1));
+  font-size: var(--chat-body-font-size);
   line-height: var(--chat-body-line-height);
 }
 

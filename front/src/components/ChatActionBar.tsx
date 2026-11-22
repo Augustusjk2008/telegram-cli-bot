@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, Plus, Minus, RotateCcw, X } from "lucide-react";
+import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type {  DeepSeekProviderOption } from "../services/types";
@@ -20,10 +20,9 @@ type Props = {
   splitView?: boolean;
   onToggleSplitView?: () => void;
   onOpenHistoryPanel: () => void;
-  chatFontSizeOffset?: number;
-  onDecreaseChatFontSize?: () => void;
-  onResetChatFontSize?: () => void;
-  onIncreaseChatFontSize?: () => void;
+  chatZoomPercent?: number;
+  onChatZoomChange?: (percent: number) => void;
+  onResetChatZoom?: () => void;
   mobileLayout?: boolean;
   modelDescription?: string;
   providerOptions?: DeepSeekProviderOption[];
@@ -48,6 +47,83 @@ const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 const activePlanIconButtonClassName = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 
+type ChatZoomControlProps = {
+  percent: number;
+  onChange?: (percent: number) => void;
+  onReset?: () => void;
+  buttonClassName?: string;
+};
+
+function ChatZoomControl({ percent, onChange, onReset, buttonClassName = iconButtonClassName }: ChatZoomControlProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+  const hasAdjustment = percent !== 100;
+  return (
+    <div ref={rootRef} className={`inline-flex h-8 shrink-0 items-center rounded-md transition-colors ${open ? "border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-elevated-bg)]" : ""}`}>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="调整聊天缩放"
+        title="调整聊天缩放"
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className={`${buttonClassName} ${open || hasAdjustment ? "text-[var(--accent)]" : ""}`}
+      >
+        <ZoomIn className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div role="group" aria-label="聊天缩放调节" className="flex min-w-[174px] items-center gap-2 px-2">
+          <ZoomOut className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden="true" />
+          <input
+            type="range"
+            min={75}
+            max={125}
+            step={5}
+            value={percent}
+            aria-label="聊天缩放比例"
+            aria-valuetext={`${percent}%`}
+            onChange={(event) => onChange?.(Number(event.target.value))}
+            className="h-1.5 min-w-0 flex-1 cursor-pointer accent-[var(--accent)]"
+          />
+          <ZoomIn className="h-3.5 w-3.5 shrink-0 text-[var(--muted)]" aria-hidden="true" />
+          <span className="min-w-9 text-right text-[11px] font-medium tabular-nums text-[var(--muted)]">{percent}%</span>
+          <button
+            type="button"
+            aria-label="恢复聊天缩放"
+            title="恢复聊天缩放"
+            onClick={() => onReset?.()}
+            disabled={!hasAdjustment}
+            className={toolbarButtonClass("ghost", "icon", "h-6 w-6 rounded-md border-transparent bg-transparent")}
+          >
+            <RotateCcw className="h-3 w-3" />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 
 export function ChatActionBar({
   planMode,
@@ -65,10 +141,9 @@ export function ChatActionBar({
   splitView = false,
   onToggleSplitView,
   onOpenHistoryPanel,
-  chatFontSizeOffset = 0,
-  onDecreaseChatFontSize,
-  onResetChatFontSize,
-  onIncreaseChatFontSize,
+  chatZoomPercent = 100,
+  onChatZoomChange,
+  onResetChatZoom,
   mobileLayout = false,
   modelDescription,
   providerOptions = [],
@@ -157,13 +232,7 @@ export function ChatActionBar({
             className={planMode ? activePlanIconButtonClassName : iconButtonClassName}
           ><ClipboardList className="h-4 w-4" /></button>
           <button type="button" aria-label="历史会话" title="历史会话" onClick={onOpenHistoryPanel} className={iconButtonClassName}><History className="h-4 w-4" /></button>
-          {onDecreaseChatFontSize && onResetChatFontSize && onIncreaseChatFontSize ? (
-            <div className={groupClassName} role="group" aria-label="聊天字体大小">
-              <button type="button" aria-label="减小聊天字体" title="减小聊天字体" onClick={onDecreaseChatFontSize} disabled={chatFontSizeOffset <= -4} className={iconButtonClassName}><Minus className="h-4 w-4" /></button>
-              <button type="button" aria-label="恢复聊天字体大小" title="恢复聊天字体大小" onClick={onResetChatFontSize} disabled={chatFontSizeOffset === 0} className={iconButtonClassName}><RotateCcw className="h-3.5 w-3.5" /></button>
-              <button type="button" aria-label="放大聊天字体" title="放大聊天字体" onClick={onIncreaseChatFontSize} disabled={chatFontSizeOffset >= 4} className={iconButtonClassName}><Plus className="h-4 w-4" /></button>
-            </div>
-          ) : null}
+          {onChatZoomChange && onResetChatZoom ? <ChatZoomControl percent={chatZoomPercent} onChange={onChatZoomChange} onReset={onResetChatZoom} /> : null}
           {embedded && onToggleFocus ? (
             <button
               type="button"
@@ -318,13 +387,7 @@ export function ChatActionBar({
           >
             <History className="h-4 w-4" />
           </button>
-          {onDecreaseChatFontSize && onResetChatFontSize && onIncreaseChatFontSize ? (
-            <div className={groupClassName} role="group" aria-label="聊天字体大小">
-              <button type="button" aria-label="减小聊天字体" title="减小聊天字体" onClick={onDecreaseChatFontSize} disabled={chatFontSizeOffset <= -4} className={iconButtonClassName}><Minus className="h-4 w-4" /></button>
-              <button type="button" aria-label="恢复聊天字体大小" title="恢复聊天字体大小" onClick={onResetChatFontSize} disabled={chatFontSizeOffset === 0} className={iconButtonClassName}><RotateCcw className="h-3.5 w-3.5" /></button>
-              <button type="button" aria-label="放大聊天字体" title="放大聊天字体" onClick={onIncreaseChatFontSize} disabled={chatFontSizeOffset >= 4} className={iconButtonClassName}><Plus className="h-4 w-4" /></button>
-            </div>
-          ) : null}
+          {onChatZoomChange && onResetChatZoom ? <ChatZoomControl percent={chatZoomPercent} onChange={onChatZoomChange} onReset={onResetChatZoom} /> : null}
           {embedded && onToggleFocus ? (
             <button
               type="button"
