@@ -28,6 +28,7 @@ import { ChatComposer, type ChatComposerHandle, type ChatComposerModelOption, ty
 import { ChatSplitColumns, revealSplitChatRow } from "../components/ChatSplitColumns";
 import { ChatConfirmDialog } from "../components/ChatConfirmDialog";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
+import { ReadAloudContext } from "../components/ChatReadAloudButton";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
 import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
@@ -1512,6 +1513,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           </div>
         ) : !hasTranscript && !isStreamingAssistant ? (
           <ChatFinalAnswerActions
+            readAloudText={item.state === "done" ? displayText : undefined}
             translationControl={translationControl}
             canContinue={canContinue}
             contextUsage={displayContextUsage}
@@ -5105,6 +5107,10 @@ export function ChatScreen({
     || voiceSession.continuity === "recovering"
   );
   const voiceInputLocked = voiceForegroundActive;
+  const readAloudContext = useMemo(() => ({
+    scope: JSON.stringify([botAlias, storageScope, activeAgentId, voiceConversationId, botOverview?.sessionEpoch]),
+    enabled: isVisible && !voiceForegroundActive && !loading && !conversationLoading,
+  }), [botAlias, storageScope, activeAgentId, voiceConversationId, botOverview?.sessionEpoch, isVisible, voiceForegroundActive, loading, conversationLoading]);
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const showActionBar = !isImmersive && !voiceForegroundActive;
   const splitViewAvailable = !mobileLayout && chatWidth >= CHAT_SPLIT_MIN_WIDTH_PX;
@@ -5374,6 +5380,7 @@ export function ChatScreen({
   ) : null;
 
   return (
+    <ReadAloudContext.Provider value={readAloudContext}>
     <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
       {showActionBar ? (
         <ChatActionBar
@@ -5691,5 +5698,6 @@ export function ChatScreen({
         />
       ) : null}
     </main>
+    </ReadAloudContext.Provider>
   );
 }

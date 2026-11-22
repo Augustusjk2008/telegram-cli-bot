@@ -3,6 +3,7 @@ import { CheckCheck, ClipboardList, Copy, FastForward, Gauge, Play, Star } from 
 import type { ChatMessageContextUsage } from "../services/types";
 import { copyDeferredText, copyText } from "../utils/clipboard";
 import { ChatContextUsageBadge, formatContextUsageDetails } from "./ChatContextUsageBadge";
+import { ChatReadAloudButton } from "./ChatReadAloudButton";
 
 type Props = {
   translationControl?: ReactNode;
@@ -11,6 +12,8 @@ type Props = {
   endlessContinueCount?: number;
   favorite?: boolean;
   fullAnswerText?: string;
+  /** Displayed final answer only; fullAnswerText may include execution details. */
+  readAloudText?: string;
   /** May resolve later when parts of the transcript have to be read from the server first. */
   buildFullAnswerText?: () => string | Promise<string>;
   onContinue?: () => void;
@@ -26,6 +29,7 @@ export function ChatFinalAnswerActions({
   endlessContinueCount,
   favorite = false,
   fullAnswerText,
+  readAloudText,
   buildFullAnswerText,
   onContinue,
   onFastForward,
@@ -55,7 +59,7 @@ export function ChatFinalAnswerActions({
     }
   }, []);
 
-  if (!translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && (onContinue || onFastForward))) {
+  if (!readAloudText && !translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && (onContinue || onFastForward))) {
     return null;
   }
 
@@ -145,6 +149,7 @@ export function ChatFinalAnswerActions({
         className="max-w-full truncate text-[11px]"
       />
       {translationControl}
+      {readAloudText ? <ChatReadAloudButton text={readAloudText} /> : null}
       {onToggleFavorite ? (
         <button
           type="button"
