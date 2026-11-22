@@ -281,6 +281,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
         title: "继续与无尽模式",
         body: [
           "回答没有做完时，点击回答下方的「继续」，会向 Agent 发送一条 `Continue`。",
+          "旁边的扬声器按钮用于「朗读回答」，播放后可暂停、继续朗读或停止；使用浏览器语音，无需配置 API 密钥。",
           "回答以错误结束时，旁边会多出「无尽模式」：确认后立即发送一条 `Continue`，此后遇到可重试的未完成或错误结果，会按间隔自动发送。",
         ],
         points: [
@@ -290,7 +291,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
         shot: "answer",
         hotspot: "continue",
         zoom: 1.8,
-        alt: "回答下方的操作按钮：ctx 标记、收藏回答、继续和复制",
+        alt: "回答下方的操作按钮：ctx 标记、朗读回答、收藏回答、继续和复制",
       },
       {
         id: "history",
@@ -1074,7 +1075,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
         shot: "answer",
         hotspot: "continue",
         zoom: 1.8,
-        alt: "回答下方的操作按钮，其中播放图标是继续",
+        alt: "回答下方的操作按钮，其中三角图标是继续任务，扬声器图标是朗读回答",
       },
       {
         id: "focus",

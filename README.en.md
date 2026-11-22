@@ -200,6 +200,8 @@ Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and r
 - **Layout**: the header's layout menu offers Classic, Bottom panel, Four columns and Side stack presets; panes can be swapped by dragging, and the arrangement is saved per browser.
 - **Tutorial**: click the logo in the upper-left corner of the desktop workbench to open the in-app usage tutorial, which explains each feature chapter by chapter with screenshots (content is in Chinese).
 
+Completed answers have a read-aloud button using browser speech synthesis, with pause, resume, and stop controls and no API key setup. It reads the displayed answer, including a selected translation, skipping code blocks and execution details. Only one answer plays per page; switching conversations or entering live voice stops playback. Voices and language support depend on the browser and operating system, and some voices require a network connection. The button is disabled when speech synthesis is unsupported.
+
 ### GitHub Accounts and Remote Repositories
 
 The Git panel's **Remotes** section lists, adds, edits, and removes remotes, and publishes the current branch (push and set upstream) to a chosen remote. Editing a URL updates both fetch and push. New remotes accept https, http, ssh, git, and file URLs or `user@host:path`; URLs must not contain passwords or tokens, and credentials stored in existing URLs are hidden.

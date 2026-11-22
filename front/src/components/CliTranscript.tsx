@@ -748,7 +748,8 @@ export function CliTranscript({
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
   const showFinalActions = state !== "streaming" && (
-    showCopyFinalAnswer
+    showFinalResult
+    || showCopyFinalAnswer
     || Boolean(contextUsage)
     || typeof endlessContinueCount === "number"
     || (canContinue && Boolean(onContinue || onFastForward))
@@ -820,6 +821,7 @@ export function CliTranscript({
           ))}
           {showFinalActions ? (
             <ChatFinalAnswerActions
+              readAloudText={state === "done" ? visibleResultText : undefined}
               translationControl={translationControl}
               canContinue={canContinue}
               contextUsage={contextUsage}
