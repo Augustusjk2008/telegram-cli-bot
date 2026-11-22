@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, X } from "lucide-react";
+import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, Plus, Minus, RotateCcw, X } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type {  DeepSeekProviderOption } from "../services/types";
@@ -20,6 +20,10 @@ type Props = {
   splitView?: boolean;
   onToggleSplitView?: () => void;
   onOpenHistoryPanel: () => void;
+  chatFontSizeOffset?: number;
+  onDecreaseChatFontSize?: () => void;
+  onResetChatFontSize?: () => void;
+  onIncreaseChatFontSize?: () => void;
   mobileLayout?: boolean;
   modelDescription?: string;
   providerOptions?: DeepSeekProviderOption[];
@@ -42,6 +46,7 @@ const groupClassName = "inline-flex shrink-0 items-center gap-1";
 const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2 text-[var(--muted)]");
 const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
+const activePlanIconButtonClassName = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 
 
 export function ChatActionBar({
@@ -60,6 +65,10 @@ export function ChatActionBar({
   splitView = false,
   onToggleSplitView,
   onOpenHistoryPanel,
+  chatFontSizeOffset = 0,
+  onDecreaseChatFontSize,
+  onResetChatFontSize,
+  onIncreaseChatFontSize,
   mobileLayout = false,
   modelDescription,
   providerOptions = [],
@@ -141,12 +150,20 @@ export function ChatActionBar({
           <button
             type="button"
             aria-label="计划模式"
+            title="计划模式"
             aria-pressed={planMode}
             onClick={onTogglePlanMode}
             disabled={planDisabled}
-            className={planMode ? activePlanButtonClassName : neutralButtonClassName}
-          >计划</button>
-          <button type="button" aria-label="历史会话" onClick={onOpenHistoryPanel} className={neutralButtonClassName}>会话</button>
+            className={planMode ? activePlanIconButtonClassName : iconButtonClassName}
+          ><ClipboardList className="h-4 w-4" /></button>
+          <button type="button" aria-label="历史会话" title="历史会话" onClick={onOpenHistoryPanel} className={iconButtonClassName}><History className="h-4 w-4" /></button>
+          {onDecreaseChatFontSize && onResetChatFontSize && onIncreaseChatFontSize ? (
+            <div className={groupClassName} role="group" aria-label="聊天字体大小">
+              <button type="button" aria-label="减小聊天字体" title="减小聊天字体" onClick={onDecreaseChatFontSize} disabled={chatFontSizeOffset <= -4} className={iconButtonClassName}><Minus className="h-4 w-4" /></button>
+              <button type="button" aria-label="恢复聊天字体大小" title="恢复聊天字体大小" onClick={onResetChatFontSize} disabled={chatFontSizeOffset === 0} className={iconButtonClassName}><RotateCcw className="h-3.5 w-3.5" /></button>
+              <button type="button" aria-label="放大聊天字体" title="放大聊天字体" onClick={onIncreaseChatFontSize} disabled={chatFontSizeOffset >= 4} className={iconButtonClassName}><Plus className="h-4 w-4" /></button>
+            </div>
+          ) : null}
           {embedded && onToggleFocus ? (
             <button
               type="button"
@@ -267,14 +284,14 @@ export function ChatActionBar({
             type="button"
             aria-pressed={planMode}
             aria-label="计划模式"
+            title="计划模式"
             onClick={onTogglePlanMode}
             disabled={planDisabled}
             className={planMode
-              ? activePlanButtonClassName
-              : neutralButtonClassName}
+              ? activePlanIconButtonClassName
+              : iconButtonClassName}
           >
             <ClipboardList className="h-4 w-4" />
-            计划
           </button>
           <button
             type="button"
@@ -295,12 +312,19 @@ export function ChatActionBar({
           <button
             type="button"
             aria-label="历史会话"
+            title="历史会话"
             onClick={onOpenHistoryPanel}
-            className={toolbarButtonClass("plain", "sm", "h-8 rounded-md px-2.5")}
+            className={iconButtonClassName}
           >
             <History className="h-4 w-4" />
-            会话
           </button>
+          {onDecreaseChatFontSize && onResetChatFontSize && onIncreaseChatFontSize ? (
+            <div className={groupClassName} role="group" aria-label="聊天字体大小">
+              <button type="button" aria-label="减小聊天字体" title="减小聊天字体" onClick={onDecreaseChatFontSize} disabled={chatFontSizeOffset <= -4} className={iconButtonClassName}><Minus className="h-4 w-4" /></button>
+              <button type="button" aria-label="恢复聊天字体大小" title="恢复聊天字体大小" onClick={onResetChatFontSize} disabled={chatFontSizeOffset === 0} className={iconButtonClassName}><RotateCcw className="h-3.5 w-3.5" /></button>
+              <button type="button" aria-label="放大聊天字体" title="放大聊天字体" onClick={onIncreaseChatFontSize} disabled={chatFontSizeOffset >= 4} className={iconButtonClassName}><Plus className="h-4 w-4" /></button>
+            </div>
+          ) : null}
           {embedded && onToggleFocus ? (
             <button
               type="button"

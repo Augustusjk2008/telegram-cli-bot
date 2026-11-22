@@ -15,6 +15,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type CSSProperties,
   type RefObject,
   type TouchEvent as ReactTouchEvent,
   type WheelEvent as ReactWheelEvent,
@@ -1730,6 +1731,7 @@ export function ChatScreen({
   const [streamStartedAtMs, setStreamStartedAtMs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [chatWidth, setChatWidth] = useState(0);
+  const [chatFontSizeOffset, setChatFontSizeOffset] = useState(0);
   const [splitView, setSplitView] = useState(false);
   const [error, setError] = useState("");
   const [selectionNotice, setSelectionNotice] = useState("");
@@ -1821,6 +1823,12 @@ export function ChatScreen({
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<ChatMessageListHandle | null>(null);
   const chatRootRef = useRef<HTMLElement | null>(null);
+  const adjustChatFontSize = useCallback((delta: number) => {
+    setChatFontSizeOffset((current) => Math.max(-4, Math.min(4, current + delta)));
+  }, []);
+  useEffect(() => {
+    setChatFontSizeOffset(0);
+  }, [accountId, botAlias]);
   useEffect(() => {
     if (mobileLayout || !isVisible || typeof window === "undefined" || typeof window.ResizeObserver !== "function") {
       setChatWidth((current) => current === 0 ? current : 0);
@@ -5381,7 +5389,11 @@ export function ChatScreen({
 
   return (
     <ReadAloudContext.Provider value={readAloudContext}>
-    <main ref={chatRootRef} className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}>
+    <main
+      ref={chatRootRef}
+      className={clsx("relative flex h-full flex-col", embedded ? "bg-transparent" : "bg-[var(--workbench-panel-bg)]")}
+      style={{ "--chat-font-size-scale": String(1 + chatFontSizeOffset / 15) } as CSSProperties}
+    >
       {showActionBar ? (
         <ChatActionBar
           planMode={planMode}
@@ -5398,6 +5410,10 @@ export function ChatScreen({
           splitView={splitView}
           onToggleSplitView={() => setSplitView((current) => !current)}
           onOpenHistoryPanel={() => void handleOpenHistoryPanel("history")}
+          chatFontSizeOffset={chatFontSizeOffset}
+          onDecreaseChatFontSize={() => adjustChatFontSize(-1)}
+          onResetChatFontSize={() => setChatFontSizeOffset(0)}
+          onIncreaseChatFontSize={() => adjustChatFontSize(1)}
           mobileLayout={mobileLayout}
           providerOptions={deepSeekProviderOptions}
           selectedProvider={selectedDeepSeekProvider}
