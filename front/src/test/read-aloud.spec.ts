@@ -41,17 +41,28 @@ async function openChat(page: Page, width: number) {
   await page.addInitScript((mobile) => {
     localStorage.setItem("web-view-mode", mobile ? "mobile" : "desktop");
     const log: SpeechLog = { spoken: [], pauses: 0, resumes: 0, cancellations: 0 };
+    let current: SpeechSynthesisUtterance | undefined;
     Object.assign(window, { __speechLog: log });
     Object.defineProperty(window, "speechSynthesis", { configurable: true, value: {
       paused: false,
       getVoices: () => [],
       speak: (utterance: SpeechSynthesisUtterance) => {
+        current = utterance;
         log.spoken.push(utterance.text);
         utterance.dispatchEvent(new Event("start"));
+        if (utterance.text.startsWith("你好，")) {
+          utterance.dispatchEvent(new SpeechSynthesisEvent("boundary", { utterance, charIndex: 3, name: "word" }));
+        }
       },
+      // Simulate a browser whose native resume silently fails to restart audio.
       pause: () => { log.pauses += 1; },
       resume: () => { log.resumes += 1; },
-      cancel: () => { log.cancellations += 1; },
+      cancel: () => {
+        log.cancellations += 1;
+        const cancelled = current;
+        current = undefined;
+        if (cancelled) setTimeout(() => cancelled.dispatchEvent(new Event("end")), 0);
+      },
     } });
   }, width < 1000);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -69,6 +80,8 @@ for (const width of [1440, 390]) {
     await first.getByRole("button", { name: "朗读回答", exact: true }).click();
     await first.getByRole("button", { name: "暂停朗读", exact: true }).click();
     await first.getByRole("button", { name: "继续朗读", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __speechLog: SpeechLog }).__speechLog.spoken))
+      .toEqual(["你好，这是第一条回答。", "这是第一条回答。"]);
     await second.getByRole("button", { name: "朗读回答", exact: true }).click();
     await expect(first.getByRole("button", { name: "朗读回答", exact: true })).toBeVisible();
     await expect(second.getByRole("button", { name: "暂停朗读", exact: true })).toBeVisible();
@@ -76,7 +89,7 @@ for (const width of [1440, 390]) {
     await page.screenshot({ path: test.info().outputPath(`read-aloud-${width}.png`) });
     await second.getByRole("button", { name: "停止朗读", exact: true }).click();
     const log = await page.evaluate(() => (window as unknown as { __speechLog: SpeechLog }).__speechLog);
-    expect(log).toEqual({ spoken: ["你好，这是第一条回答。", "这是第二条回答。"], pauses: 1, resumes: 1, cancellations: 2 });
+    expect(log).toEqual({ spoken: ["你好，这是第一条回答。", "这是第一条回答。", "这是第二条回答。"], pauses: 0, resumes: 0, cancellations: 3 });
     expect(errors).toEqual([]);
   });
 }

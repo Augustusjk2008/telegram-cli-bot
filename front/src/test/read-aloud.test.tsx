@@ -11,6 +11,7 @@ class Utterance {
   voice: SpeechSynthesisVoice | null = null;
   onstart: (() => void) | null = null;
   onend: (() => void) | null = null;
+  onboundary: ((event: { charIndex: number }) => void) | null = null;
   onerror: ((event: { error: string }) => void) | null = null;
   constructor(public text: string) {}
 }
@@ -72,14 +73,14 @@ describe("browser read-aloud controls", () => {
     expect(utterances[0].text).toBe("你好，世界。");
     expect(utterances[0].lang).toBe("zh-CN");
     fireEvent.click(screen.getByRole("button", { name: "暂停朗读" }));
-    expect(synth.pause).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
-    expect(synth.resume).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button", { name: "停止朗读" }));
     expect(synth.cancel).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
+    expect(utterances[1].text).toBe("你好，世界。");
+    fireEvent.click(screen.getByRole("button", { name: "停止朗读" }));
+    expect(synth.cancel).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("button", { name: "朗读回答" }));
-    expect(utterances).toHaveLength(2);
-    act(() => utterances[1].onend?.());
+    expect(utterances).toHaveLength(3);
+    act(() => utterances[2].onend?.());
     expect(screen.queryByRole("button", { name: "停止朗读" })).not.toBeInTheDocument();
     expect(onContinue).not.toHaveBeenCalled();
   });
@@ -135,6 +136,73 @@ describe("browser read-aloud controls", () => {
     expect(utterances).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
     expect(utterances).toHaveLength(2);
+  });
+
+  it.each(["silent-resume", "pause-cancels"])("resumes by speaking saved text when native playback has %s", (failure) => {
+    if (failure === "pause-cancels") {
+      synth.pause.mockImplementation(() => utterances.at(-1)?.onerror?.({ error: "interrupted" }));
+    }
+    render(<ChatReadAloudButton text="First sentence. Second sentence." />);
+    fireEvent.click(screen.getByRole("button", { name: "朗读回答" }));
+    act(() => utterances[0].onboundary?.({ charIndex: 16 }));
+    fireEvent.click(screen.getByRole("button", { name: "暂停朗读" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
+    // A changed button label alone is not evidence that speech was restarted.
+    expect(utterances.map((utterance) => utterance.text)).toEqual(["First sentence. Second sentence.", "Second sentence."]);
+    expect(synth.pause).not.toHaveBeenCalled();
+    expect(synth.resume).not.toHaveBeenCalled();
+  });
+
+  it("preserves progress across repeated pauses and ignores cancellation callbacks", () => {
+    synth.cancel.mockImplementation(() => {
+      utterances.at(-1)?.onend?.();
+      utterances.at(-1)?.onerror?.({ error: "canceled" });
+    });
+    render(<ChatReadAloudButton text="One two three four." />);
+    fireEvent.click(screen.getByRole("button", { name: "朗读回答" }));
+    act(() => utterances[0].onboundary?.({ charIndex: 4 }));
+    fireEvent.click(screen.getByRole("button", { name: "暂停朗读" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
+    expect(utterances[1].text).toBe("two three four.");
+    act(() => {
+      utterances[0].onboundary?.({ charIndex: 17 });
+      utterances[0].onend?.();
+      utterances[0].onerror?.({ error: "interrupted" });
+      utterances[1].onboundary?.({ charIndex: 4 });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "暂停朗读" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
+    expect(utterances[2].text).toBe("three four.");
+    act(() => utterances[2].onend?.());
+    expect(screen.getByRole("button", { name: "朗读回答" })).toBeEnabled();
+  });
+
+  it("repeats only the current chunk when the voice does not report word boundaries", () => {
+    const text = "First passage. ".repeat(20) + "Last passage. ".repeat(20);
+    const chunks = splitReadAloudText(readAloudText(text));
+    render(<ChatReadAloudButton text={text} />);
+    fireEvent.click(screen.getByRole("button", { name: "朗读回答" }));
+    act(() => utterances[0].onend?.());
+    fireEvent.click(screen.getByRole("button", { name: "暂停朗读" }));
+    act(() => utterances[1].onend?.());
+    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
+    expect(utterances.map((utterance) => utterance.text)).toEqual([chunks[0], chunks[1], chunks[1]]);
+    act(() => utterances[2].onend?.());
+    expect(utterances[3].text).toBe(chunks[2]);
+  });
+
+  it("waits for resumed audio to start and keeps cancellation available", () => {
+    vi.useFakeTimers();
+    render(<ChatReadAloudButton text="An answer." />);
+    fireEvent.click(screen.getByRole("button", { name: "朗读回答" }));
+    fireEvent.click(screen.getByRole("button", { name: "暂停朗读" }));
+    synth.speak.mockImplementation((utterance: Utterance) => { utterances.push(utterance); });
+    fireEvent.click(screen.getByRole("button", { name: "继续朗读" }));
+    expect(screen.getByRole("button", { name: "正在准备朗读" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "停止朗读" })).toBeEnabled();
+    act(() => vi.advanceTimersByTime(15000));
+    expect(screen.getByRole("alert")).toHaveTextContent("语音未能启动");
+    expect(screen.getByRole("button", { name: "朗读回答" })).toBeEnabled();
   });
 
   it("disables unsupported browsers and omits answers containing only code", () => {

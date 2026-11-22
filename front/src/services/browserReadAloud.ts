@@ -6,6 +6,8 @@ type Reading = {
   synth: SpeechSynthesis;
   chunks: string[];
   index: number;
+  /** Last reported word/sentence boundary within the current chunk. */
+  offset: number;
   paused: boolean;
   utterance?: SpeechSynthesisUtterance;
   startTimer?: ReturnType<typeof setTimeout>;
@@ -46,16 +48,18 @@ function languageFor(text: string): string {
 
 function speakNext(reading: Reading) {
   if (active !== reading || reading.paused) return;
-  const text = reading.chunks[reading.index];
-  if (!text) {
+  const chunk = reading.chunks[reading.index];
+  if (!chunk) {
     active = undefined;
     reading.notify({ status: "idle" });
     return;
   }
   try {
+    const startOffset = reading.offset;
+    const text = chunk.slice(startOffset);
     const utterance = new SpeechSynthesisUtterance(text);
     reading.utterance = utterance; // Keep a strong reference until this chunk finishes.
-    utterance.lang = languageFor(text);
+    utterance.lang = languageFor(chunk);
     // Voices can load asynchronously; query again for every utterance, falling back
     // to the browser's selection by language when its voice list is still empty.
     const voices = reading.synth.getVoices();
@@ -69,11 +73,19 @@ function speakNext(reading: Reading) {
       clearTimeout(reading.startTimer);
       reading.notify({ status: reading.paused ? "paused" : "playing" });
     };
+    utterance.onboundary = (event) => {
+      if (!current() || !Number.isInteger(event.charIndex) || event.charIndex < 0 || event.charIndex >= text.length) return;
+      let offset = startOffset + event.charIndex;
+      // A buggy voice must not leave the resumed string inside a surrogate pair.
+      if (/[\uDC00-\uDFFF]/.test(chunk[offset]) && /[\uD800-\uDBFF]/.test(chunk[offset - 1] || "")) offset -= 1;
+      reading.offset = Math.max(reading.offset, offset);
+    };
     utterance.onend = () => {
       if (!current()) return;
       clearTimeout(reading.startTimer);
       reading.utterance = undefined;
       reading.index += 1;
+      reading.offset = 0;
       speakNext(reading);
     };
     utterance.onerror = (event) => {
@@ -90,6 +102,8 @@ function speakNext(reading: Reading) {
     reading.startTimer = setTimeout(() => {
       if (current()) fail(reading, "语音未能启动，请检查系统语音设置后重试。");
     }, 15000);
+    // Clear an inherited native paused flag before queuing fresh speech.
+    if (reading.synth.paused) reading.synth.resume();
     reading.synth.speak(utterance);
   } catch {
     fail(reading, "朗读失败，请检查浏览器语音支持后重试。");
@@ -101,24 +115,23 @@ export function startReadAloud(owner: symbol, text: string, notify: Reading["not
   stopReadAloud();
   if (!supportsReadAloud()) return;
   const reading: Reading = {
-    owner, synth: window.speechSynthesis, chunks: splitReadAloudText(text), index: 0, paused: false, notify,
+    owner, synth: window.speechSynthesis, chunks: splitReadAloudText(text), index: 0, offset: 0, paused: false, notify,
   };
   active = reading;
-  try {
-    // cancel() does not reset the queue's paused flag in every browser.
-    if (reading.synth.paused) reading.synth.resume();
-    speakNext(reading);
-  } catch {
-    fail(reading, "朗读失败，请重试。");
-  }
+  speakNext(reading);
 }
 
 export function pauseReadAloud(owner: symbol) {
-  if (!active || active.owner !== owner) return;
+  if (!active || active.owner !== owner || active.paused) return;
   const reading = active;
   try {
     reading.paused = true;
-    reading.synth.pause();
+    // Some engines cancel on pause or silently fail to resume. Keep our own
+    // position and resume with a new utterance instead of native pause/resume.
+    // Invalidate first: cancel() may deliver end/error callbacks synchronously.
+    reading.utterance = undefined;
+    clearTimeout(reading.startTimer);
+    reading.synth.cancel();
     if (active === reading) reading.notify({ status: "paused" });
   } catch {
     fail(reading, "当前浏览器无法暂停朗读，请重新播放。");
@@ -126,15 +139,10 @@ export function pauseReadAloud(owner: symbol) {
 }
 
 export function resumeReadAloud(owner: symbol) {
-  if (!active || active.owner !== owner) return;
+  if (!active || active.owner !== owner || !active.paused) return;
   const reading = active;
-  try {
-    reading.paused = false;
-    reading.synth.resume();
-    if (active !== reading) return;
-    if (reading.utterance) reading.notify({ status: "playing" });
-    else speakNext(reading);
-  } catch {
-    fail(reading, "当前浏览器无法继续朗读，请重新播放。");
-  }
+  reading.paused = false;
+  // No boundary support means replaying this short chunk, never skipping it.
+  // Only onstart may change the UI from loading to playing.
+  speakNext(reading);
 }
