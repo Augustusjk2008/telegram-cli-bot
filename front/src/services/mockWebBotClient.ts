@@ -2860,21 +2860,7 @@ export class MockWebBotClient implements WebBotClient {
   ];
   private scheduledTasks = seedMockScheduledTasks();
   private scheduledTaskSeq = 0;
-  private announcements: AnnouncementItem[] = [
-    {
-      id: "ann-2026-05-13-demo",
-      publishedAt: "2026-05-13T09:00:00+08:00",
-      publisher: "CLI Bridge",
-      title: "公告中心",
-      category: "feature",
-      severity: "info",
-      summary: "公告会在新内容发布后自动提醒。",
-      sections: [
-        { label: "新增", items: ["登录后自动弹出", "右上角可再次打开"] },
-        { label: "操作", items: ["看完后点关闭即可"] },
-      ],
-    },
-  ];
+  private announcements: AnnouncementItem[] = [];
   private announcementLastSeenId = "";
   private adminUsers = new Map<string, Omit<AdminUser, "ownedBots" | "ownedBotCount">>([
     ["demo", {

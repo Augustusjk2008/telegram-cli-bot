@@ -379,23 +379,6 @@ function Invoke-FrontDistAssetCheck {
     Invoke-CheckedCommand -FilePath "node" -Arguments @("scripts/verify-build-assets.mjs") -FailureMessage "前端构建资源路径校验失败" -WorkingDirectory $script:FrontDir
 }
 
-function Export-ReleaseAnnouncements {
-    param([string]$DestinationRoot)
-
-    $relativePath = ".web_announcements.json"
-    $destinationPath = Join-Path $DestinationRoot $relativePath
-    $runtimePath = (& python -c "from bot.runtime_paths import get_announcements_content_path; print(get_announcements_content_path())").Trim()
-    if ($LASTEXITCODE -ne 0) {
-        throw "读取运行态公告路径失败。"
-    }
-    if ([string]::IsNullOrWhiteSpace($runtimePath) -or -not (Test-Path -LiteralPath $runtimePath -PathType Leaf)) {
-        Write-Info "未找到运行态公告内容，沿用仓库内 .web_announcements.json。"
-        return
-    }
-    Copy-Item -LiteralPath $runtimePath -Destination $destinationPath -Force
-    Write-Info ("已导出公告内容到发布包: {0}" -f $relativePath)
-}
-
 function Invoke-PostPortableFrontBuild {
     Write-Info "Windows 绿色版构建会临时使用根路径资源，正在恢复本机前端构建产物。"
     Invoke-FrontBuild -StepMessage "恢复本机前端构建产物"
@@ -451,7 +434,7 @@ function Copy-TrackedFilesToStage {
     param([string]$StageDir)
 
     Write-Step "复制 tracked 文件到暂存区"
-    $trackedFiles = Invoke-Git -Arguments @("ls-files") -FailureMessage "读取 tracked 文件失败"
+    $trackedFiles = Invoke-Git -Arguments @("ls-files", "--", ":(exclude).web_announcements.json", ":(exclude).web_announcement_reads.json") -FailureMessage "读取 tracked 文件失败"
     foreach ($relativePath in $trackedFiles) {
         $cleanPath = [string]$relativePath
         if ([string]::IsNullOrWhiteSpace($cleanPath)) {
@@ -479,7 +462,6 @@ function Copy-TrackedFilesToStage {
     Copy-Item -LiteralPath $frontDist -Destination $frontDistTarget -Recurse -Force
 
     Assert-ThemeFilesInStage -StageDir $StageDir
-    Export-ReleaseAnnouncements -DestinationRoot $StageDir
     Assert-ReleaseLegalFilesInStage -StageDir $StageDir
 }
 

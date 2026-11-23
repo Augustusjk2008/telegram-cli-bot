@@ -91,7 +91,6 @@ class UpdateService:
         self.store = store or UpdateStore(self.repo_root)
         self._worker = None
         self._check_lock = threading.Lock()
-        self._announcement_worker = None
 
     def _migrate_legacy(self):
         from bot import app_settings, updater
@@ -153,7 +152,6 @@ class UpdateService:
                     state = self.store.mutate(interrupt)
             except UpdateConflict:
                 pass
-        state = self._schedule_announcements(state)
         job = state.get("job") or {}
         check = state.get("last_check") or {}
         release = check.get("release") or {}
@@ -505,51 +503,6 @@ class UpdateService:
             if (name not in staged or path.resolve() != path.absolute() or not path.is_file()
                     or self._file_hash(path) != staged[name]):
                 raise UpdateServiceError(f"暂存文件校验失败，请重新准备: {name}")
-
-    def _schedule_announcements(self, state):
-        job = state.get("job") or {}
-        if (job.get("phase") != "succeeded" or job.get("announcement_pending") is False
-                or float(job.get("announcement_retry_after", 0)) > time.time()):
-            return state
-        lease = FileLock(self.store.root / "announcements.lock", timeout=0)
-        try:
-            lease.__enter__()
-        except UpdateConflict:
-            return state
-        try:
-            def pending(current):
-                active = current.get("job") or {}
-                if active.get("job_id") != job["job_id"] or active.get("phase") != "succeeded":
-                    raise UpdateConflict("公告所属升级任务已变化")
-                active.update(announcement_pending=True)
-            state = self.store.mutate(pending)
-            self._announcement_worker = threading.Thread(target=self._sync_announcements,
-                                                        args=(state["job"], lease), daemon=True)
-            self._announcement_worker.start()
-            return state
-        except UpdateConflict:
-            lease.__exit__()
-            return self.store.read()
-        except BaseException:
-            lease.__exit__()
-            raise
-
-    def _sync_announcements(self, job, lease):
-        try:
-            error = ""
-            try:
-                from bot.updater import _sync_runtime_announcements_from_package
-                _sync_runtime_announcements_from_package(Path(job.get("package_path", "")), job.get("files", []))
-            except Exception as exc:
-                error = str(exc) or type(exc).__name__
-            def complete(state):
-                active = state.get("job") or {}
-                if active.get("job_id") == job["job_id"] and active.get("phase") == "succeeded":
-                    active.update(announcement_pending=bool(error), announcement_error=error,
-                                  announcement_retry_after=time.time() + 60 if error else 0)
-            self.store.mutate(complete)
-        finally:
-            lease.__exit__()
 
     def fail_handoff(self, job_id, error):
         def fail(state):

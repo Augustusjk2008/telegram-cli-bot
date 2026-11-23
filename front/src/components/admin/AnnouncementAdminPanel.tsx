@@ -32,9 +32,9 @@ export function createAnnouncementDraft(
   carry?: Pick<AnnouncementDraft, "publisher" | "category" | "severity">,
 ): AnnouncementDraft {
   return {
-    publisher: carry?.publisher ?? "CLI Bridge",
+    publisher: carry?.publisher ?? "本站管理员",
     title: "",
-    category: carry?.category ?? "feature",
+    category: carry?.category ?? "notice",
     severity: carry?.severity ?? "info",
     summary: "",
     sections: [createSectionDraft("新增"), createSectionDraft("影响"), createSectionDraft("操作")],
@@ -117,7 +117,7 @@ export function AnnouncementAdminPanel({ items, draft, onDraftChange, saving, de
           <span className="announce-head-icon" aria-hidden="true"><Megaphone className="h-4 w-4" /></span>
           <div className="announce-head-copy">
             <h2 id="announce-composer-title">撰写公告</h2>
-            <p>发布后，所有用户下次打开控制台时会弹出提醒</p>
+            <p>发布后，本站用户可以在控制台查看公告</p>
           </div>
         </header>
 

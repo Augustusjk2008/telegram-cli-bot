@@ -99,7 +99,7 @@ const ADMIN_TAB_META: Record<AdminCenterTab, { label: string; description: strin
   usage: { label: "Usage", description: "各 CLI 的额度与用量趋势" },
   cost: { label: "Cost", description: "Codex 与 Claude 的费用统计，可按用户、智能体与模型拆分" },
   schedules: { label: "定时任务", description: "按计划新建会话并向智能体发送固定指令" },
-  announcements: { label: "公告", description: "向所有用户发布更新与提醒" },
+  announcements: { label: "公告", description: "向本站用户发布通知" },
   notifications: { label: "通知", description: "任务完成推送的配置、状态与测试" },
   weixin: { label: "消息网关", description: "Telegram 接入配置，以及个人微信扫码和连接状态" },
   "lan-chat": { label: "联机聊天", description: "局域网内多实例联机聊天" },

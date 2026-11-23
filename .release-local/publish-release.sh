@@ -408,18 +408,6 @@ invoke_front_dist_asset_check() {
   run_checked_command "$front_dir" "前端构建资源路径校验失败" node scripts/verify-build-assets.mjs
 }
 
-export_release_announcements() {
-  local destination_root="$1"
-  local runtime_path
-  runtime_path="$(cd "$repo_root" && "$python_bin" -c 'from bot.runtime_paths import get_announcements_content_path; print(get_announcements_content_path())')"
-  if [[ -z "${runtime_path//[[:space:]]/}" || ! -f "$runtime_path" ]]; then
-    write_info "未找到运行态公告内容，沿用仓库内 .web_announcements.json。"
-    return
-  fi
-  cp -p "$runtime_path" "$destination_root/.web_announcements.json"
-  write_info "已导出公告内容到发布包: .web_announcements.json"
-}
-
 restore_front_build_after_portable() {
   write_info "Windows 绿色版构建会临时使用根路径资源，正在恢复本机前端构建产物。"
   write_step "恢复本机前端构建产物"
@@ -463,7 +451,7 @@ copy_tracked_files_to_stage() {
     local destination_path="$stage_dir/$relative_path"
     mkdir -p "$(dirname "$destination_path")"
     cp -p "$source_path" "$destination_path"
-  done < <(cd "$repo_root" && git ls-files -z)
+  done < <(cd "$repo_root" && git ls-files -z -- ':(exclude).web_announcements.json' ':(exclude).web_announcement_reads.json')
 
   local front_dist="$front_dir/dist"
   if [[ ! -d "$front_dist" ]]; then
@@ -475,7 +463,6 @@ copy_tracked_files_to_stage() {
   mkdir -p "$(dirname "$front_dist_target")"
   cp -a "$front_dist" "$front_dist_target"
 
-  export_release_announcements "$stage_dir"
   assert_release_legal_files_in_stage "$stage_dir"
 }
 

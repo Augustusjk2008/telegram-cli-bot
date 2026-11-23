@@ -25,7 +25,7 @@ export function AnnouncementDialog({ open, items, latestId, onClose }: Props) {
         <header className="flex items-center justify-between px-5 pb-2 pt-4">
           <div>
             <h2 className="text-[17px] font-semibold text-[var(--text)]">公告</h2>
-            <p className="mt-0.5 text-xs text-[var(--muted)]">新版本与运维通知</p>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">本站管理员发布的通知</p>
           </div>
           <button
             type="button"

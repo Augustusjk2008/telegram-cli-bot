@@ -839,15 +839,15 @@ test("公告条目保留换行与空格，发布时忽略空段落并重置草�
 
   await user.click(publish);
   expect(upsert).toHaveBeenCalledWith({
-    publisher: "CLI Bridge",
+    publisher: "本站管理员",
     title: "Cluster upgrade",
-    category: "feature",
+    category: "notice",
     severity: "info",
     summary: "Two items",
     sections: [{ label: "新增", items: ["first item", "second item"] }],
   });
   await waitFor(() => expect(screen.getByLabelText("公告标题")).toHaveValue(""));
-  expect(screen.getByLabelText("公告发布者")).toHaveValue("CLI Bridge");
+  expect(screen.getByLabelText("公告发布者")).toHaveValue("本站管理员");
 });
 
 test("Cost 页面在 Usage 右侧，切换维度只在本地重算，粒度与开关各发一次请求", async () => {

@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 from bot.config import APP_UPDATE_REPOSITORY
-from bot.runtime_paths import get_announcements_content_path
 from bot.version import APP_VERSION
 
 UPDATE_CACHE_DIR_NAME = ".updates"
@@ -31,6 +30,7 @@ PROTECTED_UPDATE_PATHS = {
     "managed_bots.json",
     ".session_store.json",
     ".web_admin_settings.json",
+    ".web_announcements.json",
     ".web_announcement_reads.json",
     ".web_tunnel_state.json",
     ".web_lan_chat.json",
@@ -40,8 +40,6 @@ PROTECTED_UPDATE_PATHS = {
     ".updates",
 }
 DISTRIBUTION_MARKER_FILE = ".distribution.json"
-ANNOUNCEMENTS_FILE = ".web_announcements.json"
-ANNOUNCEMENT_READS_FILE = ".web_announcement_reads.json"
 WINDOWS_INSTALLER_PACKAGE_KIND = "installer"
 WINDOWS_PORTABLE_PACKAGE_KIND = "portable"
 LINUX_PACKAGE_KIND = "linux"
@@ -741,138 +739,6 @@ def _resolve_update_target_path(repo_root: Path, relative_path: str) -> Path:
     return safe_target(root, normalized_path)
 
 
-def _preserve_legacy_announcement_reads(
-    repo_root: Path,
-    relative_paths: list[str],
-    *,
-    log_callback: Any | None = None,
-) -> None:
-    normalized_paths = {str(path or "").replace("\\", "/").strip("/") for path in relative_paths}
-    if ANNOUNCEMENTS_FILE not in normalized_paths:
-        return
-
-    content_path = repo_root / ANNOUNCEMENTS_FILE
-    reads_path = repo_root / ANNOUNCEMENT_READS_FILE
-    if reads_path.exists() or not content_path.exists():
-        return
-
-    try:
-        data = json.loads(content_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    if not isinstance(data, dict):
-        return
-    reads = data.get("reads")
-    if not isinstance(reads, dict) or not reads:
-        return
-
-    payload = {
-        "version": 1,
-        "updated_at": str(data.get("updated_at") or datetime.now(timezone.utc).isoformat()),
-        "reads": reads,
-    }
-    reads_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    _emit_apply_log(log_callback, "已迁移公告已读状态到本地 sidecar。")
-
-
-def _load_announcement_content_from_bytes(raw: bytes) -> dict[str, Any]:
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return {"version": 1, "updated_at": _now_iso(), "items": []}
-    if not isinstance(data, dict):
-        return {"version": 1, "updated_at": _now_iso(), "items": []}
-    items = data.get("items")
-    return {
-        "version": data.get("version", 1),
-        "updated_at": str(data.get("updated_at") or _now_iso()),
-        "items": items if isinstance(items, list) else [],
-    }
-
-
-def _merge_announcement_content(target: dict[str, Any], source: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    merged_items: list[Any] = []
-    seen_ids: set[str] = set()
-    for item in target.get("items", []):
-        if not isinstance(item, dict):
-            continue
-        item_id = str(item.get("id") or "").strip()
-        if not item_id:
-            continue
-        merged_items.append(item)
-        seen_ids.add(item_id)
-
-    changed = False
-    for item in source.get("items", []):
-        if not isinstance(item, dict):
-            continue
-        item_id = str(item.get("id") or "").strip()
-        if not item_id or item_id in seen_ids:
-            continue
-        merged_items.append(item)
-        seen_ids.add(item_id)
-        changed = True
-
-    if not changed:
-        return target, False
-
-    return {
-        "version": target.get("version", source.get("version", 1)),
-        "updated_at": str(source.get("updated_at") or _now_iso()),
-        "items": merged_items,
-    }, True
-
-
-def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(name, path)
-    finally:
-        Path(name).unlink(missing_ok=True)
-
-
-def _sync_runtime_announcements_from_package(
-    package_path: Path,
-    relative_paths: list[str],
-    *,
-    log_callback: Any | None = None,
-) -> bool:
-    package_content: dict[str, Any] | None = None
-
-    def _capture(relative_path: str, stream) -> None:
-        nonlocal package_content
-        if relative_path != ANNOUNCEMENTS_FILE or stream is None:
-            return
-        package_content = _load_announcement_content_from_bytes(stream.read())
-
-    _stream_package_entries(package_path, _capture)
-    if package_content is None:
-        return False
-
-    target_path = get_announcements_content_path()
-    if target_path.exists():
-        try:
-            target_content = _load_announcement_content_from_bytes(target_path.read_bytes())
-        except OSError:
-            target_content = {"version": 1, "updated_at": _now_iso(), "items": []}
-    else:
-        target_content = {"version": 1, "updated_at": _now_iso(), "items": []}
-
-    merged, changed = _merge_announcement_content(target_content, package_content)
-    if not changed:
-        return False
-
-    _write_json_file(target_path, merged)
-    _emit_apply_log(log_callback, "已同步发布公告到本地公告中心。")
-    return True
-
-
 def _backup_update_targets(write_plan, *, temp_root: Path, journal_path: Path):
     from scripts.update_transaction import Transaction
     transaction = Transaction(temp_root.parent, temp_root)
@@ -1124,10 +990,6 @@ def _normalize_tag_name(tag_name: Any) -> str:
     if value.lower().startswith("v"):
         return value[1:]
     return value
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -174,6 +174,30 @@ def test_tcb_data_roots_keep_independent_idempotent_migration_state(
     assert second.state_path.exists()
 
 
+def test_announcements_belong_to_the_active_tcb_data_root(monkeypatch, tmp_path):
+    from bot.web.server import _build_default_announcement_store
+
+    first_root, repo = _configured_repo(monkeypatch, tmp_path)
+    runner.run_pending_migrations(repo)
+    first = _build_default_announcement_store()
+    assert first.list_for_user("member")["items"] == []
+    item = first.create_item({
+        "title": "Service window", "publisher": "Host A", "category": "maintenance",
+        "severity": "info", "summary": "Restart at noon",
+    })
+    first.mark_seen("member", item["id"])
+
+    monkeypatch.setenv("TCB_DATA_DIR", str(tmp_path / "second-host"))
+    runner.run_pending_migrations(repo)
+    other = _build_default_announcement_store().list_for_user("member")
+    assert other["items"] == [] and other["last_seen_id"] == ""
+
+    monkeypatch.setenv("TCB_DATA_DIR", str(first_root))
+    restored = _build_default_announcement_store().list_for_user("member")
+    assert restored["items"] == [item]
+    assert restored["last_seen_id"] == item["id"]
+
+
 def test_rerun_does_not_rewrite_historical_repair_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     data_root, repo_root = _configured_repo(monkeypatch, tmp_path)
     state_path = _write_json(

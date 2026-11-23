@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -328,32 +329,21 @@ def test_idle_callback_can_read_state_without_recursive_lock(service, monkeypatc
     assert reads == ["ready"]
 
 
-def test_failed_announcement_is_retryable_without_changing_success(service, monkeypatch):
+def test_completed_update_does_not_import_legacy_package_announcements(service, tmp_path):
+    from bot.runtime_paths import get_announcements_content_path
+
     _ready(service)
-    service.store.mutate(lambda s: s["job"].update(phase="succeeded", result={"version": "9.0.0"},
-                                                  package_path="package.zip", files=[".web_announcements.json"]))
-    def fail(*args):
-        raise OSError("announcements locked")
-    monkeypatch.setattr(updater, "_sync_runtime_announcements_from_package", fail)
-    service.status()
-    service._announcement_worker.join(5)
-    failed = service.store.read()["job"]
-    assert failed["phase"] == "succeeded"
-    assert failed["announcement_pending"] is True
-    assert failed["announcement_error"] == "announcements locked"
-    assert failed["result"] == {"version": "9.0.0"}
-    completed = []
-    monkeypatch.setattr(updater, "_sync_runtime_announcements_from_package", lambda *args: completed.append(args))
-    service.store.mutate(lambda s: s["job"].update(announcement_retry_after=0))
-    service.status()
-    service._announcement_worker.join(5)
-    success = service.status()["job"]
-    assert success["phase"] == "succeeded"
-    assert success["announcement_pending"] is False
-    assert success["announcement_error"] == ""
-    assert len(completed) == 1
-    service.status()
-    assert len(completed) == 1
+    package = tmp_path / "old-release.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr(".web_announcements.json", json.dumps({"items": [{"id": "publisher-only"}]}))
+    state = service.store.mutate(lambda s: s["job"].update(
+        phase="succeeded", package_path=str(package),
+        files=[".web_announcements.json"], announcement_pending=True,
+    ))
+
+    assert service.status()["job"]["phase"] == "succeeded"
+    assert service.store.read()["revision"] == state["revision"]
+    assert not get_announcements_content_path().exists()
 
 
 def test_invalid_release_version_is_a_failed_check(service, monkeypatch):

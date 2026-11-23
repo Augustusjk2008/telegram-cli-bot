@@ -126,11 +126,10 @@ async function openWorkbench(browser, distDir, { user = "demo", loggedOut = fals
     await page.locator('input[name="username"]').waitFor();
     return { context, page };
   }
-  // The mock build accepts any credentials; the announcement dialog opens after login and blocks clicks.
+  // The mock build accepts any credentials.
   await page.locator('input[name="username"]').fill(user);
   await page.locator('input[name="password"]').fill("demo-password");
   await page.locator("form").getByRole("button", { name: "登录", exact: true }).click();
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByTestId("desktop-workbench-columns").waitFor();
   return { context, page };
 }

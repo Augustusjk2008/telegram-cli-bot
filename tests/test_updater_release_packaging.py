@@ -40,46 +40,6 @@ def _ps_quote(value: Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _announcement_payload(*item_ids: str) -> dict:
-    return {
-        "version": 1,
-        "updated_at": "2026-06-29T00:00:00Z",
-        "items": [
-            {
-                "id": item_id,
-                "published_at": "2026-06-29T00:00:00+00:00",
-                "publisher": "Orbit Safe Claw",
-                "title": f"公告 {item_id}",
-                "category": "release",
-                "severity": "info",
-                "summary": f"摘要 {item_id}",
-                "sections": [],
-            }
-            for item_id in item_ids
-        ],
-    }
-
-
-def test_sync_runtime_announcements_from_package_merges_new_items(monkeypatch, tmp_path: Path) -> None:
-    runtime_content = tmp_path / "runtime" / "announcements" / "content.json"
-    runtime_content.parent.mkdir(parents=True)
-    runtime_content.write_text(json.dumps(_announcement_payload("ann-old"), ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(updater, "get_announcements_content_path", lambda: runtime_content)
-
-    package_path = tmp_path / "update.zip"
-    with zipfile.ZipFile(package_path, "w") as archive:
-        archive.writestr(".web_announcements.json", json.dumps(_announcement_payload("ann-old", "ann-new")))
-
-    changed = updater._sync_runtime_announcements_from_package(
-        package_path,
-        [".web_announcements.json"],
-    )
-
-    saved = json.loads(runtime_content.read_text(encoding="utf-8"))
-    assert changed is True
-    assert [item["id"] for item in saved["items"]] == ["ann-old", "ann-new"]
-
-
 def _write_legal_archive(path: Path, members: tuple[str, ...]) -> None:
     if path.suffix == ".zip":
         with zipfile.ZipFile(path, "w") as archive:
