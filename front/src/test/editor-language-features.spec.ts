@@ -143,9 +143,13 @@ test("the editor menu lists references and falls back to labelled text matches",
   await expect(menu.getByRole("menuitem")).toHaveText([
     "转到定义F12", "转到实现Ctrl+F12", "查找所有引用Shift+F12", "剪切Ctrl+X", "复制Ctrl+C", "粘贴Ctrl+V", "全选Ctrl+A",
   ]);
+  const shell = page.getByTestId("desktop-workbench-shell");
+  const shellBox = await shell.boundingBox();
   await menu.getByRole("menuitem", { name: "查找所有引用" }).click();
   const picker = page.getByTestId("desktop-definition-picker");
   await expect(picker).toContainText("引用（1）");
+  // The picker floats over the workbench; it must not take a layout row and squeeze the panes.
+  expect(await shell.boundingBox()).toEqual(shellBox);
   await expect(picker).toContainText("int step(int value);");
   // The query carries the clicked position inside `step` on line 9 (columns 18 to 22).
   const position = queries.find((query) => query.kind === "references")?.position;

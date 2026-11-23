@@ -1994,7 +1994,8 @@ export function DesktopWorkbench({
       ) : null}
 
       {definitionCandidates.length > 0 || definitionMessage ? (
-        <div className="absolute inset-0 z-30 flex items-start justify-center bg-[var(--overlay-backdrop-35)] px-4 py-12">
+        // `fixed`, like the command palette: in-flow children of the root are grid rows and would squeeze the panes.
+        <div className="fixed inset-0 z-30 flex items-start justify-center bg-[var(--overlay-backdrop-35)] px-4 py-12">
           <motion.div
             data-testid="desktop-definition-picker"
             className="w-full max-w-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl"

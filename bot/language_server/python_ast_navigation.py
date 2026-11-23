@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -60,6 +62,7 @@ def resolve_code_navigation(
         target,
         content,
         line=line,
+        column=column,
         symbol=resolved_symbol,
     )
     if not locations:
@@ -80,6 +83,7 @@ def _resolve_python_import_target(
     content: str,
     *,
     line: int,
+    column: int,
     symbol: str,
 ) -> list[dict[str, object]]:
     try:
@@ -96,19 +100,33 @@ def _resolve_python_import_target(
         if line < node_line or line > node_end_line:
             continue
 
+        module_path = _module_path_at_cursor(content, node, relative_path, line=line, column=column)
+        if module_path:
+            target = _resolve_python_module_target(root, module_path)
+            if target is None:
+                continue
+            target_content = target.read_text(encoding="utf-8", errors="ignore")
+            return [_build_code_location(root, target, _module_start_location(target_content))]
+
         if isinstance(node, ast.ImportFrom):
             module_name = _resolve_relative_module_name(relative_path, node.module or "", int(node.level or 0))
-            if not module_name:
-                continue
             for alias in node.names:
-                imported_name = alias.asname or alias.name.split(".")[-1]
-                if symbol not in {imported_name, alias.name.split(".")[-1]}:
+                name = alias.name.split(".")[-1]
+                if symbol not in {alias.asname or name, name}:
                     continue
                 target = _resolve_python_module_target(root, module_name)
+                location = None
+                if target is not None:
+                    target_content = target.read_text(encoding="utf-8", errors="ignore")
+                    location = _find_python_symbol_location(target_content, name)
+                if location is None:
+                    # ``from package import module``: the name is a file of its own.
+                    submodule = _resolve_python_module_target(root, f"{module_name}.{name}".strip("."))
+                    if submodule is not None:
+                        target = submodule
+                        target_content = submodule.read_text(encoding="utf-8", errors="ignore")
                 if target is None:
                     continue
-                target_content = target.read_text(encoding="utf-8", errors="ignore")
-                location = _find_python_symbol_location(target_content, alias.name.split(".")[-1])
                 if location is None:
                     location = _module_start_location(target_content)
                 return [_build_code_location(root, target, location)]
@@ -124,6 +142,70 @@ def _resolve_python_import_target(
                 target_content = target.read_text(encoding="utf-8", errors="ignore")
                 return [_build_code_location(root, target, _module_start_location(target_content))]
     return []
+
+
+def _module_path_at_cursor(
+    content: str,
+    node: ast.Import | ast.ImportFrom,
+    relative_path: str,
+    *,
+    line: int,
+    column: int,
+) -> str:
+    """Name the module a dotted-path segment under the cursor stands for.
+
+    In ``from a.b.c import x`` and ``import a.b.c`` the segment decides how much
+    of the path is meant: ``b`` is the package ``a.b``.  Imported names and
+    ``as`` aliases are not module paths and yield an empty string.
+    """
+    first_line = int(node.lineno)
+    statement = "".join(content.splitlines(keepends=True)[first_line - 1 : int(node.end_lineno or first_line)])
+    try:
+        tokens = [
+            token
+            for token in tokenize.generate_tokens(io.StringIO(statement).readline)
+            if token.type in {tokenize.NAME, tokenize.OP}
+        ]
+    except (tokenize.TokenError, SyntaxError):
+        return ""
+
+    row, offset = line - first_line + 1, column - 1
+    cursor = next(
+        (
+            index
+            for index, token in enumerate(tokens)
+            if token.type == tokenize.NAME and token.start[0] == row and token.start[1] <= offset < token.end[1]
+        ),
+        None,
+    )
+    if cursor is None:
+        return ""
+
+    def continues_path(dot: int, name: int) -> bool:
+        return 0 <= name < len(tokens) and tokens[dot].string == "." and tokens[name].type == tokenize.NAME
+
+    start = end = cursor
+    while continues_path(start - 1, start - 2):
+        start -= 2
+    while continues_path(end + 1, end + 2):
+        end += 2
+    full_path = ".".join(token.string for token in tokens[start : end + 1 : 2])
+    path = ".".join(token.string for token in tokens[start : cursor + 1 : 2])
+
+    level = 0
+    before = start - 1
+    while before >= 0 and tokens[before].type == tokenize.OP and set(tokens[before].string) == {"."}:
+        level += len(tokens[before].string)
+        before -= 1
+    keyword = tokens[before].string if before >= 0 else ""
+
+    if isinstance(node, ast.ImportFrom):
+        if keyword != "from" or level != int(node.level or 0) or full_path != (node.module or ""):
+            return ""
+        return _resolve_relative_module_name(relative_path, path, level)
+    if keyword not in {"import", ","} or level or all(alias.name != full_path for alias in node.names):
+        return ""
+    return path
 
 
 def _find_python_symbol_location(content: str, symbol: str) -> dict[str, object] | None:
