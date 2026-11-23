@@ -25,6 +25,7 @@ type Props = {
   isImmersive: boolean;
   storageKey: string;
   onToggle: () => void;
+  zoom?: number;
 };
 
 function readStoredPosition(storageKey: string): FloatingButtonPosition | null {
@@ -60,13 +61,28 @@ function writeStoredPosition(storageKey: string, position: FloatingButtonPositio
   }
 }
 
+function containerScale(container: HTMLElement | null) {
+  if (!container) {
+    return 1;
+  }
+  const layoutWidth = container.clientWidth;
+  const visualWidth = container.getBoundingClientRect().width;
+  if (!layoutWidth || !visualWidth || !Number.isFinite(layoutWidth) || !Number.isFinite(visualWidth)) {
+    return 1;
+  }
+  return Math.max(0.01, visualWidth / layoutWidth);
+}
+
 function clampPosition(position: FloatingButtonPosition, container: HTMLElement | null): FloatingButtonPosition {
   const rect = container?.getBoundingClientRect();
   const viewport = typeof window !== "undefined" ? window.visualViewport : null;
   const fallbackWidth = viewport?.width || (typeof window !== "undefined" ? window.innerWidth : 0);
   const fallbackHeight = viewport?.height || (typeof window !== "undefined" ? window.innerHeight : 0);
-  const width = Math.max(BUTTON_SIZE_PX + EDGE_GUTTER_PX * 2, rect?.width || fallbackWidth || 0);
-  const height = Math.max(BUTTON_SIZE_PX + EDGE_GUTTER_PX * 2, rect?.height || fallbackHeight || 0);
+  // CSS zoom scales the visual rect but leaves absolute-position coordinates in
+  // the element's layout coordinate space. Use client dimensions for the
+  // latter so the button stays reachable at every chat zoom level.
+  const width = Math.max(BUTTON_SIZE_PX + EDGE_GUTTER_PX * 2, container?.clientWidth || (rect?.width || fallbackWidth || 0));
+  const height = Math.max(BUTTON_SIZE_PX + EDGE_GUTTER_PX * 2, container?.clientHeight || (rect?.height || fallbackHeight || 0));
   const minX = EDGE_GUTTER_PX;
   const minY = EDGE_GUTTER_PX;
   const maxX = Math.max(minX, width - BUTTON_SIZE_PX - EDGE_GUTTER_PX);
@@ -82,8 +98,8 @@ function defaultPosition(container: HTMLElement | null): FloatingButtonPosition 
   const viewport = typeof window !== "undefined" ? window.visualViewport : null;
   const fallbackWidth = viewport?.width || (typeof window !== "undefined" ? window.innerWidth : 0);
   const fallbackHeight = viewport?.height || (typeof window !== "undefined" ? window.innerHeight : 0);
-  const width = rect?.width || fallbackWidth || BUTTON_SIZE_PX + DEFAULT_RIGHT_PX * 2;
-  const height = rect?.height || fallbackHeight || BUTTON_SIZE_PX + DEFAULT_BOTTOM_PX * 2;
+  const width = container?.clientWidth || rect?.width || fallbackWidth || BUTTON_SIZE_PX + DEFAULT_RIGHT_PX * 2;
+  const height = container?.clientHeight || rect?.height || fallbackHeight || BUTTON_SIZE_PX + DEFAULT_BOTTOM_PX * 2;
   return clampPosition({
     x: width - BUTTON_SIZE_PX - DEFAULT_RIGHT_PX,
     y: height - BUTTON_SIZE_PX - DEFAULT_BOTTOM_PX,
@@ -109,6 +125,7 @@ export function ImmersiveToggleButton({
   isImmersive,
   storageKey,
   onToggle,
+  zoom = 1,
 }: Props) {
   const [position, setPosition] = useState<FloatingButtonPosition | null>(null);
   const dragStateRef = useRef<{
@@ -132,7 +149,7 @@ export function ImmersiveToggleButton({
       }
       return next;
     });
-  }, [containerRef, isImmersive, storageKey]);
+  }, [containerRef, isImmersive, storageKey, zoom]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -189,6 +206,7 @@ export function ImmersiveToggleButton({
     }
     const deltaX = event.clientX - dragState.startClientX;
     const deltaY = event.clientY - dragState.startClientY;
+    const scale = containerScale(containerRef.current);
     if (!dragState.hasDragged && Math.hypot(deltaX, deltaY) >= DRAG_CLICK_THRESHOLD_PX) {
       dragState.hasDragged = true;
     }
@@ -197,8 +215,8 @@ export function ImmersiveToggleButton({
     }
     event.preventDefault();
     setPosition(clampPosition({
-      x: dragState.origin.x + deltaX,
-      y: dragState.origin.y + deltaY,
+      x: dragState.origin.x + deltaX / scale,
+      y: dragState.origin.y + deltaY / scale,
     }, containerRef.current));
   }
 
@@ -214,9 +232,10 @@ export function ImmersiveToggleButton({
     }
     const deltaX = event.clientX - dragState.startClientX;
     const deltaY = event.clientY - dragState.startClientY;
+    const scale = containerScale(containerRef.current);
     const nextPosition = clampPosition({
-      x: dragState.origin.x + deltaX,
-      y: dragState.origin.y + deltaY,
+      x: dragState.origin.x + deltaX / scale,
+      y: dragState.origin.y + deltaY / scale,
     }, containerRef.current);
     ignoreNextClickRef.current = true;
     if (ignoreNextClickTimerRef.current !== null && typeof window !== "undefined") {

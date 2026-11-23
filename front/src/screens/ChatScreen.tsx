@@ -5578,6 +5578,7 @@ export function ChatScreen({
           isImmersive={isImmersive}
           storageKey={immersiveButtonStorageKey}
           onToggle={onToggleImmersive as () => void}
+          zoom={chatZoomPercent / 100}
         />
       ) : null}
       <div className="border-t border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)]">
