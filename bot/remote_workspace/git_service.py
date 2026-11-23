@@ -1265,6 +1265,34 @@ class RemoteGitService:
                 raise
             return self._overview()
 
+    def clone(self, name: object, url: object) -> dict:
+        try:
+            remote_name = normalize_git_remote_name(name)
+            remote_url = normalize_git_remote_url(url)
+        except GitRemoteInputError as exc:
+            raise self._remote_input_error(exc) from exc
+        with self._lock:
+            if self._repo_root() is not None:
+                raise RemoteWorkspaceError(
+                    409,
+                    "git_already_repository",
+                    "The remote workspace is already a Git repository",
+                )
+            try:
+                self._git(
+                    ["clone", "--origin", remote_name, remote_url, "."],
+                    error="git_clone_failed",
+                    mutation=True,
+                    truncated=True,
+                )
+            except RemoteWorkspaceError as exc:
+                if exc.code == "git_clone_failed":
+                    raise RemoteWorkspaceError(400, "git_clone_failed", self._redact_remote_text(exc.message), exc.data) from exc
+                raise
+            if self._repo_root() is None:
+                raise RemoteWorkspaceError(400, "git_clone_failed", "Git clone did not create a repository at the remote workspace")
+            return self._overview()
+
     def diff(self, path: str, staged: bool = False) -> dict:
         path = self._path(path)
         if not isinstance(staged, bool):

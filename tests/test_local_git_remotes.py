@@ -77,6 +77,24 @@ def test_remote_management_validates_input_and_redacts_credentials(repo):
     assert [item["name"] for item in removed["remotes"]] == ["origin"]
 
 
+def test_clone_binds_remote_and_pulls_into_non_repository(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(source)], check=True)
+    _git(source, "-c", "user.name=Dev", "-c", "user.email=dev@example.com", "commit", "--allow-empty", "-m", "init")
+    target.mkdir()
+    monkeypatch.setattr(git_service, "_get_git_working_dir", lambda _manager, _alias: str(target))
+    assert git_service.get_git_capabilities(None, "main", 1)["capabilities"]["remotes"]["available"] is True
+
+    overview = git_service.clone_git_repository(None, "main", 1, "origin", f"file://{source.as_posix()}")
+
+    assert overview["repo_found"] is True
+    assert overview["current_branch"] == "main"
+    assert _git(target, "remote") == "origin"
+    assert _git(target, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}") == "origin/main"
+    assert _git(target, "rev-parse", "HEAD") == _git(source, "rev-parse", "HEAD")
+
+
 def test_publish_sets_upstream_and_enables_push_and_pull(repo):
     work, bare = repo
     git_service.add_git_remote(None, "main", 1, "origin", f"file://{bare.as_posix()}")

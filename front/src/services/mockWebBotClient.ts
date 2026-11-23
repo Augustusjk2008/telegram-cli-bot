@@ -7448,6 +7448,28 @@ export class MockWebBotClient implements WebBotClient {
     return { ...list, remotes: list.remotes.map((item) => ({ ...item })) };
   }
 
+  async cloneGitRepository(botAlias: string, name: string, url: string): Promise<GitActionResult> {
+    const list = await this.mockGitRemoteList(botAlias);
+    const overview = await this.getGitOverview(botAlias);
+    const nextOverview: GitOverview = {
+      ...overview,
+      repoFound: true,
+      canInit: false,
+      repoPath: overview.workingDir,
+      repoName: overview.workingDir.split(/[\\/]+/).filter(Boolean).pop() || "repo",
+      currentBranch: "main",
+    };
+    list.repoFound = true;
+    list.repoPath = nextOverview.repoPath;
+    list.currentBranch = nextOverview.currentBranch;
+    list.hasCommits = true;
+    list.remotes = [this.mockRemoteEntry(name, url)];
+    list.upstream = `${name}/main`;
+    this.gitRemoteLists.set(botAlias, list);
+    this.gitOverviews.set(botAlias, nextOverview);
+    return { message: "已绑定远端并拉取仓库", overview: nextOverview };
+  }
+
   async addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList> {
     const list = await this.mockGitRemoteList(botAlias);
     if (list.remotes.some((item) => item.name === name)) {

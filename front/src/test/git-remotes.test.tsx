@@ -168,6 +168,27 @@ test("remote workspaces keep host credentials and confirm before removing a remo
   expect(sshToggle).toHaveAttribute("aria-pressed", "true");
 });
 
+test("binds and pulls a remote directly when the workspace is not a repository", async () => {
+  const client = {
+    listGitRemotes: vi.fn(async () => remoteList({
+      repoFound: false,
+      repoPath: "",
+      currentBranch: "",
+      hasCommits: false,
+    })),
+    cloneGitRepository: vi.fn(async () => ({ message: "已绑定远端并拉取仓库", overview: {} as never })),
+  };
+  renderPanel(client, { repoFound: false });
+
+  expect(await screen.findByText("当前目录还不是 Git 仓库。可输入远端地址直接绑定并拉取到此工作区。")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "添加远端" }));
+  fireEvent.change(screen.getByLabelText("远端地址"), { target: { value: "https://github.com/acme/demo.git" } });
+  fireEvent.click(screen.getByRole("button", { name: "绑定并拉取" }));
+
+  await waitFor(() => expect(client.cloneGitRepository).toHaveBeenCalledWith("main", "origin", "https://github.com/acme/demo.git"));
+  expect(await screen.findByText("已绑定远端并拉取仓库")).toBeInTheDocument();
+});
+
 test("device login shows the code, polls at the GitHub interval and reports the connected account", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   const onAccountChange = vi.fn();

@@ -25,6 +25,7 @@ def register(app: web.Application, server) -> None:
     app.router.add_get("/api/bots/{alias}/git/smart-commit/{job_id}", server.get_git_smart_commit_job)
     app.router.add_put("/api/bots/{alias}/git/identity", server.put_git_identity_view)
     app.router.add_post("/api/bots/{alias}/git/init", server.post_git_init)
+    app.router.add_post("/api/bots/{alias}/git/clone", server.post_git_clone)
     app.router.add_get("/api/bots/{alias}/git/diff", server.get_git_diff_view)
     app.router.add_post("/api/bots/{alias}/git/stage", server.post_git_stage)
     app.router.add_post("/api/bots/{alias}/git/unstage", server.post_git_unstage)

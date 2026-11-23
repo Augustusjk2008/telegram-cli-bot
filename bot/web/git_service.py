@@ -1370,8 +1370,12 @@ def _list_git_remote_names(repo_root: str) -> list[str]:
 def _local_git_sync_capabilities(repo_root: Optional[str]) -> dict[str, tuple[bool, str]]:
     if not repo_root:
         return {
-            name: (False, "git_not_repository")
-            for name in ("fetch", "pull", "merge", "push", "remotes", "publish")
+            "fetch": (False, "git_not_repository"),
+            "pull": (False, "git_not_repository"),
+            "merge": (False, "git_not_repository"),
+            "push": (False, "git_not_repository"),
+            "remotes": (True, ""),
+            "publish": (False, "git_not_repository"),
         }
 
     try:
@@ -2710,6 +2714,42 @@ def _require_existing_git_remote(repo_root: str, name: Any) -> str:
 def list_git_remotes(manager: MultiBotManager, alias: str, user_id: int) -> dict[str, Any]:
     working_dir = _get_git_working_dir(manager, alias)
     return _build_git_remotes_payload(working_dir, _resolve_repo_root(working_dir))
+
+
+def clone_git_repository(
+    manager: MultiBotManager,
+    alias: str,
+    user_id: int,
+    name: Any,
+    url: Any,
+    *,
+    auth_config: tuple[tuple[str, str], ...] = (),
+) -> dict[str, Any]:
+    """Bind a remote and clone it into a workspace that is not a repository."""
+    working_dir = _get_git_working_dir(manager, alias)
+    if _resolve_repo_root(working_dir):
+        _raise(409, "git_already_repository", "当前目录已经是 Git 仓库")
+    try:
+        remote_name = normalize_git_remote_name(name)
+        remote_url = normalize_git_remote_url(url)
+    except GitRemoteInputError as exc:
+        _git_remote_input_error(exc)
+
+    try:
+        _run_git(
+            working_dir,
+            ["clone", "--origin", remote_name, remote_url, "."],
+            env=_build_git_remote_env(working_dir, auth_config),
+            remote=True,
+        )
+    except GitCommandError as exc:
+        _raise(400, "git_clone_failed", _git_network_error_message(exc, auth_config))
+
+    repo_root = _resolve_repo_root(working_dir)
+    if not repo_root:
+        _raise(400, "git_clone_failed", "Git 克隆未在当前工作区创建仓库")
+    _invalidate_git_status_cache(repo_root)
+    return _build_git_overview(working_dir, repo_root)
 
 
 def add_git_remote(manager: MultiBotManager, alias: str, user_id: int, name: Any, url: Any) -> dict[str, Any]:

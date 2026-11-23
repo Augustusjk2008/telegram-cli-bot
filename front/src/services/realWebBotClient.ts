@@ -7756,6 +7756,15 @@ export class RealWebBotClient implements WebBotClient {
     return mapGitRemoteList(data);
   }
 
+  async cloneGitRepository(botAlias: string, name: string, url: string): Promise<GitActionResult> {
+    const data = await this.requestJson<RawGitActionResult>(`/api/bots/${encodeURIComponent(botAlias)}/git/clone`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, url }),
+    });
+    return mapGitActionResult(data);
+  }
+
   private async postGitRemoteMutation(botAlias: string, suffix: string, body: Record<string, string>): Promise<GitRemoteList> {
     const data = await this.requestJson<RawGitRemoteList>(`/api/bots/${encodeURIComponent(botAlias)}/git/remotes${suffix}`, {
       method: "POST",

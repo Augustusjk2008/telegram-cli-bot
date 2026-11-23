@@ -1517,7 +1517,7 @@ export function GitScreen({
   const repoReady = !loading && Boolean(overview?.repoFound);
   // The GitHub identity belongs to the Web account, so it is loaded once and
   // only when a panel that shows it is open.
-  const githubAccountWanted = (repoReady && !remotesCollapsed && isCapabilityAvailable("remotes")) || !settingsCollapsed;
+  const githubAccountWanted = ((!loading && !remotesCollapsed && isCapabilityAvailable("remotes"))) || !settingsCollapsed;
   useEffect(() => {
     if (githubAccountWanted && !githubAccountRequestedRef.current) {
       void loadGitHubAccount();
@@ -1709,6 +1709,26 @@ export function GitScreen({
               >
                 {actionLoading === "init" ? "初始化中..." : "初始化 Git 仓库"}
               </button>
+              <div className="mt-3 w-full border-t border-[var(--workbench-hairline)] pt-3 text-left">
+                <GitRemotesPanel
+                  key={workspaceKey}
+                  botAlias={botAlias}
+                  client={client}
+                  remoteWorkspace={remote}
+                  repoFound={false}
+                  repoName={botAlias}
+                  remotesCapability={getCapability("remotes")}
+                  publishCapability={getCapability("publish")}
+                  disabled={parentMutationBusy}
+                  githubAccount={githubAccount}
+                  githubAccountLoading={githubAccountLoading}
+                  githubAccountError={githubAccountError}
+                  onGitHubAccountChange={setGithubAccount}
+                  onReloadGitHubAccount={() => void loadGitHubAccount()}
+                  onBusyChange={setRemotesBusy}
+                  onRepositoryChanged={handleRemotesChanged}
+                />
+              </div>
             </section>
           ) : null}
 
@@ -2172,6 +2192,7 @@ export function GitScreen({
                   botAlias={botAlias}
                   client={client}
                   remoteWorkspace={remote}
+                  repoFound={overview.repoFound}
                   repoName={overview.repoName}
                   remotesCapability={getCapability("remotes")}
                   publishCapability={getCapability("publish")}

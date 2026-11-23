@@ -43,6 +43,7 @@ class GitBackend(Protocol):
     def merge(self) -> dict[str, Any]: ...
     def push(self) -> dict[str, Any]: ...
     def remotes(self) -> dict[str, Any]: ...
+    def clone(self, name: Any, url: Any) -> dict[str, Any]: ...
     def remote_add(self, name: Any, url: Any) -> dict[str, Any]: ...
     def remote_set_url(self, name: Any, url: Any) -> dict[str, Any]: ...
     def remote_remove(self, name: Any) -> dict[str, Any]: ...
@@ -156,6 +157,11 @@ class LocalGitBackend:
 
     def remotes(self) -> dict[str, Any]:
         return local_git.list_git_remotes(self.manager, self.alias, self.user_id)
+
+    def clone(self, name: Any, url: Any) -> dict[str, Any]:
+        return local_git.clone_git_repository(
+            self.manager, self.alias, self.user_id, name, url, auth_config=self._auth_config(),
+        )
 
     def remote_add(self, name: Any, url: Any) -> dict[str, Any]:
         return local_git.add_git_remote(self.manager, self.alias, self.user_id, name, url)
@@ -296,6 +302,9 @@ class RemoteGitBackend:
 
     def remotes(self) -> dict[str, Any]:
         return self.service.remotes()
+
+    def clone(self, name: Any, url: Any) -> dict[str, Any]:
+        return self.service.clone(name, url)
 
     def remote_add(self, name: Any, url: Any) -> dict[str, Any]:
         return self.service.remote_add(name, url)

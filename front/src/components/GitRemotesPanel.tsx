@@ -44,6 +44,7 @@ type Props = {
   botAlias: string;
   client: WebBotClient;
   remoteWorkspace: boolean;
+  repoFound?: boolean;
   repoName: string;
   remotesCapability: GitCapability;
   publishCapability: GitCapability;
@@ -97,6 +98,7 @@ export function GitRemotesPanel({
   botAlias,
   client,
   remoteWorkspace,
+  repoFound: repoFoundProp = true,
   repoName,
   remotesCapability,
   publishCapability,
@@ -147,6 +149,7 @@ export function GitRemotesPanel({
   const busy = busyKey !== "";
   const mutationDisabled = disabled || busy || !remotesCapability.available;
   const canPublish = Boolean(branch && list?.hasCommits && publishCapability.available && !disabled && !busy);
+  const repoFound = list?.repoFound ?? repoFoundProp;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -263,6 +266,16 @@ export function GitRemotesPanel({
       return;
     }
     void run("add", async () => {
+      if (!repoFound) {
+        const result = await client.cloneGitRepository(botAlias, name, url);
+        setAddOpen(false);
+        setAddName("");
+        setAddUrl("");
+        await loadRemotes();
+        if (mountedRef.current) setNotice(result.message || `已绑定远端 ${name} 并拉取仓库`);
+        await onRepositoryChanged();
+        return;
+      }
       const next = await client.addGitRemote(botAlias, name, url);
       setAddOpen(false);
       setAddName("");
@@ -356,7 +369,9 @@ export function GitRemotesPanel({
     const publishBranch = publishAfterLink && Boolean(branch && list?.hasCommits);
     const steps = [
       linkMode === "create" ? `在 GitHub 创建${newRepoPrivate ? "私有" : "公开"}仓库 ${fullName}` : "",
-      existingRemote
+      !repoFound
+        ? `绑定远端 ${remoteName} → ${fullName}（${linkProtocol.toUpperCase()}）并拉取仓库`
+        : existingRemote
         ? `将远端 ${remoteName} 从 ${existingRemote.fetchUrl} 改为 ${fullName}（${linkProtocol.toUpperCase()}）`
         : `添加远端 ${remoteName} → ${fullName}（${linkProtocol.toUpperCase()}）`,
       publishBranch ? `推送分支 ${branch} 并设为 upstream` : "",
@@ -378,6 +393,21 @@ export function GitRemotesPanel({
         }
       }
       const url = linkProtocol === "ssh" ? repository!.sshUrl : repository!.cloneUrl;
+      if (!repoFound) {
+        try {
+          await client.cloneGitRepository(botAlias, remoteName, url);
+        } catch (err) {
+          throw new Error(linkMode === "create"
+            ? `仓库 ${repository!.fullName} 已创建，但拉取失败：${errorMessage(err, "未知错误")}`
+            : errorMessage(err, "绑定并拉取仓库失败"));
+        }
+        if (!mountedRef.current) return;
+        await loadRemotes();
+        setNotice(`已绑定并拉取 ${repository!.fullName} 为远端 ${remoteName}`);
+        setGithubOpen(false);
+        await onRepositoryChanged();
+        return;
+      }
       let next: GitRemoteList;
       try {
         next = existingRemote
@@ -411,11 +441,13 @@ export function GitRemotesPanel({
     ? "读取远端…"
     : !list
       ? ""
-      : !branch
-        ? "当前为分离 HEAD，无法发布分支"
-        : list.upstream
-          ? `${branch} → ${list.upstream}`
-          : `${branch} 尚未设置 upstream`;
+      : !list.repoFound
+        ? "尚未绑定远端"
+        : !branch
+          ? "当前为分离 HEAD，无法发布分支"
+          : list.upstream
+            ? `${branch} → ${list.upstream}`
+            : `${branch} 尚未设置 upstream`;
 
   return (
     <div data-testid="git-remotes-panel" className="min-w-0 space-y-1.5">
@@ -503,7 +535,13 @@ export function GitRemotesPanel({
         </div>
       ) : null}
 
-      {list && remotes.length === 0 ? (
+      {list && !list.repoFound ? (
+        <div className={gitEmptyStateClassName}>
+          当前目录还不是 Git 仓库。可输入远端地址直接绑定并拉取到此工作区。
+        </div>
+      ) : null}
+
+      {list && list.repoFound && remotes.length === 0 ? (
         <div className={gitEmptyStateClassName}>
           尚未配置远端。可
           <button type="button" onClick={() => setGithubOpen(true)} disabled={!remotesCapability.available} className="mx-0.5 text-[var(--accent)] underline disabled:opacity-50">
@@ -654,7 +692,7 @@ export function GitRemotesPanel({
             <button type="button" onClick={() => setAddOpen(false)} className={gitButtonClassName}>取消</button>
             <button type="button" onClick={addRemote} disabled={mutationDisabled || !addName.trim() || !addUrl.trim()} className={gitPrimaryButtonClassName}>
               {busyKey === "add" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              添加
+              {repoFound ? "添加" : "绑定并拉取"}
             </button>
           </div>
         </div>
@@ -792,7 +830,7 @@ export function GitRemotesPanel({
                 className={clsx(gitPrimaryButtonClassName, "w-full")}
               >
                 {busyKey === "github-link" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Github className="h-3.5 w-3.5" />}
-                {linkMode === "create" ? "创建并关联" : "关联所选仓库"}
+                {!repoFound ? "绑定并拉取" : linkMode === "create" ? "创建并关联" : "关联所选仓库"}
               </button>
             </>
           )}

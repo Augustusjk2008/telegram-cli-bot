@@ -455,6 +455,7 @@ export interface WebBotClient {
   mergeGitRemote(botAlias: string): Promise<GitActionResult>;
   pushGitRemote(botAlias: string): Promise<GitActionResult>;
   listGitRemotes(botAlias: string): Promise<GitRemoteList>;
+  cloneGitRepository(botAlias: string, name: string, url: string): Promise<GitActionResult>;
   addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList>;
   updateGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList>;
   removeGitRemote(botAlias: string, name: string): Promise<GitRemoteList>;

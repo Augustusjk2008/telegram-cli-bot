@@ -4385,6 +4385,18 @@ class WebApiServer:
         data = await asyncio.to_thread(backend.init)
         return _json({"ok": True, "data": data})
 
+    async def post_git_clone(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
+        overview = await asyncio.to_thread(
+            backend.clone,
+            body.get("name", "origin"),
+            body.get("url", ""),
+        )
+        return _json({"ok": True, "data": {"message": "已绑定远端并拉取仓库", "overview": overview}})
+
     async def get_git_diff_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
