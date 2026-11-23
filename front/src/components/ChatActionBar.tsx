@@ -42,7 +42,6 @@ type Props = {
 };
 
 const groupClassName = "inline-flex shrink-0 items-center gap-1";
-const neutralButtonClassName = toolbarButtonClass("ghost", "sm", "h-8 rounded-md border-transparent bg-transparent px-2 text-[var(--muted)]");
 const iconButtonClassName = toolbarButtonClass("ghost", "icon", "h-8 w-8 rounded-md border-transparent bg-transparent");
 const activePlanButtonClassName = "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] px-2 text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
 const activePlanIconButtonClassName = "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--accent-outline)] bg-[var(--workbench-active-bg)] text-[var(--accent)] transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)] disabled:opacity-60";
@@ -173,6 +172,10 @@ export function ChatActionBar({
       onModelChange?.(nextModel);
     }
   };
+  const clusterButtonLabel = clusterEnabled ? "关闭集群模式" : "开启集群模式";
+  const clusterButtonTitle = clusterDisabledReason
+    ? `${clusterButtonLabel}：${clusterDisabledReason}`
+    : clusterButtonLabel;
   function closeOptions() {
     setMobileOptionsOpen(false);
     optionsTriggerRef.current?.focus();
@@ -328,14 +331,13 @@ export function ChatActionBar({
             <button
               type="button"
               aria-pressed={clusterEnabled}
-              aria-label={clusterEnabled ? "关闭集群模式" : "开启集群模式"}
-              title={clusterDisabledReason}
+              aria-label={clusterButtonLabel}
+              title={clusterButtonTitle}
               onClick={onToggleClusterMode}
               disabled={clusterDisabled}
-              className={clusterEnabled ? activePlanButtonClassName : neutralButtonClassName}
+              className={clusterEnabled ? activePlanIconButtonClassName : iconButtonClassName}
             >
               {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
-              集群{clusterEnabled ? " 已开启" : ""}
             </button>
           </div>
         ) : null}
@@ -365,16 +367,15 @@ export function ChatActionBar({
           <button
             type="button"
             aria-pressed={clusterEnabled}
-            aria-label={clusterEnabled ? "关闭集群模式" : "开启集群模式"}
-            title={clusterDisabledReason}
+            aria-label={clusterButtonLabel}
+            title={clusterButtonTitle}
             onClick={onToggleClusterMode}
             disabled={clusterDisabled}
             className={clusterEnabled
-              ? activePlanButtonClassName
-              : neutralButtonClassName}
+              ? activePlanIconButtonClassName
+              : iconButtonClassName}
           >
             {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
-            集群
           </button>
         </div>
         <div className={groupClassName} role="group" aria-label="聊天会话">

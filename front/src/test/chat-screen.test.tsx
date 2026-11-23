@@ -995,6 +995,7 @@ test("toggles the Bot cluster config from chat and only shows an assigned enable
 
   const toggle = await screen.findByRole("button", { name: "开启集群模式" });
   expect(toggle).toHaveAttribute("aria-pressed", "false");
+  expect(toggle).toHaveAttribute("title", "开启集群模式");
   expect(screen.queryByTestId("cluster-team-panel")).not.toBeInTheDocument();
 
   await user.click(toggle);
@@ -1003,7 +1004,9 @@ test("toggles the Bot cluster config from chat and only shows an assigned enable
     ...cluster,
     enabled: true,
   }));
-  expect(await screen.findByRole("button", { name: "关闭集群模式" })).toHaveAttribute("aria-pressed", "true");
+  const enabledToggle = await screen.findByRole("button", { name: "关闭集群模式" });
+  expect(enabledToggle).toHaveAttribute("aria-pressed", "true");
+  expect(enabledToggle).toHaveAttribute("title", "关闭集群模式");
   const teamPanel = screen.getByTestId("cluster-team-panel");
   await user.click(within(teamPanel).getByRole("button", { name: "展开集群编组" }));
   expect(screen.getByText("前端审查")).toBeInTheDocument();
