@@ -584,7 +584,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
         id: "graph",
         title: "提交图",
         body: [
-          "「提交图」显示最近的提交和分支走向，可以在「全部」和「当前分支」之间切换。",
+          "「提交图」可以切换「全部」和「当前分支」。沿线找到「分叉点」，点击它可查看每条线从这里接出的第一条提交。",
           "选中一个提交后，可以从它新建分支，或以 soft、mixed、hard 模式重置到该提交。",
         ],
         shot: "branches",

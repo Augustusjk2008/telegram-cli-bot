@@ -6,6 +6,7 @@ import { WebApiClientError } from "../services/types";
 import type {
   GitActionResult,
   GitBranchList,
+  GitCommitGraphNode,
   GitCommitGraphPayload,
   GitCommitMessageCliConfig,
   GitCapabilities,
@@ -244,6 +245,35 @@ function createGitScreenClient(capabilities: GitCapabilities = localGitCapabilit
     getGitCommitGraph,
   };
 }
+
+test("the graph marks the common parent across pages and identifies the commits on each side", async () => {
+  const { client, getGitCommitGraph } = createGitScreenClient();
+  function node(hash: string, parents: string[], branch = ""): GitCommitGraphNode {
+    return {
+      hash, shortHash: hash, parents, subject: `Commit ${hash}`, authorName: "Dev", authoredAt: "",
+      refs: branch ? [{ name: branch, kind: "local_branch", current: branch === "main" }] : [],
+      graph: { column: 0, width: 1, edges: [] },
+    };
+  }
+  getGitCommitGraph.mockResolvedValueOnce({
+    ...graphPayload,
+    nodes: [node("merge", ["left", "tip"], "main"), node("tip", ["right"], "feature")],
+    hasMore: true, nextCursor: "older",
+  }).mockResolvedValueOnce({
+    ...graphPayload,
+    nodes: [node("right", ["base"]), node("left", ["base"]), node("base", [])],
+  });
+  render(<GitScreen botAlias="main" client={client} />);
+
+  await screen.findByRole("button", { name: "选择提交 merge" });
+  fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+  const fork = await screen.findByRole("button", { name: "选择提交 base，分叉点" });
+  expect(screen.getAllByText("分叉点")).toHaveLength(1);
+  fireEvent.click(fork);
+  const hint = await screen.findByRole("tooltip");
+  expect(hint).toHaveTextContent("main · left · Commit left");
+  expect(hint).toHaveTextContent("feature · right · Commit right");
+});
 
 test("remote Git supports overview, diffs, manual commit, and capability-backed commit tools", async () => {
   const { client, getGitOverview, getGitDiff, getGitCommitGraph } = createGitScreenClient(remoteGitCapabilities);

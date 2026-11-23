@@ -42,7 +42,6 @@ import type {
   GitActionResult,
   GitBranchList,
   GitChangedFile,
-  GitCommitGraphEdge,
   GitCommitGraphNode,
   GitCommitGraphPayload,
   GitCommitGraphRef,
@@ -320,53 +319,57 @@ function graphRefTone(ref: GitCommitGraphRef) {
   return ref.kind === "remote_branch" ? "neutral" : "accent";
 }
 
-function clampGraphColumn(value: number, laneCount: number) {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.min(Math.max(Math.round(value), 0), Math.max(laneCount - 1, 0));
-}
-
-function graphLaneCount(nodes: GitCommitGraphNode[]) {
-  return Math.max(
-    1,
-    ...nodes.map((node) => Math.max(
-      node.graph.width || 1,
-      node.graph.column + 1,
-      ...(node.graph.edges || []).flatMap((edge) => [edge.from + 1, edge.to + 1]),
-    )),
-  );
-}
-
 function laneX(column: number) {
   return GIT_GRAPH_LANE_PADDING + column * GIT_GRAPH_LANE_GAP;
 }
 
-function graphEdgeKey(node: GitCommitGraphNode, edge: GitCommitGraphEdge, index: number) {
-  return `${node.hash}-${edge.from}-${edge.to}-${edge.commit || index}`;
-}
-
-type GraphIncomingEdge = GitCommitGraphEdge & {
-  sourceHash: string;
-  sourceIndex: number;
+type PendingGraphLane = {
+  parent: string;
+  child: GitCommitGraphNode;
+  branch: string;
 };
 
-function graphIncomingEdgesByRow(nodes: GitCommitGraphNode[], laneCount: number) {
-  const activeEdges = new Map<number, GraphIncomingEdge>();
-  return nodes.map((node) => {
-    const nodeColumn = clampGraphColumn(node.graph.column, laneCount);
-    const incomingEdges = Array.from(activeEdges.values());
-    for (const [column, edge] of Array.from(activeEdges.entries())) {
-      if (column === nodeColumn && (!edge.commit || edge.commit === node.hash)) {
-        activeEdges.delete(column);
+function layoutCommitGraph(nodes: GitCommitGraphNode[]) {
+  // Keep each child's line open until its parent row, including across loaded pages.
+  const lanes: (PendingGraphLane | undefined)[] = [];
+  function freeColumn() {
+    const index = lanes.indexOf(undefined);
+    return index === -1 ? lanes.length : index;
+  }
+
+  const rows = nodes.map((node) => {
+    const incoming: (PendingGraphLane & { column: number })[] = [];
+    const through: number[] = [];
+    lanes.forEach((lane, column) => {
+      if (!lane) return;
+      if (lane.parent === node.hash) {
+        incoming.push({ ...lane, column });
+        lanes[column] = undefined;
+      } else {
+        through.push(column);
       }
-    }
-    (node.graph.edges || []).forEach((edge, index) => {
-      const to = clampGraphColumn(edge.to, laneCount);
-      activeEdges.set(to, { ...edge, to, sourceHash: node.hash, sourceIndex: index });
     });
-    return incomingEdges;
+    const column = incoming[0]?.column ?? freeColumn();
+    const branch = node.refs.find((ref) => ref.kind === "local_branch")?.name
+      || node.refs.find((ref) => ref.kind === "remote_branch")?.name
+      || (incoming.length === 1 ? incoming[0].branch : "");
+    const outgoing = [...new Set(node.parents)].map((parent, index) => {
+      const target = index === 0 ? column : freeColumn();
+      lanes[target] = { parent, child: node, branch: index === 0 ? branch : "" };
+      return target;
+    });
+    return { column, incoming, through, outgoing };
   });
+  const laneCount = rows.reduce((count, row) => Math.max(count, row.column + 1), lanes.length);
+  return { rows, laneCount };
+}
+
+function graphLine(from: number, to: number, startY: number, endY: number) {
+  const fromX = laneX(from);
+  const toX = laneX(to);
+  if (from === to) return `M ${fromX} ${startY} V ${endY}`;
+  const midY = (startY + endY) / 2;
+  return `M ${fromX} ${startY} C ${fromX} ${midY}, ${toX} ${midY}, ${toX} ${endY}`;
 }
 
 function compactGraphRefClass(ref: GitCommitGraphRef) {
@@ -405,9 +408,9 @@ type GitCommitGraphLiteProps = {
 
 const GIT_GRAPH_LANE_COLORS = [
   "var(--accent)",
-  "var(--status-info)",
   "var(--status-success)",
   "var(--status-warning)",
+  "var(--status-info)",
   "var(--status-danger)",
 ];
 
@@ -416,28 +419,30 @@ function laneColor(column: number) {
 }
 
 function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitCommitGraphLiteProps) {
-  const laneCount = graphLaneCount(nodes);
+  const { rows, laneCount } = useMemo(() => layoutCommitGraph(nodes), [nodes]);
   const laneWidth = GIT_GRAPH_LANE_PADDING * 2 + (laneCount - 1) * GIT_GRAPH_LANE_GAP;
   const midY = GIT_GRAPH_ROW_HEIGHT / 2;
-  const curveOffset = Math.max(8, Math.floor(GIT_GRAPH_ROW_HEIGHT * 0.28));
-  const incomingEdgesByRow = graphIncomingEdgesByRow(nodes, laneCount);
 
   return (
     <div className="min-w-0">
       {nodes.map((node, rowIndex) => {
         const selected = selectedHash === node.hash;
-        const nodeColumn = clampGraphColumn(node.graph.column, laneCount);
+        const { column: nodeColumn, incoming, through, outgoing } = rows[rowIndex];
         const shortHash = node.shortHash || node.hash.slice(0, 7);
         const commitTitle = (node.message || node.subject || "-").trim() || "-";
-        const incomingEdges = incomingEdgesByRow[rowIndex] || [];
+        const isFork = incoming.length > 1;
+        const hint = isFork ? [
+          commitTitle, "", "分叉后的提交",
+          ...incoming.map(({ branch, child }) => [branch, child.shortHash || child.hash.slice(0, 7), child.subject].filter(Boolean).join(" · ")),
+        ].join("\n") : commitTitle;
         const isHead = node.refs.some((ref) => ref.kind === "head" || ref.current);
         return (
-          <TouchHint key={node.hash} content={commitTitle} block>
+          <TouchHint key={node.hash} content={hint} block>
             <button
               type="button"
               data-testid={`git-graph-row-${shortHash}`}
               data-selected={selected ? "true" : "false"}
-              aria-label={`选择提交 ${shortHash}`}
+              aria-label={`选择提交 ${shortHash}${isFork ? "，分叉点" : ""}`}
               onClick={() => onSelect(node.hash)}
               disabled={disabled}
               className={clsx(
@@ -456,44 +461,19 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
               viewBox={`0 0 ${laneWidth} ${GIT_GRAPH_ROW_HEIGHT}`}
               className="block overflow-visible"
             >
-              {incomingEdges.map((edge, index) => {
-                const to = clampGraphColumn(edge.to, laneCount);
-                const toX = laneX(to);
-                const landsOnNode = to === nodeColumn && (!edge.commit || edge.commit === node.hash);
-                return (
-                  <path
-                    key={`incoming-${graphEdgeKey(nodes[rowIndex - 1], edge, index)}`}
-                    data-testid={`git-graph-incoming-${shortHash}-${index}`}
-                    d={`M ${toX} 0 L ${toX} ${landsOnNode ? midY : GIT_GRAPH_ROW_HEIGHT}`}
-                    fill="none"
-                    stroke={laneColor(to)}
-                    strokeWidth="1.75"
-                    strokeLinecap="round"
-                    opacity={landsOnNode ? 0.9 : 0.55}
-                  />
-                );
-              })}
-              {(node.graph.edges || []).map((edge, index) => {
-                const from = clampGraphColumn(edge.from, laneCount);
-                const to = clampGraphColumn(edge.to, laneCount);
-                const fromX = laneX(from);
-                const toX = laneX(to);
-                const path = from === to
-                  ? `M ${fromX} ${midY} L ${toX} ${GIT_GRAPH_ROW_HEIGHT}`
-                  : `M ${fromX} ${midY} C ${fromX} ${midY + curveOffset}, ${toX} ${GIT_GRAPH_ROW_HEIGHT - curveOffset}, ${toX} ${GIT_GRAPH_ROW_HEIGHT}`;
-                return (
-                  <path
-                    key={graphEdgeKey(node, edge, index)}
-                    data-testid={`git-graph-edge-${shortHash}-${index}`}
-                    d={path}
-                    fill="none"
-                    stroke={laneColor(from === to ? to : Math.max(from, to))}
-                    strokeWidth="1.75"
-                    strokeLinecap="round"
-                    opacity={from === nodeColumn ? 0.9 : 0.55}
-                  />
-                );
-              })}
+              <g fill="none" strokeWidth="1.75" strokeLinecap="round">
+                {through.map((column) => (
+                  <path key={column} d={graphLine(column, column, 0, GIT_GRAPH_ROW_HEIGHT)} stroke={laneColor(column)} />
+                ))}
+                {incoming.map(({ column }, index) => (
+                  <path key={column} data-testid={`git-graph-incoming-${shortHash}-${index}`}
+                    d={graphLine(column, nodeColumn, 0, midY)} stroke={laneColor(column)} />
+                ))}
+                {outgoing.map((column, index) => (
+                  <path key={column} data-testid={`git-graph-edge-${shortHash}-${index}`}
+                    d={graphLine(nodeColumn, column, midY, GIT_GRAPH_ROW_HEIGHT)} stroke={laneColor(column)} />
+                ))}
+              </g>
               {isHead ? (
                 <circle
                   cx={laneX(nodeColumn)}
@@ -534,6 +514,11 @@ function GitCommitGraphLite({ nodes, selectedHash, disabled, onSelect }: GitComm
               </div>
               <div className="flex min-w-0 items-center gap-1.5 text-[10.5px] leading-4 text-[var(--muted)]">
                 <span className="shrink-0 font-mono text-[var(--accent)]">{shortHash}</span>
+                {isFork ? (
+                  <span className="inline-flex shrink-0 items-center gap-0.5 font-medium text-[var(--text)]">
+                    <GitFork aria-hidden="true" className="h-3 w-3" />分叉点
+                  </span>
+                ) : null}
                 <span className="min-w-0 truncate" title={node.authorName || "-"}>{node.authorName || "-"}</span>
                 <span className="ml-auto shrink-0 tabular-nums">{formatCommitGraphDate(node.authoredAt)}</span>
               </div>
