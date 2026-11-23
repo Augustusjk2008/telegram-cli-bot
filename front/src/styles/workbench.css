@@ -222,11 +222,15 @@
   opacity: 0.38;
   background-image: linear-gradient(
     to right,
-    transparent 11px,
-    var(--file-tree-indent-guide) 11px,
-    var(--file-tree-indent-guide) 12px
+    transparent calc(var(--file-tree-indent, 8px) - 1px),
+    var(--file-tree-indent-guide) calc(var(--file-tree-indent, 8px) - 1px),
+    var(--file-tree-indent-guide) var(--file-tree-indent, 8px)
   );
-  background-size: 12px 100%;
+  background-size: var(--file-tree-indent, 8px) 100%;
+}
+
+.desktop-workbench-root .file-tree-row[data-git-ignored="true"] [data-icon] {
+  opacity: 0.6;
 }
 
 .desktop-workbench-root .terminal-shell .xterm .xterm-viewport {
@@ -890,11 +894,11 @@
   background: transparent;
 }
 
-:root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="folder-open"], [data-icon="folder-closed"]) {
+:root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="folder-open"], [data-icon="folder-closed"])[data-folder-kind="default"] {
   color: var(--file-tree-folder);
 }
 
-:root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="file-js-ts"], [data-icon="file-c-cpp"], [data-icon="file-csharp"], [data-icon="file-code"]) {
+:root[data-style-profile="paper"] .desktop-file-tree-pane [data-icon="file-code"] {
   color: var(--file-tree-code-icon);
 }
 

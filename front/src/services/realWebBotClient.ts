@@ -195,6 +195,7 @@ import type {
   FileDownloadProgress,
   FileUploadProgress,
   FileEntry,
+  FileEntryChainLink,
   FileMoveResult,
   FileReadMode,
   FileReadResult,
@@ -927,6 +928,7 @@ type RawFileEntry = {
   name: string;
   is_dir: boolean;
   child_count?: number;
+  compact_chain?: Array<{ name?: unknown; child_count?: unknown }>;
   size?: number;
   updated_at?: string;
 };
@@ -2403,11 +2405,30 @@ function mapApiErrorData(code: string | undefined, raw: unknown): unknown {
   return raw;
 }
 
+function mapFileEntryChain(raw: RawFileEntry["compact_chain"]): FileEntryChainLink[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const chain: FileEntryChainLink[] = [];
+  for (const link of raw) {
+    if (typeof link?.name !== "string" || !link.name) {
+      break;
+    }
+    chain.push({
+      name: link.name,
+      ...(typeof link.child_count === "number" ? { childCount: link.child_count } : {}),
+    });
+  }
+  return chain;
+}
+
 function mapFileEntry(raw: RawFileEntry): FileEntry {
+  const compactChain = raw.is_dir ? mapFileEntryChain(raw.compact_chain) : [];
   return {
     name: raw.name,
     isDir: raw.is_dir,
     ...(typeof raw.child_count === "number" ? { childCount: raw.child_count } : {}),
+    ...(compactChain.length > 0 ? { compactChain } : {}),
     ...(typeof raw.size === "number" ? { size: raw.size } : {}),
     ...(raw.updated_at ? { updatedAt: raw.updated_at } : {}),
   };

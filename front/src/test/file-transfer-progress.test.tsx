@@ -77,9 +77,9 @@ test.each(["picker", "drop"])("desktop upload via %s saves in the selected neste
   const changeDirectory = vi.spyOn(client, "changeDirectory");
   const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
   render(<PersistentTerminalProvider client={client}><DesktopWorkbench botAlias="main" client={client} /></PersistentTerminalProvider>);
+  // `docs` holds nothing but `资料 #1`, so expanding it opens both as one compact row.
   fireEvent.click(await screen.findByRole("button", { name: "展开 docs" }));
-  fireEvent.click(await screen.findByRole("button", { name: "展开 docs/资料 #1" }));
-  await screen.findByRole("button", { name: "收起 docs/资料 #1" });
+  expect(await screen.findByRole("button", { name: "收起 docs/资料 #1" })).toHaveTextContent("docs/资料 #1");
 
   const file = new File(["selected directory"], "report.txt");
   if (entrypoint === "picker") {

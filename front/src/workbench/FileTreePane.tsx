@@ -1,10 +1,14 @@
 import { clsx } from "clsx";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   FilePlus,
   FolderOpen,
   FolderPlus,
+  FolderTree,
+  GitBranch,
   House,
   ListTree,
   Maximize2,
@@ -12,8 +16,9 @@ import {
   MoreHorizontal,
   RefreshCw,
   Upload,
+  X,
 } from "lucide-react";
-import { type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileNameDialog } from "../components/FileNameDialog";
 import { VirtualList } from "../components/virtual/VirtualList";
@@ -23,7 +28,8 @@ import type { UiThemeName } from "../theme";
 import { PAPER_STYLE } from "../theme/types";
 import { isAbsolutePathInput } from "../utils/pathInput";
 import { deletePathWithReadonlyConfirmation } from "../utils/deletePath";
-import { type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
+import { FileIcon, FolderIcon, getFileIconKind, getFolderIconKind } from "./fileTreeIcons";
+import { FILE_TREE_COMPACT_CHAIN_LIMIT, type FileTreeNode, type UseFileTreeResult } from "./useFileTree";
 
 type Props = {
   tree: UseFileTreeResult;
@@ -59,8 +65,14 @@ type TreeContextMenuState = {
 };
 
 type FileTreeVisibleRow =
-  | { type: "entry"; entry: FileTreeNode; depth: number }
+  /** `chain` lists the directories merged in front of `entry` on a compact row, outermost first. */
+  | { type: "entry"; entry: FileTreeNode; depth: number; chain: FileTreeNode[] }
   | { type: "status"; branchPath: string; depth: number; text: string; tone: "muted" | "error" };
+
+type FileTreeViewOptions = {
+  compactFolders: boolean;
+  showGitDirectory: boolean;
+};
 
 const TREE_CONTEXT_MENU_WIDTH_PX = 152;
 const TREE_CONTEXT_MENU_PADDING_PX = 8;
@@ -68,10 +80,66 @@ const INTERNAL_FILE_DRAG_TYPE = "application/x-tcb-file-path";
 const ROOT_DROP_TARGET = "__root__";
 const TREE_AUTO_SCROLL_EDGE_PX = 40;
 const TREE_AUTO_SCROLL_MAX_STEP_PX = 18;
+/** Horizontal step per tree level; the indent guides in workbench.css read it as `--file-tree-indent`. */
+const TREE_INDENT_PX = 8;
+const HIDDEN_GIT_ENTRY_NAME = ".git";
+const FILE_TREE_VIEW_OPTIONS_STORAGE_KEY = "web-file-tree-view-options:v1";
+const DEFAULT_FILE_TREE_VIEW_OPTIONS: FileTreeViewOptions = { compactFolders: true, showGitDirectory: false };
 
-function branchLabel(path: string) {
-  const parts = path.split("/");
-  return parts[parts.length - 1] || path;
+function readFileTreeViewOptions(): FileTreeViewOptions {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FILE_TREE_VIEW_OPTIONS_STORAGE_KEY) || "{}");
+    return {
+      compactFolders: raw?.compactFolders !== false,
+      showGitDirectory: raw?.showGitDirectory === true,
+    };
+  } catch {
+    return DEFAULT_FILE_TREE_VIEW_OPTIONS;
+  }
+}
+
+function writeFileTreeViewOptions(options: FileTreeViewOptions) {
+  try {
+    localStorage.setItem(FILE_TREE_VIEW_OPTIONS_STORAGE_KEY, JSON.stringify(options));
+  } catch {
+    // The choice still applies to this page.
+  }
+}
+
+/** The child named by the listing hint of a directory whose branch has not been loaded. */
+function hintedChildDirectory(entry: FileTreeNode): FileTreeNode | null {
+  const [head, ...rest] = entry.compactChain ?? [];
+  if (!head) {
+    return null;
+  }
+  return {
+    path: `${entry.path}/${head.name}`,
+    name: head.name,
+    isDir: true,
+    childCount: head.childCount,
+    ...(rest.length > 0 ? { compactChain: rest } : {}),
+  };
+}
+
+/** The directory that is the only child of `entry`; a loaded branch outranks the listing hint. */
+function onlyChildDirectory(entry: FileTreeNode, branches: UseFileTreeResult["branches"]): FileTreeNode | null {
+  const branch = branches[entry.path];
+  if (branch?.loaded) {
+    const only = branch.entries.length === 1 ? branch.entries[0] : null;
+    return only?.isDir ? only : null;
+  }
+  return hintedChildDirectory(entry);
+}
+
+/** Directories below `entry` that a compact row merges with it, outermost first. */
+function resolveCompactChain(entry: FileTreeNode, branches: UseFileTreeResult["branches"]): FileTreeNode[] {
+  const chain: FileTreeNode[] = [];
+  let next = onlyChildDirectory(entry, branches);
+  while (next && chain.length < FILE_TREE_COMPACT_CHAIN_LIMIT) {
+    chain.push(next);
+    next = onlyChildDirectory(next, branches);
+  }
+  return chain;
 }
 
 function workspaceBaseName(path: string, remote = false) {
@@ -151,12 +219,13 @@ function findTreeNodeByPath(
       if (entry.path === path) {
         return entry;
       }
-      if (entry.isDir) {
-        const found = visit(branches[entry.path]?.entries || []);
-        if (found) {
-          return found;
-        }
+      if (!entry.isDir || !path.startsWith(`${entry.path}/`)) {
+        continue;
       }
+      const branch = branches[entry.path];
+      // A directory merged into a compact row may be known only from its parent's listing hint.
+      const hinted = branch?.loaded || branch?.entries.length ? null : hintedChildDirectory(entry);
+      return visit(hinted ? [hinted] : branch?.entries || []);
     }
     return null;
   };
@@ -208,726 +277,6 @@ function treeItemToneClass(gitDecoration?: GitTreeDecorationKind) {
   return "text-[var(--text)]";
 }
 
-type TreeIconKind =
-  | "folder-closed"
-  | "folder-open"
-  | "file-env"
-  | "file-git"
-  | "file-json"
-  | "file-ini"
-  | "file-html"
-  | "file-js-ts"
-  | "file-python"
-  | "file-c-cpp"
-  | "file-shell"
-  | "file-csharp"
-  | "file-code"
-  | "file-config"
-  | "file-markdown"
-  | "file-text"
-  | "file-document"
-  | "file-pdf"
-  | "file-sheet"
-  | "file-presentation"
-  | "file-image"
-  | "file-audio"
-  | "file-video"
-  | "file-font"
-  | "file-database"
-  | "file-archive"
-  | "file-generic";
-
-const JS_TS_FILE_EXTENSIONS = new Set([
-  "js",
-  "jsx",
-  "ts",
-  "tsx",
-  "mjs",
-  "cjs",
-  "mts",
-  "cts",
-  "vue",
-  "svelte",
-  "astro",
-]);
-
-const PYTHON_FILE_EXTENSIONS = new Set([
-  "py",
-  "pyi",
-  "pyw",
-  "ipynb",
-]);
-
-const C_CPP_FILE_EXTENSIONS = new Set([
-  "c",
-  "cc",
-  "cpp",
-  "cxx",
-  "cp",
-  "h",
-  "hpp",
-  "hh",
-  "hxx",
-  "ipp",
-  "inl",
-  "ixx",
-  "tpp",
-  "txx",
-  "m",
-  "mm",
-]);
-
-const SHELL_FILE_EXTENSIONS = new Set([
-  "sh",
-  "bash",
-  "zsh",
-  "fish",
-  "ksh",
-  "ps1",
-  "psm1",
-  "psd1",
-  "bat",
-  "cmd",
-  "nu",
-]);
-
-const SHELL_FILE_NAMES = new Set([
-  ".bashrc",
-  ".bash_profile",
-  ".bash_aliases",
-  ".profile",
-  ".zshrc",
-  ".zprofile",
-  ".zshenv",
-  ".zlogin",
-  ".zlogout",
-  "gradlew",
-  "mvnw",
-]);
-
-const CSHARP_FILE_EXTENSIONS = new Set([
-  "cs",
-  "csx",
-  "csproj",
-  "sln",
-]);
-
-const GENERIC_CODE_FILE_EXTENSIONS = new Set([
-  "java",
-  "go",
-  "rs",
-  "rb",
-  "php",
-  "swift",
-  "kt",
-  "kts",
-  "scala",
-  "lua",
-  "dart",
-  "r",
-  "pl",
-  "pm",
-  "zig",
-  "hs",
-  "elm",
-  "ex",
-  "exs",
-  "erl",
-  "hrl",
-  "ml",
-  "mli",
-  "clj",
-  "cljs",
-  "cljc",
-  "fs",
-  "fsi",
-  "fsx",
-  "vb",
-  "html",
-  "htm",
-  "css",
-  "scss",
-  "sass",
-  "less",
-  "vue",
-  "svelte",
-  "astro",
-]);
-
-const CONFIG_FILE_EXTENSIONS = new Set([
-  "json",
-  "jsonc",
-  "yaml",
-  "yml",
-  "toml",
-  "ini",
-  "conf",
-  "cfg",
-  "json5",
-  "lock",
-  "properties",
-  "xml",
-  "plist",
-  "cmake",
-]);
-
-const CONFIG_FILE_NAMES = new Set([
-  ".dockerignore",
-  "dockerfile",
-  "makefile",
-  ".env",
-  ".env.local",
-  ".env.development",
-  ".env.production",
-  ".gitignore",
-  ".gitattributes",
-  ".editorconfig",
-  ".npmrc",
-  ".nvmrc",
-  ".yarnrc",
-  ".yarnrc.yml",
-  ".prettierrc",
-  ".prettierignore",
-  ".eslintrc",
-  ".eslintignore",
-  ".stylelintrc",
-  ".stylelintignore",
-  "package.json",
-  "package-lock.json",
-  "pnpm-lock.yaml",
-  "yarn.lock",
-  "bun.lock",
-  "bun.lockb",
-  "tsconfig.json",
-  "jsconfig.json",
-  "deno.json",
-  "deno.jsonc",
-  "turbo.json",
-  "nx.json",
-  "lerna.json",
-  "vite.config.ts",
-  "vite.config.js",
-  "vitest.config.ts",
-  "vitest.config.js",
-  "eslint.config.js",
-  "eslint.config.mjs",
-  "eslint.config.cjs",
-  "eslint.config.ts",
-  "prettier.config.js",
-  "prettier.config.mjs",
-  "prettier.config.cjs",
-  "prettier.config.ts",
-  "tailwind.config.js",
-  "tailwind.config.cjs",
-  "tailwind.config.ts",
-  "postcss.config.js",
-  "postcss.config.cjs",
-  "postcss.config.mjs",
-  "postcss.config.ts",
-  "jest.config.js",
-  "jest.config.cjs",
-  "jest.config.mjs",
-  "jest.config.ts",
-  "webpack.config.js",
-  "webpack.config.cjs",
-  "webpack.config.ts",
-  "rollup.config.js",
-  "rollup.config.mjs",
-  "rollup.config.ts",
-  "babel.config.js",
-  "babel.config.cjs",
-  "babel.config.mjs",
-  "babel.config.json",
-  "next.config.js",
-  "next.config.mjs",
-  "next.config.ts",
-  "nuxt.config.ts",
-  "nuxt.config.js",
-  "svelte.config.js",
-  "svelte.config.ts",
-  "astro.config.mjs",
-  "astro.config.ts",
-  "docker-compose.yml",
-  "docker-compose.yaml",
-  "compose.yml",
-  "compose.yaml",
-  "pyproject.toml",
-  "poetry.lock",
-  "pdm.lock",
-  "uv.lock",
-  "pipfile",
-  "pipfile.lock",
-  "requirements.txt",
-  "requirements-dev.txt",
-  "cargo.toml",
-  "cargo.lock",
-  "go.mod",
-  "go.sum",
-  "gemfile",
-  "gemfile.lock",
-  "composer.json",
-  "composer.lock",
-  "podfile",
-  "podfile.lock",
-  "cmakelists.txt",
-  "meson.build",
-  "meson.options",
-  "build.gradle",
-  "build.gradle.kts",
-  "settings.gradle",
-  "settings.gradle.kts",
-  "gradle.properties",
-  "procfile",
-  "jenkinsfile",
-]);
-
-const MARKDOWN_FILE_EXTENSIONS = new Set([
-  "md",
-  "mdx",
-  "markdown",
-  "mkd",
-  "mdown",
-  "rst",
-]);
-
-const JSON_FILE_EXTENSIONS = new Set([
-  "json",
-  "jsonc",
-  "json5",
-]);
-
-const HTML_FILE_EXTENSIONS = new Set([
-  "html",
-  "htm",
-]);
-
-const TEXT_FILE_EXTENSIONS = new Set([
-  "txt",
-  "log",
-  "text",
-]);
-
-const DOCUMENT_FILE_EXTENSIONS = new Set([
-  "doc",
-  "docx",
-  "odt",
-  "rtf",
-  "pages",
-]);
-
-const PDF_FILE_EXTENSIONS = new Set([
-  "pdf",
-]);
-
-const SHEET_FILE_EXTENSIONS = new Set([
-  "csv",
-  "tsv",
-  "xls",
-  "xlsx",
-  "ods",
-]);
-
-const PRESENTATION_FILE_EXTENSIONS = new Set([
-  "ppt",
-  "pptx",
-  "odp",
-  "key",
-]);
-
-const IMAGE_FILE_EXTENSIONS = new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "svg",
-  "bmp",
-  "ico",
-  "avif",
-  "heic",
-  "heif",
-  "tif",
-  "tiff",
-  "psd",
-  "ai",
-  "eps",
-]);
-
-const AUDIO_FILE_EXTENSIONS = new Set([
-  "mp3",
-  "wav",
-  "flac",
-  "aac",
-  "ogg",
-  "m4a",
-  "opus",
-  "aiff",
-  "mid",
-  "midi",
-]);
-
-const VIDEO_FILE_EXTENSIONS = new Set([
-  "mp4",
-  "mov",
-  "mkv",
-  "avi",
-  "webm",
-  "m4v",
-  "wmv",
-  "flv",
-  "mpeg",
-  "mpg",
-]);
-
-const FONT_FILE_EXTENSIONS = new Set([
-  "ttf",
-  "otf",
-  "woff",
-  "woff2",
-  "eot",
-  "fon",
-]);
-
-const DATABASE_FILE_EXTENSIONS = new Set([
-  "sql",
-  "db",
-  "db3",
-  "sqlite",
-  "sqlite3",
-  "mdb",
-  "accdb",
-  "parquet",
-  "duckdb",
-]);
-
-const ARCHIVE_FILE_EXTENSIONS = new Set([
-  "zip",
-  "tar",
-  "gz",
-  "tgz",
-  "rar",
-  "7z",
-  "bz2",
-  "xz",
-  "lz",
-  "lz4",
-  "cab",
-  "iso",
-  "zst",
-]);
-
-function normalizedFileName(name: string) {
-  return name.trim().toLowerCase();
-}
-
-function getFileExtension(name: string) {
-  const normalized = normalizedFileName(name);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.startsWith(".") && normalized.indexOf(".", 1) === -1) {
-    return normalized;
-  }
-  const lastDotIndex = normalized.lastIndexOf(".");
-  if (lastDotIndex < 0 || lastDotIndex === normalized.length - 1) {
-    return "";
-  }
-  return normalized.slice(lastDotIndex + 1);
-}
-
-function getFileIconKind(name: string): TreeIconKind {
-  const normalized = normalizedFileName(name);
-  const extension = getFileExtension(name);
-
-  if (normalized.startsWith(".env")) {
-    return "file-env";
-  }
-  if (normalized.startsWith(".git")) {
-    return "file-git";
-  }
-  if (IMAGE_FILE_EXTENSIONS.has(extension)) {
-    return "file-image";
-  }
-  if (AUDIO_FILE_EXTENSIONS.has(extension)) {
-    return "file-audio";
-  }
-  if (VIDEO_FILE_EXTENSIONS.has(extension)) {
-    return "file-video";
-  }
-  if (FONT_FILE_EXTENSIONS.has(extension)) {
-    return "file-font";
-  }
-  if (ARCHIVE_FILE_EXTENSIONS.has(extension)) {
-    return "file-archive";
-  }
-  if (PDF_FILE_EXTENSIONS.has(extension)) {
-    return "file-pdf";
-  }
-  if (SHEET_FILE_EXTENSIONS.has(extension)) {
-    return "file-sheet";
-  }
-  if (PRESENTATION_FILE_EXTENSIONS.has(extension)) {
-    return "file-presentation";
-  }
-  if (DOCUMENT_FILE_EXTENSIONS.has(extension)) {
-    return "file-document";
-  }
-  if (DATABASE_FILE_EXTENSIONS.has(extension)) {
-    return "file-database";
-  }
-  if (JSON_FILE_EXTENSIONS.has(extension)) {
-    return "file-json";
-  }
-  if (extension === "ini") {
-    return "file-ini";
-  }
-  if (HTML_FILE_EXTENSIONS.has(extension)) {
-    return "file-html";
-  }
-  if (SHELL_FILE_NAMES.has(normalized)) {
-    return "file-shell";
-  }
-  if (
-    CONFIG_FILE_NAMES.has(normalized)
-    || CONFIG_FILE_EXTENSIONS.has(extension)
-    || normalized.startsWith(".env")
-  ) {
-    return "file-config";
-  }
-  if (MARKDOWN_FILE_EXTENSIONS.has(extension)) {
-    return "file-markdown";
-  }
-  if (TEXT_FILE_EXTENSIONS.has(extension)) {
-    return "file-text";
-  }
-  if (JS_TS_FILE_EXTENSIONS.has(extension) || normalized.endsWith(".d.ts")) {
-    return "file-js-ts";
-  }
-  if (PYTHON_FILE_EXTENSIONS.has(extension)) {
-    return "file-python";
-  }
-  if (C_CPP_FILE_EXTENSIONS.has(extension)) {
-    return "file-c-cpp";
-  }
-  if (SHELL_FILE_EXTENSIONS.has(extension)) {
-    return "file-shell";
-  }
-  if (CSHARP_FILE_EXTENSIONS.has(extension)) {
-    return "file-csharp";
-  }
-  if (GENERIC_CODE_FILE_EXTENSIONS.has(extension)) {
-    return "file-code";
-  }
-  return "file-generic";
-}
-
-function treeIconToneClass(kind: TreeIconKind) {
-  switch (kind) {
-    case "folder-closed":
-    case "folder-open":
-      return "text-[var(--status-warning)]";
-    case "file-env":
-      return "text-[var(--status-success)]";
-    case "file-git":
-      return "text-[var(--accent-strong)]";
-    case "file-json":
-      return "text-[var(--status-warning)]";
-    case "file-ini":
-      return "text-[var(--muted)]";
-    case "file-html":
-      return "text-[var(--accent-strong)]";
-    case "file-js-ts":
-      return "text-[var(--accent)]";
-    case "file-python":
-      return "text-[var(--muted)]";
-    case "file-c-cpp":
-      return "text-[var(--accent)]";
-    case "file-shell":
-      return "text-[var(--status-success)]";
-    case "file-csharp":
-      return "text-[var(--accent)]";
-    case "file-code":
-      return "text-[var(--accent)]";
-    case "file-config":
-      return "text-[var(--accent-strong)]";
-    case "file-markdown":
-      return "text-[var(--status-success)]";
-    case "file-text":
-      return "text-[var(--muted)]";
-    case "file-document":
-      return "text-[var(--muted)]";
-    case "file-pdf":
-      return "text-[var(--status-danger)]";
-    case "file-sheet":
-      return "text-[var(--status-success)]";
-    case "file-presentation":
-      return "text-[var(--accent-strong)]";
-    case "file-image":
-      return "text-[var(--accent-strong)]";
-    case "file-audio":
-      return "text-[var(--accent-strong)]";
-    case "file-video":
-      return "text-[var(--accent)]";
-    case "file-font":
-      return "text-[var(--status-warning)]";
-    case "file-database":
-      return "text-[var(--accent)]";
-    case "file-archive":
-      return "text-[var(--muted)]";
-    default:
-      return "text-[var(--muted)]";
-  }
-}
-
-function FileBadgeIcon({ kind, label, className }: { kind: Exclude<TreeIconKind, "folder-closed" | "folder-open">; label: string; className?: string }) {
-  const typographyClass = label.length >= 4
-    ? "text-[5.75px] tracking-[-0.1em]"
-    : label.length >= 3
-      ? "text-[7.25px] tracking-[-0.08em]"
-    : label.length === 2
-      ? "text-[8.75px] tracking-[-0.04em]"
-      : "text-[10px]";
-
-  return (
-    <span
-      aria-hidden="true"
-      data-icon={kind}
-      className={clsx(
-        "inline-flex h-4 w-4 shrink-0 select-none items-center justify-center font-black leading-none",
-        treeIconToneClass(kind),
-        typographyClass,
-        className,
-      )}
-    >
-      {label}
-    </span>
-  );
-}
-
-function ShellIcon({ kind }: { kind: "file-shell" }) {
-  return (
-    <span aria-hidden="true" data-icon={kind} className={clsx("inline-flex h-4 w-4 shrink-0 items-center justify-center", treeIconToneClass(kind))}>
-      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2.25" />
-        <path d="M6.1 8.15 8.65 10 6.1 11.85" />
-        <path d="M10 12.1h3.6" />
-      </svg>
-    </span>
-  );
-}
-
-function GitBranchIcon({ kind }: { kind: "file-git" }) {
-  return (
-    <span aria-hidden="true" data-icon={kind} className={clsx("inline-flex h-4 w-4 shrink-0 items-center justify-center", treeIconToneClass(kind))}>
-      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="6" cy="4.5" r="1.9" />
-        <circle cx="14" cy="6.25" r="1.9" />
-        <circle cx="6" cy="15.5" r="1.9" />
-        <path d="M6 6.4v7.2" />
-        <path d="M8 6.1c1 .7 2.15 1.05 3.35 1.05H12.1" />
-      </svg>
-    </span>
-  );
-}
-
-function IniGearIcon({ kind }: { kind: "file-ini" }) {
-  return (
-    <span aria-hidden="true" data-icon={kind} className={clsx("inline-flex h-4 w-4 shrink-0 items-center justify-center", treeIconToneClass(kind))}>
-      <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M10 3.15 11 4.55l1.68-.2.82 1.48 1.63.62-.28 1.66 1.35 1.02-1.02 1.35.28 1.66-1.63.62-.82 1.48-1.68-.2-1 1.4-1-1.4-1.68.2-.82-1.48-1.63-.62.28-1.66-1.02-1.35 1.35-1.02-.28-1.66 1.63-.62.82-1.48 1.68.2z" />
-        <circle cx="10" cy="10" r="2.15" />
-      </svg>
-    </span>
-  );
-}
-
-function PythonIcon({ kind }: { kind: "file-python" }) {
-  return (
-    <span aria-hidden="true" data-icon={kind} className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-      <svg viewBox="0 0 20 20" className="h-4 w-4">
-        <path fill="#3776AB" d="M10 2.2H7.45A3.25 3.25 0 0 0 4.2 5.45v2.1h5.15c1 0 1.8.8 1.8 1.8v1.55h1.4a3.25 3.25 0 0 0 3.25-3.25V5.45A3.25 3.25 0 0 0 12.65 2.2z" />
-        <circle cx="8.1" cy="4.75" r=".8" fill="#fff" />
-        <path fill="#FFD43B" d="M10 17.8h2.55a3.25 3.25 0 0 0 3.25-3.25V12.4h-5.15a1.8 1.8 0 0 0-1.8 1.8v1.55H7.45A3.25 3.25 0 0 1 4.2 12.5v2.05a3.25 3.25 0 0 0 3.25 3.25z" />
-        <circle cx="11.9" cy="15.25" r=".8" fill="#fff" />
-      </svg>
-    </span>
-  );
-}
-
-function TreeNodeIcon({ kind }: { kind: TreeIconKind }) {
-  const className = `inline-flex h-4 w-4 shrink-0 items-center justify-center ${treeIconToneClass(kind)}`;
-
-  switch (kind) {
-    case "folder-closed":
-      return (
-        <span aria-hidden="true" data-icon={kind} className={className}>
-          <svg viewBox="0 0 20 20" className="h-4 w-4 fill-current">
-            <path d="M2.75 5.5A2.25 2.25 0 0 1 5 3.25h3.08c.44 0 .86.18 1.18.49l.73.73c.14.14.33.22.53.22H15a2.25 2.25 0 0 1 2.25 2.25v6.3A2.25 2.25 0 0 1 15 15.5H5a2.25 2.25 0 0 1-2.25-2.25z" />
-          </svg>
-        </span>
-      );
-    case "folder-open":
-      return (
-        <span aria-hidden="true" data-icon={kind} className={className}>
-          <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2.75 6h4.14c.43 0 .84-.17 1.15-.48l.65-.64c.3-.3.71-.48 1.15-.48H15a2 2 0 0 1 2 2v.5" />
-            <path d="M3.1 8.4h13.8l-1 5.12A1.9 1.9 0 0 1 14.04 15H5.95a1.9 1.9 0 0 1-1.86-1.48z" />
-          </svg>
-        </span>
-      );
-    case "file-env":
-      return <FileBadgeIcon kind={kind} label=".env" />;
-    case "file-git":
-      return <GitBranchIcon kind={kind} />;
-    case "file-json":
-      return <FileBadgeIcon kind={kind} label="{…}" />;
-    case "file-ini":
-      return <IniGearIcon kind={kind} />;
-    case "file-html":
-      return <FileBadgeIcon kind={kind} label="</>" />;
-    case "file-js-ts":
-      return <FileBadgeIcon kind={kind} label="JS" />;
-    case "file-python":
-      return <PythonIcon kind={kind} />;
-    case "file-c-cpp":
-      return <FileBadgeIcon kind={kind} label="C++" />;
-    case "file-shell":
-      return <ShellIcon kind={kind} />;
-    case "file-csharp":
-      return <FileBadgeIcon kind={kind} label="C#" />;
-    case "file-code":
-      return <FileBadgeIcon kind={kind} label="<>" />;
-    case "file-config":
-      return <FileBadgeIcon kind={kind} label="CFG" />;
-    case "file-markdown":
-      return <FileBadgeIcon kind={kind} label="MD" />;
-    case "file-text":
-      return <FileBadgeIcon kind={kind} label="TXT" />;
-    case "file-document":
-      return <FileBadgeIcon kind={kind} label="DOC" />;
-    case "file-pdf":
-      return <FileBadgeIcon kind={kind} label="PDF" />;
-    case "file-sheet":
-      return <FileBadgeIcon kind={kind} label="XLS" />;
-    case "file-presentation":
-      return <FileBadgeIcon kind={kind} label="PPT" />;
-    case "file-image":
-      return <FileBadgeIcon kind={kind} label="IMG" />;
-    case "file-audio":
-      return <FileBadgeIcon kind={kind} label="AUD" />;
-    case "file-video":
-      return <FileBadgeIcon kind={kind} label="VID" />;
-    case "file-font":
-      return <FileBadgeIcon kind={kind} label="FNT" />;
-    case "file-database":
-      return <FileBadgeIcon kind={kind} label="DB" />;
-    case "file-archive":
-      return <FileBadgeIcon kind={kind} label="ZIP" />;
-    default:
-      return <FileBadgeIcon kind={kind} label="FI" />;
-  }
-}
-
 export function FileTreePane({
   tree,
   themeName,
@@ -969,7 +318,9 @@ export function FileTreePane({
   const [actionError, setActionError] = useState("");
   const [compressingPath, setCompressingPath] = useState("");
   const [showEntryMetadata, setShowEntryMetadata] = useState(false);
+  const [viewOptions, setViewOptions] = useState(readFileTreeViewOptions);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [jumpBarOpen, setJumpBarOpen] = useState(false);
   const [externalPath, setExternalPath] = useState("");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const moreMenuButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -1010,6 +361,19 @@ export function FileTreePane({
   const canPreviewFiles = !structureOnly;
   const canMutateFiles = canPreviewFiles && canWriteFiles;
   const canManageFiles = canMutateFiles && !remote;
+  const canJumpToPath = canBrowseExternalPaths && !structureOnly;
+  const { compactFolders, showGitDirectory } = viewOptions;
+
+  function updateViewOptions(patch: Partial<FileTreeViewOptions>) {
+    const next = { ...viewOptions, ...patch };
+    setViewOptions(next);
+    writeFileTreeViewOptions(next);
+  }
+
+  function closeJumpBar() {
+    setJumpBarOpen(false);
+    setExternalPath("");
+  }
 
   function stopTreeAutoScroll() {
     autoScrollStepRef.current = 0;
@@ -1468,7 +832,7 @@ export function FileTreePane({
     setActionError("");
     try {
       await onRequestNavigatePath(path);
-      setExternalPath("");
+      closeJumpBar();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "跳转目录失败");
     }
@@ -1488,8 +852,14 @@ export function FileTreePane({
 
   function flattenBranch(entries: FileTreeNode[], depth: number): FileTreeVisibleRow[] {
     const rows: FileTreeVisibleRow[] = [];
-    for (const entry of entries) {
-      rows.push({ type: "entry", entry, depth });
+    for (const first of entries) {
+      if (!showGitDirectory && first.name === HIDDEN_GIT_ENTRY_NAME) {
+        continue;
+      }
+      // A compact row stands for its innermost directory; the ones in front of it only add to the label.
+      const merged = first.isDir && compactFolders ? resolveCompactChain(first, tree.branches) : [];
+      const entry = merged.length > 0 ? merged[merged.length - 1] : first;
+      rows.push({ type: "entry", entry, depth, chain: merged.length > 0 ? [first, ...merged.slice(0, -1)] : [] });
       if (!entry.isDir || !tree.isExpanded(entry.path)) {
         continue;
       }
@@ -1512,24 +882,32 @@ export function FileTreePane({
       return (
         <div
           className={clsx("flex h-full items-center px-1 text-[11px]", row.tone === "error" ? "text-[var(--status-danger)]" : "text-[var(--muted)]")}
-          style={{ height: rowHeight, paddingLeft: `${row.depth * 12 + 36}px` }}
+          style={{ height: rowHeight, paddingLeft: `${row.depth * TREE_INDENT_PX + 36}px` }}
         >
           {row.text}
         </div>
       );
     }
 
-    const { entry, depth } = row;
+    const { entry, depth, chain } = row;
     const expanded = tree.isExpanded(entry.path);
-    const dirLabel = branchLabel(entry.path);
-    const absolutePath = joinAbsoluteTreePath(tree.rootPath, entry.path, remote, remotePlatform);
-    const iconKind = entry.isDir
-      ? (expanded ? "folder-open" : "folder-closed")
-      : getFileIconKind(entry.name);
-    const gitDecoration = resolveGitDecoration(entry.path, entry.isDir, gitDecorations, inheritedDirDecorations);
+    const absolutePathOf = (node: FileTreeNode) => joinAbsoluteTreePath(tree.rootPath, node.path, remote, remotePlatform);
+    const absolutePath = absolutePathOf(entry);
+    const segments = [...chain, entry];
+    const folderKind = segments.map((node) => getFolderIconKind(node.name)).find((kind) => kind !== "default") ?? "default";
+    const gitDecoration = chain.some((node) => gitDecorations[node.path] === "ignored")
+      ? "ignored"
+      : resolveGitDecoration(entry.path, entry.isDir, gitDecorations, inheritedDirDecorations);
     const isIgnored = gitDecoration === "ignored";
     const itemToneClass = treeItemToneClass(gitDecoration);
-    const selected = tree.selectedPath === entry.path;
+    const selected = segments.some((node) => node.path === tree.selectedPath);
+    // Right-clicking one name of a compact row targets that directory instead of the innermost one.
+    const contextTarget = (event: MouseEvent<HTMLButtonElement>) => {
+      const segmentPath = event.target instanceof Element
+        ? event.target.closest("[data-chain-path]")?.getAttribute("data-chain-path")
+        : null;
+      return chain.find((node) => node.path === segmentPath) ?? entry;
+    };
     const metadata = fileTreeEntryMetadata(entry);
     const itemButtonClassName = clsx(
       "file-tree-row-button relative flex h-full min-w-0 flex-1 items-center pr-1 text-left",
@@ -1540,6 +918,7 @@ export function FileTreePane({
         className="file-tree-row group relative flex h-full min-w-0 items-center text-[13px]"
         style={{ height: rowHeight }}
         data-tree-path={entry.path}
+        data-compact={chain.length > 0 ? "true" : "false"}
         data-git-state={gitDecoration || "clean"}
         data-git-ignored={isIgnored ? "true" : "false"}
         data-highlighted={tree.highlightedPath === entry.path ? "true" : "false"}
@@ -1550,7 +929,7 @@ export function FileTreePane({
           <span
             aria-hidden="true"
             className="file-tree-indent-guides pointer-events-none absolute inset-y-0 left-0"
-            style={{ width: `${depth * 12}px` }}
+            style={{ width: `${depth * TREE_INDENT_PX}px` }}
           />
         ) : null}
         {entry.isDir ? (
@@ -1561,7 +940,10 @@ export function FileTreePane({
             aria-expanded={expanded}
             aria-current={selected ? "true" : undefined}
             title={absolutePath}
-            onContextMenu={(event) => handleEntryContextMenu(event, entry, absolutePath)}
+            onContextMenu={(event) => {
+              const target = contextTarget(event);
+              handleEntryContextMenu(event, target, absolutePathOf(target));
+            }}
             onKeyDown={(event) => handleEntryContextMenuKey(event, entry, absolutePath)}
             onDragStart={(event) => handleEntryDragStart(event, entry)}
             onDragOver={(event) => handleDirectoryDragOver(event, entry)}
@@ -1574,7 +956,7 @@ export function FileTreePane({
               } else {
                 tree.selectPath(entry.path);
               }
-              void tree.toggleDirectory(entry.path);
+              void tree.toggleDirectory(entry.path, { followSingleChildDirectories: compactFolders });
             }}
             className={clsx(
               itemButtonClassName,
@@ -1583,13 +965,26 @@ export function FileTreePane({
           >
             <span
               className="flex w-full min-w-0 items-center gap-1"
-              style={{ paddingLeft: `${depth * 12 + 2}px` }}
+              style={{ paddingLeft: `${depth * TREE_INDENT_PX + 2}px` }}
             >
               {expanded
                 ? <ChevronDown aria-hidden="true" className="h-3 w-3 shrink-0 text-[var(--muted)]" />
                 : <ChevronRight aria-hidden="true" className="h-3 w-3 shrink-0 text-[var(--muted)]" />}
-              <TreeNodeIcon kind={iconKind} />
-              <span className={clsx("min-w-0 flex-1 truncate font-medium", itemToneClass)}>{dirLabel}</span>
+              <FolderIcon kind={folderKind} open={expanded} />
+              <span className={clsx("min-w-0 flex-1 truncate font-normal", itemToneClass)}>
+                {chain.map((node) => (
+                  <span key={node.path}>
+                    <span
+                      data-chain-path={node.path}
+                      className={clsx(node.path === tree.selectedPath && "underline underline-offset-2")}
+                    >
+                      {node.name}
+                    </span>
+                    <span aria-hidden="true" className="px-px opacity-55">/</span>
+                  </span>
+                ))}
+                {entry.name}
+              </span>
               {showEntryMetadata ? (
                 <span className="ml-1 shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
                   {metadata}
@@ -1618,10 +1013,10 @@ export function FileTreePane({
           >
             <span
               className="flex w-full min-w-0 items-center gap-1"
-              style={{ paddingLeft: `${depth * 12 + 2}px` }}
+              style={{ paddingLeft: `${depth * TREE_INDENT_PX + 2}px` }}
             >
               <span aria-hidden="true" className="h-3 w-3 shrink-0" />
-              <TreeNodeIcon kind={iconKind} />
+              <FileIcon kind={getFileIconKind(entry.name)} />
               <span className={clsx("min-w-0 flex-1 truncate font-normal", itemToneClass)}>{entry.name}</span>
               {showEntryMetadata ? (
                 <span className="ml-1 shrink-0 text-[11px] font-normal tabular-nums text-[var(--muted)]">
@@ -1637,7 +1032,7 @@ export function FileTreePane({
 
   const visibleTreeRows = useMemo(
     () => (!tree.loading && !tree.error ? flattenBranch(tree.rootEntries, 0) : []),
-    [tree.loading, tree.error, tree.rootEntries, tree.branches, tree.expandedPaths],
+    [tree.loading, tree.error, tree.rootEntries, tree.branches, tree.expandedPaths, compactFolders, showGitDirectory],
   );
 
   // Restore selection when returning from settings; density changes retain the row anchor.
@@ -1655,7 +1050,9 @@ export function FileTreePane({
     const viewportHeight = viewport.clientHeight;
     let nextScrollTop = previousRowHeight === null ? viewport.scrollTop : treeScrollTopRef.current / previousRowHeight * rowHeight;
     const targetPath = revealChanged ? tree.highlightedPath : tree.selectedPath;
-    const selectedIndex = visibleTreeRows.findIndex((row) => row.type === "entry" && row.entry.path === targetPath);
+    const selectedIndex = visibleTreeRows.findIndex((row) => (
+      row.type === "entry" && (row.entry.path === targetPath || row.chain.some((node) => node.path === targetPath))
+    ));
     if (selectedIndex >= 0 && viewportHeight > 0) {
       const selectedTop = selectedIndex * rowHeight;
       if (selectedTop < nextScrollTop) {
@@ -1720,8 +1117,9 @@ export function FileTreePane({
         }
       }}
       className="desktop-file-tree-pane relative flex h-full min-h-0 flex-col"
+      style={{ "--file-tree-indent": `${TREE_INDENT_PX}px` } as CSSProperties}
     >
-      <div className="file-tree-header relative flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5">
+      <div className="file-tree-header relative flex h-[30px] shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5">
         <div
           aria-label={`工作区 ${tree.rootPath}`}
           title={tree.rootPath}
@@ -1750,7 +1148,7 @@ export function FileTreePane({
                 aria-label="新建文件"
                 title="新建文件"
                 onClick={() => openCreateDialog("file")}
-                className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
               >
                 <FilePlus className="h-3.5 w-3.5" />
               </button>
@@ -1759,7 +1157,7 @@ export function FileTreePane({
                 aria-label="新建文件夹"
                 title="新建文件夹"
                 onClick={() => openCreateDialog("directory")}
-                className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
+                className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
               >
                 <FolderPlus className="h-3.5 w-3.5" />
               </button>
@@ -1770,7 +1168,7 @@ export function FileTreePane({
             aria-label="刷新文件树"
             title="刷新文件树"
             onClick={() => void handleRefresh()}
-            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
@@ -1779,7 +1177,7 @@ export function FileTreePane({
             aria-label={focused ? "退出聚焦文件区" : "聚焦文件区"}
             title={focused ? "退出聚焦文件区" : "聚焦文件区"}
             onClick={onToggleFocus}
-            className="inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]"
           >
             {focused ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
@@ -1792,7 +1190,7 @@ export function FileTreePane({
             title="更多文件操作"
             onClick={() => setMoreMenuOpen((current) => !current)}
             className={clsx(
-              "inline-flex h-7 w-7 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]",
+              "inline-flex h-6 w-6 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--workbench-focus-ring)]",
               moreMenuOpen && "bg-[var(--workbench-active-bg)] text-[var(--text)]",
             )}
           >
@@ -1833,6 +1231,20 @@ export function FileTreePane({
               <House className="h-3.5 w-3.5 text-[var(--muted)]" />
               返回工作目录
             </button>
+            {canJumpToPath ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setJumpBarOpen(true);
+                }}
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+              >
+                <CornerDownRight className="h-3.5 w-3.5 text-[var(--muted)]" />
+                跳转到路径…
+              </button>
+            ) : null}
             {canMutateFiles && onRequestOpenSystemFolder ? (
               <button
                 type="button"
@@ -1860,30 +1272,76 @@ export function FileTreePane({
               <ListTree className="h-3.5 w-3.5 text-[var(--muted)]" />
               {showEntryMetadata ? "隐藏条目信息" : "显示条目信息"}
             </button>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={compactFolders}
+              title="只含一个子文件夹的文件夹与其子文件夹显示在同一行"
+              onClick={() => {
+                updateViewOptions({ compactFolders: !compactFolders });
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+            >
+              <FolderTree className="h-3.5 w-3.5 text-[var(--muted)]" />
+              <span className="min-w-0 flex-1">合并单一子文件夹</span>
+              {compactFolders ? <Check aria-hidden="true" className="h-3.5 w-3.5 text-[var(--muted)]" /> : null}
+            </button>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={showGitDirectory}
+              onClick={() => {
+                updateViewOptions({ showGitDirectory: !showGitDirectory });
+                setMoreMenuOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-[var(--workbench-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--workbench-focus-ring)]"
+            >
+              <GitBranch className="h-3.5 w-3.5 text-[var(--muted)]" />
+              <span className="min-w-0 flex-1">显示 .git</span>
+              {showGitDirectory ? <Check aria-hidden="true" className="h-3.5 w-3.5 text-[var(--muted)]" /> : null}
+            </button>
           </div>
         ) : null}
       </div>
 
-      {canBrowseExternalPaths && !structureOnly ? (
+      {canJumpToPath && jumpBarOpen ? (
         <form
           className="flex shrink-0 items-center gap-1 border-b border-[var(--border)] px-1.5 py-1"
           onSubmit={(event) => {
             event.preventDefault();
             void handleNavigateExternalPath();
           }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              closeJumpBar();
+              moreMenuButtonRef.current?.focus();
+            }
+          }}
         >
           <input
+            autoFocus
             aria-label="跳转到绝对目录"
             value={externalPath}
             onChange={(event) => setExternalPath(event.target.value)}
             placeholder="直接跳转到路径"
-            className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[12px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
+            className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-[12px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
           />
           <button
             type="submit"
-            className="shrink-0 rounded border border-[var(--border)] px-2 py-1 text-[12px] text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
+            className="shrink-0 rounded border border-[var(--border)] px-2 py-0.5 text-[12px] text-[var(--text)] hover:bg-[var(--workbench-hover-bg)]"
           >
             跳转
+          </button>
+          <button
+            type="button"
+            aria-label="关闭路径跳转"
+            title="关闭"
+            onClick={closeJumpBar}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--muted)] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)]"
+          >
+            <X className="h-3.5 w-3.5" />
           </button>
         </form>
       ) : null}

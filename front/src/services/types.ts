@@ -1724,10 +1724,18 @@ export type TerminalActionRunResult = {
   snapshot: PersistentTerminalSnapshot;
 };
 
+/** One directory of a chain in which every directory holds only the next one. */
+export type FileEntryChainLink = {
+  name: string;
+  childCount?: number;
+};
+
 export type FileEntry = {
   name: string;
   isDir: boolean;
   childCount?: number;
+  /** Directories below this one that are its only descendants, outermost first. */
+  compactChain?: FileEntryChainLink[];
   size?: number;
   updatedAt?: string;
 };

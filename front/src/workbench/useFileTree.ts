@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileCompressResult, FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileMoveResult, FileRenameResult, FileUploadProgress, RemoteWorkspace } from "../services/types";
+import type { FileCompressResult, FileCopyResult, FileCreateResult, FileDeleteOptions, FileDownloadProgress, FileEntry, FileEntryChainLink, FileMoveResult, FileRenameResult, FileUploadProgress, RemoteWorkspace } from "../services/types";
 import { joinRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 import type { WebBotClient } from "../services/webBotClient";
 import { getErrorMessage, isAbortError } from "../utils/errorMessage";
@@ -11,8 +11,18 @@ export type FileTreeNode = {
   name: string;
   isDir: boolean;
   childCount?: number;
+  /** Listing hint: the directories below this one that are its only descendants. */
+  compactChain?: FileEntryChainLink[];
   size?: number;
   updatedAt?: string;
+};
+
+/** Longest run of single-child directories followed when expanding or merging rows. */
+export const FILE_TREE_COMPACT_CHAIN_LIMIT = 12;
+
+export type ToggleDirectoryOptions = {
+  /** After expanding, keep expanding while a directory holds nothing but one directory. */
+  followSingleChildDirectories?: boolean;
 };
 
 type FileTreeBranchState = {
@@ -58,7 +68,7 @@ export type UseFileTreeResult = {
   selectPath: (path: string) => void;
   clearSelection: () => void;
   isExpanded: (path: string) => boolean;
-  toggleDirectory: (path: string) => Promise<void>;
+  toggleDirectory: (path: string, options?: ToggleDirectoryOptions) => Promise<void>;
   refreshRoot: (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => Promise<void>;
   refreshTreeAndRoot: (options?: { preserveExpandedPaths?: boolean; rootPath?: string }) => Promise<string>;
   restoreExpandedPaths: (paths: string[]) => Promise<void>;
@@ -120,15 +130,13 @@ function branchMapConfirmsMissingPath(
   return !parentBranch.entries.some((entry) => entry.path === path);
 }
 
-function mapBranchEntries(
-  parentPath: string,
-  entries: Array<{ name: string; isDir: boolean; childCount?: number; size?: number; updatedAt?: string }>,
-) {
+function mapBranchEntries(parentPath: string, entries: FileEntry[]): FileTreeNode[] {
   return entries.map((entry) => ({
     path: joinTreePath(parentPath, entry.name),
     name: entry.name,
     isDir: entry.isDir,
     childCount: entry.childCount,
+    ...(entry.compactChain?.length ? { compactChain: entry.compactChain } : {}),
     size: entry.size,
     updatedAt: entry.updatedAt,
   }));
@@ -561,20 +569,42 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
     highlightPath(nextSelectedPath);
   }
 
-  async function toggleDirectory(path: string) {
+  async function toggleDirectory(path: string, options?: ToggleDirectoryOptions) {
     const isExpanded = expandedPathsRef.current.includes(path);
     if (isExpanded) {
       updateExpandedPathsSynced((current) => current.filter((item) => item !== path));
       return;
     }
 
-    updateExpandedPathsSynced((current) => uniqueExpandedPaths([...current, path]));
-    if (!branchesRef.current[path]?.loaded) {
-      try {
-        await loadBranch(rootPath, path);
-      } catch {
-        // Branch state already captures the error.
+    const generation = loadGenerationRef.current;
+    let current = path;
+    for (let followed = 0; followed <= FILE_TREE_COMPACT_CHAIN_LIMIT; followed += 1) {
+      const expanding = current;
+      updateExpandedPathsSynced((paths) => uniqueExpandedPaths([...paths, expanding]));
+      if (!branchesRef.current[current]?.loaded) {
+        try {
+          await loadBranch(rootPath, current, { generation });
+        } catch {
+          // Branch state already captures the error.
+          return;
+        }
       }
+      if (
+        !options?.followSingleChildDirectories
+        || loadGenerationRef.current !== generation
+        || !expandedPathsRef.current.includes(path)
+      ) {
+        return;
+      }
+      const entries = branchesRef.current[current]?.entries || [];
+      if (entries.length !== 1 || !entries[0].isDir) {
+        return;
+      }
+      // The two directories now share one row, so a selection made by the click moves with it.
+      if (selectedPathRef.current === current) {
+        selectPath(entries[0].path);
+      }
+      current = entries[0].path;
     }
   }
 

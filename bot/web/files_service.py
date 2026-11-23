@@ -155,12 +155,44 @@ def resolve_browser_target_path(current_dir: str, new_path: str) -> str:
     return os.path.abspath(os.path.expanduser(candidate))
 
 
-def _count_directory_children(path: str) -> int | None:
+_COMPACT_CHAIN_MAX_DEPTH = 12
+
+
+def _summarize_directory_children(path: str) -> tuple[int | None, str | None]:
+    """Return the child count and, when the only child is a real directory, its name."""
     try:
         with os.scandir(path) as children:
-            return sum(1 for _ in children)
+            count = 0
+            only_directory: str | None = None
+            for child in children:
+                count += 1
+                if count > 1:
+                    only_directory = None
+                    continue
+                try:
+                    # Symlinks and Windows junctions are never merged, so a link cycle cannot extend a chain.
+                    is_junction = getattr(child, "is_junction", None)
+                    if child.is_dir(follow_symlinks=False) and not (is_junction and is_junction()):
+                        only_directory = child.name
+                except OSError:
+                    only_directory = None
+            return count, only_directory
     except OSError:
-        return None
+        return None, None
+
+
+def _compact_directory_chain(path: str, only_directory: str | None) -> list[dict[str, Any]]:
+    """Follow directories whose single child is a directory, so the tree can show them as one row."""
+    chain: list[dict[str, Any]] = []
+    current = path
+    while only_directory and len(chain) < _COMPACT_CHAIN_MAX_DEPTH:
+        current = os.path.join(current, only_directory)
+        link: dict[str, Any] = {"name": only_directory}
+        child_count, only_directory = _summarize_directory_children(current)
+        if child_count is not None:
+            link["child_count"] = child_count
+        chain.append(link)
+    return chain
 
 
 def list_directory_entries(working_dir: str, *, include_child_counts: bool = False) -> dict[str, Any]:
@@ -171,9 +203,12 @@ def list_directory_entries(working_dir: str, *, include_child_counts: bool = Fal
             "is_dir": entry.is_dir(),
         }
         if item["is_dir"] and include_child_counts:
-            child_count = _count_directory_children(entry.path)
+            child_count, only_directory = _summarize_directory_children(entry.path)
             if child_count is not None:
                 item["child_count"] = child_count
+            compact_chain = _compact_directory_chain(entry.path, only_directory)
+            if compact_chain:
+                item["compact_chain"] = compact_chain
         elif entry.is_file():
             item["size"] = entry.stat().st_size
         entries.append(item)

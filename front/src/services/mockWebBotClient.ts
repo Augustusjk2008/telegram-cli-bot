@@ -112,6 +112,7 @@ import type {
   FileDownloadProgress,
   FileUploadProgress,
   FileEntry,
+  FileEntryChainLink,
   FileReadResult,
   HtmlPreviewSession,
   GitActionResult,
@@ -5555,9 +5556,19 @@ export class MockWebBotClient implements WebBotClient {
         }
         const childPath = currentPath === "/" ? `/${entry.name}` : `${currentPath}/${entry.name}`;
         const children = botFiles[childPath];
+        const compactChain: FileEntryChainLink[] = [];
+        let chainPath = childPath;
+        let chainChildren = children;
+        while (chainChildren?.length === 1 && chainChildren[0].isDir && compactChain.length < 12) {
+          chainPath = `${chainPath}/${chainChildren[0].name}`;
+          const name = chainChildren[0].name;
+          chainChildren = botFiles[chainPath];
+          compactChain.push({ name, ...(chainChildren ? { childCount: chainChildren.length } : {}) });
+        }
         return {
           ...entry,
           ...(children ? { childCount: children.length } : {}),
+          ...(compactChain.length > 0 ? { compactChain } : {}),
         };
       }),
     };

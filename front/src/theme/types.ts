@@ -125,7 +125,7 @@ export type ThemeIllustrations = {
 
 export type ThemeIllustrationsValue = ThemeIllustrations | LegacyThemeIllustrations;
 
-export const PAPER_STYLE = { fileTreeRowHeight: 26 } as const;
+export const PAPER_STYLE = { fileTreeRowHeight: 22 } as const;
 export const PAPER_MOTION = { profile: "paper" } as const;
 
 export type ThemeAppearance = {
