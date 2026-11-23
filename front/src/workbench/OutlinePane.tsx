@@ -1,21 +1,68 @@
 import { ListTree } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { WorkspaceOutlineItem } from "../services/types";
+import { useEffect, useMemo, useState } from "react";
+import type { CodeDocumentSymbol, WorkspaceOutlineItem } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import { DocumentSymbolIcon, documentSymbolKindLabel } from "./documentSymbolKinds";
+import { useDocumentSymbols } from "./useDocumentSymbols";
+import type { EditorTab } from "./workbenchTypes";
 
 type Props = {
   botAlias: string;
   client: WebBotClient;
   activeFilePath: string;
-  onOpenFile: (path: string, line?: number) => void | Promise<void>;
+  /** The open document; with a language server its live text drives the outline. */
+  activeTab?: EditorTab | null;
+  languageFeaturesEnabled?: boolean;
+  languageFeatureRefreshKey?: string;
+  onOpenFile: (path: string, line?: number, column?: number) => void | Promise<void>;
 };
 
-const KIND_LABEL: Record<WorkspaceOutlineItem["kind"], string> = {
-  class: "类",
-  function: "函数",
-  method: "方法",
-  heading: "标题",
+type OutlineEntry = {
+  name: string;
+  detail: string;
+  kind: string;
+  line: number;
+  column: number;
+  children: OutlineEntry[];
 };
+
+function fromSymbols(symbols: readonly CodeDocumentSymbol[]): OutlineEntry[] {
+  return symbols.map((symbol) => ({
+    name: symbol.name,
+    detail: symbol.detail,
+    kind: symbol.kind,
+    line: symbol.selectionRange.start.line,
+    column: symbol.selectionRange.start.column,
+    children: fromSymbols(symbol.children),
+  }));
+}
+
+/** The file-based outline lists headings flat with a level; nest them like symbols. */
+function fromOutlineItems(items: readonly WorkspaceOutlineItem[]): OutlineEntry[] {
+  const roots: OutlineEntry[] = [];
+  const stack: Array<{ level: number; entry: OutlineEntry }> = [];
+  for (const item of items) {
+    const entry: OutlineEntry = {
+      name: item.name,
+      detail: "",
+      kind: item.kind,
+      line: item.line,
+      column: 1,
+      children: fromOutlineItems(Array.isArray(item.children) ? item.children : []),
+    };
+    const level = typeof item.level === "number" && item.level > 0 ? item.level : 0;
+    if (level === 0) {
+      stack.length = 0;
+      roots.push(entry);
+      continue;
+    }
+    while (stack.length > 0 && stack[stack.length - 1].level >= level) stack.pop();
+    const parent = stack[stack.length - 1]?.entry;
+    (parent ? parent.children : roots).push(entry);
+    stack.push({ level, entry });
+  }
+  return roots;
+}
 
 function OutlineItems({
   items,
@@ -23,83 +70,101 @@ function OutlineItems({
   activeFilePath,
   onOpenFile,
 }: {
-  items: WorkspaceOutlineItem[];
+  items: OutlineEntry[];
   depth: number;
   activeFilePath: string;
-  onOpenFile: (path: string, line?: number) => void | Promise<void>;
+  onOpenFile: Props["onOpenFile"];
 }) {
   return (
     <>
-      {items.map((item, index) => {
-        const children = Array.isArray(item.children) ? item.children : [];
-        const itemDepth = typeof item.level === "number" && item.level > 0
-          ? Math.max(depth, item.level - 1)
-          : depth;
-        return (
-          <div key={`${item.kind}:${item.name}:${item.line}:${itemDepth}:${index}`}>
-            <button
-              type="button"
-              aria-label={`${item.name} ${item.kind} 第 ${item.line} 行`}
-              onClick={() => void onOpenFile(activeFilePath, item.line)}
-              className="flex w-full min-w-0 items-center justify-between gap-2 px-3 py-2 text-left hover:bg-[var(--surface-strong)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
-              style={{ paddingLeft: `${12 + itemDepth * 14}px` }}
-            >
+      {items.map((item, index) => (
+        <div key={`${item.kind}:${item.name}:${item.line}:${depth}:${index}`}>
+          <button
+            type="button"
+            aria-label={`${item.name} ${item.kind} 第 ${item.line} 行`}
+            title={item.detail ? `${item.name} ${item.detail}` : undefined}
+            onClick={() => void onOpenFile(activeFilePath, item.line, item.column)}
+            className="flex w-full min-w-0 items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-[var(--surface-strong)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            style={{ paddingLeft: `${12 + depth * 14}px` }}
+          >
+            <span className="flex min-w-0 items-center gap-1.5">
+              <DocumentSymbolIcon kind={item.kind} />
               <span className="min-w-0 truncate text-sm text-[var(--text)]">{item.name}</span>
-              <span className="shrink-0 text-xs text-[var(--muted)]">{KIND_LABEL[item.kind]} · {item.line}</span>
-            </button>
-            {children.length > 0 ? (
-              <OutlineItems
-                items={children}
-                depth={itemDepth + 1}
-                activeFilePath={activeFilePath}
-                onOpenFile={onOpenFile}
-              />
-            ) : null}
-          </div>
-        );
-      })}
+              {item.detail ? <span className="min-w-0 truncate text-xs text-[var(--muted)]">{item.detail}</span> : null}
+            </span>
+            <span className="shrink-0 text-xs text-[var(--muted)]">{documentSymbolKindLabel(item.kind)} · {item.line}</span>
+          </button>
+          {item.children.length > 0 ? (
+            <OutlineItems
+              items={item.children}
+              depth={depth + 1}
+              activeFilePath={activeFilePath}
+              onOpenFile={onOpenFile}
+            />
+          ) : null}
+        </div>
+      ))}
     </>
   );
 }
 
-export function OutlinePane({ botAlias, client, activeFilePath, onOpenFile }: Props) {
-  const [items, setItems] = useState<WorkspaceOutlineItem[]>([]);
-  const [loading, setLoading] = useState(false);
+export function OutlinePane({
+  botAlias,
+  client,
+  activeFilePath,
+  activeTab = null,
+  languageFeaturesEnabled = false,
+  languageFeatureRefreshKey = "",
+  onOpenFile,
+}: Props) {
+  const [fileItems, setFileItems] = useState<WorkspaceOutlineItem[]>([]);
+  const [fileLoading, setFileLoading] = useState(false);
   const [error, setError] = useState("");
+  const symbolTab = activeTab && activeTab.path === activeFilePath ? activeTab : null;
+  const symbols = useDocumentSymbols(client, botAlias, symbolTab, languageFeaturesEnabled, languageFeatureRefreshKey);
+  // The saved-file outline covers languages without a server (Python by AST, Markdown headings).
+  const useFileOutline = Boolean(activeFilePath) && (symbols.status === "idle" || symbols.status === "unavailable")
+    && !(languageFeaturesEnabled && symbolTab?.loading);
 
   useEffect(() => {
-    if (!activeFilePath) {
-      setItems([]);
-      setLoading(false);
+    if (!activeFilePath || !useFileOutline) {
+      setFileItems([]);
+      setFileLoading(false);
       setError("");
       return;
     }
 
     let cancelled = false;
-    setLoading(true);
+    setFileLoading(true);
     void client.getWorkspaceOutline(botAlias, activeFilePath)
       .then((result) => {
         if (!cancelled) {
-          setItems(result.items);
+          setFileItems(result.items);
           setError("");
         }
       })
       .catch((caught) => {
         if (!cancelled) {
-          setItems([]);
+          setFileItems([]);
           setError(caught instanceof Error ? caught.message : "读取大纲失败");
         }
       })
       .finally(() => {
         if (!cancelled) {
-          setLoading(false);
+          setFileLoading(false);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activeFilePath, botAlias, client]);
+  }, [activeFilePath, botAlias, client, useFileOutline]);
+
+  const items = useMemo(
+    () => (useFileOutline ? fromOutlineItems(fileItems) : fromSymbols(symbols.symbols)),
+    [fileItems, symbols.symbols, useFileOutline],
+  );
+  const loading = useFileOutline ? fileLoading : symbols.status === "loading";
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-[var(--surface)]">

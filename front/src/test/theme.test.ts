@@ -15,8 +15,11 @@ import {
   BUILTIN_THEME,
   normalizeIllustrations,
   resolveAppearance,
+  THEME_TOKENS,
 } from "../theme/resolveAppearance";
 import { defaultIllustrations } from "../theme/illustrationPresets";
+import type { ThemeLibrary } from "../theme/types";
+import presetCatalog from "../../../bot/web/theme_presets.json";
 
 function relativeLuminance(color: string) {
   const [red, green, blue] = [1, 3, 5].map((offset) => {
@@ -91,6 +94,39 @@ describe("UI themes", () => {
     expect(contrastRatio(theme.foreground, theme.background)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(theme.cursor, theme.background)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(theme.selectionForeground, theme.selectionBackground)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("keeps preset editor syntax colors readable and derives the ones a theme leaves out", () => {
+    const syntaxTokens = THEME_TOKENS.filter((token) => token.key.startsWith("editor.syntax"));
+    expect(syntaxTokens).toHaveLength(14);
+    for (const theme of (presetCatalog as unknown as ThemeLibrary).themes) {
+      const { colors } = resolveAppearance(theme);
+      for (const token of syntaxTokens) {
+        const label = `${theme.name} ${token.key}`;
+        expect(contrastRatio(colors[token.key], colors["editor.background"]), label).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(colors[token.key], colors["editor.activeLine"]), label).toBeGreaterThanOrEqual(4);
+      }
+    }
+
+    const added = [
+      "editor.syntaxControl", "editor.syntaxNamespace", "editor.syntaxConstant", "editor.syntaxVariable",
+      "editor.syntaxProperty", "editor.syntaxOperator", "editor.indentGuide", "editor.indentGuideActive",
+    ];
+    const overrides = Object.fromEntries(
+      Object.entries(BUILTIN_THEME.appearance.colors.overrides).filter(([key]) => !added.includes(key)),
+    );
+    const { cssVariables } = resolveAppearance({
+      ...BUILTIN_THEME,
+      appearance: { ...BUILTIN_THEME.appearance, colors: { ...BUILTIN_THEME.appearance.colors, overrides } },
+    });
+    expect(cssVariables["--editor-syntax-control"]).toBe(cssVariables["--editor-syntax-keyword"]);
+    expect(cssVariables["--editor-syntax-namespace"]).toBe(cssVariables["--editor-syntax-type"]);
+    expect(cssVariables["--editor-syntax-constant"]).toBe(cssVariables["--editor-syntax-number"]);
+    for (const name of ["variable", "property", "operator"]) {
+      expect(cssVariables[`--editor-syntax-${name}`]).toBe(cssVariables["--editor-text"]);
+    }
+    expect(cssVariables["--editor-indent-guide"]).toBe(`${cssVariables["--border"].slice(0, 7)}29`);
+    expect(cssVariables["--editor-indent-guide-active"]).toBe(`${cssVariables["--border-strong"].slice(0, 7)}6B`);
   });
 
   it("resolves theme material into CSS variables and rejects unsupported material", () => {

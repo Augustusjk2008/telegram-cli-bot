@@ -10,7 +10,7 @@ import { getExternalSourceErrorMessage } from "../services/types";
 import type {
   CodeLocation,
   CodeNavigationIntent,
-  CodeNavigationKind,
+  CodeNavigationIntentKind,
   GitTreeStatus,
   GitWorkspaceIdentity,
   HostEffect,
@@ -30,8 +30,13 @@ import {
 } from "../utils/filePreview";
 import { getErrorMessage } from "../utils/errorMessage";
 import { WORKSPACE_DELETED_EVENT, isWorkspaceDeletedEvent } from "../utils/workspaceEvents";
-import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import { inferFileEditorLanguageId, inferLanguageServerProviderId } from "../utils/fileEditorLanguage";
 import { ChatPane } from "./ChatPane";
+import {
+  TEXT_FALLBACK_SEARCH_LIMIT,
+  isTextFallbackSymbol,
+  rankTextFallbackLocations,
+} from "./codeNavigationTextFallback";
 import { CommandPalette } from "./CommandPalette";
 import { FileTreePane } from "./FileTreePane";
 import { EditorSplitLayout } from "./EditorSplitLayout";
@@ -75,6 +80,7 @@ import {
   type ChatWorkbenchStatus,
   type EditorRevealLocation,
   type EditorGroupId,
+  type EditorTab,
   type FocusedWorkbenchPane,
   type TerminalOverrideState,
   type TerminalWorkbenchStatus,
@@ -283,13 +289,14 @@ export function DesktopWorkbench({
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [editorReveal, setEditorReveal] = useState<EditorRevealLocation | null>(null);
   const [editorNavigationCommand, setEditorNavigationCommand] = useState<{
-    kind: "definition" | "implementation";
+    kind: CodeNavigationIntentKind;
     requestId: string;
     groupId: EditorGroupId;
   } | null>(null);
   const [definitionCandidates, setDefinitionCandidates] = useState<CodeLocation[]>([]);
   const [definitionMessage, setDefinitionMessage] = useState("");
   const [definitionSource, setDefinitionSource] = useState("");
+  const [definitionOverlayMode, setDefinitionOverlayMode] = useState<"navigation" | "references" | "text">("navigation");
   const [languageServerCatalogRevision, setLanguageServerCatalogRevision] = useState(0);
   const [languageServerRestart, setLanguageServerRestart] = useState<{
     provider: LanguageServerProviderId | null;
@@ -316,6 +323,20 @@ export function DesktopWorkbench({
     allowCodeJump
     && (tabs.activeTab?.kind === "file" || tabs.activeTab?.kind === "external-source")
     && languageService.status?.implementationSupported === true,
+  );
+  // Language features follow the provider of the focused document; other languages wait for focus.
+  const languageFeaturesAvailable = Boolean(
+    allowCodeJump
+    && !structureOnly
+    && languageService.provider
+    && languageService.status?.status === "available",
+  );
+  const languageFeatureRefreshKey = `${languageService.provider || ""}:${languageService.status?.runtimeState || ""}:${languageServerCatalogRevision}`;
+  const languageFeaturesEnabledFor = (tab: EditorTab | null) => Boolean(
+    languageFeaturesAvailable
+    && tab
+    && (tab.kind === "file" || tab.kind === "external-source")
+    && inferLanguageServerProviderId(tab.displayPath || tab.path) === languageService.provider,
   );
   const refreshLanguageServerCatalogStatus = useCallback(() => {
     setLanguageServerCatalogRevision((current) => current + 1);
@@ -1015,16 +1036,18 @@ export function DesktopWorkbench({
     setDefinitionCandidates([]);
     setDefinitionMessage("");
     setDefinitionSource("");
+    setDefinitionOverlayMode("navigation");
     definitionSourceLocationRef.current = null;
     definitionSourceScopeRef.current = "";
   }
 
-  function requestEditorCodeNavigation(kind: CodeNavigationKind) {
+  function requestEditorCodeNavigation(kind: CodeNavigationIntentKind) {
     if (
       !allowCodeJump
       || structureOnly
       || (tabs.activeTab?.kind !== "file" && tabs.activeTab?.kind !== "external-source")
       || (kind === "implementation" && !canNavigateImplementation)
+      || (kind === "references" && !languageFeaturesAvailable)
     ) {
       return false;
     }
@@ -1128,18 +1151,99 @@ export function DesktopWorkbench({
       && !controller?.signal.aborted
     );
     const requestId = `code-navigation-${Date.now()}-${sequence}`;
+    const document = {
+      ...(activeTab.kind === "external-source" && activeTab.sourceId
+        ? { sourceId: activeTab.sourceId }
+        : { path: activeTab.path }),
+      languageId: inferFileEditorLanguageId(activeTab.displayPath || activeTab.path),
+      version: Math.max(1, Math.trunc(activeTab.documentVersion || 1)),
+      content: activeTab.content,
+    };
+    const sourceLabel = input.symbol || `${input.path}:${input.line}:${input.column}`;
+    const showCandidates = (items: CodeLocation[], mode: "navigation" | "references" | "text") => {
+      setDefinitionCandidates(items);
+      setDefinitionMessage("");
+      setDefinitionSource(sourceLabel);
+      setDefinitionOverlayMode(mode);
+      definitionSourceLocationRef.current = source;
+      definitionSourceScopeRef.current = scope;
+      definitionSourceGroupRef.current = groupId;
+    };
+    const showMessage = (message: string, mode: "navigation" | "references" = "navigation") => {
+      setDefinitionCandidates([]);
+      setDefinitionMessage(message);
+      setDefinitionSource(sourceLabel);
+      setDefinitionOverlayMode(mode);
+      definitionSourceLocationRef.current = null;
+    };
+    if (input.kind === "references") {
+      try {
+        const result = await client.queryCodeIntelligence(botAlias, {
+          kind: "references",
+          requestId,
+          document,
+          position: { line: input.line, column: input.column },
+          context: { includeDeclaration: true },
+        }, controller?.signal);
+        if (!isCurrent()) {
+          return;
+        }
+        const references = result.references.filter((item) => (
+          (item.targetType === "workspace" && Boolean(item.path))
+          || (item.targetType === "external" && Boolean(item.sourceId))
+        ));
+        if (references.length > 0) {
+          showCandidates(references, "references");
+        } else if (!result.available || !result.supported) {
+          showMessage("当前文件的语言服务不支持查找引用", "references");
+        } else {
+          showMessage(result.message || "未找到引用", "references");
+        }
+      } catch (error) {
+        if (
+          !controller?.signal.aborted
+          && codeNavigationRequestRef.current === sequence
+          && (error as { name?: string })?.name !== "AbortError"
+        ) {
+          showMessage(getExternalSourceErrorMessage(error), "references");
+        }
+      } finally {
+        if (codeNavigationAbortControllerRef.current === controller) {
+          codeNavigationAbortControllerRef.current = null;
+        }
+      }
+      return;
+    }
+    // Without a semantic answer, offer plain-text matches as clearly labelled guesses.
+    const showTextFallback = async (message: string) => {
+      const symbol = input.symbol || "";
+      if (remoteWorkspace || !isTextFallbackSymbol(symbol)) {
+        showMessage(message);
+        return;
+      }
+      let candidates: CodeLocation[] = [];
+      try {
+        const search = await client.searchWorkspace(botAlias, symbol, TEXT_FALLBACK_SEARCH_LIMIT, controller?.signal);
+        candidates = rankTextFallbackLocations(symbol, search.items)
+          // The line the jump started from is not a destination.
+          .filter((item) => !(item.path === input.path && item.selectionRange.start.line === input.line));
+      } catch {
+        candidates = [];
+      }
+      if (!isCurrent()) {
+        return;
+      }
+      if (candidates.length > 0) {
+        showCandidates(candidates, "text");
+      } else {
+        showMessage(message);
+      }
+    };
     try {
       const result = await client.resolveCodeNavigation(botAlias, {
         kind: input.kind,
         requestId,
-        document: {
-          ...(activeTab.kind === "external-source" && activeTab.sourceId
-            ? { sourceId: activeTab.sourceId }
-            : { path: activeTab.path }),
-          languageId: inferFileEditorLanguageId(activeTab.displayPath || activeTab.path),
-          version: Math.max(1, Math.trunc(activeTab.documentVersion || 1)),
-          content: activeTab.content,
-        },
+        document,
         position: { line: input.line, column: input.column },
       }, controller?.signal);
       if (!isCurrent()) {
@@ -1200,20 +1304,12 @@ export function DesktopWorkbench({
         return;
       }
       if (semanticItems.length > 1) {
-        setDefinitionCandidates(semanticItems);
-        setDefinitionMessage("");
-        setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
-        definitionSourceLocationRef.current = source;
-        definitionSourceScopeRef.current = scope;
-        definitionSourceGroupRef.current = groupId;
+        showCandidates(semanticItems, "navigation");
         return;
       }
-      setDefinitionCandidates([]);
-      setDefinitionMessage(getExternalSourceErrorMessage({
+      await showTextFallback(getExternalSourceErrorMessage({
         message: result.message || (input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义"),
       }));
-      setDefinitionSource(input.symbol || `${input.path}:${input.line}:${input.column}`);
-      definitionSourceLocationRef.current = null;
     } catch (error) {
       if (
         controller?.signal.aborted
@@ -1345,8 +1441,11 @@ export function DesktopWorkbench({
           botAlias={botAlias}
           client={client}
           activeFilePath={tabs.activeTab?.path || ""}
-          onOpenFile={async (path, line) => {
-            await openWorkspaceFile(path, line);
+          activeTab={tabs.activeTab}
+          languageFeaturesEnabled={languageFeaturesEnabledFor(tabs.activeTab)}
+          languageFeatureRefreshKey={languageFeatureRefreshKey}
+          onOpenFile={async (path, line, column) => {
+            await openWorkspaceFile(path, line, column);
           }}
         />
       );
@@ -1638,6 +1737,8 @@ export function DesktopWorkbench({
                           canNavigateForward={codeNavigationHistory.canGoForward}
                           allowCodeJump={allowCodeJump}
                           canNavigateImplementation={canNavigateImplementation}
+                          languageFeaturesEnabled={languageFeaturesEnabledFor(groupTab)}
+                          languageFeatureRefreshKey={languageFeatureRefreshKey}
                           canUseInlineCompletion={canUseInlineCompletion}
                           onResolveCodeNavigation={(input) => {
                             setEditorNavigationCommand(null);
@@ -1900,9 +2001,13 @@ export function DesktopWorkbench({
             {...dialogPanelMotion}
           >
             <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-              <div>
-                <div className="text-sm font-semibold text-[var(--text)]">代码跳转</div>
-                <div className="text-xs text-[var(--muted)]">{definitionSource || "当前位置"}</div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-[var(--text)]">
+                  {definitionOverlayMode === "references"
+                    ? `引用${definitionCandidates.length > 0 ? `（${definitionCandidates.length}）` : ""}`
+                    : definitionOverlayMode === "text" ? "文本搜索结果" : "代码跳转"}
+                </div>
+                <div className="truncate text-xs text-[var(--muted)]">{definitionSource || "当前位置"}</div>
               </div>
               <button
                 type="button"
@@ -1917,6 +2022,14 @@ export function DesktopWorkbench({
               <div className="px-4 py-4 text-sm text-[var(--muted)]">{definitionMessage}</div>
             ) : (
               <div className="max-h-[min(60vh,28rem)] overflow-y-auto">
+                {definitionOverlayMode === "text" ? (
+                  <div
+                    data-testid="desktop-definition-text-fallback"
+                    className="border-b border-[var(--border)] bg-[var(--status-warning-bg)] px-4 py-2 text-xs text-[var(--status-warning)]"
+                  >
+                    未找到语义定义。以下是按名称匹配的文本搜索结果，不是语义分析，可能不准确。
+                  </div>
+                ) : null}
                 {definitionCandidates.map((item) => (
                   <button
                     key={`${item.targetType}:${item.path || item.sourceId || "unknown"}:${item.selectionRange.start.line}:${item.selectionRange.start.column}:${item.provider}`}
@@ -1927,7 +2040,12 @@ export function DesktopWorkbench({
                     className="flex w-full items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-strong)]"
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-[var(--text)]">{item.path || "外部源码"}</div>
+                      <div className="truncate text-sm font-medium text-[var(--text)]">
+                        {item.targetType === "external" ? item.displayPath || item.path || "外部源码" : item.path || "外部源码"}
+                      </div>
+                      {item.preview ? (
+                        <div className="mt-1 truncate font-mono text-xs text-[var(--editor-text)]">{item.preview}</div>
+                      ) : null}
                       <div className="mt-1 text-xs text-[var(--muted)]">
                         第 {item.selectionRange.start.line} 行，列 {item.selectionRange.start.column}
                       </div>

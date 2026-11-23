@@ -173,6 +173,8 @@ import type {
   UpdateBotWorkdirOptions,
   UserBotPermissions,
   CodeNavigationRequest,
+  CodeIntelligenceRequest,
+  CodeIntelligenceResult,
   CodeNavigationResult,
   WorkspaceDocumentSyncInput,
   WorkspaceDocumentSyncResult,
@@ -389,6 +391,11 @@ export interface WebBotClient {
     input: CodeNavigationRequest,
     signal?: AbortSignal,
   ): Promise<CodeNavigationResult>;
+  queryCodeIntelligence(
+    botAlias: string,
+    input: CodeIntelligenceRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeIntelligenceResult>;
   syncWorkspaceDocuments(
     botAlias: string,
     input: WorkspaceDocumentSyncInput,

@@ -1,6 +1,11 @@
 """语言服务器发现与托管安装。"""
 
-from .clangd import ClangdProvider, discover_clangd_project_config, discover_compile_commands
+from .clangd import (
+    ClangdProvider,
+    describe_clangd_configuration,
+    discover_clangd_project_config,
+    discover_compile_commands,
+)
 from .catalog import LanguageServerCatalog
 from .installer import LanguageServerInstallError, LanguageServerInstaller
 from .document_store import (
@@ -67,6 +72,7 @@ __all__ = [
     "LanguageServerManifestError",
     "current_platform_key",
     "load_language_server_manifest",
+    "describe_clangd_configuration",
     "discover_clangd_project_config",
     "discover_compile_commands",
 ]

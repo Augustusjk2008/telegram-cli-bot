@@ -304,10 +304,44 @@ function ThemePreview({
           <p>可以先看看正文、按钮和代码是否清晰。</p>
           <blockquote>舒适的对比度有助于持续阅读。</blockquote>
         </div>
-        <pre className="theme-preview-code">
+        <pre className="theme-preview-code" aria-label="代码示例">
           <code>
-            <span>const</span> theme = <em>"新主题"</em>;<br />
-            <span>return</span> theme;
+            <span data-syntax="comment">{"// 语法配色示例"}</span>
+            <br />
+            <span data-syntax="meta">@preview</span>
+            <br />
+            <span data-syntax="keyword">const</span>{" "}
+            <span data-syntax="variable">theme</span>{" "}
+            <span data-syntax="operator">=</span>{" "}
+            <span data-syntax="namespace">themes</span>.
+            <span data-syntax="function">create</span>(
+            <span data-syntax="string">"新主题"</span>,{" "}
+            <span data-syntax="number">8</span>);
+            <br />
+            <span data-syntax="control">for</span> (
+            <span data-syntax="keyword">const</span>{" "}
+            <span data-syntax="variable">item</span>{" "}
+            <span data-syntax="keyword">of</span>{" "}
+            <span data-syntax="variable">theme</span>.
+            <span data-syntax="property">tokens</span>) {"{"}
+            <br />
+            <span data-indent-guide="">{"  "}</span>
+            <span data-syntax="control">if</span> (
+            <span data-syntax="variable">item</span>.
+            <span data-syntax="property">scheme</span>{" "}
+            <span data-syntax="operator">===</span>{" "}
+            <span data-syntax="type">Scheme</span>.
+            <span data-syntax="constant">Dark</span>) {"{"}
+            <br />
+            <span data-indent-guide="">{"  "}</span>
+            <span data-indent-guide="active">{"  "}</span>
+            <span data-syntax="control">return</span>{" "}
+            <span data-syntax="variable">item</span>;
+            <br />
+            <span data-indent-guide="">{"  "}</span>
+            {"}"}
+            <br />
+            {"}"}
           </code>
         </pre>
         <div className="theme-preview-composer">

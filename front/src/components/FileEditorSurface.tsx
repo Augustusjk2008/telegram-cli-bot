@@ -1,11 +1,17 @@
 import { MoreHorizontal } from "lucide-react";
 import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { createPortal } from "react-dom";
+import { foldGutter } from "@codemirror/language";
+import { highlightSelectionMatches } from "@codemirror/search";
 import * as codemirrorState from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
 import * as codemirrorView from "@codemirror/view";
-import { tags } from "@lezer/highlight";
-import type { CodeNavigationIntent, CodeNavigationKind } from "../services/types";
+import type {
+  CodeIntelligenceResult,
+  CodeNavigationIntent,
+  CodeNavigationIntentKind,
+  CodePosition,
+} from "../services/types";
 import { useResolvedAppearance } from "../theme/appearanceRuntime";
 import {
   createFileEditorCodeNavigationHover,
@@ -14,9 +20,20 @@ import {
   resolveFileEditorNavigationTargetAtPosition,
   type FileEditorCodeNavigationHoverOptions,
 } from "../utils/fileEditorCodeNavigation";
+import { FILE_EDITOR_SYNTAX_HIGHLIGHTING } from "../utils/fileEditorHighlight";
+import { createFileEditorIndentGuides } from "../utils/fileEditorIndentGuides";
 import { createFileEditorInlineCompletion, type FileEditorInlineCompletionOptions } from "../utils/fileEditorInlineCompletion";
-import { loadFileEditorExtensions } from "../utils/fileEditorLanguage";
+import { inferFileEditorLanguageId, loadFileEditorExtensions } from "../utils/fileEditorLanguage";
+import {
+  createFileEditorLanguageFeatures,
+  offsetToCodePosition,
+  refreshFileEditorLanguageFeatures,
+  type FileEditorLanguageFeatureOptions,
+  type FileEditorLanguageFeatureQuery,
+} from "../utils/fileEditorLanguageFeatures";
+import { createFileEditorNameConventions } from "../utils/fileEditorNameConventions";
 import { getFileEditorDocument, pruneFileEditorDocuments } from "../utils/fileEditorSession";
+import { createFileEditorStickyScroll } from "../utils/fileEditorStickyScroll";
 
 type Props = {
   path: string;
@@ -33,15 +50,25 @@ type Props = {
   breakpointLines?: number[];
   currentLine?: number | null;
   reveal?: { line: number; column: number; requestId: string } | null;
-  navigationCommand?: { kind: CodeNavigationKind; requestId: string } | null;
+  navigationCommand?: { kind: CodeNavigationIntentKind; requestId: string } | null;
   canNavigateImplementation?: boolean;
+  canFindReferences?: boolean;
   statusText?: string;
   error?: string;
   hideHeader?: boolean;
   inlineCompletion?: FileEditorInlineCompletionOptions;
   codeNavigationHover?: Omit<FileEditorCodeNavigationHoverOptions, "path"> & { contextKey?: unknown };
+  /**
+   * Language-server features. `request` is only called once `value` matches the text the editor
+   * measured positions against; `refreshKey` changes when results should be refetched.
+   */
+  languageFeatures?: Omit<FileEditorLanguageFeatureOptions, "request"> & {
+    request: (query: FileEditorLanguageFeatureQuery, signal: AbortSignal) => Promise<CodeIntelligenceResult | null>;
+    refreshKey?: unknown;
+  };
   onToggleBreakpoint?: (line: number) => void;
   onResolveCodeNavigation?: (input: CodeNavigationIntent) => void;
+  onCursorChange?: (position: CodePosition) => void;
   onChange: (value: string) => void;
   onSave: () => void;
   onClose: () => void;
@@ -66,46 +93,22 @@ type CodeMirrorEditorView = import("@codemirror/view").EditorView;
 const EMPTY_BREAKPOINT_LINES: number[] = [];
 const FILE_EDITOR_BASIC_SETUP = {
   lineNumbers: true,
-  foldGutter: true,
+  // The fold gutter is added separately so its markers can stay hidden until the gutter is hovered.
+  foldGutter: false,
   highlightActiveLineGutter: true,
 };
-const FILE_EDITOR_HIGHLIGHT_STYLE = HighlightStyle.define([
-  { tag: tags.comment, color: "var(--editor-syntax-comment)", fontStyle: "italic" },
-  {
-    tag: [tags.keyword, tags.modifier, tags.operatorKeyword],
-    color: "var(--editor-syntax-keyword)",
-  },
-  {
-    tag: [tags.string, tags.special(tags.string)],
-    color: "var(--editor-syntax-string)",
-  },
-  {
-    tag: [tags.number, tags.bool, tags.atom],
-    color: "var(--editor-syntax-number)",
-  },
-  {
-    tag: [tags.typeName, tags.className, tags.namespace],
-    color: "var(--editor-syntax-type)",
-  },
-  {
-    tag: [
-      tags.function(tags.variableName),
-      tags.function(tags.propertyName),
-      tags.function(tags.definition(tags.variableName)),
-    ],
-    color: "var(--editor-syntax-function)",
-  },
-  {
-    tag: [tags.meta, tags.macroName],
-    color: "var(--editor-syntax-meta)",
-  },
-  {
-    tag: tags.invalid,
-    color: "var(--editor-syntax-invalid)",
-    textDecoration: "underline wavy",
-  },
-]);
-const FILE_EDITOR_SYNTAX_HIGHLIGHTING = syntaxHighlighting(FILE_EDITOR_HIGHLIGHT_STYLE);
+
+function createFoldMarker(open: boolean) {
+  const marker = document.createElement("span");
+  marker.className = open ? "cm-fold-marker" : "cm-fold-marker cm-fold-marker-closed";
+  marker.title = open ? "折叠" : "展开";
+  return marker;
+}
+
+const LANGUAGE_FEATURE_SYNC_ATTEMPTS = 8;
+const LANGUAGE_FEATURE_SYNC_INTERVAL_MS = 40;
+const FILE_EDITOR_FOLD_GUTTER = foldGutter({ markerDOM: createFoldMarker });
+const FILE_EDITOR_OCCURRENCES = highlightSelectionMatches({ highlightWordAroundCursor: true });
 
 type EditorRuntime = {
   CodeMirrorEditor: CodeMirrorComponent;
@@ -204,13 +207,18 @@ function createEditorTheme(
   EditorView: typeof import("@codemirror/view").EditorView,
   themeMode: "light" | "dark",
 ) {
+  // Gutter text is smaller than code, so it needs the code's line box spelled out to stay aligned.
+  const lineBox = "calc(var(--editor-font-size) * var(--editor-line-height))";
   return EditorView.theme({
     "&": {
-      backgroundColor: "transparent",
+      backgroundColor: "var(--editor-bg)",
       color: "var(--editor-text)",
       fontFamily: "var(--editor-font-family)",
       fontSize: "var(--editor-font-size)",
       lineHeight: "var(--editor-line-height)",
+      // Coding fonts would otherwise merge != and >= into single glyphs.
+      fontVariantLigatures: "none",
+      fontFeatureSettings: '"liga" 0, "calt" 0',
     },
     ".cm-scroller": {
       fontFamily: "var(--editor-font-family)",
@@ -224,12 +232,53 @@ function createEditorTheme(
       lineHeight: "var(--editor-line-height)",
     },
     ".cm-gutters": {
-      backgroundColor: "transparent",
+      // Opaque, so horizontally scrolled code does not show through the line numbers.
+      backgroundColor: "var(--editor-bg)",
       color: "var(--editor-gutter-text)",
-      borderRight: "1px solid var(--border)",
+      border: "none",
       fontFamily: "var(--editor-font-family)",
       fontSize: "var(--editor-gutter-font-size)",
-      lineHeight: "var(--editor-line-height)",
+      lineHeight: lineBox,
+    },
+    ".cm-lineNumbers .cm-gutterElement": {
+      padding: "0 3px 0 12px",
+    },
+    ".cm-foldGutter .cm-gutterElement": {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "16px",
+      cursor: "pointer",
+    },
+    ".cm-fold-marker": {
+      display: "block",
+      width: "6px",
+      height: "6px",
+      marginTop: "-3px",
+      borderRight: "1.5px solid currentColor",
+      borderBottom: "1.5px solid currentColor",
+      transform: "rotate(45deg)",
+      opacity: "0",
+      transition: "opacity 120ms ease",
+    },
+    ".cm-fold-marker-closed": {
+      marginTop: "0",
+      marginLeft: "-3px",
+      transform: "rotate(-45deg)",
+      opacity: "1",
+    },
+    ".cm-gutters:hover .cm-fold-marker": {
+      opacity: "1",
+    },
+    "@media (hover: none)": {
+      ".cm-fold-marker": {
+        opacity: "1",
+      },
+    },
+    ".cm-foldPlaceholder": {
+      backgroundColor: "var(--editor-active-line-bg)",
+      border: "1px solid var(--border)",
+      color: "var(--editor-gutter-text)",
     },
     ".cm-activeLine": {
       backgroundColor: "var(--editor-active-line-bg)",
@@ -240,6 +289,13 @@ function createEditorTheme(
     ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
       backgroundColor: "var(--editor-selection-bg)",
     },
+    ".cm-selectionMatch": {
+      backgroundColor: "var(--editor-search-bg)",
+    },
+    "&.cm-focused .cm-matchingBracket": {
+      backgroundColor: "var(--editor-selection-bg)",
+      outline: "1px solid var(--editor-search-border)",
+    },
     ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--editor-cursor)",
     },
@@ -249,6 +305,25 @@ function createEditorTheme(
     ".cm-searchMatch-selected": {
       outline: "1px solid var(--editor-search-border)",
     },
+    ".cm-panels": {
+      backgroundColor: "var(--editor-completion-bg)",
+      color: "var(--editor-completion-text)",
+    },
+    ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
+    ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
+    ".cm-textfield": {
+      backgroundColor: "transparent",
+      border: "1px solid var(--border)",
+      borderRadius: "4px",
+      color: "inherit",
+    },
+    ".cm-button": {
+      backgroundImage: "none",
+      backgroundColor: "var(--editor-active-line-bg)",
+      border: "1px solid var(--border)",
+      borderRadius: "4px",
+      color: "inherit",
+    },
     ".cm-tooltip, .cm-tooltip.cm-tooltip-autocomplete, .cm-tooltip.cm-completionInfo": {
       backgroundColor: "var(--editor-completion-bg)",
       color: "var(--editor-completion-text)",
@@ -257,6 +332,18 @@ function createEditorTheme(
     ".cm-tooltip-autocomplete ul li[aria-selected]": {
       backgroundColor: "var(--editor-completion-selected-bg)",
       color: "var(--editor-completion-text)",
+    },
+    ".cm-tooltip-autocomplete ul": {
+      fontFamily: "var(--editor-font-family)",
+      fontVariantLigatures: "none",
+    },
+    ".cm-completionDetail": {
+      color: "var(--editor-gutter-text)",
+      fontStyle: "normal",
+    },
+    ".cm-diagnostic": {
+      whiteSpace: "pre-wrap",
+      overflowWrap: "anywhere",
     },
     ".cm-diagnostic-error": { borderLeftColor: "var(--editor-diagnostic-error)" },
     ".cm-diagnostic-warning": { borderLeftColor: "var(--editor-diagnostic-warning)" },
@@ -356,7 +443,7 @@ function resolveTextareaNavigationTarget(
   path: string,
   value: string,
   offset: number,
-  kind: CodeNavigationKind,
+  kind: CodeNavigationIntentKind,
 ) {
   const boundedOffset = Math.min(Math.max(offset, 0), value.length);
   const before = value.slice(0, boundedOffset);
@@ -417,13 +504,16 @@ export function FileEditorSurface({
   reveal = null,
   navigationCommand = null,
   canNavigateImplementation = true,
+  canFindReferences = false,
   statusText = "",
   error = "",
   hideHeader = false,
   inlineCompletion,
   codeNavigationHover,
+  languageFeatures,
   onToggleBreakpoint,
   onResolveCodeNavigation,
+  onCursorChange,
   onChange,
   onSave,
   onClose,
@@ -432,10 +522,14 @@ export function FileEditorSurface({
   const [editorRuntime, setEditorRuntime] = useState<EditorRuntime | null>(null);
   const [editorView, setEditorView] = useState<CodeMirrorEditorView | null>(null);
   const [navigationMenuOpen, setNavigationMenuOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const handledRevealRef = useRef<{ requestId: string; target: object } | null>(null);
   const handledNavigationRef = useRef<string | null>(null);
   const codeNavigationHoverRef = useRef(codeNavigationHover);
+  const languageFeaturesRef = useRef(languageFeatures);
+  const onCursorChangeRef = useRef(onCursorChange);
   const canUseCodeMirror = typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined";
   // Color variables follow the snapshot on the root; only scheme changes need reconfiguration.
   const editorTheme = useMemo(() => createEditorTheme(codemirrorView.EditorView, appearance.scheme), [appearance.scheme]);
@@ -446,6 +540,18 @@ export function FileEditorSurface({
   useLayoutEffect(() => {
     codeNavigationHoverRef.current = codeNavigationHover;
   }, [codeNavigationHover]);
+
+  useLayoutEffect(() => {
+    languageFeaturesRef.current = languageFeatures;
+    onCursorChangeRef.current = onCursorChange;
+  }, [languageFeatures, onCursorChange]);
+
+  // The editor always holds LF text; the owner may still hold the file's CRLF text.
+  const editorValue = useMemo(() => (value.includes("\r") ? value.replace(/\r\n?/g, "\n") : value), [value]);
+  const editorValueRef = useRef(editorValue);
+  useLayoutEffect(() => {
+    editorValueRef.current = editorValue;
+  }, [editorValue]);
 
   useEffect(() => {
     if (sessionKey && documentPaths) pruneFileEditorDocuments(sessionKey, documentPaths);
@@ -463,6 +569,56 @@ export function FileEditorSurface({
       ),
     });
   }, [canShowCodeNavigationHover, codeNavigationHover?.hoverDelayMs, codeNavigationHoverContextKey, path]);
+
+  const hasLanguageFeatures = Boolean(languageFeatures);
+  const languageHover = Boolean(languageFeatures?.hover);
+  const languageSemanticTokens = Boolean(languageFeatures?.semanticTokens);
+  const languageDiagnostics = Boolean(languageFeatures?.diagnostics);
+  const languageCompletion = Boolean(languageFeatures?.completion);
+  // Requests go through the ref, so content edits never reconfigure the editor.
+  const languageFeatureExtensions = useMemo(() => {
+    if (!hasLanguageFeatures) {
+      return [];
+    }
+    return createFileEditorLanguageFeatures({
+      hover: languageHover,
+      semanticTokens: languageSemanticTokens,
+      diagnostics: languageDiagnostics,
+      completion: languageCompletion,
+      request: async (query, content, signal) => {
+        // An edit reaches the owner's state a render later; never pair new positions with old text.
+        for (let attempt = 0; editorValueRef.current !== content; attempt += 1) {
+          if (attempt >= LANGUAGE_FEATURE_SYNC_ATTEMPTS || signal.aborted) {
+            return null;
+          }
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, LANGUAGE_FEATURE_SYNC_INTERVAL_MS);
+          });
+        }
+        if (signal.aborted) {
+          return null;
+        }
+        return languageFeaturesRef.current?.request(query, signal) ?? null;
+      },
+    });
+  }, [hasLanguageFeatures, languageCompletion, languageDiagnostics, languageHover, languageSemanticTokens, path]);
+
+  const cursorListenerExtension = useMemo(() => codemirrorView.EditorView.updateListener.of((update) => {
+    if (update.selectionSet || update.docChanged) {
+      onCursorChangeRef.current?.(offsetToCodePosition(update.state.doc, update.state.selection.main.head));
+    }
+  }), []);
+
+  // Detected once per opened file: retyping must not flip the indentation unit mid-edit.
+  const indentGuideExtensions = useMemo(
+    () => createFileEditorIndentGuides(loading ? null : codemirrorState.Text.of(value.split(/\r?\n/))),
+    [loading, path],
+  );
+  const stickyScrollExtensions = useMemo(() => createFileEditorStickyScroll(), []);
+  const nameConventionExtensions = useMemo(
+    () => createFileEditorNameConventions(inferFileEditorLanguageId(path)),
+    [path],
+  );
 
   useEffect(() => {
     let active = true;
@@ -510,6 +666,11 @@ export function FileEditorSurface({
     const extensions = [
       ...editorRuntime.languageExtensions,
       FILE_EDITOR_SYNTAX_HIGHLIGHTING,
+      FILE_EDITOR_FOLD_GUTTER,
+      FILE_EDITOR_OCCURRENCES,
+      ...indentGuideExtensions,
+      ...stickyScrollExtensions,
+      cursorListenerExtension,
       ...createDebugExtensions(
         editorRuntime.viewModule,
         editorRuntime.stateModule,
@@ -522,23 +683,86 @@ export function FileEditorSurface({
     if (inlineCompletion) {
       extensions.push(...createFileEditorInlineCompletion(inlineCompletion));
     }
-    extensions.push(...codeNavigationHoverExtensions);
+    // Semantic tokens come first so they outrank the convention-based guesses.
+    extensions.push(...codeNavigationHoverExtensions, ...languageFeatureExtensions, ...nameConventionExtensions);
     return extensions;
   }, [
     editorTheme,
     codeNavigationHoverExtensions,
     currentLine,
+    cursorListenerExtension,
     editorRuntime,
+    indentGuideExtensions,
     inlineCompletion,
+    languageFeatureExtensions,
+    nameConventionExtensions,
     normalizedBreakpointLines,
     onToggleBreakpoint,
+    stickyScrollExtensions,
   ]);
 
   const CodeMirrorEditor = editorRuntime?.CodeMirrorEditor ?? null;
 
   useEffect(() => {
     setNavigationMenuOpen(false);
+    setContextMenu(null);
   }, [path]);
+
+  useEffect(() => {
+    if (editorView) {
+      onCursorChangeRef.current?.(offsetToCodePosition(editorView.state.doc, editorView.state.selection.main.head));
+    }
+  }, [editorView]);
+
+  const languageFeatureRefreshKey = languageFeatures?.refreshKey;
+  const renderedLanguageFeatureRefreshKeyRef = useRef(languageFeatureRefreshKey);
+  useEffect(() => {
+    if (renderedLanguageFeatureRefreshKeyRef.current === languageFeatureRefreshKey) {
+      return;
+    }
+    renderedLanguageFeatureRefreshKeyRef.current = languageFeatureRefreshKey;
+    if (editorView && hasLanguageFeatures) {
+      editorView.dispatch({ effects: refreshFileEditorLanguageFeatures.of(null) });
+    }
+  }, [editorView, hasLanguageFeatures, languageFeatureRefreshKey]);
+
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) {
+      return;
+    }
+    const bounds = contextMenuRef.current.getBoundingClientRect();
+    const x = Math.max(8, Math.min(contextMenu.x, window.innerWidth - bounds.width - 8));
+    const y = Math.max(8, Math.min(contextMenu.y, window.innerHeight - bounds.height - 8));
+    if (x !== contextMenu.x || y !== contextMenu.y) {
+      setContextMenu({ ...contextMenu, x, y });
+    }
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return undefined;
+    }
+    const close = () => setContextMenu(null);
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!contextMenuRef.current?.contains(event.target as Node)) close();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      close();
+      editorView?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown, true);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown, true);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [contextMenu, editorView]);
 
   useEffect(() => {
     if (!editorView || !currentLine || currentLine <= 0) {
@@ -592,8 +816,13 @@ export function FileEditorSurface({
     textarea.scrollTop = Math.max(0, (reveal.line - 1) * lineHeight - textarea.clientHeight / 2);
   }, [active, editorView, reveal?.requestId]);
 
-  function requestCodeNavigation(kind: CodeNavigationKind) {
-    if (!active || !onResolveCodeNavigation || (kind === "implementation" && !canNavigateImplementation)) {
+  function requestCodeNavigation(kind: CodeNavigationIntentKind) {
+    if (
+      !active
+      || !onResolveCodeNavigation
+      || (kind === "implementation" && !canNavigateImplementation)
+      || (kind === "references" && !canFindReferences)
+    ) {
       return false;
     }
     const target = editorView
@@ -609,12 +838,47 @@ export function FileEditorSurface({
   }
 
   function handleCodeNavigationKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.key !== "F12" || event.altKey || event.shiftKey) {
+    if (event.key !== "F12" || event.altKey || (event.shiftKey && (event.ctrlKey || event.metaKey))) {
       return;
     }
-    const kind = event.ctrlKey || event.metaKey ? "implementation" : "definition";
+    const kind = event.shiftKey
+      ? "references"
+      : event.ctrlKey || event.metaKey ? "implementation" : "definition";
     if (requestCodeNavigation(kind)) {
       event.preventDefault();
+    }
+  }
+
+  async function runClipboardAction(action: "cut" | "copy" | "paste" | "selectAll") {
+    setContextMenu(null);
+    if (!editorView) {
+      return;
+    }
+    editorView.focus();
+    const { state } = editorView;
+    if (action === "selectAll") {
+      editorView.dispatch({ selection: { anchor: 0, head: state.doc.length } });
+      return;
+    }
+    const editable = !state.readOnly && state.facet(codemirrorView.EditorView.editable);
+    try {
+      if (action === "paste") {
+        if (!editable) return;
+        const text = await navigator.clipboard.readText();
+        if (text) editorView.dispatch(editorView.state.replaceSelection(text), { userEvent: "input.paste" });
+        return;
+      }
+      const ranges = state.selection.ranges.filter((range) => !range.empty);
+      if (ranges.length === 0) return;
+      await navigator.clipboard.writeText(ranges.map((range) => state.sliceDoc(range.from, range.to)).join(state.lineBreak));
+      if (action === "cut" && editable) {
+        editorView.dispatch({
+          changes: ranges.map((range) => ({ from: range.from, to: range.to })),
+          userEvent: "delete.cut",
+        });
+      }
+    } catch {
+      // Browsers may withhold clipboard access; the keyboard shortcuts keep working.
     }
   }
 
@@ -683,8 +947,30 @@ export function FileEditorSurface({
           <div
             key={path}
             data-testid="file-editor-host"
-            className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-transparent text-[var(--editor-text)]"
+            className="file-editor-surface flex h-full min-h-0 min-w-0 overflow-hidden bg-[var(--editor-bg)] text-[var(--editor-text)]"
             onKeyDown={handleCodeNavigationKeyDown}
+            onContextMenu={(event) => {
+              // Shift keeps the browser's own menu reachable.
+              if (!active || !editorView || event.shiftKey) {
+                return;
+              }
+              const target = event.target;
+              if (target instanceof HTMLElement && target.closest(".cm-gutters, .cm-panels, .cm-sticky-scroll")) {
+                return;
+              }
+              event.preventDefault();
+              const position = editorView.posAtCoords({ x: event.clientX, y: event.clientY });
+              const { main } = editorView.state.selection;
+              // Like desktop editors: a right-click outside the selection moves the cursor there.
+              if (position !== null && (main.empty || position < main.from || position > main.to)) {
+                editorView.dispatch({ selection: { anchor: position } });
+              }
+              setContextMenu({
+                x: event.clientX,
+                y: event.clientY,
+                hasSelection: editorView.state.selection.ranges.some((range) => !range.empty),
+              });
+            }}
             onMouseDown={(event) => {
               if (!active || !onResolveCodeNavigation || !editorView || event.button !== 0 || (!event.ctrlKey && !event.metaKey)) {
                 return;
@@ -808,11 +1094,86 @@ export function FileEditorSurface({
                 >
                   转到实现
                 </button>
+                {canFindReferences ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setNavigationMenuOpen(false);
+                      requestCodeNavigation("references");
+                    }}
+                    className="flex w-full touch-manipulation rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--surface-strong)]"
+                  >
+                    查找所有引用
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
         ) : null}
       </div>
+      {/* Portalled: the glass editor pane would otherwise be the containing block of this fixed menu. */}
+      {contextMenu && typeof document !== "undefined" ? createPortal(
+        <div
+          ref={contextMenuRef}
+          role="menu"
+          aria-label="编辑器菜单"
+          data-testid="file-editor-context-menu"
+          className="desktop-workbench-menu fixed z-40 w-52 rounded-md border border-[var(--border)] bg-[var(--surface)] p-1 text-[var(--text)] shadow-[var(--shadow-card)]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          {onResolveCodeNavigation ? (
+            <>
+              {([
+                { kind: "definition", label: "转到定义", shortcut: "F12", enabled: true },
+                { kind: "implementation", label: "转到实现", shortcut: "Ctrl+F12", enabled: canNavigateImplementation },
+                { kind: "references", label: "查找所有引用", shortcut: "Shift+F12", enabled: canFindReferences },
+              ] as const).map((item) => (
+                <button
+                  key={item.kind}
+                  type="button"
+                  role="menuitem"
+                  disabled={!item.enabled}
+                  onClick={() => {
+                    setContextMenu(null);
+                    requestCodeNavigation(item.kind);
+                  }}
+                  className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-1.5 text-left text-sm hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span>{item.label}</span>
+                  <span className="text-xs text-[var(--muted)]">{item.shortcut}</span>
+                </button>
+              ))}
+              <div role="separator" className="my-1 border-t border-[var(--border)]" />
+            </>
+          ) : null}
+          {([
+            { action: "cut", label: "剪切", shortcut: "Ctrl+X", enabled: contextMenu.hasSelection && !readOnly },
+            { action: "copy", label: "复制", shortcut: "Ctrl+C", enabled: contextMenu.hasSelection },
+            { action: "paste", label: "粘贴", shortcut: "Ctrl+V", enabled: !readOnly },
+            { action: "selectAll", label: "全选", shortcut: "Ctrl+A", enabled: true },
+          ] as const).map((item) => (
+            <button
+              key={item.action}
+              type="button"
+              role="menuitem"
+              disabled={!item.enabled}
+              onClick={() => {
+                void runClipboardAction(item.action);
+              }}
+              className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-1.5 text-left text-sm hover:bg-[var(--surface-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span>{item.label}</span>
+              <span className="text-xs text-[var(--muted)]">{item.shortcut}</span>
+            </button>
+          ))}
+        </div>,
+        document.body,
+      ) : null}
     </section>
   );
 }

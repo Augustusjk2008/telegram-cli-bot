@@ -28,7 +28,7 @@ The theme library is read through `/api/public/ui/themes` and `/api/ui/themes`. 
 | File | Purpose | When to modify |
 | --- | --- | --- |
 | `bot/web/theme_presets.json` | The released theme manifest and the complete appearance of each theme | Adding or editing a release preset |
-| `bot/web/theme_catalog.json` | The color token catalog with `schemaVersion: 1`; currently 299 tokens (`light.glow` is the theme light color, derived from `accent` by default) | Adding/removing tokens, CSS variables or token semantics |
+| `bot/web/theme_catalog.json` | The color token catalog with `schemaVersion: 1`; currently 307 tokens (`light.glow` is the theme light color, derived from `accent` by default) | Adding/removing tokens, CSS variables or token semantics |
 | `bot/web/theme_illustrations.json` | The built-in illustration sets with `schemaVersion: 3`, the three surface types, layer metadata and asset paths | Adding/replacing built-in illustration assets |
 | `front/public/assets/theme-illustrations/` | The static assets matching the illustration catalog paths | Adding/replacing built-in illustration files |
 | `front/src/theme/resolveAppearance.ts` | Frontend appearance normalization, derived color resolution, illustration resolution and contrast calculation | Only when the theme contract or resolution behavior changes |
@@ -96,6 +96,7 @@ After backend validation, `name` must be 1 to 80 characters and must not contain
 - A token not written in `overrides` uses the catalog's `derive` or `default`. The keys a derived token depends on must exist, and circular dependencies are not allowed.
 - When `cssVariable` exists, the value is written to the corresponding CSS custom property; a token without `cssVariable` may still be read directly by components and must not be deleted just because it has no CSS variable.
 - `contrastAgainst` and `minContrast` describe the minimum contrast target of tokens such as text, focus and borders. After editing colors, check the contrast hints in the theme manager, and cover scenes such as the workbench, chat, editor, terminal, file tree, status feedback and overlays.
+- The editor syntax palette is `editor.syntaxComment`, `Keyword`, `Control`, `Type`, `Namespace`, `Function`, `Variable`, `Property`, `Constant`, `String`, `Number`, `Meta`, `Operator` and `Invalid` (CSS variables `--editor-syntax-*`), plus `editor.indentGuide` and `editor.indentGuideActive`. `Keyword` is for declaration keywords and `Control` for control-flow keywords. Without an override, `Control` follows `Keyword`, `Namespace` follows `Type`, `Constant` follows `Number`, `Variable`, `Property` and `Operator` follow `editor.text`, and the indent guides follow `border` and `border.strong` at a low alpha. Every syntax text token targets 4.5 against `editor.background`; release presets override all of them, also keep at least 4.0 against `editor.activeLine`, keep keyword, type, function, string and number at least 30° apart in hue and control at least 25° from keyword, and keep the comment as the least saturated color.
 - Tokens marked `terminal` generate the terminal theme. At a minimum, check the readability of the terminal foreground, the cursor, and the selection foreground against the selection background; the existing tests use 4.5 as the terminal baseline.
 
 ## Typography contract

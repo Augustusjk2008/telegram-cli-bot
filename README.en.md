@@ -192,7 +192,7 @@ Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and r
 ### Desktop Workbench
 
 - **Chat**: CLI conversations, history recovery, execution details, and context status.
-- **Files**: file tree, editor, previews, tabs, and language-service navigation.
+- **Files**: file tree, editor, previews, tabs, and language-service navigation. The editor has indentation guides, scope headers pinned to the top (sticky scroll), a breadcrumb of the symbols around the cursor, and a context menu. With language services enabled (`TCB_LSP_ENABLED=true`), C/C++ (clangd), Python (pyright) and JS/TS files also get semantic colouring, hover information, diagnostics, completion, an outline, find references (`Shift+F12`) and go to definition (`F12` / `Ctrl+click`). When the language server finds no definition, the editor lists text matches for the name and labels them as not semantic. clangd needs a `compile_commands.json` in the workspace root or a common build directory (or a root `.clangd` / `compile_flags.txt`) to resolve headers; without one the status bar reads "默认编译参数" (default compile flags).
 - **Git**: repository status, diffs, commit history, workspace operations, remote management, and GitHub linking.
 - **Terminal**: persistent multi-tab web terminals, with an independent shell and owner for every tab.
 - **Debug**: debugging entry points for Python, C/C++, Godot, and generic DAP adapters.

@@ -6,11 +6,22 @@ import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FilePreviewPane } from "../components/FilePreviewPane";
 import { GitDiffViewer } from "../components/GitDiffViewer";
 import { PluginViewSurface } from "../components/plugin-renderers/PluginViewSurface";
-import type { CodeNavigationIntent, HostEffect, InlineCompletionConfig, PluginOpenTarget, RemoteWorkspace } from "../services/types";
+import type {
+  CodeNavigationIntent,
+  CodeNavigationIntentKind,
+  CodePosition,
+  HostEffect,
+  InlineCompletionConfig,
+  PluginOpenTarget,
+  RemoteWorkspace,
+} from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
+import type { FileEditorLanguageFeatureQuery } from "../utils/fileEditorLanguageFeatures";
 import { pruneFileEditorDocuments } from "../utils/fileEditorSession";
 import { isFilePreviewFullyLoaded, isFilePreviewTooLarge } from "../utils/filePreview";
+import { DocumentSymbolIcon, documentSymbolKindLabel } from "./documentSymbolKinds";
+import { findDocumentSymbolPath, useDocumentSymbols } from "./useDocumentSymbols";
 import type { EditorRevealLocation, EditorTab } from "./workbenchTypes";
 
 type Props = {
@@ -30,11 +41,15 @@ type Props = {
   breakpointLines?: number[];
   currentLine?: number | null;
   editorReveal?: EditorRevealLocation | null;
-  navigationCommand?: { kind: "definition" | "implementation"; requestId: string } | null;
+  navigationCommand?: { kind: CodeNavigationIntentKind; requestId: string } | null;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
   allowCodeJump?: boolean;
   canNavigateImplementation?: boolean;
+  /** Whether a language server can serve the active document (hover, colours, symbols, references). */
+  languageFeaturesEnabled?: boolean;
+  /** Changes when language results should be refetched, e.g. once indexing finishes. */
+  languageFeatureRefreshKey?: string;
   canUseInlineCompletion?: boolean;
   onToggleBreakpoint?: (line: number) => void;
   onResolveCodeNavigation?: (input: CodeNavigationIntent) => void;
@@ -58,6 +73,8 @@ type Props = {
   focused: boolean;
   onToggleFocus: () => void;
 };
+
+const CURSOR_BREADCRUMB_DELAY_MS = 120;
 
 function pluginTargetLabel(target: PluginOpenTarget) {
   return target.title.trim() || "Mermaid 转 Visio";
@@ -127,6 +144,8 @@ export function EditorPane({
   canNavigateForward = false,
   allowCodeJump = true,
   canNavigateImplementation = true,
+  languageFeaturesEnabled = false,
+  languageFeatureRefreshKey = "",
   canUseInlineCompletion = false,
   onToggleBreakpoint,
   onResolveCodeNavigation,
@@ -152,6 +171,14 @@ export function EditorPane({
 }: Props) {
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const codeNavigationHoverRequestSeqRef = useRef(0);
+  const languageFeatureRequestSeqRef = useRef(0);
+  const [cursor, setCursor] = useState<{ path: string; position: CodePosition } | null>(null);
+  const [symbolReveal, setSymbolReveal] = useState<EditorRevealLocation | null>(null);
+  const symbolRevealSeqRef = useRef(0);
+  const cursorTimerRef = useRef<number | null>(null);
+  const pendingCursorRef = useRef<{ path: string; position: CodePosition } | null>(null);
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
 
   useEffect(() => {
     if (sessionKey && documentPaths) pruneFileEditorDocuments(sessionKey, documentPaths);
@@ -259,6 +286,87 @@ export function EditorPane({
       },
     };
   }, [activeTab, allowCodeJump, botAlias, client, codeNavigationHoverContextKey, onResolveCodeNavigation]);
+
+  const canUseLanguageFeatures = Boolean(
+    languageFeaturesEnabled
+    && allowCodeJump
+    && activeTab
+    && (activeTab.kind === "file" || activeTab.kind === "external-source"),
+  );
+  const languageFeaturePath = canUseLanguageFeatures && activeTab ? activeTab.path : "";
+  const languageFeatureReadOnly = Boolean(activeTab?.readOnly || activeTab?.kind === "external-source");
+  const languageFeatures = useMemo(() => {
+    if (!languageFeaturePath) {
+      return undefined;
+    }
+    return {
+      hover: true,
+      semanticTokens: true,
+      diagnostics: !languageFeatureReadOnly,
+      completion: !languageFeatureReadOnly,
+      refreshKey: languageFeatureRefreshKey,
+      // The editor only calls this once the tab state holds the text it measured positions against.
+      request: async (query: FileEditorLanguageFeatureQuery, signal: AbortSignal) => {
+        const tab = activeTabRef.current;
+        if (!tab || tab.path !== languageFeaturePath || signal.aborted) {
+          return null;
+        }
+        return client.queryCodeIntelligence(botAlias, {
+          ...query,
+          requestId: `code-intelligence-${query.kind}-${Date.now()}-${++languageFeatureRequestSeqRef.current}`,
+          document: {
+            ...(tab.kind === "external-source" && tab.sourceId ? { sourceId: tab.sourceId } : { path: tab.path }),
+            languageId: inferFileEditorLanguageId(tab.displayPath || tab.path),
+            version: Math.max(1, Math.trunc(tab.documentVersion || 1)),
+            content: tab.content,
+          },
+        }, signal);
+      },
+    };
+  }, [botAlias, client, languageFeaturePath, languageFeatureReadOnly, languageFeatureRefreshKey]);
+
+  const documentSymbols = useDocumentSymbols(
+    client,
+    botAlias,
+    activeTab,
+    canUseLanguageFeatures,
+    languageFeatureRefreshKey,
+  );
+  const symbolPath = useMemo(
+    () => findDocumentSymbolPath(
+      documentSymbols.symbols,
+      cursor && activeTab && cursor.path === activeTab.path ? cursor.position : null,
+    ),
+    [activeTab?.path, cursor, documentSymbols.symbols],
+  );
+
+  // A reveal requested by the workbench supersedes an earlier breadcrumb jump.
+  useEffect(() => {
+    setSymbolReveal(null);
+  }, [editorReveal?.requestId, activeTabPath]);
+
+  useEffect(() => () => {
+    if (cursorTimerRef.current !== null) window.clearTimeout(cursorTimerRef.current);
+  }, []);
+
+  // The breadcrumb follows the cursor a moment behind, so typing does not re-render the pane per keystroke.
+  function handleCursorChange(position: CodePosition) {
+    pendingCursorRef.current = { path: activeTabRef.current?.path || "", position };
+    if (cursorTimerRef.current !== null) return;
+    cursorTimerRef.current = window.setTimeout(() => {
+      cursorTimerRef.current = null;
+      const next = pendingCursorRef.current;
+      if (!next) return;
+      setCursor((current) => (
+        current
+        && current.path === next.path
+        && current.position.line === next.position.line
+        && current.position.column === next.position.column
+          ? current
+          : next
+      ));
+    }, CURSOR_BREADCRUMB_DELAY_MS);
+  }
 
   const [menuPath, setMenuPath] = useState("");
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
@@ -673,6 +781,31 @@ export function EditorPane({
               </li>
             );
           })}
+          {symbolPath.map((symbol, index) => (
+            <li key={`${symbol.kind}:${symbol.name}:${symbol.selectionRange.start.line}:${index}`} className="flex items-center">
+              <ChevronRight aria-hidden="true" className="mx-0.5 h-3 w-3 shrink-0 text-[var(--muted)]" />
+              <button
+                type="button"
+                data-testid="editor-breadcrumb-symbol"
+                title={`${documentSymbolKindLabel(symbol.kind)} ${symbol.name}${symbol.detail ? ` ${symbol.detail}` : ""}`}
+                onClick={() => {
+                  setSymbolReveal({
+                    path: activeTab.path,
+                    line: symbol.selectionRange.start.line,
+                    column: symbol.selectionRange.start.column,
+                    requestId: `breadcrumb-symbol-${++symbolRevealSeqRef.current}`,
+                  });
+                }}
+                className={clsx(
+                  "inline-flex items-center gap-1 rounded px-0.5 text-[11px] hover:bg-[var(--workbench-hover-bg)] hover:text-[var(--text)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--workbench-focus-ring)]",
+                  index === symbolPath.length - 1 ? "text-[var(--editor-text)]" : "text-[var(--muted)]",
+                )}
+              >
+                <DocumentSymbolIcon kind={symbol.kind} className="h-3 w-3" />
+                <span>{symbol.name}</span>
+              </button>
+            </li>
+          ))}
         </ol>
       </nav>
 
@@ -757,16 +890,21 @@ export function EditorPane({
             readOnly={Boolean(activeTab.readOnly)}
             breakpointLines={breakpointLines}
             currentLine={currentLine}
-            reveal={editorReveal?.path === activeTab.path ? editorReveal : null}
+            reveal={symbolReveal?.path === activeTab.path
+              ? symbolReveal
+              : editorReveal?.path === activeTab.path ? editorReveal : null}
             navigationCommand={navigationCommand}
             canNavigateImplementation={canNavigateImplementation}
+            canFindReferences={canUseLanguageFeatures}
             statusText=""
             error=""
             hideHeader
             inlineCompletion={inlineCompletion}
             codeNavigationHover={codeNavigationHover}
+            languageFeatures={languageFeatures}
             onToggleBreakpoint={onToggleBreakpoint}
             onResolveCodeNavigation={allowCodeJump ? onResolveCodeNavigation : undefined}
+            onCursorChange={handleCursorChange}
             onChange={onChangeActiveContent}
             onSave={onSaveActiveTab}
             onClose={() => {

@@ -31,6 +31,7 @@ const JSON_PREVIEW_EXTENSIONS = [
       color: "var(--editor-text)",
       fontSize: "var(--editor-font-size)",
       lineHeight: "var(--editor-line-height)",
+      fontVariantLigatures: "none",
     },
     "&.cm-focused": { outline: "none" },
     ".cm-scroller": { overflow: "auto", fontFamily: "var(--editor-font-family)" },

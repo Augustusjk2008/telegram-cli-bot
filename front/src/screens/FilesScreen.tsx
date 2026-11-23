@@ -923,6 +923,8 @@ export function FilesScreen({
     if (
       !editorPath
       || input.path !== editorPath
+      // The mobile editor has no references list.
+      || input.kind === "references"
       || (input.kind === "implementation" && !canNavigateImplementation)
     ) {
       return;

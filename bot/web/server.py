@@ -83,7 +83,9 @@ from bot.language_server import (
     LanguageServerInstaller,
     LanguageServerRuntimeManager,
     LanguageServerUnavailableError,
+    describe_clangd_configuration,
 )
+from bot.language_server.code_intelligence import code_intelligence_result, normalize_code_intelligence_kind
 from bot.language_server.python_ast_navigation import resolve_code_navigation
 from bot.manager import MultiBotManager
 from bot.models import session_persistence_diagnostics
@@ -3451,6 +3453,16 @@ class WebApiServer:
         if isinstance(data, dict):
             providers = data.get("providers")
             if isinstance(providers, list):
+                clangd_configuration: dict[str, str] | None = None
+                if any(
+                    isinstance(item, dict)
+                    and str(item.get("id") or item.get("provider") or "").strip().lower() == "clangd"
+                    for item in providers
+                ):
+                    try:
+                        clangd_configuration = await asyncio.to_thread(describe_clangd_configuration, workspace)
+                    except OSError:
+                        logger.warning("读取 clangd 工程配置状态失败: bot=%s", alias, exc_info=True)
                 decorated: list[object] = []
                 for item in providers:
                     if not isinstance(item, dict):
@@ -3486,6 +3498,11 @@ class WebApiServer:
                             **(
                                 {"implementationSupported": implementation_supported}
                                 if isinstance(implementation_supported, bool)
+                                else {}
+                            ),
+                            **(
+                                {"configuration": clangd_configuration}
+                                if item_provider_id == "clangd" and clangd_configuration is not None
                                 else {}
                             ),
                         }
@@ -3630,6 +3647,47 @@ class WebApiServer:
                 "语言服务请求失败，请稍后重试",
             ) from exc
         return _json({"ok": True, "data": {"cancelled": cancelled}})
+
+    async def post_workspace_code_intelligence_query(self, request: web.Request) -> web.Response:
+        """Hover, references, document symbols, semantic tokens, completion and diagnostics."""
+
+        auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        workspace = self._workspace_file_root(alias, auth)
+        try:
+            try:
+                data = await self.language_server_manager.query_code_intelligence(
+                    bot_alias=alias,
+                    user_id=self._chat_user_id(auth),
+                    workspace_root=workspace,
+                    request=body,
+                )
+            except LanguageServerUnavailableError:
+                # 未启用或未安装语言服务不是错误：编辑器按“无数据”处理。
+                data = code_intelligence_result(
+                    normalize_code_intelligence_kind(body.get("kind")),
+                    str(body.get("requestId") or body.get("request_id") or "").strip(),
+                    available=False,
+                    supported=False,
+                )
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_code_intelligence_request", str(exc)) from exc
+        except asyncio.CancelledError as exc:
+            task = asyncio.current_task()
+            if task is None or task.cancelling():
+                # 客户端断开或经取消接口终止，按取消原样传播。
+                raise
+            # 管理器发现文档已被更新的版本取代；用明确的响应代替中断连接。
+            raise WebApiError(409, "code_intelligence_superseded", "请求已被更新的文档版本取代") from exc
+        except Exception as exc:
+            logger.exception("语言服务代码智能查询失败: bot=%s", alias)
+            raise WebApiError(
+                503,
+                "language_server_failed",
+                "语言服务请求失败，请稍后重试",
+            ) from exc
+        return _json({"ok": True, "data": data})
 
     async def post_workspace_code_navigation_documents_sync(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_READ_FILE_CONTENT)

@@ -289,6 +289,16 @@ export type LanguageServerProviderStatus = {
   runtimeState?: LanguageServerRuntimeState;
   runtimeMessage?: string;
   implementationSupported?: boolean;
+  configuration?: LanguageServerConfiguration;
+};
+
+export type LanguageServerConfigurationMode = "compile_commands" | "project_config" | "fallback";
+
+/** How the provider found the project's build settings; `fallback` means generic default flags. */
+export type LanguageServerConfiguration = {
+  mode: LanguageServerConfigurationMode;
+  summary: string;
+  hint: string;
 };
 
 export type LanguageServerCatalog = {
@@ -2692,6 +2702,8 @@ export type CodeLocation = {
   provider: string;
   range: CodeRange;
   selectionRange: CodeRange;
+  /** Source line at the location, when the producer read it. */
+  preview?: string;
 };
 
 export type CodeNavigationResult = {
@@ -2700,13 +2712,106 @@ export type CodeNavigationResult = {
   message: string;
 };
 
+/** What the editor asks the workbench to resolve; references are listed instead of opened. */
+export type CodeNavigationIntentKind = CodeNavigationKind | "references";
+
 export type CodeNavigationIntent = {
-  kind: CodeNavigationKind;
+  kind: CodeNavigationIntentKind;
   path: string;
   sourceId?: string;
   line: number;
   column: number;
   symbol?: string;
+};
+
+export type CodeIntelligenceKind =
+  | "hover"
+  | "references"
+  | "documentSymbols"
+  | "semanticTokens"
+  | "completion"
+  | "diagnostics";
+
+export type CodeIntelligenceRequest = {
+  kind: CodeIntelligenceKind;
+  requestId: string;
+  document: CodeNavigationDocument;
+  /** Required for hover, references and completion. */
+  position?: CodePosition;
+  context?: {
+    triggerCharacter?: string;
+    includeDeclaration?: boolean;
+  };
+  /** Diagnostics only: how long the server may wait for a fresh result. */
+  waitMs?: number;
+};
+
+export type CodeHoverContent = {
+  kind: "markdown" | "plaintext";
+  value: string;
+};
+
+export type CodeDocumentSymbol = {
+  name: string;
+  detail: string;
+  kind: string;
+  range: CodeRange;
+  selectionRange: CodeRange;
+  containerName?: string;
+  children: CodeDocumentSymbol[];
+};
+
+export type CodeSemanticTokens = {
+  legend: { types: string[]; modifiers: string[] };
+  /** Five integers per token: line, column (both 1-based, code points), length, type index, modifier bits. */
+  tokens: number[];
+  /** 1-based inclusive line ranges the preprocessor excludes. */
+  inactiveRanges: Array<{ startLine: number; endLine: number }>;
+  version: number | null;
+};
+
+export type CodeCompletionItem = {
+  label: string;
+  kind: string;
+  detail: string;
+  documentation: string;
+  insertText: string;
+  filterText: string;
+  sortText: string;
+  textEdit: { range: CodeRange; newText: string } | null;
+  deprecated: boolean;
+};
+
+export type CodeDiagnosticSeverity = "error" | "warning" | "info" | "hint";
+
+export type CodeDiagnostic = {
+  range: CodeRange;
+  severity: CodeDiagnosticSeverity;
+  message: string;
+  source: string;
+  code: string;
+};
+
+export type CodeReferenceLocation = CodeLocation & { preview: string };
+
+/**
+ * One response shape for every kind; fields that do not belong to the requested kind stay empty.
+ * `available` is false when no language service can serve the file, `supported` when it lacks the feature.
+ */
+export type CodeIntelligenceResult = {
+  requestId: string;
+  kind: CodeIntelligenceKind;
+  provider: string;
+  available: boolean;
+  supported: boolean;
+  message: string;
+  truncated: boolean;
+  hover: { contents: CodeHoverContent[]; range: CodeRange | null };
+  references: CodeReferenceLocation[];
+  symbols: CodeDocumentSymbol[];
+  semanticTokens: CodeSemanticTokens;
+  completion: { items: CodeCompletionItem[]; isIncomplete: boolean };
+  diagnostics: { items: CodeDiagnostic[]; version: number | null; ready: boolean };
 };
 
 export type ChatAttachmentUploadResult = {

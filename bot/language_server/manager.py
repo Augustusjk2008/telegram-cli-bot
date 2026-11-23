@@ -18,6 +18,13 @@ from bot.runtime_paths import get_language_servers_root
 
 from .clangd import ClangdProvider
 from .catalog import LanguageServerCatalog
+from .code_intelligence import (
+    INDEXING_MESSAGE,
+    POSITION_KINDS,
+    clamp_diagnostics_wait_ms,
+    code_intelligence_result,
+    normalize_code_intelligence_kind,
+)
 from .document_store import (
     DocumentCloseResult,
     LanguageDocument,
@@ -43,6 +50,9 @@ _CRASH_WINDOW_SECONDS = 60.0
 _CRASH_THRESHOLD = 3
 _MAX_RECENT_ERRORS = 20
 _MAINTENANCE_MAX_INTERVAL_SECONDS = 30.0
+# Private hand-off from a runtime's diagnostics query to its settle step; it
+# never leaves the manager.
+_PENDING_DIAGNOSTICS_KEY = "_pending_diagnostics"
 
 
 class LanguageServerUnavailableError(RuntimeError):
@@ -55,6 +65,18 @@ class LanguageServerRuntimeKey:
     user_id: int
     workspace_root: Path
     provider_id: str
+
+
+@dataclass(frozen=True)
+class _DocumentRequestScope:
+    """Who asks about which document, and the provider that owns it (if any)."""
+
+    bot_alias: str
+    user_id: int
+    workspace_root: Path
+    document: Mapping[str, Any]
+    source_id: str
+    provider_id: str | None
 
 
 class RuntimeProtocol(Protocol):
@@ -263,9 +285,18 @@ class LanguageServerRuntime:
             raise
 
     async def handle_notification(self, method: str, params: Any) -> None:
-        """Track LSP work-done progress without retaining source or log payloads."""
+        """Track work-done progress and the bounded per-document pushed state.
 
-        if method != "$/progress" or not isinstance(params, Mapping):
+        Diagnostics and inactive regions are trimmed to the latest payload of a
+        bounded set of documents; nothing else from a notification is retained.
+        """
+
+        if method != "$/progress":
+            handle_push = getattr(self.provider, "handle_push_notification", None)
+            if callable(handle_push):
+                handle_push(method, params)
+            return
+        if not isinstance(params, Mapping):
             return
         value = params.get("value")
         if not isinstance(value, Mapping):
@@ -288,23 +319,10 @@ class LanguageServerRuntime:
             raise RuntimeError("语言服务器尚未就绪")
         self._active_operation_count += 1
         try:
-            document = request.get("document")
             position = request.get("position")
-            if not isinstance(document, Mapping) or not isinstance(position, Mapping):
+            if not isinstance(request.get("document"), Mapping) or not isinstance(position, Mapping):
                 raise ValueError("代码导航请求格式无效")
-            source_id = _document_source_id(document)
-            if source_id:
-                _reject_absolute_browser_path(source_id)
-                target, content = self._read_external_navigation_document(document, source_id)
-            else:
-                path = str(document.get("path") or "").strip()
-                _reject_absolute_browser_path(path)
-                target = (self.key.workspace_root / path).resolve()
-                try:
-                    target.relative_to(self.key.workspace_root)
-                except ValueError as exc:
-                    raise ValueError("代码导航路径超出工作区") from exc
-                content = str(document.get("content") or "")
+            document, source_id, target, content = self._resolve_request_document(request, label="代码导航")
             kind = str(request.get("kind") or "").strip().lower()
             request_id = str(request.get("requestId") or request.get("request_id") or "").strip()
             try:
@@ -332,6 +350,126 @@ class LanguageServerRuntime:
         finally:
             self._active_operation_count = max(0, self._active_operation_count - 1)
             self.last_used_at = time.monotonic()
+
+    def _resolve_request_document(
+        self,
+        request: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> tuple[Mapping[str, Any], str, Path, str]:
+        """Resolve the active document of a request to ``(document, source_id, path, content)``."""
+
+        document = request.get("document")
+        if not isinstance(document, Mapping):
+            raise ValueError(f"{label}请求格式无效")
+        source_id = _document_source_id(document)
+        if source_id:
+            _reject_absolute_browser_path(source_id)
+            target, content = self._read_external_navigation_document(document, source_id)
+        else:
+            path = str(document.get("path") or "").strip()
+            _reject_absolute_browser_path(path)
+            target = (self.key.workspace_root / path).resolve()
+            try:
+                target.relative_to(self.key.workspace_root)
+            except ValueError as exc:
+                raise ValueError(f"{label}路径超出工作区") from exc
+            content = str(document.get("content") or "")
+        return document, source_id, target, content
+
+    async def query_code_intelligence(self, request: dict[str, Any]) -> dict[str, object]:
+        """Answer one hover/references/symbols/tokens/completion/diagnostics query.
+
+        A diagnostics query that still has to wait leaves a private pending
+        entry in the result; ``settle_code_intelligence`` resolves it so the
+        caller can wait without holding its document lifecycle lock.
+        """
+
+        if self.state not in {"ready", "indexing"} or self.client is None:
+            raise RuntimeError("语言服务器尚未就绪")
+        self._active_operation_count += 1
+        try:
+            kind = normalize_code_intelligence_kind(request.get("kind"))
+            request_id = str(request.get("requestId") or request.get("request_id") or "").strip()
+            document, source_id, target, content = self._resolve_request_document(request, label="代码智能")
+            provider_id = self.key.provider_id
+            query = getattr(self.provider, "query_code_intelligence", None)
+            if not callable(query):
+                return code_intelligence_result(kind, request_id, provider=provider_id, supported=False)
+            language_id = str(document.get("languageId") or document.get("language_id") or "")
+            version = _int_value(document.get("version"), 0)
+            try:
+                if kind == "diagnostics":
+                    if source_id:
+                        # External sources are read-only dependencies; their
+                        # diagnostics are not the user's to act on.
+                        return code_intelligence_result(
+                            kind, request_id, provider=provider_id, payload={"ready": True},
+                        )
+                    ticket = await self.provider.prepare_diagnostics(
+                        self.client,
+                        path=target,
+                        language_id=language_id,
+                        version=version,
+                        content=content,
+                        source_id=source_id,
+                    )
+                    if ticket is None:
+                        return code_intelligence_result(kind, request_id, provider=provider_id, supported=False)
+                    payload = self.provider.diagnostics_snapshot(ticket)
+                    result = code_intelligence_result(kind, request_id, provider=provider_id, payload=payload)
+                    wait_seconds = clamp_diagnostics_wait_ms(
+                        request.get("waitMs", request.get("wait_ms"))
+                    ) / 1000.0
+                    if not payload["ready"] and wait_seconds > 0:
+                        result[_PENDING_DIAGNOSTICS_KEY] = (self.provider, ticket, wait_seconds)
+                    return result
+                position = request.get("position")
+                if not isinstance(position, Mapping):
+                    if kind in POSITION_KINDS:
+                        raise ValueError("代码智能请求缺少位置")
+                    position = {}
+                context = request.get("context")
+                payload = dict(
+                    await query(
+                        self.client,
+                        kind=kind,
+                        path=target,
+                        language_id=language_id,
+                        version=version,
+                        content=content,
+                        line=max(1, _int_value(position.get("line"), 1)),
+                        column=max(1, _int_value(position.get("column"), 1)),
+                        source_id=source_id,
+                        context=context if isinstance(context, Mapping) else None,
+                    )
+                )
+            except asyncio.TimeoutError:
+                return code_intelligence_result(
+                    kind, request_id, provider=provider_id, message=INDEXING_MESSAGE,
+                )
+            supported = bool(payload.pop("supported", True))
+            return code_intelligence_result(
+                kind, request_id, provider=provider_id, supported=supported, payload=payload,
+            )
+        finally:
+            self._active_operation_count = max(0, self._active_operation_count - 1)
+            self.last_used_at = time.monotonic()
+
+    async def settle_code_intelligence(self, result: dict[str, object]) -> dict[str, object]:
+        """Finish a diagnostics query that was waiting for the server's push."""
+
+        pending = result.pop(_PENDING_DIAGNOSTICS_KEY, None)
+        if pending is None:
+            return result
+        provider, ticket, wait_seconds = pending  # type: ignore[misc]
+        self._active_operation_count += 1
+        try:
+            result.update(await provider.wait_for_diagnostics(ticket, wait_seconds))
+        finally:
+            self._active_operation_count = max(0, self._active_operation_count - 1)
+            self.last_used_at = time.monotonic()
+        return result
 
     def _read_external_navigation_document(
         self,
@@ -546,6 +684,9 @@ class LanguageServerRuntime:
             "document_count": self.open_document_count,
             "documents": {"open_count": self.open_document_count},
             "implementation_supported": bool(getattr(self.provider, "supports_implementation", False)),
+            "pushed_document_count": int(
+                getattr(getattr(self.provider, "pushed_state", None), "document_count", 0) or 0
+            ),
             "idle_seconds": round(max(0.0, time.monotonic() - self.last_used_at), 3),
             "last_error": self.last_error,
             "stderr_tail": list(self._stderr_tail),
@@ -1226,6 +1367,107 @@ class LanguageServerRuntimeManager:
         request_id = str(request.get("requestId") or request.get("request_id") or "").strip()
         if not request_id:
             raise ValueError("缺少代码导航请求 ID")
+        scope = self._resolve_document_request_scope(
+            bot_alias=bot_alias,
+            user_id=user_id,
+            workspace_root=workspace_root,
+            request=request,
+            label="代码导航",
+        )
+        if scope.provider_id is None:
+            empty_message = "未找到语义实现" if kind == "implementation" else "未找到语义定义"
+            return {"request_id": request_id, "items": [], "message": empty_message}
+        return await self._execute_document_request(
+            scope,
+            request=request,
+            request_id=request_id,
+            label="代码导航",
+            call=lambda runtime, runtime_request: runtime.resolve_code_navigation(runtime_request),
+        )
+
+    async def query_code_intelligence(
+        self,
+        *,
+        bot_alias: str,
+        user_id: int,
+        workspace_root: Path | str,
+        request: Mapping[str, Any],
+    ) -> dict[str, object]:
+        """Answer a hover/references/documentSymbols/semanticTokens/completion/diagnostics query.
+
+        Shares validation, document sync, cancellation (``cancel_code_navigation``
+        by request ID) and recovery with navigation.  A missing provider or an
+        unavailable language service is a normal ``available: false`` answer.
+        """
+
+        if not isinstance(request, Mapping):
+            raise ValueError("代码智能请求格式无效")
+        kind = normalize_code_intelligence_kind(request.get("kind"))
+        request_id = str(request.get("requestId") or request.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("缺少代码智能请求 ID")
+        if kind in POSITION_KINDS and not isinstance(request.get("position"), Mapping):
+            raise ValueError("代码智能请求缺少位置")
+        scope = self._resolve_document_request_scope(
+            bot_alias=bot_alias,
+            user_id=user_id,
+            workspace_root=workspace_root,
+            request=request,
+            label="代码智能",
+        )
+        provider_id = scope.provider_id
+        if provider_id is None:
+            return code_intelligence_result(kind, request_id, available=False, supported=False)
+
+        async def call(runtime: RuntimeProtocol, runtime_request: dict[str, Any]) -> dict[str, object]:
+            query = getattr(runtime, "query_code_intelligence", None)
+            if not callable(query):
+                return code_intelligence_result(kind, request_id, provider=provider_id, supported=False)
+            return await query(runtime_request)
+
+        async def settle(runtime: RuntimeProtocol, result: dict[str, object]) -> dict[str, object]:
+            finish = getattr(runtime, "settle_code_intelligence", None)
+            if callable(finish):
+                result = await finish(result)
+            result.pop(_PENDING_DIAGNOSTICS_KEY, None)
+            return result
+
+        try:
+            if kind == "diagnostics" and scope.source_id:
+                if not bool(getattr(self.catalog, "enabled", True)):
+                    raise LanguageServerUnavailableError("语言服务已关闭")
+                # Read-only dependency sources never report diagnostics, so no
+                # runtime has to be started for them.
+                return code_intelligence_result(kind, request_id, provider=provider_id, payload={"ready": True})
+            return await self._execute_document_request(
+                scope,
+                request={**request, "kind": kind},
+                request_id=request_id,
+                label="代码智能",
+                call=call,
+                settle=settle,
+            )
+        except LanguageServerUnavailableError as exc:
+            return code_intelligence_result(
+                kind,
+                request_id,
+                provider=provider_id,
+                available=False,
+                supported=False,
+                message=str(exc)[:200],
+            )
+
+    def _resolve_document_request_scope(
+        self,
+        *,
+        bot_alias: str,
+        user_id: int,
+        workspace_root: Path | str,
+        request: Mapping[str, Any],
+        label: str,
+    ) -> _DocumentRequestScope:
+        """Validate the active document of a request and pick its provider."""
+
         root = Path(workspace_root).expanduser().resolve()
         if not root.is_dir():
             raise ValueError("工作区目录不存在")
@@ -1233,8 +1475,9 @@ class LanguageServerRuntimeManager:
         normalized_user_id = int(user_id)
         document_value = request.get("document")
         if not isinstance(document_value, Mapping):
-            raise ValueError("代码导航请求格式无效")
+            raise ValueError(f"{label}请求格式无效")
         source_id = _document_source_id(document_value)
+        provider_id: str | None
         if source_id:
             _reject_absolute_browser_path(source_id)
             _reject_absolute_browser_path(str(document_value.get("path") or ""))
@@ -1252,16 +1495,47 @@ class LanguageServerRuntimeManager:
                 raise ValueError("外部源码 provider 不受支持")
         else:
             provider_id = _provider_for_request(request)
-            if provider_id is None:
-                empty_message = "未找到语义实现" if kind == "implementation" else "未找到语义定义"
-                return {"request_id": request_id, "items": [], "message": empty_message}
-            if _workspace_path_requires_external_source_id(
+            if provider_id is not None and _workspace_path_requires_external_source_id(
                 str(document_value.get("path") or ""),
                 provider_id,
             ):
                 raise ValueError("外部依赖源码必须使用 source_id")
+        return _DocumentRequestScope(
+            bot_alias=normalized_alias,
+            user_id=normalized_user_id,
+            workspace_root=root,
+            document=document_value,
+            source_id=source_id,
+            provider_id=provider_id,
+        )
+
+    async def _execute_document_request(
+        self,
+        scope: _DocumentRequestScope,
+        *,
+        request: Mapping[str, Any],
+        request_id: str,
+        label: str,
+        call: Callable[[RuntimeProtocol, dict[str, Any]], Any],
+        settle: Callable[[RuntimeProtocol, dict[str, object]], Any] | None = None,
+    ) -> dict[str, object]:
+        """Run one document-scoped request against the provider's runtime.
+
+        ``call`` runs with the document lifecycle lock held (for workspace
+        documents) so the synced snapshot cannot change underneath it; the
+        optional ``settle`` runs after the lock is released and may wait.
+        """
+
+        provider_id = scope.provider_id
+        if provider_id is None:
+            raise ValueError(f"{label}请求没有可用的语言服务")
         if not bool(getattr(self.catalog, "enabled", True)):
             raise LanguageServerUnavailableError("语言服务已关闭")
+        normalized_alias = scope.bot_alias
+        normalized_user_id = scope.user_id
+        root = scope.workspace_root
+        document_value = scope.document
+        source_id = scope.source_id
 
         key = LanguageServerRuntimeKey(
             bot_alias=normalized_alias,
@@ -1274,7 +1548,7 @@ class LanguageServerRuntimeManager:
         cancellation_key = (normalized_alias, normalized_user_id, root, request_id)
         current_task = asyncio.current_task()
         if current_task is None:
-            raise RuntimeError("无法登记代码导航任务")
+            raise RuntimeError(f"无法登记{label}任务")
         active_key = (key, request_id)
         lifecycle_lock = self._document_lifecycle_lock(key)
         async with lifecycle_lock:
@@ -1317,13 +1591,15 @@ class LanguageServerRuntimeManager:
                                 raise asyncio.CancelledError
                             if current_document != document:
                                 runtime_request["document"] = current_document.to_dict()
-                            result = await runtime.resolve_code_navigation(runtime_request)
+                            result = await call(runtime, runtime_request)
                     else:
                         async with self._lock:
                             self._prune_cancelled_requests_locked()
                             if cancellation_key in self._cancelled_requests:
                                 raise asyncio.CancelledError
-                        result = await runtime.resolve_code_navigation(runtime_request)
+                        result = await call(runtime, runtime_request)
+                    if settle is not None:
+                        result = await settle(runtime, result)
                 except asyncio.CancelledError:
                     raise
                 except BaseException as exc:

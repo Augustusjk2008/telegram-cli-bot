@@ -238,6 +238,8 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
+  CodeIntelligenceRequest,
+  CodeIntelligenceResult,
   CodeNavigationRequest,
   CodeNavigationResult,
   ExternalSourceReadResult,
@@ -275,6 +277,11 @@ import type {
   WebNotificationEvent,
 } from "./types";
 import type { WebBotClient } from "./webBotClient";
+import {
+  emptyCodeIntelligenceResult,
+  mapCodeIntelligenceResult,
+  mapLanguageServerConfiguration,
+} from "./codeIntelligenceMapping";
 import { mergeMessageMeta, summarizeTrace } from "../utils/chatMessageMeta";
 import { mapChatMessageContextUsage } from "../utils/contextUsage";
 import {
@@ -519,6 +526,7 @@ type RawLanguageServerProviderStatus = {
   runtime_message?: string;
   implementationSupported?: boolean;
   implementation_supported?: boolean;
+  configuration?: unknown;
 };
 
 type RawLanguageServerCatalog = {
@@ -4014,6 +4022,7 @@ function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): 
     ? rawRuntimeState
     : undefined;
   const implementationSupported = raw.implementationSupported ?? raw.implementation_supported;
+  const configuration = mapLanguageServerConfiguration(raw.configuration);
   return {
     provider,
     status,
@@ -4029,6 +4038,7 @@ function mapLanguageServerProviderStatus(raw: RawLanguageServerProviderStatus): 
       ? { runtimeMessage: String(raw.runtimeMessage ?? raw.runtime_message) }
       : {}),
     ...(typeof implementationSupported === "boolean" ? { implementationSupported } : {}),
+    ...(configuration ? { configuration } : {}),
   } as LanguageServerProviderStatus;
 }
 
@@ -7373,6 +7383,41 @@ export class RealWebBotClient implements WebBotClient {
         };
       }),
     };
+  }
+
+  async queryCodeIntelligence(
+    botAlias: string,
+    input: CodeIntelligenceRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeIntelligenceResult> {
+    const basePath = `/api/bots/${encodeURIComponent(botAlias)}/workspace`;
+    // Cancellation shares the navigation registry: both are keyed by the request ID.
+    const cancelRequest = () => {
+      void this.requestJson<{ cancelled?: boolean }>(`${basePath}/code-navigation/cancel`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ requestId: input.requestId }),
+      }).catch(() => undefined);
+    };
+    if (signal?.aborted) {
+      return emptyCodeIntelligenceResult(input.kind, input.requestId);
+    }
+    signal?.addEventListener("abort", cancelRequest, { once: true });
+    try {
+      const data = await this.requestJson<unknown>(`${basePath}/code-intelligence/query`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(input),
+        signal,
+      });
+      return mapCodeIntelligenceResult(data, input.kind, input.requestId);
+    } finally {
+      signal?.removeEventListener("abort", cancelRequest);
+    }
   }
 
   async syncWorkspaceDocuments(

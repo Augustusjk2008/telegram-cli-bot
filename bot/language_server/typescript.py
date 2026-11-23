@@ -15,6 +15,11 @@ from .pyright import (
     _file_uri_to_path,
     _lsp_range_to_api,
 )
+from .code_intelligence import (
+    CodeIntelligenceMixin,
+    LocationContentCache,
+    code_intelligence_text_document_capabilities,
+)
 from .document_store import LanguageDocument, build_content_change, parse_text_document_sync_capability
 from .external_source_registry import (
     ApprovedRoot,
@@ -102,7 +107,7 @@ def discover_typescript_external_roots(
     return canonicalize_approved_roots(candidates)
 
 
-class TypeScriptProvider:
+class TypeScriptProvider(CodeIntelligenceMixin):
     provider_id = "typescript"
 
     def __init__(
@@ -141,6 +146,7 @@ class TypeScriptProvider:
         self.sync_change_kind = 1
         self._documents: dict[str, tuple[int, str]] = {}
         self._navigation_lock = asyncio.Lock()
+        self._init_code_intelligence()
 
     @property
     def open_document_count(self) -> int:
@@ -174,6 +180,7 @@ class TypeScriptProvider:
                     "textDocument": {
                         "definition": {"dynamicRegistration": False, "linkSupport": True},
                         "implementation": {"dynamicRegistration": False, "linkSupport": True},
+                        **code_intelligence_text_document_capabilities(),
                         "synchronization": {
                             "dynamicRegistration": False,
                             "didSave": False,
@@ -190,6 +197,7 @@ class TypeScriptProvider:
         encoding = str(capabilities.get("positionEncoding") or "utf-16").strip().lower()
         self.position_encoding = encoding if encoding in _POSITION_ENCODINGS else "utf-16"
         self.supports_implementation = bool(capabilities.get("implementationProvider"))
+        self._record_server_capabilities(capabilities)
         self.sync_open_close, self.sync_change_kind = parse_text_document_sync_capability(
             capabilities.get("textDocumentSync")
         )
@@ -253,6 +261,7 @@ class TypeScriptProvider:
                 uri = target.as_uri()
                 if self._documents.pop(uri, None) is None:
                     continue
+                self._forget_pushed_document(uri)
                 if self.sync_open_close:
                     await client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
                 closed.append(path)
@@ -273,6 +282,7 @@ class TypeScriptProvider:
                 uri = record.path.as_uri()
                 if self._documents.pop(uri, None) is None:
                     continue
+                self._forget_pushed_document(uri)
                 if self.sync_open_close:
                     await client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
                 closed.append(source_id)
@@ -490,6 +500,16 @@ class TypeScriptProvider:
             return normalized_language in _JAVASCRIPT_LANGUAGE_IDS
         return False
 
+    def _accepts_active_document(self, target: Path, language_id: str, source_id: str) -> bool:
+        return self._is_workspace_typescript_file(target, language_id) or self._is_registered_external_source(
+            source_id,
+            target,
+            language_id,
+        )
+
+    def _active_lsp_language_id(self, target: Path) -> str:
+        return self._lsp_language_id(target)
+
     def _is_registered_external_source(self, source_id: str, target: Path, language_id: str) -> bool:
         normalized_language = str(language_id or "").strip().lower()
         suffix = target.suffix.lower()
@@ -517,7 +537,10 @@ class TypeScriptProvider:
         active_path: Path,
         active_content: str,
         active_source_id: str = "",
+        content_cache: LocationContentCache | None = None,
     ) -> list[dict[str, object]]:
+        """Normalize LSP locations; a ``content_cache`` also adds a ``preview`` line."""
+
         if response is None:
             return []
         raw_items = response if isinstance(response, list) else [response]
@@ -542,6 +565,8 @@ class TypeScriptProvider:
             if not isinstance(target_range, Mapping) or not isinstance(selection_range, Mapping):
                 continue
             source_record = None
+            cache_key = str(target)
+            cached_content = content_cache.get(cache_key) if content_cache is not None else None
             if relative is None or is_workspace_dependency:
                 source_record = (
                     self._resolve_registered_external_source(active_source_id, target)
@@ -552,6 +577,8 @@ class TypeScriptProvider:
                     continue
                 if target == active_path and source_record.source_id == active_source_id:
                     target_content = active_content
+                elif cached_content is not None:
+                    target_content = cached_content
                 else:
                     target_content = self.external_source_registry.read(
                         source_record.source_id,
@@ -569,6 +596,8 @@ class TypeScriptProvider:
                     target_content = active_content
                 elif snapshot is not None:
                     target_content = snapshot[1]
+                elif cached_content is not None:
+                    target_content = cached_content
                 elif target.is_file():
                     try:
                         target_content = target.read_text(encoding="utf-8", errors="replace")
@@ -581,27 +610,27 @@ class TypeScriptProvider:
             if normalized_range is None or normalized_selection is None:
                 continue
             if source_record is not None:
-                items.append(
-                    {
-                        "target_type": "external",
-                        "path": source_record.display_path,
-                        "display_path": source_record.display_path,
-                        "source_id": source_record.source_id,
-                        "provider": self.provider_id,
-                        "range": normalized_range,
-                        "selection_range": normalized_selection,
-                    }
-                )
+                item: dict[str, object] = {
+                    "target_type": "external",
+                    "path": source_record.display_path,
+                    "display_path": source_record.display_path,
+                    "source_id": source_record.source_id,
+                    "provider": self.provider_id,
+                    "range": normalized_range,
+                    "selection_range": normalized_selection,
+                }
             else:
-                items.append(
-                    {
-                        "target_type": "workspace",
-                        "path": relative.as_posix(),
-                        "provider": self.provider_id,
-                        "range": normalized_range,
-                        "selection_range": normalized_selection,
-                    }
-                )
+                item = {
+                    "target_type": "workspace",
+                    "path": relative.as_posix(),
+                    "provider": self.provider_id,
+                    "range": normalized_range,
+                    "selection_range": normalized_selection,
+                }
+            if content_cache is not None:
+                content_cache.put(cache_key, target_content)
+                item["preview"] = content_cache.preview(cache_key, normalized_range["start"]["line"])
+            items.append(item)
         return items
 
     def _register_external_source(self, uri: str):

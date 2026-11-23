@@ -209,7 +209,7 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 ### Desktop Workbench
 
 - **Chat**：CLI 对话、历史恢复、过程详情和上下文状态。
-- **Files**：文件树、编辑器、预览、多标签和语言服务导航。
+- **Files**：文件树、编辑器、预览、多标签和语言服务导航。编辑器提供缩进参考线、顶部固定的作用域行（sticky scroll）、光标所在符号的路径导航和右键菜单；启用语言服务（`TCB_LSP_ENABLED=true`）后，C/C++（clangd）、Python（pyright）和 JS/TS 文件还有语义着色、悬停说明、诊断、补全、大纲、查找引用（`Shift+F12`）与转到定义（`F12` / `Ctrl+点击`）。语言服务找不到定义时，会列出按名称匹配的文本搜索结果并标明其并非语义分析。clangd 需要工作区根目录或常见构建目录下的 `compile_commands.json`（或根目录的 `.clangd` / `compile_flags.txt`）才能正确解析头文件；缺少时状态栏显示「默认编译参数」。
 - **Git**：状态、diff、提交历史、工作区操作、远端管理与 GitHub 关联。
 - **Terminal**：持久化多标签 Web 终端，每个标签使用独立 shell 和 owner。
 - **Debug**：面向 Python、C/C++、Godot 和通用 DAP 的调试入口。

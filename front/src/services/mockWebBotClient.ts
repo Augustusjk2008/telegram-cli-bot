@@ -194,6 +194,9 @@ import type {
   TunnelSnapshot,
   UpdateBotWorkdirOptions,
   UserBotPermissions,
+  CodeDocumentSymbol,
+  CodeIntelligenceRequest,
+  CodeIntelligenceResult,
   CodeNavigationRequest,
   CodeNavigationResult,
   WorkspaceDocumentSyncInput,
@@ -284,6 +287,7 @@ async function themeAssetDescriptor(file: File): Promise<ThemeIllustrationAsset>
   return { kind: "uploaded", assetId: `asset_${hash}`, mimeType: file.type as ThemeIllustrationAsset["mimeType"], width, height, sha256: hash };
 }
 import { WebBotClient } from "./webBotClient";
+import { emptyCodeIntelligenceResult } from "./codeIntelligenceMapping";
 import { mockBots } from "../mocks/bots";
 import { buildMockCostStats } from "../mocks/costStats";
 import { readMockChatScript } from "../mocks/chatScript";
@@ -6678,6 +6682,58 @@ export class MockWebBotClient implements WebBotClient {
       items: [],
       message: input.kind === "implementation" ? "未找到语义实现" : "未找到语义定义",
     };
+  }
+
+  async queryCodeIntelligence(
+    _botAlias: string,
+    input: CodeIntelligenceRequest,
+    signal?: AbortSignal,
+  ): Promise<CodeIntelligenceResult> {
+    signal?.throwIfAborted?.();
+    // The mock has no language server; it only derives an outline from simple declarations.
+    if (input.kind !== "documentSymbols") {
+      return emptyCodeIntelligenceResult(input.kind, input.requestId);
+    }
+    const lines = input.document.content.split(/\r?\n/);
+    const symbols: CodeDocumentSymbol[] = [];
+    const stack: Array<{ indent: number; symbol: CodeDocumentSymbol }> = [];
+    lines.forEach((line, index) => {
+      const match = line.match(/^(\s*)(?:export\s+)?(?:async\s+)?(class|def|function)\s+([A-Za-z_$][\w$]*)/);
+      if (!match) return;
+      const indent = match[1].length;
+      const column = line.indexOf(match[3]) + 1;
+      while (stack.length > 0 && stack[stack.length - 1].indent >= indent) stack.pop();
+      const parent = stack[stack.length - 1]?.symbol;
+      const symbol: CodeDocumentSymbol = {
+        name: match[3],
+        detail: "",
+        kind: match[2] === "class" ? "class" : parent?.kind === "class" ? "method" : "function",
+        range: { start: { line: index + 1, column: indent + 1 }, end: { line: index + 1, column: line.length + 1 } },
+        selectionRange: {
+          start: { line: index + 1, column },
+          end: { line: index + 1, column: column + match[3].length },
+        },
+        children: [],
+      };
+      (parent ? parent.children : symbols).push(symbol);
+      stack.push({ indent, symbol });
+    });
+    // A declaration lasts until the next one at the same depth, or the end of its parent.
+    const closeRanges = (items: CodeDocumentSymbol[], endLine: number) => {
+      items.forEach((item, index) => {
+        const next = items[index + 1];
+        const lastLine = next ? next.range.start.line - 1 : endLine;
+        item.range.end = { line: lastLine, column: (lines[lastLine - 1] || "").length + 1 };
+        closeRanges(item.children, lastLine);
+      });
+    };
+    closeRanges(symbols, lines.length);
+    return emptyCodeIntelligenceResult(input.kind, input.requestId, {
+      provider: "mock-semantic",
+      available: true,
+      supported: true,
+      symbols,
+    });
   }
 
   async syncWorkspaceDocuments(

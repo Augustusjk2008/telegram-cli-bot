@@ -435,6 +435,32 @@
       "minContrast": 4.5
     },
     {
+      "key": "editor.indentGuide",
+      "label": "缩进参考线",
+      "group": "编辑器",
+      "description": "缩进参考线，用于编辑器中的缩进层级参考线",
+      "cssVariable": "--editor-indent-guide",
+      "default": "#3F465029",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border",
+        "alpha": 0.16
+      }
+    },
+    {
+      "key": "editor.indentGuideActive",
+      "label": "当前缩进参考线",
+      "group": "编辑器",
+      "description": "当前缩进参考线，用于编辑器中光标所在代码块的缩进参考线",
+      "cssVariable": "--editor-indent-guide-active",
+      "default": "#3F46506B",
+      "allowAlpha": true,
+      "derive": {
+        "from": "border.strong",
+        "alpha": 0.42
+      }
+    },
+    {
       "key": "editor.selection",
       "label": "编辑器选区",
       "group": "编辑器",
@@ -454,7 +480,37 @@
       "description": "代码注释，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-comment",
       "default": "#74685FFF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.syntaxConstant",
+      "label": "代码常量",
+      "group": "编辑器",
+      "description": "代码常量，用于编辑器中的枚举成员、常量与转义序列",
+      "cssVariable": "--editor-syntax-constant",
+      "default": "#895518FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "editor.syntaxNumber"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.syntaxControl",
+      "label": "代码控制流关键字",
+      "group": "编辑器",
+      "description": "代码控制流关键字，用于编辑器中的 if、for、return 等控制流关键字",
+      "cssVariable": "--editor-syntax-control",
+      "default": "#9F432AFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "editor.syntaxKeyword"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxFunction",
@@ -463,7 +519,9 @@
       "description": "代码函数，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-function",
       "default": "#72528CFF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxInvalid",
@@ -475,7 +533,9 @@
       "allowAlpha": true,
       "derive": {
         "from": "control.danger"
-      }
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxKeyword",
@@ -484,7 +544,9 @@
       "description": "代码关键字，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-keyword",
       "default": "#9F432AFF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxMeta",
@@ -493,7 +555,23 @@
       "description": "代码元信息，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-meta",
       "default": "#98506CFF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.syntaxNamespace",
+      "label": "代码命名空间",
+      "group": "编辑器",
+      "description": "代码命名空间，用于编辑器中的命名空间与模块名",
+      "cssVariable": "--editor-syntax-namespace",
+      "default": "#35637EFF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "editor.syntaxType"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxNumber",
@@ -502,7 +580,37 @@
       "description": "代码数字，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-number",
       "default": "#895518FF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.syntaxOperator",
+      "label": "代码运算符",
+      "group": "编辑器",
+      "description": "代码运算符，用于编辑器中的运算符",
+      "cssVariable": "--editor-syntax-operator",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "editor.text"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.syntaxProperty",
+      "label": "代码成员属性",
+      "group": "编辑器",
+      "description": "代码成员属性，用于编辑器中的对象成员、字段、JSON 键与 CSS 属性",
+      "cssVariable": "--editor-syntax-property",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "editor.text"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxString",
@@ -511,7 +619,9 @@
       "description": "代码字符串，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-string",
       "default": "#37685BFF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.syntaxType",
@@ -520,7 +630,23 @@
       "description": "代码类型，用于编辑器中的对应界面元素",
       "cssVariable": "--editor-syntax-type",
       "default": "#35637EFF",
-      "allowAlpha": true
+      "allowAlpha": true,
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
+    },
+    {
+      "key": "editor.syntaxVariable",
+      "label": "代码变量",
+      "group": "编辑器",
+      "description": "代码变量，用于编辑器中的局部变量与函数参数",
+      "cssVariable": "--editor-syntax-variable",
+      "default": "#3F4650FF",
+      "allowAlpha": true,
+      "derive": {
+        "from": "editor.text"
+      },
+      "contrastAgainst": "editor.background",
+      "minContrast": 4.5
     },
     {
       "key": "editor.text",

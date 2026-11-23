@@ -92,7 +92,8 @@ function languageServiceLabel(
   if (status.runtimeState === "error") return `${label} · 错误`;
   if (status.runtimeState === "stopped") return `${label} · 已停止`;
   if (status.status === "available") {
-    return `${label} · 就绪`;
+    // Ready is misleading when the server only has generic flags to parse the project with.
+    return status.configuration?.mode === "fallback" ? `${label} · 就绪（默认编译参数）` : `${label} · 就绪`;
   }
   if (status.status === "installing") return `${label} · 安装中`;
   if (status.status === "missing") return `${label} · 缺失${status.canInstall ? "（可由管理员在设置安装）" : ""}`;
@@ -125,6 +126,12 @@ export function WorkbenchStatusBar({
   );
   const languageServiceRestartInProgress = languageServiceRestarting
     || languageServiceStatus?.runtimeState === "restarting";
+  const languageServiceConfiguration = languageServiceStatus?.status === "available"
+    ? languageServiceStatus.configuration
+    : undefined;
+  const languageServiceConfigurationTitle = languageServiceConfiguration
+    ? languageServiceConfiguration.hint || `工程配置：${languageServiceConfiguration.summary}`
+    : "";
   const restartLanguageServiceTitle = languageServiceProvider
     ? `重启当前 ${languageServiceProviderLabel(languageServiceProvider)} 语言服务`
     : "重启当前语言服务";
@@ -156,10 +163,13 @@ export function WorkbenchStatusBar({
               : languageServiceLoading
               ? "loading"
               : languageServiceStatus?.runtimeState || languageServiceStatus?.status || "unknown"}
+            data-language-service-configuration={languageServiceConfiguration?.mode}
+            className={languageServiceConfiguration?.mode === "fallback" ? "text-[var(--status-warning)]" : undefined}
             title={languageServiceRestartInProgress
               ? "正在请求重启当前语言服务"
               : languageServiceStatus?.runtimeMessage
               || languageServiceStatus?.error
+              || languageServiceConfigurationTitle
               || languageServiceStatus?.message
               || languageServiceStatus?.commandSummary
               || undefined}

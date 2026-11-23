@@ -698,12 +698,50 @@
   overflow: auto;
   font-size: 11px;
 }
-.theme-preview-code span {
+.theme-preview-code [data-syntax="comment"] {
+  color: var(--editor-syntax-comment, var(--muted));
+}
+.theme-preview-code [data-syntax="keyword"] {
   color: var(--editor-syntax-keyword, var(--accent));
 }
-.theme-preview-code em {
+.theme-preview-code [data-syntax="control"] {
+  color: var(--editor-syntax-control, var(--editor-syntax-keyword, var(--accent)));
+}
+.theme-preview-code [data-syntax="type"] {
+  color: var(--editor-syntax-type, var(--text));
+}
+.theme-preview-code [data-syntax="namespace"] {
+  color: var(--editor-syntax-namespace, var(--editor-syntax-type, var(--text)));
+}
+.theme-preview-code [data-syntax="function"] {
+  color: var(--editor-syntax-function, var(--text));
+}
+.theme-preview-code [data-syntax="variable"] {
+  color: var(--editor-syntax-variable, var(--text));
+}
+.theme-preview-code [data-syntax="property"] {
+  color: var(--editor-syntax-property, var(--text));
+}
+.theme-preview-code [data-syntax="constant"] {
+  color: var(--editor-syntax-constant, var(--editor-syntax-number, var(--text)));
+}
+.theme-preview-code [data-syntax="string"] {
   color: var(--editor-syntax-string, var(--text));
-  font-style: normal;
+}
+.theme-preview-code [data-syntax="number"] {
+  color: var(--editor-syntax-number, var(--text));
+}
+.theme-preview-code [data-syntax="meta"] {
+  color: var(--editor-syntax-meta, var(--text));
+}
+.theme-preview-code [data-syntax="operator"] {
+  color: var(--editor-syntax-operator, var(--text));
+}
+.theme-preview-code [data-indent-guide] {
+  box-shadow: inset 1px 0 0 var(--editor-indent-guide, var(--border));
+}
+.theme-preview-code [data-indent-guide="active"] {
+  box-shadow: inset 1px 0 0 var(--editor-indent-guide-active, var(--border));
 }
 .theme-preview-composer {
   display: flex;

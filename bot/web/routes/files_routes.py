@@ -142,6 +142,10 @@ def register(app: web.Application, server) -> None:
         server.post_workspace_code_navigation_cancel,
     )
     app.router.add_post(
+        "/api/bots/{alias}/workspace/code-intelligence/query",
+        server.post_workspace_code_intelligence_query,
+    )
+    app.router.add_post(
         "/api/bots/{alias}/workspace/code-navigation/documents/sync",
         server.post_workspace_code_navigation_documents_sync,
     )
