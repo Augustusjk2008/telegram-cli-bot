@@ -847,6 +847,8 @@ export function EditorPane({
             content={activeTab.content}
             testId="desktop-git-diff-viewer"
             className="h-full min-h-0 p-3 text-xs leading-6"
+            enableSideBySide
+            defaultViewMode="split"
           />
         ) : activeTab.kind === "plugin-view" ? (
           <div data-testid="desktop-plugin-view" className="h-full min-h-0">

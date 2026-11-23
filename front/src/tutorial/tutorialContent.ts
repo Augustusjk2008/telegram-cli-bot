@@ -562,7 +562,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
       {
         id: "diff",
         title: "查看 diff",
-        body: ["diff 在编辑器区域以只读方式打开，可以在「全文」和「仅差异」之间切换。"],
+        body: ["diff 在编辑器区域以只读方式打开，可以在「并排」「全文」和「仅差异」之间切换。"],
         shot: "diff",
         hotspot: "diff",
         zoom: 1.3,

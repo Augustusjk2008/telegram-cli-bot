@@ -2,7 +2,7 @@ import { clsx } from "clsx";
 import { useState } from "react";
 
 export type GitDiffLineKind = "meta" | "hunk" | "add" | "delete" | "context";
-export type GitDiffViewMode = "full" | "diff";
+export type GitDiffViewMode = "full" | "diff" | "split";
 type VisibleGitDiffLineKind = GitDiffLineKind;
 
 type VisibleGitDiffLine = {
@@ -11,12 +11,24 @@ type VisibleGitDiffLine = {
   kind: VisibleGitDiffLineKind;
 };
 
+type SideBySideCell = {
+  line: string;
+  lineNumber: number | null;
+  kind: VisibleGitDiffLineKind | "empty";
+};
+
+type SideBySideRow =
+  | { type: "meta" | "hunk"; line: string }
+  | { type: "line"; left: SideBySideCell; right: SideBySideCell };
+
 type GitDiffViewerProps = {
   content: string;
   testId?: string;
   className?: string;
   ariaLabel?: string;
   emptyLabel?: string;
+  enableSideBySide?: boolean;
+  defaultViewMode?: GitDiffViewMode;
 };
 
 export function parseGitDiffLineKind(line: string): GitDiffLineKind {
@@ -93,6 +105,93 @@ export function visibleGitDiffLines(content: string, viewMode: GitDiffViewMode =
     : visibleLines;
 }
 
+function sideBySideCell(line: string, kind: GitDiffLineKind, lineNumber: number | null): SideBySideCell {
+  return {
+    line: kind === "add" || kind === "delete" || kind === "context" ? line.slice(1) : line,
+    lineNumber,
+    kind,
+  };
+}
+
+function emptySideBySideCell(): SideBySideCell {
+  return { line: "", lineNumber: null, kind: "empty" };
+}
+
+export function sideBySideGitDiffRows(content: string): SideBySideRow[] {
+  const rows: SideBySideRow[] = [];
+  const lines = (content || "").split(/\r?\n/);
+  let oldLineNumber: number | null = null;
+  let newLineNumber: number | null = null;
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    const kind = parseGitDiffLineKind(line);
+
+    if (kind === "meta") {
+      if (line) rows.push({ type: "meta", line });
+      index += 1;
+      continue;
+    }
+
+    if (kind === "hunk") {
+      rows.push({ type: "hunk", line });
+      const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      oldLineNumber = match ? Number(match[1]) : null;
+      newLineNumber = match ? Number(match[2]) : null;
+      index += 1;
+      continue;
+    }
+
+    if (kind === "context" && line.startsWith(" ")) {
+      rows.push({
+        type: "line",
+        left: sideBySideCell(line, kind, oldLineNumber),
+        right: sideBySideCell(line, kind, newLineNumber),
+      });
+      if (oldLineNumber !== null) oldLineNumber += 1;
+      if (newLineNumber !== null) newLineNumber += 1;
+      index += 1;
+      continue;
+    }
+
+    if (kind === "delete" || kind === "add") {
+      const deleted: SideBySideCell[] = [];
+      const added: SideBySideCell[] = [];
+      const changeMetadata: string[] = [];
+      while (index < lines.length && parseGitDiffLineKind(lines[index]) === "delete") {
+        deleted.push(sideBySideCell(lines[index], "delete", oldLineNumber));
+        if (oldLineNumber !== null) oldLineNumber += 1;
+        index += 1;
+      }
+      while (index < lines.length
+        && parseGitDiffLineKind(lines[index]) === "meta"
+        && lines[index].startsWith("\\ No newline at end of file")) {
+        changeMetadata.push(lines[index]);
+        index += 1;
+      }
+      while (index < lines.length && parseGitDiffLineKind(lines[index]) === "add") {
+        added.push(sideBySideCell(lines[index], "add", newLineNumber));
+        if (newLineNumber !== null) newLineNumber += 1;
+        index += 1;
+      }
+      const rowCount = Math.max(deleted.length, added.length);
+      for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+        rows.push({
+          type: "line",
+          left: deleted[rowIndex] || emptySideBySideCell(),
+          right: added[rowIndex] || emptySideBySideCell(),
+        });
+      }
+      for (const metadata of changeMetadata) rows.push({ type: "meta", line: metadata });
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return rows;
+}
+
 function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
   if (kind === "add") return "bg-[var(--diff-added-background)] text-[var(--diff-added-text)]";
   if (kind === "delete") return "bg-[var(--diff-deleted-background)] text-[var(--diff-deleted-text)]";
@@ -101,15 +200,37 @@ function gitDiffLineClass(kind: VisibleGitDiffLineKind) {
   return "text-[var(--text)]";
 }
 
+function sideBySideCellClass(kind: SideBySideCell["kind"]) {
+  if (kind === "empty") return "text-[var(--text)]";
+  return gitDiffLineClass(kind);
+}
+
+function SideBySideCellView({ cell }: { cell: SideBySideCell }) {
+  return (
+    <div
+      data-diff-kind={cell.kind}
+      className={clsx("grid min-w-0 grid-cols-[3.5rem_minmax(0,1fr)] gap-3 px-3 py-0.5", sideBySideCellClass(cell.kind))}
+    >
+      <span className="select-none text-right text-[var(--diff-line-number)]">{cell.lineNumber ?? ""}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-all">{cell.line || "\u00a0"}</span>
+    </div>
+  );
+}
+
 export function GitDiffViewer({
   content,
   testId = "git-diff-content",
   className = "h-full min-h-0 p-3 text-xs leading-6",
   ariaLabel = "Git Diff 内容",
   emptyLabel = "无可显示的内容",
+  enableSideBySide = false,
+  defaultViewMode = "full",
 }: GitDiffViewerProps) {
-  const [viewMode, setViewMode] = useState<GitDiffViewMode>("full");
+  const [viewMode, setViewMode] = useState<GitDiffViewMode>(
+    enableSideBySide ? defaultViewMode : defaultViewMode === "split" ? "full" : defaultViewMode,
+  );
   const lines = visibleGitDiffLines(content, viewMode);
+  const sideBySideRows = viewMode === "split" ? sideBySideGitDiffRows(content) : [];
 
   return (
     <div
@@ -128,6 +249,7 @@ export function GitDiffViewer({
           {([
             ["full", "全文"],
             ["diff", "仅差异"],
+            ...(enableSideBySide ? [["split", "并排"] as const] : []),
           ] as const).map(([mode, label]) => (
             <button
               key={mode}
@@ -146,7 +268,28 @@ export function GitDiffViewer({
           ))}
         </div>
       </div>
-      {lines.length > 0 ? (
+      {viewMode === "split" ? (
+        sideBySideRows.length > 0 ? (
+          <div data-testid={`${testId}-side-by-side`} className="min-w-[760px] overflow-hidden">
+            {sideBySideRows.map((row, index) => row.type === "line" ? (
+              <div key={`${index}-${row.left.lineNumber}-${row.right.lineNumber}`} className="grid grid-cols-2 divide-x divide-[var(--workbench-hairline)]">
+                <SideBySideCellView cell={row.left} />
+                <SideBySideCellView cell={row.right} />
+              </div>
+            ) : (
+              <div
+                key={`${index}-${row.type}-${row.line}`}
+                data-diff-kind={row.type}
+                className={clsx("px-3 py-0.5", gitDiffLineClass(row.type))}
+              >
+                {row.line}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 py-2 text-xs text-[var(--muted)]">{emptyLabel}</div>
+        )
+      ) : lines.length > 0 ? (
         lines.map((item, index) => (
           <div
             key={`${index}-${item.lineNumber}-${item.line}`}
