@@ -1,5 +1,5 @@
 import type { HtmlPreviewHandle } from "../utils/filePreview";
-import type { FileReadResult, PluginOpenTarget, PluginRenderResult } from "../services/types";
+import type { FileReadResult, GitDiffSource, PluginOpenTarget, PluginRenderResult } from "../services/types";
 import type { WorkbenchLayoutState } from "./workbenchLayout";
 
 export type DesktopSidebarView = "files" | "search" | "outline" | "debug" | "git" | "plugins" | "settings";
@@ -135,6 +135,7 @@ export type EditorTab = {
   pluginView?: PluginRenderResult;
   pluginInput?: Record<string, unknown>;
   sourcePath?: string;
+  gitDiff?: GitDiffSource;
   /** Opaque server-issued identifier for an external dependency source. */
   sourceId?: string;
   /** Sanitized path shown to users; never sent back as a file path. */

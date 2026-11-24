@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { createTerminalSession, type TerminalSession } from "../services/terminalSession";
@@ -6,6 +6,7 @@ import type { WebBotClient } from "../services/webBotClient";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { ImmersiveToggleButton } from "../components/ImmersiveToggleButton";
 import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
+import { terminalSourceLinkProvider, type TerminalSourceNavigation } from "../terminal/terminalSourceLinks";
 import type { UiThemeName } from "../theme";
 import { getCurrentAppearance, resolvedTerminalTheme, useResolvedAppearance } from "../theme/appearanceRuntime";
 import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
@@ -21,6 +22,7 @@ type Props = {
   isImmersive?: boolean;
   disabledReason?: string;
   embedded?: boolean;
+  sourceNavigation?: TerminalSourceNavigation;
   onToggleImmersive?: () => void;
   onAcceptPendingWorkingDir?: () => void;
   onCancelPendingWorkingDir?: () => void;
@@ -97,6 +99,7 @@ export function TerminalScreen({
   isImmersive = false,
   disabledReason = "",
   embedded = false,
+  sourceNavigation,
   onToggleImmersive,
   onAcceptPendingWorkingDir,
   onCancelPendingWorkingDir,
@@ -132,6 +135,24 @@ export function TerminalScreen({
   const stagedWorkingDir = pendingWorkingDir?.trim() || "";
   const resolvedPtyMode = ptyMode ?? terminal.snapshot.ptyMode;
   const hasRunningTerminal = terminal.snapshot.started && !terminal.snapshot.closed;
+  const openSourceRef = useRef(sourceNavigation?.open);
+  useLayoutEffect(() => { openSourceRef.current = sourceNavigation?.open; });
+  const sourceRoot = sourceNavigation?.root;
+  const sourceWindows = sourceNavigation?.windows ?? false;
+  useLayoutEffect(() => {
+    const session = sessionRef.current;
+    if (!session || !sourceRoot || !hasRunningTerminal || terminalDisabled) return;
+    let current = true;
+    const isCurrent = () => current && sessionRef.current === session;
+    const provider = terminalSourceLinkProvider(session.term, runningWorkingDir, { root: sourceRoot, windows: sourceWindows }, (location) => {
+      if (isCurrent()) openSourceRef.current?.(location, isCurrent);
+    });
+    const registration = session.term.registerLinkProvider(provider);
+    return () => {
+      current = false;
+      registration.dispose();
+    };
+  }, [instanceId, terminal.ownerId, sourceNavigation?.scope, sourceRoot, sourceWindows, runningWorkingDir, hasRunningTerminal, terminalDisabled]);
 
   useEffect(() => {
     isVisibleRef.current = isVisible;

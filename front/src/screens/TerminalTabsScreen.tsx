@@ -12,6 +12,7 @@ import { TerminalActionsConfigDialog } from "../terminal/TerminalActionsConfigDi
 import { isTerminalActionVisible, resolveTerminalActionCommand } from "../terminal/terminalActionPlatform";
 import { toolbarButtonClass } from "../components/ToolbarButton";
 import { usePersistentTerminal } from "../terminal/PersistentTerminalProvider";
+import type { TerminalSourceNavigation } from "../terminal/terminalSourceLinks";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "../workbench/workbenchTypes";
 
@@ -43,6 +44,7 @@ type Props = {
   disabledReason?: string;
   embedded?: boolean;
   focused?: boolean;
+  sourceNavigation?: TerminalSourceNavigation;
   onToggleFocus?: () => void;
   onToggleImmersive?: () => void;
   onAcceptPendingWorkingDir?: () => void;
@@ -72,6 +74,7 @@ export function TerminalTabsScreen({
   disabledReason = "",
   embedded = false,
   focused = false,
+  sourceNavigation,
   onToggleFocus,
   onToggleImmersive,
   onAcceptPendingWorkingDir,
@@ -99,7 +102,7 @@ export function TerminalTabsScreen({
     try {
       await terminal.createTab({
         cwd: remote ? preferredWorkingDir : (terminal.activeTab?.botAlias ? preferredWorkingDir : terminal.activeTab?.cwd || preferredWorkingDir),
-        ...(remote ? { botAlias, title: `SSH ${botAlias}` } : {}),
+        ...(remote ? { botAlias, title: `SSH ${botAlias}` } : { sourceBotAlias: botAlias }),
       });
     } finally {
       setCreating(false);
@@ -119,6 +122,7 @@ export function TerminalTabsScreen({
   }, [closingTabId, disabledReason, terminal]);
 
   const activeTab = visibleTabs.find((tab) => tab.id === terminal.activeTabId);
+  const sourceBot = activeTab?.botAlias || activeTab?.terminalActionBotAlias || activeTab?.sourceBotAlias;
 
   useEffect(() => {
     if (!activeTab && visibleTabs[0]) terminal.selectTab(visibleTabs[0].id);
@@ -333,6 +337,7 @@ export function TerminalTabsScreen({
               isImmersive={isImmersive}
               disabledReason={disabledReason}
               embedded={embedded}
+              sourceNavigation={activeTab && (!sourceBot || sourceBot === botAlias) ? sourceNavigation : undefined}
               onToggleImmersive={onToggleImmersive}
               onAcceptPendingWorkingDir={onAcceptPendingWorkingDir}
               onCancelPendingWorkingDir={onCancelPendingWorkingDir}

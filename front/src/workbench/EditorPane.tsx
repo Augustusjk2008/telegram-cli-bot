@@ -32,6 +32,7 @@ type Props = {
   onOpenToRight?: (path: string) => void;
   onCloseGroup?: () => void;
   previewVisible?: boolean;
+  onQuoteDiff?: (quote: string) => void;
   botAlias: string;
   remotePlatform?: RemoteWorkspace["platform"];
   client: WebBotClient;
@@ -130,6 +131,7 @@ export function EditorPane({
   onOpenToRight,
   onCloseGroup,
   previewVisible = true,
+  onQuoteDiff,
   botAlias,
   remotePlatform,
   client,
@@ -845,6 +847,8 @@ export function EditorPane({
         ) : activeTab.kind === "git-diff" ? (
           <GitDiffViewer
             content={activeTab.content}
+            source={activeTab.gitDiff}
+            onQuote={onQuoteDiff}
             testId="desktop-git-diff-viewer"
             className="h-full min-h-0 p-3 text-xs leading-6"
             enableSideBySide

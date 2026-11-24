@@ -1,4 +1,5 @@
 import { relativeRemotePath } from "../services/remoteWorkspace";
+import { workspaceRelativePath } from "../services/workspacePath";
 import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
 import { clsx } from "clsx";
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -6,6 +7,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ViewMode } from "../app/layoutMode";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RemoteSshMenu } from "../components/RemoteSshMenu";
+import type { ChatComposerHandle } from "../components/ChatComposer";
 import { getExternalSourceErrorMessage } from "../services/types";
 import type {
   CodeLocation,
@@ -113,23 +115,6 @@ function isSameOrDescendantWorkbenchPath(path: string, parentPath: string) {
   );
 }
 
-function resolveRepoRelativeDiffPath(path: string, absolutePath: string, repoPath: string) {
-  const normalizedRepoPath = normalizeWorkbenchPath(repoPath);
-  const normalizedAbsolutePath = normalizeWorkbenchPath(absolutePath);
-  if (!normalizedRepoPath || !normalizedAbsolutePath) {
-    return path;
-  }
-
-  const repoKey = normalizedRepoPath.toLowerCase();
-  const absoluteKey = normalizedAbsolutePath.toLowerCase();
-  if (!absoluteKey.startsWith(`${repoKey}/`)) {
-    return path;
-  }
-
-  const relativePath = normalizedAbsolutePath.slice(normalizedRepoPath.length + 1);
-  return relativePath || path;
-}
-
 type Props = {
   authToken?: string;
   accountId?: string;
@@ -160,7 +145,10 @@ type Props = {
   lanChatReadRevision?: number;
   onLanChatUnreadChange?: (hasUnread: boolean) => void;
   announcementAction?: ReactNode;
-  chatPaneContent?: ReactNode | ((actions: { requestPreview: (path: string) => void }) => ReactNode);
+  chatPaneContent?: ReactNode | ((actions: {
+    requestPreview: (path: string) => void;
+    onDraftTargetChange: (target: ChatComposerHandle | null) => void;
+  }) => ReactNode);
   chatStatus?: ChatWorkbenchStatus;
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
@@ -229,7 +217,7 @@ export function DesktopWorkbench({
     resetLayoutTemplate,
   } = useWorkbenchState();
   const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace), platform: remoteWorkspace?.platform });
-  const workspaceUserScope = `${accountId || ""}\n${fileTree.rootPath}`;
+  const workspaceUserScope = JSON.stringify([accountId, fileTree.rootPath, remoteWorkspace?.connectionId, remoteWorkspace?.root, remoteWorkspace?.hostKeyFingerprint]);
   const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
   const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles, enableDocumentSync: !remoteWorkspace, remoteWorkspace });
   const editorDocumentPaths = useMemo(() => tabs.tabs.filter((tab) => tab.kind === "file" || tab.kind === "external-source").map((tab) => tab.path), [tabs.tabs]);
@@ -252,6 +240,7 @@ export function DesktopWorkbench({
   const previewRequestSeqRef = useRef(new Map<string, number>());
   const previewRequestSerialRef = useRef(0);
   const [focusedPane, setFocusedPane] = useState<FocusedWorkbenchPane>(null);
+  const [draftTarget, setDraftTarget] = useState<ChatComposerHandle | null>(null);
   const [isResizingPane, setIsResizingPane] = useState(false);
   const [terminalOverride, setTerminalOverride] = useState<TerminalOverrideState | null>(null);
   const [pendingTerminalOverride, setPendingTerminalOverride] = useState<TerminalOverrideState | null>(null);
@@ -262,6 +251,8 @@ export function DesktopWorkbench({
   const previewAgentId = (externalChatStatus || localChatStatus).agentId || "main";
   const chatRunning = Boolean((externalChatStatus || localChatStatus).processing || (externalChatStatus || localChatStatus).state === "running");
   const previewScopeIdentity = `${botAlias}\n${workspaceUserScope}`;
+  const windowsSourcePaths = remoteWorkspace ? remoteWorkspace.platform === "windows"
+    : /^(?:\/?[a-z]:[\\/]|[\\/]{2})/i.test(fileTree.rootPath);
   const htmlPreviewScopeIdentity = `${previewScopeIdentity}\n${previewAgentId}\n${(externalChatStatus || localChatStatus).workingDir || ""}\n${JSON.stringify(remoteWorkspace || null)}`;
   const previewScopeIdentityRef = useRef(previewScopeIdentity);
   previewScopeIdentityRef.current = previewScopeIdentity;
@@ -304,6 +295,7 @@ export function DesktopWorkbench({
     error: string;
   }>({ provider: null, pending: false, error: "" });
   const gitDecorationRequestRef = useRef(0);
+  const gitDiffRequestRef = useRef(0);
   const codeNavigationRequestRef = useRef(0);
   const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
   const codeNavigationScopeRef = useRef(codeNavigationScope);
@@ -414,8 +406,7 @@ export function DesktopWorkbench({
         location.path,
         location.line,
         location.column,
-        "",
-        () => codeNavigationScopeRef.current === scope,
+        { isCurrent: () => codeNavigationScopeRef.current === scope },
       );
     },
   });
@@ -884,26 +875,38 @@ export function DesktopWorkbench({
   const resolvedChatPaneContent = typeof chatPaneContent === "function"
     ? chatPaneContent({
         requestPreview: handleRequestPreview,
+        onDraftTargetChange: setDraftTarget,
       })
     : chatPaneContent;
+
+  function quoteDiffToChat(quote: string) {
+    if (!draftTarget) return;
+    const draft = draftTarget.getDraft();
+    setFocusedPane((current) => current === "chat" ? current : null);
+    showChat();
+    draftTarget.setDraft(`${draft}${draft ? "\n\n" : ""}${quote}\n\n`);
+  }
 
   async function openWorkspaceFile(
     path: string,
     line?: number,
     column = 1,
-    requestId = "",
-    isCurrent: () => boolean = () => true,
-    expectedScopeIdentity = previewScopeIdentityRef.current,
-    groupId = tabs.groups.activeGroupId,
+    {
+      requestId, isCurrent, expectedScopeIdentity = previewScopeIdentityRef.current,
+      groupId = tabs.groups.activeGroupId, openSource = false,
+    }: {
+      requestId?: string; isCurrent?: () => boolean; expectedScopeIdentity?: string;
+      groupId?: EditorGroupId; openSource?: boolean;
+    } = {},
   ) {
     const isCurrentRequest = () => (
-      isCurrent()
+      (isCurrent?.() ?? true)
       && previewScopeIdentityRef.current === expectedScopeIdentity
     );
     if (!isCurrentRequest()) {
       return false;
     }
-    const target = remoteWorkspace ? { kind: "file" as const } : await client.resolveFileOpenTarget(botAlias, path);
+    const target = remoteWorkspace || openSource ? { kind: "file" as const } : await client.resolveFileOpenTarget(botAlias, path);
     if (!isCurrentRequest()) {
       return false;
     }
@@ -922,7 +925,7 @@ export function DesktopWorkbench({
       setEditorReveal(null);
       return false;
     }
-    if (isRasterImagePath(path) || isHtmlPreviewPath(path)) {
+    if (isRasterImagePath(path) || (!openSource && isHtmlPreviewPath(path))) {
       await Promise.allSettled([
         loadPreview(path, "preview", { groupId }),
         fileTree.revealPath(path),
@@ -932,7 +935,7 @@ export function DesktopWorkbench({
       return false;
     }
 
-    if (!canWriteFiles) {
+    if (!openSource && !canWriteFiles) {
       await Promise.allSettled([
         loadPreview(path, "preview", { groupId }),
         fileTree.revealPath(path),
@@ -959,9 +962,14 @@ export function DesktopWorkbench({
   }
 
   async function openGitDiffInEditor(path: string, staged: boolean, gitPath = path) {
+    const request = ++gitDiffRequestRef.current;
     const diff = await client.getGitDiff(botAlias, gitPath, staged);
+    if (request !== gitDiffRequestRef.current || previewScopeIdentityRef.current !== previewScopeIdentity
+      || gitDecorationIdentityRef.current !== gitWorkspaceIdentityKey) return;
+    setFocusedPane((current) => current === "sidebar" ? null : current);
+    showEditor();
     const basename = path.split(/[\\/]/).filter(Boolean).pop() || path;
-    const tabPath = `git-diff:${staged ? "staged" : "worktree"}:${gitPath}`;
+    const tabPath = `git-diff:${diff.staged ? "staged" : "worktree"}:${diff.path}`;
     tabs.openReadOnlyTab({
       path: tabPath,
       basename: `${basename}.diff`,
@@ -969,8 +977,9 @@ export function DesktopWorkbench({
         ? `${diff.diff}\n\n...[diff truncated]`
         : (diff.diff || "当前没有可显示的差异"),
       sourcePath: path,
+      gitDiff: { path: diff.path, staged: diff.staged },
       kind: "git-diff",
-      statusText: `${path} · ${staged ? "已暂存" : "工作区"} Diff · 只读${diff.truncated ? " · 已截断" : ""}`,
+      statusText: `${diff.path} · ${diff.staged ? "已暂存" : "工作区"} Diff · 只读${diff.truncated ? " · 已截断" : ""}`,
     });
   }
 
@@ -1000,7 +1009,7 @@ export function DesktopWorkbench({
       }
       if (effect.type === "open_file") {
         setSidebarView("files");
-        await openWorkspaceFile(effect.path, effect.line, effect.column ?? 1, "", () => true, effectScopeIdentity);
+        await openWorkspaceFile(effect.path, effect.line, effect.column ?? 1, { expectedScopeIdentity: effectScopeIdentity });
         continue;
       }
       if (effect.type === "reveal_in_files") {
@@ -1108,10 +1117,7 @@ export function DesktopWorkbench({
       path,
       target.line,
       target.column,
-      "",
-      () => codeNavigationScopeRef.current === scope,
-      previewScopeIdentityRef.current,
-      groupId,
+      { isCurrent: () => codeNavigationScopeRef.current === scope, groupId },
     );
     if (opened && source && codeNavigationScopeRef.current === scope) {
       codeNavigationHistory.recordNavigation(source, target);
@@ -1284,10 +1290,7 @@ export function DesktopWorkbench({
               target.path,
               target.line,
               target.column,
-              result.requestId || requestId,
-              isCurrent,
-              previewScopeIdentityRef.current,
-              groupId,
+              { requestId: result.requestId || requestId, isCurrent, groupId },
             );
         if (opened && isCurrent()) {
           codeNavigationHistory.recordNavigation(source, target);
@@ -1370,7 +1373,7 @@ export function DesktopWorkbench({
           }}
           onOpenFileToRight={canPreviewFiles ? (path) => {
             showEditor();
-            void openWorkspaceFile(path, undefined, 1, "", () => true, previewScopeIdentityRef.current, "right");
+            void openWorkspaceFile(path, undefined, 1, { groupId: "right" });
           } : undefined}
           onCreatedFile={(path, content, lastModifiedNs) => {
             tabs.openCreatedFile(path, content, lastModifiedNs);
@@ -1398,8 +1401,7 @@ export function DesktopWorkbench({
             void loadPreview(path, "preview");
           }}
           onRequestDiff={(path, absolutePath) => {
-            if (canPreviewFiles) showEditor();
-            const gitPath = resolveRepoRelativeDiffPath(path, absolutePath, gitRepoPath);
+            const gitPath = workspaceRelativePath(absolutePath, fileTree.rootPath, gitRepoPath, windowsSourcePaths) ?? path;
             void openGitDiffInEditor(path, false, gitPath);
           }}
           onRequestUpload={handleUpload}
@@ -1728,6 +1730,7 @@ export function DesktopWorkbench({
                           client={client}
                           tabs={group.paths.flatMap((path) => tabs.tabs.find((tab) => tab.path === path) || [])}
                           activeTab={groupTab}
+                          onQuoteDiff={draftTarget ? quoteDiffToChat : undefined}
                           activeTabPath={group.activePath}
                           breakpointLines={groupTab ? debug.breakpointLinesForPath(groupTab.path) : []}
                           currentLine={groupTab ? debug.currentLineForPath(groupTab.path) : null}
@@ -1822,6 +1825,18 @@ export function DesktopWorkbench({
                     themeName={themeName}
                     disabledReason={terminalDisabledReason}
                     remote={Boolean(remoteWorkspace)}
+                    sourceNavigation={canPreviewFiles && !fileTree.loading && !fileTree.error ? {
+                      scope: previewScopeIdentity,
+                      root: fileTree.rootPath,
+                      windows: windowsSourcePaths,
+                      open: ({ path, line, column }, isCurrent) => {
+                        const existing = windowsSourcePaths && tabs.tabs.find((tab) => tab.kind === "file"
+                          && tab.path.replace(/\\/g, "/").toLowerCase() === path.toLowerCase());
+                        setFocusedPane((current) => current === "terminal" ? null : current);
+                        showEditor();
+                        void openWorkspaceFile(existing ? existing.path : path, line, column, { openSource: true, isCurrent });
+                      },
+                    } : undefined}
                     visible={showTerminalPane}
                     focused={focusedPane === "terminal"}
                     onToggleFocus={() => toggleFocusedPane("terminal")}
@@ -1872,6 +1887,7 @@ export function DesktopWorkbench({
                   onUnreadResult={onUnreadResult}
                   onWorkbenchStatusChange={setLocalChatStatus}
                   onRequestDesktopPreview={handleRequestPreview}
+                  onDraftTargetChange={setDraftTarget}
                 />
               )}
             </div>

@@ -665,6 +665,7 @@ export function FileEditorSurface({
     }
     const extensions = [
       ...editorRuntime.languageExtensions,
+      ...(readOnly ? [codemirrorView.EditorView.contentAttributes.of({ tabindex: "0" })] : []),
       FILE_EDITOR_SYNTAX_HIGHLIGHTING,
       FILE_EDITOR_FOLD_GUTTER,
       FILE_EDITOR_OCCURRENCES,
@@ -697,6 +698,7 @@ export function FileEditorSurface({
     languageFeatureExtensions,
     nameConventionExtensions,
     normalizedBreakpointLines,
+    readOnly,
     onToggleBreakpoint,
     stickyScrollExtensions,
   ]);

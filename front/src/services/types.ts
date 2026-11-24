@@ -3229,9 +3229,12 @@ export type GitOverview = {
   recentCommits: GitCommitSummary[];
 };
 
-export type GitDiffPayload = {
+export type GitDiffSource = {
   path: string;
   staged: boolean;
+};
+
+export type GitDiffPayload = GitDiffSource & {
   diff: string;
   truncated: boolean;
 };

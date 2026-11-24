@@ -129,6 +129,7 @@ type Props = {
   onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
+  onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
   onOpenGlobalPromptSettings?: () => void;
   onOpenBotSettings?: () => void;
   mobileLayout?: boolean;
@@ -1717,6 +1718,7 @@ export function ChatScreen({
   onBotActivityChange,
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
+  onDraftTargetChange,
   onOpenGlobalPromptSettings,
   onOpenBotSettings,
   mobileLayout = false,
@@ -5115,6 +5117,12 @@ export function ChatScreen({
     || voiceSession.continuity === "recovering"
   );
   const voiceInputLocked = voiceForegroundActive;
+  const composerDisabled = chatMutationsDisabled || loading || voiceInputLocked;
+  useLayoutEffect(() => {
+    if (!onDraftTargetChange || composerDisabled || chatDisabledReason || uploadingAttachments || !composerRef.current) return;
+    onDraftTargetChange(composerRef.current);
+    return () => onDraftTargetChange(null);
+  }, [onDraftTargetChange, botAlias, composerDisabled, chatDisabledReason, uploadingAttachments, composerPulseKey]);
   const readAloudContext = useMemo(() => ({
     scope: JSON.stringify([botAlias, storageScope, activeAgentId, voiceConversationId, botOverview?.sessionEpoch]),
     enabled: isVisible && !voiceForegroundActive && !loading && !conversationLoading,
@@ -5629,7 +5637,7 @@ export function ChatScreen({
             onRemoveAttachment={handleRemoveAttachment}
             attachments={pendingAttachments}
             pulse={composerPulseKey > 0}
-            disabled={chatMutationsDisabled || loading || voiceInputLocked}
+            disabled={composerDisabled}
             compact={isImmersive || embedded}
             mobileLayout={mobileLayout}
             enterToSend={enterToSend}

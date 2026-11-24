@@ -1,4 +1,5 @@
 import { ChatScreen } from "../screens/ChatScreen";
+import type { ChatComposerHandle } from "../components/ChatComposer";
 import type { WebBotClient } from "../services/webBotClient";
 import type { ChatWorkbenchStatus } from "./workbenchTypes";
 
@@ -16,6 +17,7 @@ type Props = {
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onRequestDesktopPreview?: (path: string) => void;
+  onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
 };
 
 export function ChatPane({
@@ -32,6 +34,7 @@ export function ChatPane({
   onUnreadResult,
   onWorkbenchStatusChange,
   onRequestDesktopPreview,
+  onDraftTargetChange,
 }: Props) {
   return (
     <ChatScreen
@@ -49,6 +52,7 @@ export function ChatPane({
       onUnreadResult={onUnreadResult}
       onWorkbenchStatusChange={onWorkbenchStatusChange}
       onRequestDesktopPreview={onRequestDesktopPreview}
+      onDraftTargetChange={onDraftTargetChange}
     />
   );
 }

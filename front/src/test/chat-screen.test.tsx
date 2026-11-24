@@ -1478,14 +1478,16 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   const getClusterTaskStatus = vi.fn<WebBotClient["getClusterTaskStatus"]>(async () => clusterTaskStatus);
   const client = createClient({ getBotOverview, listAgents, listMessages, listConversations, getClusterTaskStatus });
   const sendMessage = vi.spyOn(client, "sendMessage");
+  const onDraftTargetChange = vi.fn();
 
-  render(<ChatScreen botAlias="main" client={client} />);
+  render(<ChatScreen botAlias="main" client={client} onDraftTargetChange={onDraftTargetChange} />);
 
   const teamPanel = await screen.findByTestId("cluster-team-panel");
   await user.click(within(teamPanel).getByRole("button", { name: "展开集群编组" }));
   expect(screen.getByText("动态审查员")).toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "当前 agent" })).not.toBeInTheDocument();
   expect(screen.queryByText("旧固定角色")).not.toBeInTheDocument();
+  expect(onDraftTargetChange).toHaveBeenLastCalledWith(expect.objectContaining({ setDraft: expect.any(Function) }));
   await user.click(screen.getByRole("button", { name: "查看动态审查员对话" }));
 
   await waitFor(() => {
@@ -1497,6 +1499,7 @@ test("opens child conversations from the dynamic cluster team and returns to mai
   expect(within(childTeamPanel).getByText("动态审查员")).toBeInTheDocument();
   const readOnlyStatus = "会话只读 · 模型：gpt-5.6-pro · 思考深度：xhigh";
   expect(screen.getAllByText(readOnlyStatus)).toHaveLength(1);
+  expect(onDraftTargetChange).toHaveBeenLastCalledWith(null);
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
   expect(sendMessage).not.toHaveBeenCalled();

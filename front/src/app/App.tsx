@@ -5,6 +5,7 @@
 
 import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { ChatComposerHandle } from "../components/ChatComposer";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
 import { NotificationCenter } from "./NotificationCenter";
@@ -949,6 +950,7 @@ function AppContent() {
 
   function renderDesktopChatStack(options: {
     requestPreview?: (path: string) => void;
+    onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
     currentVisible?: boolean;
   } = {}) {
     const currentVisible = options.currentVisible ?? desktopChatPaneVisible;
@@ -972,6 +974,7 @@ function AppContent() {
                 onOpenBotSettings={() => openBotSettings(alias)}
                 onOpenGlobalPromptSettings={openAdminCenter}
                 onRequestDesktopPreview={options.requestPreview}
+                onDraftTargetChange={instanceKey === chatInstanceKey ? options.onDraftTargetChange : undefined}
                 onUnreadResult={recordBotCompletion}
                 onBotActivityChange={handleBotActivityChange}
                 onWorkbenchStatusChange={(status) => {
@@ -1192,9 +1195,7 @@ function AppContent() {
               onLanChatUnreadChange={setHasUnreadLanChat}
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
-              chatPaneContent={({ requestPreview }) => renderDesktopChatStack({
-                requestPreview,
-              })}
+              chatPaneContent={renderDesktopChatStack}
               onViewModeChange={setViewMode}
               onOpenBotSwitcher={(anchorRect) => {
                 void openBotSwitcher(anchorRect);

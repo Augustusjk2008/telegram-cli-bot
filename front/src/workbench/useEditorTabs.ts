@@ -615,6 +615,7 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
         ? {
             ...item,
             pluginTargets: nextPluginTargets ?? item.pluginTargets,
+            readOnly: item.kind === "file" ? !canWriteFiles : item.readOnly,
           }
         : item));
       setActiveTabPath(path, groupId);
@@ -865,12 +866,14 @@ export function useEditorTabs({ botAlias, client, scopeKey = "", structureOnly =
     content: string;
     statusText?: string;
     sourcePath?: string;
+    gitDiff?: EditorTab["gitDiff"];
     kind?: EditorTab["kind"];
   }) {
     const nextTab = createTab(input.path, input.content, undefined, {
       basename: input.basename,
       kind: input.kind || "git-diff",
       sourcePath: input.sourcePath,
+      gitDiff: input.gitDiff,
       readOnly: true,
       statusText: input.statusText || "只读",
       contentPersistence: "none",

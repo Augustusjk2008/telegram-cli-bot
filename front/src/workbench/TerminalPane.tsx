@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import type { WebBotClient } from "../services/webBotClient";
 import { DEFAULT_UI_THEME, type UiThemeName } from "../theme";
 import type { TerminalWorkbenchStatus } from "./workbenchTypes";
+import type { TerminalSourceNavigation } from "../terminal/terminalSourceLinks";
 
 const TerminalTabsScreen = lazy(() =>
   import("../screens/TerminalTabsScreen").then((module) => ({ default: module.TerminalTabsScreen })),
@@ -18,6 +19,7 @@ type Props = {
   remote?: boolean;
   visible?: boolean;
   focused?: boolean;
+  sourceNavigation?: TerminalSourceNavigation;
   onToggleFocus?: () => void;
   onAcceptPendingWorkingDir?: () => void;
   onCancelPendingWorkingDir?: () => void;
@@ -35,6 +37,7 @@ export function TerminalPane({
   remote = false,
   visible = true,
   focused = false,
+  sourceNavigation,
   onToggleFocus,
   onAcceptPendingWorkingDir,
   onCancelPendingWorkingDir,
@@ -54,6 +57,7 @@ export function TerminalPane({
         remote={remote}
         embedded
         focused={focused}
+        sourceNavigation={sourceNavigation}
         onToggleFocus={onToggleFocus}
         onAcceptPendingWorkingDir={onAcceptPendingWorkingDir}
         onCancelPendingWorkingDir={onCancelPendingWorkingDir}

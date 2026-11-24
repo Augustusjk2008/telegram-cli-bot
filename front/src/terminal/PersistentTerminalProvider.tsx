@@ -17,6 +17,7 @@ type CreateTerminalTabOptions = {
   cwd?: string;
   shell?: string;
   botAlias?: string;
+  sourceBotAlias?: string;
   start?: boolean;
   activate?: boolean;
   terminalActionBotAlias?: string;

@@ -171,7 +171,8 @@ function ancestorPathsForPath(path: string) {
 export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean; remote?: boolean; platform?: RemoteWorkspace["platform"] }): UseFileTreeResult {
   const remote = options?.remote === true;
   const platform = options?.platform;
-  const [rootPath, setRootPath] = useState("");
+  const [loadedRoot, setLoadedRoot] = useState<{ botAlias: string; client: WebBotClient; path: string } | null>(null);
+  const rootPath = loadedRoot?.botAlias === botAlias && loadedRoot.client === client ? loadedRoot.path : "";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [expandedPaths, setExpandedPaths] = useState<string[]>([]);
@@ -402,7 +403,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
         "": rootBranch,
       };
 
-      setRootPath(nextRootPath);
+      setLoadedRoot({ botAlias, client, path: nextRootPath });
       setBranchesSynced(nextBranches);
       setExpandedPathsSynced([]);
 
@@ -450,7 +451,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
         "": rootBranch,
       };
 
-      setRootPath(nextRootPath);
+      setLoadedRoot({ botAlias, client, path: nextRootPath });
       setBranchesSynced(nextBranches);
       setExpandedPathsSynced([]);
 
