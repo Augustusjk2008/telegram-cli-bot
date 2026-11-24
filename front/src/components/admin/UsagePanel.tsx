@@ -518,8 +518,7 @@ function collapseDuplicateTimedPoints(points: TimedChartPoint[]) {
   const last = points[points.length - 1];
   const interior: TimedChartPoint[] = [];
   for (const point of points.slice(1, -1)) {
-    // Segment endpoints are reset anchors, so never replace them with a
-    // duplicate sample at the same instant.
+    // Keep endpoints at their observed quota even when timestamps repeat.
     if (point.timestamp === first.timestamp || point.timestamp === last.timestamp) continue;
     const previous = interior.at(-1);
     if (previous?.timestamp === point.timestamp) {
@@ -699,7 +698,6 @@ function appendSmoothSegment(
 
 function smoothQuotaCurve(
   points: TimedChartPoint[],
-  resetBoundaryPairs: Set<string>,
   timestampRange: number,
   domainStart: number,
   plotWidth: number,
@@ -707,8 +705,9 @@ function smoothQuotaCurve(
   const segments: QuotaCurveSegment[] = [];
   let segmentStart = 0;
   for (let index = 1; index < points.length; index += 1) {
-    const isBoundary = resetBoundaryPairs.has(`${index - 1}:${index}`);
-    if (!isBoundary) continue;
+    // A rise in remaining quota has a smaller screen y. Pin both samples before smoothing.
+    const quotaRose = points[index].y < points[index - 1].y;
+    if (!quotaRose) continue;
 
     appendSmoothSegment(segments, points.slice(segmentStart, index), timestampRange, domainStart, plotWidth);
     segments.push({ start: points[index - 1], end: points[index], reset: true });
@@ -812,37 +811,8 @@ function CodexRateLimitBucketChart({
       ? yForCredits(creditsValue(sample) as number)
       : null,
   }));
-  const resetBoundaryPairs = new Set<string>();
-  // The exact reset instant is not sampled.  The nearest observations on its
-  // two sides are therefore the stable extrema anchors to keep verbatim.
-  for (let index = 1; index < orderedSamples.length; index += 1) {
-    const previousResetAt = Date.parse(orderedSamples[index - 1].resetsAt);
-    const currentResetAt = Date.parse(orderedSamples[index].resetsAt);
-    const previousSampledAt = Date.parse(orderedSamples[index - 1].sampledAt);
-    const currentSampledAt = Date.parse(orderedSamples[index].sampledAt);
-    // A reset is either observed between two samples or accompanied by a
-    // changed deadline and a quota refill.  The crossing check also handles
-    // immediate post-reset usage, where no refill is visible in the sample.
-    const resetTimestampChanged = previousResetAt !== currentResetAt;
-    const quotaJumped = remainingPercent(orderedSamples[index])
-      > remainingPercent(orderedSamples[index - 1]);
-    const resetOccurredBetweenSamples = Number.isFinite(previousSampledAt)
-      && Number.isFinite(currentSampledAt)
-      && previousResetAt > previousSampledAt
-      && previousResetAt <= currentSampledAt;
-    if (
-      Number.isFinite(previousResetAt)
-      && (
-        resetOccurredBetweenSamples
-        || (Number.isFinite(currentResetAt) && resetTimestampChanged && quotaJumped)
-      )
-    ) {
-      resetBoundaryPairs.add(`${index - 1}:${index}`);
-    }
-  }
   const quotaCurve = smoothQuotaCurve(
     points.map(({ x, timestamp, quotaY }) => ({ x, y: quotaY, timestamp })),
-    resetBoundaryPairs,
     timestampRange,
     minTimestamp,
     plotWidth,
@@ -999,7 +969,7 @@ function CodexRateLimitBucketChart({
               {showCredits
                 ? `按采样时间展示该额度桶的剩余额度与 Credits；右轴为剩余 Credits，从 ${formatCreditsValue(creditsBounds.min)} 到 ${formatCreditsValue(creditsBounds.max)}。`
                 : showConsumption
-                ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}；柱高为固定时间区间内平滑额度曲线负导数的平均值，随横轴范围变化；重置间隔为过渡估计，数据不足处留空。`
+                ? `左轴为剩余额度，右轴为消耗速度（百分点/小时），从 ${consumptionRateFormat.format(rateAxisMin)} 到 ${consumptionRateFormat.format(rateAxisMax)}。柱高为固定时间区间内平滑额度曲线负导数的平均值，随横轴范围变化。额度回升期间的消耗速度由相邻区间估算，数据不足处留空。`
                 : `按采样时间展示该额度桶的剩余额度与剩余时长；左右纵轴按当前数据范围同步缩放，左轴为${formatPercentValue(axisBounds.min)}到${formatPercentValue(axisBounds.max)}，右轴为${durationDaysForPercent(axisBounds.min)}天到${durationDaysForPercent(axisBounds.max)}天。`}
             </desc>
             <defs>
@@ -1136,7 +1106,7 @@ function CodexRateLimitBucketChart({
       {showConsumption ? (
         <p className="codex-usage-rate-limit-note">
           {consumptionBars.length
-            ? "柱高表示固定时间区间内的消耗速度；重置间隔为过渡估计。"
+            ? "柱高表示固定时间区间内的消耗速度。额度回升期间的消耗速度由相邻区间估算。"
             : "暂无可计算的消耗速度，需要有效时间范围内的连续额度曲线。"}
         </p>
       ) : null}

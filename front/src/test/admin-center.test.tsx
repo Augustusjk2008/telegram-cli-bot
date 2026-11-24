@@ -627,6 +627,33 @@ test("Codex 额度趋势隐藏已下线的次要额度桶", async () => {
   expect(article).toHaveTextContent("7 天窗口");
 });
 
+test("同一重置窗口内连续回升的额度按原始采样点直线连接", async () => {
+  const user = userEvent.setup();
+  const client = createAdminClient();
+  const stats = await client.getCodexUsageStats();
+  const start = Date.parse("2026-08-01T00:00:00Z");
+  stats.rateLimitSamples = [[0, 0], [30, 25], [60, 50], [61, 25], [62, 0], [120, 100]]
+    .map(([minute, usedPercent]) => ({
+      ...stats.rateLimitSamples[0],
+      sampledAt: new Date(start + minute * 60_000).toISOString(),
+      resetsAt: "2026-08-08T00:00:00Z",
+      usedPercent,
+    }));
+  vi.spyOn(client, "getCodexUsageStats").mockResolvedValue(stats);
+
+  render(<AdminCenterScreen client={client} onClose={() => undefined} initialBots={[]} />);
+  await openCodexUsageTab(user);
+  const chart = await screen.findByRole("img", { name: /通用 Codex.*共 6 个样本/ });
+  const grid = chart.querySelectorAll(".codex-usage-rate-limit-grid line");
+  const left = Number(grid[0].getAttribute("x1"));
+  const width = Number(grid[0].getAttribute("x2")) - left;
+  const x = (minute: number) => left + (minute / 120) * width;
+  const y = (percent: number) => grid[percent / 25].getAttribute("y1");
+  const path = chart.querySelector(".codex-usage-rate-limit-line")?.getAttribute("d");
+  expect(path).toContain("C ");
+  expect(path).toContain(`${x(60)} ${y(50)} L ${x(61)} ${y(75)} L ${x(62)} ${y(100)}`);
+});
+
 test("Codex 额度趋势重复采样时间退回折线且不产生无效坐标", async () => {
   const user = userEvent.setup();
   const client = createAdminClient();
