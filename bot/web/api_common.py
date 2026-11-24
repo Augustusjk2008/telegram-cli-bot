@@ -22,6 +22,16 @@ class WebApiError(Exception):
         self.data = data or {}
 
 
+def web_api_error_from_remote(exc: Any) -> WebApiError:
+    """Translate a ``RemoteWorkspaceError`` into the error the Web API returns."""
+    data = dict(getattr(exc, "data", None) or {})
+    if exc.code == "host_key_confirmation_required":
+        return WebApiError(409, "remote_host_key_unknown", exc.message, {
+            "fingerprint": data.get("host_key_fingerprint", ""),
+        })
+    return WebApiError(exc.status, exc.code, exc.message, data)
+
+
 @dataclass
 class AuthContext:
     """Web request auth context."""

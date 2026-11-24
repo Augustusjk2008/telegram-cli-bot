@@ -451,7 +451,9 @@ async def test_all_other_remote_git_routes_remain_unavailable(tmp_path, monkeypa
         ("POST", "git/remotes/remove"), ("POST", "git/publish"),
         ("POST", "git/stash/pop"),
         ("POST", "git/smart-commit"), ("GET", "git/smart-commit/active"),
-        ("GET", "git/smart-commit/{job_id}"),
+        ("GET", "git/smart-commit/{job_id}"), ("POST", "git/clone"),
+        ("POST", "git/operations"), ("GET", "git/operations/active"),
+        ("GET", "git/operations/{operation_id}"),
     }
     routes = [(route.method, route.resource.canonical) for route in app.router.routes()
               if route.method != "HEAD" and route.resource.canonical.startswith("/api/bots/{alias}/git")]

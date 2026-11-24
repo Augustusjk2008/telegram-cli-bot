@@ -87,6 +87,8 @@ import type {
   GitCommitMessageGenerateResult,
   GitCapabilities,
   GitSmartCommitJob,
+  GitOperationJob,
+  GitOperationKind,
   GitDiffPayload,
   GitIdentityConfig,
   GitIdentityScope,
@@ -461,6 +463,10 @@ export interface WebBotClient {
   pullGitRemote(botAlias: string): Promise<GitActionResult>;
   mergeGitRemote(botAlias: string): Promise<GitActionResult>;
   pushGitRemote(botAlias: string): Promise<GitActionResult>;
+  /** Starts a long Git action as a server job and returns before it finishes. */
+  startGitOperation(botAlias: string, kind: GitOperationKind, options?: { message?: string }): Promise<GitOperationJob>;
+  getGitOperation(botAlias: string, operationId: string): Promise<GitOperationJob>;
+  getActiveGitOperation(botAlias: string): Promise<GitOperationJob | null>;
   listGitRemotes(botAlias: string): Promise<GitRemoteList>;
   cloneGitRepository(botAlias: string, name: string, url: string): Promise<GitActionResult>;
   addGitRemote(botAlias: string, name: string, url: string): Promise<GitRemoteList>;

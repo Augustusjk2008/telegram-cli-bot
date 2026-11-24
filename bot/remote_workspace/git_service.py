@@ -98,6 +98,8 @@ class RemoteGitService:
         key = tuple(config.get(field, "") for field in (
             "connection_id", "host", "port", "username", "host_key_fingerprint", "platform",
         )) + (self.root.casefold() if self.platform == "windows" else self.root,)
+        # Serializes mutations only. Reads pass --no-optional-locks and must not
+        # queue behind a remote sync that can hold this lock for minutes.
         with _LOCKS_GUARD:
             self._lock = _LOCKS.setdefault(key, threading.RLock())
 
@@ -529,38 +531,36 @@ class RemoteGitService:
         }
 
     def overview(self) -> dict:
-        with self._lock:
-            if self._repo_root() is None:
-                return self._empty_overview()
-            return self._overview()
+        if self._repo_root() is None:
+            return self._empty_overview()
+        return self._overview()
 
     def capabilities(self) -> dict:
-        with self._lock:
-            result = self._git(["--version"], allowed=(0, 127))
-            if result["returncode"] == 127:
-                return build_git_capabilities(available=False, reason="remote_git_not_found")
-            payload = build_git_capabilities(
-                available={
-                    "tree_status": True,
-                    "commit_graph": True,
-                    "branches": True,
-                    "branch_mutation": True,
-                    "discard": True,
-                    "stash": True,
-                    "stash_create": False,
-                    "identity": True,
-                    "remotes": True,
-                    "publish": True,
-                    "commit_message_generation": True,
-                    "smart_commit": True,
-                },
-                reason="remote_feature_unavailable",
-            )
-            capabilities = payload["capabilities"]
-            for name in (*_SYNC_OPERATIONS, "merge"):
-                capabilities[name]["available"] = True
-                capabilities[name]["reason"] = ""
-            return payload
+        result = self._git(["--version"], allowed=(0, 127))
+        if result["returncode"] == 127:
+            return build_git_capabilities(available=False, reason="remote_git_not_found")
+        payload = build_git_capabilities(
+            available={
+                "tree_status": True,
+                "commit_graph": True,
+                "branches": True,
+                "branch_mutation": True,
+                "discard": True,
+                "stash": True,
+                "stash_create": False,
+                "identity": True,
+                "remotes": True,
+                "publish": True,
+                "commit_message_generation": True,
+                "smart_commit": True,
+            },
+            reason="remote_feature_unavailable",
+        )
+        capabilities = payload["capabilities"]
+        for name in (*_SYNC_OPERATIONS, "merge"):
+            capabilities[name]["available"] = True
+            capabilities[name]["reason"] = ""
+        return payload
 
     @staticmethod
     def _redact_remote_text(value: object) -> str:
@@ -831,35 +831,34 @@ class RemoteGitService:
         return remote_name
 
     def remotes(self) -> dict:
-        with self._lock:
-            payload = {
-                "repo_found": False,
-                "working_dir": self.root,
-                "repo_path": "",
-                "current_branch": "",
-                "upstream": "",
-                "has_commits": False,
-                "remotes": [],
-                # Remote hosts keep using their own Git credentials; Orbit never
-                # forwards a GitHub account token over SSH.
-                "github_account_auth": False,
-            }
-            if self._repo_root() is None:
-                return payload
-            raw = self._git(["remote", "-v"], error="git_remote_list_failed")["stdout"]
-            branch, upstream = self._current_branch_and_upstream()
-            payload.update({
-                "repo_found": True,
-                "repo_path": self.root,
-                "current_branch": branch,
-                "upstream": upstream,
-                "has_commits": self._has_head_commit(),
-                "remotes": [
-                    build_git_remote_entry(item["name"], item["fetch_urls"], item["push_urls"])
-                    for item in parse_git_remote_verbose(raw)
-                ],
-            })
+        payload = {
+            "repo_found": False,
+            "working_dir": self.root,
+            "repo_path": "",
+            "current_branch": "",
+            "upstream": "",
+            "has_commits": False,
+            "remotes": [],
+            # Remote hosts keep using their own Git credentials; Orbit never
+            # forwards a GitHub account token over SSH.
+            "github_account_auth": False,
+        }
+        if self._repo_root() is None:
             return payload
+        raw = self._git(["remote", "-v"], error="git_remote_list_failed")["stdout"]
+        branch, upstream = self._current_branch_and_upstream()
+        payload.update({
+            "repo_found": True,
+            "repo_path": self.root,
+            "current_branch": branch,
+            "upstream": upstream,
+            "has_commits": self._has_head_commit(),
+            "remotes": [
+                build_git_remote_entry(item["name"], item["fetch_urls"], item["push_urls"])
+                for item in parse_git_remote_verbose(raw)
+            ],
+        })
+        return payload
 
     def remote_add(self, name: object, url: object) -> dict:
         try:
@@ -955,19 +954,18 @@ class RemoteGitService:
         return items
 
     def tree_status(self) -> dict:
-        with self._lock:
-            if self._repo_root() is None:
-                return {"repo_found": False, "working_dir": self.root, "repo_path": "", "items": {}}
-            raw = self._git(
-                ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"],
-                error="git_status_failed",
-            )["stdout"]
-            return {
-                "repo_found": True,
-                "working_dir": self.root,
-                "repo_path": self.root,
-                "items": self._status_items(raw),
-            }
+        if self._repo_root() is None:
+            return {"repo_found": False, "working_dir": self.root, "repo_path": "", "items": {}}
+        raw = self._git(
+            ["status", "--porcelain=1", "-z", "--ignored=matching", "--untracked-files=normal"],
+            error="git_status_failed",
+        )["stdout"]
+        return {
+            "repo_found": True,
+            "working_dir": self.root,
+            "repo_path": self.root,
+            "items": self._status_items(raw),
+        }
 
     @staticmethod
     def _parse_nul_fields(raw: str, width: int, *, error: str = "remote_git_output_truncated") -> list[list[str]]:
@@ -985,27 +983,26 @@ class RemoteGitService:
         return [fields[index:index + width] for index in range(0, len(fields), width)]
 
     def branches(self) -> dict:
-        with self._lock:
-            self._require_repo()
-            raw = self._git([
-                "for-each-ref",
-                "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(objectname:short)%00%(contents:subject)%00",
-                "refs/heads",
-            ], error="git_branches_failed")["stdout"]
-            branches = [
-                {
-                    "name": name,
-                    "current": head_marker == "*",
-                    "upstream": upstream,
-                    "short_hash": short_hash,
-                    "subject": subject,
-                }
-                for name, head_marker, upstream, short_hash, subject in self._parse_nul_fields(raw, 5)
-            ]
-            return {
-                "current_branch": next((item["name"] for item in branches if item["current"]), ""),
-                "branches": branches,
+        self._require_repo()
+        raw = self._git([
+            "for-each-ref",
+            "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(objectname:short)%00%(contents:subject)%00",
+            "refs/heads",
+        ], error="git_branches_failed")["stdout"]
+        branches = [
+            {
+                "name": name,
+                "current": head_marker == "*",
+                "upstream": upstream,
+                "short_hash": short_hash,
+                "subject": subject,
             }
+            for name, head_marker, upstream, short_hash, subject in self._parse_nul_fields(raw, 5)
+        ]
+        return {
+            "current_branch": next((item["name"] for item in branches if item["current"]), ""),
+            "branches": branches,
+        }
 
     @staticmethod
     def _parse_graph_commits(raw: str) -> list[dict]:
@@ -1050,70 +1047,67 @@ class RemoteGitService:
         return refs_by_commit
 
     def graph(self, scope: str = "all", limit: object = "", cursor: object = "") -> dict:
-        with self._lock:
-            try:
-                normalized_scope = _normalize_git_graph_scope(scope)
-                normalized_limit = _normalize_git_graph_limit(limit)
-                offset = _decode_git_graph_cursor(cursor, scope=normalized_scope)
-            except ValueError as exc:
-                raise RemoteWorkspaceError(400, getattr(exc, "code", "invalid_cursor"), str(exc)) from exc
-            self._require_repo()
-            commits_raw = self._git([
-                "log", "--topo-order", f"--skip={offset}", f"-n{normalized_limit + 1}",
-                "--date=iso-strict",
-                "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%B%x00",
-                "--all" if normalized_scope == "all" else "HEAD",
-            ], error="git_graph_failed")["stdout"]
-            commits = self._parse_graph_commits(commits_raw)
-            refs_raw = self._git([
-                "for-each-ref",
-                "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(objecttype)%00%(*objecttype)%00%(HEAD)%00",
-                "refs/heads", "refs/remotes", "refs/tags",
-            ], error="git_graph_failed")["stdout"]
-            refs_by_commit = self._parse_graph_refs(refs_raw)
-            head_result = self._git(["rev-parse", "--verify", "HEAD^{commit}"], allowed=(0, 128), error="git_graph_failed")
-            head_hash = head_result["stdout"].strip() if head_result["returncode"] == 0 else ""
-            if head_hash:
-                refs_by_commit.setdefault(head_hash, []).append({"name": "HEAD", "kind": "head", "current": True})
-            order = {"head": 0, "local_branch": 1, "remote_branch": 2, "tag": 3}
-            for refs in refs_by_commit.values():
-                refs.sort(key=lambda item: (order.get(str(item.get("kind")), 99), str(item.get("name") or "")))
-            nodes = _layout_git_graph_nodes(commits, refs_by_commit)
-            has_more = len(nodes) > normalized_limit
-            return {
-                "repo_found": True,
-                "scope": normalized_scope,
-                "nodes": nodes[:normalized_limit],
-                "has_more": has_more,
-                "next_cursor": _encode_git_graph_cursor(
-                    offset=offset + normalized_limit,
-                    scope=normalized_scope,
-                    head_token=head_hash,
-                ) if has_more else "",
-            }
+        try:
+            normalized_scope = _normalize_git_graph_scope(scope)
+            normalized_limit = _normalize_git_graph_limit(limit)
+            offset = _decode_git_graph_cursor(cursor, scope=normalized_scope)
+        except ValueError as exc:
+            raise RemoteWorkspaceError(400, getattr(exc, "code", "invalid_cursor"), str(exc)) from exc
+        self._require_repo()
+        commits_raw = self._git([
+            "log", "--topo-order", f"--skip={offset}", f"-n{normalized_limit + 1}",
+            "--date=iso-strict",
+            "--format=%H%x1f%P%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%B%x00",
+            "--all" if normalized_scope == "all" else "HEAD",
+        ], error="git_graph_failed")["stdout"]
+        commits = self._parse_graph_commits(commits_raw)
+        refs_raw = self._git([
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)%00%(*objectname)%00%(objecttype)%00%(*objecttype)%00%(HEAD)%00",
+            "refs/heads", "refs/remotes", "refs/tags",
+        ], error="git_graph_failed")["stdout"]
+        refs_by_commit = self._parse_graph_refs(refs_raw)
+        head_result = self._git(["rev-parse", "--verify", "HEAD^{commit}"], allowed=(0, 128), error="git_graph_failed")
+        head_hash = head_result["stdout"].strip() if head_result["returncode"] == 0 else ""
+        if head_hash:
+            refs_by_commit.setdefault(head_hash, []).append({"name": "HEAD", "kind": "head", "current": True})
+        order = {"head": 0, "local_branch": 1, "remote_branch": 2, "tag": 3}
+        for refs in refs_by_commit.values():
+            refs.sort(key=lambda item: (order.get(str(item.get("kind")), 99), str(item.get("name") or "")))
+        nodes = _layout_git_graph_nodes(commits, refs_by_commit)
+        has_more = len(nodes) > normalized_limit
+        return {
+            "repo_found": True,
+            "scope": normalized_scope,
+            "nodes": nodes[:normalized_limit],
+            "has_more": has_more,
+            "next_cursor": _encode_git_graph_cursor(
+                offset=offset + normalized_limit,
+                scope=normalized_scope,
+                head_token=head_hash,
+            ) if has_more else "",
+        }
 
     def stashes(self) -> dict:
-        with self._lock:
-            self._require_repo()
-            return {"items": self._stash_items()}
+        self._require_repo()
+        return {"items": self._stash_items()}
 
     def identity(self) -> dict:
-        with self._lock:
-            repo_path = self._repo_root()
+        repo_path = self._repo_root()
 
-            def read(scope: str, key: str) -> str:
-                result = self._git(["config", f"--{scope}", "--get", key], allowed=(0, 1), error="git_identity_failed")
-                return result["stdout"].strip() if result["returncode"] == 0 else ""
+        def read(scope: str, key: str) -> str:
+            result = self._git(["config", f"--{scope}", "--get", key], allowed=(0, 1), error="git_identity_failed")
+            return result["stdout"].strip() if result["returncode"] == 0 else ""
 
-            return {
-                "repo_found": repo_path is not None,
-                "repo_path": repo_path or "",
-                "global": {"name": read("global", "user.name"), "email": read("global", "user.email")},
-                "local": {
-                    "name": read("local", "user.name") if repo_path else "",
-                    "email": read("local", "user.email") if repo_path else "",
-                },
-            }
+        return {
+            "repo_found": repo_path is not None,
+            "repo_path": repo_path or "",
+            "global": {"name": read("global", "user.name"), "email": read("global", "user.email")},
+            "local": {
+                "name": read("local", "user.name") if repo_path else "",
+                "email": read("local", "user.email") if repo_path else "",
+            },
+        }
 
     def branch_create(self, name: str, start_point: str = "") -> dict:
         with self._lock:
@@ -1297,24 +1291,23 @@ class RemoteGitService:
         path = self._path(path)
         if not isinstance(staged, bool):
             raise RemoteWorkspaceError(400, "invalid_git_diff", "staged must be a boolean")
-        with self._lock:
-            self._require_repo()
-            _, files, _ = self._status()
-            self._select([path], files)
-            untracked = any(item["path"] == path and item["untracked"] for item in files)
-            args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=2147483647"]
-            if staged:
-                args.append("--cached")
-            if untracked and not staged:
-                args.extend(["--no-index", "--", "NUL" if self.platform == "windows" else "/dev/null", "./" + path])
-            else:
-                args.extend(["--", path])
-            result = self._git(args, error="git_diff_failed", allowed=(0, 1) if untracked and not staged else (0,),
-                               truncated=True)
-            text = result["stdout"]
-            if result["output_truncated"]:
-                text += "\n\n[Remote Git diff truncated: output limit reached]\n"
-            return {"path": path, "staged": staged, "diff": text, "truncated": result["output_truncated"]}
+        self._require_repo()
+        _, files, _ = self._status()
+        self._select([path], files)
+        untracked = any(item["path"] == path and item["untracked"] for item in files)
+        args = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=2147483647"]
+        if staged:
+            args.append("--cached")
+        if untracked and not staged:
+            args.extend(["--no-index", "--", "NUL" if self.platform == "windows" else "/dev/null", "./" + path])
+        else:
+            args.extend(["--", path])
+        result = self._git(args, error="git_diff_failed", allowed=(0, 1) if untracked and not staged else (0,),
+                           truncated=True)
+        text = result["stdout"]
+        if result["output_truncated"]:
+            text += "\n\n[Remote Git diff truncated: output limit reached]\n"
+        return {"path": path, "staged": staged, "diff": text, "truncated": result["output_truncated"]}
 
     def stage(self, paths: list[str]) -> dict:
         paths = self._paths(paths)

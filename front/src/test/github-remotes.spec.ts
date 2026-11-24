@@ -99,7 +99,7 @@ for (const width of [1280, 390]) {
         else if (operation === "/stashes") data = { items: [] };
         else if (operation === "/identity") data = { repo_found: true, repo_path: root, global: { name: "Dev", email: "dev@example.com" }, local: { name: "", email: "" } };
         else if (operation === "/commit-message/config") data = { cli_type: "codex", cli_path: "codex", params: {}, defaults: {}, schema: {} };
-        else if (operation === "/smart-commit/active") data = null;
+        else if (operation === "/smart-commit/active" || operation === "/operations/active") data = null;
         else data = overview();
       } else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 0, reset: false };
       else if (path.endsWith("/conversations")) data = { items: [], active_conversation_id: "" };

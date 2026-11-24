@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -39,7 +39,6 @@ import { DynamicVirtualList } from "../components/virtual/DynamicVirtualList";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
-  GitActionResult,
   GitBranchList,
   GitChangedFile,
   GitCommitGraphNode,
@@ -57,9 +56,19 @@ import type {
   GitResetMode,
   GitSmartCommitJob,
   GitStashList,
+  GitOperationJob,
+  GitOperationKind,
   GitWorkspaceIdentity,
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
+import {
+  gitWorkspaceKey,
+  readGitScreenSections,
+  readGitScreenSnapshot,
+  writeGitScreenSections,
+  writeGitScreenSnapshot,
+  type GitScreenSnapshot,
+} from "./gitScreenCache";
 import {
   gitFocusRing,
   gitIconButtonClassName,
@@ -109,6 +118,39 @@ const REMOTE_GIT_ACTION_ICONS: Record<RemoteGitAction, typeof CloudDownload> = {
 const REMOTE_GIT_ACTION_HINTS: Partial<Record<RemoteGitAction, string>> = {
   merge: "Merge：合并远端分支到本地，有冲突时自动撤销",
 };
+
+const EMPTY_GIT_BRANCHES: GitBranchList = { currentBranch: "", branches: [] };
+const EMPTY_GIT_STASHES: GitStashList = { items: [] };
+const GIT_OPERATION_POLL_MS = 1000;
+const GIT_OPERATION_RETRY_MS = 3000;
+
+function isRemoteGitAction(kind: GitOperationKind): kind is RemoteGitAction {
+  return (REMOTE_GIT_ACTIONS as string[]).includes(kind);
+}
+
+/** The busy key a running operation shows, matching the button that started it. */
+function gitOperationActionKey(kind: GitOperationKind) {
+  if (kind === "commit") {
+    return "commit";
+  }
+  if (kind === "commit_message") {
+    return "generate-commit-message";
+  }
+  return `remote-${kind}`;
+}
+
+function gitOperationError(job: GitOperationJob) {
+  const error = job.error;
+  return new WebApiClientError(error?.message || "Git 操作失败", {
+    status: error?.status || undefined,
+    code: error?.code || undefined,
+    data: error?.data,
+  });
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 const GIT_GRAPH_LIMIT = 50;
 const GIT_GRAPH_ROW_HEIGHT = 38;
@@ -542,6 +584,7 @@ export function GitScreen({
   onOverviewChange,
   sessionCapabilities = [],
 }: Props) {
+  const [initialSections] = useState(() => readGitScreenSections(client));
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -552,20 +595,20 @@ export function GitScreen({
   const [notice, setNotice] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
   const [actionLoading, setActionLoading] = useState("");
-  const [branches, setBranches] = useState<GitBranchList>({ currentBranch: "", branches: [] });
+  const [branches, setBranches] = useState<GitBranchList>(EMPTY_GIT_BRANCHES);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchDraft, setBranchDraft] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("");
-  const [stashes, setStashes] = useState<GitStashList>({ items: [] });
+  const [stashes, setStashes] = useState<GitStashList>(EMPTY_GIT_STASHES);
   const [stashesLoading, setStashesLoading] = useState(false);
   const [selectedDiff, setSelectedDiff] = useState<SelectedGitDiff | null>(null);
   const [diffLoadingPath, setDiffLoadingPath] = useState("");
   const [diffError, setDiffError] = useState("");
-  const [changesCollapsed, setChangesCollapsed] = useState(false);
-  const [graphCollapsed, setGraphCollapsed] = useState(false);
-  const [branchesCollapsed, setBranchesCollapsed] = useState(false);
-  const [stashCollapsed, setStashCollapsed] = useState(false);
-  const [settingsCollapsed, setSettingsCollapsed] = useState(true);
+  const [changesCollapsed, setChangesCollapsed] = useState(initialSections.changes);
+  const [graphCollapsed, setGraphCollapsed] = useState(initialSections.graph);
+  const [branchesCollapsed, setBranchesCollapsed] = useState(initialSections.branches);
+  const [stashCollapsed, setStashCollapsed] = useState(initialSections.stash);
+  const [settingsCollapsed, setSettingsCollapsed] = useState(initialSections.settings);
   const [graphScope, setGraphScope] = useState<GitGraphScope>("all");
   const [graphPayload, setGraphPayload] = useState<GitCommitGraphPayload | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
@@ -578,27 +621,26 @@ export function GitScreen({
   const [identityEmail, setIdentityEmail] = useState("");
   const [identityLoading, setIdentityLoading] = useState(false);
   const [smartCommitJob, setSmartCommitJob] = useState<GitSmartCommitJob | null>(null);
-  const [remotesCollapsed, setRemotesCollapsed] = useState(false);
+  // A long action running on the server; it survives leaving the page.
+  const [gitOperation, setGitOperation] = useState<GitOperationJob | null>(null);
+  const [gitOperationPollTick, setGitOperationPollTick] = useState(0);
+  const [remotesCollapsed, setRemotesCollapsed] = useState(initialSections.remotes);
   const [remotesBusy, setRemotesBusy] = useState(false);
   const [githubAccount, setGithubAccount] = useState<GitHubAccountStatus | null>(null);
   const [githubAccountLoading, setGithubAccountLoading] = useState(false);
   const [githubAccountError, setGithubAccountError] = useState("");
   const githubAccountRequestedRef = useRef(false);
   const workspaceEpochRef = useRef(0);
-  const workspaceKey = useMemo(() => [
-    workspaceIdentity?.accountId || "",
-    workspaceIdentity?.botAlias || botAlias,
-    workspaceIdentity?.root || "",
-    workspaceIdentity?.connectionId || "",
-    workspaceIdentity?.platform || "",
-  ].join("\n"), [botAlias, workspaceIdentity]);
+  const snapshotRef = useRef<GitScreenSnapshot | null>(null);
+  const workspaceKey = useMemo(() => gitWorkspaceKey(botAlias, workspaceIdentity), [botAlias, workspaceIdentity]);
   const canManageBotRuntime = sessionCapabilities.length === 0 || sessionCapabilities.includes("admin_ops");
   const canManageGitCommitCli = canManageBotRuntime || sessionCapabilities.includes("git_ops");
   const canManageGlobalGitIdentity = canManageBotRuntime;
   const canManageLocalGitIdentity = sessionCapabilities.length === 0 || sessionCapabilities.includes("git_ops");
-  const isGeneratingCommitMessage = actionLoading === "generate-commit-message";
+  const busyAction = actionLoading || (gitOperation ? gitOperationActionKey(gitOperation.kind) : "");
+  const isGeneratingCommitMessage = busyAction === "generate-commit-message";
   const isSmartCommitRunning = isGitSmartCommitRunning(smartCommitJob);
-  const parentMutationBusy = actionLoading !== "" || isSmartCommitRunning;
+  const parentMutationBusy = busyAction !== "" || isSmartCommitRunning;
   const mutationBusy = parentMutationBusy || remotesBusy;
   const groups = useMemo(() => groupedFiles(overview), [overview]);
   const changeGroups = useMemo(
@@ -701,16 +743,20 @@ export function GitScreen({
     }
   }
 
-  async function loadGitCapabilities(epoch = workspaceEpochRef.current): Promise<GitCapabilities | null> {
+  async function loadGitCapabilities(epoch = workspaceEpochRef.current, options: { quiet?: boolean } = {}): Promise<GitCapabilities | null> {
     if (!isCurrentWorkspace(epoch)) return null;
-    setGitCapabilitiesLoading(true);
+    // A quiet reload keeps cached capabilities usable and only replaces them
+    // when they changed, so the dependent sections are not reloaded twice.
+    if (!options.quiet) {
+      setGitCapabilitiesLoading(true);
+    }
     setGitCapabilitiesError("");
     try {
       const next = await client.getGitCapabilities(botAlias);
       if (!isCurrentWorkspace(epoch)) {
         return null;
       }
-      setGitCapabilities(next);
+      setGitCapabilities((current) => options.quiet && sameJson(current, next) ? current : next);
       return next;
     } catch (err) {
       if (!isCurrentWorkspace(epoch)) {
@@ -800,15 +846,46 @@ export function GitScreen({
     await loadIdentityConfig(identityScope, epoch);
   }
 
+  // The last committed state of this workspace, written to the cache when the
+  // page leaves it. Layout cleanups run before the next state is applied.
+  useLayoutEffect(() => {
+    snapshotRef.current = overview && !loading ? {
+      overview,
+      gitCapabilities,
+      branches,
+      selectedBranch,
+      stashes,
+      graphScope,
+      graphPayload,
+      selectedGraphHash,
+      identityConfig,
+      commitMessage,
+      pendingOperationId: gitOperation?.operationId || "",
+    } : null;
+  });
+
   useEffect(() => {
+    writeGitScreenSections(client, {
+      changes: changesCollapsed,
+      graph: graphCollapsed,
+      branches: branchesCollapsed,
+      stash: stashCollapsed,
+      settings: settingsCollapsed,
+      remotes: remotesCollapsed,
+    });
+  }, [branchesCollapsed, changesCollapsed, client, graphCollapsed, remotesCollapsed, settingsCollapsed, stashCollapsed]);
+
+  // A layout effect so a cached workspace is shown before the first paint.
+  useLayoutEffect(() => {
     const epoch = workspaceEpochRef.current + 1;
     workspaceEpochRef.current = epoch;
-    setLoading(true);
+    const cached = readGitScreenSnapshot(client, workspaceKey);
+    setLoading(!cached);
     setError("");
     setNotice("");
     setActionLoading("");
     setRemoteGitMissing(false);
-    setGitCapabilities(null);
+    setGitCapabilities(cached?.gitCapabilities || null);
     setGitCapabilitiesError("");
     setGitCapabilitiesLoading(false);
     setBranchesLoading(false);
@@ -816,22 +893,33 @@ export function GitScreen({
     setGraphLoading(false);
     setIdentityLoading(false);
     setDiffLoadingPath("");
-    setOverview(null);
-    setBranches({ currentBranch: "", branches: [] });
-    setSelectedBranch("");
-    setStashes({ items: [] });
-    setGraphPayload(null);
-    setSelectedGraphHash("");
-    setIdentityConfig(null);
-    setIdentityScope("global");
-    setIdentityName("");
-    setIdentityEmail("");
+    setOverview(cached?.overview || null);
+    setBranches(cached?.branches || EMPTY_GIT_BRANCHES);
+    setSelectedBranch(cached?.selectedBranch || "");
+    setStashes(cached?.stashes || EMPTY_GIT_STASHES);
+    setGraphScope(cached?.graphScope || "all");
+    setGraphPayload(cached?.graphPayload || null);
+    setSelectedGraphHash(cached?.selectedGraphHash || "");
+    setIdentityConfig(cached?.identityConfig || null);
+    if (cached?.identityConfig) {
+      applyIdentityDraft(cached.identityConfig, "global");
+    } else {
+      setIdentityScope("global");
+      setIdentityName("");
+      setIdentityEmail("");
+    }
     setSelectedDiff(null);
     setDiffError("");
     setSmartCommitJob(null);
-    void loadGitCapabilities(epoch);
-    void loadOverview(epoch);
+    setGitOperation(null);
+    setCommitMessage(cached?.commitMessage || "");
+    void loadGitCapabilities(epoch, { quiet: Boolean(cached?.gitCapabilities) });
+    void (cached ? refreshOverviewQuietly(epoch) : loadOverview(epoch));
+    void restoreGitOperation(epoch, cached?.pendingOperationId || "");
     return () => {
+      if (snapshotRef.current) {
+        writeGitScreenSnapshot(client, workspaceKey, snapshotRef.current);
+      }
       if (workspaceEpochRef.current === epoch) {
         workspaceEpochRef.current += 1;
       }
@@ -987,13 +1075,19 @@ export function GitScreen({
     setIdentityEmail(identity?.email || "");
   }
 
+  /** Reloads what a mutation may change besides the overview. */
+  async function reloadRepositorySections(epoch = workspaceEpochRef.current) {
+    await loadBranches(epoch);
+    await loadGitGraph({ scope: graphScope }, epoch);
+    await loadStashes(epoch);
+    await loadIdentityConfig(identityScope, epoch);
+  }
+
   async function runAction(
     key: string,
     fn: () => Promise<{ message: string; overview: GitOverview }>,
     options: {
       refreshWorkspace?: boolean;
-      refreshOverviewOnSuccess?: boolean;
-      refreshOverviewOnError?: boolean;
       capability?: GitCapabilityName;
       confirmationMessage?: string;
     } = {},
@@ -1014,28 +1108,15 @@ export function GitScreen({
         }
         syncOverview(result.overview);
         if (options.refreshWorkspace) {
-          if (options.refreshOverviewOnSuccess) {
-            await refreshOverviewQuietly();
-          }
-          await loadBranches();
-          await loadGitGraph({ scope: graphScope });
-          await loadStashes();
-          await loadIdentityConfig(identityScope);
+          await reloadRepositorySections(epoch);
         }
         setNotice(result.message || "Git 操作完成");
-        if (key === "commit") {
-          setCommitMessage("");
-        }
       } catch (err) {
         if (!isCurrentWorkspace(epoch)) {
           return;
         }
         setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
-        const message = gitActionErrorMessage(err, "Git 操作失败");
-        if (options.refreshOverviewOnError) {
-          await refreshOverviewQuietly();
-        }
-        setError(message);
+        setError(gitActionErrorMessage(err, "Git 操作失败"));
       } finally {
         if (isCurrentWorkspace(epoch)) {
           setActionLoading("");
@@ -1051,23 +1132,138 @@ export function GitScreen({
     await execute();
   }
 
-  async function runRemoteGitAction(operation: RemoteGitAction) {
-    const mutations: Record<RemoteGitAction, () => Promise<GitActionResult>> = {
-      fetch: () => client.fetchGitRemote(botAlias),
-      pull: () => client.pullGitRemote(botAlias),
-      push: () => client.pushGitRemote(botAlias),
-      merge: () => client.mergeGitRemote(botAlias),
+  /** Shows a finished operation's result and refreshes what it changed. */
+  async function finishGitOperation(job: GitOperationJob, epoch: number) {
+    if (!isCurrentWorkspace(epoch)) return;
+    if (job.status === "failed") {
+      const err = gitOperationError(job);
+      setRemoteGitMissing(err.code === "remote_git_not_found");
+      if (isRemoteGitAction(job.kind)) {
+        await refreshOverviewQuietly(epoch);
+      }
+      if (!isCurrentWorkspace(epoch)) return;
+      setGitOperation(null);
+      setNotice("");
+      setError(gitActionErrorMessage(err, "Git 操作失败"));
+      return;
+    }
+    if (job.kind === "commit_message") {
+      setGitOperation(null);
+      setCommitMessage(job.commitMessage);
+      setError("");
+      setNotice(job.notice || "已生成提交说明");
+      return;
+    }
+    if (job.overview) {
+      syncOverview(job.overview);
+    }
+    if (isRemoteGitAction(job.kind)) {
+      await refreshOverviewQuietly(epoch);
+    }
+    await reloadRepositorySections(epoch);
+    if (!isCurrentWorkspace(epoch)) return;
+    setGitOperation(null);
+    setError("");
+    setNotice(job.notice || "Git 操作完成");
+    if (job.kind === "commit") {
+      setCommitMessage("");
+    }
+  }
+
+  /** Attaches to an operation that kept running while the page was closed. */
+  async function restoreGitOperation(epoch: number, pendingOperationId: string) {
+    try {
+      const job = await client.getActiveGitOperation(botAlias);
+      if (!job || !isCurrentWorkspace(epoch)) return;
+      if (job.status === "running") {
+        setGitOperation(job);
+      } else if (job.operationId === pendingOperationId) {
+        await finishGitOperation(job, epoch);
+      }
+    } catch {
+      // Starting an operation still reports a conflicting one.
+    }
+  }
+
+  async function startGitOperation(
+    kind: GitOperationKind,
+    options: { capability?: GitCapabilityName; confirmationMessage?: string; message?: string } = {},
+  ) {
+    const epoch = workspaceEpochRef.current;
+    const execute = async () => {
+      if (!isCurrentWorkspace(epoch)) return;
+      setActionLoading(gitOperationActionKey(kind));
+      setError("");
+      setRemoteGitMissing(false);
+      setNotice("");
+      try {
+        const job = await client.startGitOperation(botAlias, kind, kind === "commit" ? { message: options.message || "" } : {});
+        if (!isCurrentWorkspace(epoch)) return;
+        if (job.status === "running") {
+          setGitOperation(job);
+        } else {
+          await finishGitOperation(job, epoch);
+        }
+      } catch (err) {
+        if (!isCurrentWorkspace(epoch)) return;
+        setRemoteGitMissing(err instanceof WebApiClientError && err.code === "remote_git_not_found");
+        if (err instanceof WebApiClientError && err.code === "git_operation_running") {
+          // Another page started it; follow that operation instead.
+          void restoreGitOperation(epoch, "");
+        } else if (isRemoteGitAction(kind)) {
+          await refreshOverviewQuietly(epoch);
+        }
+        setError(gitActionErrorMessage(err, "Git 操作失败"));
+      } finally {
+        if (isCurrentWorkspace(epoch)) setActionLoading("");
+      }
     };
-    const mutation = mutations[operation];
+    if (options.capability) {
+      await runCapabilityAction(options.capability, execute, { confirmationMessage: options.confirmationMessage });
+      return;
+    }
+    await execute();
+  }
+
+  useEffect(() => {
+    if (gitOperation?.status !== "running") {
+      return;
+    }
+    let cancelled = false;
+    const epoch = workspaceEpochRef.current;
+    const timer = window.setTimeout(async () => {
+      try {
+        const next = await client.getGitOperation(botAlias, gitOperation.operationId);
+        if (cancelled || !isCurrentWorkspace(epoch)) return;
+        if (next.status === "running") {
+          setGitOperation(next);
+        } else {
+          await finishGitOperation(next, epoch);
+        }
+      } catch (err) {
+        if (cancelled || !isCurrentWorkspace(epoch)) return;
+        if (err instanceof WebApiClientError && err.status === 404) {
+          // The server restarted or a newer operation replaced it.
+          setGitOperation(null);
+          void refreshGitWorkspace();
+          return;
+        }
+        window.setTimeout(() => {
+          if (!cancelled) setGitOperationPollTick((tick) => tick + 1);
+        }, GIT_OPERATION_RETRY_MS);
+      }
+    }, GIT_OPERATION_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [botAlias, client, gitOperation, gitOperationPollTick, workspaceKey]);
+
+  async function runRemoteGitAction(operation: RemoteGitAction) {
     if (remote && operation !== "fetch" && !window.confirm(`确定执行 ${REMOTE_GIT_ACTION_LABELS[operation]} 吗？`)) {
       return;
     }
-    await runAction(`remote-${operation}`, mutation, {
-      refreshWorkspace: true,
-      refreshOverviewOnSuccess: true,
-      refreshOverviewOnError: true,
-      ...(remote ? {} : { capability: operation }),
-    });
+    await startGitOperation(operation, remote ? {} : { capability: operation });
   }
 
   async function loadBranches(epoch = workspaceEpochRef.current) {
@@ -1333,24 +1529,7 @@ export function GitScreen({
   }
 
   async function generateCommitMessage() {
-    await runCapabilityAction("commit_message_generation", async () => {
-      const epoch = workspaceEpochRef.current;
-      setActionLoading("generate-commit-message");
-      setError("");
-      setNotice("");
-      try {
-        const result = await client.generateGitCommitMessage(botAlias);
-        if (!isCurrentWorkspace(epoch)) return;
-        setCommitMessage(result.message);
-        setNotice("已生成提交说明");
-      } catch (err) {
-        if (isCurrentWorkspace(epoch)) {
-          setError(err instanceof Error ? err.message : "生成提交说明失败");
-        }
-      } finally {
-        if (isCurrentWorkspace(epoch)) setActionLoading("");
-      }
-    });
+    await startGitOperation("commit_message", { capability: "commit_message_generation" });
   }
 
   async function startSmartCommit() {
@@ -1522,7 +1701,7 @@ export function GitScreen({
     if (!canCommit) {
       return;
     }
-    void runAction("commit", () => client.commitGitChanges(botAlias, commitMessage), { refreshWorkspace: true, capability: "tree_status" });
+    void startGitOperation("commit", { capability: "tree_status", message: commitMessage });
   }
 
   return (
@@ -1583,7 +1762,7 @@ export function GitScreen({
                     disabled={mutationBusy || (!remote && unavailable)}
                     className={gitToolbarIconButtonClassName}
                   >
-                    {actionLoading === `remote-${operation}` ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+                    {busyAction === `remote-${operation}` ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
                     {badge > 0 ? (
                       <span aria-hidden="true" className="tcb-solid-accent absolute -right-0.5 -top-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-semibold tabular-nums leading-none">
                         {badge > 99 ? "99+" : badge}
@@ -1772,8 +1951,8 @@ export function GitScreen({
                     aria-describedby="git-capability-reason-tree_status"
                     className={clsx(gitPrimaryButtonClassName, "min-w-0 flex-1")}
                   >
-                    {actionLoading === "commit" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                    <span className="truncate">{actionLoading === "commit" ? "提交中..." : "提交更改"}</span>
+                    {busyAction === "commit" ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    <span className="truncate">{busyAction === "commit" ? "提交中..." : "提交更改"}</span>
                     {groups.staged.length > 0 ? (
                       <span aria-hidden="true" className="rounded-full bg-[color-mix(in_srgb,currentColor_18%,transparent)] px-1.5 text-[10px] tabular-nums leading-4">
                         {groups.staged.length}

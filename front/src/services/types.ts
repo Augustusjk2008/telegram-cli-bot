@@ -3256,6 +3256,32 @@ export type GitSmartCommitJob = {
   overview: GitOverview | null;
 };
 
+/** A long Git page action that keeps running on the server after the page closes. */
+export type GitOperationKind = "fetch" | "pull" | "merge" | "push" | "commit" | "commit_message";
+export type GitOperationStatus = "running" | "succeeded" | "failed";
+
+export type GitOperationError = {
+  status: number;
+  code: string;
+  message: string;
+  data: unknown;
+};
+
+export type GitOperationJob = {
+  operationId: string;
+  alias: string;
+  kind: GitOperationKind;
+  status: GitOperationStatus;
+  /** Epoch milliseconds. */
+  startedAt: number;
+  finishedAt: number | null;
+  notice: string;
+  /** The generated text of a `commit_message` operation. */
+  commitMessage: string;
+  overview: GitOverview | null;
+  error: GitOperationError | null;
+};
+
 export type GitBranchSummary = {
   name: string;
   current: boolean;

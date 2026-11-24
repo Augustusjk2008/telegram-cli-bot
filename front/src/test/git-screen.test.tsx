@@ -12,6 +12,8 @@ import type {
   GitCapabilities,
   GitDiffPayload,
   GitIdentityConfig,
+  GitOperationJob,
+  GitOperationKind,
   GitOverview,
   GitStashList,
 } from "../services/types";
@@ -163,6 +165,26 @@ function createActionResult(): GitActionResult {
   };
 }
 
+function operationJob(kind: GitOperationKind, job: Partial<GitOperationJob> = {}): GitOperationJob {
+  return {
+    operationId: `op-${kind}`,
+    alias: "main",
+    kind,
+    status: "succeeded",
+    startedAt: 1,
+    finishedAt: 2,
+    notice: "ok",
+    commitMessage: "",
+    overview: cloneOverview(),
+    error: null,
+    ...job,
+  };
+}
+
+function operationKinds(client: WebBotClient) {
+  return vi.mocked(client.startGitOperation).mock.calls.map(([, kind]) => kind);
+}
+
 function createGitScreenClient(capabilities: GitCapabilities = localGitCapabilities) {
   const getGitOverview = vi.fn(async () => cloneOverview());
   const getGitDiff = vi.fn(async (_botAlias: string, path: string, staged = false): Promise<GitDiffPayload> => ({
@@ -208,11 +230,9 @@ function createGitScreenClient(capabilities: GitCapabilities = localGitCapabilit
     stageGitPaths: vi.fn(async () => createActionResult()),
     unstageGitPaths: vi.fn(async () => createActionResult()),
     discardGitPaths: vi.fn(async () => createActionResult()),
-    commitGitChanges: vi.fn(async () => createActionResult()),
-    fetchGitRemote: vi.fn(async () => createActionResult()),
-    pullGitRemote: vi.fn(async () => createActionResult()),
-    mergeGitRemote: vi.fn(async () => createActionResult()),
-    pushGitRemote: vi.fn(async () => createActionResult()),
+    startGitOperation: vi.fn(async (_botAlias: string, kind: GitOperationKind) => operationJob(kind)),
+    getGitOperation: vi.fn(async (_botAlias: string, operationId: string) => operationJob("push", { operationId })),
+    getActiveGitOperation: vi.fn(async (): Promise<GitOperationJob | null> => null),
     listGitRemotes: vi.fn(async () => ({
       repoFound: true,
       workingDir: overview.workingDir,
@@ -305,7 +325,7 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
     local: { name: "Repo Dev", email: "repo@example.com" },
   });
   const committed = { ...cloneOverview(), changedFiles: [], isClean: true, recentCommits: [{ ...recentCommit, hash: "def5678", shortHash: "def5678", subject: "Manual change" }] };
-  vi.mocked(client.commitGitChanges).mockResolvedValue({ message: "已提交", overview: committed });
+  vi.mocked(client.startGitOperation).mockImplementation(async (_botAlias, kind) => operationJob(kind, { notice: "已提交", overview: committed }));
   render(<GitScreen botAlias="remote" client={client} remote />);
 
   expect(await screen.findByText(/origin\/main/)).toBeInTheDocument();
@@ -329,7 +349,7 @@ test("remote Git supports overview, diffs, manual commit, and capability-backed 
   await waitFor(() => expect(screen.getByRole("button", { name: "提交更改" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "提交更改" }));
   expect(await screen.findByText("Manual change")).toBeInTheDocument();
-  expect(client.commitGitChanges).toHaveBeenCalledExactlyOnceWith("remote", "Manual change");
+  expect(client.startGitOperation).toHaveBeenCalledExactlyOnceWith("remote", "commit", { message: "Manual change" });
   expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("");
   expect(screen.getByText("工作区干净")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "刷新 Git 状态" }));
@@ -374,24 +394,25 @@ test("remote Git sync actions ignore capability availability and expose no unava
   expect(screen.queryByTestId("remote-git-pull-reason")).not.toBeInTheDocument();
 
   fireEvent.click(fetch);
-  await waitFor(() => expect(client.fetchGitRemote).toHaveBeenCalledWith("remote"));
+  await waitFor(() => expect(client.startGitOperation).toHaveBeenCalledWith("remote", "fetch", {}));
   await screen.findByText("ok");
   fireEvent.click(screen.getByRole("button", { name: "Pull" }));
-  await waitFor(() => expect(client.pullGitRemote).toHaveBeenCalledWith("remote"));
+  await waitFor(() => expect(client.startGitOperation).toHaveBeenCalledWith("remote", "pull", {}));
 });
 
 test("remote Git sync sends the operation and shows its raw failure", async () => {
   const { client } = createGitScreenClient(remoteGitCapabilities);
-  vi.mocked(client.fetchGitRemote).mockRejectedValue(new WebApiClientError("fatal: no configured remote", {
-    status: 400,
-    code: "git_remote_not_configured",
+  vi.mocked(client.startGitOperation).mockResolvedValue(operationJob("fetch", {
+    status: "failed",
+    overview: null,
+    error: { status: 400, code: "git_remote_not_configured", message: "fatal: no configured remote", data: {} },
   }));
   render(<GitScreen botAlias="remote" client={client} remote />);
 
   const fetch = await screen.findByRole("button", { name: "Fetch" });
   fireEvent.click(fetch);
 
-  await waitFor(() => expect(client.fetchGitRemote).toHaveBeenCalledWith("remote"));
+  await waitFor(() => expect(client.startGitOperation).toHaveBeenCalledWith("remote", "fetch", {}));
   expect(await screen.findByText("fatal: no configured remote")).toBeInTheDocument();
   expect(screen.queryByText(/请在远程主机配置 Git remote/)).not.toBeInTheDocument();
 });
@@ -409,7 +430,7 @@ test("capability read failure keeps local actions gated", async () => {
   const fetch = screen.getByRole("button", { name: "Fetch" });
   expect(fetch).toBeDisabled();
   fireEvent.click(fetch);
-  expect(client.fetchGitRemote).not.toHaveBeenCalled();
+  expect(client.startGitOperation).not.toHaveBeenCalled();
   expect(client.listGitBranches).not.toHaveBeenCalled();
   expect(client.getGitIdentityConfig).not.toHaveBeenCalled();
 });
@@ -476,13 +497,13 @@ test.each([false, true])("Merge confirms once, then merges the upstream branch (
   await waitFor(() => expect(screen.getByRole("button", { name: "Merge" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Merge" }));
   expect(confirm).toHaveBeenCalledTimes(1);
-  expect(client.mergeGitRemote).not.toHaveBeenCalled();
+  expect(client.startGitOperation).not.toHaveBeenCalled();
 
   confirm.mockReturnValue(true);
   fireEvent.click(screen.getByRole("button", { name: "Merge" }));
-  await waitFor(() => expect(client.mergeGitRemote).toHaveBeenCalledWith(remote ? "remote" : "main"));
+  await waitFor(() => expect(client.startGitOperation).toHaveBeenCalledWith(remote ? "remote" : "main", "merge", {}));
   expect(confirm).toHaveBeenCalledTimes(2);
-  expect(client.pullGitRemote).not.toHaveBeenCalled();
+  expect(operationKinds(client)).toEqual(["merge"]);
 });
 
 test.each([false, true])("Pull and Push require one confirmation per action (remote=%s)", async (remote) => {
@@ -493,18 +514,17 @@ test.each([false, true])("Pull and Push require one confirmation per action (rem
   await waitFor(() => expect(screen.getByRole("button", { name: "Pull" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Pull" }));
   expect(confirm).toHaveBeenCalledTimes(1);
-  expect(client.pullGitRemote).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Push" }));
   expect(confirm).toHaveBeenCalledTimes(2);
-  expect(client.pushGitRemote).not.toHaveBeenCalled();
+  expect(client.startGitOperation).not.toHaveBeenCalled();
 
   confirm.mockReturnValue(true);
   fireEvent.click(screen.getByRole("button", { name: "Pull" }));
-  await waitFor(() => expect(client.pullGitRemote).toHaveBeenCalledOnce());
+  await waitFor(() => expect(operationKinds(client)).toEqual(["pull"]));
   expect(confirm).toHaveBeenCalledTimes(3);
   await screen.findByText("ok");
   fireEvent.click(screen.getByRole("button", { name: "Push" }));
-  await waitFor(() => expect(client.pushGitRemote).toHaveBeenCalledOnce());
+  await waitFor(() => expect(operationKinds(client)).toEqual(["pull", "push"]));
   expect(confirm).toHaveBeenCalledTimes(4);
 });
 
@@ -541,7 +561,7 @@ test("a successful remote Fetch refreshes overview, branches, graph, and stashes
     expect(getGitCommitGraph).toHaveBeenCalledTimes(before.graph + 1);
     expect(client.listGitStashes).toHaveBeenCalledTimes(before.stashes + 1);
   });
-  expect(client.fetchGitRemote).toHaveBeenCalledOnce();
+  expect(operationKinds(client)).toEqual(["fetch"]);
 });
 
 test("remote missing Git shows installation and SSH PATH guidance and retries only overview", async () => {
@@ -574,14 +594,53 @@ test("remote non-repository exposes initialization through the capability matrix
 
 test("a failed remote commit preserves the draft and does not retry the mutation", async () => {
   const { client } = createGitScreenClient(remoteGitCapabilities);
-  vi.mocked(client.commitGitChanges).mockRejectedValue(new Error("SSH command timed out"));
+  vi.mocked(client.startGitOperation).mockResolvedValue(operationJob("commit", {
+    status: "failed",
+    overview: null,
+    error: { status: 504, code: "remote_command_timeout", message: "SSH command timed out", data: {} },
+  }));
   render(<GitScreen botAlias="remote" client={client} remote />);
   fireEvent.change(await screen.findByRole("textbox", { name: "commit message" }), { target: { value: "Keep this draft" } });
   fireEvent.click(screen.getByRole("button", { name: "提交更改" }));
   expect(await screen.findByText("SSH command timed out")).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("Keep this draft");
-  expect(client.commitGitChanges).toHaveBeenCalledOnce();
+  expect(client.startGitOperation).toHaveBeenCalledOnce();
   expect(client.getGitOverview).toHaveBeenCalledOnce();
+});
+
+test("returning to the page shows the cached workspace and the result of an operation that finished meanwhile", async () => {
+  const { client, getGitOverview } = createGitScreenClient(localGitCapabilities);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(client.startGitOperation).mockResolvedValue(operationJob("push", { status: "running", finishedAt: null, notice: "", overview: null }));
+  const first = render(<GitScreen botAlias="main" client={client} />);
+  fireEvent.change(await screen.findByRole("textbox", { name: "commit message" }), { target: { value: "Draft kept" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Push" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Push" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Fetch" })).toBeDisabled());
+  first.unmount();
+
+  vi.mocked(client.getActiveGitOperation).mockResolvedValue(operationJob("push", { notice: "已推送本地提交" }));
+  render(<GitScreen botAlias="main" client={client} />);
+  // The cached page is shown at once, without the loading state.
+  expect(screen.queryByText("加载中...")).not.toBeInTheDocument();
+  expect(screen.getByTestId("git-change-row-src/deep/same.ts")).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("Draft kept");
+  expect(await screen.findByText("已推送本地提交")).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Fetch" })).toBeEnabled());
+  expect(getGitOverview.mock.calls.length).toBeGreaterThan(1);
+});
+
+test("a page opened during an operation follows it until it finishes", async () => {
+  const { client } = createGitScreenClient(localGitCapabilities);
+  vi.mocked(client.getActiveGitOperation).mockResolvedValue(operationJob("commit_message", { status: "running", finishedAt: null, notice: "", overview: null }));
+  vi.mocked(client.getGitOperation).mockResolvedValue(operationJob("commit_message", { notice: "已生成提交说明", commitMessage: "feat: generated", overview: null }));
+  render(<GitScreen botAlias="main" client={client} />);
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "生成 commit message" })).toBeDisabled());
+  expect(await screen.findByText("已生成提交说明", undefined, { timeout: 3000 })).toBeInTheDocument();
+  expect(client.getGitOperation).toHaveBeenCalledWith("main", "op-commit_message");
+  expect(screen.getByRole("textbox", { name: "commit message" })).toHaveValue("feat: generated");
+  expect(client.startGitOperation).not.toHaveBeenCalled();
 });
 
 test("allows git users to manage commit message cli config", async () => {

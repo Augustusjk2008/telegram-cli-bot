@@ -70,6 +70,8 @@ import type {
   GitResetMode,
   GitOverview,
   GitSmartCommitJob,
+  GitOperationJob,
+  GitOperationKind,
   GitStashList,
   GitTreeStatus,
   BotOverview,
@@ -1476,6 +1478,19 @@ type RawGitSmartCommitJob = {
   message?: string;
   error?: string;
   overview?: RawGitOverview | null;
+};
+
+type RawGitOperationJob = {
+  operation_id?: string;
+  alias?: string;
+  kind?: string;
+  status?: string;
+  started_at?: number;
+  finished_at?: number | null;
+  notice?: string;
+  commit_message?: string;
+  overview?: RawGitOverview | null;
+  error?: { status?: number; code?: string; message?: string; data?: unknown } | null;
 };
 
 type RawGitRemoteEntry = {
@@ -3797,6 +3812,30 @@ function mapGitSmartCommitJob(raw: RawGitSmartCommitJob): GitSmartCommitJob {
     message: raw.message || "",
     error: raw.error || "",
     overview: hasRawGitOverview(raw.overview) ? mapGitOverview(raw.overview) : null,
+  };
+}
+
+function mapGitOperationJob(raw: RawGitOperationJob): GitOperationJob {
+  // An unknown status must not keep the page polling forever.
+  const status = raw.status === "running" || raw.status === "succeeded" ? raw.status : "failed";
+  return {
+    operationId: raw.operation_id || "",
+    alias: raw.alias || "",
+    kind: (raw.kind || "fetch") as GitOperationKind,
+    status,
+    startedAt: Number(raw.started_at || 0) * 1000,
+    finishedAt: raw.finished_at ? Number(raw.finished_at) * 1000 : null,
+    notice: raw.notice || "",
+    commitMessage: raw.commit_message || "",
+    overview: hasRawGitOverview(raw.overview) ? mapGitOverview(raw.overview) : null,
+    error: raw.error || status === "failed"
+      ? {
+        status: Number(raw.error?.status || 0),
+        code: raw.error?.code || "",
+        message: raw.error?.message || "Git 操作失败",
+        data: raw.error?.data ?? null,
+      }
+      : null,
   };
 }
 
@@ -7815,6 +7854,29 @@ export class RealWebBotClient implements WebBotClient {
       method: "POST",
     });
     return mapGitActionResult(data);
+  }
+
+  async startGitOperation(botAlias: string, kind: GitOperationKind, options: { message?: string } = {}): Promise<GitOperationJob> {
+    const data = await this.requestJson<RawGitOperationJob>(`/api/bots/${encodeURIComponent(botAlias)}/git/operations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(kind === "commit" ? { kind, message: options.message || "" } : { kind }),
+    });
+    return mapGitOperationJob(data);
+  }
+
+  async getGitOperation(botAlias: string, operationId: string): Promise<GitOperationJob> {
+    const data = await this.requestJson<RawGitOperationJob>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/operations/${encodeURIComponent(operationId)}`,
+    );
+    return mapGitOperationJob(data);
+  }
+
+  async getActiveGitOperation(botAlias: string): Promise<GitOperationJob | null> {
+    const data = await this.requestJson<RawGitOperationJob | null>(
+      `/api/bots/${encodeURIComponent(botAlias)}/git/operations/active`,
+    );
+    return data?.operation_id ? mapGitOperationJob(data) : null;
   }
 
   async listGitRemotes(botAlias: string): Promise<GitRemoteList> {

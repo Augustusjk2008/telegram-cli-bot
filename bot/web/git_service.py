@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +95,7 @@ _GIT_STATUS_RETRY_DELAY_SECONDS = 0.15
 _GIT_STATUS_CACHE_LOCK = threading.Lock()
 _GIT_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _GIT_REPO_LOCKS: dict[str, Any] = {}
+_GIT_STATUS_BUILD_LOCKS: dict[str, Any] = {}
 _GIT_RECENT_COMMITS_CACHE: dict[tuple[str, int], dict[str, Any]] = {}
 _GIT_DIAGNOSTICS_LOCK = threading.Lock()
 _GIT_DIAGNOSTICS = {
@@ -128,6 +130,24 @@ _GIT_INDEX_WRITE_COMMANDS = frozenset(
         "update-index",
     }
 )
+_GIT_READ_ONLY_COMMANDS = frozenset(
+    {
+        "--version",
+        "cat-file",
+        "check-ref-format",
+        "diff",
+        "for-each-ref",
+        "log",
+        "ls-files",
+        "merge-base",
+        "rev-list",
+        "rev-parse",
+        "show",
+        "show-ref",
+        "status",
+    }
+)
+_GIT_CONFIG_READ_FLAGS = frozenset({"--get", "--get-all", "--get-regexp", "--list", "-l"})
 _GIT_TRANSIENT_INDEX_ERROR_RE = re.compile(
     r"(index file open failed|Permission denied|unable to create .*index\.lock|File exists)",
     re.IGNORECASE,
@@ -420,6 +440,28 @@ def _git_command_writes_index(args: list[str]) -> bool:
     return _git_command_name(args) in _GIT_INDEX_WRITE_COMMANDS
 
 
+def _git_command_is_read_only(args: list[str]) -> bool:
+    """Whether the command only reads the repository.
+
+    Reads skip the per-repo mutation lock so a long fetch/pull/push never
+    blocks the Git page; they run with optional locks disabled instead.
+    """
+    name = _git_command_name(args)
+    if name in _GIT_READ_ONLY_COMMANDS:
+        return True
+    rest = [str(arg) for arg in args[1:]]
+    if name == "config":
+        return any(arg in _GIT_CONFIG_READ_FLAGS for arg in rest)
+    if name == "symbolic-ref":
+        # Reading names one ref; writing names the ref and its new target.
+        return len([arg for arg in rest if not arg.startswith("-")]) <= 1
+    if name == "remote":
+        return not rest or rest == ["-v"] or rest[0] == "get-url"
+    if name == "stash":
+        return bool(rest) and rest[0] in {"list", "show"}
+    return False
+
+
 def _git_command_profile(args: list[str], *, remote: bool) -> _GitCommandProfile:
     if remote:
         return _GIT_REMOTE_PROFILE
@@ -431,7 +473,7 @@ def _git_command_profile(args: list[str], *, remote: bool) -> _GitCommandProfile
 
 
 def _git_command_env(args: list[str], env: dict[str, str] | None) -> dict[str, str] | None:
-    if _git_command_name(args) != "status":
+    if not _git_command_is_read_only(args):
         return env
     effective_env = os.environ.copy() if env is None else dict(env)
     effective_env["GIT_OPTIONAL_LOCKS"] = "0"
@@ -487,8 +529,11 @@ def _run_git_process(
     writes_index = _git_command_writes_index(args)
     index_lock_path = _git_index_lock_path(repo_root) if writes_index else None
     created_lock_identity: tuple[int, int] | None = None
+    # Mutations stay serialized per repository; reads must not queue behind a
+    # remote sync that may hold the lock for minutes.
+    lock = nullcontext() if _git_command_is_read_only(args) and not remote else _git_repo_lock(repo_root)
 
-    with _git_repo_lock(repo_root):
+    with lock:
         index_lock_existed = bool(index_lock_path and index_lock_path.exists())
 
         def capture_created_lock() -> None:
@@ -892,14 +937,24 @@ def _git_status_cache_key(repo_root: str) -> str:
     return os.path.normcase(os.path.abspath(repo_root))
 
 
-def _git_repo_lock(repo_root: str):
+def _keyed_repo_lock(locks: dict[str, Any], repo_root: str):
     cache_key = _git_status_cache_key(repo_root)
     with _GIT_STATUS_CACHE_LOCK:
-        lock = _GIT_REPO_LOCKS.get(cache_key)
+        lock = locks.get(cache_key)
         if lock is None:
             lock = threading.RLock()
-            _GIT_REPO_LOCKS[cache_key] = lock
+            locks[cache_key] = lock
         return lock
+
+
+def _git_repo_lock(repo_root: str):
+    """Serializes Git mutations on one repository."""
+    return _keyed_repo_lock(_GIT_REPO_LOCKS, repo_root)
+
+
+def _git_status_build_lock(repo_root: str):
+    """Deduplicates concurrent status snapshot builds without waiting on mutations."""
+    return _keyed_repo_lock(_GIT_STATUS_BUILD_LOCKS, repo_root)
 
 
 def _read_git_status_cache(repo_root: str) -> dict[str, Any] | None:
@@ -993,7 +1048,7 @@ def _build_repo_status_snapshot(repo_root: str) -> dict[str, Any]:
     if cached:
         return cached
 
-    with _git_repo_lock(repo_root):
+    with _git_status_build_lock(repo_root):
         cached, head_token, index_token = _read_fresh_git_status_cache(repo_root)
         if cached:
             return cached

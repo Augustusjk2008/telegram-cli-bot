@@ -36,6 +36,10 @@ def register(app: web.Application, server) -> None:
     app.router.add_post("/api/bots/{alias}/git/pull", server.post_git_pull)
     app.router.add_post("/api/bots/{alias}/git/merge", server.post_git_merge)
     app.router.add_post("/api/bots/{alias}/git/push", server.post_git_push)
+    app.router.add_post("/api/bots/{alias}/git/operations", server.post_git_operation)
+    # "active" is registered before the dynamic segment that would also match it.
+    app.router.add_get("/api/bots/{alias}/git/operations/active", server.get_git_operation_active)
+    app.router.add_get("/api/bots/{alias}/git/operations/{operation_id}", server.get_git_operation)
     app.router.add_get("/api/bots/{alias}/git/remotes", server.get_git_remotes_view)
     app.router.add_post("/api/bots/{alias}/git/remotes", server.post_git_remote_add)
     app.router.add_post("/api/bots/{alias}/git/remotes/update", server.post_git_remote_update)

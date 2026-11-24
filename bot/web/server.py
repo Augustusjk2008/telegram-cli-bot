@@ -302,7 +302,9 @@ from .api_service import (
     verify_cluster_mcp_request,
 )
 from bot.migrations.runner import migration_diagnostics
+from .api_common import web_api_error_from_remote
 from .git_backend import resolve_git_backend
+from .git_operations import GIT_OPERATION_KINDS, GIT_OPERATION_NOTICES, GIT_SYNC_OPERATIONS, GitOperationRegistry
 from .github_service import get_github_service
 from .git_service import git_service_diagnostics
 from .workspace_search_service import (
@@ -958,11 +960,7 @@ async def error_middleware(request: web.Request, handler):
     except WebApiError as exc:
         return _error_response(exc)
     except RemoteWorkspaceError as exc:
-        if exc.code == "host_key_confirmation_required":
-            return _error_response(WebApiError(409, "remote_host_key_unknown", exc.message, {
-                "fingerprint": exc.data.get("host_key_fingerprint", ""),
-            }))
-        return _error_response(WebApiError(exc.status, exc.code, exc.message, exc.data))
+        return _error_response(web_api_error_from_remote(exc))
     except ChatStoreOverloadedError as exc:
         return _json(
             {"ok": False, "error": {"code": "chat_store_busy", "message": str(exc)}},
@@ -1186,6 +1184,7 @@ class WebApiServer:
         self._git_smart_commit_latest_by_alias: dict[str, str] = {}
         self._git_smart_commit_repo_locks: dict[str, str] = {}
         self._git_smart_commit_task_by_job: dict[str, asyncio.Task[None]] = {}
+        self._git_operations = GitOperationRegistry()
         self._tunnel_service = tunnel_service or TunnelService(
             host=self._host,
             port=self._port,
@@ -4495,41 +4494,75 @@ class WebApiServer:
         overview = await asyncio.to_thread(backend.discard_all)
         return _json({"ok": True, "data": {"message": "已丢弃全部改动", "overview": overview}})
 
+    async def _git_operation_runner(self, auth: AuthContext, alias: str, kind: str, body: dict[str, Any]):
+        """Resolve the backend now and return the coroutine factory that performs ``kind``."""
+        notice = GIT_OPERATION_NOTICES[kind]
+        if kind in GIT_SYNC_OPERATIONS:
+            # Only network operations receive the account's GitHub credentials.
+            backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
+            action = getattr(backend, kind)
+
+            async def run_sync() -> dict[str, Any]:
+                return {"notice": notice, "overview": await asyncio.to_thread(action)}
+
+            return run_sync
+        backend = await self._get_git_backend(alias, auth.user_id)
+        if kind == "commit":
+            message = body.get("message", "")
+
+            async def run_commit() -> dict[str, Any]:
+                return {"notice": notice, "overview": await asyncio.to_thread(backend.commit, message)}
+
+            return run_commit
+
+        async def run_commit_message() -> dict[str, Any]:
+            data = await backend.generate_commit_message()
+            return {"notice": notice, "commit_message": str(data.get("message") or "")}
+
+        return run_commit_message
+
+    async def _run_git_action_now(self, request: web.Request, kind: str) -> web.Response:
+        auth = await self._with_capability(request, CAP_GIT_OPS)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request) if kind == "commit" else {}
+        run = await self._git_operation_runner(auth, alias, kind, body)
+        result = await run()
+        return _json({"ok": True, "data": {"message": result["notice"], "overview": result["overview"]}})
+
     async def post_git_commit(self, request: web.Request) -> web.Response:
+        return await self._run_git_action_now(request, "commit")
+
+    async def post_git_fetch(self, request: web.Request) -> web.Response:
+        return await self._run_git_action_now(request, "fetch")
+
+    async def post_git_pull(self, request: web.Request) -> web.Response:
+        return await self._run_git_action_now(request, "pull")
+
+    async def post_git_merge(self, request: web.Request) -> web.Response:
+        return await self._run_git_action_now(request, "merge")
+
+    async def post_git_push(self, request: web.Request) -> web.Response:
+        return await self._run_git_action_now(request, "push")
+
+    async def post_git_operation(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        backend = await self._get_git_backend(alias, auth.user_id)
-        overview = await asyncio.to_thread(backend.commit, body.get("message", ""))
-        return _json({"ok": True, "data": {"message": "已创建提交", "overview": overview}})
+        kind = str(body.get("kind") or "").strip()
+        if kind not in GIT_OPERATION_KINDS:
+            raise WebApiError(400, "invalid_git_operation", "不支持的 Git 操作")
+        run = await self._git_operation_runner(auth, alias, kind, body)
+        return _json({"ok": True, "data": self._git_operations.start(alias, kind, run)})
 
-    async def post_git_fetch(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_GIT_OPS)
+    async def get_git_operation_active(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
-        overview = await asyncio.to_thread(backend.fetch)
-        return _json({"ok": True, "data": {"message": "已抓取远端更新", "overview": overview}})
+        return _json({"ok": True, "data": self._git_operations.active(alias)})
 
-    async def post_git_pull(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_GIT_OPS)
+    async def get_git_operation(self, request: web.Request) -> web.Response:
+        await self._with_capability(request, CAP_GIT_OPS)
         alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
-        overview = await asyncio.to_thread(backend.pull)
-        return _json({"ok": True, "data": {"message": "已拉取远端更新", "overview": overview}})
-
-    async def post_git_merge(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_GIT_OPS)
-        alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
-        overview = await asyncio.to_thread(backend.merge)
-        return _json({"ok": True, "data": {"message": "已合并远端更新", "overview": overview}})
-
-    async def post_git_push(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_GIT_OPS)
-        alias = self._manager_alias(request)
-        backend = await self._get_git_backend(alias, auth.user_id, account_id=auth.account_id)
-        overview = await asyncio.to_thread(backend.push)
-        return _json({"ok": True, "data": {"message": "已推送本地提交", "overview": overview}})
+        return _json({"ok": True, "data": self._git_operations.get(alias, request.match_info["operation_id"])})
 
     async def get_git_remotes_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_GIT_OPS)

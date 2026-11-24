@@ -139,6 +139,8 @@ import type {
   GitResetMode,
   GitOverview,
   GitSmartCommitJob,
+  GitOperationJob,
+  GitOperationKind,
   GitStashList,
   GitTreeStatus,
   FileMoveResult,
@@ -2379,6 +2381,8 @@ export class MockWebBotClient implements WebBotClient {
   private gitSmartCommitJobs = new Map<string, GitSmartCommitJob>();
   private gitSmartCommitActiveJobs = new Map<string, string>();
   private gitSmartCommitJobSeq = 1;
+  private gitOperations = new Map<string, GitOperationJob>();
+  private gitOperationSeq = 1;
   private gitRemoteLists = new Map<string, GitRemoteList>();
   private githubAccount: GitHubAccountStatus = {
     connected: false,
@@ -7462,6 +7466,63 @@ export class MockWebBotClient implements WebBotClient {
     return this.actionWithOverview(botAlias, "已推送本地提交");
   }
 
+  // Mock operations finish before the start call returns.
+  async startGitOperation(botAlias: string, kind: GitOperationKind, options: { message?: string } = {}): Promise<GitOperationJob> {
+    const startedAt = Date.now();
+    const job: GitOperationJob = {
+      operationId: `git-op-${this.gitOperationSeq++}`,
+      alias: botAlias,
+      kind,
+      status: "succeeded",
+      startedAt,
+      finishedAt: startedAt,
+      notice: "",
+      commitMessage: "",
+      overview: null,
+      error: null,
+    };
+    try {
+      if (kind === "commit_message") {
+        job.commitMessage = (await this.generateGitCommitMessage(botAlias)).message;
+        job.notice = "已生成提交说明";
+      } else {
+        const actions: Record<Exclude<GitOperationKind, "commit_message">, () => Promise<GitActionResult>> = {
+          fetch: () => this.fetchGitRemote(botAlias),
+          pull: () => this.pullGitRemote(botAlias),
+          merge: () => this.mergeGitRemote(botAlias),
+          push: () => this.pushGitRemote(botAlias),
+          commit: () => this.commitGitChanges(botAlias, options.message || ""),
+        };
+        const result = await actions[kind]();
+        job.notice = result.message;
+        job.overview = result.overview;
+      }
+    } catch (error) {
+      job.status = "failed";
+      job.error = {
+        status: error instanceof WebApiClientError ? error.status || 0 : 0,
+        code: error instanceof WebApiClientError ? error.code || "" : "",
+        message: error instanceof Error ? error.message : "Git 操作失败",
+        data: error instanceof WebApiClientError ? error.data ?? null : null,
+      };
+    }
+    this.gitOperations.set(botAlias, job);
+    return { ...job };
+  }
+
+  async getGitOperation(botAlias: string, operationId: string): Promise<GitOperationJob> {
+    const job = this.gitOperations.get(botAlias);
+    if (!job || job.operationId !== operationId) {
+      throw new WebApiClientError("未找到 Git 操作", { status: 404, code: "git_operation_not_found" });
+    }
+    return { ...job };
+  }
+
+  async getActiveGitOperation(botAlias: string): Promise<GitOperationJob | null> {
+    const job = this.gitOperations.get(botAlias);
+    return job ? { ...job } : null;
+  }
+
   private async mockGitRemoteList(botAlias: string): Promise<GitRemoteList> {
     const existing = this.gitRemoteLists.get(botAlias);
     if (existing) {
@@ -8346,6 +8407,7 @@ export class MockWebBotClient implements WebBotClient {
     this.gitOverviews.delete(botAlias);
     this.gitIdentityConfigs.delete(botAlias);
     this.gitSmartCommitActiveJobs.delete(botAlias);
+    this.gitOperations.delete(botAlias);
     for (const [jobId, job] of Array.from(this.gitSmartCommitJobs.entries())) {
       if (job.alias === botAlias) {
         this.gitSmartCommitJobs.delete(jobId);

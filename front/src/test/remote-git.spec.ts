@@ -59,8 +59,10 @@ for (const width of [1280, 390]) {
       }
       else if (path.startsWith("bots/remote/git")) {
         const operation = path.slice("bots/remote/git".length);
-        gitRequests.push(`${request.method()} ${operation || "/"}`);
-        if (!["", "/diff", "/stage", "/unstage", "/commit", "/tree-status", "/branches", "/graph", "/stashes", "/identity", "/fetch", "/pull", "/push", "/commit-message/config", "/commit-message/generate", "/smart-commit/active"].includes(operation)) {
+        // Long actions are started as server operations; record which one.
+        const operationKind = operation === "/operations" ? `:${request.postDataJSON().kind}` : "";
+        gitRequests.push(`${request.method()} ${operation || "/"}${operationKind}`);
+        if (!["", "/diff", "/stage", "/unstage", "/tree-status", "/branches", "/graph", "/stashes", "/identity", "/commit-message/config", "/smart-commit/active", "/operations", "/operations/active"].includes(operation)) {
           unsupportedRequests.push(path);
           await route.fulfill({ status: 501, json: { ok: false, error: { code: "remote_feature_unavailable", message: "Unsupported remote Git operation" } } });
           return;
@@ -77,20 +79,27 @@ for (const width of [1280, 390]) {
         else if (operation === "/stashes") data = { items: [{ ref: "stash@{0}", hash: "stash123", created_at: "2026-09-24", message: "Remote stash" }] };
         else if (operation === "/identity") data = { repo_found: true, repo_path: remote.root, global: { name: "Remote Dev", email: "remote@example.com" }, local: { name: "Repo Dev", email: "repo@example.com" } };
         else if (operation === "/commit-message/config") data = { cli_type: "codex", cli_path: "codex", params: {}, defaults: {}, schema: {} };
-        else if (operation === "/commit-message/generate") data = { message: "feat(remote): update changed files" };
-        else if (operation === "/smart-commit/active") data = null;
+        else if (operation === "/smart-commit/active" || operation === "/operations/active") data = null;
         else if (operation === "/diff") data = { path: url.searchParams.get("path"), staged: url.searchParams.get("staged") === "true", diff: "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -0,0 +1 @@\n+remote change", truncated: false };
         else if (operation === "/stage" || operation === "/unstage") {
           const paths = request.postDataJSON().paths as string[];
           expect(paths).toHaveLength(1);
           files = files.map((file) => paths.includes(file.path) ? changed(file.path, operation === "/stage") : file);
           data = { message: "Index updated", overview: overview() };
-        } else if (operation === "/commit") {
-          subject = request.postDataJSON().message;
-          files = [];
-          data = { message: "Committed", overview: overview() };
-        } else if (operation === "/fetch" || operation === "/pull" || operation === "/push") {
-          data = { message: `${operation.slice(1)} complete`, overview: overview() };
+        } else if (operation === "/operations") {
+          const { kind, message } = request.postDataJSON() as { kind: string; message?: string };
+          const job = { operation_id: `op-${kind}`, alias: "remote", kind, status: "succeeded", started_at: 1, finished_at: 2, notice: `${kind} complete`, commit_message: "", overview: null as unknown, error: null };
+          if (kind === "commit_message") {
+            job.commit_message = "feat(remote): update changed files";
+          } else {
+            if (kind === "commit") {
+              subject = message || "";
+              files = [];
+              job.notice = "Committed";
+            }
+            job.overview = overview();
+          }
+          data = job;
         } else data = overview();
       }
       else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 0, reset: false };
@@ -159,7 +168,7 @@ for (const width of [1280, 390]) {
     await expect(page.getByRole("button", { name: "打开 tracked.txt", exact: true })).toBeVisible();
     // Only the desktop file tree reads Git decorations (tree-status); the mobile Git screen never requests them.
     const desktopOnlyRequests = width === 1280 ? ["GET /tree-status"] : [];
-    expect(gitRequests).toEqual(expect.arrayContaining(["GET /capabilities", "GET /", ...desktopOnlyRequests, "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /commit-message/config", "GET /smart-commit/active", "GET /diff", "POST /stage", "POST /unstage", "POST /commit", "POST /fetch", "POST /pull", "POST /push", "POST /commit-message/generate"]));
+    expect(gitRequests).toEqual(expect.arrayContaining(["GET /capabilities", "GET /", ...desktopOnlyRequests, "GET /branches", "GET /graph", "GET /stashes", "GET /identity", "GET /commit-message/config", "GET /smart-commit/active", "GET /operations/active", "GET /diff", "POST /stage", "POST /unstage", "POST /operations:commit", "POST /operations:fetch", "POST /operations:pull", "POST /operations:push", "POST /operations:commit_message"]));
     expect(unsupportedRequests).toEqual([]);
   });
 }
