@@ -4894,7 +4894,7 @@ export class MockWebBotClient implements WebBotClient {
   async listConversations(botAlias: string, _query = "", options: AgentScopedOptions = {}): Promise<ConversationListResult> {
     const agentId = options.agentId || "main";
     const key = this.getConversationKey(botAlias, agentId);
-    const items = this.ensureConversations(botAlias, agentId, options.executionMode);
+    const items = this.conversationsByBot.get(key) || [];
     const activeConversationId = this.activeConversationByBot.get(key) || items.find((item) => item.active)?.id || "";
     return { items, activeConversationId };
   }

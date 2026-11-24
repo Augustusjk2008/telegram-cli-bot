@@ -192,11 +192,15 @@ export function SettingsScreen({
       setNotice("CLI 配置已更新");
       if (overview && nextBot.cliType !== overview.cliType) {
         try {
-          await startConversationAfterCliSwitch(client, botAlias);
-          setNotice(`已切换到 ${cliTypeLabel(nextBot.cliType)}，并开启新会话`);
+          const switchedConversation = await startConversationAfterCliSwitch(client, botAlias, nextBot.cliType);
+          setNotice(
+            switchedConversation.reused
+              ? `已切换到 ${cliTypeLabel(nextBot.cliType)}，并恢复最近会话`
+              : `已切换到 ${cliTypeLabel(nextBot.cliType)}，并开启新会话`,
+          );
           onCliSwitched?.(botAlias);
         } catch (err) {
-          setError(`CLI 配置已更新，但新建会话失败：${getErrorMessage(err, "未知错误")}`);
+          setError(`CLI 配置已更新，但切换会话失败：${getErrorMessage(err, "未知错误")}`);
         }
       }
     } catch (err) {

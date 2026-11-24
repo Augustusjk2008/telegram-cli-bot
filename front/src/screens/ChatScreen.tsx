@@ -65,6 +65,7 @@ import type {
   FileDownloadProgress,
   FileReadResult,
   HistorySnapshotResult,
+  CliType,
   PromptPreset,
   SteerMessageResult,
   VoiceTaskBinding,
@@ -2171,24 +2172,18 @@ export function ChatScreen({
     clusterRunIdRef.current = clusterRunId;
   }, [clusterRunId]);
 
-  useEffect(() => {
-    const current = cliParamsLoadRef.current;
-    const matchesScope = current?.client === client && current.botAlias === botAlias;
-    if (!matchesScope) {
-      cliParamsLoadRef.current = null;
-      setCliParams(null);
-    }
-    if (!isForeground || matchesScope) {
-      return;
-    }
-
+  const loadCliParams = useCallback((requestedCliType?: CliType) => {
     const request: NonNullable<typeof cliParamsLoadRef.current> = {
       client,
       botAlias,
       state: "loading",
     };
     cliParamsLoadRef.current = request;
-    void client.getCliParams(botAlias)
+    setCliParams(null);
+    const pending = requestedCliType
+      ? client.getCliParams(botAlias, requestedCliType)
+      : client.getCliParams(botAlias);
+    return pending
       .then((payload) => {
         if (cliParamsLoadRef.current !== request) {
           return;
@@ -2203,7 +2198,20 @@ export function ChatScreen({
         cliParamsLoadRef.current = null;
         setCliParams(null);
       });
-  }, [botAlias, client, isForeground]);
+  }, [botAlias, client]);
+
+  useEffect(() => {
+    const current = cliParamsLoadRef.current;
+    const matchesScope = current?.client === client && current.botAlias === botAlias;
+    if (!matchesScope) {
+      cliParamsLoadRef.current = null;
+      setCliParams(null);
+    }
+    if (!isForeground || matchesScope) {
+      return;
+    }
+    void loadCliParams();
+  }, [botAlias, client, isForeground, loadCliParams]);
 
   const applyHistoryView = useCallback((
     messages: ChatMessage[],
@@ -3788,7 +3796,7 @@ export function ChatScreen({
     setHistoryPanelOpen(false);
   }
 
-  // Saving a CLI switch creates the main CLI conversation elsewhere; follow it when this chat shows that scope.
+  // Saving a CLI switch selects or creates the main CLI conversation elsewhere; follow it when this chat shows that scope.
   const followCreatedConversationRef = useRef<(detail: ConversationCreatedDetail) => void>(() => undefined);
   followCreatedConversationRef.current = (detail) => {
     if (
@@ -3807,12 +3815,36 @@ export function ChatScreen({
   useEffect(() => {
     const handleConversationCreated = (event: Event) => {
       if (isConversationCreatedEvent(event)) {
+        const followsMainChat = (
+          event.detail.botAlias === botAlias
+          && hasActivatedRef.current
+          && !isStreamingRef.current
+          && (activeAgentIdRef.current || "main") === "main"
+        );
+        if (followsMainChat) {
+          const nextCliType = String(event.detail.result.conversation.cliType || "").trim();
+          if (nextCliType) {
+            void loadCliParams(nextCliType as CliType);
+            setBotOverview((current) => {
+              if (!current) {
+                return current;
+              }
+              const next = {
+                ...current,
+                cliType: nextCliType as CliType,
+                activeConversationId: event.detail.result.conversation.id,
+              };
+              botOverviewRef.current = next;
+              return next;
+            });
+          }
+        }
         followCreatedConversationRef.current(event.detail);
       }
     };
     window.addEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
     return () => window.removeEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
-  }, []);
+  }, [botAlias, loadCliParams]);
 
   async function handleDeleteConversation(conversation: ConversationSummary, deleteNativeSession: boolean) {
     if (isStreamingRef.current) {

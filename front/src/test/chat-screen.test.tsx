@@ -1648,7 +1648,7 @@ test("chat attachment uploads show progress and cancelling keeps files that alre
   expect(screen.queryByText("上传已取消")).not.toBeInTheDocument();
 });
 
-test("follows a conversation created by a saved CLI switch for the same bot", async () => {
+test("follows a conversation selected by a saved CLI switch and refreshes CLI params", async () => {
   const client = createClient({
     listMessages: async () => ({ items: [{
       id: "old-cli-answer",
@@ -1658,6 +1658,7 @@ test("follows a conversation created by a saved CLI switch for the same bot", as
       state: "done",
     }] }),
   });
+  const getCliParams = vi.spyOn(client, "getCliParams");
   render(<ChatScreen botAlias="main" client={client} />);
   expect(await screen.findByText("旧 CLI 的回答")).toBeInTheDocument();
 
@@ -1688,4 +1689,5 @@ test("follows a conversation created by a saved CLI switch for the same bot", as
   expect(screen.getByText("旧 CLI 的回答")).toBeInTheDocument();
   announce("main");
   await waitFor(() => expect(screen.queryByText("旧 CLI 的回答")).not.toBeInTheDocument());
+  await waitFor(() => expect(getCliParams).toHaveBeenLastCalledWith("main", "claude"));
 });

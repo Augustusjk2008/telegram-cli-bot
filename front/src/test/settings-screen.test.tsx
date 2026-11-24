@@ -169,6 +169,43 @@ test("switching CLI type fills another agent's path and saving it opens a new co
   expect(screen.getByText("已切换到 claude，并开启新会话")).toBeInTheDocument();
 });
 
+test("switching CLI type selects the latest historical conversation for that CLI", async () => {
+  const user = userEvent.setup();
+  const client = new MockWebBotClient();
+  await client.login({ username: "127.0.0.1", password: "test" });
+  await client.updateBotCli("main", "claude", "claude");
+  const historical = await client.createConversation("main");
+  await client.updateBotCli("main", "codex", "codex");
+  const older = {
+    ...historical.conversation,
+    id: `${historical.conversation.id}-older`,
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const latest = {
+    ...historical.conversation,
+    id: `${historical.conversation.id}-latest`,
+    updatedAt: "2026-02-01T00:00:00Z",
+  };
+  vi.spyOn(client, "listConversations").mockResolvedValue({
+    items: [older, latest],
+    activeConversationId: "",
+  });
+  const selectConversation = vi.spyOn(client, "selectConversation").mockResolvedValue({
+    conversation: latest,
+    messages: [],
+  });
+  const createConversation = vi.spyOn(client, "createConversation");
+
+  render(<SettingsScreen botAlias="main" client={client} />);
+  const cliType = await screen.findByLabelText("CLI 类型");
+  await user.selectOptions(cliType, "claude");
+  await user.click(screen.getByRole("button", { name: "保存 CLI 配置" }));
+
+  await waitFor(() => expect(selectConversation).toHaveBeenCalledWith("main", latest.id));
+  expect(createConversation).not.toHaveBeenCalled();
+  expect(await screen.findByText("已切换到 claude，并恢复最近会话")).toBeInTheDocument();
+});
+
 test("saving only a new CLI path keeps the current conversation", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

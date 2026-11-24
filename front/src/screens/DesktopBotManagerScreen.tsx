@@ -314,11 +314,11 @@ function EditPanel({
       setPendingWorkdirConflict(null);
       if (result.bot.cliType !== previousCliType) {
         try {
-          await startConversationAfterCliSwitch(manager.client, result.bot.alias);
+          await startConversationAfterCliSwitch(manager.client, result.bot.alias, result.bot.cliType);
           onOpenConversation(result.bot.alias);
           return;
         } catch (err) {
-          manager.setError(`CLI 配置已更新，但新建会话失败：${err instanceof Error ? err.message : "未知错误"}`);
+          manager.setError(`CLI 配置已更新，但切换会话失败：${err instanceof Error ? err.message : "未知错误"}`);
         }
       }
       onSaved(result.bot.alias);
