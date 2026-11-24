@@ -188,6 +188,24 @@ describe("terminal session", () => {
     session.dispose();
   });
 
+  it("opens web links only on Ctrl+left click", () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const session = createTerminalSession(document.createElement("div"), { token: "", ownerId: "links" });
+    const activate = session.term.options.linkHandler!.activate;
+    const range = { start: { x: 1, y: 1 }, end: { x: 4, y: 1 } };
+    const url = "https://example.org/docs";
+    const ctrlClick = new MouseEvent("mouseup", { ctrlKey: true });
+
+    activate(new MouseEvent("mouseup"), url, range);
+    activate(new MouseEvent("mouseup", { ctrlKey: true, button: 2 }), url, range);
+    activate(ctrlClick, "javascript:void(0)", range);
+    expect(open).not.toHaveBeenCalled();
+
+    activate(ctrlClick, url, range);
+    expect(open).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
+    session.dispose();
+  });
+
   it("an open screen applies same-ID color revisions without recreating its terminal, socket or output buffer", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
     appearanceRuntime.applyResolvedAppearance(terminalAppearance("screen-1", "#E0E1E2FF"));

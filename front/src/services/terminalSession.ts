@@ -1,5 +1,6 @@
 import { AttachAddon } from "@xterm/addon-attach";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { getTerminalMinimumContrastRatio } from "../theme";
 import { getCurrentAppearance, resolvedTerminalTheme } from "../theme/appearanceRuntime";
@@ -154,10 +155,17 @@ function authHeaders(token: string): Record<string, string> {
   return trimmed ? { Authorization: `Bearer ${trimmed}` } : {};
 }
 
+function openTerminalLink(event: MouseEvent, uri: string) {
+  if (event.ctrlKey && event.button === 0 && /^https?:\/\//i.test(uri)) {
+    window.open(uri, "_blank", "noopener,noreferrer");
+  }
+}
+
 export function createTerminalSession(container: HTMLElement, options: TerminalSessionOptions): TerminalSession {
   const term = new Terminal({
     cursorBlink: true,
     convertEol: false,
+    linkHandler: { activate: openTerminalLink },
     fontSize: options.fontSize ?? 13,
     fontFamily: '"Cascadia Code", "Consolas", "Courier New", monospace',
     ...buildTerminalAppearance(options.theme ?? getCurrentAppearance()),
@@ -199,6 +207,7 @@ export function createTerminalSession(container: HTMLElement, options: TerminalS
   );
 
   term.loadAddon(fitAddon);
+  term.loadAddon(new WebLinksAddon(openTerminalLink));
   term.open(container);
   try {
     fitAddon.fit();

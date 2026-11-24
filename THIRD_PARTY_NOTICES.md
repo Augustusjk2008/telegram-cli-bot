@@ -27,7 +27,7 @@ Packages grouped in one row use the same listed license family.
 | `@codemirror/autocomplete` 6.20.1, `lang-cpp` 6.0.3, `lang-css` 6.3.1, `lang-html` 6.4.11, `lang-javascript` 6.2.5, `lang-json` 6.0.2, `lang-markdown` 6.5.0, `lang-python` 6.2.1, `language` 6.12.3, `legacy-modes` 6.5.3, `lint` 6.9.5, `search` 6.6.0, `state` 6.7.1, `view` 6.43.6 | MIT; Copyright (C) 2018-2021 Marijn Haverbeke and others. |
 | `@lezer/highlight` 1.2.3 | MIT; Copyright (C) 2018 Marijn Haverbeke and others. |
 | `@uiw/react-codemirror` 4.25.9 | MIT; Kenny Wong. Installed metadata does not include a standalone license file. |
-| `@xterm/addon-attach` 0.12.0, `@xterm/addon-fit` 0.11.0 | MIT; xterm.js authors. |
+| `@xterm/addon-attach` 0.12.0, `@xterm/addon-fit` 0.11.0, `@xterm/addon-web-links` 0.12.0 | MIT; xterm.js authors. |
 | `@xterm/xterm` 6.0.0 | MIT; xterm.js authors, SourceLair Private Company, Christopher Jeffrey, Fabrice Bellard, and Microsoft contributors. Preserve the notices in the distributed xterm entry file. |
 | `clsx` 2.1.1 | MIT; Copyright (c) Luke Edwards. |
 | `tailwind-merge` 3.5.0 | MIT; Copyright (c) 2021 Dany Castillo. |
