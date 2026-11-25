@@ -345,6 +345,11 @@ export default defineConfig(({mode}) => {
     build: {
       manifest: true,
       chunkSizeWarningLimit: 650,
+      modulePreload: {
+        resolveDependencies(_filename, dependencies) {
+          return dependencies.filter((dependency) => !dependency.includes('markdown-html-vendor-'));
+        },
+      },
       rollupOptions: {
         onwarn(warning, defaultHandler) {
           if (warning.code === 'CIRCULAR_DEPENDENCY') {

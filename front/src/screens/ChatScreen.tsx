@@ -31,7 +31,7 @@ import { ChatConfirmDialog } from "../components/ChatConfirmDialog";
 import { ChatFinalAnswerActions } from "../components/ChatFinalAnswerActions";
 import { ReadAloudContext } from "../components/ChatReadAloudButton";
 import { ChatMessageMeta } from "../components/ChatMessageMeta";
-import { ChatMarkdownMessage } from "../components/ChatMarkdownMessage";
+import { ChatMarkdownMessage, preloadChatMarkdown } from "../components/ChatMarkdownMessage";
 import { ChatPlainTextMessage } from "../components/ChatPlainTextMessage";
 import { ClusterTeamPanel } from "../components/ClusterTeamPanel";
 import { ConversationHistoryPanel, type ConversationHistoryPanelTab } from "../components/ConversationHistoryPanel";
@@ -1856,6 +1856,11 @@ function ChatScreenView({
   useEffect(() => {
     setChatZoomPercent(100);
   }, [accountId, botAlias]);
+  useEffect(() => {
+    if (isVisible) {
+      preloadChatMarkdown();
+    }
+  }, [isVisible]);
   useEffect(() => {
     if (mobileLayout || !isVisible || typeof window === "undefined" || typeof window.ResizeObserver !== "function") {
       setChatWidth((current) => current === 0 ? current : 0);

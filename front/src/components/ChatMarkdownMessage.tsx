@@ -1,6 +1,5 @@
-import { Component, memo, type ReactNode } from "react";
+import { Component, lazy, memo, Suspense, type ReactNode } from "react";
 import { ChatPlainTextMessage } from "./ChatPlainTextMessage";
-import { MarkdownContent } from "./MarkdownPreview";
 
 type Props = {
   content: string;
@@ -12,6 +11,23 @@ type Props = {
 type State = {
   hasError: boolean;
 };
+
+type MarkdownContentModule = typeof import("./MarkdownPreview");
+
+let markdownContentPromise: Promise<MarkdownContentModule> | undefined;
+
+function loadMarkdownContent() {
+  markdownContentPromise ??= import("./MarkdownPreview");
+  return markdownContentPromise;
+}
+
+export function preloadChatMarkdown() {
+  void loadMarkdownContent();
+}
+
+const LazyMarkdownContent = lazy(() => loadMarkdownContent().then((module) => ({
+  default: module.MarkdownContent,
+})));
 
 class ChatMarkdownBoundary extends Component<Props, State> {
   state: State = { hasError: false };
@@ -40,7 +56,16 @@ class ChatMarkdownBoundary extends Component<Props, State> {
 
     return (
       <div data-testid={`${this.props.role || "assistant"}-markdown-message`} className={`min-w-0 w-full overflow-hidden ${this.props.className || ""}`}>
-        <MarkdownContent content={this.props.content} variant="chat" onFileLinkClick={this.props.onFileLinkClick} />
+        <Suspense
+          fallback={(
+            <ChatPlainTextMessage
+              content={this.props.content}
+              className="text-[var(--chat-markdown-text,var(--text))]"
+            />
+          )}
+        >
+          <LazyMarkdownContent content={this.props.content} variant="chat" onFileLinkClick={this.props.onFileLinkClick} />
+        </Suspense>
       </div>
     );
   }

@@ -5,10 +5,10 @@ import { LoaderCircle } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { FileReadResult, RemoteWorkspace } from "../services/types";
 import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
-import { MarkdownPreview } from "./MarkdownPreview";
 import { isFilePreviewFullyLoaded, isJsonPreviewPath } from "../utils/filePreview";
 
 const JsonPreview = lazy(() => import("./JsonPreview").then((module) => ({ default: module.JsonPreview })));
+const MarkdownPreview = lazy(() => import("./MarkdownPreview").then((module) => ({ default: module.MarkdownPreview })));
 
 export type FilePreviewSurfaceProps = {
   title: string;
@@ -122,12 +122,14 @@ export function FilePreviewSurface({
 
     if (isMarkdownPreview) {
       return (
-        <MarkdownPreview
-          content={content}
-          variant={desktop ? "desktop-preview" : undefined}
-          onFileLinkClick={onFileLinkClick}
-          resolveImageSrc={resolveMarkdownImageSrc}
-        />
+        <Suspense fallback={<div className="p-4 text-sm text-[var(--muted)]">加载预览...</div>}>
+          <MarkdownPreview
+            content={content}
+            variant={desktop ? "desktop-preview" : undefined}
+            onFileLinkClick={onFileLinkClick}
+            resolveImageSrc={resolveMarkdownImageSrc}
+          />
+        </Suspense>
       );
     }
 

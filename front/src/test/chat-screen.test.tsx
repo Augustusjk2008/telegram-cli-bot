@@ -73,7 +73,7 @@ test("renders user Markdown, math and diagrams", async () => {
   render(<ChatScreen botAlias="main" client={client} />);
 
   const message = await screen.findByTestId("user-markdown-message");
-  expect(within(message).getByRole("heading", { level: 2 })).toHaveTextContent("Formatted question");
+  expect(await within(message).findByRole("heading", { level: 2 })).toHaveTextContent("Formatted question");
   expect(message.querySelector("strong")).toHaveTextContent("Bold");
   expect(message.querySelector(".katex annotation")).toHaveTextContent("x^2");
   expect(within(message).getByRole("table")).toHaveTextContent("Input");
