@@ -1212,6 +1212,28 @@ class ChatStore:
             "last_seq": voice_row["last_seq"],
         }
 
+    def _voice_rows_for_turn_ids(
+        self,
+        conn: sqlite3.Connection,
+        turn_ids: list[str],
+    ) -> dict[str, sqlite3.Row]:
+        normalized_turn_ids = list(dict.fromkeys(str(turn_id or "").strip() for turn_id in turn_ids))
+        normalized_turn_ids = [turn_id for turn_id in normalized_turn_ids if turn_id]
+        if not normalized_turn_ids:
+            return {}
+        rows_by_turn: dict[str, sqlite3.Row] = {}
+        # Keep room below SQLite's default host-parameter limit for legacy
+        # callers that request an unbounded conversation history.
+        for offset in range(0, len(normalized_turn_ids), 900):
+            batch = normalized_turn_ids[offset : offset + 900]
+            placeholders = ", ".join("?" for _ in batch)
+            rows = conn.execute(
+                f"SELECT * FROM voice_turns WHERE turn_id IN ({placeholders})",
+                batch,
+            ).fetchall()
+            rows_by_turn.update({str(row["turn_id"] or ""): row for row in rows})
+        return rows_by_turn
+
     def _update_voice_message_conn(
         self,
         conn: sqlite3.Connection,
@@ -3868,6 +3890,7 @@ class ChatStore:
         conn: sqlite3.Connection,
         row: sqlite3.Row,
         trace_stats_by_turn: dict[str, dict[str, int]] | None = None,
+        voice_row: sqlite3.Row | None = None,
     ) -> dict[str, Any]:
         turn_id = str(row["turn_id"])
         if trace_stats_by_turn is None:
@@ -3906,10 +3929,6 @@ class ChatStore:
                 meta["endless_continue_count"] = sum(
                     1 for event in endless_events if str(event.get("kind") or "").strip() == "continue"
                 )
-        voice_row = conn.execute(
-            "SELECT * FROM voice_turns WHERE turn_id = ?",
-            (turn_id,),
-        ).fetchone()
         if is_assistant:
             meta.update({
                 "trace_count": int(trace_stats.get("trace_count", 0) or 0),
@@ -4108,7 +4127,19 @@ class ChatStore:
             [str(row["turn_id"]) for row in rows],
             final_text_by_turn,
         )
-        return [self._message_from_row(conn, row, trace_stats_by_turn) for row in rows]
+        voice_rows_by_turn = self._voice_rows_for_turn_ids(
+            conn,
+            [str(row["turn_id"]) for row in rows],
+        )
+        return [
+            self._message_from_row(
+                conn,
+                row,
+                trace_stats_by_turn,
+                voice_rows_by_turn.get(str(row["turn_id"])),
+            )
+            for row in rows
+        ]
 
     def get_message(self, message_id: str) -> dict[str, Any]:
         conn = self._connect(create=False)

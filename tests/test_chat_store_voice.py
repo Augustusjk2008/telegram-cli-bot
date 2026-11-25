@@ -136,6 +136,26 @@ def test_voice_schema_submission_and_event_are_idempotent(tmp_path: Path) -> Non
     assert assistant["meta"]["tool_call_count"] == 1
 
 
+def test_list_messages_preloads_voice_rows_once(tmp_path: Path, monkeypatch) -> None:
+    store = ChatStore(tmp_path)
+    handle = _voice_handle(store)
+    calls: list[list[str]] = []
+    original_loader = store._voice_rows_for_turn_ids
+
+    def counted_loader(conn, turn_ids):
+        calls.append(list(turn_ids))
+        return original_loader(conn, turn_ids)
+
+    monkeypatch.setattr(store, "_voice_rows_for_turn_ids", counted_loader)
+
+    messages = store.list_messages(handle.conversation_id)
+
+    assert len(calls) == 1
+    assert set(calls[0]) == {handle.turn_id}
+    assistant = next(item for item in messages if item["id"] == handle.assistant_message_id)
+    assert assistant["meta"]["voice"]["tcb_turn_id"] == handle.turn_id
+
+
 def test_voice_turn_is_skipped_by_stale_stream_reconcile_and_supports_request_id(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     handle = _voice_handle(store)
