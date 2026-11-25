@@ -9,7 +9,10 @@ from bot.cli import cli_data_provider
 from bot.models import BotProfile, UserSession
 from bot.web.async_chat_store import AsyncChatStore
 from bot.web.chat_store import ChatStore, ChatTurnHandle, is_cli_history_provider
-from bot.web.native_history_builder import resolve_native_trace_for_turn
+from bot.web.native_history_builder import (
+    resolve_native_trace_for_turn,
+    resolve_native_traces_for_turns,
+)
 
 
 def _session_epoch(session: UserSession) -> int:
@@ -516,6 +519,36 @@ class ChatHistoryService:
         self.store.mark_trace_recovery_attempted(turn_id, status="recovered")
         return True
 
+    def _recover_traces_for_contexts(self, contexts: list[dict[str, Any]]) -> bool:
+        grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for context in contexts:
+            if not self._should_attempt_trace_recovery(context):
+                continue
+            provider = cli_data_provider(str(context.get("native_provider") or ""))
+            session_id = str(context.get("native_session_id") or "").strip()
+            cwd_hint = str(context.get("working_dir") or "").strip()
+            grouped.setdefault((provider, session_id, cwd_hint), []).append(context)
+
+        recovered_any = False
+        for (provider, session_id, cwd_hint), group in grouped.items():
+            recovered_by_turn = resolve_native_traces_for_turns(
+                provider,
+                session_id,
+                group,
+                cwd_hint=cwd_hint or None,
+            )
+            for context in group:
+                turn_id = str(context.get("turn_id") or "")
+                recovered = recovered_by_turn.get(turn_id)
+                if not self._should_replace_trace(context, recovered):
+                    status = "kept_existing" if int(context.get("trace_count") or 0) > 0 else "no_trace"
+                    self.store.mark_trace_recovery_attempted(turn_id, status=status)
+                    continue
+                self.store.replace_trace_events(turn_id, recovered["trace"])
+                self.store.mark_trace_recovery_attempted(turn_id, status="recovered")
+                recovered_any = True
+        return recovered_any
+
     def start_turn(
         self,
         *,
@@ -840,7 +873,7 @@ class ChatHistoryService:
                     if deepseek_conversation is not None:
                         session.deepseek_session_id = str(deepseek_conversation.get("native_session_id") or "").strip() or None
                 session.persist()
-        recovered = False
+        recovery_contexts: list[dict[str, Any]] = []
         for item in items:
             if str(item.get("role") or "") != "assistant":
                 continue
@@ -848,8 +881,8 @@ class ChatHistoryService:
                 context = self.store.get_trace_recovery_context(str(item.get("id") or ""))
             except KeyError:
                 continue
-            if self._recover_trace_for_context(context):
-                recovered = True
+            recovery_contexts.append(context)
+        recovered = self._recover_traces_for_contexts(recovery_contexts)
         if not recovered:
             return items
         return self.store.list_active_history(

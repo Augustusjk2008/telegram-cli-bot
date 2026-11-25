@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from bot.web import chat_history_service
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.models import BotProfile, UserSession
 from bot.web.chat_store import ChatStore
@@ -96,6 +97,44 @@ async def test_streaming_trace_keeps_fast_flush_interval() -> None:
     assert service.trace_batches == [[{"kind": "tool_call", "summary": "run"}]]
     assert buffer.trace_flush_count == 1
     assert buffer.flush_count == 1
+
+
+def test_list_history_batches_native_trace_recovery_for_shared_session(tmp_path, monkeypatch) -> None:
+    profile = BotProfile(alias="main", cli_type="codex", working_dir=str(tmp_path))
+    session = UserSession(
+        bot_id=1,
+        bot_alias="main",
+        user_id=2,
+        working_dir=str(tmp_path),
+        _persist_enabled=False,
+    )
+    service = ChatHistoryService(ChatStore(tmp_path))
+    for prompt, answer in (("first", "first reply"), ("second", "second reply")):
+        handle = service.start_turn(
+            profile=profile,
+            session=session,
+            user_text=prompt,
+            native_provider="codex",
+        )
+        service.complete_turn(
+            handle,
+            content=answer,
+            completion_state="completed",
+            native_session_id="session-shared",
+        )
+
+    batches: list[tuple[str, str, int]] = []
+
+    def resolve_batch(provider, session_id, contexts, *, cwd_hint=None):
+        batches.append((provider, session_id, len(contexts)))
+        return {}
+
+    monkeypatch.setattr(chat_history_service, "resolve_native_traces_for_turns", resolve_batch)
+
+    history = service.list_history(profile, session)
+
+    assert batches == [("codex", "session-shared", 2)]
+    assert [item["content"] for item in history] == ["first", "first reply", "second", "second reply"]
 
 
 def test_start_turn_does_not_reuse_codex_server_conversation_for_codex(tmp_path) -> None:

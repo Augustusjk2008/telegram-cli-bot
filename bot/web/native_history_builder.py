@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from bot.cli import cli_data_provider
@@ -318,6 +319,87 @@ def _select_matching_native_turn(
     return dict(scored[-1][2])
 
 
+def _native_trace_result(
+    provider: str,
+    session_id: str,
+    transcript_path: Path,
+    matched: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if matched is None:
+        return None
+
+    meta = dict(matched.get("meta") or {})
+    trace = [dict(item) for item in meta.get("trace") or [] if isinstance(item, dict)]
+    content = str(matched.get("content") or "")
+    trace = _prune_redundant_summary_trace(trace, content)
+    return {
+        "provider": provider,
+        "session_id": session_id,
+        "trace": trace,
+        "trace_count": len(trace),
+        "tool_call_count": int(meta.get("tool_call_count") or _count_tool_calls(trace)),
+        "process_count": _count_process_events(trace, content),
+        "content": content,
+        "user_text": str(matched.get("user_text") or ""),
+        "transcript_path": str(transcript_path),
+    }
+
+
+def resolve_native_traces_for_turns(
+    provider: str,
+    session_id: str,
+    contexts: list[dict[str, Any]],
+    *,
+    cwd_hint: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve several persisted turns from one native transcript read.
+
+    Each context keeps the same matching inputs as
+    :func:`resolve_native_trace_for_turn`. The transcript is loaded once, then
+    the existing latest-match rules are applied independently to each context.
+    """
+    normalized_provider = cli_data_provider(provider)
+    normalized_session_id = str(session_id or "").strip()
+    if normalized_provider not in {"codex", "claude"} or not normalized_session_id:
+        return {}
+
+    ref = _locate_native_transcript(
+        normalized_provider,
+        normalized_session_id,
+        cwd_hint=cwd_hint,
+    )
+    if ref is None:
+        return {}
+
+    turns = load_native_transcript(
+        normalized_provider,
+        ref.path,
+        session_id=ref.session_id,
+        include_trace=True,
+    )
+    resolved: dict[str, dict[str, Any]] = {}
+    for context in contexts:
+        turn_id = str(context.get("turn_id") or "").strip()
+        if not turn_id:
+            continue
+        matched = _select_matching_native_turn(
+            turns,
+            provider=normalized_provider,
+            session_id=ref.session_id,
+            user_text=str(context.get("user_text") or ""),
+            assistant_text=str(context.get("assistant_text") or ""),
+        )
+        result = _native_trace_result(
+            normalized_provider,
+            ref.session_id,
+            ref.path,
+            matched,
+        )
+        if result is not None:
+            resolved[turn_id] = result
+    return resolved
+
+
 def resolve_native_trace_for_turn(
     provider: str,
     session_id: str,
@@ -331,45 +413,13 @@ def resolve_native_trace_for_turn(
     if normalized_provider not in {"codex", "claude"} or not normalized_session_id:
         return None
 
-    ref = _locate_native_transcript(
+    resolved = resolve_native_traces_for_turns(
         normalized_provider,
         normalized_session_id,
+        [{"turn_id": "single", "user_text": user_text, "assistant_text": assistant_text}],
         cwd_hint=cwd_hint,
     )
-    if ref is None:
-        return None
-
-    turns = load_native_transcript(
-        normalized_provider,
-        ref.path,
-        session_id=ref.session_id,
-        include_trace=True,
-    )
-    matched = _select_matching_native_turn(
-        turns,
-        provider=normalized_provider,
-        session_id=ref.session_id,
-        user_text=user_text,
-        assistant_text=assistant_text,
-    )
-    if matched is None:
-        return None
-
-    meta = dict(matched.get("meta") or {})
-    trace = [dict(item) for item in meta.get("trace") or [] if isinstance(item, dict)]
-    content = str(matched.get("content") or "")
-    trace = _prune_redundant_summary_trace(trace, content)
-    return {
-        "provider": normalized_provider,
-        "session_id": ref.session_id,
-        "trace": trace,
-        "trace_count": len(trace),
-        "tool_call_count": int(meta.get("tool_call_count") or _count_tool_calls(trace)),
-        "process_count": _count_process_events(trace, content),
-        "content": content,
-        "user_text": str(matched.get("user_text") or ""),
-        "transcript_path": str(ref.path),
-    }
+    return resolved.get("single")
 
 
 def _get_native_session_id(provider: str, session) -> str:

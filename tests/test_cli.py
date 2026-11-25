@@ -6,6 +6,7 @@ CLI 模块测试
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,8 @@ from bot.web.native_history_adapter import (
     create_stream_trace_state,
     load_native_transcript,
 )
+from bot.web import native_history_builder
+from bot.web.native_history_builder import resolve_native_traces_for_turns
 
 
 ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
@@ -623,6 +626,64 @@ def test_claude_transcript_keeps_process_text_out_of_final_answer(tmp_path: Path
     assert [event["kind"] for event in trace] == ["commentary", "tool_call", "tool_result"]
     assert trace[0]["summary"] == "我先检查当前目录。"
     assert all(event["summary"] != "Print current working directory" for event in trace)
+
+
+def test_resolve_native_traces_for_turns_loads_one_transcript(tmp_path, monkeypatch) -> None:
+    transcript_path = tmp_path / "rollout.jsonl"
+    transcript_path.write_text(
+        "\n".join(
+            json.dumps(item)
+            for item in (
+                {"type": "turn_context", "payload": {"content": "first prompt"}},
+                {
+                    "type": "response_item",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "final",
+                        "content": [{"type": "output_text", "text": "first answer"}],
+                    },
+                },
+                {"type": "turn_context", "payload": {"content": "second prompt"}},
+                {
+                    "type": "response_item",
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "final",
+                        "content": [{"type": "output_text", "text": "second answer"}],
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reference = SimpleNamespace(path=transcript_path, session_id="session-1")
+    load_calls = 0
+    original_loader = native_history_builder.load_native_transcript
+
+    def counted_loader(*args, **kwargs):
+        nonlocal load_calls
+        load_calls += 1
+        return original_loader(*args, **kwargs)
+
+    monkeypatch.setattr(native_history_builder, "_locate_native_transcript", lambda *_args, **_kwargs: reference)
+    monkeypatch.setattr(native_history_builder, "load_native_transcript", counted_loader)
+
+    resolved = resolve_native_traces_for_turns(
+        "codex",
+        "session-1",
+        [
+            {"turn_id": "turn-1", "user_text": "first prompt", "assistant_text": "first answer"},
+            {"turn_id": "turn-2", "user_text": "second prompt", "assistant_text": "second answer"},
+        ],
+    )
+
+    assert load_calls == 1
+    assert set(resolved) == {"turn-1", "turn-2"}
+    assert resolved["turn-1"]["content"] == "first answer"
+    assert resolved["turn-2"]["content"] == "second answer"
 
 
 def test_claude_effort_accepts_xhigh_and_passes_it_to_cli() -> None:
