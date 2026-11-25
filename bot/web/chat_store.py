@@ -558,6 +558,9 @@ class ChatStore:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_trace_events_turn_ordinal
             ON trace_events(turn_id, ordinal);
 
+            CREATE INDEX IF NOT EXISTS idx_trace_events_turn_kind_call
+            ON trace_events(turn_id, kind, call_id, ordinal, created_at, id);
+
             CREATE TABLE IF NOT EXISTS voice_turns (
                 turn_id TEXT PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
@@ -1292,7 +1295,7 @@ class ChatStore:
                 existing = conn.execute(
                     """
                     SELECT id
-                    FROM trace_events
+                    FROM trace_events INDEXED BY idx_trace_events_turn_kind_call
                     WHERE turn_id = ? AND kind = ? AND call_id = ?
                     ORDER BY ordinal ASC, created_at ASC, id ASC
                     LIMIT 1

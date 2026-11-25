@@ -155,6 +155,32 @@ def test_trace_stats_exclude_duplicate_final_commentary(tmp_path: Path) -> None:
     assert details["process_count"] == 1
 
 
+def test_trace_result_lookup_has_covering_turn_kind_call_index(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    handle = _begin(store, text="trace index")
+
+    with store._connect(create=False) as conn:
+        assert conn is not None
+        index_names = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA index_list(trace_events)").fetchall()
+        }
+        assert "idx_trace_events_turn_kind_call" in index_names
+        plan = conn.execute(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT id
+            FROM trace_events INDEXED BY idx_trace_events_turn_kind_call
+            WHERE turn_id = ? AND kind = ? AND call_id = ?
+            ORDER BY ordinal ASC, created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (handle.turn_id, "tool_result", "call-1"),
+        ).fetchall()
+
+    assert any("idx_trace_events_turn_kind_call" in str(row["detail"]) for row in plan)
+
+
 def test_legacy_endless_group_is_consolidated_in_database(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     first = _begin(store, text="原始问题")
