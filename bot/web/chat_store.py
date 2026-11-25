@@ -4464,6 +4464,19 @@ class ChatStore:
         )
         return items
 
+    def _count_history_conn(self, conn: sqlite3.Connection, conversation_id: str) -> int:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM messages AS m
+            JOIN turns AS t ON t.id = m.turn_id
+            WHERE m.conversation_id = ?
+              AND t.workspace_history_discarded_at IS NULL
+            """,
+            (conversation_id,),
+        ).fetchone()
+        return int(row["count"] if row is not None else 0)
+
     def count_history(
         self,
         *,
@@ -4495,17 +4508,7 @@ class ChatStore:
                 )
                 if resolved_conversation_id is None:
                     return 0
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*) AS count
-                    FROM messages AS m
-                    JOIN turns AS t ON t.id = m.turn_id
-                    WHERE m.conversation_id = ?
-                      AND t.workspace_history_discarded_at IS NULL
-                    """,
-                    (resolved_conversation_id,),
-                ).fetchone()
-                count = int(row["count"])
+                count = self._count_history_conn(conn, resolved_conversation_id)
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -4614,6 +4617,72 @@ class ChatStore:
         )
         return row_count
 
+    def _get_running_reply_conn(
+        self,
+        conn: sqlite3.Connection,
+        conversation_id: str,
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            """
+            SELECT
+                t.id AS turn_id,
+                t.conversation_id AS conversation_id,
+                t.user_message_id AS user_message_id,
+                t.assistant_message_id AS assistant_message_id,
+                assistant.content AS preview_text,
+                assistant.created_at AS started_at,
+                assistant.updated_at AS updated_at,
+                user.content AS user_text
+            FROM turns AS t
+            JOIN messages AS assistant ON assistant.id = t.assistant_message_id
+            JOIN messages AS user ON user.id = t.user_message_id
+            WHERE t.conversation_id = ?
+              AND t.completion_state = 'streaming'
+              AND (
+                  assistant.state = ?
+                  OR EXISTS (
+                      SELECT 1
+                      FROM voice_turns AS voice_turn
+                      WHERE voice_turn.turn_id = t.id AND voice_turn.state = 'active'
+                  )
+              )
+            ORDER BY t.seq DESC
+            LIMIT 1
+            """,
+            (conversation_id, "streaming"),
+        ).fetchone()
+        if row is None:
+            return None
+        result = {
+            "turn_id": str(row["turn_id"] or ""),
+            "conversation_id": str(row["conversation_id"] or ""),
+            "user_message_id": str(row["user_message_id"] or ""),
+            "assistant_message_id": str(row["assistant_message_id"] or ""),
+            "user_text": row["user_text"] or "",
+            "preview_text": row["preview_text"] or "",
+            "started_at": row["started_at"],
+            "updated_at": row["updated_at"] or row["started_at"],
+        }
+        voice_row = conn.execute(
+            "SELECT * FROM voice_turns WHERE turn_id = ?",
+            (str(row["turn_id"] or ""),),
+        ).fetchone()
+        if voice_row is not None:
+            trace_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS count FROM trace_events WHERE turn_id = ?",
+                    (str(row["turn_id"] or ""),),
+                ).fetchone()["count"]
+                or 0
+            )
+            result["voice"] = self._voice_meta_from_row(
+                conn,
+                voice_row,
+                assistant_message_id=str(row["assistant_message_id"] or ""),
+                trace_count=trace_count,
+            )
+        return result
+
     def get_running_reply(
         self,
         *,
@@ -4645,65 +4714,7 @@ class ChatStore:
                 )
                 if resolved_conversation_id is None:
                     return None
-                row = conn.execute(
-                    """
-                    SELECT
-                        t.id AS turn_id,
-                        t.conversation_id AS conversation_id,
-                        t.user_message_id AS user_message_id,
-                        t.assistant_message_id AS assistant_message_id,
-                        assistant.content AS preview_text,
-                        assistant.created_at AS started_at,
-                        assistant.updated_at AS updated_at,
-                        user.content AS user_text
-                    FROM turns AS t
-                    JOIN messages AS assistant ON assistant.id = t.assistant_message_id
-                    JOIN messages AS user ON user.id = t.user_message_id
-                    WHERE t.conversation_id = ?
-                      AND t.completion_state = 'streaming'
-                      AND (
-                          assistant.state = ?
-                          OR EXISTS (
-                              SELECT 1
-                              FROM voice_turns AS voice_turn
-                              WHERE voice_turn.turn_id = t.id AND voice_turn.state = 'active'
-                          )
-                      )
-                    ORDER BY t.seq DESC
-                    LIMIT 1
-                    """,
-                    (resolved_conversation_id, "streaming"),
-                ).fetchone()
-                if row is None:
-                    return None
-                result = {
-                    "turn_id": str(row["turn_id"] or ""),
-                    "conversation_id": str(row["conversation_id"] or ""),
-                    "user_message_id": str(row["user_message_id"] or ""),
-                    "assistant_message_id": str(row["assistant_message_id"] or ""),
-                    "user_text": row["user_text"] or "",
-                    "preview_text": row["preview_text"] or "",
-                    "started_at": row["started_at"],
-                    "updated_at": row["updated_at"] or row["started_at"],
-                }
-                voice_row = conn.execute(
-                    "SELECT * FROM voice_turns WHERE turn_id = ?",
-                    (str(row["turn_id"] or ""),),
-                ).fetchone()
-                if voice_row is not None:
-                    trace_count = int(
-                        conn.execute(
-                            "SELECT COUNT(*) AS count FROM trace_events WHERE turn_id = ?",
-                            (str(row["turn_id"] or ""),),
-                        ).fetchone()["count"]
-                        or 0
-                    )
-                    result["voice"] = self._voice_meta_from_row(
-                        conn,
-                        voice_row,
-                        assistant_message_id=str(row["assistant_message_id"] or ""),
-                        trace_count=trace_count,
-                    )
+                result = self._get_running_reply_conn(conn, resolved_conversation_id)
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
             logger,
@@ -4716,6 +4727,42 @@ class ChatStore:
             found=bool(result),
         )
         return result
+
+    def get_running_reply_and_history_count(
+        self,
+        *,
+        bot_id: int,
+        user_id: int,
+        working_dir: str,
+        session_epoch: int,
+        agent_id: str = "main",
+        conversation_id: str | None = None,
+        native_provider: str | None = None,
+        native_provider_exclude: str | None = None,
+    ) -> tuple[dict[str, Any] | None, int]:
+        """Read the running reply and exact history count in one connection."""
+        conn = self._connect(create=False)
+        if conn is None:
+            return None, 0
+        with closing(conn):
+            with conn:
+                resolved_conversation_id = self._get_scoped_conversation_id(
+                    conn,
+                    conversation_id=conversation_id,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    working_dir=working_dir,
+                    session_epoch=session_epoch,
+                    native_provider=native_provider,
+                    native_provider_exclude=native_provider_exclude,
+                )
+                if resolved_conversation_id is None:
+                    return None, 0
+                return (
+                    self._get_running_reply_conn(conn, resolved_conversation_id),
+                    self._count_history_conn(conn, resolved_conversation_id),
+                )
 
     def append_user_message_to_turn(
         self,

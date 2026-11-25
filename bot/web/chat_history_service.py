@@ -1040,7 +1040,7 @@ class ChatHistoryService:
                 "endless_group_id": session.endless_group_id,
                 "endless_retry_at_ms": session.endless_retry_at_ms,
             }
-        running_reply = self.store.get_running_reply(
+        running_reply, history_count = self.store.get_running_reply_and_history_count(
             bot_id=session.bot_id,
             user_id=session.user_id,
             agent_id=session.agent_id,
@@ -1058,16 +1058,7 @@ class ChatHistoryService:
             "cli_path": profile.cli_path,
             "working_dir": session.working_dir,
             "message_count": session.message_count,
-            "history_count": self.store.count_history(
-                bot_id=session.bot_id,
-                user_id=session.user_id,
-                agent_id=session.agent_id,
-                working_dir=session.working_dir,
-                session_epoch=_session_epoch(session),
-                conversation_id=_active_conversation_id(session) or None,
-                native_provider=self.native_provider_filter,
-                native_provider_exclude=self.native_provider_exclude,
-            ),
+            "history_count": history_count,
             "is_processing": is_processing,
             **endless_state,
             "running_reply": running_reply,

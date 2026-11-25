@@ -61,6 +61,26 @@ def test_history_revision_delta_tracks_add_stream_update_and_finalize(tmp_path: 
     assert finalized["deleted_ids"] == []
 
 
+def test_running_reply_and_history_count_match_separate_reads(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path)
+    handle = _begin(store, text="snapshot")
+    kwargs = {
+        "bot_id": 1,
+        "user_id": 2,
+        "working_dir": str(tmp_path),
+        "session_epoch": 0,
+        "conversation_id": handle.conversation_id,
+        "native_provider": "codex",
+    }
+
+    separate_reply = store.get_running_reply(**kwargs)
+    separate_count = store.count_history(**kwargs)
+    combined_reply, combined_count = store.get_running_reply_and_history_count(**kwargs)
+
+    assert combined_reply == separate_reply
+    assert combined_count == separate_count
+
+
 def test_endless_group_and_events_survive_history_reload(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     first = _begin(store, text="原始问题")
