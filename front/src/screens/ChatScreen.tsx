@@ -1727,7 +1727,7 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   );
 }));
 
-export function ChatScreen({
+function ChatScreenView({
   botAlias,
   accountId,
   client = new MockWebBotClient(),
@@ -5784,3 +5784,16 @@ export function ChatScreen({
     </ReadAloudContext.Provider>
   );
 }
+
+function areChatScreenPropsEqual(previous: Props, next: Props): boolean {
+  if (previous.isVisible || next.isVisible) {
+    return false;
+  }
+  return previous.botAlias === next.botAlias
+    && previous.accountId === next.accountId
+    && previous.client === next.client
+    && previous.mobileLayout === next.mobileLayout
+    && previous.embedded === next.embedded;
+}
+
+export const ChatScreen = memo(ChatScreenView, areChatScreenPropsEqual);
