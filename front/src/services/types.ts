@@ -1445,6 +1445,8 @@ export type ChatTranslation = {
 
 export type ChatMessage = {
   id: string;
+  /** Persisted message revision used to reuse unchanged history objects. */
+  revision?: number;
   turnId?: string;
   conversationId?: string;
   role: "user" | "assistant" | "system";

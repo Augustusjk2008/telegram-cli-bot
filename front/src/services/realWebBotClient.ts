@@ -584,6 +584,7 @@ type RawHistoryItem = {
   translation?: unknown;
   agent_input_text?: string | null;
   id?: string;
+  revision?: number | string | null;
   turn_id?: string;
   turnId?: string;
   conversation_id?: string;
@@ -2808,8 +2809,11 @@ function mapChatMessage(raw: RawHistoryItem, index: number, fallbackState: ChatM
   const turnId = raw.turn_id ?? raw.turnId;
   const conversationId = raw.conversation_id ?? raw.conversationId;
   const meta = mapMessageMeta(raw.meta);
+  const parsedRevision = Number(raw.revision);
+  const revision = Number.isSafeInteger(parsedRevision) && parsedRevision > 0 ? parsedRevision : undefined;
   return {
     id: raw.id || `${raw.timestamp || raw.created_at || "history"}-${index}`,
+    ...(revision !== undefined ? { revision } : {}),
     ...(typeof turnId === "string" && turnId ? { turnId } : {}),
     ...(typeof conversationId === "string" && conversationId ? { conversationId } : {}),
     role: raw.role,

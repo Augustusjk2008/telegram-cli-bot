@@ -33,6 +33,53 @@ test("idle history merge preserves message references when nothing changed", () 
   expect(merged[1]).toBe(previousItems[1]);
 });
 
+test("persisted message revisions reuse the previous object and its loaded metadata", () => {
+  const previous: ChatMessage = {
+    id: "assistant-revisioned",
+    revision: 7,
+    role: "assistant",
+    text: "已完成",
+    createdAt: "2026-07-07T10:00:01Z",
+    state: "done",
+    meta: {
+      traceCount: 3,
+      traceLoadedCount: 3,
+      trace: [{ id: "trace-1", kind: "tool_result", summary: "完整结果", payload: { output: "large" } }],
+    },
+  };
+  const incoming: ChatMessage = {
+    ...previous,
+    meta: { traceCount: 3, traceLoadedCount: 1 },
+  };
+
+  const merged = mergeMessagesPreservingClientState([previous], [incoming]);
+
+  expect(merged[0]).toBe(previous);
+  expect(merged[0].meta).toBe(previous.meta);
+});
+
+test("a newer persisted message revision accepts the incoming content", () => {
+  const previous: ChatMessage = {
+    id: "assistant-revisioned",
+    revision: 7,
+    role: "assistant",
+    text: "旧内容",
+    createdAt: "2026-07-07T10:00:01Z",
+    state: "done",
+  };
+  const incoming: ChatMessage = {
+    ...previous,
+    revision: 8,
+    text: "新内容",
+  };
+
+  const merged = mergeMessagesPreservingClientState([previous], [incoming]);
+
+  expect(merged[0]).not.toBe(previous);
+  expect(merged[0].text).toBe("新内容");
+  expect(merged[0].revision).toBe(8);
+});
+
 test("history merge deduplicates reset rows already represented locally", () => {
   const previousItems: ChatMessage[] = [
     {

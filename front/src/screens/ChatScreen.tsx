@@ -1124,6 +1124,29 @@ function areMessageValuesEqual(left: unknown, right: unknown): boolean {
   return leftKeys.every((key, index) => key === rightKeys[index] && areMessageValuesEqual(leftRecord[key], rightRecord[key]));
 }
 
+function persistedMessageRevision(item: ChatMessage): number | undefined {
+  const revision = item.revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+    ? revision
+    : undefined;
+}
+
+function canReusePersistedMessage(
+  previousItem: ChatMessage,
+  incomingItem: ChatMessage,
+  preserveStreaming: boolean,
+): boolean {
+  if (previousItem.id !== incomingItem.id || previousItem.role !== incomingItem.role) {
+    return false;
+  }
+  const previousRevision = persistedMessageRevision(previousItem);
+  const incomingRevision = persistedMessageRevision(incomingItem);
+  if (previousRevision === undefined || previousRevision !== incomingRevision) {
+    return false;
+  }
+  return !preserveStreaming || previousItem.state === incomingItem.state;
+}
+
 export function mergeMessagesPreservingClientState(previousItems: ChatMessage[], nextItems: ChatMessage[], preserveStreaming = false) {
   if (preserveStreaming) {
     const incomingIds = new Set(nextItems.map((item) => item.id));
@@ -1153,6 +1176,10 @@ export function mergeMessagesPreservingClientState(previousItems: ChatMessage[],
       || previousByTurnRoleKey.get(getMessageTurnRoleKey(item));
     if (!previousItem) {
       return item;
+    }
+
+    if (canReusePersistedMessage(previousItem, item, preserveStreaming)) {
+      return previousItem;
     }
 
     const mergedMeta = mergeMessageMeta(previousItem.meta, item.meta);
