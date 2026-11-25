@@ -45,3 +45,23 @@ def test_resolve_safe_path_rejects_absolute_picker_path_outside_workspace(tmp_pa
         _resolve_safe_path(str(workspace), str(current), str(outside))
     assert exc_info.value.status == 403
     assert exc_info.value.code == "path_outside_workspace"
+
+
+def test_dev_source_path_allows_remote_admin_with_dev_flag() -> None:
+    from bot.web.api_common import AuthContext
+    from bot.web.plugin_api_service import _get_dev_source_path
+
+    admin = AuthContext(user_id=1, token_used=True, account_id="local-admin", is_local_admin=True)
+    assert _get_dev_source_path({"sourcePath": "/srv/plugins", "allowDevSourcePath": True}, admin) == "/srv/plugins"
+
+
+def test_dev_source_path_rejects_non_admin_and_missing_dev_flag() -> None:
+    from bot.web.api_common import AuthContext
+    from bot.web.plugin_api_service import _get_dev_source_path
+
+    member = AuthContext(user_id=2, token_used=True)
+    for body in ({"sourcePath": "/srv/plugins", "allowDevSourcePath": True}, {"sourcePath": "/srv/plugins"}):
+        with pytest.raises(WebApiError) as exc_info:
+            _get_dev_source_path(dict(body), member)
+        assert exc_info.value.status == 403
+        assert exc_info.value.code == "plugin_source_path_forbidden"

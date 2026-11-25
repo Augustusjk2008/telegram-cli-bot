@@ -69,8 +69,8 @@ def _get_dev_source_path(body: dict[str, Any], auth: AuthContext) -> str:
     source_path = str(body.get("sourcePath") or body.get("source_path") or "").strip()
     if source_path:
         dev_enabled = bool(body.get("dev") or body.get("devMode") or body.get("allowDevSourcePath"))
-        if not (auth.is_local_admin and bool(body.get("_local_request")) and dev_enabled):
-            _raise(403, "plugin_source_path_forbidden", "仅本机管理员开发模式可从目录安装插件")
+        if not (auth.is_local_admin and dev_enabled):
+            _raise(403, "plugin_source_path_forbidden", "仅管理员开发模式可从目录安装插件")
     return source_path
 
 
