@@ -11,7 +11,11 @@ from bot.models import UserSession
 from bot.web import chat_history_service
 from bot.web.chat_history_service import ChatHistoryService, StreamingPersistenceBuffer
 from bot.web.chat_store import ChatStore
-from bot.web.native_history_adapter import consume_stream_trace_chunk, create_stream_trace_state
+from bot.web.native_history_adapter import (
+    consume_stream_trace_chunk,
+    consume_stream_trace_event,
+    create_stream_trace_state,
+)
 
 
 def _jsonl(*events: dict) -> str:
@@ -56,6 +60,22 @@ def test_deepseek_trace_pairs_interleaved_tools_and_separates_thinking_from_body
     } for event in trace)
     assert all(event["kind"] != "permission" for event in trace)
     assert all(event["payload"]["type"] not in {"session", "text", "final", "extension"} for event in trace)
+
+
+def test_preparsed_stream_trace_event_matches_chunk_path():
+    event = {
+        "type": "tool_result",
+        "callId": "read-1",
+        "status": "completed",
+        "result": "workspace",
+    }
+    chunk_state = create_stream_trace_state("deepseek")
+    event_state = create_stream_trace_state("deepseek")
+
+    expected = consume_stream_trace_chunk("deepseek", _jsonl(event), chunk_state)
+    actual = consume_stream_trace_event("deepseek", event, event_state)
+
+    assert actual == expected
 
 
 def test_deepseek_trace_deduplicates_step_replay_without_losing_later_steps():

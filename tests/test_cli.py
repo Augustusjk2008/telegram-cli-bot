@@ -12,8 +12,10 @@ import pytest
 
 from bot import config
 from bot.cli import (
+    AntigravityJsonStreamParser,
     ClaudeJsonStreamParser,
     CodexJsonStreamParser,
+    DeepSeekJsonStreamParser,
     build_cli_command,
     parse_antigravity_json_output,
     parse_antigravity_model_options,
@@ -38,6 +40,29 @@ from bot.web.native_history_builder import resolve_native_traces_for_turns
 
 
 ANTIGRAVITY_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "antigravity"
+
+
+@pytest.mark.parametrize(
+    ("parser_type", "event"),
+    [
+        (CodexJsonStreamParser, {"type": "thread.started", "thread_id": "thread-1"}),
+        (ClaudeJsonStreamParser, {"type": "system", "subtype": "init", "session_id": "session-1"}),
+        (AntigravityJsonStreamParser, {
+            "event": "step_update",
+            "step_update": {"step_type": "agent_response", "text_delta": "hello"},
+        }),
+        (DeepSeekJsonStreamParser, {"type": "session", "sessionId": "session-1"}),
+    ],
+)
+def test_stream_parser_preparsed_event_matches_line_path(parser_type, event) -> None:
+    line_parser = parser_type(raw_tail_max_bytes=4096, final_text_max_bytes=4096)
+    event_parser = parser_type(raw_tail_max_bytes=4096, final_text_max_bytes=4096)
+    line = json.dumps(event) + "\n"
+
+    line_parser.consume_line(line)
+    event_parser.consume_line(line, parsed_event=event)
+
+    assert event_parser.result() == line_parser.result()
 
 
 def test_cli_environment_excludes_removed_anthropic_overrides():

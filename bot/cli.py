@@ -100,7 +100,7 @@ class DeepSeekJsonStreamParser:
         self.terminal_status: Optional[str] = None
         self.total_bytes = 0
 
-    def consume_line(self, line: str) -> Dict[str, Optional[str]]:
+    def consume_line(self, line: str, *, parsed_event: Dict[str, Any] | None = None) -> Dict[str, Optional[str]]:
         value = str(line or "")
         self.total_bytes += len(value.encode("utf-8", errors="replace"))
         self._raw_tail.append(value)
@@ -109,11 +109,14 @@ class DeepSeekJsonStreamParser:
         }
         if not value.strip():
             return parsed
-        try:
-            event = json.loads(value)
-        except (json.JSONDecodeError, RecursionError):
-            self._errors.append("DeepSeek Harness 输出了无效 JSON", separator="\n")
-            return parsed
+        if parsed_event is None:
+            try:
+                event = json.loads(value)
+            except (json.JSONDecodeError, RecursionError):
+                self._errors.append("DeepSeek Harness 输出了无效 JSON", separator="\n")
+                return parsed
+        else:
+            event = parsed_event
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             self._errors.append("DeepSeek Harness 事件缺少有效 type", separator="\n")
             return parsed
@@ -237,11 +240,17 @@ class DeepSeekJsonStreamParser:
         )
 
 
-def _parse_terminal_usage(line: str, *, cli_type: str) -> Optional[Dict[str, Any]]:
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        return None
+def _parse_terminal_usage(
+    line: str,
+    *,
+    cli_type: str,
+    event: Any = None,
+) -> Optional[Dict[str, Any]]:
+    if event is None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return None
     if not isinstance(event, dict):
         return None
     terminal_types = ("turn.completed", "turn.failed") if cli_type == "codex" else ("result",)
@@ -278,12 +287,17 @@ def _parse_terminal_usage(line: str, *, cli_type: str) -> Optional[Dict[str, Any
 _CLAUDE_CONTEXT_WINDOW_MODEL_LIMIT = 16
 
 
-def _parse_claude_context_windows(line: str) -> Optional[Dict[str, int]]:
+def _parse_claude_context_windows(
+    line: str,
+    *,
+    event: Any = None,
+) -> Optional[Dict[str, int]]:
     """Read the per-model context window Claude Code reports on its result event."""
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        return None
+    if event is None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return None
     if not isinstance(event, dict) or event.get("type") != "result":
         return None
     model_usage = event.get("modelUsage")
@@ -302,17 +316,22 @@ def _parse_claude_context_windows(line: str) -> Optional[Dict[str, int]]:
     return windows or None
 
 
-def _parse_claude_result_cost(line: str) -> Optional[Tuple[Optional[int], Optional[Dict[str, float]]]]:
+def _parse_claude_result_cost(
+    line: str,
+    *,
+    event: Any = None,
+) -> Optional[Tuple[Optional[int], Optional[Dict[str, float]]]]:
     """Read the cost Claude Code reports for the work since its previous result event.
 
     Returns ``(result_index, {model: costUSD})`` for a result event, with ``None`` costs
     when the event does not carry a usable value. ``total_cost_usd`` and ``modelUsage``
     are deliberately ignored: they also include cost restored from the resumed session.
     """
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        return None
+    if event is None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return None
     if not isinstance(event, dict) or event.get("type") != "result":
         return None
     index = event.get("result_index")
@@ -348,7 +367,7 @@ class CodexJsonStreamParser:
         self.terminal_usage: Optional[Dict[str, Any]] = None
         self.total_bytes = 0
 
-    def consume_line(self, line: str) -> Dict[str, Optional[str]]:
+    def consume_line(self, line: str, *, parsed_event: Dict[str, Any] | None = None) -> Dict[str, Optional[str]]:
         value = str(line or "")
         self.total_bytes += len(value.encode("utf-8", errors="replace"))
         self._raw_tail.append(value)
@@ -360,8 +379,8 @@ class CodexJsonStreamParser:
                 "delta_text": None,
                 "error_text": None,
             }
-        parsed = parse_codex_json_line(stripped)
-        terminal_usage = _parse_terminal_usage(stripped, cli_type="codex")
+        parsed = parse_codex_json_line(stripped, event=parsed_event)
+        terminal_usage = _parse_terminal_usage(stripped, cli_type="codex", event=parsed_event)
         if terminal_usage is not None:
             self.terminal_usage = terminal_usage
         if parsed["thread_id"]:
@@ -432,7 +451,7 @@ class ClaudeJsonStreamParser:
         self._result_cost_missing = False
         self.total_bytes = 0
 
-    def consume_line(self, line: str) -> Dict[str, Optional[str]]:
+    def consume_line(self, line: str, *, parsed_event: Dict[str, Any] | None = None) -> Dict[str, Optional[str]]:
         value = str(line or "")
         self.total_bytes += len(value.encode("utf-8", errors="replace"))
         self._raw_tail.append(value)
@@ -445,19 +464,19 @@ class ClaudeJsonStreamParser:
                 "error_text": None,
             }
         if '"rate_limit_event"' in stripped[:80]:
-            self._observe_rate_limit_event(stripped)
-        parsed = parse_claude_stream_json_line(stripped)
-        terminal_usage = _parse_terminal_usage(stripped, cli_type="claude")
+            self._observe_rate_limit_event(stripped, parsed_event=parsed_event)
+        parsed = parse_claude_stream_json_line(stripped, event=parsed_event)
+        terminal_usage = _parse_terminal_usage(stripped, cli_type="claude", event=parsed_event)
         if terminal_usage is not None:
             self.terminal_usage = terminal_usage
         if '"modelUsage"' in stripped:
-            context_windows = _parse_claude_context_windows(stripped)
+            context_windows = _parse_claude_context_windows(stripped, event=parsed_event)
             if context_windows:
                 self.context_windows = context_windows
         # Every result event carries total_cost_usd; one without the per-result amount
         # must mark the reported total incomplete rather than be skipped.
         if '"total_cost_usd"' in stripped or '"model_usage_since_last_result"' in stripped:
-            result_cost = _parse_claude_result_cost(stripped)
+            result_cost = _parse_claude_result_cost(stripped, event=parsed_event)
             if result_cost is not None:
                 index, costs = result_cost
                 if costs is None:
@@ -485,11 +504,19 @@ class ClaudeJsonStreamParser:
         total = math.fsum(cost for costs in self._result_costs.values() for cost in costs.values())
         return {"models": models, "total": round(total, 10)}
 
-    def _observe_rate_limit_event(self, line: str) -> None:
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            return
+    def _observe_rate_limit_event(
+        self,
+        line: str,
+        *,
+        parsed_event: Dict[str, Any] | None = None,
+    ) -> None:
+        if parsed_event is None:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return
+        else:
+            event = parsed_event
         if not isinstance(event, dict) or event.get("type") != "rate_limit_event":
             return
         info = event.get("rate_limit_info")
@@ -753,7 +780,7 @@ def parse_antigravity_model_options(raw_output: str) -> List[str]:
     return options
 
 
-def parse_antigravity_json_line(line: str) -> Dict[str, Any]:
+def parse_antigravity_json_line(line: str, *, event: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """解析 Antigravity stream-json 的单行事件。"""
     result: Dict[str, Any] = {
         "conversation_id": None,
@@ -764,10 +791,11 @@ def parse_antigravity_json_line(line: str) -> Dict[str, Any]:
         "terminal_error": None,
         "denied_actions": None,
     }
-    try:
-        event: Any = json.loads(line)
-    except json.JSONDecodeError:
-        return result
+    if event is None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return result
     if not isinstance(event, dict):
         return result
 
@@ -838,7 +866,7 @@ class AntigravityJsonStreamParser:
         self.denied_actions: list[Any] = []
         self.total_bytes = 0
 
-    def consume_line(self, line: str) -> Dict[str, Any]:
+    def consume_line(self, line: str, *, parsed_event: Dict[str, Any] | None = None) -> Dict[str, Any]:
         value = str(line or "")
         self.total_bytes += len(value.encode("utf-8", errors="replace"))
         self._raw_tail.append(value)
@@ -850,7 +878,7 @@ class AntigravityJsonStreamParser:
                 "delta_text": None,
                 "error_text": None,
             }
-        parsed = parse_antigravity_json_line(stripped)
+        parsed = parse_antigravity_json_line(stripped, event=parsed_event)
         if parsed.get("conversation_id"):
             self.session_id = parsed["conversation_id"]
         if parsed.get("completed_text"):
@@ -1057,7 +1085,11 @@ def _extract_codex_content_text(content: Any) -> Optional[str]:
     return "\n".join(text_parts).strip()
 
 
-def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
+def parse_codex_json_line(
+    line: str,
+    *,
+    event: Dict[str, Any] | None = None,
+) -> Dict[str, Optional[str]]:
     """解析 codex --json 的单行事件。"""
     result: Dict[str, Optional[str]] = {
         "thread_id": None,
@@ -1065,10 +1097,11 @@ def parse_codex_json_line(line: str) -> Dict[str, Optional[str]]:
         "delta_text": None,
         "error_text": None,
     }
-    try:
-        event: Any = json.loads(line)
-    except json.JSONDecodeError:
-        return result
+    if event is None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return result
 
     if not isinstance(event, dict):
         return result
@@ -1302,7 +1335,11 @@ def _extract_claude_error_text(event: Dict[str, Any]) -> Optional[str]:
     return "\n".join(unique)
 
 
-def parse_claude_stream_json_line(line: str) -> Dict[str, Optional[str]]:
+def parse_claude_stream_json_line(
+    line: str,
+    *,
+    event: Dict[str, Any] | None = None,
+) -> Dict[str, Optional[str]]:
     """解析 Claude stream-json 的单行事件。"""
     result: Dict[str, Optional[str]] = {
         "session_id": None,
@@ -1310,10 +1347,11 @@ def parse_claude_stream_json_line(line: str) -> Dict[str, Optional[str]]:
         "delta_text": None,
         "error_text": None,
     }
-    try:
-        event: Any = json.loads(line)
-    except json.JSONDecodeError:
-        return result
+    if event is None:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return result
 
     if not isinstance(event, dict):
         return result

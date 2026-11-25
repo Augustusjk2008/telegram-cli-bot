@@ -1188,6 +1188,35 @@ def _consume_live_antigravity_line(item: dict[str, Any], state: dict[str, Any]) 
     return events
 
 
+def consume_stream_trace_event(
+    provider: str,
+    item: dict[str, Any],
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    if provider == "codex":
+        candidate_events = _consume_live_codex_line(item)
+    elif provider == "claude":
+        candidate_events = _consume_live_claude_line(item, state)
+    elif provider == "antigravity":
+        candidate_events = _consume_live_antigravity_line(item, state)
+    elif provider == "deepseek":
+        candidate_events = _consume_live_deepseek_line(item, state)
+    else:
+        candidate_events = []
+
+    for event in candidate_events:
+        event_key = _stream_event_key(event)
+        if provider == "deepseek":
+            payload = event.get("payload") or {}
+            event_key += (str(payload.get("turn", "")), str(payload.get("step", "")))
+        if event_key in state["seen"]:
+            continue
+        state["seen"].add(event_key)
+        events.append(event)
+    return events
+
+
 def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     state["buffer"] = str(state.get("buffer") or "") + str(chunk or "")
@@ -1214,24 +1243,5 @@ def consume_stream_trace_chunk(provider: str, chunk: str, state: dict[str, Any])
         if not isinstance(item, dict):
             continue
 
-        if provider == "codex":
-            candidate_events = _consume_live_codex_line(item)
-        elif provider == "claude":
-            candidate_events = _consume_live_claude_line(item, state)
-        elif provider == "antigravity":
-            candidate_events = _consume_live_antigravity_line(item, state)
-        elif provider == "deepseek":
-            candidate_events = _consume_live_deepseek_line(item, state)
-        else:
-            candidate_events = []
-
-        for event in candidate_events:
-            event_key = _stream_event_key(event)
-            if provider == "deepseek":
-                payload = event.get("payload") or {}
-                event_key += (str(payload.get("turn", "")), str(payload.get("step", "")))
-            if event_key in state["seen"]:
-                continue
-            state["seen"].add(event_key)
-            events.append(event)
+        events.extend(consume_stream_trace_event(provider, item, state))
     return events

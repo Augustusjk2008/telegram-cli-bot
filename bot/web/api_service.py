@@ -166,6 +166,7 @@ from bot.web.cli_turn_cost import CliTurnCost
 from bot.web.diagnostics import diag_log_event, diag_log_slow
 from bot.web.native_history_adapter import (
     consume_stream_trace_chunk,
+    consume_stream_trace_event,
     create_stream_trace_state,
 )
 from bot.web.plan_mode import (
@@ -5196,8 +5197,13 @@ class _StreamPreviewState:
             final_text_max_bytes=_CLI_OUTPUT_LIMITS.final_text_max_bytes,
         )
 
-    def consume(self, chunk: str) -> dict[str, Optional[str]]:
-        return self._parser.consume_line(str(chunk or ""))
+    def consume(
+        self,
+        chunk: str,
+        *,
+        parsed_event: dict[str, Any] | None = None,
+    ) -> dict[str, Optional[str]]:
+        return self._parser.consume_line(str(chunk or ""), parsed_event=parsed_event)
 
     def status_event(self, *, elapsed_seconds: int) -> dict[str, Any]:
         event: dict[str, Any] = {"type": "status", "elapsed_seconds": elapsed_seconds}
@@ -5480,12 +5486,16 @@ def _advance_codex_done_candidate(
     candidate_text: Optional[str],
     candidate_seen_at: Optional[float],
     now: float,
+    event: dict[str, Any] | None = None,
 ) -> tuple[Optional[str], Optional[str], Optional[float]]:
     stripped = line.strip()
     if not stripped:
         return thread_id, candidate_text, candidate_seen_at
 
-    parsed, event = _parse_codex_event(stripped)
+    if event is None:
+        parsed, event = _parse_codex_event(stripped)
+    else:
+        parsed = _parse_codex_event_dict(event)
     next_thread_id = thread_id
     if parsed["thread_id"]:
         next_thread_id = parsed["thread_id"]
@@ -6745,7 +6755,16 @@ async def _stream_cli_chat(
 
                         text_chunk = str(item)
                         output_bytes += len(text_chunk.encode("utf-8", errors="replace"))
-                        preview_state.consume(text_chunk)
+                        parsed_stream_event: dict[str, Any] | None = None
+                        stripped_chunk = text_chunk.strip()
+                        if stripped_chunk:
+                            try:
+                                candidate_event = json.loads(stripped_chunk)
+                            except (json.JSONDecodeError, RecursionError):
+                                candidate_event = None
+                            if isinstance(candidate_event, dict):
+                                parsed_stream_event = candidate_event
+                        preview_state.consume(text_chunk, parsed_event=parsed_stream_event)
                         if cli_type == "antigravity":
                             parsed_preview = preview_state.result()
                             if parsed_preview.session_id:
@@ -6763,8 +6782,21 @@ async def _stream_cli_chat(
                                 service.store.set_conversation_native_session(turn_handle.conversation_id, received_session_id)
                             if received_session_id:
                                 attempt.cli_session_id = received_session_id
-                        turn_cost.observe(text_chunk)
-                        for trace_event in consume_stream_trace_chunk(cli_data_provider(cli_type), text_chunk, trace_state):
+                        turn_cost.observe(text_chunk, parsed_event=parsed_stream_event)
+                        trace_events = (
+                            consume_stream_trace_event(
+                                cli_data_provider(cli_type),
+                                parsed_stream_event,
+                                trace_state,
+                            )
+                            if parsed_stream_event is not None
+                            else consume_stream_trace_chunk(
+                                cli_data_provider(cli_type),
+                                text_chunk,
+                                trace_state,
+                            )
+                        )
+                        for trace_event in trace_events:
                             appended_trace = append_live_trace_event(trace_event)
                             if appended_trace is not None and include_trace:
                                 yield {"type": "trace", **turn_event_ids, "event": appended_trace}
@@ -6784,6 +6816,7 @@ async def _stream_cli_chat(
                                 candidate_text=codex_done_candidate,
                                 candidate_seen_at=codex_done_seen_at,
                                 now=now,
+                                event=parsed_stream_event,
                             )
                         elif claude_detector is not None:
                             claude_detector.observe_text(

@@ -24,13 +24,16 @@ class CliTurnCost:
         self.started_at = datetime.now(timezone.utc)
         self._messages: dict[str, tuple[str, dict[str, Any]]] = {}
 
-    def observe(self, line: str) -> None:
+    def observe(self, line: str, *, parsed_event: dict[str, Any] | None = None) -> None:
         if self.cli_type != "claude":
             return
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            return
+        if parsed_event is None:
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                return
+        else:
+            event = parsed_event
         if not isinstance(event, dict) or event.get("type") != "assistant" or event.get("parent_tool_use_id"):
             return
         message = event.get("message")

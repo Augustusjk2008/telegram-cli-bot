@@ -99,6 +99,22 @@ def test_claude_partial_cost_uses_message_snapshots_and_skips_unpriced_usage():
     assert cost["is_partial"] is True
 
 
+def test_claude_partial_cost_accepts_preparsed_event():
+    turn = CliTurnCost("claude", "test-model")
+    event = {
+        "type": "assistant",
+        "message": {
+            "id": "preparsed",
+            "model": "test-model",
+            "usage": {"input_tokens": 1000, "output_tokens": 100},
+        },
+    }
+
+    turn.observe(json.dumps(event), parsed_event=event)
+
+    assert turn.estimate_partial("") is not None
+
+
 def test_claude_missing_or_unpriced_usage_is_not_reported_as_zero():
     turn = CliTurnCost("claude", "unknown-model")
     for usage in [{}, {"input_tokens": 1000}, {"input_tokens": 1000, "output_tokens": 100}]:
