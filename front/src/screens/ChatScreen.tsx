@@ -16,6 +16,7 @@ import {
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type CSSProperties,
+  type ReactNode,
   type RefObject,
   type TouchEvent as ReactTouchEvent,
   type WheelEvent as ReactWheelEvent,
@@ -23,6 +24,7 @@ import {
 import { clsx } from "clsx";
 import { CheckCheck, ChevronDown, ChevronUp, Copy, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
+import { ChatSessionSelector } from "../components/ChatSessionSelector";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
@@ -47,6 +49,7 @@ import type {
   AgentSummary,
   BotOverview,
   ChatAttachmentUploadResult,
+  ChatSessionSummary,
   ClusterAgentTask,
   ClusterSlotStatus,
   ClusterTeam,
@@ -147,11 +150,20 @@ type PendingChatAttachment = ChatAttachmentUploadResult & {
   id: string;
 };
 
+const DETACHED_QUEUE_ADMISSION_TIMEOUT_MS = 30_000;
+const QUEUED_CHAT_RESTORED_EVENT = "tcb-chat-queue-restored";
+
 type QueuedChatMessage = {
+  needsHistoryCheck?: boolean;
+  rejection?: "bot_chat_capacity" | "session_busy" | "chat_catalog_busy";
   text: string;
   attachments: PendingChatAttachment[];
   sendOptions?: ChatSendOptions;
 };
+
+function isAdmissionRejection(code: unknown): code is NonNullable<QueuedChatMessage["rejection"]> {
+  return code === "bot_chat_capacity" || code === "session_busy" || code === "chat_catalog_busy";
+}
 
 type ActiveTurnBinding = {
   localAssistantId: string;
@@ -253,7 +265,8 @@ function activeAgentStorageKey(botAlias: string, accountId?: string) {
   return `tcb.activeAgent.${storageScopePrefix(accountId)}${botAlias}`;
 }
 
-function planModeStorageKey(botAlias: string, accountId?: string) {
+function planModeStorageKey(botAlias: string, accountId: string, sessionId: string) {
+  if (sessionId !== "main") return `tcb.webChatPlanMode.${JSON.stringify([accountId, botAlias, sessionId])}`;
   return `tcb.planMode.${storageScopePrefix(accountId)}${botAlias}`;
 }
 
@@ -270,34 +283,35 @@ function isPlanExecutionPrompt(text: string) {
   return value.startsWith("Please execute the plan. Plan file:") || value.startsWith("请按方案执行。方案文件：");
 }
 
-function queuedMessageStorageKey(botAlias: string, agentId: string, accountId?: string) {
+function queuedMessageStorageKey(botAlias: string, agentId: string, accountId: string, sessionId: string) {
+  if (sessionId !== "main") return `tcb.webChatQueue.${JSON.stringify([accountId, botAlias, sessionId, agentId])}`;
   return `tcb.queuedMessage.${storageScopePrefix(accountId)}${botAlias}.${agentId || "main"}`;
 }
 
-function readStoredPlanMode(botAlias: string, accountId?: string) {
+function readStoredPlanMode(key: string) {
   if (typeof window === "undefined") {
     return false;
   }
-  return window.localStorage.getItem(planModeStorageKey(botAlias, accountId)) === "1";
+  return window.localStorage.getItem(key) === "1";
 }
 
-function writeStoredPlanMode(botAlias: string, enabled: boolean, accountId?: string) {
+function writeStoredPlanMode(key: string, enabled: boolean) {
   if (typeof window === "undefined") {
     return;
   }
   if (enabled) {
-    window.localStorage.setItem(planModeStorageKey(botAlias, accountId), "1");
+    window.localStorage.setItem(key, "1");
     return;
   }
-  window.localStorage.removeItem(planModeStorageKey(botAlias, accountId));
+  window.localStorage.removeItem(key);
 }
 
-function readStoredQueuedMessage(botAlias: string, agentId: string, accountId?: string): QueuedChatMessage | null {
+function readStoredQueuedMessage(key: string): QueuedChatMessage | null {
   if (typeof window === "undefined") {
     return null;
   }
   try {
-    const rawValue = window.localStorage.getItem(queuedMessageStorageKey(botAlias, agentId, accountId));
+    const rawValue = window.localStorage.getItem(key);
     if (!rawValue) {
       return null;
     }
@@ -313,34 +327,31 @@ function readStoredQueuedMessage(botAlias: string, agentId: string, accountId?: 
       ))
       : [];
     const sendOptions = parsed.sendOptions && typeof parsed.sendOptions === "object" ? parsed.sendOptions : undefined;
-    const nextMessage = {
+    const nextMessage: QueuedChatMessage = {
+      needsHistoryCheck: parsed.needsHistoryCheck === true || undefined,
+      rejection: isAdmissionRejection(parsed.rejection) ? parsed.rejection : undefined,
       text,
       attachments,
       sendOptions,
     };
     return buildComposedMessageText(nextMessage.text, nextMessage.attachments) ? nextMessage : null;
   } catch {
-    window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId, accountId));
+    window.localStorage.removeItem(key);
     return null;
   }
 }
 
-function writeStoredQueuedMessage(botAlias: string, agentId: string, message: QueuedChatMessage, accountId?: string) {
+function writeStoredQueuedMessage(key: string, message: QueuedChatMessage) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(queuedMessageStorageKey(botAlias, agentId, accountId), JSON.stringify({
+  window.localStorage.setItem(key, JSON.stringify({
     text: message.text,
     attachments: message.attachments,
     sendOptions: message.sendOptions,
+    rejection: message.rejection,
+    needsHistoryCheck: message.needsHistoryCheck,
   }));
-}
-
-function clearStoredQueuedMessage(botAlias: string, agentId: string, accountId?: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.removeItem(queuedMessageStorageKey(botAlias, agentId, accountId));
 }
 
 function agentOptions(agentId?: string, executionMode?: ChatExecutionMode): { agentId?: string; executionMode?: ChatExecutionMode } | undefined {
@@ -609,6 +620,8 @@ function mergeQueuedChatMessage(current: QueuedChatMessage | null, incoming: Que
 
   return {
     text,
+    rejection: current.rejection || incoming.rejection,
+    needsHistoryCheck: current.needsHistoryCheck || incoming.needsHistoryCheck,
     attachments: [...current.attachments, ...incoming.attachments],
     sendOptions,
   };
@@ -1765,10 +1778,30 @@ const ChatMessageList = memo(forwardRef<ChatMessageListHandle, {
   );
 }));
 
+type ChatDraft = { text: string; attachments: PendingChatAttachment[] };
+
+type ChatRuntimeProps = Props & {
+  client: WebBotClient;
+  sessionId: string;
+  sessionOptions: ChatSessionSummary[];
+  catalogNotice?: ReactNode;
+  draft?: ChatDraft;
+  focusSessionSelector: boolean;
+  onSelectSession: (item: ChatSessionSummary, draft?: ChatDraft) => void;
+  onCreateSession?: (title: string) => Promise<ChatSessionSummary>;
+};
+
 function ChatScreenView({
   botAlias,
   accountId,
-  client = new MockWebBotClient(),
+  client,
+  sessionId,
+  sessionOptions,
+  catalogNotice,
+  draft,
+  focusSessionSelector,
+  onSelectSession,
+  onCreateSession,
   readOnly = false,
   readOnlyReason,
   disabledReason,
@@ -1788,8 +1821,13 @@ function ChatScreenView({
   onOpenGlobalPromptSettings,
   onOpenBotSettings,
   mobileLayout = false,
-}: Props) {
+}: ChatRuntimeProps) {
+  const isMainSession = sessionId === "main";
   const storageScope = accountId?.trim() || "";
+  const planModeKey = planModeStorageKey(botAlias, storageScope, sessionId);
+  const queueKey = useCallback((agentId: string) => (
+    queuedMessageStorageKey(botAlias, agentId, storageScope, sessionId)
+  ), [botAlias, storageScope, sessionId]);
   const documentVisible = useDocumentVisible();
   const isForeground = isVisible && documentVisible;
   const [items, setItems] = useState<ChatMessage[]>([]);
@@ -1815,7 +1853,7 @@ function ChatScreenView({
   const [cliParams, setCliParams] = useState<CliParamsPayload | null>(null);
   const [modelSaving, setModelSaving] = useState(false);
   const [clusterSaving, setClusterSaving] = useState(false);
-  const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>(() => draft?.attachments ?? []);
   const [queuedMessage, setQueuedMessage] = useState<QueuedChatMessage | null>(null);
   const [attachmentUploadProgress, setAttachmentUploadProgress] = useState<ChatComposerUploadProgress | null>(null);
   const attachmentUploadAbortControllerRef = useRef<AbortController | null>(null);
@@ -1871,7 +1909,7 @@ function ChatScreenView({
   const [clusterTaskStatus, setClusterTaskStatus] = useState<ClusterTaskStatus | null>(null);
   const [clusterTaskError, setClusterTaskError] = useState("");
   const [clusterTeamSnapshot, setClusterTeamSnapshot] = useState<ClusterTeamViewSnapshot | null>(null);
-  const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(botAlias, storageScope));
+  const [planMode, setPlanModeState] = useState(() => readStoredPlanMode(planModeKey));
   const executionMode: ChatExecutionMode = "cli";
   const favoriteScopeKey = JSON.stringify([botAlias, storageScope, activeAgentId, executionMode]);
   const favoriteAutoLoadRef = useRef<{
@@ -1921,9 +1959,15 @@ function ChatScreenView({
   const shouldStickToBottomRef = useRef(true);
   const forceAutoScrollRef = useRef(true);
   const isVisibleRef = useRef(isVisible);
-  isVisibleRef.current = isVisible;
   const isForegroundRef = useRef(isForeground);
-  isForegroundRef.current = isForeground;
+  useLayoutEffect(() => {
+    isVisibleRef.current = isVisible;
+    isForegroundRef.current = isForeground;
+    return () => {
+      isVisibleRef.current = false;
+      isForegroundRef.current = false;
+    };
+  }, [isForeground, isVisible]);
   const loadingRef = useRef(loading);
   const isStreamingRef = useRef(isStreaming);
   const streamModeRef = useRef(streamMode);
@@ -1955,12 +1999,12 @@ function ChatScreenView({
   const chatSyncStateSyncQueuedRef = useRef(false);
   const lastStateSyncAtRef = useRef(0);
   const localStreamEndedAtRef = useRef(0);
-  const sseAbortControllerRef = useRef<AbortController | null>(null);
+  const detachSseReaderRef = useRef<(() => void) | null>(null);
   const endlessModeRef = useRef(false);
   const endlessModeTargetRef = useRef<ChatMessage | null>(null);
   const pollAssistantStateRef = useRef<((options?: { allowDuringSse?: boolean; forceHistory?: boolean }) => Promise<boolean>) | null>(null);
   const voiceTaskBindingRef = useRef<VoiceTaskBinding | null>(null);
-  const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string }) => Promise<void>) | null>(null);
+  const drainQueuedMessageIfIdleRef = useRef<((context?: { botAlias: string; agentId: string; retry?: boolean }) => Promise<void>) | null>(null);
   const clusterTaskPollTimerRef = useRef<number | null>(null);
   const revealScrollFrameRef = useRef<number | null>(null);
   const revealScrollAttemptsRef = useRef(0);
@@ -1973,8 +2017,6 @@ function ChatScreenView({
   const clusterRunIdRef = useRef("");
   const assistantSendVersionRef = useRef(0);
   const activeTurnBindingRef = useRef<ActiveTurnBinding | null>(null);
-  const previousBotAliasRef = useRef(botAlias);
-  const previousStorageScopeRef = useRef(storageScope);
   const hasActivatedRef = useRef(false);
   const previousForegroundRef = useRef(isForeground);
   const previousVisibleRef = useRef(isVisible);
@@ -1993,26 +2035,37 @@ function ChatScreenView({
   const setPlanMode = useCallback((value: boolean | ((current: boolean) => boolean)) => {
     setPlanModeState((current) => {
       const next = typeof value === "function" ? value(current) : value;
-      writeStoredPlanMode(previousBotAliasRef.current, next, previousStorageScopeRef.current);
+      writeStoredPlanMode(planModeKey, next);
       return next;
     });
-  }, []);
+  }, [planModeKey]);
 
   const setQueuedMessageState = useCallback((
     next: QueuedChatMessage | null,
-    context?: { botAlias: string; agentId: string; accountId?: string },
+    agentId = activeAgentIdRef.current || "main",
   ) => {
-    const targetBotAlias = context?.botAlias || botAlias;
-    const targetAgentId = context?.agentId || activeAgentIdRef.current || "main";
-    const targetScope = context?.accountId ?? storageScope;
+    const key = queueKey(agentId);
     queuedMessageRef.current = next;
     setQueuedMessage(next);
     if (next) {
-      writeStoredQueuedMessage(targetBotAlias, targetAgentId, next, targetScope);
+      writeStoredQueuedMessage(key, next);
     } else {
-      clearStoredQueuedMessage(targetBotAlias, targetAgentId, targetScope);
+      window.localStorage.removeItem(key);
     }
-  }, [botAlias, storageScope]);
+  }, [queueKey]);
+
+  // A definitive rejection may arrive after the user has switched away and back.
+  useEffect(() => {
+    const restore = (event: Event) => {
+      const key = queueKey(activeAgentIdRef.current || "main");
+      if (!(event instanceof CustomEvent) || event.detail !== key) return;
+      const restored = readStoredQueuedMessage(key);
+      queuedMessageRef.current = restored;
+      setQueuedMessage(restored);
+    };
+    window.addEventListener(QUEUED_CHAT_RESTORED_EVENT, restore);
+    return () => window.removeEventListener(QUEUED_CHAT_RESTORED_EVENT, restore);
+  }, [queueKey]);
 
   const stopEndlessMode = useCallback(() => {
     endlessModeRef.current = false;
@@ -2036,13 +2089,10 @@ function ChatScreenView({
     }
   }, []);
 
-  const abortActiveSseRequest = useCallback(() => {
-    const controller = sseAbortControllerRef.current;
-    if (!controller) {
-      return;
-    }
-    sseAbortControllerRef.current = null;
-    controller.abort();
+  const detachActiveSseReader = useCallback(() => {
+    const detach = detachSseReaderRef.current;
+    detachSseReaderRef.current = null;
+    detach?.();
   }, []);
 
   const stopClusterTaskPoll = useCallback(() => {
@@ -2062,7 +2112,7 @@ function ChatScreenView({
 
   const cancelInactiveChatTransport = useCallback(() => {
     stopEndlessMode();
-    abortActiveSseRequest();
+    detachActiveSseReader();
     stopAssistantPoll();
     stopSseRecoveryWatch();
     stopClusterTaskPoll();
@@ -2072,7 +2122,7 @@ function ChatScreenView({
     sseLastActivityAtRef.current = null;
     clearClusterTaskState();
   }, [
-    abortActiveSseRequest,
+    detachActiveSseReader,
     clearClusterTaskState,
     stopEndlessMode,
     stopAssistantPoll,
@@ -2081,31 +2131,9 @@ function ChatScreenView({
     streamBatcher,
   ]);
 
-  useEffect(() => () => {
+  useLayoutEffect(() => () => {
     cancelInactiveChatTransport();
   }, [cancelInactiveChatTransport]);
-
-  useLayoutEffect(() => {
-    const previousBotAlias = previousBotAliasRef.current;
-    const previousScope = previousStorageScopeRef.current;
-    const scopeChanged = previousBotAlias !== botAlias || previousScope !== storageScope;
-    if (!scopeChanged) {
-      return;
-    }
-    cancelInactiveChatTransport();
-    if (!scopeChanged) {
-      return;
-    }
-    clearStoredQueuedMessage(previousBotAlias, activeAgentIdRef.current || "main", previousScope);
-    setQueuedMessage(null);
-    queuedMessageRef.current = null;
-    setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
-    previousBotAliasRef.current = botAlias;
-    previousStorageScopeRef.current = storageScope;
-    setPlanModeState(readStoredPlanMode(botAlias, storageScope));
-    const storedExecutionMode = "cli";
-    executionModeRef.current = storedExecutionMode;
-  }, [botAlias, cancelInactiveChatTransport, storageScope]);
 
   useEffect(() => {
     setClusterSaving(false);
@@ -2128,8 +2156,8 @@ function ChatScreenView({
     setClusterTeamSnapshot(null);
     setActiveAgentId("main");
     activeAgentIdRef.current = "main";
-    window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), "main");
-  }, [botAlias, storageScope]);
+    if (isMainSession) window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), "main");
+  }, [botAlias, isMainSession, storageScope]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -2373,7 +2401,7 @@ function ChatScreenView({
 
   const restoreClusterRunFromOverview = useCallback((overview: BotOverview) => {
     const activeRun = overview.activeClusterRun;
-    if (!activeRun?.runId || activeAgentIdRef.current !== "main") {
+    if (!isMainSession || !activeRun?.runId || activeAgentIdRef.current !== "main") {
       return;
     }
     if (clusterRunIdRef.current !== activeRun.runId) {
@@ -2392,7 +2420,7 @@ function ChatScreenView({
     }
     setClusterTaskError("");
     void pollClusterTasks();
-  }, [pollClusterTasks]);
+  }, [isMainSession, pollClusterTasks]);
 
   const scheduleAssistantPoll = useCallback((delayMs = ACTIVE_CHAT_POLL_INTERVAL_MS) => {
     stopAssistantPoll();
@@ -2517,7 +2545,7 @@ function ChatScreenView({
           }
 
           assistantSendVersionRef.current += 1;
-          abortActiveSseRequest();
+          detachActiveSseReader();
           const keepStreamingRowsActive = overview.isProcessing || hasPersistedStreamingAssistant(messages);
           const { shouldPoll } = applyHistoryView(recoveredMessages, overview, { keepStreamingRowsActive });
           if (shouldPoll) {
@@ -2547,7 +2575,7 @@ function ChatScreenView({
       sseRecoveryTimerRef.current = null;
       runRecovery();
     }, delayMs);
-  }, [abortActiveSseRequest, applyHistoryView, botAlias, client, restoreClusterRunFromOverview, scheduleAssistantPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [detachActiveSseReader, applyHistoryView, botAlias, client, restoreClusterRunFromOverview, scheduleAssistantPoll, stopSseRecoveryWatch, streamBatcher]);
 
   const markSseActivity = useCallback(() => {
     sseStallCountRef.current = 0;
@@ -2728,7 +2756,6 @@ function ChatScreenView({
     setPreviewName("");
     setPreviewResult(null);
     setBotOverview(null);
-    setPendingAttachments([]);
     attachmentUploadAbortControllerRef.current?.abort();
     attachmentUploadAbortControllerRef.current = null;
     setAttachmentUploadProgress(null);
@@ -2767,8 +2794,8 @@ function ChatScreenView({
         setBotOverview(overview);
         setWorkingDir(overview.remoteWorkspace?.root || overview.workingDir || "");
         restoreClusterRunFromOverview(overview);
-        const storedQueuedMessage = readStoredQueuedMessage(botAlias, nextAgentId, storageScope);
-        setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: nextAgentId });
+        const storedQueuedMessage = readStoredQueuedMessage(queueKey(nextAgentId));
+        setQueuedMessageState(storedQueuedMessage, nextAgentId);
         const { shouldPoll } = applyHistoryView(snapshot.items, overview);
         initialLoadSettled = true;
         loadingRef.current = false;
@@ -2805,6 +2832,7 @@ function ChatScreenView({
     isVisible,
     restoreClusterRunFromOverview,
     scheduleAssistantPoll,
+    queueKey,
     setQueuedMessageState,
     stopAssistantPoll,
     stopSseRecoveryWatch,
@@ -3636,7 +3664,8 @@ function ChatScreenView({
   useEffect(() => {
     const autoLoad = favoriteAutoLoadRef.current;
     if (
-      !isForeground
+      !isMainSession
+      || !isForeground
       || favoriteLoading
       || autoLoad?.client !== client
       || autoLoad.scopeKey !== favoriteScopeKey
@@ -3703,6 +3732,7 @@ function ChatScreenView({
     favoriteItems,
     favoriteLoading,
     isForeground,
+    isMainSession,
     storageScope,
   ]);
 
@@ -3734,7 +3764,7 @@ function ChatScreenView({
       setClusterTaskError("");
       clusterRunIdRef.current = "";
       setTraceLoadState({});
-      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setQueuedMessageState(null);
       setItems(data.messages);
       setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       setConversations((prev) => prev.map((item) => (
@@ -3784,7 +3814,7 @@ function ChatScreenView({
       setClusterTaskError("");
       clusterRunIdRef.current = "";
       setTraceLoadState({});
-      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setQueuedMessageState(null);
       setItems(data.messages);
       setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       itemsRef.current = data.messages;
@@ -3856,7 +3886,7 @@ function ChatScreenView({
     setClusterTaskError("");
     clusterRunIdRef.current = "";
     setTraceLoadState({});
-    setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+    setQueuedMessageState(null);
     setItems(data.messages);
     setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
     setConversations((prev) => [
@@ -3883,6 +3913,7 @@ function ChatScreenView({
   };
 
   useEffect(() => {
+    if (!isMainSession) return;
     const handleConversationCreated = (event: Event) => {
       if (isConversationCreatedEvent(event)) {
         const followsMainChat = (
@@ -3914,7 +3945,7 @@ function ChatScreenView({
     };
     window.addEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
     return () => window.removeEventListener(CONVERSATION_CREATED_EVENT, handleConversationCreated);
-  }, [botAlias, loadCliParams]);
+  }, [botAlias, isMainSession, loadCliParams]);
 
   async function handleDeleteConversation(conversation: ConversationSummary, deleteNativeSession: boolean) {
     if (isStreamingRef.current) {
@@ -3946,7 +3977,7 @@ function ChatScreenView({
         setClusterTaskError("");
         clusterRunIdRef.current = "";
         setTraceLoadState({});
-        setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+        setQueuedMessageState(null);
         setItems(nextMessages);
         setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
         itemsRef.current = nextMessages;
@@ -3984,7 +4015,7 @@ function ChatScreenView({
       setClusterTaskError("");
       clusterRunIdRef.current = "";
       setTraceLoadState({});
-      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setQueuedMessageState(null);
       setConversations(data.items);
       setFavoriteItems([]);
       setItems(data.messages);
@@ -4002,7 +4033,7 @@ function ChatScreenView({
   const handleSelectAgent = useCallback((agentId: string) => {
     const normalized = agentId || "main";
     const previousAgentId = activeAgentIdRef.current || "main";
-    setQueuedMessageState(null, { botAlias, agentId: previousAgentId });
+    setQueuedMessageState(null, previousAgentId);
     activeAgentIdRef.current = normalized;
     setActiveAgentId(normalized);
     window.localStorage.setItem(activeAgentStorageKey(botAlias, storageScope), normalized);
@@ -4045,8 +4076,8 @@ function ChatScreenView({
         if (overview.agents && overview.agents.length > 0) {
           setAgents(overview.agents);
         }
-        const storedQueuedMessage = readStoredQueuedMessage(botAlias, normalized, storageScope);
-        setQueuedMessageState(storedQueuedMessage, { botAlias, agentId: normalized });
+        const storedQueuedMessage = readStoredQueuedMessage(queueKey(normalized));
+        setQueuedMessageState(storedQueuedMessage, normalized);
         const { shouldPoll } = applyHistoryView(snapshot.items, overview);
         loadingRef.current = false;
         setLoading(false);
@@ -4062,7 +4093,7 @@ function ChatScreenView({
         loadingRef.current = false;
         setLoading(false);
       });
-  }, [applyHistoryView, botAlias, cancelInactiveChatTransport, client, restoreClusterRunFromOverview, setQueuedMessageState, storageScope]);
+  }, [applyHistoryView, botAlias, cancelInactiveChatTransport, client, queueKey, restoreClusterRunFromOverview, setQueuedMessageState, storageScope]);
 
   useEffect(() => {
     if (botOverview?.cluster?.enabled === false) {
@@ -4187,6 +4218,7 @@ function ChatScreenView({
     options: {
       attachments?: PendingChatAttachment[];
       clearPendingAttachments?: boolean;
+      queuedMessage?: QueuedChatMessage;
       background?: boolean;
       reuseAssistant?: ChatMessage;
       sendOptions?: ChatSendOptions;
@@ -4208,7 +4240,18 @@ function ChatScreenView({
 
     const localStartedAtMs = Date.now();
     const sseAbortController = typeof AbortController !== "undefined" ? new AbortController() : null;
-    sseAbortControllerRef.current = sseAbortController;
+    let awaitingQueueAdmission = Boolean(options.queuedMessage);
+    let detachedTimer: number | undefined;
+    // A queued POST is already claimed locally. Read its admission result even when
+    // the chat unmounts, so reopening the chat never has to replay the request.
+    const detachReader = () => {
+      if (awaitingQueueAdmission) {
+        detachedTimer = window.setTimeout(() => sseAbortController?.abort(), DETACHED_QUEUE_ADMISSION_TIMEOUT_MS);
+      } else {
+        sseAbortController?.abort();
+      }
+    };
+    detachSseReaderRef.current = detachReader;
     assistantSendVersionRef.current += 1;
     const sendVersion = assistantSendVersionRef.current;
     const displayUserText = options.sendOptions?.visibleText || composedText;
@@ -4323,11 +4366,16 @@ function ChatScreenView({
       turnId: message?.turnId || streamTurnId || undefined,
       streamStartedAtMs: localStartedAtMs,
     });
+    const acceptStreamEvent = () => {
+      awaitingQueueAdmission = false;
+      if (detachedTimer !== undefined) sseAbortController?.abort();
+      return sendVersion === assistantSendVersionRef.current;
+    };
     let recoverIncompleteStream = false;
     try {
       let usingPreviewReplace = false;
       const handleEndlessError = (message: ChatMessage, attempt: number, nextDelayMs = 0, retryAtMs?: number) => {
-        if (sendVersion !== assistantSendVersionRef.current) {
+        if (!acceptStreamEvent()) {
           return;
         }
         const previousTarget = activeAssistantTarget();
@@ -4374,7 +4422,7 @@ function ChatScreenView({
         options.onEndlessError?.(visibleError, attempt, nextDelayMs, retryAtMs);
       };
       const handleEndlessContinue = (attempt: number) => {
-        if (sendVersion !== assistantSendVersionRef.current) {
+        if (!acceptStreamEvent()) {
           return;
         }
         markSseActivity();
@@ -4418,7 +4466,7 @@ function ChatScreenView({
           : baseOptions;
       })();
       const onChunk = (chunk: string) => {
-        if (sendVersion !== assistantSendVersionRef.current) {
+        if (!acceptStreamEvent()) {
           return;
         }
         markSseActivity();
@@ -4432,7 +4480,7 @@ function ChatScreenView({
         });
       };
       const onStatus = (status: ChatStatusUpdate) => {
-        if (sendVersion !== assistantSendVersionRef.current) {
+        if (!acceptStreamEvent()) {
           return;
         }
         markSseActivity();
@@ -4440,7 +4488,7 @@ function ChatScreenView({
         if (typeof status.elapsedSeconds === "number") {
           setStreamStartedAtMs(resolveStreamStartMs(itemsRef.current, status.elapsedSeconds));
         }
-        if (status.clusterRunId && status.clusterRunId !== clusterRunIdRef.current) {
+        if (isMainSession && status.clusterRunId && status.clusterRunId !== clusterRunIdRef.current) {
           clusterRunIdRef.current = status.clusterRunId;
           setClusterRunId(status.clusterRunId);
           setClusterTaskStatus(null);
@@ -4461,7 +4509,7 @@ function ChatScreenView({
         });
       };
       const onTrace = (traceEvent: ChatTraceEvent) => {
-        if (sendVersion !== assistantSendVersionRef.current) {
+        if (!acceptStreamEvent()) {
           return;
         }
         markSseActivity();
@@ -4549,6 +4597,20 @@ function ChatScreenView({
       }
     } catch (err) {
       streamBatcher.flush();
+      const rejection = err instanceof WebApiClientError && isAdmissionRejection(err.code)
+        ? err.code : undefined;
+      const admissionUnknown = detachedTimer !== undefined && awaitingQueueAdmission && !rejection;
+      if (options.queuedMessage && (rejection || admissionUnknown)) {
+        const key = queueKey(sendAgentId);
+        const later = readStoredQueuedMessage(key);
+        const restored = later ? mergeQueuedChatMessage(options.queuedMessage, later) : options.queuedMessage;
+        writeStoredQueuedMessage(key, { ...restored, rejection, needsHistoryCheck: restored.needsHistoryCheck || admissionUnknown });
+        window.dispatchEvent(new CustomEvent(QUEUED_CHAT_RESTORED_EVENT, { detail: key }));
+        if (sendVersion === assistantSendVersionRef.current) {
+          setItems((items) => items.filter((item) => item.id !== userMessage?.id && item.id !== assistantId));
+        }
+        return;
+      }
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
@@ -4597,9 +4659,11 @@ function ChatScreenView({
         options.onError?.(message);
       }
     } finally {
-      if (sseAbortControllerRef.current === sseAbortController) {
-        sseAbortControllerRef.current = null;
+      if (detachedTimer !== undefined) {
+        window.clearTimeout(detachedTimer);
+        sseAbortController?.abort();
       }
+      if (detachSseReaderRef.current === detachReader) detachSseReaderRef.current = null;
       if (sendVersion !== assistantSendVersionRef.current) {
         return;
       }
@@ -4626,13 +4690,13 @@ function ChatScreenView({
         void drainQueuedMessageIfIdleRef.current?.({ botAlias: sendBotAlias, agentId: sendAgentId });
       }
     }
-  }, [botAlias, client, markSseActivity, onUnreadResult, pollClusterTasks, resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
+  }, [botAlias, client, isMainSession, markSseActivity, onUnreadResult, pollClusterTasks, queueKey, resumeTerminalAutoScroll, scheduleAssistantPoll, stopAssistantPoll, stopClusterTaskPoll, stopSseRecoveryWatch, streamBatcher]);
 
   drainQueuedMessageIfIdleRef.current = async (context) => {
     const targetBotAlias = context?.botAlias || botAlias;
     const targetAgentId = context?.agentId || activeAgentIdRef.current || "main";
     const nextQueuedMessage = queuedMessageRef.current;
-    if (!nextQueuedMessage) {
+    if (!nextQueuedMessage || nextQueuedMessage.needsHistoryCheck || (nextQueuedMessage.rejection && !context?.retry) || readOnly || !isForegroundRef.current) {
       return;
     }
     if (targetBotAlias !== botAlias || targetAgentId !== (activeAgentIdRef.current || "main")) {
@@ -4642,8 +4706,9 @@ function ChatScreenView({
       return;
     }
 
-    setQueuedMessageState(null, { botAlias: targetBotAlias, agentId: targetAgentId });
+    setQueuedMessageState(null, targetAgentId);
     await sendMessageInternal(nextQueuedMessage.text, {
+      queuedMessage: nextQueuedMessage,
       attachments: nextQueuedMessage.attachments,
       sendOptions: nextQueuedMessage.sendOptions,
     });
@@ -4677,7 +4742,7 @@ function ChatScreenView({
       setClusterTaskError("");
       clusterRunIdRef.current = "";
       setTraceLoadState({});
-      setQueuedMessageState(null, { botAlias, agentId: activeAgentIdRef.current || "main" });
+      setQueuedMessageState(null);
       setItems(result.messages);
       setVisibleTurnCount(CHAT_INITIAL_VISIBLE_TURNS);
       setConversations((prev) => [result.conversation, ...prev.map((item) => ({ ...item, active: false }))]);
@@ -4842,10 +4907,7 @@ function ChatScreenView({
     if (!queued) {
       return;
     }
-    setQueuedMessageState(null, {
-      botAlias,
-      agentId: activeAgentIdRef.current || "main",
-    });
+    setQueuedMessageState(null);
     if (queued.attachments.length > 0) {
       setPendingAttachments((prev) => [
         ...prev,
@@ -5134,6 +5196,10 @@ function ChatScreenView({
     });
   }, [botAlias, client]);
 
+  const queueStatus = queuedMessage?.needsHistoryCheck ? "发送状态待确认，请先查看聊天历史"
+    : queuedMessage?.rejection === "bot_chat_capacity" ? "未发送 · Bot 并行会话已满"
+    : queuedMessage?.rejection === "chat_catalog_busy" ? "未发送 · Bot 工作区正在变更"
+    : queuedMessage?.rejection === "session_busy" ? "未发送 · 当前会话正忙" : "排队中";
   const terminateVisible = isStreaming || endlessModeActive || actionLoading === "kill";
   useEffect(() => {
     if (!isStreaming && !endlessModeActive) {
@@ -5142,7 +5208,7 @@ function ChatScreenView({
   }, [endlessModeActive, isStreaming]);
   const activeAgent = agents.find((agent) => agent.id === activeAgentId) || agents[0] || fallbackAgents()[0];
   const deepseekCli = botOverview?.cliType === "deepseek";
-  const clusterMode = Boolean(botOverview?.cluster?.enabled);
+  const clusterMode = isMainSession && Boolean(botOverview?.cluster?.enabled);
   const activeConversation = conversations.find((conversation) => conversation.active);
   const liveClusterTeam = botOverview?.activeClusterRun?.team || activeConversation?.clusterTeam;
   const liveClusterTeamView: ClusterTeamViewSnapshot | null = liveClusterTeam?.assignments.length ? {
@@ -5164,7 +5230,7 @@ function ChatScreenView({
   const chatMutationsDisabled = readOnly || childAgentReadOnly;
   const chatDisabledReason = disabledReason || readOnlyReason || (readOnly ? "主机已关闭聊天，当前无法发送消息" : "");
   const killTaskDisabled = readOnly || (!isStreaming && !endlessModeActive) || actionLoading === "kill";
-  const voiceEnabled = botOverview?.alias === botAlias
+  const voiceEnabled = isMainSession && botOverview?.alias === botAlias
     && botOverview?.cliType === "codex_server"
     && botOverview.voice?.enabled === true
     && botOverview.effectiveCapabilities?.includes("chat_send") === true
@@ -5175,8 +5241,8 @@ function ChatScreenView({
     || botOverview?.agents?.find((agent) => agent.id === activeAgentId)?.activeConversationId
     || "";
   const restoredVoiceTask = useMemo(
-    () => latestVoiceTaskBinding(items, botOverview?.runningReply),
-    [botOverview?.runningReply, items],
+    () => isMainSession ? latestVoiceTaskBinding(items, botOverview?.runningReply) : null,
+    [botOverview?.runningReply, isMainSession, items],
   );
   const voiceSession = useCodexVoiceSession({
     client,
@@ -5226,9 +5292,9 @@ function ChatScreenView({
     return () => onDraftTargetChange(null);
   }, [onDraftTargetChange, botAlias, composerDisabled, chatDisabledReason, uploadingAttachments, composerPulseKey]);
   const readAloudContext = useMemo(() => ({
-    scope: JSON.stringify([botAlias, storageScope, activeAgentId, voiceConversationId, botOverview?.sessionEpoch]),
+    scope: JSON.stringify([botAlias, storageScope, sessionId, activeAgentId, voiceConversationId, botOverview?.sessionEpoch]),
     enabled: isVisible && !voiceForegroundActive && !loading && !conversationLoading,
-  }), [botAlias, storageScope, activeAgentId, voiceConversationId, botOverview?.sessionEpoch, isVisible, voiceForegroundActive, loading, conversationLoading]);
+  }), [botAlias, storageScope, sessionId, activeAgentId, voiceConversationId, botOverview?.sessionEpoch, isVisible, voiceForegroundActive, loading, conversationLoading]);
   const showImmersiveButton = !embedded && isVisible && Boolean(onToggleImmersive);
   const showActionBar = !isImmersive && !voiceForegroundActive;
   const splitViewAvailable = !mobileLayout && chatWidth >= CHAT_SPLIT_MIN_WIDTH_PX;
@@ -5416,6 +5482,7 @@ function ChatScreenView({
     const agentId = activeAgentIdRef.current || "main";
     const agent = agentsRef.current.find((item) => item.id === agentId) || activeAgent;
     const agentName = activeClusterAssignment?.name || agent.name || agentId;
+    if (!isMainSession) return;
     onBotActivityChange?.(botAlias, {
       activityStatus,
       agentId,
@@ -5512,7 +5579,19 @@ function ChatScreenView({
           clusterEnabled={clusterMode}
           clusterDisabled={loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
           clusterSaving={clusterSaving}
-          onToggleClusterMode={() => void handleToggleClusterMode()}
+          onToggleClusterMode={isMainSession ? () => void handleToggleClusterMode() : undefined}
+          sessionSelector={isVisible && sessionOptions.length > 0 && !botOverview?.remoteWorkspace ? (
+            <ChatSessionSelector
+              items={sessionOptions}
+              selectedId={sessionId}
+              focusOnMount={focusSessionSelector}
+              onSelect={(item) => onSelectSession(item, childAgentReadOnly ? undefined : {
+                text: composerRef.current?.getDraft() || "",
+                attachments: pendingAttachments,
+              })}
+              onCreate={chatMutationsDisabled || !botOverview || botOverview.canOperate === false ? undefined : onCreateSession}
+            />
+          ) : undefined}
           embedded={embedded}
           focused={focused}
           onToggleFocus={onToggleFocus}
@@ -5524,7 +5603,7 @@ function ChatScreenView({
           onChatZoomChange={setChatZoomPercent}
           onResetChatZoom={() => setChatZoomPercent(100)}
           mobileLayout={mobileLayout}
-          providerOptions={deepSeekProviderOptions}
+          providerOptions={isMainSession ? deepSeekProviderOptions : []}
           selectedProvider={selectedDeepSeekProvider}
           providerDescription={deepSeekProviderDescription}
           providerDisabled={loading || uploadingAttachments || chatMutationsDisabled || modelSaving || readOnly || !cliParams}
@@ -5540,6 +5619,7 @@ function ChatScreenView({
           onReasoningEffortChange={(effort) => void handleReasoningEffortChange(effort)}
         />
       ) : null}
+      {catalogNotice}
       {voiceEnabled && isVisible ? (
         <section
           data-testid="codex-voice-foreground"
@@ -5646,6 +5726,7 @@ function ChatScreenView({
         </div>
       ) : null}
       <ConversationHistoryPanel
+        chatSessionTitle={isMainSession ? undefined : sessionOptions.find((session) => session.id === sessionId)?.title}
         translationSettings={historyPanelOpen ? <BotChatTranslationSettings key={botAlias} client={client} botAlias={botAlias} /> : null}
         open={historyPanelOpen}
         activeTab={historyPanelTab}
@@ -5702,7 +5783,7 @@ function ChatScreenView({
             {mobileLayout ? (
               <details>
                 <summary aria-label="排队消息" className="cursor-pointer truncate">
-                  排队中 · {queuedMessage.text || queuedMessage.attachments.map((attachment) => attachment.filename).join("、")}
+                  {queueStatus} · {queuedMessage.text || queuedMessage.attachments.map((attachment) => attachment.filename).join("、")}
                 </summary>
                 <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
                   {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
@@ -5710,26 +5791,35 @@ function ChatScreenView({
               </details>
             ) : (
               <>
-                <div className="font-medium">排队中</div>
+                <div className="font-medium">{queueStatus}</div>
                 <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
                   {buildComposedMessageText(queuedMessage.text, queuedMessage.attachments)}
                 </div>
               </>
             )}
+            {queuedMessage.rejection && !queuedMessage.needsHistoryCheck && !chatMutationsDisabled ? (
+              <button
+                type="button"
+                className="mt-1 rounded px-1 py-1 font-medium underline"
+                disabled={loading || isStreaming}
+                onClick={() => void drainQueuedMessageIfIdleRef.current?.({ botAlias, agentId: activeAgentId, retry: true })}
+              >重试发送</button>
+            ) : null}
             <button
               type="button"
-              aria-label="取消排队消息"
-              title="取消排队消息"
+              aria-label={queuedMessage.needsHistoryCheck ? "放回输入框" : "取消排队消息"}
+              title={queuedMessage.needsHistoryCheck ? "放回输入框" : "取消排队消息"}
               onClick={handleCancelQueuedMessage}
               className="absolute right-2 top-1.5 rounded-md border border-[var(--status-warning-border)] px-2 py-1 font-medium transition-colors hover:bg-[var(--workbench-hover-bg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
             >
-              取消
+              {queuedMessage.needsHistoryCheck ? "放回输入框" : "取消"}
             </button>
           </div>
         ) : null}
         {!childAgentReadOnly ? (
           <ChatComposer
             key={`composer-${composerPulseKey}`}
+            initialDraft={composerPulseKey === 0 ? draft?.text : undefined}
             onSend={handleSend}
             ref={composerRef}
             onStop={terminateVisible ? () => setKillConfirmOpen(true) : undefined}
@@ -5747,7 +5837,7 @@ function ChatScreenView({
             attachmentUploadProgress={attachmentUploadProgress}
             onCancelAttachmentUpload={handleCancelAttachmentUpload}
             placeholder={voiceInputLocked ? "请先结束语音再发送文字，混合输入将在 M2 支持" : composerPlaceholder}
-            providerOptions={deepSeekProviderOptions}
+            providerOptions={isMainSession ? deepSeekProviderOptions : []}
             selectedProvider={selectedDeepSeekProvider}
             providerDescription={deepSeekProviderDescription}
             providerDisabled={modelSaving || readOnly || !cliParams}
@@ -5829,7 +5919,7 @@ function ChatScreenView({
 }
 
 function areChatScreenPropsEqual(previous: Props, next: Props): boolean {
-  if (previous.isVisible || next.isVisible) {
+  if (previous.isVisible !== false || next.isVisible !== false) {
     return false;
   }
   return previous.botAlias === next.botAlias
@@ -5839,4 +5929,123 @@ function areChatScreenPropsEqual(previous: Props, next: Props): boolean {
     && previous.embedded === next.embedded;
 }
 
-export const ChatScreen = memo(ChatScreenView, areChatScreenPropsEqual);
+function BotChatSessions(props: Props) {
+  const { botAlias, accountId, isVisible = true } = props;
+  const client = useMemo<WebBotClient>(() => props.client ?? new MockWebBotClient(), [props.client]);
+  const selectionKey = `tcb.webChatSelection.${JSON.stringify([accountId?.trim() || "", botAlias])}`;
+  const supportsSessions = Boolean(client.listChatSessions && client.forChatSession);
+  const wantedId = useRef<string>("main");
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    wantedId.current = window.localStorage.getItem(selectionKey) || "main";
+    // Load a saved named session only after the server confirms it is accessible.
+    return supportsSessions && wantedId.current !== "main" ? null : "main";
+  });
+  const [options, setOptions] = useState<ChatSessionSummary[]>([]);
+  const [catalogIssue, setCatalogIssue] = useState<{ message: string; defaultOnly?: boolean } | null>(null);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const drafts = useRef(new Map<string, ChatDraft>());
+  const selectionVersion = useRef(0);
+
+  useEffect(() => {
+    if (!isVisible || !client.listChatSessions || !client.forChatSession) return;
+    let sequence = 0;
+    function showDefaultOnly() {
+      setOptions([]);
+      if (wantedId.current === "main") {
+        setCatalogIssue(null);
+        setSelectedId("main");
+      } else {
+        setSelectedId(null);
+        setCatalogIssue({ message: "当前 Bot 仅支持主会话。", defaultOnly: true });
+      }
+    }
+    function refresh() {
+      const request = ++sequence;
+      const selection = selectionVersion.current;
+      const isCurrent = () => request === sequence && selection === selectionVersion.current;
+      void client.listChatSessions!(botAlias).then((result) => {
+        if (!isCurrent()) return;
+        if (!result.enabled) {
+          showDefaultOnly();
+          return;
+        }
+        const items = result.items;
+        const id = items.some((item) => item.id === wantedId.current) ? wantedId.current : "main";
+        if (id !== wantedId.current) window.localStorage.removeItem(selectionKey);
+        wantedId.current = id;
+        setOptions(items);
+        setSelectedId(id);
+        setCatalogIssue(null);
+      }).catch((error: unknown) => {
+        if (!isCurrent()) return;
+        if (error instanceof WebApiClientError && error.status === 404 && error.code !== "bot_not_found") {
+          showDefaultOnly();
+        } else {
+          setCatalogIssue({ message: error instanceof Error ? error.message : "无法读取聊天会话" });
+        }
+      });
+    }
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      sequence++;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [botAlias, client, isVisible, selectionKey, catalogAttempt]);
+
+  const scopedClient = useMemo(() => {
+    if (selectedId === "main" || !supportsSessions) return client;
+    return selectedId ? client.forChatSession!(botAlias, selectedId) : null;
+  }, [botAlias, client, selectedId, supportsSessions]);
+
+  const createSession = useCallback((title: string) => client.createChatSession!(botAlias, title), [botAlias, client]);
+  const catalogNotice = catalogIssue && isVisible ? (
+    <div role="status" className="flex shrink-0 flex-wrap items-center gap-x-2 border-b border-[var(--workbench-hairline)] px-3 py-1 text-xs text-[var(--text)]">
+      {catalogIssue.defaultOnly ? null : <span>会话列表加载失败</span>}
+      <span>{catalogIssue.message}</span>
+      {catalogIssue.defaultOnly ? (
+        <button type="button" className="py-1 underline" onClick={() => {
+          selectionVersion.current++;
+          wantedId.current = "main";
+          window.localStorage.removeItem(selectionKey);
+          setSelectedId("main");
+          setCatalogIssue(null);
+        }}>打开主会话</button>
+      ) : (
+        <button type="button" className="py-1 underline" onClick={() => {
+          setCatalogIssue(null);
+          setCatalogAttempt((attempt) => attempt + 1);
+        }}>重试</button>
+      )}
+    </div>
+  ) : null;
+  if (!scopedClient) return catalogNotice || <div role="status" className="p-4 text-sm text-[var(--muted)]">加载中...</div>;
+  const sessionId = supportsSessions ? selectedId ?? "main" : "main";
+  return (
+    <ChatScreenView
+      key={sessionId}
+      {...props}
+      client={scopedClient}
+      sessionId={sessionId}
+      sessionOptions={supportsSessions ? options : []}
+      catalogNotice={catalogNotice}
+      draft={drafts.current.get(sessionId)}
+      focusSessionSelector={selectionVersion.current > 0}
+      onSelectSession={(item, draft) => {
+        if (draft) drafts.current.set(sessionId, draft);
+        selectionVersion.current++;
+        wantedId.current = item.id;
+        window.localStorage.setItem(selectionKey, item.id);
+        setOptions((items) => items.some((option) => option.id === item.id) ? items : [...items, item]);
+        setSelectedId(item.id);
+      }}
+      onCreateSession={client.createChatSession ? createSession : undefined}
+    />
+  );
+}
+
+function ChatScreenScope(props: Props) {
+  return <BotChatSessions key={JSON.stringify([props.accountId, props.botAlias])} {...props} />;
+}
+
+export const ChatScreen = memo(ChatScreenScope, areChatScreenPropsEqual);

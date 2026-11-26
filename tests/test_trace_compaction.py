@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
-from bot.models import BotProfile
-from bot.web.api_common import AuthContext
+from bot.models import BotProfile, UserSession
+from bot.web.api_common import AuthContext, resolve_session_bot_id
 from bot.web.auth_store import CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE
 from bot.web.chat_history_service import ChatHistoryService
 from bot.web.chat_store import PROCESS_TRACE_RAW_TYPES, ChatStore
@@ -25,11 +26,11 @@ from bot.web.trace_compaction import (
 BIG_OUTPUT = "".join(f"line {index}\n" for index in range(20_000))
 
 
-def _begin(store: ChatStore, *, text: str = "hello", native_provider: str = "claude"):
+def _begin(store: ChatStore, *, text: str = "hello", native_provider: str = "claude", bot_id: int = 1, user_id: int = 2):
     return store.begin_turn(
-        bot_id=1,
+        bot_id=bot_id,
         bot_alias="main",
-        user_id=2,
+        user_id=user_id,
         agent_id="main",
         cli_type="claude",
         working_dir=str(store.workspace_dir),
@@ -235,13 +236,14 @@ def test_single_event_read_applies_the_history_provider_filter(tmp_path: Path) -
     store.append_trace_events(handle.turn_id, [_tool_result("toolu_1", BIG_OUTPUT)])
     reference = {"kind": "tool_result", "call_id": "toolu_1"}
 
-    visible = ChatHistoryService(store).get_message_trace_event(None, None, handle.assistant_message_id, **reference)
+    session = UserSession(bot_id=1, bot_alias="main", user_id=2, working_dir=str(store.workspace_dir))
+    visible = ChatHistoryService(store).get_message_trace_event(None, session, handle.assistant_message_id, **reference)
     assert visible is not None and "native_provider" not in visible
     filtered = ChatHistoryService(store, native_provider_filter="codex")
-    assert filtered.get_message_trace_event(None, None, handle.assistant_message_id, **reference) is None
+    assert filtered.get_message_trace_event(None, session, handle.assistant_message_id, **reference) is None
     excluded = ChatHistoryService(store, native_provider_exclude="claude")
-    assert excluded.get_message_trace_event(None, None, handle.assistant_message_id, **reference) is None
-    assert ChatHistoryService(store).get_message_trace_event(None, None, "msg_missing", **reference) is None
+    assert excluded.get_message_trace_event(None, session, handle.assistant_message_id, **reference) is None
+    assert ChatHistoryService(store).get_message_trace_event(None, session, "msg_missing", **reference) is None
 
 
 class _DummyTunnelService:
@@ -332,7 +334,7 @@ async def test_trace_endpoints_serve_compact_snapshot_and_single_event(
 ) -> None:
     server = _build_server(monkeypatch, tmp_path)
     store = ChatStore(tmp_path)
-    handle = _begin(store)
+    handle = _begin(store, bot_id=resolve_session_bot_id(server.manager, "main"), user_id=chat_session_user_id())
     store.append_trace_events(handle.turn_id, [_tool_result("toolu_1", BIG_OUTPUT)])
     store.complete_turn(handle, content="完成", completion_state="completed")
     trace_path = f"/api/bots/main/history/{handle.assistant_message_id}/trace"

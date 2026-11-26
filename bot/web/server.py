@@ -121,6 +121,7 @@ from .inline_completion_config import InlineCompletionConfigError, InlineComplet
 from .inline_completion_service import InlineCompletionService, InlineCompletionServiceError
 from .translation_service import get_translation_service
 from .lan_chat_service import LanChatService
+from . import chat_targets
 from .chat_sync_events import clear_chat_sync_publisher, set_chat_sync_publisher
 from .notification_service import NOTIFICATION_FEATURE_CHAT_SYNC, ChatNotificationService
 from .os_open_service import DesktopOpenError, open_directory_in_desktop
@@ -297,12 +298,13 @@ from .api_service import (
     upsert_favorite_answer,
     rename_managed_bot,
     update_bot_workdir,
+    sync_cluster_bot_alias,
     write_file_content,
     prepare_cluster_setup,
     verify_cluster_mcp_request,
 )
 from bot.migrations.runner import migration_diagnostics
-from .api_common import web_api_error_from_remote
+from .api_common import ensure_bot_rename_ready, web_api_error_from_remote
 from .git_backend import resolve_git_backend
 from .git_operations import GIT_OPERATION_KINDS, GIT_OPERATION_NOTICES, GIT_SYNC_OPERATIONS, GitOperationRegistry
 from .github_service import get_github_service
@@ -834,21 +836,6 @@ def _format_sse(event_type: str, data: dict[str, Any]) -> bytes:
     return f"event: {event_type}\ndata: {payload}\n\n".encode("utf-8")
 
 
-async def _drain_chat_event_stream(event_stream: Any, *, alias: str, user_id: int) -> None:
-    """Finish a detached endless chat stream after its HTTP client is gone."""
-    try:
-        async for _event in event_stream:
-            pass
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("后台收尾聊天流失败: alias=%s user_id=%s", alias, user_id)
-    finally:
-        close_event_stream = getattr(event_stream, "aclose", None)
-        if callable(close_event_stream):
-            await close_event_stream()
-
-
 def _sse_headers() -> dict[str, str]:
     return {
         "Content-Type": "text/event-stream",
@@ -1092,6 +1079,9 @@ class WebApiServer:
         storage_migration_stop_all_agents: Any | None = None,
     ):
         self.manager = manager
+        if isinstance(manager, MultiBotManager):
+            manager.rename_bot_permissions = lambda old, new: _BOT_PERMISSION_STORE.rename_bot(old, new)
+            manager.on_chat_renamed = sync_cluster_bot_alias
         self.html_preview_store = HtmlPreviewStore()
         self._host = str(host or WEB_HOST or "").strip() or "0.0.0.0"
         self._port = int(port if port is not None else WEB_PORT)
@@ -1483,6 +1473,7 @@ class WebApiServer:
 
     def _can_operate_bot(self, auth: AuthContext, alias: str) -> bool:
         normalized_alias = self._normalize_bot_alias(alias)
+        ensure_bot_rename_ready(self.manager, normalized_alias)
         if normalized_alias != self.manager.main_profile.alias and normalized_alias not in self.manager.managed_profiles:
             return False
         if auth.role == ROLE_GUEST:
@@ -2029,19 +2020,39 @@ class WebApiServer:
         plugin_id = request.match_info.get("plugin_id", "").strip()
         return _json({"ok": True, "data": await uninstall_plugin(self.manager, auth, plugin_id)})
 
+    async def get_chat_sessions_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
+        data = await run_chat_store_io(
+            chat_targets.list_chat_sessions, self.manager, self._manager_alias(request), self._chat_user_id(auth),
+        )
+        return _json({"ok": True, "data": data})
+
+    async def post_chat_session_view(self, request: web.Request) -> web.Response:
+        auth = await self._with_capability(request, CAP_CHAT_SEND)
+        alias = self._manager_alias(request)
+        body = await self._parse_json(request)
+        if set(body) != {"title"} or not isinstance(body["title"], str):
+            raise WebApiError(400, "invalid_chat_session", "仅支持字符串字段 title")
+        user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            chat_targets.create_chat_session, self.manager, alias, user_id, body["title"],
+            write_key=f"{alias}:{user_id}:sessions",
+        )
+        return _json({"ok": True, "data": data})
+
     async def get_bot_overview(self, request: web.Request) -> web.Response:
         base_auth = await self._with_auth(request)
         alias = self._manager_alias(request)
         auth = self._bot_auth(base_auth, alias)
         _require_capability(auth, CAP_VIEW_BOT_STATUS)
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
         data = await run_chat_store_io(
             get_overview,
             self.manager,
             alias,
             auth.user_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             can_chat_send=CAP_CHAT_SEND in auth.capabilities,
         )
@@ -2050,7 +2061,7 @@ class WebApiServer:
     async def chat_voice_ws(self, request: web.Request) -> web.WebSocketResponse:
         auth = await self._with_websocket_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        agent_id = self._request_agent_id(request)
+        agent_id = (await self._chat_request_scope(request, alias, auth))["agent_id"]
         execution_mode = self._request_execution_mode(request, include_body=False)
         if not config.TCB_CODEX_SERVER_VOICE_ENABLED:
             raise WebApiError(403, "voice_disabled", "语音连接未启用")
@@ -2219,6 +2230,38 @@ class WebApiServer:
         if not isinstance(value, str):
             return "main"
         return str(value or "main").strip().lower() or "main"
+
+    async def _optional_chat_body(self, request: web.Request) -> dict[str, Any]:
+        if getattr(request, "content_length", None) or getattr(request, "can_read_body", False):
+            return await self._parse_json(request)
+        return {}
+
+    async def _chat_request_scope(
+        self, request: web.Request, alias: str, auth: AuthContext, body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        session_id = request.match_info.get("session_id")
+        selector_body = body if body is not None else await self._optional_chat_body(request)
+        for key, value in chain(request.query.items(), selector_body.items()):
+            if key in {"session_id", "sessionId"} and value not in (None, "", session_id or "main"):
+                raise WebApiError(400, "session_scope_mismatch", "请求的会话与 URL 不一致，请重新选择聊天会话")
+            if session_id is not None and key in {"agent_id", "agentId"}:
+                if not isinstance(value, str) or value.strip().lower() not in {"", "main"}:
+                    raise WebApiError(400, "invalid_agent_id", "命名聊天仅支持 main")
+        if session_id is None:
+            # Legacy handlers that read only the query keep their original agent selection.
+            agent_id = self._request_agent_id(request) if body is None else self._request_agent_id(request, body)
+            return {"agent_id": agent_id}
+        if session_id == "main":
+            return {"agent_id": "main"}
+        target = await run_chat_store_io(
+            chat_targets.resolve_named_chat_target, self.manager, alias, self._chat_user_id(auth), session_id,
+        )
+        return {"agent_id": "main", "target": target}
+
+    @staticmethod
+    def _chat_store_write_key(alias: str, user_id: int, scope: dict[str, Any]) -> str:
+        storage_scope = scope["target"].session.storage_scope if "target" in scope else scope["agent_id"]
+        return f"{alias}:{user_id}:{storage_scope}"
 
     def _request_execution_mode(
         self,
@@ -2429,24 +2472,6 @@ class WebApiServer:
 
         task.add_done_callback(discard_task)
 
-    def _detach_chat_event_stream(self, event_stream: Any, *, alias: str, user_id: int) -> None:
-        task = asyncio.create_task(
-            _drain_chat_event_stream(event_stream, alias=alias, user_id=user_id),
-            name=f"chat-endless-{alias}-{user_id}",
-        )
-        self._chat_stream_tasks.add(task)
-
-        def discard_task(done_task: asyncio.Task[Any]) -> None:
-            self._chat_stream_tasks.discard(done_task)
-            try:
-                done_task.result()
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:
-                logger.warning("后台收尾聊天流任务失败 alias=%s user_id=%s error=%s", alias, user_id, exc)
-
-        task.add_done_callback(discard_task)
-
     async def get_agents_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_VIEW_BOT_STATUS)
         alias = self._manager_alias(request)
@@ -2512,7 +2537,7 @@ class WebApiServer:
         task_payload = body.get("task_payload")
         visible_text = body.get("visible_text")
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        agent_id = self._request_agent_id(request, body)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
@@ -2528,7 +2553,7 @@ class WebApiServer:
                     task_mode=task_mode or "standard",
                     task_payload=dict(task_payload) if isinstance(task_payload, dict) else None,
                     visible_text=str(visible_text) if visible_text is not None else None,
-                    agent_id=agent_id,
+                    **scope,
                     cluster=cluster_enabled,
                     mentions=mentions,
                     execution_mode=execution_mode,
@@ -2541,7 +2566,7 @@ class WebApiServer:
                     alias,
                     chat_user_id,
                     body.get("message", ""),
-                    agent_id=agent_id,
+                    **scope,
                     cluster=cluster_enabled,
                     mentions=mentions,
                     execution_mode=execution_mode,
@@ -2549,15 +2574,17 @@ class WebApiServer:
                     allow_unsafe_cli=allow_unsafe_cli,
                 )
         except Exception as exc:
-            self._schedule_chat_terminal_event(
-                auth=auth,
-                alias=alias,
-                agent_id=agent_id,
-                data={"output": str(exc), "elapsed_seconds": 0},
-                fallback_status="error",
-            )
+            if "target" not in scope:
+                self._schedule_chat_terminal_event(
+                    auth=auth,
+                    alias=alias,
+                    agent_id=scope["agent_id"],
+                    data={"output": str(exc), "elapsed_seconds": 0},
+                    fallback_status="error",
+                )
             raise
-        self._schedule_chat_terminal_event(auth=auth, alias=alias, agent_id=agent_id, data=data)
+        if "target" not in scope:
+            self._schedule_chat_terminal_event(auth=auth, alias=alias, agent_id=scope["agent_id"], data=data)
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
     async def post_chat_steer(self, request: web.Request) -> web.Response:
@@ -2568,7 +2595,7 @@ class WebApiServer:
         if not isinstance(raw_turn_id, str) or not raw_turn_id.strip():
             raise WebApiError(400, "missing_turn_id", "缺少 turn_id")
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        agent_id = self._request_agent_id(request, body)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         visible_text = body.get("visible_text")
         raw_conversation_id = body.get("conversation_id", body.get("conversationId", ""))
         raw_session_epoch = body.get("session_epoch", body.get("sessionEpoch"))
@@ -2584,7 +2611,7 @@ class WebApiServer:
             body.get("message", ""),
             turn_id=raw_turn_id.strip(),
             visible_text=str(visible_text) if visible_text is not None else None,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             actor=self._chat_actor(auth),
             conversation_id=str(raw_conversation_id or ""),
@@ -2619,7 +2646,7 @@ class WebApiServer:
             raise WebApiError(400, "invalid_endless_binding", "无尽模式绑定字段过长")
         skip_input_translation = bool(body.get("skip_input_translation") or body.get("skipInputTranslation"))
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        agent_id = self._request_agent_id(request, body)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         cluster_enabled = bool(body.get("cluster"))
         mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
         chat_user_id = self._chat_user_id(auth)
@@ -2632,14 +2659,6 @@ class WebApiServer:
         # Transport-only projection: persistence and other channels keep full trace events.
         compact_trace = str(body.get("trace_payload", body.get("tracePayload")) or "").strip().lower() == "compact"
 
-        response = web.StreamResponse(
-            status=200,
-            headers=_sse_headers(),
-        )
-        await response.prepare(request)
-        await response.write(b": ready\n\n")
-
-        client_disconnected = False
         stream_kwargs: dict[str, Any] = {
             "allow_unsafe_cli": allow_unsafe_cli,
             "include_trace": include_trace,
@@ -2647,8 +2666,8 @@ class WebApiServer:
         }
         if execution_mode:
             stream_kwargs["execution_mode"] = execution_mode
-        if agent_id != "main":
-            stream_kwargs["agent_id"] = agent_id
+        if scope["agent_id"] != "main" or "target" in scope:
+            stream_kwargs.update(scope)
         if cluster_enabled:
             stream_kwargs["cluster"] = True
             stream_kwargs["mentions"] = mentions
@@ -2674,60 +2693,69 @@ class WebApiServer:
             **stream_kwargs,
             actor=actor,
         )
-        stream_detached = False
-        try:
-            async for event in event_stream:
-                event = self._decorate_chat_authors(event, auth)
-                event_type = str(event.get("type") or "")
-                if event_type == "done":
-                    self._schedule_chat_terminal_event(
-                        auth=auth,
-                        alias=alias,
-                        agent_id=agent_id,
-                        data=event,
-                    )
-                elif event_type == "error":
-                    self._schedule_chat_terminal_event(
-                        auth=auth,
-                        alias=alias,
-                        agent_id=agent_id,
-                        data=event,
-                        fallback_status="error",
-                    )
-                if client_disconnected:
-                    continue
-                try:
-                    if compact_trace and event_type == "trace":
-                        event = {**event, "event": compact_trace_event(event.get("event"))}
-                    encoded_event = _format_sse(event["type"], event)
-                    if event.get("sequence") is not None:
-                        encoded_event = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded_event
-                    await response.write(encoded_event)
-                except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                    client_disconnected = True
-                    logger.debug(
-                        "Web SSE 客户端已断开，继续在后台完成任务: alias=%s user_id=%s",
-                        alias,
-                        auth.user_id,
-                    )
-                    if endless_mode:
-                        self._detach_chat_event_stream(event_stream, alias=alias, user_id=auth.user_id)
-                        stream_detached = True
-                        break
-        finally:
-            if not stream_detached:
+        # The handler owns the socket. A single server task owns the turn, even if
+        # the socket disappears during the handshake or while waiting for an event.
+        events: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        delivered = asyncio.Event()
+        connected = True
+
+        async def consume_stream() -> None:
+            try:
+                async for event in event_stream:
+                    event_type = event.get("type")
+                    notify_terminal = "target" not in scope and event_type in {"done", "error"}
+                    if not connected and (endless_mode or not notify_terminal):
+                        continue
+                    event = self._decorate_chat_authors(event, auth)
+                    if notify_terminal:
+                        self._schedule_chat_terminal_event(
+                            auth=auth, alias=alias, agent_id=scope["agent_id"],
+                            data=event,
+                            fallback_status="error" if event_type == "error" else "success",
+                        )
+                    if connected:
+                        # At most one event waits for delivery. Disconnect releases
+                        # the outstanding acknowledgement and all later events drain.
+                        delivered.clear()
+                        events.put_nowait(event)
+                        await delivered.wait()
+            finally:
                 close_event_stream = getattr(event_stream, "aclose", None)
                 if callable(close_event_stream):
                     await close_event_stream()
-        if not client_disconnected:
-            try:
-                await response.write_eof()
-            except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
-                logger.debug(
-                    "Web SSE 客户端在结束前断开: alias=%s user_id=%s",
-                    alias,
-                    auth.user_id,
-                )
+
+        def stream_finished(task: asyncio.Task[None]) -> None:
+            self._chat_stream_tasks.discard(task)
+            events.put_nowait(None)
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None and not connected:
+                    logger.warning("后台收尾聊天流失败 alias=%s user_id=%s error=%s", alias, auth.user_id, error)
+
+        response = web.StreamResponse(status=200, headers=_sse_headers())
+        task = asyncio.create_task(consume_stream(), name=f"chat-stream-{alias}-{chat_user_id}")
+        self._chat_stream_tasks.add(task)
+        task.add_done_callback(stream_finished)
+        try:
+            await response.prepare(request)
+            await response.write(b": ready\n\n")
+            while (event := await events.get()) is not None:
+                if compact_trace and event.get("type") == "trace":
+                    event = {**event, "event": compact_trace_event(event.get("event"))}
+                encoded_event = _format_sse(event["type"], event)
+                if event.get("sequence") is not None:
+                    encoded_event = f"id: {int(event['sequence'])}\n".encode("ascii") + encoded_event
+                await response.write(encoded_event)
+                delivered.set()
+            task.result()
+            await response.write_eof()
+        except (ClientConnectionResetError, ConnectionResetError, BrokenPipeError):
+            logger.debug("Web SSE 客户端已断开: alias=%s user_id=%s", alias, auth.user_id)
+        finally:
+            connected = False
+            if not events.empty():
+                events.get_nowait()
+            delivered.set()
         return response
 
     async def post_exec(self, request: web.Request) -> web.Response:
@@ -3766,23 +3794,23 @@ class WebApiServer:
     async def post_reset(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
+        body = await self._optional_chat_body(request)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         return _json({
             "ok": True,
             "data": await reset_user_session(
                 self.manager,
                 alias,
                 self._chat_user_id(auth),
-                agent_id=agent_id,
+                **scope,
             ),
         })
 
     async def post_kill(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
+        body = await self._optional_chat_body(request)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         return _json({
             "ok": True,
@@ -3790,7 +3818,7 @@ class WebApiServer:
                 self.manager,
                 alias,
                 self._chat_user_id(auth),
-                agent_id=agent_id,
+                **scope,
                 execution_mode=execution_mode,
             ),
         })
@@ -3863,7 +3891,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
         data = await run_chat_store_io(
@@ -3872,9 +3900,9 @@ class WebApiServer:
             alias,
             chat_user_id,
             limit=limit,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+            write_key=self._chat_store_write_key(alias, chat_user_id, scope),
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3885,7 +3913,7 @@ class WebApiServer:
         after_id = request.query.get("after_id", "")
         revision = int(request.query.get("revision", "0")) if "revision" in request.query else None
         cursor = request.query.get("cursor", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
         data = await run_chat_store_io(
@@ -3895,11 +3923,11 @@ class WebApiServer:
             chat_user_id,
             after_id,
             limit=limit,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             revision=revision,
             cursor=cursor,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+            write_key=self._chat_store_write_key(alias, chat_user_id, scope),
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
 
@@ -3908,7 +3936,7 @@ class WebApiServer:
         alias = self._manager_alias(request)
         limit = int(request.query.get("limit", "50"))
         query = request.query.get("q", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
         data = await run_chat_store_io(
             list_conversations,
@@ -3917,7 +3945,7 @@ class WebApiServer:
             self._chat_user_id(auth),
             limit=limit,
             query=query,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
         )
         return _json({"ok": True, "data": data})
@@ -3926,13 +3954,14 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         query = request.query.get("q", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = list_favorite_answers(
+        data = await run_chat_store_io(
+            list_favorite_answers,
             self.manager,
             alias,
             self._chat_user_id(auth),
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             query=query,
         )
@@ -3942,15 +3971,18 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        agent_id = self._request_agent_id(request, body)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
-        data = upsert_favorite_answer(
+        user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            upsert_favorite_answer,
             self.manager,
             alias,
-            self._chat_user_id(auth),
+            user_id,
             body,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
+            write_key=self._chat_store_write_key(alias, user_id, scope),
         )
         return _json({"ok": True, "data": data})
 
@@ -3958,23 +3990,26 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         favorite_id = request.match_info.get("favorite_id", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
-        data = delete_favorite_answer(
+        user_id = self._chat_user_id(auth)
+        data = await run_chat_store_io(
+            delete_favorite_answer,
             self.manager,
             alias,
-            self._chat_user_id(auth),
+            user_id,
             favorite_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
+            write_key=self._chat_store_write_key(alias, user_id, scope),
         )
         return _json({"ok": True, "data": data})
 
     async def post_conversation_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
+        body = await self._optional_chat_body(request)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         chat_user_id = self._chat_user_id(auth)
         data = await create_conversation(
@@ -3982,7 +4017,7 @@ class WebApiServer:
             alias,
             chat_user_id,
             str(body.get("title") or ""),
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
@@ -3990,8 +4025,8 @@ class WebApiServer:
     async def delete_conversations_view(self, request: web.Request) -> web.Response:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
+        body = await self._optional_chat_body(request)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, body)
         chat_user_id = self._chat_user_id(auth)
@@ -3999,7 +4034,7 @@ class WebApiServer:
             self.manager,
             alias,
             chat_user_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             delete_native_session=delete_native,
         )
@@ -4009,14 +4044,14 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        agent_id = self._request_agent_id(request, body)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         data = await execute_plan(
             self.manager,
             alias,
             self._chat_user_id(auth),
             str(body.get("content") or ""),
             title=str(body.get("title") or ""),
-            agent_id=agent_id,
+            **scope,
             execution_mode=self._request_execution_mode(request, body, include_query=False),
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
@@ -4025,8 +4060,8 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_HISTORY)
         alias = self._manager_alias(request)
         conversation_id = request.match_info.get("conversation_id", "")
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
+        body = await self._optional_chat_body(request)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         chat_user_id = self._chat_user_id(auth)
         data = await select_conversation(
@@ -4034,7 +4069,7 @@ class WebApiServer:
             alias,
             chat_user_id,
             conversation_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
@@ -4043,7 +4078,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         conversation_id = request.match_info.get("conversation_id", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         delete_native = str(request.query.get("delete_native_session", "")).lower() in {"1", "true", "yes", "on"}
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
@@ -4052,7 +4087,7 @@ class WebApiServer:
             alias,
             chat_user_id,
             conversation_id,
-            agent_id=agent_id,
+            **scope,
             delete_native_session=delete_native,
             execution_mode=execution_mode,
         )
@@ -4062,8 +4097,8 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_CHAT_SEND)
         alias = self._manager_alias(request)
         conversation_id = request.match_info.get("conversation_id", "")
-        body = await self._parse_json(request) if (request.content_length or 0) > 0 else {}
-        agent_id = self._request_agent_id(request, body)
+        body = await self._optional_chat_body(request)
+        scope = await self._chat_request_scope(request, alias, auth, body)
         execution_mode = self._request_execution_mode(request, body, include_query=False)
         chat_user_id = self._chat_user_id(auth)
         data = await archive_conversation(
@@ -4071,7 +4106,7 @@ class WebApiServer:
             alias,
             chat_user_id,
             conversation_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
         )
         return _json({"ok": True, "data": self._decorate_chat_authors(data, auth)})
@@ -4196,7 +4231,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_TRACE)
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
         # Clients that can read single events on demand ask for capped payloads.
@@ -4207,10 +4242,10 @@ class WebApiServer:
             alias,
             chat_user_id,
             message_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             compact=compact,
-            write_key=f"{alias}:{chat_user_id}:{agent_id}",
+            write_key=self._chat_store_write_key(alias, chat_user_id, scope),
         )
         return _json({"ok": True, "data": data})
 
@@ -4218,7 +4253,7 @@ class WebApiServer:
         auth = await self._with_capability(request, CAP_VIEW_CHAT_TRACE)
         alias = self._manager_alias(request)
         message_id = request.match_info.get("message_id", "")
-        agent_id = self._request_agent_id(request)
+        scope = await self._chat_request_scope(request, alias, auth)
         execution_mode = self._request_execution_mode(request, include_body=False)
         chat_user_id = self._chat_user_id(auth)
         data = await run_chat_store_io(
@@ -4227,7 +4262,7 @@ class WebApiServer:
             alias,
             chat_user_id,
             message_id,
-            agent_id=agent_id,
+            **scope,
             execution_mode=execution_mode,
             event_id=str(request.query.get("id") or ""),
             kind=str(request.query.get("kind") or ""),
@@ -5054,13 +5089,16 @@ class WebApiServer:
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_rename_bot(self, request: web.Request) -> web.Response:
-        auth = await self._with_capability(request, CAP_MANAGE_BOTS)
+        auth = await self._with_auth(request)
+        _require_capability(auth, CAP_MANAGE_BOTS)
         alias = self._manager_alias(request)
         body = await self._parse_json(request)
-        data = await rename_managed_bot(self.manager, alias, str(body.get("new_alias", "")))
-        renamed_alias = str(data.get("bot", {}).get("alias") or "").strip().lower()
-        if renamed_alias:
-            _BOT_PERMISSION_STORE.rename_bot(alias, renamed_alias)
+        new_alias = str(body.get("new_alias", "")).strip().lower()
+        ensure_bot_rename_ready(self.manager, alias)
+        new_profile = self.manager.managed_profiles.get(new_alias)
+        completed = alias not in self.manager.managed_profiles and getattr(new_profile, "last_renamed_from", "") == alias
+        auth = self._bot_auth(auth, new_alias if completed else alias)
+        data = await rename_managed_bot(self.manager, alias, new_alias)
         return _json({"ok": True, "data": {**data, "bot": self._decorate_bot_for_auth(auth, data["bot"])}})
 
     async def admin_update_workdir(self, request: web.Request) -> web.Response:

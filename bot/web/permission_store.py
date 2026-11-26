@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ class BotPermissionStore:
         with self._lock:
             if self._directory_mode:
                 self.accounts_dir.mkdir(parents=True, exist_ok=True)
-                if self.legacy_path is not None and self.legacy_path.exists() and not any(self.accounts_dir.glob("*.json")):
+                if self.legacy_path is not None and self.legacy_path.exists() and not self._account_files():
                     legacy = self._read_legacy_path()
                     for account_id, item in self._users(legacy).items():
                         if isinstance(item, dict):
@@ -263,11 +264,14 @@ class BotPermissionStore:
             return
         with self._lock:
             if self._directory_mode:
-                bots = self._read_bots()
+                # Enumerate and read every grant before changing ownership. An I/O
+                # failure must keep the manager's durable rename intent pending.
+                users = self._read_users(strict=True)
+                bots = self._read_bots(strict=True)
                 if normalized_old in bots:
                     bots[normalized_new] = bots.pop(normalized_old)
                     self._write_bots(bots)
-                for account_id, item in self._read_users().items():
+                for account_id, item in users.items():
                     item["allowed_bots"] = self._renamed_allowed_bots(item, normalized_old, normalized_new)
                     self._write_account(account_id, item)
                 return
@@ -309,8 +313,7 @@ class BotPermissionStore:
                     self._write_account(str(account_id), item)
             self._write_bots(self._bots(data))
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._write_json(self.path, data)
 
     def _normalize_legacy_data(self, data: Any) -> dict[str, Any]:
         if not isinstance(data, dict):
@@ -322,22 +325,35 @@ class BotPermissionStore:
             data["bots"] = {}
         return data
 
-    def _read_users(self) -> dict[str, Any]:
+    def _account_files(self) -> list[Path]:
+        # Path.glob can report an unreadable accounts directory as an empty one.
+        with os.scandir(self.accounts_dir) as entries:
+            return sorted(Path(entry.path) for entry in entries if entry.name.lower().endswith(".json") and entry.is_file())
+
+    def _read_users(self, *, strict: bool = False) -> dict[str, Any]:
         if not self._directory_mode:
             return self._users(self._read())
         users: dict[str, Any] = {}
-        if self.accounts_dir.exists():
-            for path in sorted(self.accounts_dir.glob("*.json")):
-                if not path.is_file():
-                    continue
-                try:
-                    item = json.loads(path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"无法解析权限配置文件: {path.name}") from exc
-                if isinstance(item, dict):
-                    account_id = str(item.get("account_id") or path.stem).strip()
-                    if account_id:
-                        users[account_id] = item
+        try:
+            files = self._account_files()
+        except FileNotFoundError:
+            if strict:
+                raise
+            files = []
+        for path in files:
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"无法解析权限配置文件: {path.name}") from exc
+            if not isinstance(item, dict):
+                if strict:
+                    raise ValueError(f"无效的账号权限配置: {path.name}")
+                continue
+            account_id = str(item.get("account_id") or path.stem).strip()
+            if strict and (account_id != path.stem or not isinstance(item.get("allowed_bots", []), list)):
+                raise ValueError(f"无效的账号权限配置: {path.name}")
+            if account_id:
+                users[account_id] = item
         if not users and self.legacy_path is not None and self.legacy_path.exists():
             return self._users(self._read_legacy_path())
         return users
@@ -372,16 +388,20 @@ class BotPermissionStore:
         }
         self._write_json(self._account_path(account_id), payload)
 
-    def _read_bots(self) -> dict[str, Any]:
+    def _read_bots(self, *, strict: bool = False) -> dict[str, Any]:
         if not self._directory_mode:
             return self._bots(self._read())
-        if self.bots_path.exists():
-            try:
-                data = json.loads(self.bots_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"无法解析权限配置文件: {self.bots_path.name}") from exc
+        try:
+            data = json.loads(self.bots_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pass
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"无法解析权限配置文件: {self.bots_path.name}") from exc
+        else:
             if isinstance(data, dict) and isinstance(data.get("bots"), dict):
                 return data["bots"]
+            if strict:
+                raise ValueError(f"无效的 Bot 权限配置: {self.bots_path.name}")
         if self.legacy_path is not None and self.legacy_path.exists():
             return self._bots(self._read_legacy_path())
         return {}

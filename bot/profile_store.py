@@ -86,7 +86,11 @@ def load_managed_profiles(storage_file: Path, *, archived: bool = False) -> dict
             )
         if "remote_workspace" in item:
             profile_data["remote_workspace"] = item["remote_workspace"]
-        profiles[alias] = BotProfile.from_dict(profile_data)
+        profile = BotProfile.from_dict(profile_data)
+        profile.pending_rename_to = str(item.get("pending_rename_to") or "").strip().lower()
+        profile.pending_rename_skip_legacy = item.get("pending_rename_skip_legacy") is True
+        profile.last_renamed_from = str(item.get("last_renamed_from") or "").strip().lower()
+        profiles[alias] = profile
 
     return profiles
 
@@ -105,14 +109,31 @@ def save_managed_profiles(
         if isinstance(item, dict) and item.get("archived")
         and str(item.get("alias", "")).strip().lower() != removed_alias
     }
-    saved.update({alias: profile.to_dict() for alias, profile in profiles.items()})
+    for alias, profile in profiles.items():
+        item = profile.to_dict()
+        if profile.pending_rename_to:
+            item["pending_rename_to"] = profile.pending_rename_to
+            if profile.pending_rename_skip_legacy:
+                item["pending_rename_skip_legacy"] = True
+        if profile.last_renamed_from:
+            item["last_renamed_from"] = profile.last_renamed_from
+        saved[alias] = item
     payload = {"bots": [saved[key] for key in sorted(saved)]}
     temporary = storage_file.with_suffix(storage_file.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temporary.replace(storage_file)
+    try:
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(storage_file)
+        if os.name != "nt":
+            directory = os.open(storage_file.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def apply_persisted_main_profile(main_profile: BotProfile, app_settings_file: Path) -> None:

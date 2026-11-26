@@ -225,6 +225,7 @@ The toolbar supports refresh, return to the entry page, and retry. Resources are
 
 ### Sub-agent and Cluster Collaboration
 
+- On a local Bot, use the chat session selector to create a named chat or switch back to one. Accounts with access to that Bot share the chats. Each chat keeps its own transcript and CLI thread in the Bot workspace. Switching lets a turn finish in the background, and Stop affects the selected chat. Concurrent local text turns use the Bot’s configured parallel limit. The default session also supports cluster delegation, voice and the messaging gateways.
 - Regular chats can select an explicit `agent_id` and use an isolated agent session; cluster templates prepare bot-level parallel slots and model tiers.
 - CLI backends (including DeepSeek Harness) share cluster settings for 1–20 parallel slots, default timeout, write policy, and low/medium/high/professional model and reasoning tiers. Blank tier values inherit the main agent configuration. Model and reasoning choices follow the active CLI. The professional tier is reserved for special work and requires an explicit user request. Overrides apply only to child tasks, and queued tasks retain their configuration snapshot.
 - Cluster tools cover dynamic team configuration, status checks, fresh sub-agent sessions, asynchronous task creation, targeted task cancellation, polling, and message waiting.

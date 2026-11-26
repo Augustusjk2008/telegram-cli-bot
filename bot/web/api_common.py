@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from bot.chat_identity import chat_session_user_id
+from bot.chat_rename import ChatRenamePending
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.sessions import align_session_paths, get_or_create_session
@@ -74,8 +75,17 @@ def bot_readonly_auth(auth: AuthContext) -> AuthContext:
     return auth.with_capabilities(GUEST_CAPABILITIES)
 
 
+def ensure_bot_rename_ready(manager: MultiBotManager, alias: str) -> None:
+    if isinstance(manager, MultiBotManager):
+        try:
+            manager.ensure_chat_rename_ready(alias)
+        except ChatRenamePending as exc:
+            raise WebApiError(503, "bot_rename_pending", str(exc)) from exc
+
+
 def get_profile_or_raise(manager: MultiBotManager, alias: str) -> BotProfile:
     alias = (alias or "").strip().lower()
+    ensure_bot_rename_ready(manager, alias)
     if alias == manager.main_profile.alias:
         return manager.main_profile
     profile = manager.managed_profiles.get(alias)

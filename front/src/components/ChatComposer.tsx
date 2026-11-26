@@ -31,6 +31,7 @@ export type ChatComposerHandle = {
 
 type Props = {
   ref?: Ref<ChatComposerHandle>;
+  initialDraft?: string;
   onSend: (text: string) => void | boolean | Promise<void | boolean>;
   /** When set, a running task replaces the empty-draft send button with a terminate button. */
   onStop?: () => void;
@@ -126,6 +127,7 @@ function clonePromptPresetList(presets: PromptPreset[] = []) {
 
 export function ChatComposer({
   ref,
+  initialDraft = "",
   onSend,
   onStop,
   stopDisabled = false,
@@ -177,7 +179,7 @@ export function ChatComposer({
     ? "relative flex min-h-10 min-w-0 flex-row items-center gap-1 p-1 transition-colors focus-within:bg-[var(--workbench-hover-bg)]"
     : "relative flex min-w-0 flex-col p-1 transition-colors focus-within:bg-[var(--workbench-hover-bg)]";
   const inputDisabled = disabled || uploadingAttachments;
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(initialDraft);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
   const [editingPresetScope, setEditingPresetScope] = useState<PresetScope>("bot");

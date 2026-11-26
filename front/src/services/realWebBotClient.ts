@@ -1,3 +1,4 @@
+import { bindChatSession } from "./chatSessionClient";
 import { mapChatTranslation, mapUserTranslationUpdate } from "../utils/chatTranslation";
 import { mapRemoteWorkspace, remoteConnectionBody } from "./remoteWorkspace";
 import { cliTypeLabel, isCodexCli } from "../utils/cliType";
@@ -41,6 +42,8 @@ import type {
   Capability,
   AgentListResult,
   AgentScopedOptions,
+  ChatSessionList,
+  ChatSessionSummary,
   AgentSummary,
   GitActionResult,
   GitBranchResetResult,
@@ -4780,6 +4783,48 @@ function isRetryableFetchNetworkError(error: unknown) {
 }
 
 export class RealWebBotClient implements WebBotClient {
+  private readonly chatSessionClients = new Map<string, WebBotClient>();
+
+  private chatBasePath(botAlias: string): string {
+    return `/api/bots/${encodeURIComponent(botAlias)}`;
+  }
+
+  async listChatSessions(botAlias: string): Promise<ChatSessionList> {
+    const catalog = await this.requestJson<ChatSessionList>(`${this.chatBasePath(botAlias)}/sessions`, {}, async () => {
+      // Older hosts serve their SPA for unknown GETs. Confirm access to this Bot before
+      // letting the UI drop its saved named session and open the default chat.
+      const overview = await this.getBotOverview(botAlias).catch((error: unknown) => {
+        // A missing Bot is distinct from a missing catalog route to the caller.
+        if (error instanceof WebApiClientError && error.status === 404) throw new Error(error.message, { cause: error });
+        throw error;
+      });
+      if (overview.alias !== botAlias.trim().toLowerCase()) throw new Error("无法确认 Bot 的默认会话");
+      return { enabled: false, items: [{ id: "main", title: "主会话" }] };
+    });
+    if (typeof catalog?.enabled !== "boolean" || !Array.isArray(catalog.items)
+      || !catalog.items.every((item) => item && typeof item.id === "string" && typeof item.title === "string")) {
+      throw new Error("服务返回了无效的聊天会话列表");
+    }
+    return catalog;
+  }
+
+  async createChatSession(botAlias: string, title: string): Promise<ChatSessionSummary> {
+    return this.requestJson(`${this.chatBasePath(botAlias)}/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+  }
+
+  forChatSession(botAlias: string, sessionId: string): WebBotClient {
+    return bindChatSession(this, this.chatSessionClients, botAlias, sessionId, () => {
+      const basePath = `${this.chatBasePath(botAlias)}/sessions/${encodeURIComponent(sessionId)}`;
+      const chat = Object.create(this) as this;
+      chat.chatBasePath = () => basePath;
+      return chat;
+    });
+  }
+
   private token = "";
   private notificationPresence: NotificationPresenceUpdate | null = null;
   private notificationPresenceSenders = new Set<(presence: NotificationPresenceUpdate) => void>();
@@ -4828,7 +4873,7 @@ export class RealWebBotClient implements WebBotClient {
     };
   }
 
-  private async requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async requestJson<T>(path: string, init: RequestInit = {}, onAppShell?: () => Promise<T>): Promise<T> {
     const method = String(init.method || "GET").toUpperCase();
     const canRetry = method === "GET";
     const requestInit: RequestInit = {
@@ -4867,6 +4912,12 @@ export class RealWebBotClient implements WebBotClient {
           : "";
       } catch {
         previewText = "";
+      }
+      if (onAppShell && response.status === 200 && !response.redirected
+        && contentType.split(";")[0].trim().toLowerCase() === "text/html"
+        && /<title>\s*Orbit Safe Claw\s*<\/title>/i.test(previewText)
+        && /<div\s+id=["']root["']/i.test(previewText)) {
+        return onAppShell();
       }
       const looksLikeHtml = contentType.includes("text/html") || /^\s*</.test(previewText);
       throw new Error(
@@ -5988,7 +6039,7 @@ export class RealWebBotClient implements WebBotClient {
       busy_agent_ids?: string[];
       active_cluster_run?: RawActiveClusterRun | null;
       voice?: CodexVoiceCapability;
-    }>(`/api/bots/${encodeURIComponent(botAlias)}${suffix}`);
+    }>(`${this.chatBasePath(botAlias)}${suffix}`);
 
     const summary = mapBotSummary(data.bot, data.session.is_processing);
     const overview: BotOverview = {
@@ -6093,7 +6144,7 @@ export class RealWebBotClient implements WebBotClient {
       items: RawHistoryItem[];
       current_revision?: number;
       revision?: number;
-    }>(`/api/bots/${encodeURIComponent(botAlias)}/history${suffix}`);
+    }>(`${this.chatBasePath(botAlias)}/history${suffix}`);
     const revision = typeof data.current_revision === "number"
       ? data.current_revision
       : typeof data.revision === "number" ? data.revision : undefined;
@@ -6110,7 +6161,7 @@ export class RealWebBotClient implements WebBotClient {
     options?: ChatSendOptions,
   ): Promise<ChatMessage | SteerMessageResult> {
     const data = await this.requestJson<RawSteerChatResult>(
-      `/api/bots/${encodeURIComponent(botAlias)}/chat/steer`,
+      `${this.chatBasePath(botAlias)}/chat/steer`,
       {
         method: "POST",
         headers: {
@@ -6167,7 +6218,7 @@ export class RealWebBotClient implements WebBotClient {
     }
     appendAgentParam(params, options.agentId);
     const data = await this.requestJson<{ items: RawConversationSummary[]; active_conversation_id: string }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/conversations?${params.toString()}`,
+      `${this.chatBasePath(botAlias)}/conversations?${params.toString()}`,
     );
     const activeConversationId = String(data.active_conversation_id || "");
     return {
@@ -6181,7 +6232,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async createConversation(botAlias: string, title = "", options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
     const data = await this.requestJson<{ conversation: RawConversationSummary; messages: RawHistoryItem[] }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/conversations`,
+      `${this.chatBasePath(botAlias)}/conversations`,
       {
         method: "POST",
         headers: this.headers({ "Content-Type": "application/json" }),
@@ -6199,7 +6250,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async executePlan(botAlias: string, input: PlanExecuteInput): Promise<PlanExecuteResult> {
     const data = await this.requestJson<RawPlanExecuteResult>(
-      `/api/bots/${encodeURIComponent(botAlias)}/plans/execute`,
+      `${this.chatBasePath(botAlias)}/plans/execute`,
       {
         method: "POST",
         headers: this.headers({
@@ -6223,7 +6274,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async selectConversation(botAlias: string, conversationId: string, options: AgentScopedOptions = {}): Promise<ConversationSelectResult> {
     const data = await this.requestJson<{ conversation: RawConversationSummary; messages: RawHistoryItem[] }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}/select`,
+      `${this.chatBasePath(botAlias)}/conversations/${encodeURIComponent(conversationId)}/select`,
       {
         method: "POST",
         headers: this.headers({ "Content-Type": "application/json" }),
@@ -6244,7 +6295,7 @@ export class RealWebBotClient implements WebBotClient {
     appendAgentParam(params, options.agentId);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ items?: RawFavoriteAnswerItem[]; execution_mode?: string; executionMode?: string }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/favorites${suffix}`,
+      `${this.chatBasePath(botAlias)}/favorites${suffix}`,
     );
     return {
       items: (data.items || []).map(mapFavoriteAnswerItem),
@@ -6254,7 +6305,7 @@ export class RealWebBotClient implements WebBotClient {
 
   async favoriteAnswer(botAlias: string, input: FavoriteAnswerInput, options: AgentScopedOptions = {}): Promise<FavoriteAnswerItem> {
     const data = await this.requestJson<{ item: RawFavoriteAnswerItem }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/favorites`,
+      `${this.chatBasePath(botAlias)}/favorites`,
       {
         method: "POST",
         headers: this.headers({ "Content-Type": "application/json" }),
@@ -6278,7 +6329,7 @@ export class RealWebBotClient implements WebBotClient {
     appendAgentParam(params, options.agentId);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<{ deleted?: boolean; favorite_id?: string; favoriteId?: string }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/favorites/${encodeURIComponent(favoriteId)}${suffix}`,
+      `${this.chatBasePath(botAlias)}/favorites/${encodeURIComponent(favoriteId)}${suffix}`,
       {
         method: "DELETE",
         headers: this.headers(),
@@ -6302,7 +6353,7 @@ export class RealWebBotClient implements WebBotClient {
     }
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawConversationDeleteResult>(
-      `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}${suffix}`,
+      `${this.chatBasePath(botAlias)}/conversations/${encodeURIComponent(conversationId)}${suffix}`,
       {
         method: "DELETE",
         headers: this.headers(),
@@ -6329,7 +6380,7 @@ export class RealWebBotClient implements WebBotClient {
       items?: RawConversationSummary[];
       messages?: RawHistoryItem[];
     }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/conversations/${encodeURIComponent(conversationId)}/archive`,
+      `${this.chatBasePath(botAlias)}/conversations/${encodeURIComponent(conversationId)}/archive`,
       {
         method: "POST",
         headers: this.headers(),
@@ -6358,7 +6409,7 @@ export class RealWebBotClient implements WebBotClient {
     }
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawConversationBulkDeleteResult>(
-      `/api/bots/${encodeURIComponent(botAlias)}/conversations${suffix}`,
+      `${this.chatBasePath(botAlias)}/conversations${suffix}`,
       {
         method: "DELETE",
         headers: this.headers(),
@@ -6396,7 +6447,7 @@ export class RealWebBotClient implements WebBotClient {
       reset: boolean;
       reason?: string;
     }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/history/delta?${params.toString()}`,
+      `${this.chatBasePath(botAlias)}/history/delta?${params.toString()}`,
     );
     return {
       items: data.items.map((item, index) => mapChatMessage(item, index)),
@@ -6420,7 +6471,7 @@ export class RealWebBotClient implements WebBotClient {
     }
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const data = await this.requestJson<RawChatTraceDetails>(
-      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
+      `${this.chatBasePath(botAlias)}/history/${encodeURIComponent(messageId)}/trace${suffix}`,
     );
     return mapChatTraceDetails(data);
   }
@@ -6441,7 +6492,7 @@ export class RealWebBotClient implements WebBotClient {
       params.set("call_id", ref.callId);
     }
     const data = await this.requestJson<{ event?: RawChatTraceEvent }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/trace/event?${params.toString()}`,
+      `${this.chatBasePath(botAlias)}/history/${encodeURIComponent(messageId)}/trace/event?${params.toString()}`,
     );
     return mapTraceEvent(data.event);
   }
@@ -6456,7 +6507,7 @@ export class RealWebBotClient implements WebBotClient {
     onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
-    const streamUrl = `/api/bots/${encodeURIComponent(botAlias)}/chat/stream`;
+    const streamUrl = `${this.chatBasePath(botAlias)}/chat/stream`;
     const response = await fetch(withApiBase(streamUrl), {
       method: "POST",
       credentials: "same-origin",
@@ -6482,14 +6533,18 @@ export class RealWebBotClient implements WebBotClient {
     });
 
     if (!response.ok || !response.body) {
-      let message = "发送消息失败";
+      let apiError: JsonEnvelope<unknown>["error"];
       try {
         const payload = (await response.json()) as JsonEnvelope<unknown>;
-        message = payload.error?.message || message;
+        apiError = payload.error;
       } catch {
         // ignore parse failures
       }
-      throw new Error(message);
+      throw new WebApiClientError(apiError?.message || "发送消息失败", {
+        status: response.status,
+        code: apiError?.code,
+        data: mapApiErrorData(apiError?.code, apiError?.data),
+      });
     }
 
     const reader = response.body.getReader();
@@ -6666,7 +6721,7 @@ export class RealWebBotClient implements WebBotClient {
           await reader.cancel().catch(() => undefined);
           break;
         } else if (event.type === "error") {
-          throw new Error(event.message || "流式响应失败");
+          throw new WebApiClientError(event.message || "流式响应失败", { code: event.code });
         }
 
         separator = findSseSeparator(buffer);
@@ -6803,7 +6858,7 @@ export class RealWebBotClient implements WebBotClient {
     appendAgentParam(params, options.agentId);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return this.requestJson<ChatTranslation>(
-      `/api/bots/${encodeURIComponent(botAlias)}/history/${encodeURIComponent(messageId)}/translation/retry${suffix}`,
+      `${this.chatBasePath(botAlias)}/history/${encodeURIComponent(messageId)}/translation/retry${suffix}`,
       { method: "POST", headers: this.headers() },
     );
   }
@@ -7573,13 +7628,13 @@ export class RealWebBotClient implements WebBotClient {
   }
 
   async resetSession(botAlias: string): Promise<void> {
-    await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/reset`, {
+    await this.requestJson(`${this.chatBasePath(botAlias)}/reset`, {
       method: "POST",
     });
   }
 
   async killTask(botAlias: string, options: AgentScopedOptions = {}): Promise<string> {
-    const data = await this.requestJson<{ message?: string }>(`/api/bots/${encodeURIComponent(botAlias)}/kill`, {
+    const data = await this.requestJson<{ message?: string }>(`${this.chatBasePath(botAlias)}/kill`, {
       method: "POST",
       headers: this.headers({ "Content-Type": "application/json" }),
       body: JSON.stringify(scopedRequestBody(options)),

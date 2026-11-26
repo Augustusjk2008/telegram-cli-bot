@@ -7,6 +7,7 @@ export type ConversationHistoryPanelTab = "history" | "favorites";
 
 type Props = {
   translationSettings?: ReactNode;
+  chatSessionTitle?: string;
   open: boolean;
   activeTab?: ConversationHistoryPanelTab;
   loading: boolean;
@@ -44,6 +45,7 @@ function formatConversationTime(value: string) {
 
 export function ConversationHistoryPanel({
   translationSettings,
+  chatSessionTitle,
   open,
   activeTab = "history",
   loading,
@@ -100,6 +102,9 @@ export function ConversationHistoryPanel({
   const deleting = Boolean(deletingConversationId);
   const favoriteDeleting = Boolean(deletingFavoriteId);
   const deleteDialogTitle = pendingDeleteAll ? "删除全部会话" : "删除会话";
+  const deleteAllWarning = chatSessionTitle
+    ? `将清空「${chatSessionTitle}」的全部聊天历史。所有有权访问此聊天会话的用户都将失去这些记录。`
+    : "将删除本 bot 当前工作区全部历史会话，影响所有可访问该 bot 的用户。";
   const panelLoading = activeTab === "favorites" ? favoritesLoading : loading;
   const emptyText = activeTab === "favorites" ? "暂无收藏" : "暂无历史";
   const searchLabel = activeTab === "favorites" ? "搜索收藏" : "搜索会话";
@@ -303,7 +308,7 @@ export function ConversationHistoryPanel({
             <h2 id="delete-conversation-title" className="text-sm font-semibold text-[var(--text)]">{deleteDialogTitle}</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
               {pendingDeleteAll
-                ? "将删除本 bot 当前工作区全部历史会话，影响所有可访问该 bot 的用户。"
+                ? deleteAllWarning
                 : "共享会话，删除会影响所有可访问该 bot 的用户。"}
             </p>
             <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text)]">

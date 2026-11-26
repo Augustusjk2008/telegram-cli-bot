@@ -10,6 +10,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from bot import config
+from bot.models import BotProfile
 from bot.scheduler import notify_bot_removed, notify_bot_renamed
 from bot.scheduler.service import SchedulerService
 from bot.scheduler.store import ScheduleStore
@@ -22,8 +23,8 @@ ADMIN = {"account_id": "admin-1", "username": "admin", "can_allow_unsafe_cli": T
 LIMITED = {"account_id": "ops-1", "username": "ops", "can_allow_unsafe_cli": False}
 
 
-def _profile(alias: str, *, enabled: bool = True, archived: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(alias=alias, enabled=enabled, archived=archived, cli_type="codex")
+def _profile(alias: str, *, enabled: bool = True, archived: bool = False) -> BotProfile:
+    return BotProfile(alias=alias, enabled=enabled, archived=archived, cli_type="codex")
 
 
 class FakeChat:
@@ -85,7 +86,7 @@ class Clock:
 
 
 def _service(tmp_path: Path, *, capabilities: dict[str, set[str]] | None = None, clock: Clock | None = None,
-             profiles: list[SimpleNamespace] | None = None) -> SchedulerService:
+             profiles: list[BotProfile] | None = None) -> SchedulerService:
     items = profiles or [_profile("main"), _profile("dev")]
     manager = SimpleNamespace(main_profile=items[0], managed_profiles={p.alias: p for p in items[1:]})
     caps = capabilities if capabilities is not None else {"admin-1": {CAP_ADMIN_OPS, CAP_RUN_UNSAFE_CLI}}
@@ -180,6 +181,34 @@ async def test_busy_policy_waits_for_idle_or_skips(tmp_path: Path, chat: FakeCha
     [run] = service.store.list_runs(skipping["id"])
     assert (run["status"], run["reason_code"]) == ("skipped", "target_busy")
     assert len(chat.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_full_chat_pool_skips_before_switching_and_waits_until_a_slot_is_free(tmp_path: Path, chat: FakeChat):
+    from dataclasses import replace
+
+    clock = Clock(NOW)
+    service = _service(tmp_path, clock=clock)
+    profile = service.manager.managed_profiles["dev"]
+    profile.cluster = replace(profile.cluster, max_parallel_agents=1)
+    skip = await service.create(_payload(busy_policy="skip"), ADMIN)
+    with api_service.reserve_bot_chat_slot(service.manager, profile, "@named"):
+        await _fire(service, clock, skip)
+    assert service.store.list_runs(skip["id"])[0]["reason_code"] == "target_busy"
+    assert chat.created == []
+
+    wait = await service.create(_payload(name="等待容量", busy_policy="wait"), ADMIN)
+    with api_service.reserve_bot_chat_slot(service.manager, profile, "@named"):
+        clock.value = datetime.fromisoformat(service.store.require_schedule(wait["id"])["next_run_at"])
+        await service._tick()
+        async def waiting():
+            while service.store.list_runs(wait["id"])[0]["status"] != "waiting":
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(waiting(), 4)
+        assert chat.created == []
+    await _drain(service)
+    assert service.store.list_runs(wait["id"])[0]["status"] == "completed"
+    assert len(chat.created) == 1 and chat.streams[0]["reserved_slot"].scope == "main"
 
 
 @pytest.mark.asyncio

@@ -772,6 +772,7 @@ def resolve_cli_context_usage(
     cli_type: str,
     session_id: str | None,
     cwd_hint: str | None = None,
+    *, telemetry_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     provider = normalize_cli_type(str(cli_type or ""))
     normalized_session_id = str(session_id or "").strip()
@@ -783,7 +784,7 @@ def resolve_cli_context_usage(
             return resolve_deepseek_context_usage(normalized_session_id)
 
         if provider == "antigravity":
-            return resolve_antigravity_statusline_usage(normalized_session_id, cwd_hint)
+            return resolve_antigravity_statusline_usage(normalized_session_id, cwd_hint, telemetry_path=telemetry_path)
 
         if provider == "codex":
             ref = locate_codex_transcript(normalized_session_id)

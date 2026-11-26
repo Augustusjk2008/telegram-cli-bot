@@ -5099,7 +5099,9 @@ class ChatStore:
         self._merge_conversation_metadata(conn, source=source, target=target, new_alias=new_alias)
         conn.execute("DELETE FROM conversations WHERE id = ?", (source_id,))
 
-    def rename_bot_identity(self, *, old_bot_id: int, new_bot_id: int, old_alias: str, new_alias: str) -> int:
+    def rename_bot_identity(
+        self, *, old_bot_id: int, new_bot_id: int, old_alias: str, new_alias: str, include_unlabeled_legacy: bool = True,
+    ) -> int:
         conn = self._connect(create=False)
         if conn is None:
             return 0
@@ -5109,28 +5111,37 @@ class ChatStore:
             with conn:
                 if old_bot_id == new_bot_id:
                     return conn.execute(
-                        "UPDATE conversations SET bot_alias = ?, updated_at = ? WHERE bot_id = ? AND bot_alias = ?",
-                        (new_alias, _utc_now(), new_bot_id, old_alias),
+                        "UPDATE conversations SET bot_alias = ?, updated_at = ? WHERE bot_id = ? AND "
+                        "(bot_alias = ? OR (? AND bot_alias = '' AND agent_id NOT GLOB '@ses_*'))",
+                        (new_alias, _utc_now(), new_bot_id, old_alias, include_unlabeled_legacy),
                     ).rowcount
 
+                # Named sessions have globally generated identities and can have
+                # several conversations in the same epoch (including archived ones).
+                moved = conn.execute(
+                    "UPDATE conversations SET bot_id = ?, bot_alias = ? "
+                    "WHERE bot_id = ? AND bot_alias = ? AND agent_id GLOB '@ses_*'",
+                    (new_bot_id, new_alias, old_bot_id, old_alias),
+                ).rowcount
                 rows = conn.execute(
                     """
                     SELECT *
                     FROM conversations
-                    WHERE bot_id = ?
+                    WHERE bot_id = ? AND (bot_alias = ? OR (? AND bot_alias = '')) AND agent_id NOT GLOB '@ses_*'
                     ORDER BY created_at ASC, id ASC
                     """,
-                    (old_bot_id,),
+                    (old_bot_id, old_alias, include_unlabeled_legacy),
                 ).fetchall()
                 for source in rows:
                     target = conn.execute(
                         """
                         SELECT *
                         FROM conversations
-                        WHERE bot_id = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
+                        WHERE bot_id = ? AND bot_alias = ? AND user_id = ? AND agent_id = ? AND working_dir = ? AND session_epoch = ?
                         """,
                         (
                             new_bot_id,
+                            new_alias,
                             source["user_id"],
                             source["agent_id"],
                             source["working_dir"],
@@ -5155,12 +5166,20 @@ class ChatStore:
         working_dir: str,
         session_epoch: int,
         agent_id: str = "main",
+        conversation_id: str | None = None,
     ) -> None:
         conn = self._connect(create=False)
         if conn is None:
             return
         with closing(conn):
             with conn:
+                if conversation_id:
+                    conn.execute(
+                        "DELETE FROM conversations WHERE id = ? AND bot_id = ? AND user_id = ? "
+                        "AND agent_id = ? AND working_dir = ?",
+                        (conversation_id, bot_id, user_id, agent_id, working_dir),
+                    )
+                    return
                 conn.execute(
                     """
                     DELETE FROM conversations
@@ -5243,15 +5262,15 @@ class ChatStore:
                 )
                 return int(result.rowcount or 0)
 
-    def delete_bot_history(self, *, bot_id: int) -> int:
+    def delete_bot_history(self, *, bot_id: int, bot_alias: str = "") -> int:
         conn = self._connect(create=False)
         if conn is None:
             return 0
         with closing(conn):
             with conn:
                 result = conn.execute(
-                    "DELETE FROM conversations WHERE bot_id = ?",
-                    (bot_id,),
+                    "DELETE FROM conversations WHERE bot_id = ? AND (agent_id NOT GLOB '@ses_*' OR bot_alias = ?)",
+                    (bot_id, bot_alias),
                 )
                 return int(result.rowcount or 0)
 
@@ -5326,6 +5345,7 @@ class ChatStore:
         self,
         message_id: str,
         *,
+        owner: tuple[int, int, str] | None = None,
         event_id: str = "",
         kind: str = "",
         call_id: str = "",
@@ -5347,14 +5367,16 @@ class ChatStore:
         columns = "id, ordinal, kind, raw_type, title, tool_name, call_id, summary, payload_json, created_at"
         with closing(conn):
             with conn:
+                owner_clause = "AND c.bot_id = ? AND c.user_id = ? AND c.agent_id = ?" if owner else ""
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT m.turn_id, t.native_provider
                     FROM messages AS m
                     JOIN turns AS t ON t.id = m.turn_id
-                    WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL
+                    JOIN conversations AS c ON c.id = m.conversation_id
+                    WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL {owner_clause}
                     """,
-                    (message_id,),
+                    (message_id, *(owner or ())),
                 ).fetchone()
                 if row is None:
                     raise KeyError(message_id)
@@ -5417,14 +5439,20 @@ class ChatStore:
                     "event": event,
                 }
 
-    def get_trace_recovery_context(self, message_id: str) -> dict[str, Any]:
+    def get_trace_recovery_context(
+        self, message_id: str, *, owner: tuple[int, int, str] | None = None,
+    ) -> dict[str, Any]:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
         with closing(conn):
             with conn:
+                owner_clause = (
+                    "AND conversation.bot_id = ? AND conversation.user_id = ? AND conversation.agent_id = ?"
+                    if owner else ""
+                )
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT
                         assistant.id AS message_id,
                         assistant.turn_id AS turn_id,
@@ -5445,9 +5473,9 @@ class ChatStore:
                     JOIN messages AS user ON user.id = turn.user_message_id
                     LEFT JOIN voice_turns AS voice_turn ON voice_turn.turn_id = turn.id
                     WHERE assistant.id = ?
-                      AND turn.workspace_history_discarded_at IS NULL
+                      AND turn.workspace_history_discarded_at IS NULL {owner_clause}
                     """,
-                    (message_id,),
+                    (message_id, *(owner or ())),
                 ).fetchone()
                 if row is None:
                     raise KeyError(message_id)

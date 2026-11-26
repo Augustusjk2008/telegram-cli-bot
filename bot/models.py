@@ -2,6 +2,7 @@
 
 import logging
 import math
+import re
 import subprocess
 import threading
 import time
@@ -49,7 +50,7 @@ class _SessionPersistenceScheduler:
         return (
             int(session.bot_id),
             int(session.user_id),
-            str(session.agent_id or "main").strip().lower() or "main",
+            session.storage_scope,
         )
 
     def schedule(self, session: "UserSession") -> None:
@@ -353,6 +354,11 @@ class BotProfile:
     chat_translation_enabled: bool = True
     remote_workspace: Dict[str, Any] = field(default_factory=dict)
 
+    # Private managed-profile metadata. The profile store alone serializes it.
+    pending_rename_to: str = field(default="", kw_only=True, repr=False, compare=False)
+    pending_rename_skip_legacy: bool = field(default=False, kw_only=True, repr=False, compare=False)
+    last_renamed_from: str = field(default="", kw_only=True, repr=False, compare=False)
+
     def ensure_cluster_slots(self) -> list[ClusterSlotStatus]:
         child_agents = [agent for agent in self.agents if agent.id != "main"]
         existing_ids = {agent.id for agent in self.agents}
@@ -471,15 +477,25 @@ class BotProfile:
         return profile
 
 
+def normalize_session_bot_alias(value: object) -> str:
+    return value.strip().lower() if isinstance(value, str) else ""
+
+
+def is_web_session_id(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"ses_[0-9a-f]{32}", value) is not None
+
+
 @dataclass
 class UserSession:
-    """按 (bot_id, user_id, agent_id) 隔离的用户会话状态"""
+    """按 (bot_id, user_id, storage_scope) 隔离的用户会话状态"""
 
     bot_id: int
     bot_alias: str
     user_id: int
     working_dir: str
     agent_id: str = "main"
+    web_session_id: str = field(default="", kw_only=True)
+    web_session_title: str = field(default="", kw_only=True)
     browse_dir: Optional[str] = None
     history: List[dict] = field(default_factory=list)
     codex_session_id: Optional[str] = None
@@ -517,6 +533,10 @@ class UserSession:
     _persist_enabled: bool = field(default=True, repr=False, compare=False)
     persist_hook: Optional[PersistHook] = field(default=None, repr=False, compare=False)
 
+    @property
+    def storage_scope(self) -> str:
+        return "@" + self.web_session_id if self.web_session_id else self.agent_id
+
     def __getattr__(self, name: str) -> Any:
         if name == "kimi_session_id":
             return None
@@ -525,6 +545,14 @@ class UserSession:
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "kimi_session_id":
             return
+        if name in {"agent_id", "web_session_id"}:
+            if name in vars(self) and vars(self)[name] != value:
+                raise AttributeError(f"{name} is immutable")
+            if name == "agent_id" and str(value).strip().startswith("@"):
+                raise ValueError("reserved session storage scope")
+            if name == "web_session_id" and value != "":
+                if self.agent_id != "main" or not is_web_session_id(value):
+                    raise ValueError("invalid named Web session identity")
         super().__setattr__(name, value)
 
     def touch(self):

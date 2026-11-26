@@ -21,7 +21,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import aclosing, asynccontextmanager, contextmanager
+from contextlib import aclosing, asynccontextmanager, contextmanager, nullcontext
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,6 +32,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 from bot import app_settings
 from bot.claude_done import ClaudeDoneDetector, build_claude_done_session, strip_claude_done_sentinel
 from bot.agents import build_agent_prompt_input
+from bot.chat_rename import ChatRenamePending
 from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
     CliParamsConfig,
@@ -117,7 +118,6 @@ from .chat_translation import (
     translation_snapshot,
 )
 from bot.scheduler import notify_bot_removed as notify_scheduler_bot_removed
-from bot.scheduler import notify_bot_renamed as notify_scheduler_bot_renamed
 from bot.platform.output import strip_ansi_escape
 from bot.platform.executables import build_executable_invocation
 from bot.platform.processes import (
@@ -130,15 +130,13 @@ from bot.platform.processes import (
 )
 from bot.platform.subprocess_streams import close_process_streams
 from bot.remote_workspace import get_remote_workspace_service
-from bot.session_store import (
-    rename_bot_sessions as rename_stored_bot_sessions,
-)
 from bot.sessions import (
     align_session_paths,
     clear_bot_sessions,
     get_bot_sessions,
     get_or_create_session,
-    rekey_bot_sessions,
+    get_web_chat_session,
+    list_web_chat_sessions,
     reset_session,
     sessions,
     sessions_lock,
@@ -154,6 +152,7 @@ from bot.web.chat_sync_events import (
     CHAT_SYNC_REASON_TURN_STARTED,
     publish_chat_sync,
 )
+from bot.web.chat_targets import ChatTarget, after_chat_catalog_change, check_named_chat_owner, reserve_chat_catalog, with_chat_target
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
 from bot.web.async_chat_store import run_chat_store_io
 from bot.web.chat_store import ChatStore, is_cli_history_provider
@@ -267,6 +266,7 @@ set_task_change_listener(lambda alias: publish_chat_sync(alias, "main", CHAT_SYN
 def _publishes_conversation_sync(function: Callable[..., Awaitable[_ResultT]]) -> Callable[..., Awaitable[_ResultT]]:
     """After a conversation or session change succeeds, hint other pages of that session to sync."""
     signature = inspect.signature(function)
+    function = with_chat_target(function)
 
     @functools.wraps(function)
     async def wrapper(*args: Any, **kwargs: Any) -> _ResultT:
@@ -525,6 +525,61 @@ def _require_update_admission() -> None:
         _raise(503, "update_restarting", "更新正在交接，请等待宿主重新启动")
 
 
+@dataclass
+class BotChatSlot:
+    manager: MultiBotManager
+    alias: str
+    scope: str
+    active: bool = True
+
+
+_bot_chat_counts: dict[tuple[int, str], int] = {}
+_capacity_blocked_wakeups: dict[tuple[int, str], set[str]] = {}
+_bot_chat_counts_lock = threading.Lock()
+
+
+@contextmanager
+def reserve_bot_chat_slot(
+    manager: MultiBotManager, profile: BotProfile, scope: str = "main", *, session: UserSession | None = None,
+):
+    """Hold a local text-turn slot. A schedule takes it before switching its conversation."""
+    if profile.remote_workspace:
+        yield None
+        return
+    key = (id(manager), profile.alias)
+    with reserve_chat_catalog(manager, profile.alias):
+        if session is not None and session.web_session_id:
+            check_named_chat_owner(manager, profile.alias, session, profile.working_dir)
+        with _bot_chat_counts_lock:
+            active = _bot_chat_counts.get(key, 0)
+            if active >= profile.cluster.max_parallel_agents:
+                _raise(409, "bot_chat_capacity", f"此 Bot 已有 {active} 个聊天会话运行，请在会话结束后重试")
+            _bot_chat_counts[key] = active + 1
+        slot = BotChatSlot(manager, profile.alias, scope)
+        try:
+            yield slot
+        finally:
+            slot.active = False
+            with _bot_chat_counts_lock:
+                _bot_chat_counts[key] -= 1
+                if not _bot_chat_counts[key]:
+                    del _bot_chat_counts[key]
+                wakeups = _capacity_blocked_wakeups.pop(key, ())
+            for run_id in wakeups:
+                asyncio.get_running_loop().call_soon(_schedule_cluster_parent_wakeup, manager, run_id)
+
+
+def _bot_chat_slot(
+    manager: MultiBotManager, session: UserSession, profile: BotProfile, reserved: BotChatSlot | None = None,
+):
+    if reserved is None:
+        return reserve_bot_chat_slot(manager, profile, session.storage_scope, session=session)
+    if (not reserved.active or reserved.manager is not manager
+            or reserved.alias != profile.alias or reserved.scope != session.storage_scope):
+        raise ValueError("chat slot does not belong to this session")
+    return nullcontext(reserved)
+
+
 @contextmanager
 def _session_lifecycle_scope(
     session: UserSession, *, conversation_change: bool = False,
@@ -601,16 +656,19 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
     return "configured" if profile.enabled and not profile.archived else "stopped"
 
 
-def _build_agent_runtime_map(bot_id: int, user_id: int | None) -> dict[str, dict[str, Any]]:
+def _build_agent_runtime_map(bot_id: int, user_id: int | None, bot_alias: str) -> dict[str, dict[str, Any]]:
     _ = user_id
     result: dict[str, dict[str, Any]] = {}
     with sessions_lock:
         for (session_bot_id, session_user_id, session_agent_id), session in sessions.items():
             if session_bot_id != bot_id or session_user_id != chat_session_user_id(session_user_id):
                 continue
+            if session.bot_alias != bot_alias:
+                continue
             with session._lock:
                 result[session_agent_id] = {
                     "is_processing": bool(session.is_processing or session.endless_mode),
+                    "web_session_id": session.web_session_id,
                     "endless_group_id": session.endless_group_id if session.endless_mode else "",
                     "message_count": max(0, int(session.message_count or 0)),
                     "active_conversation_id": session.active_conversation_id or "",
@@ -711,8 +769,11 @@ def build_bot_summary(
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
-    runtime_map = {} if profile.archived else _build_agent_runtime_map(bot_id, user_id)
+    runtime_map = {} if profile.archived else _build_agent_runtime_map(bot_id, user_id, alias)
     agent_items = _build_agent_status_items(profile, runtime_map)
+    if any(item["is_processing"] and item.get("web_session_id") for item in runtime_map.values()):
+        # The Bot list counts busy agent profiles. All named Web chats run as its main agent.
+        agent_items[0]["is_processing"] = True
     active_cluster_run = None
     if user_id is not None and current_session is not None and profile.cluster.enabled:
         try:
@@ -775,6 +836,7 @@ def list_archived_bots(manager: MultiBotManager) -> list[dict[str, Any]]:
             for alias, profile in sorted(manager.load_archived_profiles().items())]
 
 
+@with_chat_target
 def get_overview(
     manager: MultiBotManager,
     alias: str,
@@ -783,8 +845,9 @@ def get_overview(
     execution_mode: str = "",
     *,
     can_chat_send: bool = False,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     from bot.codex_server.voice import voice_capability
     voice = voice_capability(
@@ -792,7 +855,7 @@ def get_overview(
         cli_type=normalize_cli_type(profile.cli_type),
         execution_mode=resolved_execution_mode,
         can_send=can_chat_send,
-        valid_session=session.agent_id == str(agent_id or "main").strip().lower(),
+        valid_session=not session.web_session_id and session.agent_id == str(agent_id or "main").strip().lower(),
     )
     bot_id = resolve_session_bot_id(manager, alias)
     active_cluster_run = _find_active_cluster_run_for_session(alias, user_id, session)
@@ -804,6 +867,9 @@ def get_overview(
     history_service = _history_service_for_execution_mode(session, resolved_execution_mode)
     session_snapshot = history_service.build_session_snapshot(profile, session)
     session_snapshot["session_epoch"] = max(0, int(getattr(session, "session_epoch", 0) or 0))
+    runtime_map = _build_agent_runtime_map(bot_id, user_id, alias)
+    if session.web_session_id:
+        runtime_map = {"main": runtime_map.get(session.storage_scope, {})}
     return {
         "bot": {
             **build_bot_summary(manager, alias, user_id, profile=profile, session=session),
@@ -812,7 +878,7 @@ def get_overview(
         },
         "voice": voice,
         "session": session_snapshot,
-        "agents": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id)),
+        "agents": _build_agent_status_items(profile, runtime_map),
         "active_agent_id": session.agent_id,
         "active_cluster_run": (
             {
@@ -836,7 +902,7 @@ def get_overview(
 def list_agents(manager: MultiBotManager, alias: str, user_id: int | None = None) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
-    return {"items": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id))}
+    return {"items": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id, alias))}
 
 
 def _cluster_token_path() -> Path:
@@ -2114,6 +2180,7 @@ async def reset_cli_params(manager: MultiBotManager, alias: str, cli_type: Optio
     return await asyncio.to_thread(get_cli_params_payload, manager, alias, resolved_cli_type)
 
 
+@with_chat_target
 def get_history(
     manager: MultiBotManager,
     alias: str,
@@ -2121,8 +2188,10 @@ def get_history(
     limit: int = 50,
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
     items = service.list_history(profile, session, limit=max(1, limit))
@@ -2163,6 +2232,7 @@ def _active_conversation_matches_execution_mode(store: ChatStore, conversation_i
     return is_cli_history_provider(provider)
 
 
+@with_chat_target
 def list_conversations(
     manager: MultiBotManager,
     alias: str,
@@ -2171,8 +2241,10 @@ def list_conversations(
     query: str = "",
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     store = _get_chat_store(session)
     bounded_limit = min(200, max(1, int(limit)))
@@ -2181,7 +2253,7 @@ def list_conversations(
     items = store.list_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
-        agent_id=session.agent_id,
+        agent_id=session.storage_scope,
         working_dir=session.working_dir,
         limit=bounded_limit,
         query=query,
@@ -2189,6 +2261,7 @@ def list_conversations(
     decorated_items = [
         {
             **item,
+            "agent_id": session.agent_id,
             "active": str(item.get("id") or "") == visible_active_id,
             "execution_mode": _conversation_execution_mode(item),
         }
@@ -2202,6 +2275,7 @@ def list_conversations(
     }
 
 
+@with_chat_target
 def list_favorite_answers(
     manager: MultiBotManager,
     alias: str,
@@ -2210,13 +2284,14 @@ def list_favorite_answers(
     agent_id: str = "main",
     execution_mode: str = "",
     query: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _favorite_execution_mode_for_request(execution_mode, profile)
     scope = _favorite_scope_for_session(session, resolved_execution_mode)
     store = ChatFavoriteStore(session.working_dir)
     return {
-        "items": store.list_favorites(scope, query=query),
+        "items": [{**item, "agent_id": session.agent_id} for item in store.list_favorites(scope, query=query)],
         "execution_mode": resolved_execution_mode,
     }
 
@@ -2224,8 +2299,9 @@ def list_favorite_answers(
 def _favorite_scope_for_session(session: UserSession, execution_mode: str) -> FavoriteScope:
     return FavoriteScope(
         bot_id=session.bot_id,
+        bot_alias=session.bot_alias,
         user_id=session.user_id,
-        agent_id=session.agent_id,
+        agent_id=session.storage_scope,
         execution_mode=execution_mode,
     )
 
@@ -2245,7 +2321,7 @@ def _validate_favorite_conversation(
         _raise(404, "conversation_not_found", "未找到会话")
     if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
         _raise(404, "conversation_not_found", "未找到会话")
-    if str(conversation.get("agent_id") or "main") != session.agent_id:
+    if str(conversation.get("agent_id") or "main") != session.storage_scope:
         _raise(404, "conversation_not_found", "未找到会话")
     if str(conversation.get("working_dir") or "") != session.working_dir:
         _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
@@ -2277,6 +2353,7 @@ def _favorite_preview(answer_text: str, fallback: str = "") -> str:
     return f"{text[:237].rstrip()}..."
 
 
+@with_chat_target
 def upsert_favorite_answer(
     manager: MultiBotManager,
     alias: str,
@@ -2285,8 +2362,9 @@ def upsert_favorite_answer(
     *,
     agent_id: str = "main",
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _favorite_execution_mode_for_request(execution_mode, profile)
     store = _get_chat_store(session)
     conversation = _validate_favorite_conversation(
@@ -2328,9 +2406,10 @@ def upsert_favorite_answer(
         created_at=str(message.get("created_at") or payload.get("created_at") or payload.get("createdAt") or ""),
     )
     favorite_store = ChatFavoriteStore(session.working_dir)
-    return {"item": favorite_store.upsert_favorite(item)}
+    return {"item": {**favorite_store.upsert_favorite(item), "agent_id": session.agent_id}}
 
 
+@with_chat_target
 def delete_favorite_answer(
     manager: MultiBotManager,
     alias: str,
@@ -2339,8 +2418,9 @@ def delete_favorite_answer(
     *,
     agent_id: str = "main",
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _favorite_execution_mode_for_request(execution_mode, profile)
     scope = _favorite_scope_for_session(session, resolved_execution_mode)
     deleted = ChatFavoriteStore(session.working_dir).delete_favorite(favorite_id, scope)
@@ -2368,7 +2448,7 @@ def _create_agent_conversation(
         bot_id=session.bot_id,
         bot_alias=session.bot_alias,
         user_id=session.user_id,
-        agent_id=session.agent_id,
+        agent_id=session.storage_scope,
         cli_type=profile.cli_type,
         working_dir=session.working_dir,
         session_epoch=max(0, int(getattr(session, "session_epoch", 0) or 0)),
@@ -2518,8 +2598,10 @@ def _create_conversation_locked(
     title: str = "",
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         is_processing = bool(session.is_processing)
@@ -2527,7 +2609,7 @@ def _create_conversation_locked(
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
     previous_conversation_id = str(session.active_conversation_id or "").strip()
     if (
-        session.agent_id == "main"
+        session.storage_scope == "main"
         and previous_conversation_id
         and _CLUSTER_RUNTIME.has_pending_tasks(
             bot_alias=alias,
@@ -2538,7 +2620,7 @@ def _create_conversation_locked(
         _raise(409, "cluster_team_busy", "当前主会话仍有子任务运行，暂不能切换会话")
 
     store, conversation_id = _create_agent_conversation(profile, session, title=title, execution_mode=resolved_execution_mode)
-    if session.agent_id == "main" and conversation_id != previous_conversation_id:
+    if session.storage_scope == "main" and conversation_id != previous_conversation_id:
         _retire_cluster_child_conversations(manager, alias, user_id, previous_conversation_id)
         _clear_cluster_child_session_bindings(
             manager,
@@ -2569,22 +2651,24 @@ async def create_conversation(
     *,
     follow_current_conversation: bool = False,
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, user_id, agent_id))
+    profile, _agent, session = target
     with _session_lifecycle_scope(session, conversation_change=True, expected_conversation_id=expected_conversation_id):
         if follow_current_conversation:
             execution_mode = _current_conversation_execution_mode(profile, session)
         normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
-        write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+        write_key = f"{alias}:{chat_session_user_id(user_id)}:{session.storage_scope}"
         while True:
             previous_conversation_id = (
                 str(session.active_conversation_id or "").strip()
-                if normalized_agent_id == "main"
+                if session.storage_scope == "main"
                 else ""
             )
             async with _cluster_parent_lock_scope(alias, user_id, previous_conversation_id):
                 if (
-                    normalized_agent_id == "main"
+                    session.storage_scope == "main"
                     and str(session.active_conversation_id or "").strip() != previous_conversation_id
                 ):
                     continue
@@ -2597,6 +2681,7 @@ async def create_conversation(
                     agent_id=normalized_agent_id,
                     execution_mode=execution_mode,
                     write_key=write_key,
+                    target=target,
                 )
                 return await _await_cancel_safe_lifecycle_io(io)
 
@@ -2609,8 +2694,10 @@ def _select_conversation_locked(
     agent_id: str = "main",
     execution_mode: str = "",
     profile_override: BotProfile | None = None,
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if profile_override is not None:
         profile = copy.deepcopy(profile_override)
     requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
@@ -2620,7 +2707,7 @@ def _select_conversation_locked(
         _raise(409, "conversation_switch_blocked", "当前任务运行中，先终止或等待完成")
     previous_conversation_id = str(session.active_conversation_id or "").strip()
     if (
-        session.agent_id == "main"
+        session.storage_scope == "main"
         and str(conversation_id or "").strip() != previous_conversation_id
         and _CLUSTER_RUNTIME.has_pending_tasks(
             bot_alias=alias,
@@ -2638,7 +2725,7 @@ def _select_conversation_locked(
 
     if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
         _raise(404, "conversation_not_found", "未找到会话")
-    if str(conversation.get("agent_id") or "main") != session.agent_id:
+    if str(conversation.get("agent_id") or "main") != session.storage_scope:
         _raise(404, "conversation_not_found", "未找到会话")
     if str(conversation.get("working_dir") or "") != session.working_dir:
         _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
@@ -2672,7 +2759,7 @@ def _select_conversation_locked(
         if native_provider == "deepseek":
             session.deepseek_session_id = native_session_id or None
     session.persist()
-    if session.agent_id == "main" and str(conversation["id"]) != previous_conversation_id:
+    if session.storage_scope == "main" and str(conversation["id"]) != previous_conversation_id:
         _retire_cluster_child_conversations(manager, alias, user_id, previous_conversation_id)
         _clear_cluster_child_session_bindings(
             manager,
@@ -2702,19 +2789,22 @@ async def select_conversation(
     conversation_id: str,
     agent_id: str = "main",
     execution_mode: str = "",
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, user_id, agent_id))
+    _profile, _agent, session = target
     with _session_lifecycle_scope(session, conversation_change=True):
         normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
         target_conversation_id = str(conversation_id or "").strip()
-        write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
+        write_key = f"{alias}:{chat_session_user_id(user_id)}:{session.storage_scope}"
         while True:
             previous_conversation_id = (
                 str(session.active_conversation_id or "").strip()
-                if normalized_agent_id == "main"
+                if session.storage_scope == "main"
                 else ""
             )
-            target_parent_id = target_conversation_id if normalized_agent_id == "main" else ""
+            target_parent_id = target_conversation_id if session.storage_scope == "main" else ""
             async with _cluster_parent_lock_scope(
                 alias,
                 user_id,
@@ -2722,7 +2812,7 @@ async def select_conversation(
                 target_parent_id,
             ):
                 if (
-                    normalized_agent_id == "main"
+                    session.storage_scope == "main"
                     and str(session.active_conversation_id or "").strip() != previous_conversation_id
                 ):
                     continue
@@ -2735,6 +2825,7 @@ async def select_conversation(
                     agent_id=normalized_agent_id,
                     execution_mode=execution_mode,
                     write_key=write_key,
+                    target=target,
                 )
                 return await _await_cancel_safe_lifecycle_io(io)
 
@@ -2748,8 +2839,9 @@ def _delete_conversation_locked(
     agent_id: str = "main",
     delete_native_session: bool = False,
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         is_processing = bool(session.is_processing)
@@ -2764,7 +2856,7 @@ def _delete_conversation_locked(
 
     if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
         _raise(404, "conversation_not_found", "未找到会话")
-    if str(conversation.get("agent_id") or "main") != session.agent_id:
+    if str(conversation.get("agent_id") or "main") != session.storage_scope:
         _raise(404, "conversation_not_found", "未找到会话")
     if str(conversation.get("working_dir") or "") != session.working_dir:
         _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
@@ -2775,7 +2867,7 @@ def _delete_conversation_locked(
     is_active = str(session.active_conversation_id or "") == str(conversation_id or "")
     _ensure_conversation_execution_mode(conversation, requested_execution_mode)
     native_provider = cli_data_provider(str(conversation.get("native_provider") or profile.cli_type))
-    if session.agent_id == "main" and _CLUSTER_RUNTIME.has_pending_tasks(
+    if session.storage_scope == "main" and _CLUSTER_RUNTIME.has_pending_tasks(
         bot_alias=alias,
         user_id=chat_session_user_id(user_id),
         main_conversation_id=str(conversation_id or "").strip(),
@@ -2783,7 +2875,7 @@ def _delete_conversation_locked(
         _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能删除")
     cluster_team_revision = (
         _conversation_cluster_team_revision(store, conversation_id)
-        if session.agent_id == "main"
+        if session.storage_scope == "main"
         else 0
     )
     native_session_id = str(conversation.get("native_session_id") or "").strip()
@@ -2811,7 +2903,7 @@ def _delete_conversation_locked(
     session.persist()
 
     store.delete_conversation_by_id(conversation_id)
-    if session.agent_id == "main":
+    if session.storage_scope == "main":
         _retire_cluster_child_conversations(manager, alias, user_id, conversation_id)
         _clear_cluster_child_session_bindings(
             manager,
@@ -2825,7 +2917,7 @@ def _delete_conversation_locked(
         [conversation_id],
         _favorite_scope_for_session(session, requested_execution_mode),
     )
-    listed = list_conversations(manager, alias, user_id, agent_id=agent_id, execution_mode=requested_execution_mode)
+    listed = list_conversations(manager, alias, user_id, agent_id=agent_id, execution_mode=requested_execution_mode, target=target)
     return {
         "deleted_conversation_id": conversation_id,
         "deleted_favorite_count": deleted_favorite_count,
@@ -2846,27 +2938,23 @@ async def delete_conversation(
     agent_id: str = "main",
     delete_native_session: bool = False,
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
-    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
-
-    async def run_delete() -> dict[str, Any]:
-        return await run_chat_store_io(
-            _delete_conversation_locked,
-            manager,
-            alias,
-            user_id,
-            conversation_id,
-            agent_id=normalized_agent_id,
-            delete_native_session=delete_native_session,
-            execution_mode=execution_mode,
-            write_key=write_key,
-        )
-
-    if normalized_agent_id != "main":
-        return await run_delete()
-    async with _cluster_parent_lock_scope(alias, user_id, conversation_id):
-        return await _await_cancel_safe_lifecycle_io(run_delete())
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, user_id, agent_id))
+    session = target.session
+    parent = conversation_id if session.storage_scope == "main" else ""
+    with _session_lifecycle_scope(session, conversation_change=True):
+        async with _cluster_parent_lock_scope(alias, user_id, parent):
+            io = run_chat_store_io(
+                _delete_conversation_locked,
+                manager, alias, user_id, conversation_id,
+                agent_id=target.agent.id,
+                execution_mode=execution_mode,
+                delete_native_session=delete_native_session,
+                write_key=f"{alias}:{chat_session_user_id(user_id)}:{session.storage_scope}",
+                target=target,
+            )
+            return await _await_cancel_safe_lifecycle_io(io)
 
 
 def _archive_conversation_locked(
@@ -2877,8 +2965,9 @@ def _archive_conversation_locked(
     *,
     agent_id: str = "main",
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     requested_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         if session.is_processing:
@@ -2891,14 +2980,14 @@ def _archive_conversation_locked(
         _raise(404, "conversation_not_found", "未找到会话")
     if int(conversation.get("bot_id") or 0) != session.bot_id or int(conversation.get("user_id") or 0) != session.user_id:
         _raise(404, "conversation_not_found", "未找到会话")
-    if str(conversation.get("agent_id") or "main") != session.agent_id:
+    if str(conversation.get("agent_id") or "main") != session.storage_scope:
         _raise(404, "conversation_not_found", "未找到会话")
     if str(conversation.get("working_dir") or "") != session.working_dir:
         _raise(409, "conversation_workdir_mismatch", "会话工作目录和当前 Bot 不一致")
     if str(conversation.get("archived_at") or "").strip():
         _raise(404, "conversation_not_found", "未找到会话")
     _ensure_conversation_execution_mode(conversation, requested_execution_mode)
-    if session.agent_id == "main" and _CLUSTER_RUNTIME.has_pending_tasks(
+    if session.storage_scope == "main" and _CLUSTER_RUNTIME.has_pending_tasks(
         bot_alias=alias,
         user_id=chat_session_user_id(user_id),
         main_conversation_id=str(conversation_id or "").strip(),
@@ -2906,12 +2995,12 @@ def _archive_conversation_locked(
         _raise(409, "cluster_team_busy", "该主会话仍有子任务运行，暂不能归档")
     cluster_team_revision = (
         _conversation_cluster_team_revision(store, conversation_id)
-        if session.agent_id == "main"
+        if session.storage_scope == "main"
         else 0
     )
 
     store.archive_conversation_by_id(conversation_id)
-    if session.agent_id == "main":
+    if session.storage_scope == "main":
         _retire_cluster_child_conversations(manager, alias, user_id, conversation_id)
         _clear_cluster_child_session_bindings(
             manager,
@@ -2932,6 +3021,7 @@ def _archive_conversation_locked(
         user_id,
         agent_id=agent_id,
         execution_mode=requested_execution_mode,
+        target=target,
     )
     return {
         "archived_conversation_id": str(conversation_id or ""),
@@ -2950,26 +3040,22 @@ async def archive_conversation(
     *,
     agent_id: str = "main",
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
-    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
-
-    async def run_archive() -> dict[str, Any]:
-        return await run_chat_store_io(
-            _archive_conversation_locked,
-            manager,
-            alias,
-            user_id,
-            conversation_id,
-            agent_id=normalized_agent_id,
-            execution_mode=execution_mode,
-            write_key=write_key,
-        )
-
-    if normalized_agent_id != "main":
-        return await run_archive()
-    async with _cluster_parent_lock_scope(alias, user_id, conversation_id):
-        return await _await_cancel_safe_lifecycle_io(run_archive())
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, user_id, agent_id))
+    session = target.session
+    parent = conversation_id if session.storage_scope == "main" else ""
+    with _session_lifecycle_scope(session, conversation_change=True):
+        async with _cluster_parent_lock_scope(alias, user_id, parent):
+            io = run_chat_store_io(
+                _archive_conversation_locked,
+                manager, alias, user_id, conversation_id,
+                agent_id=target.agent.id,
+                execution_mode=execution_mode,
+                write_key=f"{alias}:{chat_session_user_id(user_id)}:{session.storage_scope}",
+                target=target,
+            )
+            return await _await_cancel_safe_lifecycle_io(io)
 
 
 def _normalized_resolved_path(value: str | Path) -> str:
@@ -3105,8 +3191,9 @@ def delete_all_conversations(
     agent_id: str = "main",
     execution_mode: str = "",
     delete_native_session: bool = False,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     with session._lock:
         if bool(session.is_processing):
@@ -3118,12 +3205,12 @@ def delete_all_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
         working_dir=session.working_dir,
-        agent_id=session.agent_id,
+        agent_id=session.storage_scope,
         limit=100,
     )
     cluster_conversations = (
         [str(item.get("id") or "").strip() for item in conversations_to_delete]
-        if session.agent_id == "main"
+        if session.storage_scope == "main"
         else []
     )
     for conversation_id in cluster_conversations:
@@ -3141,7 +3228,7 @@ def delete_all_conversations(
         bot_id=session.bot_id,
         user_id=session.user_id,
         working_dir=session.working_dir,
-        agent_id=session.agent_id,
+        agent_id=session.storage_scope,
     )
     deleted_favorite_count = ChatFavoriteStore(session.working_dir).delete_favorites_for_scope(
         _favorite_scope_for_session(session, resolved_execution_mode)
@@ -3207,44 +3294,36 @@ async def delete_all_conversations_async(
     agent_id: str = "main",
     execution_mode: str = "",
     delete_native_session: bool = False,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
-    normalized_agent_id = str(session.agent_id or "main").strip().lower() or "main"
-    write_key = f"{alias}:{chat_session_user_id(user_id)}:{normalized_agent_id}"
-    if normalized_agent_id != "main":
-        return await run_chat_store_io(
-            delete_all_conversations,
-            manager,
-            alias,
-            user_id,
-            agent_id=normalized_agent_id,
-            execution_mode=execution_mode,
-            delete_native_session=delete_native_session,
-            write_key=write_key,
-        )
-    resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
-    conversations = _get_chat_store(session).list_conversations(
-        bot_id=session.bot_id,
-        user_id=session.user_id,
-        working_dir=session.working_dir,
-        agent_id=session.agent_id,
-        limit=100,
-    )
-    conversation_ids = [str(item.get("id") or "").strip() for item in conversations]
-    async with _cluster_parent_lock_scope(alias, user_id, *conversation_ids):
-        io = run_chat_store_io(
-            delete_all_conversations,
-            manager,
-            alias,
-            user_id,
-            agent_id=normalized_agent_id,
-            execution_mode=resolved_execution_mode,
-            delete_native_session=delete_native_session,
-            write_key=write_key,
-        )
-        return await _await_cancel_safe_lifecycle_io(io)
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, user_id, agent_id))
+    profile, agent, session = target
+    resolved_mode = _resolve_requested_execution_mode(execution_mode, profile)
+    with _session_lifecycle_scope(session, conversation_change=True):
+        parents = []
+        if session.storage_scope == "main":
+            conversations = _get_chat_store(session).list_conversations(
+                bot_id=session.bot_id,
+                user_id=session.user_id,
+                working_dir=session.working_dir,
+                agent_id=session.storage_scope,
+                limit=100,
+            )
+            parents = [str(item.get("id") or "").strip() for item in conversations]
+        async with _cluster_parent_lock_scope(alias, user_id, *parents):
+            io = run_chat_store_io(
+                delete_all_conversations,
+                manager, alias, user_id,
+                agent_id=agent.id,
+                execution_mode=resolved_mode,
+                delete_native_session=delete_native_session,
+                write_key=f"{alias}:{chat_session_user_id(user_id)}:{session.storage_scope}",
+                target=target,
+            )
+            return await _await_cancel_safe_lifecycle_io(io)
 
 
+@with_chat_target
 def get_history_delta(
     manager: MultiBotManager,
     alias: str,
@@ -3255,8 +3334,10 @@ def get_history_delta(
     execution_mode: str = "",
     revision: int | None = None,
     cursor: str = "",
+    *,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
     if revision is not None or str(cursor or "").strip():
@@ -3278,6 +3359,7 @@ def get_history_delta(
     return {"items": items[ids.index(marker) + 1:], "reset": False}
 
 
+@with_chat_target
 def get_history_trace(
     manager: MultiBotManager,
     alias: str,
@@ -3287,8 +3369,9 @@ def get_history_trace(
     execution_mode: str = "",
     *,
     compact: bool = False,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
     data = service.get_message_trace(profile, session, message_id, compact=compact)
@@ -3297,6 +3380,7 @@ def get_history_trace(
     return data
 
 
+@with_chat_target
 def get_history_trace_event(
     manager: MultiBotManager,
     alias: str,
@@ -3308,10 +3392,11 @@ def get_history_trace_event(
     event_id: str = "",
     kind: str = "",
     call_id: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     if not str(event_id or "").strip() and not (str(kind or "").strip() and str(call_id or "").strip()):
         _raise(400, "missing_trace_event_ref", "缺少过程事件标识")
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     service = _history_service_for_execution_mode(session, resolved_execution_mode)
     data = service.get_message_trace_event(
@@ -3327,11 +3412,14 @@ def get_history_trace_event(
     return data
 
 
+@with_chat_target
 def get_answer_translation_retry_target(
     manager: MultiBotManager, alias: str, user_id: int, message_id: str,
     agent_id: str = "main", execution_mode: str = "",
+    *,
+    target: ChatTarget | None = None,
 ) -> tuple[ChatHistoryService, dict[str, Any] | None]:
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     mode = _resolve_requested_execution_mode(execution_mode, profile)
     history = _history_service_for_execution_mode(session, mode)
     return history, history.get_scoped_message(session, message_id)
@@ -3339,20 +3427,9 @@ def get_answer_translation_retry_target(
 
 def _reset_user_session_locked(manager: MultiBotManager, alias: str, user_id: int, agent_id: str = "main") -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
-    profile = get_profile_or_raise(manager, alias)
-    bot_id = resolve_session_bot_id(manager, alias)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
-
-    with sessions_lock:
-        session = sessions.get((bot_id, user_id, normalized_agent_id))
-
-    if session is None:
-        if normalized_agent_id == "main":
-            session = get_session_for_alias(manager, alias, user_id)
-        else:
-            _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
-    else:
-        session = align_session_paths(session, profile.working_dir)
+    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
+    bot_id = session.bot_id
 
     with session._lock:
         if bool(session.is_processing):
@@ -3408,6 +3485,8 @@ async def reset_user_session(
 
 
 def _find_active_cluster_run_for_session(alias: str, user_id: int, session: UserSession) -> Any | None:
+    if session.web_session_id:
+        return None
     user_id = chat_session_user_id(user_id)
     conversation_id = str(session.active_conversation_id or "").strip()
     if not conversation_id:
@@ -3441,7 +3520,7 @@ def _control_history(session: UserSession) -> tuple[dict[str, Any], str | None, 
     try:
         row = conn.execute(
             "SELECT * FROM conversations WHERE id = ? AND bot_id = ? AND user_id = ? AND agent_id = ?",
-            (conversation_id, session.bot_id, chat_session_user_id(session.user_id), session.agent_id),
+            (conversation_id, session.bot_id, chat_session_user_id(session.user_id), session.storage_scope),
         ).fetchone()
         if row is None:
             return {}, None, None
@@ -3532,6 +3611,7 @@ def _check_expected_control(expected: dict[str, Any] | None, actual: dict[str, A
         _raise(409, "execution_changed", "当前任务已变化，请刷新面板后重新确认停止")
 
 
+@with_chat_target
 async def kill_user_process(
     manager: MultiBotManager,
     alias: str,
@@ -3541,15 +3621,12 @@ async def kill_user_process(
     *,
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
     expected_control: dict[str, Any] | None = None,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
-    profile = get_profile_or_raise(manager, alias)
+    profile, _agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     resolved_execution_mode = _resolve_requested_execution_mode(execution_mode, profile)
     normalized_agent_id = str(agent_id or "main").strip().lower() or "main"
-    if normalized_agent_id == "main":
-        session = get_session_for_alias(manager, alias, user_id)
-    else:
-        _profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, normalized_agent_id)
     with session._lock:
         _check_expected_conversation(session, expected_conversation_id)
         if session._control_stop_task is not None:
@@ -4044,7 +4121,7 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
             cost_stats_user=wakeup_cost_user,
         )
     except WebApiError as exc:
-        if exc.code in {"session_busy", "conversation_changed", "execution_changed", "conversation_switch_blocked"}:
+        if exc.code in {"session_busy", "bot_chat_capacity", "chat_catalog_busy", "conversation_changed", "execution_changed", "conversation_switch_blocked"}:
             live_run = _CLUSTER_RUNTIME.get_run(run_id)
             if live_run is not None:
                 for task in claimed_tasks:
@@ -4052,6 +4129,15 @@ async def _run_cluster_parent_wakeup(manager: MultiBotManager, run_id: str) -> b
                         task.wakeup_sent = False
                         task.wakeup_pending = True
                         live_run.pending_parent_wakeup_task_ids.add(task.task_id)
+                if exc.code == "bot_chat_capacity":
+                    with _bot_chat_counts_lock:
+                        _capacity_blocked_wakeups.setdefault((id(manager), run.bot_alias), set()).add(run_id)
+                elif exc.code == "chat_catalog_busy":
+                    loop = asyncio.get_running_loop()
+                    after_chat_catalog_change(
+                        manager, run.bot_alias,
+                        functools.partial(loop.call_soon_threadsafe, _schedule_cluster_parent_wakeup, manager, run_id),
+                    )
         logger.debug("集群父会话唤醒未启动 run_id=%s code=%s", run_id, exc.code)
         return False
     except Exception:
@@ -4937,6 +5023,7 @@ async def _resolve_cli_context_usage_bounded(
     session_id: str | None,
     *,
     cwd_hint: str | None,
+    telemetry_path: str | None = None,
     timeout_seconds: float = CLI_CONTEXT_USAGE_RESOLVE_TIMEOUT_SECONDS,
 ) -> dict[str, Any] | None:
     normalized_session_id = str(session_id or "").strip()
@@ -4946,7 +5033,7 @@ async def _resolve_cli_context_usage_bounded(
     loop = asyncio.get_running_loop()
     task = loop.run_in_executor(
         _CLI_CONTEXT_USAGE_EXECUTOR,
-        resolve_cli_context_usage,
+        functools.partial(resolve_cli_context_usage, telemetry_path=telemetry_path) if telemetry_path else resolve_cli_context_usage,
         normalized_cli_type,
         normalized_session_id,
         cwd_hint,
@@ -5219,7 +5306,7 @@ class _StreamPreviewState:
 
 
 def _codex_server_owner(session: UserSession) -> tuple[int, int, str]:
-    return (session.bot_id, chat_session_user_id(session.user_id), session.agent_id)
+    return (session.bot_id, chat_session_user_id(session.user_id), session.storage_scope)
 
 
 def _invalidate_codex_server_voice(session: UserSession, conversation_id: str) -> None:
@@ -5293,7 +5380,7 @@ def get_codex_server_voice_session(
     except KeyError:
         _raise(409, "voice_session_changed", "当前聊天会话已失效")
     if (conversation.get("bot_id") != session.bot_id or conversation.get("user_id") != session.user_id
-            or str(conversation.get("agent_id") or "main") != session.agent_id
+            or str(conversation.get("agent_id") or "main") != session.storage_scope
             or conversation.get("working_dir") != session.working_dir or conversation.get("archived_at")
             or conversation.get("native_provider") not in {"", None, "codex", "codex_server"}):
         _raise(409, "voice_session_changed", "当前聊天会话不支持语音")
@@ -6226,10 +6313,11 @@ async def _stream_cli_chat(
     suppress_agent_prompt: bool = False,
     translate_chat: bool = True,
     cost_stats_user: str | None = None,
+    target: ChatTarget | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     total_started_at = time.perf_counter()
     user_id = chat_session_user_id(user_id)
-    profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if profile_override is not None:
         profile = copy.deepcopy(profile_override)
     cli_type = normalize_cli_type(profile.cli_type)
@@ -6274,10 +6362,13 @@ async def _stream_cli_chat(
     env = _build_cli_env(cli_type)
     if remote_chat is not None:
         env.update(remote_chat.env)
+    telemetry_path = None
     if cli_type == "antigravity":
-        env["TCB_ANTIGRAVITY_STATUSLINE_PATH"] = str(
-            get_antigravity_statusline_telemetry_path(cwd_hint=session.working_dir)
-        )
+        path = get_antigravity_statusline_telemetry_path(cwd_hint=session.working_dir)
+        if session.web_session_id:
+            path = path.with_name(f"{path.stem}-{session.web_session_id}{path.suffix}")
+            telemetry_path = str(path)
+        env["TCB_ANTIGRAVITY_STATUSLINE_PATH"] = str(path)
     if cluster_run_id:
         env["TCB_CLUSTER_ACTIVE"] = "1"
         env["TCB_CLUSTER_BOT_ALIAS"] = alias
@@ -6910,6 +7001,7 @@ async def _stream_cli_chat(
                             cli_type,
                             status_session_id,
                             cwd_hint=session.working_dir,
+                            telemetry_path=telemetry_path,
                         )
                         if server_runtime is not None and server_runtime.context_usage:
                             status_context_usage = server_runtime.context_usage
@@ -7212,6 +7304,7 @@ async def _stream_cli_chat(
                 cli_type,
                 native_session_id,
                 cwd_hint=session.working_dir,
+                telemetry_path=telemetry_path,
             )
             if server_runtime is not None and server_runtime.context_usage:
                 context_usage = server_runtime.context_usage
@@ -7433,6 +7526,7 @@ async def run_cli_chat(
     cluster_run_id: str = "",
     cluster_mentions: list[dict[str, Any]] | None = None,
     cost_stats_user: str | None = None,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     last_event: dict[str, Any] | None = None
     events = _stream_cli_chat(
@@ -7448,6 +7542,7 @@ async def run_cli_chat(
         cluster_mentions=cluster_mentions,
         include_trace=False,
         cost_stats_user=cost_stats_user,
+        **({"target": target} if target is not None else {}),
     )
     try:
         async for event in events:
@@ -7484,6 +7579,7 @@ def _normalized_chat_text(
     return text
 
 
+@with_chat_target
 async def steer_chat(
     manager: MultiBotManager,
     alias: str,
@@ -7499,9 +7595,10 @@ async def steer_chat(
     session_epoch: int | str | None = None,
     codex_turn_id: str = "",
     request_id: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     """Append input to the active codex app-server turn without opening a reader."""
-    profile, agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    profile, agent, session = target or get_chat_session_for_alias(manager, alias, user_id, agent_id)
     if normalize_cli_type(profile.cli_type) != "codex_server":
         _raise(409, "steering_unsupported_cli", "当前 CLI 不支持运行中追加消息")
     requested_mode = str(execution_mode or "").strip().lower()
@@ -8088,12 +8185,16 @@ async def run_chat(
     cluster_run_id: str = "",
     cost_stats_user: str | None = None,
     skip_input_translation: bool = False,
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
     shared_user_id = chat_session_user_id(user_id)
-    _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, shared_user_id, agent_id))
+    profile, _agent, session = target
     cluster_run = None
-    with _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id):
+    with (
+        _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id),
+        _bot_chat_slot(manager, session, profile),
+    ):
         resolved_execution_mode = _resolve_chat_execution_mode(profile, execution_mode, session)
         session._execution_mode = resolved_execution_mode
         main_conversation_id = ""
@@ -8147,6 +8248,7 @@ async def run_chat(
                 cluster_mentions=list(mentions or []),
                 allow_unsafe_cli=allow_unsafe_cli,
                 cost_stats_user=cost_stats_user,
+                target=target,
             )
         finally:
             if cluster_run:
@@ -8185,16 +8287,21 @@ async def stream_chat(
     endless_parent_message_id: str = "",
     skip_input_translation: bool = False,
     internal_continuation: bool = False,
+    target: ChatTarget | None = None,
+    reserved_slot: BotChatSlot | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     endless_requested = bool(endless_mode)
     endless_started = False
     session: UserSession | None = None
     cluster_run = None
     try:
-        profile = get_profile_or_raise(manager, alias)
         shared_user_id = chat_session_user_id(user_id)
-        _profile, _agent, session = get_chat_session_for_alias(manager, alias, shared_user_id, agent_id)
-        with _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id):
+        target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, shared_user_id, agent_id))
+        profile, _agent, session = target
+        with (
+            _session_lifecycle_scope(session, expected_conversation_id=expected_conversation_id),
+            _bot_chat_slot(manager, session, profile, reserved_slot),
+        ):
             if endless_requested:
                 _set_endless_session_state(session, active=True, attempt=0)
                 endless_started = True
@@ -8260,6 +8367,7 @@ async def stream_chat(
                         allow_unsafe_cli=allow_unsafe_cli,
                         include_trace=include_trace,
                         stream_protocol_version=normalized_stream_protocol_version,
+                        target=target,
                     )
 
                 events = (
@@ -8276,19 +8384,22 @@ async def stream_chat(
                     else cli_attempt(user_text, request)
                 )
                 async with aclosing(events):
-                    async for event in _stream_with_telegram_completion_notifications(
-                        events,
-                        alias=alias,
-                        agent_id=agent_id,
-                        source_chat_id=telegram_origin_chat_id,
-                        source_channel=("telegram" if telegram_origin_chat_id is not None else source_channel),
-                        source_external_id=(
-                            str(telegram_origin_chat_id)
-                            if telegram_origin_chat_id is not None
-                            else source_external_id
-                        ),
-                    ):
-                        yield event
+                    outbound = events
+                    if not session.web_session_id:
+                        outbound = _stream_with_telegram_completion_notifications(
+                            events,
+                            alias=alias,
+                            agent_id=agent_id,
+                            source_chat_id=telegram_origin_chat_id,
+                            source_channel=("telegram" if telegram_origin_chat_id is not None else source_channel),
+                            source_external_id=(
+                                str(telegram_origin_chat_id)
+                                if telegram_origin_chat_id is not None
+                                else source_external_id
+                            ),
+                        )
+                    async for event in outbound:
+                        yield {**event, "session_id": session.web_session_id} if session.web_session_id else event
             finally:
                 if cluster_run:
                     _cleanup_cluster_run_control_if_idle(cluster_run.run_id)
@@ -8358,6 +8469,7 @@ async def execute_shell_command(manager: MultiBotManager, alias: str, user_id: i
     }
 
 
+@with_chat_target
 async def execute_plan(
     manager: MultiBotManager,
     alias: str,
@@ -8367,12 +8479,14 @@ async def execute_plan(
     title: str = "",
     agent_id: str = "main",
     execution_mode: str = "",
+    target: ChatTarget | None = None,
 ) -> dict[str, Any]:
     user_id = chat_session_user_id(user_id)
     plan_text = str(content or "").strip()
     if not plan_text:
         _raise(400, "empty_plan", "方案不能为空")
-    profile, _agent, session = get_chat_session_for_alias(manager, alias, user_id, agent_id)
+    target = target or ChatTarget(*get_chat_session_for_alias(manager, alias, user_id, agent_id))
+    profile, _agent, session = target
     if profile.remote_workspace:
         from bot.remote_workspace import get_remote_workspace_service
 
@@ -8389,6 +8503,7 @@ async def execute_plan(
         title=title or "执行方案",
         agent_id=agent_id,
         execution_mode=execution_mode,
+        target=target,
     )
     execution_message = build_plan_execution_prompt(saved.relative_path)
     return {
@@ -8526,9 +8641,9 @@ async def remove_managed_bot_with_history(
     favorite_deleted = 0
     if should_delete_history:
         chat_store = ChatStore(Path(profile.working_dir))
-        favorite_deleted = ChatFavoriteStore(Path(profile.working_dir)).delete_favorites_for_bot(bot_id=bot_id)
-        history_deleted = chat_store.delete_bot_history(bot_id=bot_id)
-        clear_bot_sessions(bot_id)
+        favorite_deleted = ChatFavoriteStore(Path(profile.working_dir)).delete_favorites_for_bot(bot_id=bot_id, bot_alias=profile.alias)
+        history_deleted = chat_store.delete_bot_history(bot_id=bot_id, bot_alias=profile.alias)
+        clear_bot_sessions(bot_id, bot_alias=profile.alias)
     try:
         await manager.remove_bot(alias)
     except ValueError as exc:
@@ -8587,23 +8702,24 @@ async def update_bot_execution_config(manager: MultiBotManager, alias: str, data
     return {"bot": build_bot_summary(manager, alias)}
 
 
+def sync_cluster_bot_alias(old_alias: str, new_alias: str) -> None:
+    _CLUSTER_RUNTIME.rename_bot_alias(old_alias, new_alias)
+
+
 async def rename_managed_bot(manager: MultiBotManager, alias: str, new_alias: str) -> dict[str, Any]:
-    profile = get_profile_or_raise(manager, alias)
-    old_alias = profile.alias
-    old_bot_id = resolve_session_bot_id(manager, old_alias)
-    workdir = profile.working_dir
-    profile = await manager.rename_bot(alias, new_alias)
-    new_bot_id = resolve_session_bot_id(manager, profile.alias)
-    rekey_bot_sessions(old_bot_id, new_bot_id, old_alias=old_alias, new_alias=profile.alias)
-    rename_stored_bot_sessions(old_bot_id, new_bot_id)
-    ChatStore(Path(workdir)).rename_bot_identity(
-        old_bot_id=old_bot_id,
-        new_bot_id=new_bot_id,
-        old_alias=old_alias,
-        new_alias=profile.alias,
-    )
-    _CLUSTER_RUNTIME.rename_bot_alias(old_alias, profile.alias)
-    notify_scheduler_bot_renamed(old_alias, profile.alias)
+    new_alias = str(new_alias or "").strip().lower()
+    if manager.on_chat_renamed is None:
+        manager.on_chat_renamed = sync_cluster_bot_alias
+    with (
+        reserve_chat_catalog(manager, alias, changing_owner=True),
+        reserve_chat_catalog(manager, new_alias, changing_owner=True) if new_alias != alias else nullcontext(),
+    ):
+        try:
+            profile = await manager.rename_bot(alias, new_alias)
+        except ChatRenamePending as exc:
+            raise WebApiError(503, "bot_rename_pending", str(exc)) from exc
+        except ValueError as exc:
+            raise WebApiError(400, "invalid_bot_config", str(exc)) from exc
     return {"bot": build_bot_summary(manager, profile.alias)}
 
 
@@ -8628,6 +8744,11 @@ def _reset_session_for_workdir_change(session: UserSession, working_dir: str) ->
 
 def _get_bot_sessions_for_workdir_change(manager: MultiBotManager, alias: str) -> list[UserSession]:
     bot_id = resolve_session_bot_id(manager, alias)
+    profile = get_profile_or_raise(manager, alias)
+    if not profile.remote_workspace:
+        shared_user_id = chat_session_user_id()
+        for item in list_web_chat_sessions(bot_id, alias, shared_user_id):
+            get_web_chat_session(bot_id, alias, shared_user_id, profile.working_dir, item["id"])
     return [session for session in get_bot_sessions(alias) if session.bot_id == bot_id]
 
 
@@ -8638,6 +8759,18 @@ async def update_bot_workdir(
     user_id: Optional[int] = None,
     force_reset: bool = False,
     remote_workspace: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    with reserve_chat_catalog(manager, alias, changing_owner=True):
+        return await _update_bot_workdir(manager, alias, working_dir, user_id, force_reset, remote_workspace)
+
+
+async def _update_bot_workdir(
+    manager: MultiBotManager,
+    alias: str,
+    working_dir: str,
+    user_id: int | None,
+    force_reset: bool,
+    remote_workspace: dict[str, Any] | None,
 ) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     if remote_workspace is not None:
@@ -8652,7 +8785,10 @@ async def update_bot_workdir(
         if not os.path.isdir(resolved_working_dir):
             _raise(400, "invalid_working_dir", f"工作目录不存在: {resolved_working_dir}")
         target_changed = resolved_working_dir != profile.working_dir
-    target_sessions = _get_bot_sessions_for_workdir_change(manager, alias) if target_changed or force_reset else []
+    target_sessions = (
+        await asyncio.to_thread(_get_bot_sessions_for_workdir_change, manager, alias)
+        if target_changed or force_reset else []
+    )
     if target_changed:
         for target_session in target_sessions:
             service = _get_chat_history_service(target_session)
@@ -8721,7 +8857,7 @@ async def update_global_prompt_presets(
 def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
     items = []
     with sessions_lock:
-        for (bot_id, user_id, agent_id), session in sessions.items():
+        for (bot_id, user_id, _scope), session in sessions.items():
             if session.bot_alias != alias:
                 continue
             if not session.is_processing:
@@ -8730,7 +8866,8 @@ def get_processing_sessions(alias: str) -> list[dict[str, Any]]:
                 {
                     "bot_id": bot_id,
                     "user_id": user_id,
-                    "agent_id": agent_id,
+                    "agent_id": session.agent_id,
+                    **({"session_id": session.web_session_id} if session.web_session_id else {}),
                     "working_dir": session.working_dir,
                     "message_count": session.message_count,
                 }

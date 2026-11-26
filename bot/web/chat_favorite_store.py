@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from bot.models import normalize_session_bot_alias
 from bot.runtime_paths import get_chat_favorites_path
 
 
@@ -32,6 +33,7 @@ class FavoriteScope:
     user_id: int
     agent_id: str = "main"
     execution_mode: str = "cli"
+    bot_alias: str = ""
 
 
 def _utc_now() -> str:
@@ -52,6 +54,7 @@ def normalize_favorite_scope(scope: FavoriteScope) -> FavoriteScope:
         user_id=int(scope.user_id),
         agent_id=_normalize_agent_id(scope.agent_id),
         execution_mode=_normalize_execution_mode(scope.execution_mode),
+        bot_alias=normalize_session_bot_alias(scope.bot_alias),
     )
 
 
@@ -91,10 +94,13 @@ def build_favorite_item(
     favorited_at: str | None = None,
 ) -> dict[str, Any]:
     normalized_scope = normalize_favorite_scope(scope)
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    if normalized_scope.bot_alias and normalized_scope.bot_alias != bot_alias:
+        raise ValueError("favorite scope belongs to a different Bot")
     normalized_answer = str(answer_text or "")
     payload: dict[str, Any] = {
         "bot_id": normalized_scope.bot_id,
-        "bot_alias": str(bot_alias or "").strip(),
+        "bot_alias": bot_alias,
         "user_id": normalized_scope.user_id,
         "agent_id": normalized_scope.agent_id,
         "execution_mode": normalized_scope.execution_mode,
@@ -164,21 +170,29 @@ class ChatFavoriteStore:
         except OSError:
             pass
 
-    def _read_payload(self) -> dict[str, Any]:
-        if not self.path.is_file():
-            return {"version": FAVORITES_SCHEMA_VERSION, "items": []}
+    def _read_payload(self, *, strict: bool = False) -> dict[str, Any]:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"version": FAVORITES_SCHEMA_VERSION, "items": []}
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            if strict:
+                raise
             self._backup_corrupt_file()
             return {"version": FAVORITES_SCHEMA_VERSION, "items": []}
         if not isinstance(payload, dict):
+            if strict:
+                raise ValueError("invalid chat favorite store")
             self._backup_corrupt_file()
             return {"version": FAVORITES_SCHEMA_VERSION, "items": []}
         items = payload.get("items")
         if not isinstance(items, list):
+            if strict:
+                raise ValueError("invalid chat favorite list")
             return {"version": FAVORITES_SCHEMA_VERSION, "items": []}
         normalized = [item for item in (_normalize_item(raw) for raw in items) if item is not None]
+        if strict and len(normalized) != len(items):
+            raise ValueError("invalid chat favorite")
         return {"version": FAVORITES_SCHEMA_VERSION, "items": normalized}
 
     def _write_payload(self, payload: dict[str, Any]) -> None:
@@ -192,10 +206,18 @@ class ChatFavoriteStore:
         tmp_path.replace(self.path)
 
     @staticmethod
+    def _matches_owner(item: dict[str, Any], bot_id: int, bot_alias: str) -> bool:
+        if int(item.get("bot_id") or 0) != int(bot_id):
+            return False
+        if bot_alias:
+            return normalize_session_bot_alias(item.get("bot_alias")) == bot_alias
+        return not _normalize_agent_id(item.get("agent_id")).startswith("@")
+
+    @staticmethod
     def _matches_scope(item: dict[str, Any], scope: FavoriteScope) -> bool:
         normalized_scope = normalize_favorite_scope(scope)
         return (
-            int(item.get("bot_id") or 0) == normalized_scope.bot_id
+            ChatFavoriteStore._matches_owner(item, normalized_scope.bot_id, normalized_scope.bot_alias)
             and int(item.get("user_id") or 0) == normalized_scope.user_id
             and _normalize_agent_id(item.get("agent_id")) == normalized_scope.agent_id
             and _normalize_execution_mode(item.get("execution_mode")) == normalized_scope.execution_mode
@@ -232,12 +254,12 @@ class ChatFavoriteStore:
             existing_items = list(payload["items"])
             created_at = normalized["favorited_at"]
             next_items: list[dict[str, Any]] = []
-            replaced = False
             for existing in existing_items:
                 existing_id = make_favorite_id(existing)
-                if existing_id == favorite_id or str(existing.get("id") or "") == favorite_id:
+                if existing["bot_alias"] == normalized["bot_alias"] and (
+                    existing_id == favorite_id or str(existing.get("id") or "") == favorite_id
+                ):
                     created_at = str(existing.get("favorited_at") or created_at)
-                    replaced = True
                     continue
                 next_items.append(existing)
             normalized["favorited_at"] = created_at
@@ -245,6 +267,37 @@ class ChatFavoriteStore:
             payload["items"] = sorted(next_items, key=lambda value: str(value.get("favorited_at") or ""), reverse=True)
             self._write_payload(payload)
             return dict(normalized)
+
+    def rename_bot(self, old_bot_id: int, new_bot_id: int, old_alias: str, new_alias: str) -> int:
+        old_alias = normalize_session_bot_alias(old_alias)
+        new_alias = normalize_session_bot_alias(new_alias)
+        if not old_alias or not new_alias:
+            raise ValueError("missing Bot alias for favorites rename")
+        if (old_bot_id, old_alias) == (new_bot_id, new_alias):
+            return 0
+        with self._lock:
+            payload = self._read_payload(strict=True)
+            kept = []
+            moved = []
+            for item in payload["items"]:
+                if self._matches_owner(item, old_bot_id, old_alias):
+                    updated = {**item, "bot_id": new_bot_id, "bot_alias": new_alias}
+                    updated["id"] = make_favorite_id(updated)
+                    moved.append(updated)
+                else:
+                    kept.append(item)
+            if moved:
+                # A destination favorite can already exist if a user saved the answer again.
+                destination_ids = {
+                    make_favorite_id(item) for item in kept if self._matches_owner(item, new_bot_id, new_alias)
+                }
+                for updated in moved:
+                    if updated["id"] not in destination_ids:
+                        kept.append(updated)
+                        destination_ids.add(updated["id"])
+                payload["items"] = kept
+                self._write_payload(payload)
+            return len(moved)
 
     def delete_favorite(self, favorite_id: str, scope: FavoriteScope) -> bool:
         normalized_id = str(favorite_id or "").strip()
@@ -297,7 +350,9 @@ class ChatFavoriteStore:
         *,
         bot_id: int,
         user_id: int,
+        bot_alias: str = "",
     ) -> int:
+        bot_alias = normalize_session_bot_alias(bot_alias)
         normalized_ids = {str(conversation_id or "").strip() for conversation_id in conversation_ids}
         normalized_ids.discard("")
         if not normalized_ids:
@@ -310,7 +365,7 @@ class ChatFavoriteStore:
                 for item in previous_items
                 if not (
                     str(item.get("conversation_id") or "").strip() in normalized_ids
-                    and int(item.get("bot_id") or 0) == int(bot_id)
+                    and self._matches_owner(item, bot_id, bot_alias)
                     and int(item.get("user_id") or 0) == int(user_id)
                 )
             ]
@@ -333,11 +388,12 @@ class ChatFavoriteStore:
             self._write_payload(payload)
             return deleted_count
 
-    def delete_favorites_for_bot(self, *, bot_id: int) -> int:
+    def delete_favorites_for_bot(self, *, bot_id: int, bot_alias: str = "") -> int:
+        bot_alias = normalize_session_bot_alias(bot_alias)
         with self._lock:
             payload = self._read_payload()
             previous_items = list(payload["items"])
-            next_items = [item for item in previous_items if int(item.get("bot_id") or 0) != int(bot_id)]
+            next_items = [item for item in previous_items if not self._matches_owner(item, bot_id, bot_alias)]
             deleted_count = len(previous_items) - len(next_items)
             if deleted_count <= 0:
                 return 0

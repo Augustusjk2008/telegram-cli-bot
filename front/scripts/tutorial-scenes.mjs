@@ -544,7 +544,7 @@ export const SCENES = [
       panel: (page) => [
         page.getByText("历史会话", { exact: true }),
         page.getByRole("button", { name: "关闭历史会话" }).first(),
-        page.getByRole("button", { name: /^当前会话/ }),
+        page.locator('aside.workbench-sheet-panel [aria-current="true"]'),
       ],
     },
   },

@@ -7,14 +7,17 @@ import json
 import logging
 import math
 import os
+import threading
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from bot import app_settings
 from bot.cli import resolve_cli_executable, validate_cli_type
 from bot.chat_identity import chat_session_user_id
+from bot.chat_rename import ChatRenamePending, has_legacy_collision, migrate_chat_ownership, rename_default_permissions
 from bot.cli_params import (
     CliParamsConfig,
     coerce_param_value,
@@ -38,7 +41,7 @@ from bot.profile_store import (
     persist_main_profile,
     save_managed_profiles,
 )
-from bot.sessions import update_bot_alias, update_bot_working_dir
+from bot.sessions import get_bot_sessions, update_bot_working_dir
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> 
     for session in get_bot_sessions(normalized_alias):
         if chat_session_user_id(session.user_id) != normalized_user_id:
             continue
-        if str(session.agent_id or "main").strip().lower() != normalized_agent_id:
+        if session.storage_scope != normalized_agent_id:
             continue
         with session._lock:
             had_binding = bool(session.deepseek_session_id)
@@ -66,7 +69,7 @@ def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> 
 
     from bot.session_store import load_session, save_session
 
-    stored = load_session(bot_id, normalized_user_id, agent_id=normalized_agent_id)
+    stored = load_session(bot_id, normalized_user_id, agent_id=normalized_agent_id, bot_alias=normalized_alias)
     if not isinstance(stored, dict) or not stored.get("deepseek_session_id"):
         return False
     save_session(
@@ -84,14 +87,21 @@ def _clear_deepseek_session_binding(alias: str, user_id: int, agent_id: str) -> 
         session_epoch=stored.get("session_epoch"),
         active_conversation_id=stored.get("active_conversation_id"),
         agent_prompt_hash_seen=stored.get("agent_prompt_hash_seen"),
+        web_session_id=stored.get("web_session_id", ""),
+        web_session_title=stored.get("web_session_title", ""),
+        bot_alias=normalized_alias,
     )
     return True
 
 
-async def _close_codex_server_runtimes(alias: str, *, require_idle: bool = True) -> None:
+async def _close_codex_server_runtimes(
+    alias: str, *, require_idle: bool = True, named_only: bool = False,
+) -> None:
     from bot.codex_server.runtime import get_codex_server_registry
     from bot.sessions import get_bot_sessions
     targets = get_bot_sessions(alias)
+    if named_only:
+        targets = [session for session in targets if session.web_session_id]
     if require_idle:
         for session in targets:
             with session._lock:
@@ -99,11 +109,14 @@ async def _close_codex_server_runtimes(alias: str, *, require_idle: bool = True)
                     raise ValueError("当前 Bot 有任务运行中，先终止或等待完成后再修改")
     registry = get_codex_server_registry()
     for session in targets:
-        await registry.close_owner((session.bot_id, session.user_id, session.agent_id))
+        await registry.close_owner((session.bot_id, session.user_id, session.storage_scope))
 
 
 class MultiBotManager:
-    def __init__(self, main_profile: BotProfile, storage_file: str):
+    def __init__(
+        self, main_profile: BotProfile, storage_file: str, *,
+        rename_bot_permissions: Callable[[str, str], None] = rename_default_permissions,
+    ):
         self.main_profile = main_profile
         self.remote_bridge_url = ""
         self.storage_file = Path(storage_file)
@@ -119,16 +132,29 @@ class MultiBotManager:
         )
         self.managed_profiles: Dict[str, BotProfile] = {}
         self._lock = asyncio.Lock()
+        self._rename_lock = threading.RLock()
+        self._pending_renames: dict[str, BotProfile] = {}
+        self.rename_bot_permissions = rename_bot_permissions
+        self.on_chat_renamed: Callable[[str, str], None] | None = None
 
         self._load_profiles()
         self._apply_persisted_main_profile()
         self._apply_persisted_git_commit_cli_configs()
+        pending = [p for p in self.managed_profiles.values() if p.pending_rename_to]
+        for profile in pending:
+            self._pending_renames[profile.alias] = self._pending_renames[profile.pending_rename_to] = profile
+        for profile in pending:
+            try:
+                self.ensure_chat_rename_ready(profile.alias)
+            except ChatRenamePending:
+                logger.exception("托管 Bot 改名尚未完成，将在下次访问时重试: %s", profile.alias)
 
     def _load_profiles(self) -> None:
         self.managed_profiles = load_managed_profiles(self.storage_file)
 
     def _save_profiles(self, *, removed_alias: str = "") -> None:
-        save_managed_profiles(self.storage_file, self.managed_profiles, removed_alias=removed_alias)
+        with self._rename_lock:
+            save_managed_profiles(self.storage_file, self.managed_profiles, removed_alias=removed_alias)
 
     def load_archived_profiles(self) -> dict[str, BotProfile]:
         return load_managed_profiles(self.storage_file, archived=True)
@@ -204,7 +230,52 @@ class MultiBotManager:
     def _persist_git_commit_cli_config(self, config: GitCommitMessageCliConfig | None) -> None:
         self._save_git_commit_cli_config_store(config)
 
+    def ensure_chat_rename_ready(self, alias: str) -> None:
+        """Finish a pending rename before either identity can access the Bot."""
+        alias = str(alias or "").strip().lower()
+        with self._rename_lock:
+            profile = self._pending_renames.get(alias)
+            if profile is None:
+                return
+            old_alias, new_alias = profile.alias, profile.pending_rename_to
+            try:
+                self._validate_alias(new_alias)
+                if (old_alias == self.main_profile.alias or new_alias == self.main_profile.alias
+                        or new_alias in self.managed_profiles or new_alias in self.load_archived_profiles()):
+                    raise ValueError("Bot 改名目标已被占用")
+                if not profile.pending_rename_skip_legacy and has_legacy_collision(self, profile, new_alias):
+                    profile.pending_rename_skip_legacy = True
+                    try:
+                        self._save_profiles()
+                    except BaseException:
+                        profile.pending_rename_skip_legacy = False
+                        raise
+                migrate_chat_ownership(self, profile, new_alias)
+
+                # Replace the intent and the profile alias in a single atomic file write.
+                renamed = replace(
+                    profile, alias=new_alias, pending_rename_to="", pending_rename_skip_legacy=False,
+                    last_renamed_from=old_alias,
+                )
+                profiles = dict(self.managed_profiles)
+                del profiles[old_alias]
+                profiles[new_alias] = renamed
+                save_managed_profiles(self.storage_file, profiles)
+            except Exception as exc:
+                raise ChatRenamePending(f"Bot {old_alias} 改名为 {new_alias} 尚未完成，请重试") from exc
+
+            del self.managed_profiles[old_alias]
+            profile.alias = new_alias
+            profile.pending_rename_to = ""
+            profile.pending_rename_skip_legacy = False
+            profile.last_renamed_from = old_alias
+            self.managed_profiles[new_alias] = profile
+            del self._pending_renames[old_alias], self._pending_renames[new_alias]
+            if self.on_chat_renamed is not None:
+                self.on_chat_renamed(old_alias, new_alias)
+
     def get_profile(self, alias: str) -> BotProfile:
+        self.ensure_chat_rename_ready(alias)
         normalized_alias = str(alias or "").strip().lower()
         if normalized_alias == self.main_profile.alias:
             return self.main_profile
@@ -213,6 +284,7 @@ class MultiBotManager:
         return self.managed_profiles[normalized_alias]
 
     def _get_profile_for_update(self, alias: str) -> BotProfile:
+        self.ensure_chat_rename_ready(alias)
         normalized_alias = str(alias or "").strip().lower()
         if normalized_alias == self.main_profile.alias:
             return self.main_profile
@@ -331,6 +403,7 @@ class MultiBotManager:
             )
 
         async with self._lock:
+            self.ensure_chat_rename_ready(normalized_alias)
             if normalized_alias in self.managed_profiles or normalized_alias in self.load_archived_profiles():
                 raise ValueError(f"alias `{normalized_alias}` 已存在")
             profile = BotProfile(
@@ -423,6 +496,7 @@ class MultiBotManager:
             raise ValueError(f"主 Bot `{normalized_alias}` 已在运行，无需启动")
 
         async with self._lock:
+            self.ensure_chat_rename_ready(normalized_alias)
             if normalized_alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
@@ -436,6 +510,7 @@ class MultiBotManager:
             raise ValueError(f"主 Bot `{normalized_alias}` 无法通过此接口停止，请使用系统级管理")
 
         async with self._lock:
+            self.ensure_chat_rename_ready(normalized_alias)
             if normalized_alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
@@ -448,6 +523,7 @@ class MultiBotManager:
             raise ValueError(f"主 Bot `{normalized_alias}` 无法归档")
 
         async with self._lock:
+            self.ensure_chat_rename_ready(normalized_alias)
             if normalized_alias not in self.managed_profiles:
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             profile = self.managed_profiles[normalized_alias]
@@ -550,7 +626,12 @@ class MultiBotManager:
         self._validate_alias(normalized_new_alias)
 
         async with self._lock:
+            self.ensure_chat_rename_ready(normalized_alias)
+            self.ensure_chat_rename_ready(normalized_new_alias)
             if normalized_alias not in self.managed_profiles:
+                target = self.managed_profiles.get(normalized_new_alias)
+                if target and target.last_renamed_from == normalized_alias and normalized_alias not in self.load_archived_profiles():
+                    return target
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             if normalized_new_alias == normalized_alias:
                 raise ValueError("新旧 alias 不能相同")
@@ -558,13 +639,24 @@ class MultiBotManager:
                     or normalized_new_alias in self.load_archived_profiles()):
                 raise ValueError(f"alias `{normalized_new_alias}` 已存在")
 
-            profile = self.managed_profiles.pop(normalized_alias)
-            profile.alias = normalized_new_alias
-            self.managed_profiles[normalized_new_alias] = profile
-
-            update_bot_alias(normalized_alias, normalized_new_alias)
-            self._save_profiles()
-            return profile
+            await _close_codex_server_runtimes(normalized_alias, named_only=True)
+            with self._rename_lock:
+                profile = self.managed_profiles[normalized_alias]
+                collision = has_legacy_collision(self, profile, normalized_new_alias)
+                for session in get_bot_sessions(normalized_alias):
+                    if session.web_session_id or not collision:
+                        session.flush_persistence()
+                profile.pending_rename_to = normalized_new_alias
+                profile.pending_rename_skip_legacy = collision
+                try:
+                    self._save_profiles()
+                except BaseException:
+                    profile.pending_rename_to = ""
+                    profile.pending_rename_skip_legacy = False
+                    raise
+                self._pending_renames[normalized_alias] = self._pending_renames[normalized_new_alias] = profile
+                self.ensure_chat_rename_ready(normalized_alias)
+                return profile
 
     async def set_bot_workdir(self, alias: str, working_dir: str, *, update_sessions: bool = False) -> None:
         normalized_alias = str(alias or "").strip().lower()

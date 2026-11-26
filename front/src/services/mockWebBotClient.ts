@@ -1,3 +1,4 @@
+import { bindChatSession } from "./chatSessionClient";
 import themeCatalog from "../../../bot/web/theme_catalog.json";
 import themePresets from "../../../bot/web/theme_presets.json";
 import { DEFAULT_CHAT_TRANSLATION_CONFIG } from "../utils/chatTranslation";
@@ -39,6 +40,8 @@ import type {
   AppUpdateStatus,
   AgentListResult,
   AgentScopedOptions,
+  ChatSessionList,
+  ChatSessionSummary,
   AgentSummary,
   ChatSendOptions,
   ConversationBulkDeleteResult,
@@ -64,6 +67,7 @@ import type {
   ChatMessage,
   ChatStatusUpdate,
   ChatTraceDetails,
+  ChatTraceEventRef,
   ChatTraceEvent,
   CliErrorStatsFilters,
   CliErrorStatsResult,
@@ -309,6 +313,11 @@ import { fallbackAgents } from "../utils/defaultAgents";
 const MOCK_RELEASE_URL = `https://github.com/example/cli-bridge/releases/tag/v${APP_VERSION}`;
 const MOCK_PERSISTENT_TERMINAL_STORAGE_KEY = "mock-web-persistent-terminal-session";
 const MEMBER_BOT_LIMIT = 10;
+
+function mockChatId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function emitMockUploadProgress(file: File, onProgress?: (progress: FileUploadProgress) => void) {
   onProgress?.({ uploadedBytes: 0, totalBytes: file.size, percent: 0 });
@@ -2155,6 +2164,54 @@ export class MockWebBotClient implements WebBotClient {
       },
     ]),
   );
+  private readonly namedSessions = new Map<string, ChatSessionSummary[]>();
+  private readonly chatSessionClients = new Map<string, WebBotClient>();
+  private readonly chatRuns = new Map<string, Map<string, AbortController>>();
+  private chatSessionId = "main";
+  private chatMessages = mockChatMessages;
+  private namedConversationMessages?: Map<string, ChatMessage[]>;
+
+  private chatSessionsEnabled(botAlias: string) {
+    const bot = this.bots.get(botAlias);
+    if (!bot) throw new WebApiClientError("Bot 不存在", { status: 404, code: "bot_not_found" });
+    return !bot.remoteWorkspace && !bot.archived;
+  }
+
+  async listChatSessions(botAlias: string): Promise<ChatSessionList> {
+    const enabled = this.chatSessionsEnabled(botAlias);
+    const named = enabled ? this.namedSessions.get(botAlias) || [] : [];
+    return { enabled, items: [{ id: "main", title: "主会话" }, ...named.map((item) => ({ ...item }))] };
+  }
+
+  async createChatSession(botAlias: string, title: string): Promise<ChatSessionSummary> {
+    if (!this.chatSessionsEnabled(botAlias)) {
+      throw new WebApiClientError("独立聊天会话仅支持本地工作区", { status: 409, code: "local_chat_sessions_unavailable" });
+    }
+    const name = title.trim();
+    if (!name || Array.from(name).length > 80) {
+      throw new WebApiClientError("会话名称须为 1 至 80 个字符", { status: 400, code: "invalid_session_title" });
+    }
+    const item = { id: `ses_${mockChatId()}`, title: name };
+    this.namedSessions.set(botAlias, [...(this.namedSessions.get(botAlias) || []), item]);
+    return { ...item };
+  }
+
+  forChatSession(botAlias: string, sessionId: string): WebBotClient {
+    return bindChatSession(this, this.chatSessionClients, botAlias, sessionId, () => {
+      if (!this.namedSessions.get(botAlias)?.some((item) => item.id === sessionId)) {
+        throw new WebApiClientError("聊天会话不存在", { status: 404, code: "session_not_found" });
+      }
+      const chat = Object.create(this) as this;
+      chat.chatSessionId = sessionId;
+      chat.chatMessages = {};
+      chat.namedConversationMessages = new Map();
+      chat.conversationsByBot = new Map();
+      chat.activeConversationByBot = new Map();
+      chat.favoriteAnswersByBot = new Map();
+      return chat;
+    });
+  }
+
   private globalPromptPresets: PromptPreset[] = [];
   private currentPaths = new Map<string, string>();
   private cliParamsByBot = new Map<string, Partial<Record<CliType, CliParamsPayload>>>();
@@ -3528,27 +3585,34 @@ export class MockWebBotClient implements WebBotClient {
     this.appendAgentChatMessage(botAlias, "main", message);
   }
 
+  private checkChatAgent(agentId = "main") {
+    if (this.chatSessionId !== "main" && agentId !== "main") {
+      throw new WebApiClientError("独立聊天会话仅支持主代理", { code: "invalid_agent_id", status: 400 });
+    }
+  }
+
   private agentKey(botAlias: string, agentId = "main") {
+    this.checkChatAgent(agentId);
     return `${botAlias}:${agentId || "main"}`;
   }
 
   private getAgentMessages(botAlias: string, agentId = "main") {
     if (agentId === "main") {
-      return mockChatMessages[botAlias] || [];
+      return this.chatMessages[botAlias] || [];
     }
     const key = this.agentKey(botAlias, agentId);
-    if (!mockChatMessages[key]) {
-      mockChatMessages[key] = [];
+    if (!this.chatMessages[key]) {
+      this.chatMessages[key] = [];
     }
-    return mockChatMessages[key];
+    return this.chatMessages[key];
   }
 
   private appendAgentChatMessage(botAlias: string, agentId: string, message: ChatMessage) {
     const key = agentId === "main" ? botAlias : this.agentKey(botAlias, agentId);
-    if (!mockChatMessages[key]) {
-      mockChatMessages[key] = [];
+    if (!this.chatMessages[key]) {
+      this.chatMessages[key] = [];
     }
-    mockChatMessages[key].push(message);
+    this.chatMessages[key].push(message);
   }
 
   private getConversationKey(botAlias: string, agentId = "main") {
@@ -4844,8 +4908,14 @@ export class MockWebBotClient implements WebBotClient {
       isMain: bot.isMain,
       messageCount: messages.length,
       historyCount: messages.length,
-      isProcessing: false,
-      agents: this.ensureAgents(botAlias).map((agent) => this.cloneAgent(agent)),
+      isProcessing: this.chatRuns.get(botAlias)?.has(this.chatRunKey(agentId)) || false,
+      ...(this.chatSessionId !== "main" ? {
+        activeConversationId: this.activeConversationByBot.get(this.getConversationKey(botAlias, agentId)) || "",
+        cluster: bot.cluster && { ...bot.cluster, enabled: false },
+      } : {}),
+      agents: this.ensureAgents(botAlias)
+        .filter((agent) => this.chatSessionId === "main" || agent.id === "main")
+        .map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
       busyAgentIds: [],
       executionMode: options.executionMode || bot.executionMode || "cli",
@@ -4878,7 +4948,7 @@ export class MockWebBotClient implements WebBotClient {
       agentId,
       cliType: this.getBotSummary(botAlias).cliType,
       workingDir: this.getBotSummary(botAlias).workingDir,
-      ...(agentId === "main" ? {
+      ...(agentId === "main" && this.chatSessionId === "main" ? {
         clusterTeam: readMockChatScript()?.clusterTeam ?? { version: 1, assignments: [] },
         clusterTeamRevision: 0,
       } : {}),
@@ -4905,7 +4975,7 @@ export class MockWebBotClient implements WebBotClient {
     const now = new Date().toISOString();
     const bot = this.getBotSummary(botAlias);
     const conversation: ConversationSummary = {
-      id: `mock-conv-${Date.now()}`,
+      id: this.namedConversationMessages ? mockChatId() : `mock-conv-${Date.now()}`,
       title: title.trim() || "新会话",
       lastMessagePreview: "",
       messageCount: 0,
@@ -4916,21 +4986,22 @@ export class MockWebBotClient implements WebBotClient {
       agentId,
       cliType: bot.cliType,
       workingDir: bot.workingDir,
-      ...(agentId === "main" ? {
+      ...(agentId === "main" && this.chatSessionId === "main" ? {
         clusterTeam: readMockChatScript()?.clusterTeam ?? { version: 1, assignments: [] },
         clusterTeamRevision: 0,
       } : {}),
       createdAt: now,
       updatedAt: now,
     };
-    const previous = this.ensureConversations(botAlias, agentId, options.executionMode).map((item) => ({ ...item, active: false }));
+    const conversations = this.namedConversationMessages
+      ? this.conversationsByBot.get(key) || []
+      : this.ensureConversations(botAlias, agentId, options.executionMode);
+    const previous = conversations.map((item) => ({ ...item, active: false }));
+    const current = this.activeConversationByBot.get(key);
+    if (current) this.namedConversationMessages?.set(current, this.getAgentMessages(botAlias, agentId));
     this.conversationsByBot.set(key, [conversation, ...previous]);
     this.activeConversationByBot.set(key, conversation.id);
-    if (agentId === "main") {
-      mockChatMessages[botAlias] = [];
-    } else {
-      mockChatMessages[this.agentKey(botAlias, agentId)] = [];
-    }
+    this.chatMessages[key] = [];
     return { conversation, messages: [] };
   }
 
@@ -4960,6 +5031,11 @@ export class MockWebBotClient implements WebBotClient {
       throw new WebApiClientError("未找到会话", { status: 404, code: "conversation_not_found" });
     }
     this.conversationsByBot.set(key, items);
+    const current = this.activeConversationByBot.get(key);
+    if (this.namedConversationMessages && current !== conversationId) {
+      if (current) this.namedConversationMessages.set(current, this.getAgentMessages(botAlias, agentId));
+      this.chatMessages[key] = this.namedConversationMessages.get(conversationId) || [];
+    }
     this.activeConversationByBot.set(key, conversationId);
     return { conversation, messages: this.getAgentMessages(botAlias, agentId) };
   }
@@ -5042,14 +5118,11 @@ export class MockWebBotClient implements WebBotClient {
     }
     const wasActive = activeConversationId === conversationId || conversation.active;
     const nextItems = items.filter((item) => item.id !== conversationId);
+    this.namedConversationMessages?.delete(conversationId);
     this.conversationsByBot.set(key, nextItems);
     if (wasActive) {
       this.activeConversationByBot.set(key, "");
-      if (agentId === "main") {
-        mockChatMessages[botAlias] = [];
-      } else {
-        mockChatMessages[this.agentKey(botAlias, agentId)] = [];
-      }
+      this.chatMessages[key] = [];
     }
     return {
       deletedConversationId: conversationId,
@@ -5075,14 +5148,11 @@ export class MockWebBotClient implements WebBotClient {
     }
     const wasActive = (this.activeConversationByBot.get(key) || "") === conversationId || conversation.active;
     const nextItems = items.filter((item) => item.id !== conversationId);
+    this.namedConversationMessages?.delete(conversationId);
     this.conversationsByBot.set(key, nextItems);
     if (wasActive) {
       this.activeConversationByBot.set(key, "");
-      if (agentId === "main") {
-        mockChatMessages[botAlias] = [];
-      } else {
-        mockChatMessages[this.agentKey(botAlias, agentId)] = [];
-      }
+      this.chatMessages[key] = [];
     }
     return {
       archivedConversationId: conversationId,
@@ -5100,13 +5170,10 @@ export class MockWebBotClient implements WebBotClient {
     const key = this.getConversationKey(botAlias, agentId);
     const items = this.ensureConversations(botAlias, agentId);
     const deletedCount = items.length;
+    this.namedConversationMessages?.clear();
     this.conversationsByBot.set(key, []);
     this.activeConversationByBot.set(key, "");
-    if (agentId === "main") {
-      mockChatMessages[botAlias] = [];
-    } else {
-      mockChatMessages[this.agentKey(botAlias, agentId)] = [];
-    }
+    this.chatMessages[key] = [];
     return {
       deletedCount,
       deletedFavoriteCount: 0,
@@ -5170,9 +5237,9 @@ export class MockWebBotClient implements WebBotClient {
     return pending;
   }
 
-  async getMessageTrace(botAlias: string, messageId: string): Promise<ChatTraceDetails> {
+  async getMessageTrace(botAlias: string, messageId: string, options: AgentScopedOptions = {}): Promise<ChatTraceDetails> {
     // Only scripted turns (mocks/chatScript.ts) store a trace; every other message has none.
-    const meta = this.getAgentMessages(botAlias).find((message) => message.id === messageId)?.meta;
+    const meta = this.getAgentMessages(botAlias, options.agentId).find((message) => message.id === messageId)?.meta;
     const trace = meta?.trace ?? [];
     return {
       traceCount: trace.length,
@@ -5180,6 +5247,18 @@ export class MockWebBotClient implements WebBotClient {
       processCount: meta?.processCount ?? 0,
       trace,
     };
+  }
+
+  async getMessageTraceEvent(
+    botAlias: string,
+    messageId: string,
+    ref: ChatTraceEventRef,
+    options: AgentScopedOptions = {},
+  ): Promise<ChatTraceEvent | null> {
+    const { trace } = await this.getMessageTrace(botAlias, messageId, options);
+    return trace.find((event) => ref.id
+      ? event.id === ref.id
+      : ref.kind && ref.callId && event.kind === ref.kind && event.callId === ref.callId) || null;
   }
 
   async getDebugProfile(_botAlias: string): Promise<DebugProfile | null> {
@@ -5360,6 +5439,11 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
+  private chatRunKey(agentId = "main") {
+    this.checkChatAgent(agentId);
+    return JSON.stringify([this.chatSessionId, agentId]);
+  }
+
   async sendMessage(
     botAlias: string,
     text: string,
@@ -5370,9 +5454,45 @@ export class MockWebBotClient implements WebBotClient {
     _onEndlessError?: (message: ChatMessage, attempt: number, nextDelayMs?: number, retryAtMs?: number) => void,
     _onEndlessContinue?: (attempt: number) => void,
   ): Promise<ChatMessage> {
+    const key = this.chatRunKey(options?.agentId);
+    const runs = this.chatRuns.get(botAlias) || new Map<string, AbortController>();
+    if (runs.has(key)) {
+      throw new WebApiClientError("会话正在执行任务", { code: "session_busy", status: 409 });
+    }
+    const bot = this.getBotSummary(botAlias);
+    const limit = bot.cluster?.maxParallelAgents ?? DEFAULT_CLUSTER.maxParallelAgents;
+    if (!bot.remoteWorkspace && runs.size >= limit) {
+      throw new WebApiClientError("已达到 Bot 的并行会话上限", { code: "bot_chat_capacity", status: 409 });
+    }
+    const controller = new AbortController();
+    this.chatRuns.set(botAlias, runs);
+    runs.set(key, controller);
+    try {
+      return await this.streamMockMessage(botAlias, text, onChunk, onStatus, onTrace, options, controller.signal);
+    } finally {
+      runs.delete(key);
+      if (runs.size === 0) this.chatRuns.delete(botAlias);
+    }
+  }
+
+  private async streamMockMessage(
+    botAlias: string,
+    text: string,
+    onChunk: (chunk: string) => void,
+    onStatus: ((status: ChatStatusUpdate) => void) | undefined,
+    onTrace: ((trace: ChatTraceEvent) => void) | undefined,
+    options: ChatSendOptions | undefined,
+    signal: AbortSignal,
+  ): Promise<ChatMessage> {
+    signal.throwIfAborted();
+    options?.signal?.throwIfAborted();
     const agentId = options?.agentId || "main";
     const createdAt = new Date().toISOString();
     const userText = options?.visibleText || text;
+    if (this.namedConversationMessages && !this.activeConversationByBot.get(this.getConversationKey(botAlias, agentId))) {
+      await this.createConversation(botAlias, userText.split(/\r?\n/)[0].slice(0, 32), options);
+      signal.throwIfAborted();
+    }
     this.appendAgentChatMessage(botAlias, agentId, {
       id: `user-${Date.now()}`,
       role: "user",
@@ -5417,10 +5537,12 @@ export class MockWebBotClient implements WebBotClient {
     const scriptedTrace = script?.trace ?? [];
     for (const event of scriptedTrace) {
       await new Promise((resolve) => setTimeout(resolve, 120));
+      signal.throwIfAborted();
       onTrace?.(event);
     }
     let streamed = "";
     const emitChunk = (chunk: string) => {
+      signal.throwIfAborted();
       streamed += chunk;
       onChunk(chunk);
       onStatus?.({
@@ -6804,7 +6926,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   async killTask(botAlias: string, options: AgentScopedOptions = {}): Promise<string> {
-    void options;
+    this.chatRuns.get(botAlias)?.get(this.chatRunKey(options.agentId))?.abort();
     return "已发送终止任务请求";
   }
 

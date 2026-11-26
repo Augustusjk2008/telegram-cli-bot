@@ -985,16 +985,7 @@ async def test_new_main_conversation_does_not_precreate_child_conversations(monk
         cluster=BotClusterConfig(enabled=True, max_parallel_agents=2),
     )
     sessions = {
-        agent_id: SimpleNamespace(
-            agent_id=agent_id,
-            is_processing=False,
-            active_conversation_id=None,
-            codex_session_id=None,
-            claude_session_id=None,
-            claude_session_initialized=False,
-            _lock=threading.RLock(),
-            persist=lambda: None,
-        )
+        agent_id: UserSession(bot_id=-1, bot_alias="main", user_id=1, working_dir=".", agent_id=agent_id)
         for agent_id in ("main", "one", "two")
     }
     created_for: list[str] = []
@@ -1687,6 +1678,7 @@ def test_cluster_child_cleanup_only_clears_matching_idle_child_after_cluster_is_
     for agent_id in ("related", "manual", "busy"):
         session = SimpleNamespace(
             agent_id=agent_id,
+            storage_scope=agent_id,
             bot_id=-1,
             user_id=1,
             active_conversation_id=f"conv_{agent_id}",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,6 +106,35 @@ async def _drain_wakeup(run) -> None:
     if run.parent_wakeup_task is not None:
         await run.parent_wakeup_task
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", ["capacity", "workspace_change"])
+async def test_parent_completion_retries_when_local_chat_admission_reopens(monkeypatch, blocker):
+    import bot.web.api_service as api
+
+    profile, runtime, run, parent = _cluster_fixture()
+    calls = _patch_parent(monkeypatch, api, profile, runtime, parent)
+    send = api.run_chat
+    manager = SimpleNamespace(main_profile=profile, managed_profiles={})
+
+    async def limited_send(*args, **kwargs):
+        with api._bot_chat_slot(manager, parent, profile):
+            return await send(*args, **kwargs)
+
+    monkeypatch.setattr(api, "run_chat", limited_send)
+    other = UserSession(parent.bot_id, "main", parent.user_id, ".", web_session_id="ses_" + "a" * 32)
+    guard = (api._bot_chat_slot(manager, other, profile) if blocker == "capacity"
+             else api.reserve_chat_catalog(manager, "main", changing_owner=True))
+    with guard:
+        child = _complete_task(runtime, run.run_id)
+        api._schedule_cluster_parent_wakeup(manager, run.run_id, child.task_id)
+        await _drain_wakeup(run)
+        assert not calls and child.task_id in run.pending_parent_wakeup_task_ids
+    await asyncio.sleep(0)
+    await _drain_wakeup(run)
+    assert len(calls) == 1 and child.wakeup_sent
+    assert not run.pending_parent_wakeup_task_ids
 
 
 @pytest.mark.asyncio

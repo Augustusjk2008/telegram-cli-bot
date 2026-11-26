@@ -12,10 +12,12 @@ import atexit
 import json
 import logging
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from bot.models import is_web_session_id, normalize_session_bot_alias
 from bot.runtime_paths import get_session_store_path
 from bot.session_store_sqlite import SessionStoreSQLite
 
@@ -164,9 +166,7 @@ def save_session_ids(data: Dict[str, dict]):
         return
     try:
         with _store_lock:
-            STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            _write_json_snapshots(data)
     except IOError as e:
         logger.error(f"保存会话存储文件失败: {e}")
 
@@ -281,7 +281,7 @@ def _merge_session_snapshots(source: dict[str, Any] | None, target: dict[str, An
     return merged
 
 
-def _flush_live_session_if_available(bot_id: int, user_id: int, agent_id: str = "main"):
+def _flush_live_session_if_available(bot_id: int, user_id: int, agent_id: str, bot_alias: str):
     """在直接读取持久化快照前，尽量刷新同一会话的待写状态。
 
     `get_session()` 在持有 `sessions_lock` 时也会调用 `load_session()`，这里必须避免阻塞式重入。
@@ -300,23 +300,96 @@ def _flush_live_session_if_available(bot_id: int, user_id: int, agent_id: str = 
     finally:
         sessions_lock.release()
 
-    if session is not None:
+    if session is not None and (not session.web_session_id or session.bot_alias == bot_alias):
         session.flush_persistence()
 
 
-def load_session(bot_id: int, user_id: int, agent_id: str = "main") -> Optional[dict]:
+def load_session(bot_id: int, user_id: int, agent_id: str = "main", *, bot_alias: str = "") -> Optional[dict]:
     """加载指定会话的 session 信息
     
     Returns:
         dict: 包含 CLI 会话绑定和工作目录
         None: 如果没有找到
     """
-    _flush_live_session_if_available(bot_id, user_id, agent_id)
-    key = _make_key(bot_id, user_id, agent_id)
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    scope = _normalize_agent_id(agent_id)
+    _flush_live_session_if_available(bot_id, user_id, scope, bot_alias)
+    key = _make_key(bot_id, user_id, scope)
+    payload = _get_sqlite_store().get(key) if _using_sqlite() else load_session_ids().get(key)
+    if scope.startswith("@") and not _matches_named_owner(payload, bot_alias):
+        return None
+    return payload
+
+
+def _matches_named_owner(payload: dict | None, alias: str) -> bool:
+    return bool(alias and isinstance(payload, dict) and normalize_session_bot_alias(payload.get("bot_alias")) == alias)
+
+
+def insert_web_session_snapshot(
+    bot_id: int, user_id: int, session_id: str, working_dir: str, title: str, *, bot_alias: str,
+) -> bool:
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    if not bot_alias:
+        raise ValueError("missing named Web session owner")
+    scope = "@" + session_id
+    key = _make_key(bot_id, user_id, scope)
+    payload = {
+        "bot_alias": bot_alias,
+        "web_session_id": session_id,
+        "web_session_title": title,
+        "working_dir": working_dir,
+        "browse_dir": working_dir,
+        "local_history_backend": LOCAL_HISTORY_BACKEND,
+        "session_epoch": 0,
+    }
+    with _store_lock:
+        if _using_sqlite():
+            return _get_sqlite_store().insert_session(key, bot_id, user_id, scope, payload)
+        try:
+            data = json.loads(STORE_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            data = {}
+        if key in data:
+            return False
+        data[key] = payload
+        _write_json_snapshots(data)
+        return True
+
+
+def _write_json_snapshots(data: dict) -> None:
+    STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=STORE_FILE.parent, delete=False,
+        ) as tmp:
+            temp_path = Path(tmp.name)
+            json.dump(data, tmp, indent=2, ensure_ascii=False)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(temp_path, STORE_FILE)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def list_web_session_snapshots(bot_id: int, user_id: int, *, bot_alias: str) -> list[dict[str, str]]:
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    if not bot_alias:
+        return []
     if _using_sqlite():
-        return _get_sqlite_store().get(key)
-    data = load_session_ids()
-    return data.get(key)
+        data = _get_sqlite_store().load_named(bot_id, user_id)
+    else:
+        data = load_session_ids()
+    prefix = _make_key(bot_id, user_id) + ":@"
+    result = []
+    for key, payload in data.items():
+        if not key.startswith(prefix) or not _matches_named_owner(payload, bot_alias):
+            continue
+        session_id = key[len(prefix):]
+        if is_web_session_id(session_id) and payload.get("web_session_id") == session_id:
+            result.append({"id": session_id, "title": str(payload.get("web_session_title") or "")})
+    return result
 
 
 def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
@@ -346,7 +419,7 @@ def migrate_sessions_to_shared(bot_id: int, shared_user_id: int) -> int:
             if parsed is None:
                 continue
             item_bot_id, user_id, agent_id = parsed
-            if item_bot_id != bot_id or user_id == shared_user_id:
+            if item_bot_id != bot_id or user_id == shared_user_id or agent_id.startswith("@"):
                 continue
             shared_key = _make_key(bot_id, shared_user_id, agent_id)
             source = value if isinstance(value, dict) else {}
@@ -415,11 +488,21 @@ def save_session(
     agent_id: str = "main",
     antigravity_conversation_id: Optional[str] = None,
     deepseek_session_id: Optional[str] = None,
+    web_session_id: str = "",
+    web_session_title: str = "",
+    bot_alias: str = "",
 ):
     """保存会话信息到持久化存储（原子读-改-写）"""
     key = _make_key(bot_id, user_id, agent_id)
 
     session_data: dict = {}
+    if web_session_id or _normalize_agent_id(agent_id).startswith("@"):
+        if not is_web_session_id(web_session_id) or agent_id != "@" + web_session_id:
+            raise ValueError("invalid named Web session storage scope")
+        bot_alias = normalize_session_bot_alias(bot_alias)
+        if not bot_alias:
+            raise ValueError("missing named Web session owner")
+        session_data.update(bot_alias=bot_alias, web_session_id=web_session_id, web_session_title=web_session_title)
     if codex_session_id:
         session_data["codex_session_id"] = codex_session_id
     if claude_session_id:
@@ -472,15 +555,15 @@ def save_session(
         except (json.JSONDecodeError, IOError):
             data = {}
 
+        if web_session_id and not _matches_named_owner(data.get(key), bot_alias):
+            raise KeyError(web_session_id)
         if not session_data:
             data.pop(key, None)
         else:
             data[key] = session_data
 
         try:
-            STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            _write_json_snapshots(data)
         except IOError as e:
             logger.error(f"保存会话存储文件失败: {e}")
             return
@@ -490,6 +573,8 @@ def save_session(
 
 def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
     """删除指定会话的持久化存储（原子读-改-写）"""
+    if _normalize_agent_id(agent_id).startswith("@"):
+        return False
     key = _make_key(bot_id, user_id, agent_id)
 
     if _using_sqlite():
@@ -518,8 +603,7 @@ def remove_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
 
         del data[key]
         try:
-            with open(STORE_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            _write_json_snapshots(data)
         except IOError as e:
             logger.error(f"保存会话存储文件失败: {e}")
             return False
@@ -545,8 +629,10 @@ def remove_sessions_for_workspace(
     *,
     working_dir: str,
     agent_ids: set[str] | list[str] | tuple[str, ...] | None = None,
+    bot_alias: str = "",
 ) -> int:
     """删除同一 bot/user/workdir 下的持久化会话快照。"""
+    bot_alias = normalize_session_bot_alias(bot_alias)
     normalized_agents = {_normalize_agent_id(agent_id) for agent_id in (agent_ids or [])}
     removed = 0
 
@@ -560,6 +646,8 @@ def remove_sessions_for_workspace(
                 continue
             item_bot_id, item_user_id, item_agent_id = parsed
             if item_bot_id != int(bot_id) or item_user_id != int(user_id):
+                continue
+            if item_agent_id.startswith("@") and not _matches_named_owner(value, bot_alias):
                 continue
             if normalized_agents and item_agent_id not in normalized_agents:
                 continue
@@ -578,14 +666,21 @@ def remove_sessions_for_workspace(
     return removed
 
 
-def remove_all_sessions_for_bot(bot_id: int):
+def remove_all_sessions_for_bot(bot_id: int, *, bot_alias: str = ""):
     """删除指定bot的所有会话（原子读-改-写）"""
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    if _using_sqlite():
+        _get_sqlite_store().remove_bot(bot_id, bot_alias)
+        return
     prefix = f"{bot_id}:"
 
     with _store_lock:
         data = load_session_ids()
 
-        keys_to_remove = [k for k in data if k.startswith(prefix)]
+        keys_to_remove = [
+            key for key, payload in data.items() if key.startswith(prefix)
+            and (":@" not in key or _matches_named_owner(payload, bot_alias))
+        ]
         if not keys_to_remove:
             return
         for key in keys_to_remove:
@@ -595,32 +690,58 @@ def remove_all_sessions_for_bot(bot_id: int):
     logger.debug(f"已删除bot={bot_id}的所有会话，共{len(keys_to_remove)}个")
 
 
-def rename_bot_sessions(old_bot_id: int, new_bot_id: int) -> int:
-    """将指定 bot_id 的持久化会话快照迁移到新的 bot_id。"""
-    if old_bot_id == new_bot_id:
+def rename_bot_sessions(
+    old_bot_id: int, new_bot_id: int, *, old_alias: str = "", new_alias: str = "", include_legacy: bool = True,
+) -> int:
+    """Move legacy keys by id and named snapshots by id plus authoritative alias."""
+    old_alias = normalize_session_bot_alias(old_alias)
+    new_alias = normalize_session_bot_alias(new_alias)
+    same_id = old_bot_id == new_bot_id
+    if same_id and old_alias == new_alias:
         return 0
 
-    moved = 0
-    with _store_lock:
-        data = load_session_ids()
+    def rename_payload(scope: str, source: dict, target: dict | None) -> dict | None:
+        if scope.startswith("@"):
+            if not new_alias or not _matches_named_owner(source, old_alias):
+                return None
+            if target is not None and not _matches_named_owner(target, new_alias):
+                raise ValueError("named Web session target belongs to a different Bot")
+            source = {**source, "bot_alias": new_alias}
+        elif same_id or not include_legacy:
+            return None
+        return _merge_session_snapshots(source, target) if target is not None else source
 
-        next_data = dict(data)
+    moved = 0
+    sqlite_path = _session_store_sqlite_path().resolve()
+    if _session_store_backend() == "sqlite" and sqlite_path.is_file():
+        # A locked existing database must be retried before the new alias is published.
+        store = _get_sqlite_store()
+        store.ensure_ready()
+        moved = store.rename_bot(old_bot_id, new_bot_id, rename_payload)
+        if sqlite_path not in _sqlite_disabled_paths:
+            return moved
+        # This process has also been writing to the JSON fallback.
+    elif _using_sqlite():
+        return _get_sqlite_store().rename_bot(old_bot_id, new_bot_id, rename_payload)
+
+    with _store_lock:
+        try:
+            data = json.loads(STORE_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return moved
+        if not isinstance(data, dict):
+            raise ValueError("invalid session snapshot store")
         for key, value in list(data.items()):
             parsed = _parse_key(key)
-            if parsed is None:
+            if parsed is None or parsed[0] != old_bot_id:
                 continue
-            bot_id, user_id, agent_id = parsed
-            if bot_id != old_bot_id:
-                continue
-            new_key = _make_key(new_bot_id, user_id, agent_id)
-            next_data[new_key] = _merge_session_snapshots(value if isinstance(value, dict) else {}, next_data.get(new_key))
-            next_data.pop(key, None)
-            moved += 1
-
-        if moved == 0:
-            return 0
-
-        save_session_ids(next_data)
-
-    logger.debug("已迁移 bot 会话快照: old_bot=%s new_bot=%s moved=%s", old_bot_id, new_bot_id, moved)
+            _, user_id, scope = parsed
+            new_key = _make_key(new_bot_id, user_id, scope)
+            renamed = rename_payload(scope, value, None if same_id else data.get(new_key))
+            if renamed is not None:
+                del data[key]
+                data[new_key] = renamed
+                moved += 1
+        if moved:
+            _write_json_snapshots(data)
     return moved

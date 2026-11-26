@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from bot import config
 from bot.chat_identity import chat_session_user_id
@@ -30,6 +30,9 @@ from bot.scheduler.triggers import (
 )
 from bot.web.api_common import WebApiError
 
+if TYPE_CHECKING:
+    from bot.web.api_service import BotChatSlot
+
 logger = logging.getLogger(__name__)
 
 SCHEDULE_SOURCE_CHANNEL = "schedule"
@@ -46,8 +49,8 @@ MAX_LOOP_SLEEP_SECONDS = 30.0
 PAUSED_LOOP_SLEEP_SECONDS = 5.0
 PREVIEW_CHARS = 300
 
-_BUSY_ERROR_CODES = frozenset({"session_busy", "conversation_switch_blocked", "cluster_team_busy"})
-_PREEMPTED_ERROR_CODES = frozenset({"session_busy", "conversation_changed", "conversation_switch_blocked"})
+_BUSY_ERROR_CODES = frozenset({"session_busy", "chat_catalog_busy", "bot_chat_capacity", "conversation_switch_blocked", "cluster_team_busy"})
+_PREEMPTED_ERROR_CODES = frozenset({"session_busy", "bot_chat_capacity", "conversation_changed", "conversation_switch_blocked"})
 _UNSAFE_SENSITIVE_FIELDS = ("prompt", "bot_alias", "allow_unsafe_cli")
 
 CapabilityResolver = Callable[[str], "frozenset[str] | set[str] | None"]
@@ -354,7 +357,6 @@ class SchedulerService:
         wait_seconds = schedule["max_wait_minutes"] * 60 if schedule["busy_policy"] == "wait" else 0
         deadline = loop.time() + wait_seconds
         marked_waiting = False
-        conversation_id = ""
         while True:
             if run_id in self._cancel_requested:
                 self._finish(run_id, "cancelled", "cancelled_by_admin", "已由管理员取消")
@@ -365,24 +367,8 @@ class SchedulerService:
             snapshot = await api_service.get_conversation_control_snapshot(
                 self.manager, alias, user_id, agent_id="main",
             )
-            busy = snapshot.get("phase") != "idle"
-            if not busy:
-                try:
-                    result = await api_service.create_conversation(
-                        self.manager,
-                        alias,
-                        user_id,
-                        title=self._conversation_title(schedule),
-                        agent_id="main",
-                        follow_current_conversation=True,
-                    )
-                    conversation_id = str(result["conversation"]["id"])
-                    break
-                except WebApiError as exc:
-                    if exc.code not in _BUSY_ERROR_CODES:
-                        self._finish(run_id, "failed", exc.code, exc.message)
-                        return
-                    busy = True
+            if snapshot.get("phase") == "idle" and await self._start_run(schedule, run_id, user_id, allow_unsafe):
+                return
             remaining = deadline - loop.time()
             if remaining <= 0:
                 message = "智能体忙碌，已跳过本次运行"
@@ -398,23 +384,38 @@ class SchedulerService:
                 marked_waiting = True
             await asyncio.sleep(min(self._busy_retry_seconds, remaining))
 
-        await asyncio.to_thread(
-            self.store.update_run,
-            run_id,
-            status="running",
-            reason_code="",
-            reason_message="",
-            conversation_id=conversation_id,
-            started_at=to_utc_iso(self._clock()),
-        )
-        if run_id in self._cancel_requested:
-            self._finish(run_id, "cancelled", "cancelled_by_admin", "已由管理员取消")
-            return
-        outcome = await self._stream(schedule, run_id, conversation_id, allow_unsafe)
+    async def _start_run(self, schedule: dict[str, Any], run_id: str, user_id: int, allow_unsafe: bool) -> bool:
+        """Return False only when admission is refused before creating a conversation."""
+        from bot.web import api_service
+
+        alias = schedule["bot_alias"]
+        profile = api_service.get_profile_or_raise(self.manager, alias)
+        conversation_id = ""
+        try:
+            with api_service.reserve_bot_chat_slot(self.manager, profile) as slot:
+                result = await api_service.create_conversation(
+                    self.manager, alias, user_id, title=self._conversation_title(schedule),
+                    agent_id="main", follow_current_conversation=True,
+                )
+                conversation_id = str(result["conversation"]["id"])
+                await asyncio.to_thread(
+                    self.store.update_run, run_id, status="running", reason_code="", reason_message="",
+                    conversation_id=conversation_id, started_at=to_utc_iso(self._clock()),
+                )
+                if run_id in self._cancel_requested:
+                    self._finish(run_id, "cancelled", "cancelled_by_admin", "已由管理员取消")
+                    return True
+                outcome = await self._stream(schedule, run_id, conversation_id, allow_unsafe, reserved_slot=slot)
+        except WebApiError as exc:
+            if not conversation_id and exc.code in _BUSY_ERROR_CODES:
+                return False
+            self._finish(run_id, "failed", exc.code, exc.message)
+            return True
         if outcome["status"] == "cancelled" and run_id in self._cancel_requested:
             outcome["reason_code"] = "cancelled_by_admin"
             outcome["reason_message"] = "已由管理员停止"
         self._finish(run_id, **outcome)
+        return True
 
     def _conversation_title(self, schedule: dict[str, Any]) -> str:
         try:
@@ -425,6 +426,7 @@ class SchedulerService:
 
     async def _stream(
         self, schedule: dict[str, Any], run_id: str, conversation_id: str, allow_unsafe: bool,
+        *, reserved_slot: BotChatSlot | None,
     ) -> dict[str, Any]:
         from bot.web import api_service
 
@@ -441,6 +443,7 @@ class SchedulerService:
             source_channel=SCHEDULE_SOURCE_CHANNEL,
             source_external_id=schedule["id"],
             allow_unsafe_cli=allow_unsafe,
+            reserved_slot=reserved_slot,
         )
         bindings: dict[str, str] = {"conversation_id": conversation_id}
         persisted: dict[str, str] = {}

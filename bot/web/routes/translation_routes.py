@@ -65,19 +65,19 @@ def register(app: web.Application, server, *, service: TranslationService | None
 
         auth = await server._with_capability(request, CAP_CHAT_SEND)
         alias = server._manager_alias(request)
-        profile = get_profile_or_raise(server.manager, alias)
+        scope = await server._chat_request_scope(request, alias, auth)
+        profile = scope["target"].profile if "target" in scope else get_profile_or_raise(server.manager, alias)
         config = translation_service.config_store.get_config().in_working_dir(profile.working_dir)
         if not profile.chat_translation_enabled or not config.translate_assistant_enabled or not config.configured:
             raise WebApiError(409, "translation_unavailable", "回答翻译当前不可用")
         message_id = request.match_info["message_id"]
-        agent_id = server._request_agent_id(request)
-        if agent_id != "main":
+        if scope["agent_id"] != "main":
             raise WebApiError(404, "message_not_found", "未找到对应回答")
         user_id = server._chat_user_id(auth)
         history, message = await run_chat_store_io(
             get_answer_translation_retry_target, server.manager, alias, user_id, message_id,
-            agent_id=agent_id, execution_mode=server._request_execution_mode(request, include_body=False),
-            write_key=f"{alias}:{user_id}:{agent_id}",
+            **scope, execution_mode=server._request_execution_mode(request, include_body=False),
+            write_key=server._chat_store_write_key(alias, user_id, scope),
         )
         if message is None:
             raise WebApiError(404, "message_not_found", "未找到对应回答")
@@ -98,4 +98,5 @@ def register(app: web.Application, server, *, service: TranslationService | None
             "status": "pending", "target_language": PROMPT_TARGET_LANGUAGE, "source_digest": digest,
         }})
 
-    app.router.add_post("/api/bots/{alias}/history/{message_id}/translation/retry", retry_answer)
+    for base in ("/api/bots/{alias}", "/api/bots/{alias}/sessions/{session_id}"):
+        app.router.add_post(base + "/history/{message_id}/translation/retry", retry_answer)

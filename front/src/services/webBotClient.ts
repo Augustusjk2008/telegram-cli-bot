@@ -24,6 +24,8 @@ import type {
   BotSummary,
   AgentListResult,
   AgentScopedOptions,
+  ChatSessionList,
+  ChatSessionSummary,
   ChatMessage,
   ChatTranslation,
   ChatStatusUpdate,
@@ -284,6 +286,9 @@ export interface WebBotClient {
   updateClusterConfig(botAlias: string, input: ClusterConfigUpdateInput): Promise<ClusterConfigUpdateResult>;
   updateBotPromptPresets(botAlias: string, presets: PromptPreset[]): Promise<BotSummary>;
   updateGlobalPromptPresets(presets: PromptPreset[]): Promise<PromptPreset[]>;
+  listChatSessions?(botAlias: string): Promise<ChatSessionList>;
+  createChatSession?(botAlias: string, title: string): Promise<ChatSessionSummary>;
+  forChatSession?(botAlias: string, sessionId: string): WebBotClient;
   getBotOverview(botAlias: string, options?: AgentScopedOptions): Promise<BotOverview>;
   connectCodexVoice(botAlias: string, options: CodexVoiceConnectionOptions): CodexVoiceConnection;
   listConversations(botAlias: string, query?: string, options?: AgentScopedOptions): Promise<ConversationListResult>;

@@ -1,15 +1,18 @@
-"""按 (bot_id, shared_user_id, agent_id) 管理 Web 聊天会话生命周期。"""
+"""按 (bot_id, shared_user_id, storage_scope) 管理 Web 聊天会话生命周期。"""
 
 import logging
 import threading
+import uuid
 from datetime import datetime
 from typing import Dict, Tuple
 
 from bot.chat_identity import chat_session_user_id
-from bot.models import UserSession
+from bot.models import UserSession, is_web_session_id, normalize_session_bot_alias
 from bot.session_store import (
     LOCAL_HISTORY_BACKEND,
     _same_workspace_path,
+    insert_web_session_snapshot,
+    list_web_session_snapshots,
     load_session,
     migrate_local_history_snapshot,
     migrate_sessions_to_shared,
@@ -21,7 +24,7 @@ from bot.session_store import (
 
 logger = logging.getLogger(__name__)
 
-# 全局会话存储，key 形状保留为 (bot_id, user_id, agent_id)，Web 聊天 user_id 恒为共享 id。
+# Legacy scopes are agent ids. Named Web sessions use @ses_<id> in the same key slot.
 sessions: Dict[Tuple[int, int, str], UserSession] = {}
 sessions_lock = threading.Lock()
 
@@ -32,7 +35,7 @@ class _InitializationState:
         self.error: BaseException | None = None
 
 
-_session_initializations: dict[Tuple[int, int, str], _InitializationState] = {}
+_session_initializations: dict[tuple[int, int, str, str], _InitializationState] = {}
 _shared_migration_initializations: dict[tuple[str, int, int], _InitializationState] = {}
 _shared_migration_completed: set[tuple[str, int, int]] = set()
 
@@ -114,7 +117,6 @@ def _merge_session_state(preferred: UserSession, fallback: UserSession, *, bot_i
                 break
         preferred.bot_id = bot_id
         preferred.bot_alias = bot_alias
-        preferred.agent_id = preferred.agent_id or fallback.agent_id or "main"
         preferred.working_dir = preferred.working_dir or fallback.working_dir
         preferred.browse_dir = preferred.browse_dir or fallback.browse_dir or preferred.working_dir
         preferred.codex_session_id = preferred.codex_session_id or fallback.codex_session_id
@@ -168,20 +170,59 @@ def get_or_create_session(
     load_persisted_state: bool = True,
     agent_id: str = "main",
 ) -> UserSession:
-    user_id = chat_session_user_id(user_id)
     normalized_agent_id = _normalize_agent_id(agent_id)
-    key = (bot_id, user_id, normalized_agent_id)
+    if normalized_agent_id.startswith("@"):
+        raise ValueError("reserved session storage scope")
+    return _get_session(bot_id, bot_alias, user_id, default_working_dir, load_persisted_state, normalized_agent_id)
+
+
+def create_web_chat_session(
+    bot_id: int, bot_alias: str, user_id: int, working_dir: str, title: str,
+) -> UserSession:
+    user_id = chat_session_user_id(user_id)
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    if not bot_alias:
+        raise ValueError("missing named Web session owner")
+    while True:
+        session_id = "ses_" + uuid.uuid4().hex
+        if insert_web_session_snapshot(bot_id, user_id, session_id, working_dir, title, bot_alias=bot_alias):
+            return get_web_chat_session(bot_id, bot_alias, user_id, working_dir, session_id)
+
+
+def get_web_chat_session(
+    bot_id: int, bot_alias: str, user_id: int, working_dir: str, session_id: str,
+) -> UserSession:
+    bot_alias = normalize_session_bot_alias(bot_alias)
+    if not bot_alias or not is_web_session_id(session_id):
+        raise KeyError(session_id)
+    return _get_session(bot_id, bot_alias, user_id, working_dir, True, "main", web_session_id=session_id)
+
+
+def list_web_chat_sessions(bot_id: int, bot_alias: str, user_id: int) -> list[dict[str, str]]:
+    return list_web_session_snapshots(bot_id, chat_session_user_id(user_id), bot_alias=bot_alias)
+
+
+def _get_session(
+    bot_id: int, bot_alias: str, user_id: int, default_working_dir: str | None,
+    load_persisted_state: bool, normalized_agent_id: str, *, web_session_id: str = "",
+) -> UserSession:
+    user_id = chat_session_user_id(user_id)
+    scope = "@" + web_session_id if web_session_id else normalized_agent_id
+    key = (bot_id, user_id, scope)
+    init_key = (*key, bot_alias if web_session_id else "")
 
     while True:
         with sessions_lock:
             session = sessions.get(key)
             if session is not None:
+                if web_session_id and session.bot_alias != bot_alias:
+                    raise KeyError(web_session_id)
                 return session
-            initialization = _session_initializations.get(key)
+            initialization = _session_initializations.get(init_key)
             is_initializer = initialization is None
             if initialization is None:
                 initialization = _InitializationState()
-                _session_initializations[key] = initialization
+                _session_initializations[init_key] = initialization
 
         if is_initializer:
             break
@@ -190,13 +231,15 @@ def get_or_create_session(
             raise initialization.error
 
     try:
-        if load_persisted_state:
+        if load_persisted_state and not web_session_id:
             _ensure_shared_session_migration(bot_id, user_id)
-        stored_data = (
-            load_session(bot_id, user_id, agent_id=normalized_agent_id)
-            if load_persisted_state
-            else None
-        )
+        stored_data = None
+        if web_session_id:
+            stored_data = load_session(bot_id, user_id, agent_id=scope, bot_alias=bot_alias)
+        elif load_persisted_state:
+            stored_data = load_session(bot_id, user_id, agent_id=scope)
+        if web_session_id and (stored_data is None or stored_data.get("web_session_id") != web_session_id):
+            raise KeyError(web_session_id)
         session, should_persist_migration = _build_session_from_store(
             bot_id=bot_id,
             bot_alias=bot_alias,
@@ -204,11 +247,16 @@ def get_or_create_session(
             normalized_agent_id=normalized_agent_id,
             default_working_dir=default_working_dir,
             stored_data=stored_data,
+            web_session_id=web_session_id,
         )
 
         with sessions_lock:
+            if initialization.error is not None:
+                raise initialization.error
             existing = sessions.get(key)
             if existing is not None:
+                if web_session_id and existing.bot_alias != bot_alias:
+                    raise KeyError(web_session_id)
                 session = existing
             else:
                 sessions[key] = session
@@ -221,8 +269,8 @@ def get_or_create_session(
         raise
     finally:
         with sessions_lock:
-            if _session_initializations.get(key) is initialization:
-                _session_initializations.pop(key, None)
+            if _session_initializations.get(init_key) is initialization:
+                _session_initializations.pop(init_key, None)
             initialization.ready.set()
 
 
@@ -237,7 +285,10 @@ def _save_session_to_store(session: UserSession):
         save_session(
             bot_id=session.bot_id,
             user_id=user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
+            web_session_id=session.web_session_id,
+            web_session_title=session.web_session_title,
+            bot_alias=session.bot_alias,
             codex_session_id=session.codex_session_id,
             claude_session_id=session.claude_session_id,
             antigravity_conversation_id=session.antigravity_conversation_id,
@@ -261,6 +312,7 @@ def _build_session_from_store(
     normalized_agent_id: str,
     default_working_dir: str | None,
     stored_data: dict | None,
+    web_session_id: str = "",
 ) -> tuple[UserSession, bool]:
     should_persist_migration = False
     codex_session_id = None
@@ -331,6 +383,8 @@ def _build_session_from_store(
             user_id=user_id,
             working_dir=working_dir,
             agent_id=normalized_agent_id,
+            web_session_id=web_session_id,
+            web_session_title=str((stored_data or {}).get("web_session_title") or "") if web_session_id else "",
             browse_dir=browse_dir,
             history=[],
             codex_session_id=codex_session_id,
@@ -357,6 +411,8 @@ def _build_session_from_store(
 def reset_session(bot_id: int, user_id: int, agent_id: str = "main") -> bool:
     user_id = chat_session_user_id(user_id)
     normalized_agent_id = _normalize_agent_id(agent_id)
+    if normalized_agent_id.startswith("@"):
+        return False
     key = (bot_id, user_id, normalized_agent_id)
     removed_in_memory = False
     with sessions_lock:
@@ -380,18 +436,34 @@ def unload_bot_sessions(bot_alias: str) -> None:
         for key, session in list(sessions.items()):
             if session.bot_alias == bot_alias:
                 from bot.codex_server.runtime import get_codex_server_registry
-                get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.agent_id))
+                get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.storage_scope))
                 _save_session_to_store(session)
                 session.disable_persistence()
                 del sessions[key]
 
 
-def clear_bot_sessions(bot_id: int):
+def _invalidate_named_loads(bot_id: int, bot_alias: str) -> None:
+    # Called under sessions_lock. A restore that read the old owner before
+    # rename/removal must not publish that object back into the cache.
+    for (owner_id, _, scope, alias), initialization in _session_initializations.items():
+        if owner_id == bot_id and alias == bot_alias and scope.startswith("@"):
+            initialization.error = KeyError(scope[1:])
+
+
+def clear_bot_sessions(bot_id: int, *, bot_alias: str = ""):
+    bot_alias = normalize_session_bot_alias(bot_alias)
     targets: list[UserSession] = []
     with sessions_lock:
-        keys = [k for k in sessions if k[0] == bot_id]
+        _invalidate_named_loads(bot_id, bot_alias)
+        keys = [
+            key for key, session in sessions.items() if key[0] == bot_id
+            and (session.bot_alias == bot_alias or (not bot_alias and not session.web_session_id))
+        ]
         for key in keys:
-            targets.append(sessions.pop(key))
+            session = sessions.pop(key)
+            session.disable_persistence()
+            targets.append(session)
+        remove_all_sessions_for_bot(bot_id, bot_alias=bot_alias)
         completed_migrations = [
             key for key in _shared_migration_completed if key[1] == int(bot_id)
         ]
@@ -399,14 +471,10 @@ def clear_bot_sessions(bot_id: int):
             _shared_migration_completed.discard(key)
 
     for session in targets:
-        session.disable_persistence()
         try:
             session.terminate_process()
         except Exception as exc:
             logger.warning("终止会话进程失败 bot=%s user=%s error=%s", bot_id, session.user_id, exc)
-
-    # 清除持久化存储
-    remove_all_sessions_for_bot(bot_id)
 
 
 def is_bot_processing(bot_id: int) -> bool:
@@ -455,7 +523,7 @@ def update_bot_working_dir(bot_alias: str, working_dir: str) -> int:
 
     for session in targets:
         from bot.codex_server.runtime import get_codex_server_registry
-        get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.agent_id))
+        get_codex_server_registry().release_owner((session.bot_id, chat_session_user_id(session.user_id), session.storage_scope))
         with session._lock:
             session.working_dir = working_dir
             session.browse_dir = working_dir
@@ -501,11 +569,11 @@ def align_session_paths(session: UserSession, default_working_dir: str) -> UserS
 
 
 def update_bot_alias(old_alias: str, new_alias: str) -> int:
-    """更新指定 bot 的所有会话别名。"""
+    """Update legacy aliases. Named owners change together with the Bot id in rekey_bot_sessions."""
     targets: list[UserSession] = []
     with sessions_lock:
         for session in sessions.values():
-            if session.bot_alias == old_alias:
+            if not session.web_session_id and session.bot_alias == old_alias:
                 targets.append(session)
 
     for session in targets:
@@ -516,23 +584,39 @@ def update_bot_alias(old_alias: str, new_alias: str) -> int:
     return len(targets)
 
 
-def rekey_bot_sessions(old_bot_id: int, new_bot_id: int, *, old_alias: str, new_alias: str) -> int:
+def rekey_bot_sessions(
+    old_bot_id: int, new_bot_id: int, *, old_alias: str, new_alias: str, include_legacy: bool = True,
+) -> int:
     """将内存中的 bot 会话迁移到新的 bot_id。"""
-    if old_bot_id == new_bot_id:
-        return update_bot_alias(old_alias, new_alias)
+    old_alias = normalize_session_bot_alias(old_alias)
+    new_alias = normalize_session_bot_alias(new_alias)
+    if not old_alias or not new_alias:
+        raise ValueError("missing Bot alias for session rename")
 
     moved = 0
     with sessions_lock:
+        _invalidate_named_loads(old_bot_id, old_alias)
         for key in [item for item in list(sessions.keys()) if item[0] == old_bot_id]:
-            source = sessions.pop(key)
+            source = sessions[key]
+            if not include_legacy and not source.web_session_id:
+                continue
+            if source.bot_alias != old_alias:
+                # manager.rename_bot already updates the aliases of legacy sessions.
+                if source.web_session_id or source.bot_alias != new_alias or old_bot_id == new_bot_id:
+                    continue
             shared_user_id = chat_session_user_id(source.user_id)
-            source.user_id = shared_user_id
-            target_key = (new_bot_id, shared_user_id, _normalize_agent_id(source.agent_id))
+            target_key = (new_bot_id, shared_user_id, source.storage_scope)
+            target = sessions.get(target_key)
+            if (source.web_session_id and target is not None and target is not source
+                    and target.bot_alias != new_alias):
+                raise ValueError("named Web session target belongs to a different Bot")
+            del sessions[key]
             target = sessions.pop(target_key, None)
-
             if target is None:
-                source.bot_id = new_bot_id
-                source.bot_alias = new_alias
+                with source._lock:
+                    source.user_id = shared_user_id
+                    source.bot_id = new_bot_id
+                    source.bot_alias = new_alias
                 sessions[target_key] = source
                 moved += 1
                 continue
@@ -541,6 +625,8 @@ def rekey_bot_sessions(old_bot_id: int, new_bot_id: int, *, old_alias: str, new_
                 (source, target) if _session_rank(source) >= _session_rank(target) else (target, source)
             )
             merged = _merge_session_state(preferred, fallback, bot_id=new_bot_id, bot_alias=new_alias)
+            with merged._lock:
+                merged.user_id = shared_user_id
             sessions[target_key] = merged
             fallback.disable_persistence()
             moved += 1

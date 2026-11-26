@@ -997,7 +997,7 @@ class TelegramGateway:
             await events.aclose()
         if terminal is None:
             return format_result(alias, "执行结束，但未收到最终结果。请在 Web 查看历史。", None), "failed"
-        if terminal.get("code") == "session_busy":
+        if terminal.get("code") in {"session_busy", "bot_chat_capacity", "chat_catalog_busy"}:
             return format_plain_text(f"[{alias}] {terminal['message']}"), "rejected"
 
         final_message = terminal.get("message") if isinstance(terminal.get("message"), dict) else {}

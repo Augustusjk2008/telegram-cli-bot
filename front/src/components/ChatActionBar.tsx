@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
 import { toolbarButtonClass } from "./ToolbarButton";
@@ -12,7 +12,8 @@ type Props = {
   clusterDisabled?: boolean;
   clusterDisabledReason?: string;
   clusterSaving?: boolean;
-  onToggleClusterMode: () => void;
+  onToggleClusterMode?: () => void;
+  sessionSelector?: ReactNode;
   embedded?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -133,6 +134,7 @@ export function ChatActionBar({
   clusterDisabledReason,
   clusterSaving = false,
   onToggleClusterMode,
+  sessionSelector,
   embedded = false,
   focused = false,
   onToggleFocus,
@@ -176,6 +178,19 @@ export function ChatActionBar({
   const clusterButtonTitle = clusterDisabledReason
     ? `${clusterButtonLabel}：${clusterDisabledReason}`
     : clusterButtonLabel;
+  const clusterButton = onToggleClusterMode ? (
+    <button
+      type="button"
+      aria-pressed={clusterEnabled}
+      aria-label={clusterButtonLabel}
+      title={clusterButtonTitle}
+      onClick={onToggleClusterMode}
+      disabled={clusterDisabled}
+      className={clusterEnabled ? activePlanIconButtonClassName : iconButtonClassName}
+    >
+      {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
+    </button>
+  ) : null;
   function closeOptions() {
     setMobileOptionsOpen(false);
     optionsTriggerRef.current?.focus();
@@ -211,6 +226,7 @@ export function ChatActionBar({
     return (
       <section ref={optionsRootRef} className="relative z-10 h-10 shrink-0 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2">
         <div data-testid="chat-action-bar" className="flex h-full min-w-0 items-center gap-1">
+          {sessionSelector}
           <button
             ref={optionsTriggerRef}
             type="button"
@@ -328,17 +344,7 @@ export function ChatActionBar({
                 </select>
               </label>
             ) : null}
-            <button
-              type="button"
-              aria-pressed={clusterEnabled}
-              aria-label={clusterButtonLabel}
-              title={clusterButtonTitle}
-              onClick={onToggleClusterMode}
-              disabled={clusterDisabled}
-              className={clusterEnabled ? activePlanIconButtonClassName : iconButtonClassName}
-            >
-              {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
-            </button>
+            {clusterButton}
           </div>
         ) : null}
       </section>
@@ -364,21 +370,10 @@ export function ChatActionBar({
           >
             <ClipboardList className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            aria-pressed={clusterEnabled}
-            aria-label={clusterButtonLabel}
-            title={clusterButtonTitle}
-            onClick={onToggleClusterMode}
-            disabled={clusterDisabled}
-            className={clusterEnabled
-              ? activePlanIconButtonClassName
-              : iconButtonClassName}
-          >
-            {clusterSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
-          </button>
+          {clusterButton}
         </div>
         <div className={groupClassName} role="group" aria-label="聊天会话">
+          {sessionSelector}
           <button
             type="button"
             aria-label="历史会话"

@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from bot.models import normalize_session_bot_alias
+
 
 logger = logging.getLogger(__name__)
 
@@ -175,15 +177,44 @@ class SessionStoreSQLite:
             encoding="utf-8",
         )
 
-    def load_all(self) -> dict[str, dict[str, Any]]:
+    def insert_session(
+        self, key: str, bot_id: int, user_id: int, scope: str, payload: dict[str, Any],
+    ) -> bool:
+        """Publish a new session only after the insert commits."""
         self.ensure_ready()
         with self._lock:
+            if key in self._pending:
+                return False
+            with closing(self._connect()) as connection, connection:
+                row = connection.execute(
+                    """
+                    INSERT INTO sessions(session_key, bot_id, user_id, agent_id, payload_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_key) DO NOTHING
+                    """,
+                    (key, bot_id, user_id, scope, json.dumps(payload, ensure_ascii=False), _utc_now()),
+                )
+                return row.rowcount == 1
+
+    def load_all(self) -> dict[str, dict[str, Any]]:
+        return self._load_snapshots()
+
+    def load_named(self, bot_id: int, user_id: int) -> dict[str, dict[str, Any]]:
+        return self._load_snapshots(named_owner=(bot_id, user_id))
+
+    def _load_snapshots(self, *, named_owner: tuple[int, int] | None = None) -> dict[str, dict[str, Any]]:
+        self.ensure_ready()
+        with self._lock:
+            sql = "SELECT session_key, payload_json FROM sessions"
+            if named_owner is not None:
+                sql += " WHERE bot_id = ? AND user_id = ? AND agent_id GLOB '@ses_*'"
             with closing(self._connect()) as connection:
-                rows = connection.execute(
-                    "SELECT session_key, payload_json FROM sessions"
-                ).fetchall()
+                rows = connection.execute(sql, named_owner or ()).fetchall()
             with self._pending_lock:
-                pending = dict(self._pending)
+                pending = {
+                    key: item for key, item in self._pending.items()
+                    if named_owner is None or (item[:2] == named_owner and item[2].startswith("@ses_"))
+                }
         result: dict[str, dict[str, Any]] = {}
         for row in rows:
             try:
@@ -221,6 +252,51 @@ class SessionStoreSQLite:
             return None
         return payload if isinstance(payload, dict) else None
 
+    def remove_bot(self, bot_id: int, bot_alias: str) -> None:
+        with self._lock:
+            self.flush()
+            with closing(self._connect()) as conn, conn:
+                conn.execute(
+                    """DELETE FROM sessions WHERE bot_id = ? AND (
+                        agent_id NOT GLOB '@*' OR (? != '' AND lower(trim(json_extract(payload_json, '$.bot_alias'))) = ?)
+                    )""",
+                    (bot_id, bot_alias, bot_alias),
+                )
+
+    def rename_bot(
+        self, old_id: int, new_id: int, rename_payload: Callable[[str, dict, dict | None], dict | None],
+    ) -> int:
+        moved = 0
+        with self._lock:
+            self.flush()
+            with closing(self._connect()) as conn, conn:
+                rows = conn.execute(
+                    "SELECT session_key, user_id, agent_id, payload_json FROM sessions WHERE bot_id = ?",
+                    (old_id,),
+                ).fetchall()
+                for row in rows:
+                    key = _make_session_key(new_id, row["user_id"], row["agent_id"])
+                    target = None
+                    if new_id != old_id:
+                        target = conn.execute(
+                            "SELECT payload_json FROM sessions WHERE session_key = ?", (key,),
+                        ).fetchone()
+                    renamed = rename_payload(
+                        row["agent_id"], json.loads(row["payload_json"]),
+                        json.loads(target["payload_json"]) if target is not None else None,
+                    )
+                    if renamed is None:
+                        continue
+                    if target is not None:
+                        conn.execute("DELETE FROM sessions WHERE session_key = ?", (key,))
+                    conn.execute(
+                        "UPDATE sessions SET session_key = ?, bot_id = ?, payload_json = ?, updated_at = ? "
+                        "WHERE session_key = ?",
+                        (key, new_id, json.dumps(renamed, ensure_ascii=False), _utc_now(), row["session_key"]),
+                    )
+                    moved += 1
+        return moved
+
     def migrate_sessions_to_shared(
         self,
         bot_id: int,
@@ -244,7 +320,7 @@ class SessionStoreSQLite:
                     """
                     SELECT session_key, user_id, agent_id, payload_json
                     FROM sessions
-                    WHERE bot_id = ?
+                    WHERE bot_id = ? AND agent_id NOT GLOB '@*'
                     ORDER BY session_key
                     """,
                     (normalized_bot_id,),
@@ -335,6 +411,10 @@ class SessionStoreSQLite:
             dict(payload) if payload is not None else None,
         )
         with self._lock:
+            if item[2].startswith("@") and payload is not None:
+                current = self.get(key)
+                if not current or normalize_session_bot_alias(current.get("bot_alias")) != payload.get("bot_alias"):
+                    raise KeyError(key)
             with self._pending_lock:
                 self._pending[normalized] = item
                 self._queued_write_count += 1

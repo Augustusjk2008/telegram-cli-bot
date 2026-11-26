@@ -225,7 +225,7 @@ class ChatHistoryService:
         return self.store.mark_stale_streaming_turns(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -278,7 +278,7 @@ class ChatHistoryService:
             bot_id=session.bot_id,
             bot_alias=bot_alias,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             task_submission_key=task_submission_key,
@@ -321,7 +321,7 @@ class ChatHistoryService:
             bot_id=session.bot_id,
             bot_alias=bot_alias,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             task_submission_key=task_submission_key,
@@ -583,7 +583,7 @@ class ChatHistoryService:
             bot_id=session.bot_id,
             bot_alias=session.bot_alias,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             cli_type=profile.cli_type,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
@@ -607,7 +607,7 @@ class ChatHistoryService:
         return self.store.get_running_reply(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -619,7 +619,7 @@ class ChatHistoryService:
         return await self.async_store.get_running_reply(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -646,7 +646,7 @@ class ChatHistoryService:
             conversation_id=conversation_id,
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             user_text=user_text,
@@ -802,7 +802,7 @@ class ChatHistoryService:
     def get_scoped_message(self, session: UserSession, message_id: str) -> dict[str, Any] | None:
         return self.store.get_scoped_message(
             message_id, bot_id=session.bot_id, user_id=session.user_id,
-            agent_id=session.agent_id, working_dir=session.working_dir,
+            agent_id=session.storage_scope, working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
             native_provider=self.native_provider_filter,
@@ -850,7 +850,7 @@ class ChatHistoryService:
         items = self.store.list_active_history(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -888,7 +888,7 @@ class ChatHistoryService:
         return self.store.list_active_history(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -923,7 +923,7 @@ class ChatHistoryService:
         return self.store.get_scoped_history_delta(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -942,8 +942,12 @@ class ChatHistoryService:
         *,
         compact: bool = False,
     ) -> dict[str, Any] | None:
+        if session is None:
+            return None
         try:
-            context = self.store.get_trace_recovery_context(message_id)
+            context = self.store.get_trace_recovery_context(
+                message_id, owner=(session.bot_id, session.user_id, session.storage_scope),
+            )
         except KeyError:
             return None
         if not self._matches_native_provider(context.get("native_provider")):
@@ -965,9 +969,12 @@ class ChatHistoryService:
         call_id: str = "",
     ) -> dict[str, Any] | None:
         """Read one full trace event; the counterpart of a compact trace snapshot or stream."""
+        if session is None:
+            return None
         try:
             data = self.store.get_message_trace_event(
                 message_id,
+                owner=(session.bot_id, session.user_id, session.storage_scope),
                 event_id=event_id,
                 kind=kind,
                 call_id=call_id,
@@ -1002,7 +1009,10 @@ class ChatHistoryService:
         native_session_id: str | None = None,
     ) -> bool:
         try:
-            if self.store.get_trace_recovery_context(handle.assistant_message_id).get("is_voice"):
+            context = self.store.get_trace_recovery_context(
+                handle.assistant_message_id, owner=(session.bot_id, session.user_id, session.storage_scope),
+            )
+            if context.get("is_voice"):
                 return False
         except KeyError:
             return False
@@ -1043,7 +1053,7 @@ class ChatHistoryService:
         running_reply, history_count = self.store.get_running_reply_and_history_count(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
             conversation_id=_active_conversation_id(session) or None,
@@ -1089,7 +1099,7 @@ class ChatHistoryService:
             "history_count": self.store.count_history(
                 bot_id=session.bot_id,
                 user_id=session.user_id,
-                agent_id=session.agent_id,
+                agent_id=session.storage_scope,
                 working_dir=session.working_dir,
                 session_epoch=_session_epoch(session),
                 conversation_id=_active_conversation_id(session) or None,
@@ -1114,7 +1124,11 @@ class ChatHistoryService:
     def reset_active_conversation(self, session: UserSession) -> None:
         conversation_id = _active_conversation_id(session)
         if conversation_id:
-            self.store.delete_conversation_by_id(conversation_id)
+            self.store.delete_conversation(
+                bot_id=session.bot_id, user_id=session.user_id, agent_id=session.storage_scope,
+                working_dir=session.working_dir, session_epoch=_session_epoch(session),
+                conversation_id=conversation_id,
+            )
             with session._lock:
                 session.active_conversation_id = None
             session.persist()
@@ -1122,7 +1136,7 @@ class ChatHistoryService:
         self.store.delete_conversation(
             bot_id=session.bot_id,
             user_id=session.user_id,
-            agent_id=session.agent_id,
+            agent_id=session.storage_scope,
             working_dir=session.working_dir,
             session_epoch=_session_epoch(session),
         )

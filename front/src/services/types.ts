@@ -1009,6 +1009,16 @@ export type ClusterConfigUpdateResult = {
   status: ClusterStatus;
 };
 
+export type ChatSessionSummary = {
+  id: string;
+  title: string;
+};
+
+export type ChatSessionList = {
+  enabled: boolean;
+  items: ChatSessionSummary[];
+};
+
 export type AgentScopedOptions = {
   agentId?: string;
   executionMode?: ChatExecutionMode;
