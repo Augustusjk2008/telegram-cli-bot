@@ -561,6 +561,16 @@ class ChatStore:
             CREATE INDEX IF NOT EXISTS idx_trace_events_turn_kind_call
             ON trace_events(turn_id, kind, call_id, ordinal, created_at, id);
 
+            CREATE TABLE IF NOT EXISTS trace_stats (
+                turn_id TEXT PRIMARY KEY,
+                trace_count INTEGER NOT NULL,
+                tool_call_count INTEGER NOT NULL,
+                process_count INTEGER NOT NULL,
+                content_digest TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS voice_turns (
                 turn_id TEXT PRIMARY KEY,
                 conversation_id TEXT NOT NULL,
@@ -972,6 +982,11 @@ class ChatStore:
             if str(message_id or "").strip()
         ]
         child_turn_ids = [str(child["id"]) for child in children]
+        trace_turn_ids = [str(root["id"]), *child_turn_ids]
+        conn.execute(
+            f"DELETE FROM trace_stats WHERE turn_id IN ({', '.join('?' for _ in trace_turn_ids)})",
+            trace_turn_ids,
+        )
         placeholders = ", ".join("?" for _ in child_turn_ids)
         conn.execute(f"DELETE FROM turns WHERE id IN ({placeholders})", child_turn_ids)
 
@@ -1346,6 +1361,7 @@ class ChatStore:
             next_ordinal += 1
             changed = True
         if changed:
+            conn.execute("DELETE FROM trace_stats WHERE turn_id = ?", (turn_id,))
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
         return changed
 
@@ -3608,6 +3624,7 @@ class ChatStore:
                 raise KeyError(turn_id)
 
             conn.execute("DELETE FROM trace_events WHERE turn_id = ?", (turn_id,))
+            conn.execute("DELETE FROM trace_stats WHERE turn_id = ?", (turn_id,))
             for ordinal, item in enumerate(normalized_trace, start=1):
                 payload = item.get("payload")
                 payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
@@ -3836,7 +3853,47 @@ class ChatStore:
         if not normalized_turn_ids:
             return {}
 
+        final_texts = final_text_by_turn or {}
+        content_digests = {
+            turn_id: hashlib.sha256(
+                str(final_texts[turn_id] or "").encode("utf-8", errors="replace")
+            ).hexdigest()
+            for turn_id in normalized_turn_ids
+            if turn_id in final_texts
+        }
         placeholders = ", ".join("?" for _ in normalized_turn_ids)
+        cached_rows = conn.execute(
+            f"""
+            SELECT turn_id, trace_count, tool_call_count, process_count, content_digest
+            FROM trace_stats
+            WHERE turn_id IN ({placeholders})
+            """,
+            normalized_turn_ids,
+        ).fetchall()
+        stats: dict[str, dict[str, int]] = {}
+        cached_turn_ids: set[str] = set()
+        missing_turn_ids: list[str] = []
+        for row in cached_rows:
+            turn_id = str(row["turn_id"] or "")
+            cached_turn_ids.add(turn_id)
+            expected_digest = content_digests.get(turn_id)
+            cached_digest = str(row["content_digest"] or "")
+            if expected_digest is not None and cached_digest != expected_digest:
+                missing_turn_ids.append(turn_id)
+                continue
+            stats[turn_id] = {
+                "trace_count": int(row["trace_count"] or 0),
+                "tool_call_count": int(row["tool_call_count"] or 0),
+                "process_count": int(row["process_count"] or 0),
+            }
+        missing_turn_ids.extend(
+            turn_id for turn_id in normalized_turn_ids if turn_id not in cached_turn_ids
+        )
+        missing_turn_ids = list(dict.fromkeys(missing_turn_ids))
+        if not missing_turn_ids:
+            return stats
+
+        missing_placeholders = ", ".join("?" for _ in missing_turn_ids)
         rows = conn.execute(
             f"""
             SELECT
@@ -3852,10 +3909,10 @@ class ChatStore:
                 payload_json,
                 created_at
             FROM trace_events
-            WHERE turn_id IN ({placeholders})
+            WHERE turn_id IN ({missing_placeholders})
             ORDER BY turn_id ASC, ordinal ASC, created_at ASC, id ASC
             """,
-            normalized_turn_ids,
+            missing_turn_ids,
         ).fetchall()
 
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -3874,18 +3931,47 @@ class ChatStore:
                 "created_at": item["created_at"],
             })
 
-        stats: dict[str, dict[str, int]] = {}
         for turn_id, trace in grouped.items():
             normalized = _normalize_trace_events(trace)
             normalized = _prune_redundant_final_trace(
                 normalized,
-                (final_text_by_turn or {}).get(turn_id, ""),
+                final_texts.get(turn_id, ""),
             )
             stats[turn_id] = {
                 "trace_count": len(normalized),
                 "tool_call_count": sum(1 for item in normalized if str(item.get("kind") or "") == "tool_call"),
                 "process_count": sum(1 for item in normalized if str(item.get("kind") or "") not in {"tool_call", "tool_result"}),
             }
+        for turn_id in missing_turn_ids:
+            stats.setdefault(
+                turn_id,
+                {"trace_count": 0, "tool_call_count": 0, "process_count": 0},
+            )
+        now = _utc_now()
+        conn.executemany(
+            """
+            INSERT INTO trace_stats (
+                turn_id, trace_count, tool_call_count, process_count, content_digest, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(turn_id) DO UPDATE SET
+                trace_count = excluded.trace_count,
+                tool_call_count = excluded.tool_call_count,
+                process_count = excluded.process_count,
+                content_digest = excluded.content_digest,
+                updated_at = excluded.updated_at
+            """,
+            [
+                (
+                    turn_id,
+                    stats[turn_id]["trace_count"],
+                    stats[turn_id]["tool_call_count"],
+                    stats[turn_id]["process_count"],
+                    content_digests.get(turn_id, ""),
+                    now,
+                )
+                for turn_id in missing_turn_ids
+            ],
+        )
         return stats
 
     def _message_from_row(

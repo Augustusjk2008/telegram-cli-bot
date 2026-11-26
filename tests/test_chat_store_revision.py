@@ -175,6 +175,39 @@ def test_trace_stats_exclude_duplicate_final_commentary(tmp_path: Path) -> None:
     assert details["process_count"] == 1
 
 
+def test_trace_stats_cache_skips_payload_scan_until_trace_changes(tmp_path: Path) -> None:
+    class TracedStore(ChatStore):
+        def __init__(self, workspace):
+            super().__init__(workspace)
+            self.sql: list[str] = []
+
+        def _connect(self, *, create):
+            conn = super()._connect(create=create)
+            if conn is not None:
+                conn.set_trace_callback(self.sql.append)
+            return conn
+
+    store = TracedStore(tmp_path)
+    handle = _begin(store, text="缓存统计")
+    store.append_trace_event(handle.turn_id, kind="tool_call", summary="运行工具")
+    store.complete_turn(handle, content="完成", completion_state="completed")
+
+    store.sql.clear()
+    first = store.list_messages(handle.conversation_id)
+    assert first[-1]["meta"]["tool_call_count"] == 1
+
+    store.sql.clear()
+    second = store.list_messages(handle.conversation_id)
+    assert second[-1]["meta"]["tool_call_count"] == 1
+    assert not any("FROM trace_events" in statement for statement in store.sql)
+
+    store.append_trace_event(handle.turn_id, kind="commentary", summary="后续过程")
+    store.sql.clear()
+    third = store.list_messages(handle.conversation_id)
+    assert third[-1]["meta"]["process_count"] == 1
+    assert any("FROM trace_events" in statement for statement in store.sql)
+
+
 def test_trace_result_lookup_has_covering_turn_kind_call_index(tmp_path: Path) -> None:
     store = ChatStore(tmp_path)
     handle = _begin(store, text="trace index")
