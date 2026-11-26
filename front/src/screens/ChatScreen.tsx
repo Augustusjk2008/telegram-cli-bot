@@ -989,7 +989,7 @@ function updateMessageByIdOrClientStateKey(
   return updateMessageByClientStateKey(items, messageClientStateKey, updater);
 }
 
-function applyChatStreamEvents(
+export function applyChatStreamEvents(
   items: ChatMessage[],
   events: readonly ChatStreamRenderEvent[],
   activeSendVersion: number,
@@ -997,6 +997,7 @@ function applyChatStreamEvents(
   let nextItems = items;
   let copied = false;
   const assistantIndexes = new Map<string, number>();
+  const pendingTextByIndex = new Map<number, string[]>();
 
   const updateAtIndex = (index: number, updater: (item: ChatMessage) => ChatMessage) => {
     if (index < 0) {
@@ -1014,10 +1015,7 @@ function applyChatStreamEvents(
     nextItems[index] = next;
   };
 
-  const updateAssistant = (
-    event: ChatStreamRenderEvent,
-    updater: (item: ChatMessage) => ChatMessage,
-  ) => {
+  const assistantIndexFor = (event: ChatStreamRenderEvent) => {
     const cacheKey = `${event.turnId || ""}:${event.assistantMessageId || ""}:${event.assistantId}:${event.streamStartedAtMs}`;
     let index = assistantIndexes.get(cacheKey);
     if (typeof index !== "number") {
@@ -1029,7 +1027,30 @@ function applyChatStreamEvents(
       });
       assistantIndexes.set(cacheKey, index);
     }
-    updateAtIndex(index, updater);
+    return index;
+  };
+
+  const updateAssistant = (
+    event: ChatStreamRenderEvent,
+    updater: (item: ChatMessage) => ChatMessage,
+  ) => {
+    updateAtIndex(assistantIndexFor(event), updater);
+  };
+
+  const materializePendingText = (index: number) => {
+    const pending = pendingTextByIndex.get(index);
+    if (!pending || pending.length === 0) {
+      return;
+    }
+    pendingTextByIndex.delete(index);
+    const appendedText = pending.join("");
+    if (!appendedText) {
+      return;
+    }
+    updateAtIndex(index, (item) => ({
+      ...item,
+      text: item.text + appendedText,
+    }));
   };
 
   for (const event of events) {
@@ -1037,11 +1058,15 @@ function applyChatStreamEvents(
       continue;
     }
     if (event.kind === "chunk") {
-      updateAssistant(event, (item) => ({
-        ...item,
-        text: item.text + event.chunk,
-        state: "streaming",
-      }));
+      const index = assistantIndexFor(event);
+      if (index >= 0) {
+        const pending = pendingTextByIndex.get(index) || [];
+        pending.push(event.chunk);
+        pendingTextByIndex.set(index, pending);
+        updateAtIndex(index, (item) => item.state === "streaming"
+          ? item
+          : { ...item, state: "streaming" });
+      }
       continue;
     }
     if (event.kind === "status") {
@@ -1062,13 +1087,17 @@ function applyChatStreamEvents(
         }));
       }
       if (typeof status.replaceText === "string") {
-        updateAssistant(event, (item) => ({
+        const index = assistantIndexFor(event);
+        materializePendingText(index);
+        updateAtIndex(index, (item) => ({
           ...item,
           text: status.replaceText || "",
           state: "streaming",
         }));
       } else if (typeof status.previewText === "string" && status.previewText.trim()) {
-        updateAssistant(event, (item) => (
+        const index = assistantIndexFor(event);
+        materializePendingText(index);
+        updateAtIndex(index, (item) => (
           item.text.trim()
             ? item
             : { ...item, text: status.previewText || "", state: "streaming" }
@@ -1077,18 +1106,27 @@ function applyChatStreamEvents(
       continue;
     }
     if (event.kind === "trace") {
-      updateAssistant(event, (item) => {
+      const index = assistantIndexFor(event);
+      const canUseTracePreview = event.trace.kind === "commentary"
+        && Boolean(event.trace.summary.trim())
+        && !event.usingPreviewReplace;
+      if (canUseTracePreview) {
+        materializePendingText(index);
+      }
+      updateAtIndex(index, (item) => {
         const nextItem = appendTraceToMessage(item, event.trace);
-        const canUseTracePreview = event.trace.kind === "commentary"
-          && Boolean(event.trace.summary.trim())
-          && !event.usingPreviewReplace
+        const canUsePreview = canUseTracePreview
           && !item.text.trim();
-        return canUseTracePreview
+        return canUsePreview
           ? { ...nextItem, text: event.trace.summary, state: "streaming" }
           : nextItem;
       });
       continue;
     }
+  }
+
+  for (const index of pendingTextByIndex.keys()) {
+    materializePendingText(index);
   }
 
   return nextItems;

@@ -27,17 +27,43 @@ export function isChatStreamBarrier(event: ChatStreamInputEvent) {
 
 export function reduceChatStreamBatch(input: readonly ChatStreamInputEvent[]) {
   const events: ChatStreamRenderEvent[] = [];
+  let pendingChunk: {
+    event: Extract<ChatStreamRenderEvent, { kind: "chunk" }>;
+    parts: string[];
+  } | null = null;
+
+  const flushChunk = () => {
+    if (!pendingChunk) {
+      return;
+    }
+    events.push({ ...pendingChunk.event, chunk: pendingChunk.parts.join("") });
+    pendingChunk = null;
+  };
+
   for (const event of input) {
-    const previous = events[events.length - 1];
-    if (event.kind === "chunk" && previous?.kind === "chunk" && sameTarget(previous, event)) {
-      previous.chunk += event.chunk;
+    if (event.kind === "chunk") {
+      if (pendingChunk && sameTarget(pendingChunk.event, event)) {
+        pendingChunk.parts.push(event.chunk);
+      } else {
+        flushChunk();
+        pendingChunk = { event, parts: [event.chunk] };
+      }
       continue;
     }
-    if (event.kind === "status" && previous?.kind === "status" && sameTarget(previous, event)) {
-      previous.status = { ...previous.status, ...event.status };
+    flushChunk();
+    const previous = events[events.length - 1];
+    if (
+      event.kind === "status"
+      && previous?.kind === "status"
+      && sameTarget(previous, event)
+      && !isChatStreamBarrier(previous)
+      && !isChatStreamBarrier(event)
+    ) {
+      events[events.length - 1] = { ...previous, status: { ...previous.status, ...event.status } };
       continue;
     }
     events.push(event);
   }
+  flushChunk();
   return { events };
 }

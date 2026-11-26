@@ -5,8 +5,9 @@ import { isChatStreamBarrier, type ChatStreamInputEvent } from "../stream/chatSt
 
 export function useChatStreamBatcher(
   consume: (events: readonly ChatStreamInputEvent[]) => void,
+  enabled = FRONTEND_FEATURE_FLAGS.chatFrameBatching,
 ) {
-  const queue = useFrameBatchedQueue(consume, FRONTEND_FEATURE_FLAGS.chatFrameBatching);
+  const queue = useFrameBatchedQueue(consume, enabled);
   const enqueue = useCallback((event: ChatStreamInputEvent) => {
     if (isChatStreamBarrier(event)) {
       queue.flush();

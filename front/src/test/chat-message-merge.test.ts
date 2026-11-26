@@ -1,7 +1,127 @@
 import { expect, test } from "vitest";
-import { mergeMessagesPreservingClientState } from "../screens/ChatScreen";
+import { applyChatStreamEvents, mergeMessagesPreservingClientState } from "../screens/ChatScreen";
 import type { ChatMessage } from "../services/types";
+import type { ChatStreamRenderEvent } from "../stream/chatStreamBatch";
 import { compactCompletedMessageMeta, mergeMessageMeta } from "../utils/chatMessageMeta";
+
+const streamBase = { sendVersion: 1, streamStartedAtMs: 100 };
+
+function streamingAssistant(id: string): ChatMessage {
+  return {
+    id,
+    role: "assistant",
+    text: "",
+    createdAt: "2026-07-07T10:00:01Z",
+    state: "streaming",
+  };
+}
+
+function applyStreamEvents(items: ChatMessage[], events: readonly ChatStreamRenderEvent[]) {
+  return applyChatStreamEvents(items, events, streamBase.sendVersion);
+}
+
+test("stream batching applies one coalesced text update per assistant target", () => {
+  const merged = applyStreamEvents(
+    [streamingAssistant("assistant-1"), streamingAssistant("assistant-2")],
+    [
+      { ...streamBase, assistantId: "assistant-1", kind: "chunk", chunk: "first" },
+      { ...streamBase, assistantId: "assistant-2", kind: "chunk", chunk: "other" },
+      { ...streamBase, assistantId: "assistant-1", kind: "chunk", chunk: " answer" },
+    ],
+  );
+
+  expect(merged.map((item) => item.text)).toEqual(["first answer", "other"]);
+});
+
+test("stream text batching crosses non-text events without changing their order", () => {
+  const merged = applyStreamEvents(
+    [streamingAssistant("assistant-1")],
+    [
+      { ...streamBase, assistantId: "assistant-1", kind: "chunk", chunk: "before" },
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "status",
+        userMessageId: "user-1",
+        status: { elapsedSeconds: 1 },
+      },
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "trace",
+        trace: { kind: "tool_result", summary: "tool" },
+        usingPreviewReplace: false,
+      },
+      { ...streamBase, assistantId: "assistant-1", kind: "chunk", chunk: " after" },
+    ],
+  );
+
+  expect(merged[0].text).toBe("before after");
+  expect(merged[0].meta?.trace).toEqual([{ kind: "tool_result", summary: "tool" }]);
+});
+
+test("stream status and trace previews stay ordered around text updates", () => {
+  const merged = applyStreamEvents(
+    [streamingAssistant("assistant-1")],
+    [
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "status",
+        userMessageId: "user-1",
+        status: { previewText: "preview " },
+      },
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "chunk",
+        chunk: "answer",
+      },
+    ],
+  );
+
+  expect(merged[0].text).toBe("preview answer");
+
+  const tracePreview = applyStreamEvents(
+    [streamingAssistant("assistant-1")],
+    [
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "trace",
+        trace: { kind: "commentary", summary: "thinking " },
+        usingPreviewReplace: false,
+      },
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "chunk",
+        chunk: "answer",
+      },
+    ],
+  );
+
+  expect(tracePreview[0].text).toBe("thinking answer");
+});
+
+test("replaceText remains a text barrier for subsequent chunks", () => {
+  const merged = applyStreamEvents(
+    [streamingAssistant("assistant-1")],
+    [
+      { ...streamBase, assistantId: "assistant-1", kind: "chunk", chunk: "old" },
+      {
+        ...streamBase,
+        assistantId: "assistant-1",
+        kind: "status",
+        userMessageId: "user-1",
+        status: { replaceText: "authoritative" },
+      },
+      { ...streamBase, assistantId: "assistant-1", kind: "chunk", chunk: " tail" },
+    ],
+  );
+
+  expect(merged[0].text).toBe("authoritative tail");
+});
 
 test("idle history merge preserves message references when nothing changed", () => {
   const previousItems: ChatMessage[] = [
