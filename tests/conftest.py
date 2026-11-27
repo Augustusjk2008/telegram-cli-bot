@@ -10,10 +10,10 @@ import pytest
 # locator authoritative for every process.  Test modules import bot while
 # pytest collects them, so reading the developer's real home profile would
 # either point the suite at production data or raise StoragePathError before
-# any fixture can isolate it.  Keep the whole session on a throwaway home;
-# tests that need another one monkeypatch Path.home themselves.
+# any fixture can isolate it. Child processes resolve the same temporary home.
 _SESSION_HOME = Path(tempfile.mkdtemp(prefix="orbit-safe-claw-pytest-home-"))
-Path.home = staticmethod(lambda: _SESSION_HOME)
+os.environ["USERPROFILE" if os.name == "nt" else "HOME"] = str(_SESSION_HOME)
+os.environ["TCB_PORTABLE_ROOT"] = ""
 
 # Agent sessions and terminals started by a supervised host inherit its update
 # protocol variables.  A test that writes the handoff with them would overwrite
@@ -37,10 +37,7 @@ for _name in (
 # open a developer's real Codex state.
 os.environ.pop("CODEX_HOME", None)
 
-os.environ.setdefault(
-    "TCB_DATA_DIR",
-    str(Path(tempfile.gettempdir()) / f"orbit-safe-claw-pytest-data-{os.getpid()}"),
-)
+os.environ["TCB_DATA_DIR"] = str(_SESSION_HOME / "runtime-data")
 
 
 @pytest.fixture

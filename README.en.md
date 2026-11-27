@@ -358,6 +358,26 @@ Desktop execution temporarily bridges the Desktop profile's `agent-default-model
 Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup for source installations. Windows portable packages use a separate `.tcb` storage root inside the package, so a host user's migrated locator is not imported. Portable packages place application data under the package's `data/` directory; after a portable migration, the package locator determines the application data directory.
 
 <details>
+<summary>Archive chat history from temporary pytest workspaces</summary>
+
+Run these commands from the installation directory. Choose a new batch directory on the same volume as chat history, outside the storage roots and repository. The local date passed to `--before` is exclusive. The scan checks the workspace hash and the `pytest-of-*/pytest-<number>/test_*` path. It protects workspaces referenced by the main Bot, every managed profile and persisted sessions.
+
+```powershell
+$batch = 'H:\orbit-safe-claw-archives\pytest-history\batch-01'
+python -m scripts.archive_pytest_history scan --batch-dir $batch --before 2026-10-30
+python -m scripts.archive_pytest_history archive --batch-dir $batch
+python -m scripts.archive_pytest_history verify --batch-dir $batch
+python -m scripts.archive_pytest_history detach --batch-dir $batch
+python -m scripts.archive_pytest_history report --batch-dir $batch
+```
+
+`verify` reads back the ZIPs and restores sample SQLite databases. On Windows, `detach` rechecks references and file fingerprints, then atomically moves exclusively accessible directories into the batch's `quarantine/`. Rerun the command to resume an interrupted move. Retaining the quarantine copies frees zero bytes on the volume. The `workspaces` table in `manifest.sqlite3` records workspace keys, file inventories, outcomes and skip reasons.
+
+Run `python -m scripts.archive_pytest_history restore --batch-dir $batch --workspace <key>` to restore one workspace from its ZIP. An existing destination reports a conflict. Add `--to <isolated-directory>` to restore and verify an independent copy.
+
+</details>
+
+<details>
 <summary><strong>Manage multiple bots</strong></summary>
 
 Create a local `managed_bots.json` based on `managed_bots.example.json`:

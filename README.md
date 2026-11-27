@@ -392,6 +392,26 @@ Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否�
 应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
 
 <details>
+<summary>归档 pytest 临时工作区的聊天历史</summary>
+
+在安装目录运行以下命令。为批次选择与活动历史库同卷、位于存储根和仓库外的新目录。`--before` 使用本地日期，排除当天。扫描核对工作区哈希与 `pytest-of-*/pytest-数字/test_*` 路径，并保护主 Bot、所有托管配置和持久化会话引用的工作区。
+
+```powershell
+$batch = 'H:\orbit-safe-claw-archives\pytest-history\batch-01'
+python -m scripts.archive_pytest_history scan --batch-dir $batch --before 2026-10-30
+python -m scripts.archive_pytest_history archive --batch-dir $batch
+python -m scripts.archive_pytest_history verify --batch-dir $batch
+python -m scripts.archive_pytest_history detach --batch-dir $batch
+python -m scripts.archive_pytest_history report --batch-dir $batch
+```
+
+`verify` 回读 ZIP 并抽样恢复 SQLite。Windows 上的 `detach` 重新检查引用和文件指纹，将可独占的目录原子移到批次的 `quarantine/`，中断后可重复执行。保留隔离副本时，移出活动目录释放的磁盘空间为零。`manifest.sqlite3` 的 `workspaces` 表记录工作区键、文件清单、处理结果和跳过原因。
+
+按工作区键运行 `python -m scripts.archive_pytest_history restore --batch-dir $batch --workspace <key>` 可从 ZIP 恢复单库。同名目录会报告冲突。添加 `--to <隔离目录>` 可独立恢复和核验一份副本。
+
+</details>
+
+<details>
 <summary><strong>托管多个 Bot</strong></summary>
 
 参考 `managed_bots.example.json` 创建本地 `managed_bots.json`：
