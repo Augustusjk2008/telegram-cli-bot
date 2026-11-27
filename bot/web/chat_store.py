@@ -1258,8 +1258,8 @@ class ChatStore:
         if not normalized_events:
             return False
         trace_previews.begin_write(conn)
-        pilot = any(event.get("kind") == "tool_result" for event in normalized_events) and trace_body_policy.enabled(
-            conn, self.workspace_key
+        pilot = any(event.get("kind") == "tool_result" for event in normalized_events) and trace_body_policy.for_append(
+            conn, self.workspace_key, self.db_path
         )
         row = conn.execute(
             "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",

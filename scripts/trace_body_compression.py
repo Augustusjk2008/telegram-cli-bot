@@ -1,4 +1,4 @@
-"""Manage the pilot for new tool-result bodies in the active history store."""
+"""Manage compression of new tool results across all sessions or in individual workspaces."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
 from bot import runtime_paths
-from bot.storage_migration import StorageExclusiveGuard
+from bot.storage_migration import StorageExclusiveGuard, _atomic_write_json, _fsync_directory
 from bot.update_state import FileLock, UpdateStore
 from bot.web import trace_body_policy as pilot, trace_previews as traces
 from scripts import _pytest_history_inventory as paths
@@ -105,12 +105,33 @@ def decoded_text(row):
     return summary, payload
 
 
+def _all_status(default):
+    if default is None:
+        return {"configured": False, "enabled": False}
+    return {"configured": True, "enabled": default.state == "enabled" and pilot.verified(
+        default.writer, default.rollback_root, default.rollback_digest),
+        "state": default.state, "rollback_install": default.rollback_root,
+        "excluded_workspaces": list(default.excluded)}
+
+
 def _inspect(conn, path: Path, verify: bool) -> dict:
     setting = pilot.policy(conn)
-    result = {"workspace": path.parent.name, "database": str(path), "configured": setting is not None,
+    key = path.parent.name
+    default = pilot.default_for_database(path, key, root=runtime_paths.get_active_storage_root() / "chat-history")
+    result = {"workspace": key, "database": str(path), "configured": setting is not None,
               "enabled": False, "compressed": 0, "encoded_bytes": 0, "legacy_json_blobs": 0}
-    if setting is not None:
-        result.update(enabled=pilot.enabled(conn, path.parent.name), rollback_install=setting[2])
+    if default is not None:
+        covered = default.covers(key)
+        values = (key, default.writer, default.rollback_root, default.rollback_digest)
+        scope = "excluded" if key in default.excluded else "all"
+        if default.state == "disabling":
+            scope = "disabling"
+        result.update(scope=scope,
+                      configured=covered or setting is not None, rollback_install=default.rollback_root,
+                      enabled=covered and pilot.verified(*values[1:]),
+                      workspace_policy_ready=covered and setting is not None and tuple(setting) == values)
+    elif setting is not None:
+        result.update(scope="workspace", enabled=pilot.enabled(conn, key), rollback_install=setting[2])
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_events'").fetchone():
         return result
     for row in conn.execute("""SELECT rowid,id,substr(payload_json,1,4) AS prefix,length(payload_json) AS bytes
@@ -149,6 +170,12 @@ def inspect_workspace(path: Path, *, verify: bool = False) -> dict:
 
 def inventory(root: Path, *, verify: bool = False) -> dict:
     items, errors = [], []
+    policy_file = paths.plain_path(root / pilot.ALL_SESSIONS_FILE)
+    try:
+        global_state = _all_status(pilot.all_sessions(root))
+    except (ValueError, OSError) as exc:
+        errors.append({"policy": str(policy_file), "error": str(exc)})
+        global_state = {"configured": True, "enabled": False, "state": "invalid"}
     directories = [root] if root.exists() else []
     while directories:
         directory = directories.pop()
@@ -160,6 +187,8 @@ def inventory(root: Path, *, verify: bool = False) -> dict:
         for entry in entries:
             try:
                 path = paths.plain_path(entry)
+                if path == policy_file:
+                    continue
                 if path.is_dir():
                     directories.append(path)
                 elif path.name.endswith(("-wal", "-journal", "-shm")):
@@ -170,7 +199,10 @@ def inventory(root: Path, *, verify: bool = False) -> dict:
             except (OSError, ValueError, sqlite3.Error) as exc:
                 errors.append({"database": str(entry), "error": str(exc)})
     blockers = [item["database"] for item in items if item["configured"] or item["compressed"]]
-    return {"root": str(root), "databases": len(items), "compressed": sum(item["compressed"] for item in items), "workspaces": items,
+    if global_state["configured"]:
+        blockers.append(str(policy_file))
+    return {"root": str(root), "all_sessions": global_state, "databases": len(items),
+            "compressed": sum(item["compressed"] for item in items), "workspaces": items,
             "errors": errors, "blockers": blockers, "legacy_ready": not errors and not blockers}
 
 
@@ -178,7 +210,7 @@ def require_legacy_ready() -> None:
     with StorageExclusiveGuard():
         result = inventory(history_root())
     if not result["legacy_ready"]:
-        raise ValueError("降级前请用 scripts.trace_body_compression check-legacy 检查所有工作区，关闭试点并展开压缩正文")
+        raise ValueError("降级前请用 scripts.trace_body_compression check-legacy 检查所有工作区，关闭压缩开关并展开已有压缩正文")
 
 
 _PROBE = """
@@ -275,7 +307,8 @@ def restore(path: Path, batch_size: int, max_batches: int | None = None) -> dict
         while max_batches is None or batches < max_batches:
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
-                if pilot.policy(conn) is not None:
+                default = pilot.default_for_database(path, path.parent.name, root=runtime_paths.get_active_storage_root() / "chat-history")
+                if pilot.policy(conn) is not None or (default and default.covers(path.parent.name)):
                     raise ValueError("disable this workspace before restoring its bodies")
                 if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_events'").fetchone():
                     break
@@ -299,14 +332,91 @@ def restore(path: Path, batch_size: int, max_batches: int | None = None) -> dict
     return {"workspace": path.parent.name, "restored": restored, "committed_batches": batches, **inspect_workspace(path)}
 
 
+def _publish_all(root: Path, default: pilot.AllSessions) -> None:
+    _atomic_write_json(paths.plain_path(root / pilot.ALL_SESSIONS_FILE), {"version": 1, **default._asdict()})
+
+
+def _sync_workspaces(root: Path, default: pilot.AllSessions) -> tuple[int, list]:
+    workspaces = paths.plain_path(root / "workspaces")
+    count, errors = 0, []
+    if not workspaces.exists():
+        return count, errors
+    for folder in sorted(workspaces.iterdir()):
+        if not paths.KEY.fullmatch(folder.name):
+            continue
+        try:
+            path = paths.plain_path(paths.workspace(workspaces, folder.name) / "chat.sqlite")
+            if not path.is_file():
+                continue
+            with database(path, writable=True) as conn, conn:
+                # Drain writers that observed the previous default before the atomic publication.
+                conn.execute("BEGIN IMMEDIATE")
+                if default.state == "enabled":
+                    pilot.install_policy(conn, folder.name, default.writer, default.rollback_root, default.rollback_digest)
+                else:
+                    pilot.disable(conn)
+            count += 1
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            errors.append({"workspace": folder.name, "error": str(exc)})
+    return count, errors
+
+
+def configure_all(root: Path, proof) -> dict:
+    """Publish before syncing old writers. A disabling marker survives an interrupted drain."""
+    stopping = pilot.AllSessions("disabling", "", "", "")
+    if proof is not None:
+        previous = pilot.all_sessions(root)
+        if previous and previous.state == "disabling":
+            count, errors = _sync_workspaces(root, stopping)
+            if errors:
+                return {"all_sessions": _all_status(stopping), "synchronized": count, "errors": errors}
+        rollback, digest = proof
+        default = pilot.AllSessions("enabled", pilot.writer_identity(), str(rollback), digest)
+    else:
+        default = stopping
+    _publish_all(root, default)
+    count, errors = _sync_workspaces(root, default)
+    if not errors and default.state == "disabling":
+        paths.plain_path(root / pilot.ALL_SESSIONS_FILE).unlink()
+        _fsync_directory(root)
+    return {"all_sessions": _all_status(pilot.all_sessions(root)), "synchronized": count, "errors": errors}
+
+
+def _workspace_setting(root: Path, path: Path, proof) -> None:
+    key = path.parent.name
+    default = pilot.default_for_database(path, key, root=root)
+    if default is not None:
+        if default.state == "disabling":
+            raise ValueError("finish disable --all before changing a workspace")
+        excluded = set(default.excluded)
+        if proof is None:
+            excluded.add(key)
+        else:
+            if (pilot.writer_identity(), str(proof[0]), proof[1]) != (default.writer, default.rollback_root, default.rollback_digest):
+                raise ValueError("use enable --all to change the deployment rollback proof")
+            excluded.discard(key)
+        updated = default._replace(excluded=tuple(sorted(excluded)))
+        if updated != default:
+            _publish_all(root, updated)
+    with database(path, writable=True) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if proof is None:
+            pilot.disable(conn)
+        else:
+            pilot.enable(conn, key, *proof)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     for action in ("status", "verify", "enable", "disable", "restore", "check-legacy"):
         sub = commands.add_parser(action)
-        if action != "check-legacy":
-            sub.add_argument("--workspace", required=action in {"enable", "disable", "restore"},
-                             help="workspace directory, 64-character history key, or database path from status")
+        if action in {"enable", "disable"}:
+            scope = sub.add_mutually_exclusive_group(required=True)
+            scope.add_argument("--all", action="store_true", help="existing and future workspaces")
+            scope.add_argument("--workspace", help="project directory or history key")
+        elif action != "check-legacy":
+            sub.add_argument("--workspace", required=action == "restore", help="workspace directory, history key or database path")
         if action == "enable":
             sub.add_argument("--rollback-install", required=True, type=Path, help="installed program retained for rollback")
         if action == "restore":
@@ -317,6 +427,11 @@ def main(argv=None):
             if args.action == "enable" else nullcontext())
     with lock, StorageExclusiveGuard():
         root = history_root()
+        if getattr(args, "all", False):
+            proof = verified_rollback(args.rollback_install) if args.action == "enable" else None
+            data = configure_all(root, proof)
+            print(json.dumps(data, indent=2))
+            return int(bool(data["errors"]) or (proof is not None and not data["all_sessions"]["enabled"]))
         if args.action == "check-legacy" or not args.workspace:
             data = inventory(root, verify=args.action == "verify")
             print(json.dumps(data, indent=2))
@@ -324,12 +439,7 @@ def main(argv=None):
         proof = verified_rollback(args.rollback_install) if args.action == "enable" else None
         path = workspace_database(root, args.workspace, create=proof is not None)
         if args.action in {"enable", "disable"}:
-            with database(path, writable=True) as conn, conn:
-                conn.execute("BEGIN IMMEDIATE")
-                if proof is not None:
-                    pilot.enable(conn, path.parent.name, *proof)
-                else:
-                    pilot.disable(conn)
+            _workspace_setting(root, path, proof)
         data = (restore(path, args.batch_size, args.max_batches) if args.action == "restore"
                 else inspect_workspace(path, verify=args.action == "verify"))
         print(json.dumps(data, indent=2))

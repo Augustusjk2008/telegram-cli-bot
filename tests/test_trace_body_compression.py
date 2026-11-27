@@ -2,6 +2,8 @@ import hashlib
 import json
 import shutil
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -253,3 +255,109 @@ def test_same_package_reinstalled_from_a_different_predecessor_needs_new_opt_in(
     store.append_trace_events(handle.turn_id, [event("after-jump", "x" * traces.MIN_BODY_BYTES)])
     report = maintenance.inspect_workspace(store.db_path)
     assert report["configured"] and not report["enabled"] and report["compressed"] == 0
+
+
+def test_all_sessions_covers_running_named_and_future_workspace_writes(install, rollback):
+    existing = ChatStore(install / "existing")
+    main = start(existing)
+    named = existing.begin_turn(bot_id=1, bot_alias="main", user_id=2, agent_id="@ses_named", cli_type="codex",
+                                working_dir=str(existing.workspace_dir), session_epoch=0, user_text="named",
+                                native_provider="codex")
+    big = "result" * 18000
+    existing.append_trace_events(main.turn_id, [event("pre-existing", "initial")])
+    assert maintenance.main(["enable", "--all", "--rollback-install", str(rollback)]) == 0
+    with maintenance.database(existing.db_path) as conn:
+        assert pilot.enabled(conn, existing.workspace_key)  # Workspace-only hosts see the published setting too.
+    existing.append_trace_events(main.turn_id, [event("pre-existing", big), event("live", "running")])
+    existing.append_trace_events(named.turn_id, [event("named", big)])
+    # Reapplying the global setting preserves eligibility of an in-flight result.
+    assert maintenance.main(["enable", "--all", "--rollback-install", str(rollback)]) == 0
+    existing.append_trace_events(main.turn_id, [event("live", big)])
+    with maintenance.database(existing.db_path) as conn:
+        assert dict(conn.execute("SELECT call_id,typeof(payload_json) FROM trace_events")) == {
+            "pre-existing": "text", "named": "blob", "live": "blob"}
+
+    later = ChatStore(install / "created-later")
+    turn = start(later)
+    state = maintenance.inspect_workspace(later.db_path)
+    assert state["enabled"] and not state["workspace_policy_ready"]
+    with pytest.raises(ValueError, match="disable"):
+        maintenance.restore(later.db_path, 1)
+    later.append_trace_events(turn.turn_id, [event("first", big)])
+    assert maintenance.inspect_workspace(later.db_path, verify=True)["compressed"] == 1
+    assert later.get_message_trace_event(turn.assistant_message_id, kind="tool_result", call_id="first")["event"]["summary"] == big
+    assert maintenance.main(["disable", "--all"]) == 0
+    later.append_trace_events(turn.turn_id, [event("after", big)])
+    state = maintenance.inspect_workspace(later.db_path)
+    assert not state["configured"] and state["compressed"] == 1
+
+
+def test_global_default_blocks_legacy_with_empty_store_and_respects_workspace_disable(install, rollback):
+    root = maintenance.history_root()
+    assert maintenance.main(["enable", "--all", "--rollback-install", str(rollback)]) == 0
+    report = maintenance.inventory(root)
+    assert report["databases"] == 0 and report["all_sessions"]["enabled"] and not report["legacy_ready"]
+    opted_out = ChatStore(install / "except")
+    turn = start(opted_out)
+    assert maintenance.main(["disable", "--workspace", opted_out.workspace_key]) == 0
+    opted_out.append_trace_events(turn.turn_id, [event("plain", "x" * 80000)])
+    assert maintenance.inspect_workspace(opted_out.db_path)["compressed"] == 0
+    assert maintenance.main(["enable", "--workspace", opted_out.workspace_key, "--rollback-install", str(rollback)]) == 0
+    opted_out.append_trace_events(turn.turn_id, [event("again", "x" * 80000)])
+    assert maintenance.inspect_workspace(opted_out.db_path)["compressed"] == 1
+    (rollback / "bot/web/trace_previews.py").unlink()
+    other = ChatStore(install / "after-reader-loss")
+    other_turn = start(other)
+    other.append_trace_events(other_turn.turn_id, [event("unproven", "x" * 80000)])
+    state = maintenance.inspect_workspace(other.db_path)
+    assert state["configured"] and not state["enabled"] and not state["compressed"]
+
+
+def test_interrupted_disable_all_blocks_new_inheritance_and_can_resume(install, rollback, monkeypatch):
+    store = ChatStore(install / "busy")
+    turn = start(store)
+    assert maintenance.main(["enable", "--all", "--rollback-install", str(rollback)]) == 0
+
+    def busy(_conn):
+        raise sqlite3.OperationalError("busy workspace")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pilot, "disable", busy)
+        assert maintenance.main(["disable", "--all"]) == 1
+    root = maintenance.history_root()
+    assert maintenance.inventory(root)["all_sessions"]["state"] == "disabling"
+    with maintenance.database(store.db_path) as conn:
+        assert pilot.policy(conn) is not None
+    store.append_trace_events(turn.turn_id, [event("during-drain", "x" * 80000)])
+    assert maintenance.inspect_workspace(store.db_path)["compressed"] == 0
+    assert maintenance.main(["disable", "--all"]) == 0
+    assert maintenance.inventory(root)["legacy_ready"]
+
+
+def test_disable_all_drains_inflight_first_write_to_a_new_workspace(install, rollback, monkeypatch):
+    assert maintenance.main(["enable", "--all", "--rollback-install", str(rollback)]) == 0
+    store = ChatStore(install / "just-created")
+    turn = start(store)
+    published = threading.Event()
+    publish = maintenance._publish_all
+
+    def signal(root, default):
+        publish(root, default)
+        if default.state == "disabling":
+            published.set()
+
+    monkeypatch.setattr(maintenance, "_publish_all", signal)
+    with ThreadPoolExecutor(max_workers=1) as executor, maintenance.database(store.db_path, writable=True) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        assert pilot.for_append(writer, store.workspace_key, store.db_path)
+        stopping = executor.submit(maintenance.main, ["disable", "--all"])
+        try:
+            assert published.wait(5)
+            traces.write_event(writer, turn.turn_id, 1, "trace_inflight", event("c", "x" * 80000), "now", pilot=True)
+            writer.commit()
+        finally:
+            writer.rollback()
+        assert stopping.result(timeout=10) == 0
+    store.append_trace_events(turn.turn_id, [event("after-stop", "x" * 80000)])
+    status = maintenance.inspect_workspace(store.db_path, verify=True)
+    assert not status["configured"] and status["compressed"] == 1

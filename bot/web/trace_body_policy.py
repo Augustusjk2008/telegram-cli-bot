@@ -1,13 +1,15 @@
-"""Workspace opt-in for v1 trace bodies, bound to a verified local rollback reader."""
+"""Workspace and deployment-wide v1 trace writes bound to a verified rollback reader."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from bot.update_state import UpdateConflict, UpdateStore, installation_id
 
@@ -15,6 +17,7 @@ from bot.update_state import UpdateConflict, UpdateStore, installation_id
 PROGRAM_ROOT = Path(__file__).resolve().parents[2]
 READER_FILES = ("bot/web/trace_previews.py", "bot/web/chat_store.py", "bot/web/trace_compaction.py")
 _POLICY = "trace_body_pilot"
+ALL_SESSIONS_FILE = "trace-body-compression.json"
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS trace_body_pilot (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1), workspace_key TEXT NOT NULL,
@@ -75,31 +78,94 @@ def policy(conn: sqlite3.Connection):
     return conn.execute("SELECT workspace_key,writer,rollback_root,rollback_digest FROM trace_body_pilot WHERE singleton=1").fetchone()
 
 
-def enabled(conn: sqlite3.Connection, workspace_key: str) -> bool:
+class AllSessions(NamedTuple):
+    state: str
+    writer: str
+    rollback_root: str
+    rollback_digest: str
+    excluded: tuple[str, ...] = ()
+
+    def covers(self, workspace_key: str) -> bool:
+        return self.state == "enabled" and workspace_key not in self.excluded
+
+
+@lru_cache(maxsize=16)
+def _read_all_sessions(path: Path, stamp: tuple) -> AllSessions:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(data, dict) or data.get("version") != 1 or data.get("state") not in ("enabled", "disabling")
+            or not all(isinstance(data.get(k), str) for k in ("writer", "rollback_root", "rollback_digest"))
+            or not isinstance(data.get("excluded"), list) or not all(isinstance(k, str) for k in data["excluded"])):
+        raise ValueError(f"invalid global trace compression setting: {path}")
+    return AllSessions(data["state"], data["writer"], data["rollback_root"], data["rollback_digest"], tuple(data["excluded"]))
+
+
+def all_sessions(root: Path) -> AllSessions | None:
+    path = root / ALL_SESSIONS_FILE
     try:
-        row = policy(conn)
-        if row is None or row[0] != workspace_key or not isinstance(row[2], str):
-            return False
-        rollback = Path(row[2])
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    return _read_all_sessions(path, (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+
+
+def default_for_database(database: Path, workspace_key: str, *, root: Path | None = None) -> AllSessions | None:
+    folder = database.parent
+    if (database.name == "chat.sqlite" and folder.name == workspace_key and re.fullmatch(r"[0-9a-f]{64}", workspace_key)
+            and folder.parent.name == "workspaces" and folder.parent.parent.name == "chat-history"
+            and (root is None or folder.parent.parent == root)):
+        return all_sessions(folder.parent.parent)
+    return None
+
+
+def verified(writer: str, rollback_root: str, rollback_digest: str) -> bool:
+    try:
+        rollback = Path(rollback_root)
         return (rollback.is_absolute() and rollback != PROGRAM_ROOT
-                and row[1] == writer_identity() and program_digest(rollback) == row[3])
-    except (OSError, ValueError, sqlite3.Error, UpdateConflict):
-        # Loss of the optional policy or its reader proof still permits the ordinary plaintext write.
+                and writer == writer_identity() and program_digest(rollback) == rollback_digest)
+    except (OSError, TypeError, ValueError, UpdateConflict):
         return False
 
 
-def enable(conn: sqlite3.Connection, workspace_key: str, rollback_root: Path, rollback_digest: str) -> None:
-    values = (workspace_key, writer_identity(), os.fspath(rollback_root), rollback_digest)
-    for statement in _SCHEMA:
-        conn.execute(statement)
+def enabled(conn: sqlite3.Connection, workspace_key: str) -> bool:
+    try:
+        row = policy(conn)
+        return row is not None and row[0] == workspace_key and verified(*row[1:])
+    except sqlite3.Error:
+        return False
+
+
+def install_policy(conn: sqlite3.Connection, workspace_key: str, writer: str, rollback_root: str, rollback_digest: str) -> None:
+    values = (workspace_key, writer, rollback_root, rollback_digest)
     current = policy(conn)
     if current is not None and tuple(current) == values:
         return
-    conn.execute("DELETE FROM trace_body_pilot_events")
+    for statement in _SCHEMA:
+        conn.execute(statement)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_events'").fetchone():
+        conn.execute("DELETE FROM trace_body_pilot_events")
     conn.execute("INSERT OR REPLACE INTO trace_body_pilot VALUES (1,?,?,?,?)", values)
+
+
+def for_append(conn: sqlite3.Connection, workspace_key: str, database: Path) -> bool:
+    # The caller holds the workspace writer lock before observing the deployment setting.
+    try:
+        default = default_for_database(database, workspace_key)
+    except (OSError, ValueError):
+        return False
+    if default is None:
+        return enabled(conn, workspace_key)
+    if not default.covers(workspace_key) or not verified(default.writer, default.rollback_root, default.rollback_digest):
+        return False
+    install_policy(conn, workspace_key, default.writer, default.rollback_root, default.rollback_digest)
+    return True
+
+
+def enable(conn: sqlite3.Connection, workspace_key: str, rollback_root: Path, rollback_digest: str) -> None:
+    install_policy(conn, workspace_key, writer_identity(), os.fspath(rollback_root), rollback_digest)
 
 
 def disable(conn: sqlite3.Connection) -> None:
     if policy(conn) is not None:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_events'").fetchone():
+            conn.execute("DELETE FROM trace_body_pilot_events")
         conn.execute("DELETE FROM trace_body_pilot")
-        conn.execute("DELETE FROM trace_body_pilot_events")

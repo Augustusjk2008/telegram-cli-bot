@@ -360,23 +360,26 @@ Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides 
 The execution details list reads previews from the workspace database. Expanding a tool result reads the selected event in full. Older turns build their previews on the first request that needs them for a list or its counts. The default write format is 3.2.0 plaintext.
 
 <details>
-<summary>Pilot compression and restoration of large tool results</summary>
+<summary>Enable large tool-result compression for all sessions and restore plaintext</summary>
 
 Run these commands from the installation directory with the host's storage configuration. Use a project directory or a 64-character history key for `$workspace`. Point `--rollback-install` at the separately retained program that will actually serve as the rollback installation. Before enabling writes the command runs that program's reader against a temporary database with plaintext and v1 zlib events. Managed updates also check the actual pre-update reader hashes. The same check applies when skipping releases.
 
 ```powershell
-$workspace = 'D:\Projects\example'
-python -m scripts.trace_body_compression status --workspace $workspace
-python -m scripts.trace_body_compression enable --workspace $workspace --rollback-install 'D:\Orbit\rollback'
-python -m scripts.trace_body_compression verify --workspace $workspace
+$rollback = 'D:\Orbit\rollback'
+python -m scripts.trace_body_compression enable --all --rollback-install $rollback
+python -m scripts.trace_body_compression status
 ```
 
-The pilot covers live `tool_result` events appended to the selected workspace after activation, including later updates to those events. A summary and its original JSON must total at least **64 KiB in UTF-8** and save space including framing and SHA-256. Previews are stored separately. A changed writer or rollback-reader fingerprint returns subsequent writes to plaintext until re-enabled. Disabling stops new compression and leaves existing encoded bodies readable.
+`--all` synchronizes the setting to existing workspace databases for their default chats, named chats and gateways that share history. Backends with global-setting support automatically apply it to future workspaces as well. The `all_sessions` field in `status` reports the deployment setting. Use `enable --workspace $workspace --rollback-install $rollback` for a single workspace or `disable --workspace $workspace` to exclude it. Reapplying `enable --all` selects every workspace.
 
-The tested compatible reader (`0c412028`) can read mixed history and continue writing plaintext. Before reverting to original 3.2.0 (`395c3d850115`), use the pilot tools to disable and expand each affected workspace, then check the entire active history directory.
+Compression covers live `tool_result` events appended after activation, including later updates to those events. A summary and its original JSON must total at least **64 KiB in UTF-8** and save space including framing and SHA-256. Previews are stored separately. A changed writer or rollback-reader fingerprint returns subsequent writes to plaintext until re-enabled. Disabling stops new compression and leaves existing encoded bodies readable.
+
+The tested compatible reader (`0c412028`) can read mixed history and continue writing plaintext. Before reverting to original 3.2.0 (`395c3d850115`), disable all compression, expand existing encoded bodies in each affected workspace, then check the entire active history directory.
 
 ```powershell
-python -m scripts.trace_body_compression disable --workspace $workspace
+python -m scripts.trace_body_compression disable --all
+$workspace = 'D:\Projects\example'
+python -m scripts.trace_body_compression verify --workspace $workspace
 python -m scripts.trace_body_compression restore --workspace $workspace --batch-size 8
 python -m scripts.trace_body_compression check-legacy
 ```
