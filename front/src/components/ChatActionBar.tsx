@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ClipboardList, Columns2, History, LoaderCircle, Maximize2, Minimize2, Network, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { ChatComposerModelOption } from "./ChatComposer";
+import { ChatSessionSelector, chatSessionTitle, type ChatSessionSelectorProps } from "./ChatSessionSelector";
+import { cliTypeLabel } from "../utils/cliType";
 import { toolbarButtonClass } from "./ToolbarButton";
 import type {  DeepSeekProviderOption } from "../services/types";
 
@@ -13,7 +15,7 @@ type Props = {
   clusterDisabledReason?: string;
   clusterSaving?: boolean;
   onToggleClusterMode?: () => void;
-  sessionSelector?: ReactNode;
+  sessionSelector?: ChatSessionSelectorProps;
   embedded?: boolean;
   focused?: boolean;
   onToggleFocus?: () => void;
@@ -202,7 +204,7 @@ export function ChatActionBar({
       if (!optionsRootRef.current?.contains(event.target as Node)) setMobileOptionsOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !optionsPanelRef.current?.querySelector("dialog[open]")) {
         event.preventDefault();
         closeOptions();
       }
@@ -215,10 +217,17 @@ export function ChatActionBar({
     };
   }, [mobileLayout, mobileOptionsOpen]);
   if (mobileLayout) {
+    const chats = sessionSelector?.items || [];
+    const chat = chats.find((item) => item.id === sessionSelector?.selectedId);
+    const namedTitle = chat && chat.id !== "main"
+      ? chatSessionTitle(chat, chats.some((other) => other.id !== chat.id && other.title === chat.title))
+      : "";
+    const tool = sessionSelector?.activeCliType || chat?.effectiveCliType;
     const selectedModelLabel = modelDescription || modelOptions.find((option) => option.value === selectedModel)?.label || selectedModel || "模型";
     const selectedProviderLabel = providerOptions.find((option) => option.id === selectedProvider)?.label || selectedProvider || "默认 Provider";
     const optionsSummary = [
-      "CLI",
+      namedTitle,
+      tool === "unknown" ? "未知工具" : cliTypeLabel(tool || "CLI"),
       providerOptions.length > 0 ? selectedProviderLabel : "",
       selectedModelLabel,
       selectedReasoningEffort,
@@ -226,9 +235,9 @@ export function ChatActionBar({
     return (
       <section ref={optionsRootRef} className="relative z-10 h-10 shrink-0 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-titlebar-bg)] px-2">
         <div data-testid="chat-action-bar" className="flex h-full min-w-0 items-center gap-1">
-          {sessionSelector}
           <button
             ref={optionsTriggerRef}
+            autoFocus={sessionSelector?.focusOnMount}
             type="button"
             aria-label="聊天选项"
             aria-haspopup="dialog"
@@ -276,6 +285,7 @@ export function ChatActionBar({
               聊天选项
               <button type="button" aria-label="关闭聊天选项" onClick={closeOptions} className={iconButtonClassName}><X className="h-4 w-4" /></button>
             </div>
+            {sessionSelector && <ChatSessionSelector {...sessionSelector} inOptionsPanel />}
             {providerOptions.length > 1 ? (
               <label className="mb-2 block text-xs text-[var(--muted)]">
                 Provider
@@ -373,7 +383,7 @@ export function ChatActionBar({
           {clusterButton}
         </div>
         <div className={groupClassName} role="group" aria-label="聊天会话">
-          {sessionSelector}
+          {sessionSelector && <ChatSessionSelector {...sessionSelector} />}
           <button
             type="button"
             aria-label="历史会话"
