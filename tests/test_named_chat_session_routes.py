@@ -485,6 +485,10 @@ async def test_retry_translation_and_trace_require_message_in_selected_session(a
         cli_type=profile.cli_type, working_dir=session.working_dir, session_epoch=session.session_epoch,
         user_text="Question", native_provider="codex", conversation_id=session.active_conversation_id,
     )
+    output = "named trace output " * 200
+    store.append_trace_events(turn.turn_id, [
+        {"kind": "tool_result", "call_id": "named-call", "summary": output, "payload": {"output": output}},
+    ])
     reply = "Answer"
     store.complete_turn(turn, content=reply, completion_state="completed")
     digest = hashlib.sha256(reply.encode()).hexdigest()
@@ -494,14 +498,20 @@ async def test_retry_translation_and_trace_require_message_in_selected_session(a
     )
     message = "/history/" + turn.assistant_message_id
     for other in (BOT, f"{SESSIONS}/{sibling['id']}"):
-        for method, suffix in (("GET", "/trace"), ("POST", "/translation/retry")):
+        for method, suffix in (("GET", "/trace?payload=compact"), ("GET", "/trace/event?kind=tool_result&call_id=named-call"),
+                               ("POST", "/translation/retry")):
             response = await dispatch(api, method, other + message + suffix)
             assert response.status == 404
     for method, suffix in (("GET", "/trace"), ("POST", "/translation/retry")):
         response = await dispatch(api, method, base + message + suffix, body={"sessionId": sibling["id"]})
         assert (response.status, json.loads(response.text)["error"]["code"]) == (400, "session_scope_mismatch")
     api.translator.submit_answer.assert_not_called()
-    assert (await dispatch(api, "GET", base + message + "/trace")).status == 200
+    trace = base + message + "/trace"
+    assert (await data(api, "GET", trace))["trace"][0]["summary"] == output
+    preview = (await data(api, "GET", trace + "?payload=compact"))["trace"][0]
+    assert preview["content_truncated"]
+    assert (await data(api, "GET", trace + "/event?id=" + preview["id"]))["event"]["payload"]["output"] == output
+    assert (await dispatch(api, "GET", trace + "/event?id=" + preview["id"], token="reader")).status == 403
     retry = await data(api, "POST", base + message + "/translation/retry")
     assert retry["status"] == "pending"
     assert api.translator.submit_answer.call_args.kwargs["text"] == reply

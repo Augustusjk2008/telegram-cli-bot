@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,8 +23,8 @@ from bot.runtime_paths import (
     get_legacy_project_chat_db_path,
     normalize_workspace_dir,
 )
+from bot.web import trace_previews
 from bot.web.diagnostics import diag_log_slow
-from bot.web.trace_compaction import compact_trace_events, estimate_json_chars
 
 LOCAL_HISTORY_BACKEND = "local_v1"
 CLI_HISTORY_PROVIDERS = ("", "codex", "codex_server", "claude", "antigravity", "deepseek")
@@ -83,24 +83,6 @@ def _duration_ms(started_at: str, completed_at: str | None) -> int | None:
     return max(0, int(round((completed - started).total_seconds() * 1000)))
 
 
-def _payload_text(payload: Any) -> str:
-    if payload is None:
-        return ""
-    if isinstance(payload, str):
-        return payload
-    if isinstance(payload, (int, float, bool)):
-        return str(payload)
-    if isinstance(payload, list):
-        return "".join(_payload_text(item) for item in payload)
-    if isinstance(payload, dict):
-        for key in ("output", "result", "content", "text", "message", "summary"):
-            if key in payload:
-                text = _payload_text(payload.get(key))
-                if text:
-                    return text
-    return ""
-
-
 def _trace_summary_key(trace: dict[str, Any]) -> str:
     return "".join(str(trace.get("summary") or "").split())
 
@@ -132,56 +114,33 @@ def _prune_redundant_final_trace(trace: list[dict[str, Any]], final_text: str) -
     return pruned
 
 
-def _trace_payload_message_id(trace: dict[str, Any]) -> str:
-    payload = trace.get("payload")
-    if not isinstance(payload, dict):
-        return ""
-    for key in ("messageID", "message_id", "messageId"):
-        value = payload.get(key)
-        if value:
-            return str(value).strip()
-    return ""
+def _trace_counts(trace: list[dict]) -> dict[str, int]:
+    return {
+        "trace_count": len(trace),
+        "tool_call_count": sum(1 for item in trace if item["kind"] == "tool_call"),
+        "process_count": sum(1 for item in trace if item["kind"] not in {"tool_call", "tool_result"}),
+    }
 
 
-def _trace_payload_state(trace: dict[str, Any]) -> str:
-    payload = trace.get("payload")
-    if not isinstance(payload, dict):
-        return ""
-    return str(payload.get("state") or payload.get("status") or "").strip().lower()
-
-
-def _trace_payload_reason(trace: dict[str, Any]) -> str:
-    payload = trace.get("payload")
-    if not isinstance(payload, dict):
-        return ""
-    return str(payload.get("reason") or "").strip()
-
-
-def _tool_result_rank(trace: dict[str, Any]) -> tuple[int, int, int]:
-    state = _trace_payload_state(trace)
-    payload_text = _payload_text(trace.get("payload")).strip()
-    summary = str(trace.get("summary") or "").strip()
-    terminal = state in {"completed", "done", "finished", "success", "error", "failed"}
-    return (1 if terminal else 0, max(len(payload_text), len(summary)), int(trace.get("ordinal") or 0))
-
-
-def _reclassified_commentary_rank(trace: dict[str, Any]) -> tuple[int, int, int]:
-    call_id = str(trace.get("call_id") or "").strip()
-    message_id = _trace_payload_message_id(trace)
-    reason = _trace_payload_reason(trace)
-    return (
-        1 if call_id else 0,
-        0 if reason == "assistant-message-switched" else 1,
-        0 if message_id.startswith("msg_") else 1,
-    )
-
-
-def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_trace_events(
+    trace: list[dict[str, Any]], scores: dict[str, trace_previews.Selection] | None = None,
+) -> list[dict[str, Any]]:
     if not trace:
         return []
 
+    def score(event):
+        return scores[event["id"]] if scores is not None else trace_previews.selection(event)
+
+    def commentary_rank(event):
+        facts = score(event)
+        return (bool(str(event.get("call_id") or "").strip()), facts.priority, not facts.message_id.startswith("msg_"))
+
+    def result_rank(event):
+        facts = score(event)
+        return (facts.priority, facts.weight, event["ordinal"])
+
     kept: list[dict[str, Any]] = []
-    result_indexes_by_call_id: dict[str, int] = {}
+    result_positions: dict[str, tuple[int, str, str]] = {}
     commentary_signatures: set[tuple[str, str]] = set()
     commentary_indexes_by_summary: dict[str, int] = {}
     for item in trace:
@@ -194,28 +153,25 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
             kind = "event"
         if kind == "commentary" and raw_type == "message.text.reclassified":
             summary_key = _trace_summary_key(event)
-            signature = (_trace_payload_message_id(event), summary_key)
+            signature = (score(event).message_id, summary_key)
             if summary_key and signature in commentary_signatures:
                 continue
             existing_index = commentary_indexes_by_summary.get(summary_key)
             if summary_key and existing_index is not None:
-                if _reclassified_commentary_rank(event) > _reclassified_commentary_rank(kept[existing_index]):
+                if commentary_rank(event) > commentary_rank(kept[existing_index]):
                     kept[existing_index] = event
                 continue
             commentary_signatures.add(signature)
             if summary_key:
                 commentary_indexes_by_summary[summary_key] = len(kept)
         if kind == "tool_result" and call_id:
-            existing_index = result_indexes_by_call_id.get(call_id)
-            if existing_index is None:
-                result_indexes_by_call_id[call_id] = len(kept)
+            position = result_positions.get(call_id)
+            if position is None:
+                result_positions[call_id] = (len(kept), event["id"], event["created_at"])
                 kept.append(event)
-            elif _tool_result_rank(event) >= _tool_result_rank(kept[existing_index]):
-                original = kept[existing_index]
-                event["ordinal"] = original.get("ordinal")
-                event["id"] = original.get("id")
-                event["created_at"] = original.get("created_at")
-                kept[existing_index] = event
+            elif result_rank(event) >= result_rank(kept[position[0]]):
+                event["ordinal"] = kept[position[0]]["ordinal"]
+                kept[position[0]] = event
             continue
         kept.append(event)
 
@@ -260,6 +216,11 @@ def _normalize_trace_events(trace: list[dict[str, Any]]) -> list[dict[str, Any]]
     normalized: list[dict[str, Any]] = []
     for ordinal, item in enumerate(kept, start=1):
         normalized_item = dict(item)
+        if str(item.get("kind") or "").strip() == "tool_result":
+            position = result_positions.get(str(item.get("call_id") or "").strip())
+            if position is not None:
+                # Keep the first display identity after ranking physical rows by their own content.
+                normalized_item["id"], normalized_item["created_at"] = position[1:]
         normalized_item["ordinal"] = ordinal
         normalized.append(normalized_item)
     return normalized
@@ -618,6 +579,7 @@ class ChatStore:
             ON voice_events(turn_id, seq);
             """
         )
+        conn.executescript(trace_previews.SCHEMA)
         conn.execute("DROP INDEX IF EXISTS idx_conversations_identity")
         conversation_columns = {
             "bot_id": "INTEGER NOT NULL DEFAULT 0",
@@ -950,7 +912,7 @@ class ChatStore:
                 ORDER BY ordinal ASC, created_at ASC, id ASC
                 """,
                 (str(child["id"]),),
-            ).fetchall()
+            )
             for trace_row in trace_rows:
                 conn.execute(
                     """
@@ -1295,75 +1257,30 @@ class ChatStore:
         normalized_events = [dict(event) for event in events if isinstance(event, dict)]
         if not normalized_events:
             return False
+        trace_previews.begin_write(conn)
         row = conn.execute(
             "SELECT COALESCE(MAX(ordinal), 0) + 1 AS next_ordinal FROM trace_events WHERE turn_id = ?",
             (turn_id,),
         ).fetchone()
         next_ordinal = int(row["next_ordinal"])
-        changed = False
         for event in normalized_events:
-            payload = event.get("payload")
-            payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
             kind = str(event.get("kind") or "unknown")
             call_id = str(event.get("call_id") or "")
             if kind == "tool_result" and call_id:
                 existing = conn.execute(
                     """
-                    SELECT id
-                    FROM trace_events INDEXED BY idx_trace_events_turn_kind_call
+                    SELECT id FROM trace_events INDEXED BY idx_trace_events_turn_kind_call
                     WHERE turn_id = ? AND kind = ? AND call_id = ?
-                    ORDER BY ordinal ASC, created_at ASC, id ASC
-                    LIMIT 1
-                    """,
-                    (turn_id, kind, call_id),
+                    ORDER BY ordinal ASC, created_at ASC, id ASC LIMIT 1
+                    """, (turn_id, kind, call_id),
                 ).fetchone()
                 if existing is not None:
-                    conn.execute(
-                        """
-                        UPDATE trace_events
-                        SET raw_type = ?, title = ?, tool_name = ?, summary = ?,
-                            payload_json = ?, created_at = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            str(event.get("raw_type") or ""),
-                            str(event.get("title") or ""),
-                            str(event.get("tool_name") or ""),
-                            str(event.get("summary") or ""),
-                            payload_json,
-                            now,
-                            str(existing["id"]),
-                        ),
-                    )
-                    changed = True
+                    trace_previews.write_event(conn, turn_id, next_ordinal, existing["id"], event, now, update=True)
                     continue
-            conn.execute(
-                """
-                INSERT INTO trace_events (
-                    id, turn_id, ordinal, kind, raw_type, title, tool_name,
-                    call_id, summary, payload_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"trace_{uuid.uuid4().hex}",
-                    turn_id,
-                    next_ordinal,
-                    kind,
-                    str(event.get("raw_type") or ""),
-                    str(event.get("title") or ""),
-                    str(event.get("tool_name") or ""),
-                    call_id,
-                    str(event.get("summary") or ""),
-                    payload_json,
-                    now,
-                ),
-            )
+            trace_previews.write_event(conn, turn_id, next_ordinal, f"trace_{uuid.uuid4().hex}", event, now)
             next_ordinal += 1
-            changed = True
-        if changed:
-            conn.execute("DELETE FROM trace_stats WHERE turn_id = ?", (turn_id,))
-            conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
-        return changed
+        conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
+        return True
 
     def _next_turn_seq(self, conn: sqlite3.Connection, conversation_id: str) -> int:
         row = conn.execute(
@@ -3651,38 +3568,8 @@ class ChatStore:
             conn.execute("DELETE FROM trace_events WHERE turn_id = ?", (turn_id,))
             conn.execute("DELETE FROM trace_stats WHERE turn_id = ?", (turn_id,))
             for ordinal, item in enumerate(normalized_trace, start=1):
-                payload = item.get("payload")
-                payload_json = json.dumps(payload, ensure_ascii=False) if payload is not None else None
-                conn.execute(
-                    """
-                    INSERT INTO trace_events (
-                        id,
-                        turn_id,
-                        ordinal,
-                        kind,
-                        raw_type,
-                        title,
-                        tool_name,
-                        call_id,
-                        summary,
-                        payload_json,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        f"trace_{uuid.uuid4().hex}",
-                        turn_id,
-                        ordinal,
-                        str(item.get("kind") or "unknown"),
-                        str(item.get("raw_type") or ""),
-                        str(item.get("title") or ""),
-                        str(item.get("tool_name") or ""),
-                        str(item.get("call_id") or ""),
-                        str(item.get("summary") or ""),
-                        payload_json,
-                        str(item.get("created_at") or now),
-                    ),
-                )
+                trace_previews.write_event(conn, turn_id, ordinal, f"trace_{uuid.uuid4().hex}", item,
+                                           str(item.get("created_at") or now))
             conn.execute("UPDATE turns SET updated_at = ? WHERE id = ?", (now, turn_id))
         elapsed_ms = int(round((time.perf_counter() - started_at) * 1000))
         diag_log_slow(
@@ -3918,66 +3805,18 @@ class ChatStore:
         if not missing_turn_ids:
             return stats
 
-        missing_placeholders = ", ".join("?" for _ in missing_turn_ids)
-        rows = conn.execute(
-            f"""
-            SELECT
-                id,
-                turn_id,
-                ordinal,
-                kind,
-                raw_type,
-                title,
-                tool_name,
-                call_id,
-                summary,
-                payload_json,
-                created_at
-            FROM trace_events
-            WHERE turn_id IN ({missing_placeholders})
-            ORDER BY turn_id ASC, ordinal ASC, created_at ASC, id ASC
-            """,
-            missing_turn_ids,
-        ).fetchall()
-
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for item in rows:
-            turn_id = str(item["turn_id"])
-            grouped.setdefault(turn_id, []).append({
-                "id": item["id"],
-                "ordinal": int(item["ordinal"]),
-                "kind": item["kind"],
-                "raw_type": item["raw_type"],
-                "title": item["title"],
-                "tool_name": item["tool_name"],
-                "call_id": item["call_id"],
-                "summary": item["summary"],
-                "payload": _parse_json(item["payload_json"]),
-                "created_at": item["created_at"],
-            })
-
-        for turn_id, trace in grouped.items():
-            normalized = _normalize_trace_events(trace)
-            normalized = _prune_redundant_final_trace(
-                normalized,
-                final_texts.get(turn_id, ""),
-            )
-            stats[turn_id] = {
-                "trace_count": len(normalized),
-                "tool_call_count": sum(1 for item in normalized if str(item.get("kind") or "") == "tool_call"),
-                "process_count": sum(1 for item in normalized if str(item.get("kind") or "") not in {"tool_call", "tool_result"}),
-            }
+        # The cache row and the projections it counts must describe the same trace revision.
+        trace_previews.begin_write(conn)
         for turn_id in missing_turn_ids:
-            stats.setdefault(
-                turn_id,
-                {"trace_count": 0, "tool_call_count": 0, "process_count": 0},
-            )
+            events, scores = trace_previews.read_turn(conn, turn_id, stats=True, backfill=True)
+            normalized = _prune_redundant_final_trace(_normalize_trace_events(events, scores), final_texts.get(turn_id, ""))
+            stats[turn_id] = _trace_counts(normalized)
         now = _utc_now()
         conn.executemany(
             """
             INSERT INTO trace_stats (
                 turn_id, trace_count, tool_call_count, process_count, content_digest, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) SELECT id, ?, ?, ?, ?, ? FROM turns WHERE id = ?
             ON CONFLICT(turn_id) DO UPDATE SET
                 trace_count = excluded.trace_count,
                 tool_call_count = excluded.tool_call_count,
@@ -3987,12 +3826,12 @@ class ChatStore:
             """,
             [
                 (
-                    turn_id,
                     stats[turn_id]["trace_count"],
                     stats[turn_id]["tool_call_count"],
                     stats[turn_id]["process_count"],
                     content_digests.get(turn_id, ""),
                     now,
+                    turn_id,
                 )
                 for turn_id in missing_turn_ids
             ],
@@ -5304,8 +5143,9 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
-        with closing(conn):
-            with conn:
+        with closing(conn), conn:
+            for backfill in (False, True):
+                conn.execute("BEGIN IMMEDIATE" if backfill else "BEGIN")
                 row = conn.execute(
                     """
                     SELECT m.turn_id, m.content
@@ -5318,59 +5158,29 @@ class ChatStore:
                 if row is None:
                     raise KeyError(message_id)
                 turn_id = str(row["turn_id"])
-                trace_rows = conn.execute(
-                    """
-                    SELECT
-                        id,
-                        ordinal,
-                        kind,
-                        raw_type,
-                        title,
-                        tool_name,
-                        call_id,
-                        summary,
-                        payload_json,
-                        created_at
-                    FROM trace_events
-                    WHERE turn_id = ?
-                    ORDER BY ordinal ASC, created_at ASC, id ASC
-                    """,
-                    (turn_id,),
-                ).fetchall()
-                trace = [
-                    {
-                        "id": trace_row["id"],
-                        "ordinal": int(trace_row["ordinal"]),
-                        "kind": trace_row["kind"],
-                        "raw_type": trace_row["raw_type"],
-                        "title": trace_row["title"],
-                        "tool_name": trace_row["tool_name"],
-                        "call_id": trace_row["call_id"],
-                        "summary": trace_row["summary"],
-                        "payload": _parse_json(trace_row["payload_json"]),
-                        "created_at": trace_row["created_at"],
-                    }
-                    for trace_row in trace_rows
-                ]
-                trace = _prune_redundant_final_trace(
-                    _normalize_trace_events(trace),
-                    str(row["content"] or ""),
-                )
-                tool_call_count = sum(1 for item in trace if str(item["kind"] or "") == "tool_call")
-                process_count = sum(1 for item in trace if str(item["kind"] or "") not in {"tool_call", "tool_result"})
-                return {
-                    "message_id": message_id,
-                    "trace_count": len(trace),
-                    "tool_call_count": tool_call_count,
-                    "process_count": process_count,
-                    "trace": compact_trace_events(trace) if compact else trace,
-                }
+                if compact:
+                    result = trace_previews.read_turn(conn, turn_id, backfill=backfill)
+                    if result is None:
+                        # Drop this snapshot and re-read both the final answer and events after any concurrent writer.
+                        conn.rollback()
+                        continue
+                    events, scores = result
+                else:
+                    rows = conn.execute(f"""
+                        SELECT {trace_previews.BODY_COLUMNS} FROM trace_events
+                        WHERE turn_id=? ORDER BY ordinal, created_at, id
+                        """, (turn_id,))
+                    events = [trace_previews.full_event(event) for event in rows]
+                    scores = None
+                trace = _prune_redundant_final_trace(_normalize_trace_events(events, scores), str(row["content"] or ""))
+                return {"message_id": message_id, **_trace_counts(trace), "trace": trace}
 
     def get_message_trace_event(
         self,
         message_id: str,
         *,
         owner: tuple[int, int, str] | None = None,
+        accept_provider: Callable[[str], bool] | None = None,
         event_id: str = "",
         kind: str = "",
         call_id: str = "",
@@ -5389,10 +5199,12 @@ class ChatStore:
         conn = self._connect(create=False)
         if conn is None:
             raise KeyError(message_id)
-        columns = "id, ordinal, kind, raw_type, title, tool_name, call_id, summary, payload_json, created_at"
-        with closing(conn):
-            with conn:
-                owner_clause = "AND c.bot_id = ? AND c.user_id = ? AND c.agent_id = ?" if owner else ""
+        with closing(conn), conn:
+            owner_clause = "AND c.bot_id = ? AND c.user_id = ? AND c.agent_id = ?" if owner else ""
+            # The winning row and its body are read from one SQLite snapshot. Only
+            # a group of duplicate legacy rows can require a second, writable snapshot.
+            for backfill in (False, True):
+                conn.execute("BEGIN IMMEDIATE" if backfill else "BEGIN")
                 row = conn.execute(
                     f"""
                     SELECT m.turn_id, t.native_provider
@@ -5400,72 +5212,26 @@ class ChatStore:
                     JOIN turns AS t ON t.id = m.turn_id
                     JOIN conversations AS c ON c.id = m.conversation_id
                     WHERE m.id = ? AND t.workspace_history_discarded_at IS NULL {owner_clause}
-                    """,
-                    (message_id, *(owner or ())),
+                    """, (message_id, *(owner or ())),
                 ).fetchone()
-                if row is None:
+                if row is None or (accept_provider is not None and not accept_provider(row["native_provider"] or "")):
                     raise KeyError(message_id)
-                turn_id = str(row["turn_id"])
-                target = None
-                if normalized_event_id:
-                    target = conn.execute(
-                        f"SELECT {columns} FROM trace_events WHERE turn_id = ? AND id = ?",
-                        (turn_id, normalized_event_id),
-                    ).fetchone()
-                if target is not None:
-                    normalized_kind = str(target["kind"] or "")
-                    normalized_call_id = str(target["call_id"] or "")
-                candidates = [target] if target is not None else []
-                if normalized_call_id and normalized_kind in {"tool_call", "tool_result"}:
-                    candidates = conn.execute(
-                        f"""
-                        SELECT {columns}
-                        FROM trace_events
-                        WHERE turn_id = ? AND kind = ? AND call_id = ?
-                        ORDER BY ordinal ASC, created_at ASC, id ASC
-                        """,
-                        (turn_id, normalized_kind, normalized_call_id),
-                    ).fetchall()
-                if not candidates:
-                    raise KeyError(normalized_event_id or normalized_call_id or message_id)
-                events = [
-                    {
-                        "id": candidate["id"],
-                        "ordinal": int(candidate["ordinal"]),
-                        "kind": candidate["kind"],
-                        "raw_type": candidate["raw_type"],
-                        "title": candidate["title"],
-                        "tool_name": candidate["tool_name"],
-                        "call_id": candidate["call_id"],
-                        "summary": candidate["summary"],
-                        "payload": _parse_json(candidate["payload_json"]),
-                        "created_at": candidate["created_at"],
-                    }
-                    for candidate in candidates
-                ]
-                if normalized_kind == "tool_result":
-                    selected = max(events, key=_tool_result_rank)
-                else:
-                    # Same weighting the Web client uses when it merges versions of one call.
-                    selected = max(
-                        events,
-                        key=lambda item: (
-                            estimate_json_chars(item.get("payload")) * 10 + len(str(item.get("summary") or "")) * 5,
-                            int(item.get("ordinal") or 0),
-                        ),
-                    )
-                event = dict(selected)
-                event.pop("ordinal", None)
-                if event["kind"] == "tool_call" and str(event.get("raw_type") or "") in PROCESS_TRACE_RAW_TYPES:
-                    event["kind"] = "event"
-                return {
-                    "message_id": message_id,
-                    "native_provider": str(row["native_provider"] or ""),
-                    "event": event,
-                }
+                if not normalized_event_id and not normalized_call_id:
+                    raise KeyError(message_id)
+                event = trace_previews.detail(conn, row["turn_id"], normalized_event_id, normalized_kind,
+                                              normalized_call_id, backfill=backfill)
+                if event is not None:
+                    break
+                conn.rollback()
+            assert event is not None
+            event.pop("ordinal")
+            if event["kind"] == "tool_call" and str(event.get("raw_type") or "") in PROCESS_TRACE_RAW_TYPES:
+                event["kind"] = "event"
+            return {"message_id": message_id, "native_provider": str(row["native_provider"] or ""), "event": event}
 
     def get_trace_recovery_context(
         self, message_id: str, *, owner: tuple[int, int, str] | None = None,
+        accept_provider: Callable[[str], bool] | None = None,
     ) -> dict[str, Any]:
         conn = self._connect(create=False)
         if conn is None:
@@ -5502,7 +5268,7 @@ class ChatStore:
                     """,
                     (message_id, *(owner or ())),
                 ).fetchone()
-                if row is None:
+                if row is None or (accept_provider is not None and not accept_provider(row["native_provider"] or "")):
                     raise KeyError(message_id)
                 trace_stats = self._load_trace_stats(
                     conn,

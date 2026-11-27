@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import sqlite3
+import struct
 import uuid
+import zlib
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -10,6 +15,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from bot.chat_identity import chat_session_user_id
 from bot.manager import MultiBotManager
 from bot.models import BotProfile, UserSession
+from bot.web import trace_previews
 from bot.web.api_common import AuthContext, resolve_session_bot_id
 from bot.web.auth_store import CAP_CHAT_SEND, CAP_VIEW_CHAT_TRACE
 from bot.web.chat_history_service import ChatHistoryService
@@ -230,7 +236,7 @@ def test_tool_call_rows_sharing_a_call_id_resolve_to_the_richest_version(tmp_pat
         assert detail["event"]["payload"]["aggregated_output"] == BIG_OUTPUT
 
 
-def test_single_event_read_applies_the_history_provider_filter(tmp_path: Path) -> None:
+def test_single_event_read_applies_the_history_provider_filter(tmp_path: Path, monkeypatch) -> None:
     store = ChatStore(tmp_path / f"workspace-{uuid.uuid4().hex}")
     handle = _begin(store)
     store.append_trace_events(handle.turn_id, [_tool_result("toolu_1", BIG_OUTPUT)])
@@ -239,11 +245,184 @@ def test_single_event_read_applies_the_history_provider_filter(tmp_path: Path) -
     session = UserSession(bot_id=1, bot_alias="main", user_id=2, working_dir=str(store.workspace_dir))
     visible = ChatHistoryService(store).get_message_trace_event(None, session, handle.assistant_message_id, **reference)
     assert visible is not None and "native_provider" not in visible
+    monkeypatch.setattr(trace_previews, "read_body", lambda *args: pytest.fail("filtered body was read"))
+    for other_owner in ((7, 2, "main"), (1, 8, "main"), (1, 2, "@ses_other")):
+        with pytest.raises(KeyError):
+            store.get_message_trace_event(handle.assistant_message_id, owner=other_owner, **reference)
     filtered = ChatHistoryService(store, native_provider_filter="codex")
     assert filtered.get_message_trace_event(None, session, handle.assistant_message_id, **reference) is None
     excluded = ChatHistoryService(store, native_provider_exclude="claude")
     assert excluded.get_message_trace_event(None, session, handle.assistant_message_id, **reference) is None
     assert ChatHistoryService(store).get_message_trace_event(None, session, "msg_missing", **reference) is None
+
+
+def test_ready_preview_and_missing_stats_read_no_bodies_and_detail_reads_one(tmp_path, monkeypatch):
+    store = ChatStore(tmp_path)
+    handle = _begin(store)
+    mid = handle.assistant_message_id
+    # The terminal state and the commentary IDs fall beyond the payload preview.
+    events = [
+        _tool_result("r", BIG_OUTPUT, payload={"output": BIG_OUTPUT, "state": "running"}),
+        _tool_result("r", "winner" * 400, payload={"output": "winner" * 400, "state": "completed"}),
+        _tool_result("r", BIG_OUTPUT + "later", payload={"output": BIG_OUTPUT + "later", "state": "running"}),
+        {"kind": "tool_call", "call_id": "c"},
+        *[{"kind": "commentary", "raw_type": "message.text.reclassified", "call_id": "c",
+           "summary": "working", "payload": {"padding": BIG_OUTPUT, "messageID": identity, "reason": reason}}
+          for identity, reason in (("msg_1", "assistant-message-switched"), ("native-id", "normal"))],
+        {"kind": "tool_call", "call_id": "f", "raw_type": "file.edited",
+         "summary": BIG_OUTPUT, "payload": {"output": BIG_OUTPUT}},
+        {"kind": "reasoning", "summary": "final "},
+    ]
+    store.replace_trace_events(handle.turn_id, events)
+    store.complete_turn(handle, content="final answer", completion_state="completed")
+    full = store.get_message_trace(mid)
+    expected = {**full, "trace": [compact_trace_event(e) for e in full["trace"]]}
+    original_connect = store._connect
+
+    def preview_only(*, create):
+        conn = original_connect(create=create)
+
+        def authorize(action, table, column, *_):
+            if action == sqlite3.SQLITE_READ and table == "trace_events" and column in ("summary", "payload_json"):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(authorize)
+        return conn
+
+    with closing(sqlite3.connect(store.db_path)) as db, db:
+        db.execute("DELETE FROM trace_stats WHERE turn_id=?", (handle.turn_id,))
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_connect", preview_only)
+        assert store.get_message_trace(mid, compact=True) == expected
+        counts = store.get_trace_recovery_context(mid)
+        assert {k: counts[k] for k in ("trace_count", "tool_call_count", "process_count")} == {
+            k: full[k] for k in ("trace_count", "tool_call_count", "process_count")
+        }
+        patch.setattr("bot.web.chat_history_service.resolve_native_trace_for_turn",
+                      lambda *args, **kwargs: {"trace_count": 1, "tool_call_count": 0})
+        assert not ChatHistoryService(store).reconcile_turn_trace(
+            handle, profile=BotProfile(alias="main", cli_type="claude", working_dir=str(tmp_path)),
+            session=UserSession(bot_id=1, bot_alias="main", user_id=2, working_dir=str(tmp_path)),
+            user_text="hello", assistant_text="final answer", native_session_id="fixture",
+        )
+    reads = []
+    original_body = trace_previews.read_body
+
+    def record(conn, turn_id, event_id):
+        reads.append(event_id)
+        return original_body(conn, turn_id, event_id)
+
+    monkeypatch.setattr(trace_previews, "read_body", record)
+    detail = store.get_message_trace_event(mid, event_id=full["trace"][0]["id"])["event"]
+    assert reads == [detail["id"]]
+    assert detail["payload"]["state"] == "completed"
+    assert detail["summary"] == "winner" * 400
+
+
+def test_lazy_backfill_rereads_the_current_turn_and_final_text_after_legacy_write(tmp_path, monkeypatch):
+    store = ChatStore(tmp_path)
+    handle = _begin(store)
+    other = _begin(store, text="unopened turn")
+    store.append_trace_events(handle.turn_id, [_tool_result("r", "original"), {"kind": "reasoning", "summary": "reply"}])
+    store.append_trace_events(other.turn_id, [_tool_result("other", BIG_OUTPUT)])
+    mid = handle.assistant_message_id
+    with closing(sqlite3.connect(store.db_path)) as db, db:
+        db.execute("UPDATE trace_event_previews SET version=0")
+    original_rows = trace_previews._rows
+    changed = False
+
+    def read_then_update(*args, **kwargs):
+        nonlocal changed
+        rows = original_rows(*args, **kwargs)
+        if not changed:
+            changed = True
+            with closing(sqlite3.connect(store.db_path)) as writer, writer:
+                writer.execute("UPDATE trace_events SET summary=?,payload_json=? WHERE turn_id=? AND kind='tool_result'",
+                               ("updated", json.dumps({"output": BIG_OUTPUT}), handle.turn_id))
+                writer.execute("UPDATE messages SET content='reply' WHERE id=?", (mid,))
+        return rows
+
+    monkeypatch.setattr(trace_previews, "_rows", read_then_update)
+    shown = store.get_message_trace(mid, compact=True)
+    assert shown["trace_count"] == 1 and shown["trace"][0]["summary"] == "updated"
+    assert shown["trace"][0]["content_truncated"]
+    with closing(sqlite3.connect(store.db_path)) as db, db:
+        assert db.execute("SELECT count(*) FROM trace_event_previews WHERE version=0").fetchone()[0] == 1
+        # A 3.2.0-style connection can update the answer, replace events or delete them with foreign keys off.
+        db.execute("UPDATE messages SET content='different' WHERE id=?", (mid,))
+    assert store.get_trace_recovery_context(mid)["trace_count"] == 2
+    with closing(sqlite3.connect(store.db_path)) as db, db:
+        db.execute("DELETE FROM trace_events WHERE turn_id=?", (handle.turn_id,))
+        assert db.execute("SELECT count(*) FROM trace_event_previews").fetchone()[0] == 1
+    assert store.get_trace_recovery_context(mid)["trace_count"] == 0
+
+
+def test_failed_same_call_update_rolls_back_body_and_preview(tmp_path, monkeypatch):
+    store = ChatStore(tmp_path)
+    turn = _begin(store)
+    store.append_trace_events(turn.turn_id, [_tool_result("c", BIG_OUTPUT)])
+    previous = store.get_message_trace(turn.assistant_message_id, compact=True)
+
+    def fail(*args, **kwargs):
+        raise sqlite3.OperationalError("interrupted preview write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(trace_previews, "save", fail)
+        with pytest.raises(sqlite3.OperationalError, match="interrupted"):
+            store.append_trace_events(turn.turn_id, [_tool_result("c", "replacement")])
+    assert store.get_message_trace(turn.assistant_message_id, compact=True) == previous
+    detail = store.get_message_trace_event(turn.assistant_message_id, kind="tool_result", call_id="c")
+    assert detail["event"]["payload"]["content"] == BIG_OUTPUT
+
+
+def test_new_preview_can_rank_deeply_nested_json_accepted_by_plaintext_writer(tmp_path):
+    store = ChatStore(tmp_path)
+    turn = _begin(store)
+    nested = [{"output": [], "text": " a"}, {"output": "b ", "text": "unused"}]
+    for _ in range(550):
+        nested = [nested]
+    store.replace_trace_events(turn.turn_id, [
+        {"kind": "tool_result", "call_id": "c", "payload": {"output": nested}},
+        {"kind": "tool_result", "call_id": "c", "summary": "x"},
+    ])
+    assert store.get_message_trace(turn.assistant_message_id, compact=True)["trace"][0]["summary"] == ""
+    detail = store.get_message_trace_event(turn.assistant_message_id, kind="tool_result", call_id="c")["event"]
+    assert json.dumps(detail["payload"]) == json.dumps({"output": nested})
+
+
+@pytest.mark.parametrize("payload_json", [None, '{ "output" : "原文\\n", "state" : "done" }'])
+def test_compatible_reader_checks_tagged_body_and_continues_plaintext_writes(tmp_path, payload_json):
+    store = ChatStore(tmp_path)
+    handle = _begin(store)
+    mid = handle.assistant_message_id
+    store.append_trace_events(handle.turn_id, [_tool_result("r", "initial"), _tool_result("plain", "neighbor")])
+    event_id = store.get_message_trace(mid)["trace"][0]["id"]
+    summary = "你" * 1200
+    data = summary.encode() + (payload_json or "").encode()
+    lengths = struct.pack(">BQq", 1, len(summary.encode()), -1 if payload_json is None else len(payload_json.encode()))
+    encoded = b"\x00OTR" + lengths + hashlib.sha256(lengths + data).digest() + zlib.compress(data)
+    assert trace_previews.decode_body(event_id, "", encoded) == (summary, payload_json)
+    with closing(sqlite3.connect(store.db_path)) as db, db:
+        db.execute("UPDATE trace_events SET summary='',payload_json=? WHERE id=?", (encoded, event_id))
+    event = store.get_message_trace_event(mid, event_id=event_id)["event"]
+    assert event["summary"] == summary and event["payload"] == (json.loads(payload_json) if payload_json else None)
+    mixed = store.get_message_trace(mid, compact=True)["trace"]
+    assert mixed[0] == compact_trace_event({**event, "ordinal": 1})
+    assert mixed[1]["summary"] == "neighbor"
+    damaged = encoded[:-1]
+    if payload_json is not None:
+        # The total stays the same but the summary/payload boundary is corrupted.
+        wrong_lengths = struct.pack(">BQq", 1, len(summary.encode()) - 1, len(payload_json.encode()) + 1)
+        damaged = b"\x00OTR" + wrong_lengths + encoded[4 + len(lengths):]
+    with closing(sqlite3.connect(store.db_path)) as db, db:
+        db.execute("UPDATE trace_events SET payload_json=? WHERE id=?", (damaged, event_id))
+    with pytest.raises(ValueError, match=event_id):
+        store.get_message_trace(mid)
+    store.append_trace_events(handle.turn_id, [_tool_result("r", "plain again")])
+    with closing(sqlite3.connect(store.db_path)) as db:
+        assert db.execute("SELECT summary,typeof(payload_json) FROM trace_events WHERE id=?",
+                          (event_id,)).fetchone() == ("plain again", "text")
 
 
 class _DummyTunnelService:

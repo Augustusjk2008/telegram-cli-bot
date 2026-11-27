@@ -5,8 +5,8 @@ shows a one-line summary until an entry is expanded. A client that asks for
 compact trace events receives a capped summary and payload preview plus the
 original sizes, and reads the full event on demand (``get_message_trace_event``).
 
-The projection never touches what is persisted. The same event must project
-the same way whether it is streamed live or read from history, because the
+The history store saves this projection alongside the authoritative event body.
+The same event must project the same way live and in history, because the
 client matches the two by summary; so only tool events with a ``call_id`` get
 a capped summary, and an event that the client could not address later (no
 row id and no tool ``call_id``) is left intact.

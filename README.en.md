@@ -357,6 +357,8 @@ Desktop execution temporarily bridges the Desktop profile's `agent-default-model
 
 Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup for source installations. Windows portable packages use a separate `.tcb` storage root inside the package, so a host user's migrated locator is not imported. Portable packages place application data under the package's `data/` directory; after a portable migration, the package locator determines the application data directory.
 
+The execution details list reads previews from the workspace database. Expanding a tool result reads the selected event in full. Older turns build their previews on the first request that needs them for a list or its counts. This compatibility version continues to write plaintext, so 3.2.0 can read and append to history created during the upgrade.
+
 <details>
 <summary>Archive chat history from temporary pytest workspaces</summary>
 

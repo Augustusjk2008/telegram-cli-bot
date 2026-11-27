@@ -283,8 +283,11 @@ def test_legacy_endless_group_is_consolidated_in_database(tmp_path: Path) -> Non
         "error", "error", "continue",
     ]
     assert assistants[0]["meta"]["trace_count"] == 2
+    merged = migrated.get_message_trace(first.assistant_message_id, compact=True)["trace"]
+    assert [event["summary"] for event in merged] == ["first process", "retry process"]
     with migrated._connect(create=False) as conn:
         assert conn is not None
+        assert {row[0] for row in conn.execute("SELECT event_id FROM trace_event_previews")} == {e["id"] for e in merged}
         assert conn.execute(
             "SELECT COUNT(*) AS count FROM turns WHERE conversation_id = ?",
             (first.conversation_id,),
