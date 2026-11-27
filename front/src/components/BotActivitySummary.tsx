@@ -1,5 +1,6 @@
 import { LoaderCircle } from "lucide-react";
 import type { BotSummary } from "../services/types";
+import { getBusyActivityNames, isBotBusy } from "../app/botActivity";
 
 type Props = {
   bot: BotSummary;
@@ -24,38 +25,22 @@ function formatLatestAnswerTime(value: string | undefined) {
   })}`;
 }
 
-export function getBotActivityText(bot: BotSummary, showLatestAnswerTime = false): string {
-  const count = Math.max(
-    bot.busyAgentCount ?? 0,
-    bot.busyAgentIds?.length ?? 0,
-    bot.busyAgentNames?.length ?? 0,
-  );
-  if (count <= 0 && bot.activityStatus !== "busy" && bot.status !== "busy") {
-    return showLatestAnswerTime ? formatLatestAnswerTime(bot.lastAnswerCompletedAt) : "全部空闲";
-  }
-  if (count <= 0) {
-    return "任务处理中";
-  }
-  const names = bot.busyAgentNames || [];
-  if (count === 1) {
-    return `${names[0] || "agent"} 处理中`;
-  }
-  return `${count} 个 agent 处理中`;
-}
-
 export function BotActivitySummary({ bot, className = "", showLatestAnswerTime = false }: Props) {
-  const count = Math.max(
-    bot.busyAgentCount ?? 0,
-    bot.busyAgentIds?.length ?? 0,
-    bot.busyAgentNames?.length ?? 0,
-  );
-  const busy = count > 0 || bot.activityStatus === "busy" || bot.status === "busy";
-  const text = getBotActivityText(bot, showLatestAnswerTime);
-
+  if (!isBotBusy(bot)) {
+    return <span className={`inline-flex min-h-5 items-center text-xs text-[var(--muted)] ${className}`}>
+      {showLatestAnswerTime ? formatLatestAnswerTime(bot.lastAnswerCompletedAt) : "全部空闲"}
+    </span>;
+  }
   return (
-    <div className={`inline-flex min-h-5 items-center gap-1.5 text-xs ${busy ? "text-[var(--feedback-warning-text-deep)]" : "text-[var(--muted)]"} ${className}`}>
-      {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : null}
-      <span>{text}</span>
-    </div>
+    <span className={`inline-flex min-h-5 min-w-0 max-w-full flex-wrap items-center gap-1 text-xs ${className}`}>
+      <span className="inline-flex shrink-0 items-center gap-1 text-[var(--feedback-warning-text-deep)]">
+        <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />处理中
+      </span>
+      {getBusyActivityNames(bot).map((name, index) => (
+        <span key={`${index}-${name}`} className="min-w-0 max-w-full rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-[var(--text)] [overflow-wrap:anywhere]">
+          {name}
+        </span>
+      ))}
+    </span>
   );
 }

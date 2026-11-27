@@ -415,7 +415,7 @@ def test_bot_activity_uses_current_cluster_role_name(monkeypatch, tmp_path) -> N
     )
     monkeypatch.setattr(
         api_service,
-        "_build_agent_runtime_map",
+        "get_bot_session_runtime",
         lambda *_args: {"worker": {"is_processing": True}},
     )
     monkeypatch.setattr(api_service, "_find_active_cluster_run_for_session", lambda *_args: run)

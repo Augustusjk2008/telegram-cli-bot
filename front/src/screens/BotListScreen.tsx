@@ -4,7 +4,6 @@ import { workspaceLabel } from "../services/remoteWorkspace";
 import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { BotActivitySummary } from "../components/BotActivitySummary";
-import { MockWebBotClient } from "../services/mockWebBotClient";
 import { getBotIdentityTextStyle } from "../utils/botVisual";
 import { AgentCreateForm } from "./AgentCreateForm";
 import { FleetAvatar, FleetStats, FleetStatusChip } from "./AgentManagerParts";
@@ -126,7 +125,7 @@ function DeleteBotDialog({
 }
 
 export function BotListScreen({
-  client = new MockWebBotClient(),
+  client: suppliedClient,
   onSelect,
   onOpenBotSettings,
   onBotCreated,
@@ -144,6 +143,7 @@ export function BotListScreen({
   const [deleteWorkspaceConfirmText, setDeleteWorkspaceConfirmText] = useState("");
   const [selectedAliases, setSelectedAliases] = useState<string[]>([]);
   const {
+    client,
     bots,
     loading,
     error,
@@ -157,7 +157,7 @@ export function BotListScreen({
     unarchiveBot,
     renameBot,
     deleteBot,
-  } = useBotManager({ client, onBotsChange, includeArchived: canManage });
+  } = useBotManager({ client: suppliedClient, onBotsChange, includeArchived: canManage });
 
   useEffect(() => {
     const available = new Set(bots.filter((bot) => canManage && !isMainBot(bot) && !isBotArchived(bot)).map((bot) => bot.alias));

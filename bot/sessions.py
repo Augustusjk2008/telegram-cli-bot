@@ -4,7 +4,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 from bot.chat_identity import chat_session_user_id
 from bot.models import UserSession, is_web_session_id, normalize_session_bot_alias
@@ -163,6 +163,27 @@ def get_bot_sessions(bot_alias: str) -> list[UserSession]:
             if session.bot_alias == normalized_alias:
                 targets.append(session)
     return targets
+
+
+def get_bot_session_runtime(bot_id: int, bot_alias: str) -> dict[str, dict[str, Any]]:
+    """Snapshot shared activity by storage scope without opening idle chats from disk."""
+    result = {}
+    shared_user = chat_session_user_id()
+    with sessions_lock:
+        for (owner, user, scope), session in sessions.items():
+            if owner != bot_id or user != shared_user or session.bot_alias != bot_alias:
+                continue
+            with session._lock:
+                result[scope] = {
+                    "is_processing": bool(session.is_processing or session.endless_mode),
+                    "web_session_id": session.web_session_id,
+                    "web_session_title": session.web_session_title,
+                    "selected_cli_type": session.selected_cli_type,
+                    "endless_group_id": session.endless_group_id if session.endless_mode else "",
+                    "message_count": max(0, int(session.message_count or 0)),
+                    "active_conversation_id": session.active_conversation_id or "",
+                }
+    return result
 
 
 def get_or_create_session(

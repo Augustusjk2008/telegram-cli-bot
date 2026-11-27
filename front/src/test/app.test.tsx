@@ -101,7 +101,7 @@ test("bot switcher counts running, stopped and archived bots separately", async 
   await user.click(switchButton);
 
   const switcher = await screen.findByRole("dialog", { name: "智能体切换" });
-  expect(await within(switcher).findByText("运行 3 / 停止 1 / 归档 1")).toBeInTheDocument();
+  expect(await within(switcher).findByText("在线 3 / 离线 1 / 归档 1")).toBeInTheDocument();
   expect(listBots).toHaveBeenLastCalledWith({ includeArchived: true });
   expect(within(switcher).queryByRole("button", { name: /archived/ })).not.toBeInTheDocument();
 });

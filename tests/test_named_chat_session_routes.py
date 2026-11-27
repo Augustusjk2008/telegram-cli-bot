@@ -16,7 +16,7 @@ from bot.chat_identity import chat_session_user_id
 from bot.models import BotProfile
 from bot.web import api_common, api_service, chat_targets, server as server_module
 from bot.web.auth_store import (
-    CAP_CHAT_SEND, CAP_VIEW_BOT_STATUS, CAP_VIEW_CHAT_HISTORY, CAP_VIEW_CHAT_TRACE,
+    CAP_CHAT_SEND, CAP_VIEW_BOTS, CAP_VIEW_BOT_STATUS, CAP_VIEW_CHAT_HISTORY, CAP_VIEW_CHAT_TRACE,
     WebAccount, WebAuthSession,
 )
 from bot.web.chat_store import ChatStore
@@ -34,7 +34,7 @@ def api(tmp_path, monkeypatch):
     server = object.__new__(WebApiServer)
     server._chat_stream_tasks = set()
     server.manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(tmp_path / "bots.json"))
-    capabilities = (CAP_VIEW_BOT_STATUS, CAP_VIEW_CHAT_HISTORY, CAP_VIEW_CHAT_TRACE, CAP_CHAT_SEND)
+    capabilities = (CAP_VIEW_BOTS, CAP_VIEW_BOT_STATUS, CAP_VIEW_CHAT_HISTORY, CAP_VIEW_CHAT_TRACE, CAP_CHAT_SEND)
     members = {
         name: WebAuthSession(
             token=name, account=WebAccount(account_id=name, username=name, role="member", session_user_id=index),
@@ -42,7 +42,7 @@ def api(tmp_path, monkeypatch):
         )
         for index, (name, grants) in enumerate((
             ("sender", capabilities), ("reader", (CAP_VIEW_BOT_STATUS, CAP_VIEW_CHAT_HISTORY)),
-            ("outsider", capabilities),
+            ("outsider", capabilities), ("lister", (CAP_VIEW_BOTS,)),
         ), start=101)
     }
     monkeypatch.setattr(server_module, "_WEB_AUTH_STORE", SimpleNamespace(
@@ -139,7 +139,7 @@ async def test_local_catalog_pins_only_the_selected_tool_and_trusted_custom_path
     monkeypatch.setattr(chat_targets, "resolve_cli_executable", lambda command, _: command if command in available else None)
     catalog = await data(api, "GET", SESSIONS, token="reader")
     assert catalog["cli_options"] == [{"cli_type": kind, "available": True} for kind in commands]
-    assert catalog["items"] == [{"id": "main", "title": "主会话", "selected_cli_type": None, "effective_cli_type": "codex"}]
+    assert catalog["items"] == [{"id": "main", "title": "主会话", "selected_cli_type": None, "effective_cli_type": "codex", "is_processing": False}]
     assert (await dispatch(api, "POST", SESSIONS, body={"title": "Denied", "cli_type": "claude"}, token="reader")).status == 403
     available.remove(profile.cli_path)
     denied = await dispatch(api, "POST", SESSIONS, body={"title": "Gone", "cli_type": "codex_server"})
@@ -151,7 +151,7 @@ async def test_local_catalog_pins_only_the_selected_tool_and_trusted_custom_path
     for kind in commands:
         profile.cli_params.set_param(kind, "extra_args", [f"private-{kind}-arg"])
         item = await data(api, "POST", SESSIONS, body={"title": kind, "cli_type": kind})
-        assert item == {"id": item["id"], "title": kind, "selected_cli_type": kind, "effective_cli_type": kind}
+        assert item == {"id": item["id"], "title": kind, "selected_cli_type": kind, "effective_cli_type": kind, "is_processing": False}
         pinned[kind] = item
     profile.cli_type, profile.cli_path = "antigravity", "agy"
     catalog = await data(api, "GET", SESSIONS)
@@ -182,6 +182,41 @@ async def test_local_catalog_pins_only_the_selected_tool_and_trusted_custom_path
     with pytest.raises(api_common.WebApiError) as unavailable:
         await api_service.run_chat(manager, "main", 101, "hello", target=target)
     assert unavailable.value.code == "chat_cli_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_shared_activity_identifies_running_chats_and_protects_titles(api, monkeypatch):
+    manager = api.server.manager
+    profile = manager.main_profile
+    profile.cli_type = "codex"
+    monkeypatch.setattr(chat_targets, "resolve_cli_executable", lambda *_: "/private/executable")
+    implementation = await data(api, "POST", SESSIONS, body={"title": "Implementation", "cli_type": "codex"})
+    review = await data(api, "POST", SESSIONS, body={"title": "Review", "cli_type": "claude"})
+    main = api_service.get_chat_session_for_alias(manager, "main", 1)[2]
+    first, second = [chat_targets.resolve_named_chat_target(manager, "main", 1, item["id"]).session
+                     for item in (implementation, review)]
+    first.is_processing = True
+    second.endless_mode = True
+
+    async def listed_activity():
+        bot, = await data(api, "GET", "/api/bots")
+        catalog = await data(api, "GET", SESSIONS, token="reader")
+        assert {row["id"] for row in bot["busy_chat_sessions"]} == {
+            row["id"] for row in catalog["items"] if row["is_processing"]
+        }
+        return {row["id"]: (row["title"], row["effective_cli_type"]) for row in bot["busy_chat_sessions"]}
+
+    assert await listed_activity() == {
+        first.web_session_id: ("Implementation", "codex"), second.web_session_id: ("Review", "claude"),
+    }
+    for token in ("lister", "outsider"):
+        limited = await data(api, "GET", "/api/bots", token=token)
+        assert all("busy_chat_sessions" not in bot for bot in limited)
+        assert "Implementation" not in str(limited) and first.web_session_id not in str(limited)
+    main.is_processing, first.is_processing = True, False
+    assert await listed_activity() == {"main": ("主会话", "codex"), second.web_session_id: ("Review", "claude")}
+    main.is_processing = second.endless_mode = False
+    assert await listed_activity() == {}
 
 
 @pytest.mark.asyncio
@@ -266,7 +301,7 @@ async def test_corrupt_stored_cli_does_not_fall_back_or_leak_snapshot_data(api):
 async def test_path_selects_session_for_mutation_and_subsequent_reads(api):
     first = await data(api, "POST", SESSIONS, body={"title": "First"})
     second = await data(api, "POST", SESSIONS, body={"title": "Second"})
-    assert first.keys() == second.keys() == {"id", "title", "selected_cli_type", "effective_cli_type"}
+    assert first.keys() == second.keys() == {"id", "title", "selected_cli_type", "effective_cli_type", "is_processing"}
     assert first["selected_cli_type"] is None and first["effective_cli_type"] == api.server.manager.main_profile.cli_type
     listed = await data(api, "GET", SESSIONS, token="reader")
     assert first in listed["items"] and second in listed["items"]

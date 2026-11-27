@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { watchChatActivity } from "../services/watchChatActivity";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { WebApiClientError } from "../services/types";
 import type {
@@ -61,16 +62,18 @@ type UseBotManagerArgs = {
 };
 
 export function useBotManager({
-  client = new MockWebBotClient(),
+  client: suppliedClient,
   onBotsChange,
   includeArchived = true,
 }: UseBotManagerArgs = {}) {
+  const client = useMemo(() => suppliedClient ?? new MockWebBotClient(), [suppliedClient]);
   const [bots, setBots] = useState<BotSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [savingAction, setSavingAction] = useState("");
   const botsRef = useRef<BotSummary[]>([]);
+  const listRequest = useRef(0);
 
   function replaceBots(next: BotSummary[]) {
     botsRef.current = next;
@@ -78,22 +81,26 @@ export function useBotManager({
     onBotsChange?.(next.filter((bot) => !bot.archived));
   }
 
-  async function loadBots() {
-    setLoading(true);
-    setError("");
+  async function loadBots(quiet = false) {
+    const request = ++listRequest.current;
+    if (!quiet) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const data = await client.listBots({ includeArchived });
-      replaceBots(data);
+      if (request === listRequest.current) replaceBots(data);
       return data;
     } catch (err) {
-      setError(getErrorMessage(err, "加载智能体失败"));
+      if (!quiet && request === listRequest.current) setError(getErrorMessage(err, "加载智能体失败"));
       return [];
     } finally {
-      setLoading(false);
+      if (request === listRequest.current) setLoading(false);
     }
   }
 
   function updateBotCluster(botAlias: string, cluster: BotClusterConfig) {
+    listRequest.current++;
     const next = botsRef.current.map((bot) => (
       bot.alias === botAlias ? { ...bot, cluster } : bot
     ));
@@ -101,7 +108,8 @@ export function useBotManager({
   }
 
   useEffect(() => {
-    void loadBots();
+    const stop = watchChatActivity(client, (initial) => loadBots(!initial));
+    return () => { listRequest.current++; stop(); };
   }, [client, includeArchived]);
 
   async function createBot(draft: CreateDraft) {

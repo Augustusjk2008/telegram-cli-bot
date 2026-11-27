@@ -725,6 +725,7 @@ export type BotSummary = {
   lastAnswerTerminalAt?: string;
   serviceStatus?: BotServiceStatus;
   activityStatus?: BotActivityStatus;
+  busyChatSessions?: ChatSessionSummary[];
   busyAgentIds?: string[];
   busyAgentNames?: string[];
   busyAgentCount?: number;
@@ -1013,6 +1014,7 @@ export type ClusterConfigUpdateResult = {
 export type ChatSessionSummary = {
   id: string;
   title: string;
+  isProcessing?: boolean;
   selectedCliType?: CliType | "unknown" | null;
   effectiveCliType?: CliType | "unknown";
 };
@@ -1272,6 +1274,7 @@ export type BotOverview = {
   activeAgentId?: string;
   activeConversationId?: string;
   sessionEpoch?: number;
+  busyChatSessions?: ChatSessionSummary[];
   busyAgentIds?: string[];
   busyAgentNames?: string[];
   busyAgentCount?: number;

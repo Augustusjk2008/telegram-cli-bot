@@ -6,7 +6,7 @@ export type FleetStatus = "running" | "busy" | "unread" | "offline" | "online";
 
 const STATUS_VIEW: Record<FleetStatus, { label: string; tone: string; dot: string }> = {
   online: { label: "在线", tone: "success", dot: "online" },
-  running: { label: "运行中", tone: "success", dot: "online" },
+  running: { label: "空闲", tone: "success", dot: "online" },
   busy: { label: "处理中", tone: "accent", dot: "running" },
   unread: { label: "未读", tone: "info", dot: "info" },
   offline: { label: "离线", tone: "danger", dot: "offline" },

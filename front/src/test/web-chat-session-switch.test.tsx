@@ -118,7 +118,7 @@ test("preselects the Bot default even when unavailable, retains a failed choice,
   expect(create.mock.calls).toEqual([["main", "Review", "claude"], ["main", "Review", "claude"]]);
   const selector = await screen.findByRole("combobox", { name: "当前聊天会话" });
   await waitFor(() => {
-    expect(selector).toHaveDisplayValue("Review · claude");
+    expect(selector).toHaveDisplayValue("Review · claude · 空闲");
     expect(selector).toHaveFocus();
   });
 });
@@ -152,7 +152,7 @@ test("keeps a pinned chat's draft and DeepSeek controls when the Bot's default i
     await startConversationAfterCliSwitch(client, "main", "antigravity");
   });
   const selector = screen.getByRole("combobox", { name: "当前聊天会话" });
-  expect(selector).toHaveDisplayValue("Pinned · DeepSeek Harness");
+  expect(selector).toHaveDisplayValue("Pinned · DeepSeek Harness · 空闲");
   expect(within(selector).getByRole("option", { name: /主会话.*Antigravity CLI.*Bot 默认/ })).toBeInTheDocument();
   expect(screen.getByPlaceholderText("输入消息")).toHaveValue("keep this draft");
   expect(params).toHaveBeenLastCalledWith("main", "deepseek");
@@ -175,7 +175,7 @@ test("refreshes an inherited chat's controls from its own overview after a Bot s
     await startConversationAfterCliSwitch(client, "main", "deepseek");
   });
   await waitFor(() => expect(params).toHaveBeenLastCalledWith("main", "deepseek"));
-  expect(screen.getByRole("combobox", { name: "当前聊天会话" })).toHaveDisplayValue("Legacy · DeepSeek Harness（Bot 默认）");
+  expect(screen.getByRole("combobox", { name: "当前聊天会话" })).toHaveDisplayValue("Legacy · DeepSeek Harness（Bot 默认） · 空闲");
   expect(screen.getByPlaceholderText("输入消息")).toHaveValue("inherited draft");
 });
 

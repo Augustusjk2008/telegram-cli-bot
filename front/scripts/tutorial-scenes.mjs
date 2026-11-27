@@ -139,6 +139,14 @@ async function fillDemoQuestion(page) {
   await composer(page).locator('textarea[name="message"]').fill(DEMO_QUESTION);
 }
 
+async function fillReviewChatDialog(page) {
+  await chatPane(page).getByRole("combobox", { name: "当前聊天会话" }).selectOption("");
+  const dialog = page.getByRole("dialog", { name: "新建聊天会话" });
+  await dialog.getByLabel("聊天会话名称").fill("代码审查");
+  await dialog.getByLabel("AI 工具").selectOption("claude");
+  return dialog;
+}
+
 async function sendDemoQuestion(page) {
   await page.evaluate((script) => {
     window.__ORBIT_MOCK_CHAT_SCRIPT__ = script;
@@ -451,7 +459,15 @@ export const SCENES = [
     chapter: "start",
     shot: "switcher",
     async run(page) {
+      const dialog = await fillReviewChatDialog(page);
+      await dialog.getByRole("button", { name: "创建", exact: true }).click();
+      await chatPane(page).getByText("代码审查", { exact: true }).waitFor();
+      await composer(page).locator('textarea[name="message"]').fill("请审查当前工作区的改动");
+      await page.clock.install({ time: FIXED_TIME });
+      await page.clock.pauseAt(new Date(FIXED_TIME.getTime() + 1000));
+      await chatPane(page).getByRole("button", { name: "发送", exact: true }).click();
       await openBotSwitcher(page);
+      await page.getByTestId("desktop-bot-switcher-detail").getByText("会话「代码审查」（claude）", { exact: true }).waitFor();
     },
     hotspots: {
       panel: (page) => [page.getByPlaceholder("搜索智能体、目录、agent"), exact(page, "关闭智能体切换"), exact(page, "管理中心")],
@@ -460,9 +476,9 @@ export const SCENES = [
   {
     chapter: "start",
     shot: "manager",
+    fresh: true,
     async run(page) {
-      await exact(page, "智能体管理").click();
-      await exact(page, "新增智能体").waitFor();
+      await openAgentManager(page);
     },
     hotspots: {
       list: (page) => page.getByTestId("desktop-bot-manager-list"),
@@ -486,10 +502,7 @@ export const SCENES = [
     shot: "chat-tool",
     fresh: true,
     async run(page) {
-      await chatPane(page).getByRole("combobox", { name: "当前聊天会话" }).selectOption("");
-      const dialog = page.getByRole("dialog", { name: "新建聊天会话" });
-      await dialog.getByLabel("聊天会话名称").fill("代码审查");
-      await dialog.getByLabel("AI 工具").selectOption("claude");
+      await fillReviewChatDialog(page);
     },
     hotspots: {
       dialog: (page) => page.getByRole("dialog", { name: "新建聊天会话" }),

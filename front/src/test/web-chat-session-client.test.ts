@@ -397,7 +397,7 @@ describe("named Web chat client", () => {
     const catalog = await root.listChatSessions("main");
     expect(catalog.cliOptions).toEqual(CLI_TYPES.map((cliType) => ({ cliType, available: true })));
     expect(catalog.items.slice(0, 2)).toEqual(["main", inherited.id].map((id) => ({
-      id, title: id === "main" ? "主会话" : "Inherit", selectedCliType: null, effectiveCliType: "antigravity",
+      id, title: id === "main" ? "主会话" : "Inherit", selectedCliType: null, effectiveCliType: "antigravity", isProcessing: false,
     })));
     expect(await root.forChatSession("main", inherited.id).getBotOverview("main")).toMatchObject({ cliType: "antigravity" });
     for (const [index, cliType] of CLI_TYPES.entries()) {

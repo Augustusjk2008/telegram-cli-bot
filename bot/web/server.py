@@ -1508,6 +1508,8 @@ class WebApiServer:
         else:
             effective = auth.with_capabilities(set())
             bot_item = self._redact_bot_summary(item)
+        if CAP_VIEW_BOT_STATUS not in effective.capabilities:
+            bot_item.pop("busy_chat_sessions", None)
         return {
             **bot_item,
             "can_operate": can_operate,

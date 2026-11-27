@@ -43,6 +43,7 @@ import type {
   AgentScopedOptions,
   ChatSessionList,
   ChatSessionSummary,
+  ChatSyncEvent,
   AgentSummary,
   ChatSendOptions,
   ConversationBulkDeleteResult,
@@ -2190,6 +2191,7 @@ export class MockWebBotClient implements WebBotClient {
   private readonly namedSessions = new Map<string, { id: string; title: string; selectedCliType: CliType | null }[]>();
   private readonly chatSessionClients = new Map<string, WebBotClient>();
   private readonly chatRuns = new Map<string, Map<string, AbortController>>();
+  private readonly chatSyncListeners = new Set<(event: ChatSyncEvent) => void>();
   private chatSessionId = "main";
   private selectedCliType: CliType | null = null;
   private chatMessages = mockChatMessages;
@@ -2201,17 +2203,26 @@ export class MockWebBotClient implements WebBotClient {
     return !bot.remoteWorkspace && !bot.archived;
   }
 
+  private chatSessionSummaries(bot: BotSummary): ChatSessionSummary[] {
+    const runs = this.chatRuns.get(bot.alias);
+    const named = this.namedSessions.get(bot.alias) || [];
+    return [
+      { id: "main", title: "主会话", selectedCliType: null, effectiveCliType: bot.cliType,
+        isProcessing: !!runs?.has(JSON.stringify(["main", "main"])) || bot.status === "busy" },
+      ...named.map((item) => ({
+        ...item, effectiveCliType: item.selectedCliType ?? bot.cliType,
+        isProcessing: !!runs?.has(JSON.stringify([item.id, "main"])),
+      })),
+    ];
+  }
+
   async listChatSessions(botAlias: string): Promise<ChatSessionList> {
     const enabled = this.chatSessionsEnabled(botAlias);
-    const defaultCli = this.bots.get(botAlias)!.cliType;
-    const named = enabled ? this.namedSessions.get(botAlias) || [] : [];
+    const items = this.chatSessionSummaries(this.bots.get(botAlias)!);
     return {
       enabled,
       cliOptions: enabled ? CLI_TYPES.map((cliType) => ({ cliType, available: true })) : [],
-      items: [
-        { id: "main", title: "主会话", selectedCliType: null, effectiveCliType: defaultCli },
-        ...named.map((item) => ({ ...item, effectiveCliType: item.selectedCliType ?? defaultCli })),
-      ],
+      items: enabled ? items : items.slice(0, 1),
     };
   }
 
@@ -2231,7 +2242,7 @@ export class MockWebBotClient implements WebBotClient {
     }
     const item = { id: `ses_${mockChatId()}`, title: name, selectedCliType: cliType ?? null };
     this.namedSessions.set(botAlias, [...(this.namedSessions.get(botAlias) || []), item]);
-    return { ...item, effectiveCliType: cliType ?? this.bots.get(botAlias)!.cliType };
+    return { ...item, effectiveCliType: cliType ?? this.bots.get(botAlias)!.cliType, isProcessing: false };
   }
 
   forChatSession(botAlias: string, sessionId: string): WebBotClient {
@@ -4648,12 +4659,28 @@ export class MockWebBotClient implements WebBotClient {
     return { ...this.weixinSetup };
   }
 
+  private botActivitySummary(alias: string): BotSummary {
+    const bot = this.getBotSummary(alias);
+    const busy = this.chatSessionSummaries(bot).filter((chat) => chat.isProcessing);
+    if (bot.canOperate && bot.effectiveCapabilities?.includes("view_bot_status")) bot.busyChatSessions = busy;
+    if (busy.length) {
+      bot.status = "busy";
+      bot.activityStatus = "busy";
+      if (!bot.busyAgentIds?.includes("main")) {
+        bot.busyAgentIds = ["main", ...(bot.busyAgentIds || [])];
+        bot.busyAgentNames = ["主 agent", ...(bot.busyAgentNames || [])];
+        bot.busyAgentCount = bot.busyAgentIds.length;
+      }
+    }
+    return bot;
+  }
+
   async listBots(options?: { includeArchived?: boolean }): Promise<BotSummary[]> {
     const aliases = Array.from(this.bots.keys());
     const visibleAliases = this.session.role === "guest"
       ? aliases.filter((alias) => alias === "main")
       : aliases;
-    return visibleAliases.map((alias) => this.getBotSummary(alias))
+    return visibleAliases.map((alias) => this.botActivitySummary(alias))
       .filter((bot) => options?.includeArchived || !bot.archived);
   }
 
@@ -4938,7 +4965,7 @@ export class MockWebBotClient implements WebBotClient {
   }
 
   private getChatBotSummary(botAlias: string) {
-    const bot = this.getBotSummary(botAlias);
+    const bot = this.botActivitySummary(botAlias);
     if (this.chatSessionId !== "main") {
       bot.cliType = this.selectedCliType ?? bot.cliType;
       delete bot.cliPath;
@@ -4965,7 +4992,6 @@ export class MockWebBotClient implements WebBotClient {
         .filter((agent) => this.chatSessionId === "main" || agent.id === "main")
         .map((agent) => this.cloneAgent(agent)),
       activeAgentId: agentId,
-      busyAgentIds: [],
       executionMode: options.executionMode || bot.executionMode || "cli",
       globalPromptPresets: clonePromptPresets(this.globalPromptPresets),
       voice: { enabled: false, reason: this.chatSessionId !== "main" || bot.cliType === "deepseek" ? "unsupported_cli" : "disabled" },
@@ -5492,6 +5518,15 @@ export class MockWebBotClient implements WebBotClient {
     return JSON.stringify([this.chatSessionId, agentId]);
   }
 
+  subscribeChatSync(listener: (event: ChatSyncEvent) => void) {
+    this.chatSyncListeners.add(listener);
+    return () => { this.chatSyncListeners.delete(listener); };
+  }
+
+  private publishChatActivity(botAlias: string, agentId: string, reason: string) {
+    for (const listener of this.chatSyncListeners) listener({ type: "change", botAlias, agentId, reason });
+  }
+
   async sendMessage(
     botAlias: string,
     text: string,
@@ -5516,10 +5551,12 @@ export class MockWebBotClient implements WebBotClient {
     this.chatRuns.set(botAlias, runs);
     runs.set(key, controller);
     try {
+      this.publishChatActivity(botAlias, options?.agentId || "main", "turn_started");
       return await this.streamMockMessage(botAlias, text, onChunk, onStatus, onTrace, options, controller.signal);
     } finally {
       runs.delete(key);
       if (runs.size === 0) this.chatRuns.delete(botAlias);
+      this.publishChatActivity(botAlias, options?.agentId || "main", "turn_finished");
     }
   }
 

@@ -87,6 +87,7 @@ import {
   isFilePreviewTooLarge,
 } from "../utils/filePreview";
 import type { BotActivityChange } from "../app/botActivity";
+import { watchChatActivity } from "../services/watchChatActivity";
 import type { ChatWorkbenchStatus } from "../workbench/workbenchTypes";
 import { extractPlanDraft, extractPlanTitle, stripPlanDraftTags } from "../utils/planDraft";
 import {
@@ -5602,6 +5603,7 @@ function ChatScreenView({
               cliOptions={cliOptions}
               selectedId={sessionId}
               activeCliType={botOverview?.cliType}
+              activeTurnRunning={activeAgentId === "main" && isStreaming}
               focusOnMount={focusSessionSelector}
               onSelect={(item) => onSelectSession(item, childAgentReadOnly ? undefined : {
                 text: composerRef.current?.getDraft() || "",
@@ -5981,7 +5983,7 @@ function BotChatSessions(props: Props) {
       const request = ++sequence;
       const selection = selectionVersion.current;
       const isCurrent = () => request === sequence && selection === selectionVersion.current;
-      void client.listChatSessions!(botAlias).then((result) => {
+      return client.listChatSessions!(botAlias).then((result) => {
         if (!isCurrent()) return;
         if (!result.enabled) {
           showDefaultOnly();
@@ -6003,16 +6005,15 @@ function BotChatSessions(props: Props) {
         }
       });
     }
-    refresh();
+    const stop = watchChatActivity(client, refresh, botAlias);
     function refreshAfterCliSwitch(event: Event) {
       if (isConversationCreatedEvent(event) && event.detail.botAlias === botAlias) refresh();
     }
     window.addEventListener(CONVERSATION_CREATED_EVENT, refreshAfterCliSwitch);
-    window.addEventListener("focus", refresh);
     return () => {
       sequence++;
+      stop();
       window.removeEventListener(CONVERSATION_CREATED_EVENT, refreshAfterCliSwitch);
-      window.removeEventListener("focus", refresh);
     };
   }, [botAlias, client, isVisible, selectionKey, catalogAttempt]);
 

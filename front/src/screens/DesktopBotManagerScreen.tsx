@@ -27,7 +27,6 @@ import { BotActivitySummary } from "../components/BotActivitySummary";
 import { ClusterModelTiersPanel } from "../components/ClusterModelTiersPanel";
 import { ClusterSetupPanel } from "../components/ClusterSetupPanel";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog";
-import { MockWebBotClient } from "../services/mockWebBotClient";
 import { clusterDraftEquals } from "../utils/clusterDraft";
 import { WebApiClientError } from "../services/types";
 import { getBotIdentityTextStyle } from "../utils/botVisual";
@@ -54,6 +53,7 @@ import {
   draftFromBot,
   getBotManagerStatus,
   getVisibleManagedBots,
+  isBotBusy,
   isBotOffline,
   isBotArchived,
   isMainBot,
@@ -96,7 +96,7 @@ const DEFAULT_CLUSTER_CONFIG: BotClusterConfig = {
 const STATUS_FILTERS: Array<{ id: ManagerViewFilter; label: string }> = [
   { id: "all", label: "全部" },
   { id: "unread", label: "未读" },
-  { id: "running", label: "运行中" },
+  { id: "running", label: "空闲" },
   { id: "busy", label: "处理中" },
   { id: "offline", label: "离线" },
   { id: "archived", label: "已归档" },
@@ -841,7 +841,7 @@ function DeleteBotDialog({
 }
 
 export function DesktopBotManagerScreen({
-  client = new MockWebBotClient(),
+  client,
   currentAlias,
   onSelect,
   onLogout,
@@ -884,7 +884,7 @@ export function DesktopBotManagerScreen({
   );
 
   const stats = countBotManagerStats(manager.bots);
-  const focusedBotIssues = focusedBot ? detectBotIssues(focusedBot, manager.bots) : [];
+  const focusedBotIssues = focusedBot ? detectBotIssues(focusedBot, manager.bots).filter((issue) => issue.code !== "busy") : [];
 
   useEffect(() => {
     if (!focusedBot && visibleBots[0]) {
@@ -1328,7 +1328,7 @@ export function DesktopBotManagerScreen({
                     {visibleBots.map((bot) => {
                       const focused = mode !== "create" && focusedBot?.alias === bot.alias;
                       const checked = selectedAliases.has(bot.alias);
-                      const issues = detectBotIssues(bot, manager.bots);
+                      const issues = detectBotIssues(bot, manager.bots).filter((issue) => issue.code !== "busy");
 
                       return (
                         <tr
@@ -1364,6 +1364,7 @@ export function DesktopBotManagerScreen({
                                   <span className="am-name">{bot.alias}</span>
                                   {renderBotTags(bot, { remote: true })}
                                 </span>
+                                {isBotBusy(bot) && <BotActivitySummary bot={bot} className="mt-1" />}
                                 {issues.length > 0 ? (
                                   <span className="am-issues">
                                     {issues.slice(0, 2).map((issue) => (
