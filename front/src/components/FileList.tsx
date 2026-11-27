@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, Download, FileText, Folder, MoreHorizontal, Pencil, SquarePen, Trash2 } from "lucide-react";
+import { Archive, Download, MoreHorizontal, Pencil, SquarePen, Trash2 } from "lucide-react";
 import { toolbarButtonClass } from "./ToolbarButton";
 import { FileEntry } from "../services/types";
+import { FileIcon, FolderIcon, getFileIconKind, getFolderIconKind } from "../workbench/fileTreeIcons";
 
 type Props = {
   files: FileEntry[];
@@ -67,9 +68,9 @@ export function FileList({ files, onDirClick, onFileClick, onEdit, onRename, onC
             className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-[var(--workbench-hover-bg)] active:bg-[var(--workbench-active-bg)]"
           >
             {file.isDir ? (
-              <Folder className="h-4 w-4 shrink-0 text-[var(--file-list-folder-icon)]" />
+              <FolderIcon kind={getFolderIconKind(file.name)} open={false} />
             ) : (
-              <FileText className="h-4 w-4 shrink-0 text-[var(--file-list-file-icon)]" />
+              <FileIcon kind={getFileIconKind(file.name)} />
             )}
             <div className="min-w-0 flex-1 truncate">
               <span className="font-medium">{file.name}</span>
