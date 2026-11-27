@@ -319,6 +319,27 @@ def test_password_key_passphrase_are_memory_only_and_pool_is_reused(ssh):
         connection.list_directory(root=ROOT)
 
 
+def test_connection_status_returns_while_a_directory_listing_is_pending(ssh, monkeypatch):
+    config, connection = connected(ssh)
+    entered, release = threading.Event(), threading.Event()
+    listdir = ssh.clients[0].sftp.listdir_iter
+
+    def slow_listdir(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return listdir(*args, **kwargs)
+
+    monkeypatch.setattr(ssh.clients[0].sftp, "listdir_iter", slow_listdir)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        listing = pool.submit(connection.list_directory, root=ROOT)
+        try:
+            assert entered.wait(2)
+            assert pool.submit(ssh.service.connection_status, config).result(timeout=1) == "connected"
+        finally:
+            release.set()
+        assert listing.result(timeout=2)["working_dir"] == ROOT
+
+
 def test_manual_disconnect_closes_pool_until_reauthentication(ssh):
     config, connection = connected(ssh, password="secret")
     assert ssh.service.connection_status(config) == "connected"

@@ -133,6 +133,7 @@ type Props = {
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onBotActivityChange?: (botAlias: string, activity: BotActivityChange) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
+  onInitialLoadSettled?: () => void;
   onRequestDesktopPreview?: (path: string) => void;
   onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
   onOpenGlobalPromptSettings?: () => void;
@@ -1819,6 +1820,7 @@ function ChatScreenView({
   onUnreadResult,
   onBotActivityChange,
   onWorkbenchStatusChange,
+  onInitialLoadSettled,
   onRequestDesktopPreview,
   onDraftTargetChange,
   onOpenGlobalPromptSettings,
@@ -2862,6 +2864,10 @@ function ChatScreenView({
       window.clearInterval(timer);
     };
   }, [isStreaming, streamStartedAtMs]);
+
+  useEffect(() => {
+    if (isVisible && !loadingRef.current) onInitialLoadSettled?.();
+  }, [isVisible, loading, onInitialLoadSettled]);
 
   useEffect(() => {
     onWorkbenchStatusChange?.({
@@ -6012,6 +6018,10 @@ function BotChatSessions(props: Props) {
     if (selectedId === "main" || !supportsSessions) return client;
     return selectedId ? client.forChatSession!(botAlias, selectedId) : null;
   }, [botAlias, client, selectedId, supportsSessions]);
+
+  useEffect(() => {
+    if (isVisible && !scopedClient && catalogIssue) props.onInitialLoadSettled?.();
+  }, [isVisible, scopedClient, catalogIssue, props.onInitialLoadSettled]);
 
   const createSession = useCallback((title: string, cliType?: CliType) => (
     cliType === undefined ? client.createChatSession!(botAlias, title) : client.createChatSession!(botAlias, title, cliType)

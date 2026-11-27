@@ -961,9 +961,9 @@ function AppContent() {
   function renderDesktopChatStack(options: {
     requestPreview?: (path: string) => void;
     onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
-    currentVisible?: boolean;
-  } = {}) {
-    const currentVisible = options.currentVisible ?? desktopChatPaneVisible;
+    onInitialLoadSettled?: () => void;
+    currentVisible: boolean;
+  }) {
     return (
       <div className="h-full">
         {mountedChatBots.map((instanceKey) => {
@@ -975,7 +975,7 @@ function AppContent() {
                 mobileLayout={false}
                 accountId={accountKey}
                 client={client}
-                isVisible={instanceKey === chatInstanceKey && currentVisible}
+                isVisible={instanceKey === chatInstanceKey && options.currentVisible}
                 readOnly={chatReadOnly || !canOperateCurrentBot}
                 disabledReason={chatDisabledReason}
                 allowTrace={allowTrace}
@@ -985,6 +985,7 @@ function AppContent() {
                 onOpenGlobalPromptSettings={openAdminCenter}
                 onRequestDesktopPreview={options.requestPreview}
                 onDraftTargetChange={instanceKey === chatInstanceKey ? options.onDraftTargetChange : undefined}
+                onInitialLoadSettled={instanceKey === chatInstanceKey ? options.onInitialLoadSettled : undefined}
                 onUnreadResult={recordBotCompletion}
                 onBotActivityChange={handleBotActivityChange}
                 onWorkbenchStatusChange={(status) => {
@@ -1206,6 +1207,7 @@ function AppContent() {
               announcementAction={announcementButton}
               chatStatus={currentBot ? desktopChatStatusByBot[currentBot] : undefined}
               chatPaneContent={renderDesktopChatStack}
+              deferRemoteFileTreeUntilChat
               onViewModeChange={setViewMode}
               onOpenBotSwitcher={(anchorRect) => {
                 void openBotSwitcher(anchorRect);

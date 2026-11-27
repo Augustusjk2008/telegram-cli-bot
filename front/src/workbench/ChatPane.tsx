@@ -16,6 +16,7 @@ type Props = {
   onToggleFocus?: () => void;
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
+  onInitialLoadSettled?: () => void;
   onRequestDesktopPreview?: (path: string) => void;
   onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
 };
@@ -33,6 +34,7 @@ export function ChatPane({
   onToggleFocus,
   onUnreadResult,
   onWorkbenchStatusChange,
+  onInitialLoadSettled,
   onRequestDesktopPreview,
   onDraftTargetChange,
 }: Props) {
@@ -51,6 +53,7 @@ export function ChatPane({
       onToggleFocus={onToggleFocus}
       onUnreadResult={onUnreadResult}
       onWorkbenchStatusChange={onWorkbenchStatusChange}
+      onInitialLoadSettled={onInitialLoadSettled}
       onRequestDesktopPreview={onRequestDesktopPreview}
       onDraftTargetChange={onDraftTargetChange}
     />
