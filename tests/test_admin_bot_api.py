@@ -9,7 +9,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_common import AuthContext, WebApiError, get_session_for_alias
-from bot.web.api_service import list_bots, list_archived_bots
+from bot.web.api_service import list_bots, list_archived_bots, update_bot_workdir
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_MANAGE_BOTS, CAP_MANAGE_REGISTER_CODES, CAP_RUN_UNSAFE_CLI, CAP_VIEW_BOTS
 from bot.web.permission_store import BotPermissionStore
 from bot.web.server import WebApiServer
@@ -307,3 +307,55 @@ async def test_legacy_archive_stays_cold_and_keeps_unknown_disk_fields(tmp_path)
     assert saved["future_field"] == {"value": 1}
     await manager.unarchive_bot("old")
     assert manager.managed_profiles["old"].enabled is False
+
+
+@pytest.mark.asyncio
+async def test_managed_status_flags_roundtrip_through_workdir_change(tmp_path):
+    storage = tmp_path / "managed_bots.json"
+    storage.write_text(json.dumps([
+        {"alias": "stopped", "enabled": "false"},
+        {"alias": "working", "archived": "false", "working_dir": str(tmp_path)},
+        {"alias": "cold", "archived": "true", "enabled": 1},
+    ]), encoding="utf-8")
+    main = BotProfile(alias="main", working_dir=str(tmp_path))
+    manager = MultiBotManager(main, str(storage))
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    await update_bot_workdir(manager, "working", str(new_dir))
+
+    saved = {row["alias"]: row for row in json.loads(storage.read_text(encoding="utf-8"))["bots"]}
+    assert saved["stopped"]["enabled"] is False
+    assert saved["working"]["archived"] is False
+    assert saved["cold"]["archived"] is True
+    restored = MultiBotManager(main, str(storage))
+    visible = {row["alias"]: row for row in list_bots(restored)}
+    assert set(visible) == {"main", "stopped", "working"}
+    assert visible["stopped"]["enabled"] is False
+    assert visible["working"]["enabled"] is True
+    assert visible["working"]["working_dir"] == str(new_dir)
+    assert [(row["alias"], row["enabled"]) for row in list_archived_bots(restored)] == [("cold", False)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field", "value"), [("enabled", "flase"), ("archived", None)])
+async def test_invalid_status_preserves_record_and_reserves_alias(tmp_path, caplog, field, value):
+    storage = tmp_path / "managed_bots.json"
+    invalid = {"alias": "broken", field: value, "custom": {"keep": [1, 2]}}
+    storage.write_text(json.dumps({"bots": [invalid, {"alias": "working"}]}), encoding="utf-8")
+    manager = MultiBotManager(BotProfile(alias="main", working_dir=str(tmp_path)), str(storage))
+
+    assert set(manager.managed_profiles) == {"working"}
+    assert not manager.load_archived_profiles()
+    assert any("broken" in record.getMessage() and field in record.getMessage() for record in caplog.records)
+    with pytest.raises(ValueError, match="已存在"):
+        await manager.rename_bot("working", "broken")
+    await manager.stop_bot("working")
+    saved = {row["alias"]: row for row in json.loads(storage.read_text(encoding="utf-8"))["bots"]}
+    assert saved["working"]["enabled"] is False
+    assert saved["broken"] == invalid
+
+    saved["broken"][field] = False
+    storage.write_text(json.dumps({"bots": list(saved.values())}), encoding="utf-8")
+    await manager.start_bot("working")
+    restored = MultiBotManager(manager.main_profile, str(storage))
+    assert getattr(restored.get_profile("broken"), field) is False

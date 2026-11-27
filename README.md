@@ -410,6 +410,8 @@ Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否�
 }
 ```
 
+托管 Bot 的 `enabled` 和 `archived` 使用 JSON 布尔值，省略时分别为 `true` 和 `false`。加载时也接受旧的顶层数组、字符串 `"true"` 和 `"false"`，以及数字或字符串形式的 `0` 和 `1`。状态值无效时，日志会指出 Bot 别名和字段，其他 Bot 照常加载和保存。修正原记录后，下次启动时会重新加载该 Bot。
+
 </details>
 
 ## 高级配置

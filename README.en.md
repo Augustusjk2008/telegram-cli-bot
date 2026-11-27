@@ -376,6 +376,8 @@ Create a local `managed_bots.json` based on `managed_bots.example.json`:
 }
 ```
 
+Managed Bot profiles use JSON booleans for `enabled` and `archived`, which default to `true` and `false` respectively. The loader also accepts a legacy top-level array, the strings `"true"` and `"false"`, and numeric or quoted `0` and `1`. If either flag is invalid, the host skips that Bot and logs its alias and field. Saving other Bots preserves the original record. After you correct the value, that Bot loads on the next startup.
+
 </details>
 
 ## Advanced Configuration

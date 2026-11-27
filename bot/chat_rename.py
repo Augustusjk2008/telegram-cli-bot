@@ -29,11 +29,11 @@ def has_legacy_collision(manager: MultiBotManager, profile: BotProfile, new_alia
     from bot.web.api_common import resolve_session_bot_id
 
     owner_ids = {resolve_session_bot_id(manager, alias) for alias in (profile.alias, new_alias)}
-    other_aliases = {manager.main_profile.alias, *manager.managed_profiles, *manager.load_archived_profiles()}
+    other_aliases = set(manager.bot_workspaces())
     other_aliases.update(
         p.pending_rename_to for p in manager.managed_profiles.values() if p is not profile and p.pending_rename_to
     )
-    other_aliases.discard(profile.alias)
+    other_aliases.difference_update((profile.alias, new_alias))
     return any(resolve_session_bot_id(manager, alias) in owner_ids for alias in other_aliases)
 
 

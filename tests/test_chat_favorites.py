@@ -194,8 +194,14 @@ def test_remove_bot_with_history_only_keeps_workspace(tmp_path: Path):
     assert _conversation_records(manager, bot_workspace, "team", None) == []
 
 
-@pytest.mark.parametrize("nested", [False, True], ids=["same", "nested"])
-def test_remove_bot_with_workspace_rejects_overlapping_managed_bot_workspace(tmp_path: Path, nested: bool):
+@pytest.mark.parametrize(
+    ("nested", "invalid_status"),
+    [(False, False), (True, False), (True, True)],
+    ids=["same", "nested", "invalid-profile"],
+)
+def test_remove_bot_with_workspace_rejects_overlapping_managed_bot_workspace(
+    tmp_path: Path, nested: bool, invalid_status: bool,
+):
     main_workspace = tmp_path / "main"
     workspace = tmp_path / "workspace"
     main_workspace.mkdir()
@@ -204,7 +210,12 @@ def test_remove_bot_with_workspace_rejects_overlapping_managed_bot_workspace(tmp
     (other_workspace / "keep.txt").write_text("keep", encoding="utf-8")
     manager = _manager(main_workspace)
     _add_managed_profile(manager, "team", workspace)
-    _add_managed_profile(manager, "other", other_workspace)
+    if invalid_status:
+        manager.storage_file.write_text(json.dumps({"bots": [
+            {"alias": "other", "working_dir": str(other_workspace), "archived": "flase"},
+        ]}), encoding="utf-8")
+    else:
+        _add_managed_profile(manager, "other", other_workspace)
     _assert_workspace_removal_error(manager, "team", 409, "workspace_delete_scope_mismatch")
     assert "team" in manager.managed_profiles
     assert (other_workspace / "keep.txt").is_file()

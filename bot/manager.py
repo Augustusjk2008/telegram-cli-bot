@@ -40,8 +40,10 @@ from bot.plugins.service import PluginService
 from bot.profile_store import (
     apply_persisted_main_profile,
     load_managed_profiles,
+    managed_rename_target_taken,
     persist_main_profile,
     save_managed_profiles,
+    stored_managed_workspaces,
 )
 from bot.sessions import get_bot_sessions, update_bot_working_dir
 
@@ -167,6 +169,13 @@ class MultiBotManager:
     def load_archived_profiles(self) -> dict[str, BotProfile]:
         return load_managed_profiles(self.storage_file, archived=True)
 
+    def bot_workspaces(self) -> dict[str, str]:
+        """Include every Bot that reserves an alias or workspace."""
+        workspaces = stored_managed_workspaces(self.storage_file)
+        workspaces.update((alias, profile.working_dir) for alias, profile in self.managed_profiles.items())
+        workspaces[self.main_profile.alias] = self.main_profile.working_dir
+        return workspaces
+
     def get_management_profile(self, alias: str) -> BotProfile:
         normalized_alias = str(alias or "").strip().lower()
         try:
@@ -249,7 +258,8 @@ class MultiBotManager:
             try:
                 self._validate_alias(new_alias)
                 if (old_alias == self.main_profile.alias or new_alias == self.main_profile.alias
-                        or new_alias in self.managed_profiles or new_alias in self.load_archived_profiles()):
+                        or new_alias in self.managed_profiles
+                        or managed_rename_target_taken(self.storage_file, old_alias, new_alias)):
                     raise ValueError("Bot 改名目标已被占用")
                 if not profile.pending_rename_skip_legacy and has_legacy_collision(self, profile, new_alias):
                     profile.pending_rename_skip_legacy = True
@@ -268,7 +278,7 @@ class MultiBotManager:
                 profiles = dict(self.managed_profiles)
                 del profiles[old_alias]
                 profiles[new_alias] = renamed
-                save_managed_profiles(self.storage_file, profiles)
+                save_managed_profiles(self.storage_file, profiles, removed_alias=old_alias)
             except Exception as exc:
                 raise ChatRenamePending(f"Bot {old_alias} 改名为 {new_alias} 尚未完成，请重试") from exc
 
@@ -412,7 +422,7 @@ class MultiBotManager:
 
         async with self._lock:
             self.ensure_chat_rename_ready(normalized_alias)
-            if normalized_alias in self.managed_profiles or normalized_alias in self.load_archived_profiles():
+            if normalized_alias in self.bot_workspaces():
                 raise ValueError(f"alias `{normalized_alias}` 已存在")
             profile = BotProfile(
                 alias=normalized_alias,
@@ -638,13 +648,12 @@ class MultiBotManager:
             self.ensure_chat_rename_ready(normalized_new_alias)
             if normalized_alias not in self.managed_profiles:
                 target = self.managed_profiles.get(normalized_new_alias)
-                if target and target.last_renamed_from == normalized_alias and normalized_alias not in self.load_archived_profiles():
+                if target and target.last_renamed_from == normalized_alias and normalized_alias not in self.bot_workspaces():
                     return target
                 raise ValueError(f"不存在 alias `{normalized_alias}`")
             if normalized_new_alias == normalized_alias:
                 raise ValueError("新旧 alias 不能相同")
-            if (normalized_new_alias == self.main_profile.alias or normalized_new_alias in self.managed_profiles
-                    or normalized_new_alias in self.load_archived_profiles()):
+            if normalized_new_alias in self.bot_workspaces():
                 raise ValueError(f"alias `{normalized_new_alias}` 已存在")
 
             await _close_codex_server_runtimes(normalized_alias, named_only=True)

@@ -3134,32 +3134,20 @@ def _resolve_bot_delete_workspace(profile: BotProfile) -> Path:
     return resolved_workspace
 
 
-def _profile_workspace_items(manager: MultiBotManager) -> list[tuple[str, BotProfile]]:
-    return [
-        (manager.main_profile.alias, manager.main_profile),
-        *[(alias, manager.managed_profiles[alias]) for alias in sorted(manager.managed_profiles.keys())],
-        *manager.load_archived_profiles().items(),
-    ]
-
-
 def _ensure_no_other_bot_workspace_overlap(
     manager: MultiBotManager,
     alias: str,
     resolved_workspace: Path,
 ) -> None:
     normalized_alias = str(alias or "").strip().lower()
-    for item_alias, item_profile in _profile_workspace_items(manager):
-        if str(item_alias or "").strip().lower() == normalized_alias:
-            continue
-        item_working_dir = str(item_profile.working_dir or "").strip()
-        if not item_working_dir:
+    for item_alias, item_working_dir in manager.bot_workspaces().items():
+        if item_alias == normalized_alias or not item_working_dir:
             continue
         if _paths_overlap(item_working_dir, resolved_workspace):
-            display_alias = item_profile.alias or item_alias
             _raise(
                 409,
                 "workspace_delete_scope_mismatch",
-                f"其它 Bot（{display_alias}）的工作区与当前工作区重叠，已拒绝彻底删除",
+                f"其它 Bot（{item_alias}）的工作区与当前工作区重叠，已拒绝彻底删除",
             )
 
 

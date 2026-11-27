@@ -335,6 +335,22 @@ class AgentProfile:
         )
 
 
+def bot_profile_flags(data: dict) -> tuple[bool, bool]:
+    def read(field: str, default: bool) -> bool:
+        value = data.get(field, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (str, int)):
+            text = str(value).strip().lower()
+            if text in ("true", "1"):
+                return True
+            if text in ("false", "0"):
+                return False
+        raise ValueError(f"托管 Bot `{data.get('alias', '')}` 的 {field} 需要布尔值 true 或 false")
+
+    return read("enabled", True), read("archived", False)
+
+
 @dataclass
 class BotProfile:
     """Bot 配置档案"""
@@ -451,7 +467,7 @@ class BotProfile:
             data.get("supported_execution_modes", data.get("supportedExecutionModes")),
             data.get("default_execution_mode", data.get("defaultExecutionMode", "cli")),
         )
-        archived = bool(data.get("archived", False))
+        enabled, archived = bot_profile_flags(data)
         cli_type = normalize_cli_type_config(data.get("cli_type", CLI_TYPE))
         
         profile = cls(
@@ -459,7 +475,7 @@ class BotProfile:
             cli_type=cli_type,
             cli_path=data.get("cli_path") or default_cli_path(cli_type),
             working_dir=data.get("working_dir", WORKING_DIR),
-            enabled=bool(data.get("enabled", True)) and not archived,
+            enabled=enabled and not archived,
             archived=archived,
             chat_translation_enabled=data.get("chat_translation_enabled", True) is not False,
             cli_params=cli_params,

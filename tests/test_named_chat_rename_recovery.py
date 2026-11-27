@@ -227,7 +227,8 @@ async def test_rename_preserves_unrelated_colliding_bots_data(tmp_path, old, new
 
 
 @pytest.mark.asyncio
-async def test_final_profile_replace_survives_lost_acknowledgement(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reopen", [False, True], ids=["retry", "restart"])
+async def test_final_profile_replace_survives_lost_acknowledgement(tmp_path, monkeypatch, reopen):
     path, grants, manager, session_id, handle = _seed(tmp_path)
     save = manager_module.save_managed_profiles
 
@@ -240,10 +241,11 @@ async def test_final_profile_replace_survives_lost_acknowledgement(tmp_path, mon
         fault.setattr(manager_module, "save_managed_profiles", lose_acknowledgement)
         with pytest.raises(ChatRenamePending):
             await manager.rename_bot("worker", "renamed")
-    _discard_process_cache()
-    reopened = _open_manager(path, grants)
-    assert (await reopened.rename_bot("worker", "renamed")).alias == "renamed"
-    _assert_recovered(reopened, path, grants, session_id, handle)
+    if reopen:
+        _discard_process_cache()
+        manager = _open_manager(path, grants)
+    assert (await manager.rename_bot("worker", "renamed")).alias == "renamed"
+    _assert_recovered(manager, path, grants, session_id, handle)
 
 
 @pytest.mark.parametrize("unavailable", ["sqlite", "json", "favorites"])
