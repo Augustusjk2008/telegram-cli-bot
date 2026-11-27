@@ -22,29 +22,61 @@ jobs:
         run: |
           version=$(cat VERSION)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]
-          test "$(git rev-list -n 1 "refs/tags/v$version")" = "$GITHUB_SHA"
-          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"
+          release_commit=$(git rev-list -n 1 "refs/tags/v$version")
+          git merge-base --is-ancestor "$release_commit" "origin/$DEFAULT_BRANCH"
+          # A workflow-only repair can rerun an immutable tag. Always build the tag itself.
+          git diff --exit-code "$release_commit" "$GITHUB_SHA" -- . ':(exclude).github/workflows/linux-release.yml'
+          git checkout --detach "$release_commit"
+          echo "RELEASE_COMMIT=$release_commit" >> "$GITHUB_ENV"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.23.5'
           package-manager-cache: false
-      - name: Install build dependencies
+      - name: Prepare native Ubuntu build environment
+        shell: bash
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y patchelf zstd
-          python3.12 -m venv .venv
-          .venv/bin/python -m pip install --require-hashes -r .release-local/portable-linux/requirements.lock
-          npm ci --prefix front --no-audit --no-fund
+          docker build --build-arg "uid=$(id -u)" --build-arg "gid=$(id -g)" -t orbit-linux-builder - <<'DOCKER'
+          FROM ubuntu:24.04
+          ARG uid
+          ARG gid
+          RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                bash ca-certificates curl git openssh-client patchelf python3.12-venv xz-utils zstd \
+                && rm -rf /var/lib/apt/lists/* \
+                && groupadd --non-unique -g "$gid" orbitbuild \
+                && useradd --non-unique -u "$uid" -g "$gid" -m orbitbuild
+          USER orbitbuild
+          DOCKER
       - name: Build and verify Linux archives
-        run: bash .release-local/publish-release.sh --version "$(cat VERSION)" --mode BuildOnly --run-checks
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/linux-release.log"
+          node_root=$(dirname "$(dirname "$(command -v node)")")
+          if ! docker run --rm -i -v "$GITHUB_WORKSPACE:/src" -w /src -v "$node_root:/opt/node:ro" \
+              orbit-linux-builder bash -euo pipefail -s <<'BUILD' 2>&1 | tee "$log"; then
+          export PATH="/src/.venv/bin:/opt/node/bin:/usr/bin:/bin"
+          python3.12 -m venv .venv
+          python -m pip install --require-hashes -r .release-local/portable-linux/requirements.lock
+          npm ci --prefix front --no-audit --no-fund
+          bash .release-local/publish-release.sh --version "$(cat VERSION)" --mode BuildOnly --run-checks
+          BUILD
+            python3 - "$log" <<'PY'
+          import sys
+          from pathlib import Path
+          lines = Path(sys.argv[1]).read_text(errors="replace").splitlines()
+          for line in (s for s in lines if s.startswith(("FAILED ", "ERROR ", "[错误]", "RuntimeError:", "ValueError:"))):
+              print("::error::" + line[:400].replace("%", "%25"))
+          PY
+            exit 1
+          fi
       - name: Publish verified archives
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v$(cat VERSION)"
           files=(.release-local/artifacts/*.tar.gz .release-local/artifacts/*.tgz)
-          .venv/bin/python scripts/update_package.py verify --commit "$GITHUB_SHA" --version "$tag" --require-clean "${files[@]}"
+          python3 scripts/update_package.py verify --commit "$RELEASE_COMMIT" --version "$tag" --require-clean "${files[@]}"
           git for-each-ref --format='%(contents:body)' "refs/tags/$tag" > "$RUNNER_TEMP/release.md"
           args=()
           if grep -q '[^[:space:]]' "$RUNNER_TEMP/release.md"; then args+=(--notes-file "$RUNNER_TEMP/release.md"); fi
-          .venv/bin/python .release-local/publish_assets.py --repo "$GITHUB_REPOSITORY" --tag "$tag" "${args[@]}" "${files[@]}" .release-local/artifacts/*.sha256
+          python3 .release-local/publish_assets.py --repo "$GITHUB_REPOSITORY" --tag "$tag" "${args[@]}" "${files[@]}" .release-local/artifacts/*.sha256
