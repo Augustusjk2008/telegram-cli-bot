@@ -213,7 +213,7 @@ Windows 文本保存保留 UTF-8 BOM / CRLF 和内容冲突检查，使用同目
 - **Git** 支持查看状态、Diff 和提交历史，以及工作区操作、远端管理与 GitHub 关联。从 Git 面板或文件树打开并排 Diff，拖选代码后点击「引用到聊天」，即可把仓库相对路径、所选侧的行号和完整改动行追加到当前 Bot 的草稿。可以继续输入问题，再自行发送。
 - **Terminal** 提供持久化多标签 Web 终端，每个标签使用独立的 shell 和 owner。在本地或 SSH 终端中，按住 Ctrl 并用鼠标左键点击 `src/app.ts:42:7` 可跳到第 42 行第 7 列，省略列号时定位到第 1 列。相对路径以该标签的启动目录为准，手动 `cd` 后可使用工作区内的绝对路径。
 - **Debug**：面向 Python、C/C++、Godot 和通用 DAP 的调试入口。
-- **Plugins** 提供 PDF、Word、PPTX、CSV、Vivado waveform 等可扩展视图。Word 预览提供左侧章节目录，可直接打开 DOCX，主机安装 LibreOffice Writer 后还可打开 Word 97–2003 的 `.doc` 文件。
+- **Plugins** 提供 PDF、Word、PPTX、CSV、Vivado waveform 等可扩展视图。Word 预览提供左侧章节目录，可直接打开 DOCX。主机缺少 LibreOffice Writer 时，使用内置转换器预览 Word 97–2003 的 `.doc` 文件。遇到加密或不兼容的文件时，错误信息显示在该文件的预览中。
 - **布局**：顶部「窗口布局」提供经典、底部通栏、四列并排、右侧堆叠预设，可拖动交换窗口位置，设置按浏览器保存。
 - **使用教程**：点击桌面工作台左上角的图标，打开应用内使用教程，按章节用截图说明各项功能的用法。
 

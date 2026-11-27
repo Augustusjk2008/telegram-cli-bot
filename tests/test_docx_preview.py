@@ -1,13 +1,17 @@
-import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pytest
 
 from bot.plugins.service import PluginService
+from bot.web.api_common import AuthContext, WebApiError
+from bot.web.plugin_api_service import open_plugin_view
 
 
 PLUGIN = Path(__file__).resolve().parents[1] / "examples/plugins/docx-preview"
+# Saved from write_docx() using Writer's "MS Word 97" filter.
+WORD97 = Path(__file__).parent / "fixtures/word97-outline.doc"
 
 
 def write_docx(path: Path) -> None:
@@ -47,23 +51,12 @@ def write_docx(path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("extension", [".docx", ".DOC"])
-async def test_word_session_retains_outline_and_original_path(tmp_path, monkeypatch, extension):
-    docx = tmp_path / "sample.docx"
-    write_docx(docx)
-    path = docx.with_suffix(extension)
+async def test_word_session_retains_outline_and_original_path(tmp_path, extension):
+    path = tmp_path / f"sample{extension}"
     if extension == ".DOC":
-        path = tmp_path / "legacy.DOC"
-        monkeypatch.syspath_prepend(str(PLUGIN / "backend"))
-        from legacy_doc import OLE_SIGNATURE, find_libreoffice
-
-        writer = find_libreoffice()
-        if not writer:
-            pytest.skip("Requires LibreOffice Writer to generate and preview a Word 97–2003 file")
-        subprocess.run([writer, f"-env:UserInstallation={(tmp_path / 'profile').as_uri()}",
-                        "--headless", "--convert-to", "doc:MS Word 97", "--outdir", str(tmp_path), str(docx)],
-                       check=True, capture_output=True, timeout=40)
-        docx.with_suffix(".doc").rename(path)
-        assert path.read_bytes().startswith(OLE_SIGNATURE)
+        path.write_bytes(WORD97.read_bytes())
+    else:
+        write_docx(path)
 
     service = PluginService(tmp_path, tmp_path / "plugins", PLUGIN.parent)
     await service.install_plugin(PLUGIN.name)
@@ -85,13 +78,55 @@ async def test_word_session_retains_outline_and_original_path(tmp_path, monkeypa
         await service.shutdown()
 
 
-def test_doc_dependency_and_input_errors_are_actionable(monkeypatch):
+@pytest.mark.parametrize("missing", [True, False], ids=["no-writer", "unusable-writer"])
+def test_bundled_reader_opens_real_doc_without_writer(tmp_path, monkeypatch, missing):
+    monkeypatch.syspath_prepend(str(PLUGIN / "backend"))
+    import legacy_doc
+    from docx_parser import parse_docx_document
+
+    writer = None if missing else str(tmp_path / "unavailable-soffice")
+    monkeypatch.setattr(legacy_doc, "find_libreoffice", lambda: writer)
+    document = parse_docx_document("sample.doc", legacy_doc.convert_doc(WORD97.read_bytes()))
+    headings = [(b["level"], b["runs"][0]["text"]) for b in document["blocks"] if b["type"] == "heading"]
+    assert headings == [(1, "Overview"), (2, "细节")]
+    assert document["blocks"][-1]["runs"][0]["text"] == "Section body"
+
+
+@pytest.mark.asyncio
+async def test_incompatible_doc_only_fails_its_preview(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+        monkeypatch.delenv(variable, raising=False)
+    (tmp_path / "readable.doc").write_bytes(WORD97.read_bytes())
+    (tmp_path / "broken.doc").write_bytes(WORD97.read_bytes()[:8])
+    write_docx(tmp_path / "next.docx")
+    service = PluginService(tmp_path, tmp_path / "plugins", PLUGIN.parent)
+    await service.install_plugin(PLUGIN.name)
+    manager = SimpleNamespace(plugin_service=service, main_profile=SimpleNamespace(alias="main", working_dir=str(tmp_path)))
+    auth = AuthContext(user_id=1, token_used=True, capabilities={"run_plugins"})
+
+    async def open_file(name):
+        return await open_plugin_view(manager, "main", auth, PLUGIN.name, "document", {"path": name})
+
+    try:
+        opened = await open_file("readable.doc")
+        with pytest.raises(WebApiError, match="格式不兼容或文件已损坏") as failure:
+            await open_file("broken.doc")
+        assert failure.value.code == "plugin_open_failed"
+        # A native session only exists in its original plugin process.
+        section = opened["summary"]["sections"][1]["id"]
+        window = await service.get_view_window(bot_alias="main", plugin_id=PLUGIN.name, session_id=opened["sessionId"],
+                                               request_payload={"sectionId": section}, audit_context={})
+        assert window["blocks"][-1]["runs"][0]["text"] == "Section body"
+        assert (await open_file("next.docx"))["title"] == "Overview"
+    finally:
+        await service.shutdown()
+
+
+def test_non_word_input_has_actionable_error(monkeypatch):
     monkeypatch.syspath_prepend(str(PLUGIN / "backend"))
     import legacy_doc
 
-    monkeypatch.setattr(legacy_doc, "find_libreoffice", lambda: None)
-    with pytest.raises(RuntimeError, match="LibreOffice Writer.*另存为 .docx"):
-        legacy_doc.convert_doc(legacy_doc.OLE_SIGNATURE)
     with pytest.raises(RuntimeError, match="Word 97–2003"):
         legacy_doc.convert_doc(b"plain text")
 
@@ -102,13 +137,14 @@ def test_converted_doc_size_limit_cleans_up_private_files(monkeypatch):
 
     outputs = []
 
-    def write_output(command):
+    def write_output(command, deadline):
         output = Path(command[-1]).with_suffix(".docx")
         output.write_bytes(b"above the test limit")
         outputs.append(output)
+        return 0
 
     monkeypatch.setattr(legacy_doc, "find_libreoffice", lambda: "soffice")
-    monkeypatch.setattr(legacy_doc, "_run_writer", write_output)
+    monkeypatch.setattr(legacy_doc, "_run_converter", write_output)
     with pytest.raises(RuntimeError, match="大小限制"):
         legacy_doc.convert_doc(legacy_doc.OLE_SIGNATURE, max_bytes=4)
     assert not outputs[0].parent.exists()

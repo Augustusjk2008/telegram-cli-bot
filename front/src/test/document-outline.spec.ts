@@ -3,6 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 test.skip(!process.env.PLAYWRIGHT_BASE_URL, "Uses a user-started host serving the built frontend");
 
 const filename = "report.docx";
+const incompatible = "damaged.doc";
+const incompatibilityMessage = "无法预览此 DOC 文件，格式不兼容或文件已损坏。请将文件另存为 .docx 后重试";
 const bot = { alias: "main", name: "main", cli_type: "codex", status: "running", working_dir: "/workspace", can_operate: true };
 const sections = ["Overview", "Measurements", "Conclusions"].map((title, i) => ({
   id: `section-${i + 1}`, title, headingLevel: i === 1 ? 2 : 1,
@@ -18,8 +20,8 @@ function sectionWindow(id: string) {
   ] };
 }
 
-async function openWord(page: Page, width: number, loadSections: Promise<void>) {
-  const target = { kind: "plugin_view", pluginId: "docx-preview", viewId: "document", title: filename, input: { path: filename } };
+async function openWord(page: Page, width: number, loadSections: Promise<void>, initialFile = filename) {
+  const target = { kind: "plugin_view", pluginId: "docx-preview", viewId: "document" };
   const agents = [{ id: "main", name: "main" }];
   await page.routeWebSocket("**/*", (socket) => socket.close());
   await page.route("**/api/**", async (route) => {
@@ -30,14 +32,20 @@ async function openWord(page: Page, width: number, loadSections: Promise<void>) 
     else if (path === "bots") data = [bot];
     else if (path === "bots/main") data = { bot, agents, session: { working_dir: bot.working_dir, is_processing: false } };
     else if (path.endsWith("/pwd")) data = { working_dir: bot.working_dir };
-    else if (path.endsWith("/ls")) data = { working_dir: bot.working_dir, entries: [{ name: filename, is_dir: false }] };
+    else if (path.endsWith("/ls")) data = { working_dir: bot.working_dir, entries: [filename, incompatible].map((name) => ({ name, is_dir: false })) };
     else if (path.endsWith("/agents")) data = { items: agents, active_agent_id: "main" };
-    else if (path.endsWith("/plugins/resolve-file-target")) data = target;
-    else if (path.endsWith("/views/document/open")) data = {
-      pluginId: target.pluginId, viewId: target.viewId, renderer: "document", mode: "session", sessionId: "word-1",
-      summary: { title: filename, path: filename, formatting: "document", sections }, initialWindow: sectionWindow(sections[0].id),
-    };
-    else if (path.endsWith("/sessions/word-1/window")) {
+    else if (path.endsWith("/plugins/resolve-file-target")) {
+      const file = route.request().postDataJSON().path;
+      data = { ...target, title: file.split("/").pop(), input: { path: file } };
+    } else if (path.endsWith("/views/document/open")) {
+      if (route.request().postDataJSON().input.path.endsWith(incompatible)) {
+        return route.fulfill({ status: 500, json: { ok: false, error: { code: "plugin_open_failed", message: incompatibilityMessage } } });
+      }
+      data = {
+        pluginId: target.pluginId, viewId: target.viewId, renderer: "document", mode: "session", sessionId: "word-1",
+        summary: { title: filename, path: filename, formatting: "document", sections }, initialWindow: sectionWindow(sections[0].id),
+      };
+    } else if (path.endsWith("/sessions/word-1/window")) {
       await loadSections;
       data = sectionWindow(route.request().postDataJSON().sectionId);
     } else if (path.endsWith("/history") || path.endsWith("/history/delta")) data = { items: [], revision: 0 };
@@ -46,10 +54,19 @@ async function openWord(page: Page, width: number, loadSections: Promise<void>) 
   await page.setViewportSize({ width, height: 900 });
   await page.goto("./");
   if (width < 500) await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "文件", exact: true }).click();
-  await page.getByRole("button", { name: `打开 ${filename}`, exact: true }).click();
+  await page.getByRole("button", { name: `打开 ${initialFile}`, exact: true }).click();
 }
 
 for (const width of [1366, 390]) {
+  test(`an incompatible DOC reports its error and the next file opens at ${width}px`, async ({ page }) => {
+    await openWord(page, width, Promise.resolve(), incompatible);
+    await expect(page.getByText(incompatibilityMessage, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("正在加载插件视图", { exact: true })).toHaveCount(0);
+    if (width === 390) await page.getByTestId("mobile-file-preview").getByRole("button", { name: "返回", exact: true }).click();
+    await page.getByRole("button", { name: `打开 ${filename}`, exact: true }).click();
+    await expect(page.getByTestId("document-view").getByRole("heading", { name: "Overview" })).toBeVisible();
+  });
+
   test(`Word outline navigates loaded and pending sections at ${width}px`, async ({ page }) => {
     let finishLoading!: () => void;
     await openWord(page, width, new Promise<void>((resolve) => { finishLoading = resolve; }));

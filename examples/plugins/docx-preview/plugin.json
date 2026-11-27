@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "id": "docx-preview",
   "name": "DOCX Preview",
-  "version": "0.3.0",
-  "description": "按标题导航并预览 DOCX 的段落、图片与表格。预览 Word 97–2003 的 .doc 文件需要主机安装 LibreOffice Writer。",
+  "version": "0.4.0",
+  "description": "按标题导航并预览 Word 文档的段落、图片与表格。内置转换器可预览 Word 97–2003 的 .doc 文件，主机也可使用 LibreOffice Writer。",
   "enabled": true,
   "config": {},
   "runtime": {

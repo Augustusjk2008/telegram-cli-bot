@@ -74,6 +74,10 @@ distribution metadata. Other installation methods resolve the constraints in
 | `pytest` 9.1.1 | MIT; test dependency currently installed in the portable runtime. |
 | `pytest-asyncio` 1.4.0 | Apache-2.0; test dependency currently installed in the portable runtime. |
 
+## Word preview plugin
+
+DOCX Preview bundles the unmodified `msdoc2docx` 0.36.6 Python wheel under the MIT License, copyright 2026 doc2docx contributors. The wheel contains the license at `msdoc2docx-0.36.6.dist-info/licenses/LICENSE`. Its SHA-256 digest is `34a1c9303188cb2fd83c7baa25624768e908ac739c3b9a5080276d6e3d0d9d38`. [Upstream release](https://pypi.org/project/msdoc2docx/0.36.6/)
+
 ## Windows portable bundle
 
 The Windows portable edition aggregates third-party runtimes and tools; those

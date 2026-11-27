@@ -817,7 +817,7 @@ export function EditorPane({
         </div>
       ) : null}
       {activeTab.kind !== "file-preview" && visibleError ? (
-        <div className="border-b border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-2 text-sm text-[var(--status-danger)]">
+        <div role="alert" className="border-b border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-4 py-2 text-sm text-[var(--status-danger)]">
           {visibleError}
         </div>
       ) : null}
@@ -875,11 +875,11 @@ export function EditorPane({
                 onReopenPluginView={onReopenPluginView}
                 onNotice={onNotice}
               />
-            ) : (
+            ) : activeTab.loading ? (
               <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
                 <PluginViewLoading />
               </div>
-            )}
+            ) : null}
           </div>
         ) : (
           <FileEditorSurface
