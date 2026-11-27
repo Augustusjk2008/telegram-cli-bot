@@ -532,6 +532,19 @@ def test_running_release_is_not_offered_or_prepared_again(service, monkeypatch):
     assert service.status()["job"] is None
 
 
+def test_platform_only_release_waits_for_this_installations_asset(service, monkeypatch):
+    monkeypatch.setattr(updater, "detect_update_package_kind", lambda root: "linux-portable")
+    release = {"tag_name": "v99.0.0", "assets": [{"name": "orbit-windows-x64-99.0.0.zip"}]}
+    monkeypatch.setattr(updater, "_fetch_latest_release", lambda: release)
+    assert service.check()["update_available"] is False
+    with pytest.raises(UpdateServiceError) as exc:
+        service.start_online()
+    assert exc.value.code == "update_not_available"
+    assert service.status()["job"] is None
+    release["assets"].append({"name": "orbit-linux-x64-portable-99.0.0.tgz"})
+    assert service.check()["update_available"] is True
+
+
 def test_status_points_to_existing_job_logs(service):
     service.status()
     service.store.mutate(lambda s: s.update(job={**service._new_job("logs", {"path": "one.zip"}), "phase": "failed"}))

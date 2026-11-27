@@ -784,34 +784,12 @@ function Publish-GitHubRelease {
     Write-Step ("推送 tag {0} 到 origin" -f $ReleaseTag)
     Invoke-CheckedCommand -FilePath "git" -Arguments @("push", "origin", ("refs/tags/{0}" -f $ReleaseTag)) -FailureMessage "推送 tag 失败"
 
-    $releaseAssets = @()
-    if (-not [string]::IsNullOrWhiteSpace($WindowsArchive)) {
-        $releaseAssets += $WindowsArchive
-    }
-    $releaseAssets += @($WindowsInstallerArchive, $LinuxArchive, $MacOSArchive)
-    if ($ChecksumArchives) {
-        $releaseAssets += $ChecksumArchives
-    }
-
-    Write-Step ("创建 GitHub Release {0}" -f $ReleaseTag)
-    $releaseArguments = @(
-        "release",
-        "create",
-        $ReleaseTag
-    ) + $releaseAssets + @(
-        "--repo", $Repo,
-        "--title", $ReleaseTag,
-        "--verify-tag"
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($ReleaseNotesFile)) {
-        Write-Info ("GitHub Release body: {0}" -f $ReleaseNotesFile)
-        $releaseArguments += @("--notes-file", $ReleaseNotesFile)
-    } else {
-        $releaseArguments += "--generate-notes"
-    }
-
-    Invoke-CheckedCommand -FilePath $ghCommand.Source -Arguments $releaseArguments -FailureMessage "创建 GitHub Release 失败"
+    $releaseAssets = @($WindowsInstallerArchive)
+    if ($WindowsArchive) { $releaseAssets += $WindowsArchive }
+    $releaseAssets += @($ChecksumArchives | Where-Object { $_ -and (Split-Path -Leaf $_) -like "*-windows-x64-*" })
+    $arguments = @((Join-Path $script:ScriptDir "publish_assets.py"), "--repo", $Repo, "--tag", $ReleaseTag)
+    if ($ReleaseNotesFile) { $arguments += @("--notes-file", $ReleaseNotesFile) }
+    Invoke-CheckedCommand -FilePath "python" -Arguments ($arguments + $releaseAssets) -FailureMessage "发布 GitHub Release 失败"
 }
 
 try {

@@ -160,11 +160,12 @@ class UpdateService:
         if public_job is not None:
             public_job.update(self._log_paths(job))
         latest = str(release.get("tag_name") or "").lstrip("v")
+        kind = updater.detect_update_package_kind(self.repo_root)
         state.pop("trace_rollback_origin", None)
         return {**state, "job": public_job, "launcher": launcher_capability(self.repo_root), "current_version": APP_VERSION,
-                "current_package_kind": updater.detect_update_package_kind(self.repo_root), "update_channel": "release",
+                "current_package_kind": kind, "update_channel": "release",
                 # Recomputed on every read: the stored check result goes stale after an upgrade.
-                "update_available": _is_newer(latest, APP_VERSION),
+                "update_available": _is_newer(latest, APP_VERSION) and updater.release_supports_installation(release, kind),
                 "last_checked_at": check.get("checked_at", ""),
                 "last_available_version": latest,
                 "last_available_release_url": release.get("html_url", ""), "last_available_notes": release.get("body", ""),
@@ -193,7 +194,8 @@ class UpdateService:
                 release = updater._fetch_latest_release()
                 if not isinstance(release, dict) or not release.get("tag_name"):
                     raise ValueError("Release 缺少版本信息")
-                available = compare_versions(release["tag_name"], APP_VERSION) > 0
+                available = (compare_versions(release["tag_name"], APP_VERSION) > 0
+                             and updater.release_supports_installation(release, updater.detect_update_package_kind(self.repo_root)))
                 result = {"ok": True, "cached": False, "checked_at": _now(), "error": "", "release": release,
                           "update_available": available}
             except Exception as exc:
@@ -251,6 +253,7 @@ class UpdateService:
             raise
 
     def start_online(self, *, release=None):
+        from bot import updater
         from scripts.update_package import compare_versions
         status = self.status()
         if (status.get("job") or {}).get("phase") in ACTIVE_PHASES:
@@ -269,6 +272,8 @@ class UpdateService:
         if order == 0:
             # Re-preparing the running release would only cost a download and a restart.
             raise UpdateServiceError("当前已是最新版本，无需准备更新", status=409, code="update_not_available")
+        if not updater.release_supports_installation(release, status["current_package_kind"]):
+            raise UpdateServiceError("此版本没有适用于当前安装的发布包", status=409, code="update_not_available")
         return self._start({"release": release})
 
     def declined_release(self, version):

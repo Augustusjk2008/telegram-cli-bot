@@ -331,6 +331,7 @@ function emitMockUploadProgress(file: File, onProgress?: (progress: FileUploadPr
 function getMockUpdatePath(packageKind: AppUpdatePackageKind) {
   if (packageKind === "portable") return ".updates/orbit-safe-claw-windows-x64.zip";
   if (packageKind === "linux") return ".updates/orbit-safe-claw-linux-x64.tar.gz";
+  if (packageKind === "linux-portable") return ".updates/orbit-safe-claw-linux-x64-portable.tgz";
   if (packageKind === "macos") return ".updates/orbit-safe-claw-macos-universal.tar.gz";
   return ".updates/orbit-safe-claw-windows-x64-installer.zip";
 }
@@ -338,6 +339,7 @@ function getMockUpdatePath(packageKind: AppUpdatePackageKind) {
 function getMockUpdatePlatform(packageKind: AppUpdatePackageKind) {
   if (packageKind === "portable") return "windows-x64-portable";
   if (packageKind === "linux") return "linux-x64";
+  if (packageKind === "linux-portable") return "linux-x64-portable";
   if (packageKind === "macos") return "macos-universal";
   return "windows-x64-installer";
 }

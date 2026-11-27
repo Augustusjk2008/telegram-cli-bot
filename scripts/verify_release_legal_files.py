@@ -56,6 +56,8 @@ def missing_release_legal_files(archive_path: Path) -> list[str]:
         for member in members
     ):
         required.extend(PORTABLE_RUNTIME_LICENSE_FILES)
+    if "runtime/python/bin/python3" in members:
+        required.extend(("runtime/python/licenses/LICENSE.openssl-3.txt", "tools/git/licenses/packages.txt"))
     return [path for path in required if path not in members]
 
 

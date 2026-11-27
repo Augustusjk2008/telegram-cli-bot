@@ -83,7 +83,7 @@ def control_root(repo_root: Path) -> Path:
 
 
 def freeze_runner(repo_root: Path, snapshot_dir: Path, *, source_root: Path | None = None) -> dict:
-    """Freeze code and, when needed, a Windows control Python outside update targets."""
+    """Freeze the runner and any installation-owned control Python outside update targets."""
     repo_root, snapshot_dir = repo_root.resolve(), snapshot_dir.resolve()
     source_root = Path(source_root or repo_root).resolve()
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -105,8 +105,11 @@ def freeze_runner(repo_root: Path, snapshot_dir: Path, *, source_root: Path | No
         destination = control_root(repo_root) / identity / "python"
         if destination.exists():
             raise RuntimeError(f"控制用 Python 运行时已存在: {destination}")
-        shutil.copytree(control_python.parent, destination, ignore=shutil.ignore_patterns("site-packages", "__pycache__"))
-        control_python = destination / control_python.name
+        runtime = control_python.parent
+        if control_python.parent == repo_root / "runtime/python/bin":
+            runtime = control_python.parent.parent  # POSIX Python also needs its sibling lib directory.
+        shutil.copytree(runtime, destination, ignore=shutil.ignore_patterns("site-packages", "__pycache__"))
+        control_python = destination / control_python.relative_to(runtime)
     if control_python.is_relative_to(repo_root):
         raise RuntimeError("控制用 Python 不能位于安装目录内")
     return {"runner_path": str(snapshot_dir / "update_runner.py"),

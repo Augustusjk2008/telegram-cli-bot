@@ -97,6 +97,12 @@ but the portable distributor must independently satisfy all GPL/LGPL notice,
 license-text, and corresponding-source obligations for the exact copied
 artifact. This document does not constitute a source offer.
 
+## Linux portable bundle
+
+The Linux x86-64 archive includes CPython 3.12.16 from the 20261124 python-build-standalone release. Its PSF license, build metadata and native dependency notices are under `runtime/python/`. Wheel distributions retain their notices under `site-packages`. Node.js 22.23.5 and its bundled npm and Corepack notices are under `runtime/node/`.
+
+The native Git distribution carries its copyright file at `tools/git/LICENSE.txt`. Its helper programs and redistributed libraries retain the distribution's notices, common license texts, exact binary and source package versions under `tools/git/licenses/`. The Ubuntu source packages and packaging patches can be obtained using those versions. [Ubuntu source package archive](https://launchpad.net/ubuntu/+source)
+
 ## Optional and runtime-downloaded tools
 
 These tools are not preinstalled in all release artifacts. Their terms apply

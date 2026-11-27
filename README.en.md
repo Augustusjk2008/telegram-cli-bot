@@ -72,7 +72,7 @@ flowchart LR
 > [!TIP]
 > The Windows portable package includes Python, Node.js, Git, and the built frontend. Extract it and start immediately. Install and configure Codex, Claude, Antigravity, or DeepSeek Harness separately when using those CLIs.
 
-1. Open [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest).
+1. Find the most recent release with Windows assets in [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases).
 2. Download `orbit-safe-claw-windows-x64-<version>.zip` and extract it to a writable directory.
 3. Double-click `start.bat`, or run:
 
@@ -84,7 +84,23 @@ flowchart LR
 
 For the conventional installer flow, download `orbit-safe-claw-windows-x64-installer-<version>.zip`, extract it, and run `install.bat`.
 
-### Linux / macOS
+### Linux x64 portable
+
+Download `orbit-safe-claw-linux-x64-portable-<version>.tgz` and its `.sha256` from the Linux release. This edition targets Ubuntu 24.04 x86-64 (glibc). It includes Python, the backend dependencies, Node.js/npm, Git and the same web UI as the Windows portable edition.
+
+```bash
+version=3.2.1
+archive="orbit-safe-claw-linux-x64-portable-${version}.tgz"
+sha256sum -c "${archive}.sha256"
+mkdir -p orbit-safe-claw
+tar -xzf "$archive" -C orbit-safe-claw
+cd orbit-safe-claw
+bash start.sh
+```
+
+Open `http://127.0.0.1:8765` on the host. First launch works offline as a regular user. Configure your AI CLI separately. The Linux portable updater accepts the portable `.tgz`; Linux source installations use the `.tar.gz` asset.
+
+### Linux / macOS source packages
 
 | Platform | Installation |
 |---|---|
@@ -101,7 +117,7 @@ bash install.sh
 bash start.sh
 ```
 
-Linux and macOS require Python 3.10+, Git, and Node.js 22.13+. Installers check these runtime versions.
+Linux and macOS source installations require Python 3.10+, Git, and Node.js 22.13+. Installers check these runtime versions.
 
 The source launchers `start.bat`, `start.ps1`, and `start.sh` use the existing frontend assets and do not rebuild them during startup. After changing the frontend, run `npm run build` manually in `front`, then restart the service.
 
@@ -310,7 +326,8 @@ Ordinary WeChat groups, images, video, voice, files, cards, and message editing 
 |---|---|---|
 | Windows portable | Fast setup and portable/offline use | Bundles Python, Node.js, Git, and frontend assets |
 | Windows installer | Conventional local installation | Installer checks and prepares dependencies |
-| Linux x64 | Self-hosting on Linux | Uses system Python, Node.js, and Git |
+| Linux x64 portable | Offline setup on Ubuntu 24.04 x86-64 | Bundles Python, Node.js, Git and frontend assets |
+| Linux x64 source | Self-hosting on Linux | Uses system Python, Node.js, and Git |
 | macOS universal | macOS source package | Uses system Python, Node.js, and Git |
 
 ### Execution Modes
@@ -362,7 +379,7 @@ Desktop execution temporarily bridges the Desktop profile's `agent-default-model
 
 `cli_params.codex_server` and `cli_params.codex` keep separate settings with the same parameter definitions and defaults. Switching backends preserves both. Global extra arguments also use separate keys, for example `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`. Both backends share Codex history, model-parameter, and cost semantics.
 
-Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup for source installations. Windows portable packages use a separate `.tcb` storage root inside the package, so a host user's migrated locator is not imported. Portable packages place application data under the package's `data/` directory; after a portable migration, the package locator determines the application data directory.
+Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup for source installations. Windows and Linux portable packages use a separate `.tcb` storage root inside the package, so a host user's migrated locator is not imported. Portable packages place application data under the package's `data/` directory; after a portable migration, the package locator determines the application data directory.
 
 The execution details list reads previews from the workspace database. Expanding a tool result reads the selected event in full. Older turns build their previews on the first request that needs them for a list or its counts. The default write format is 3.2.0 plaintext.
 

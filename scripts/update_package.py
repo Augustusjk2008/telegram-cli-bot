@@ -20,6 +20,7 @@ import zipfile
 
 MANIFEST = ".update-manifest.json"
 MARKER = ".distribution.json"
+PORTABLE_PYTHONS = {"portable": "runtime/python/python.exe", "linux-portable": "runtime/python/bin/python3"}
 TRACE_READER_FILES = ("bot/web/trace_previews.py", "bot/web/chat_store.py", "bot/web/trace_compaction.py")
 TRACE_PILOT_FILES = (*TRACE_READER_FILES, "bot/web/trace_body_policy.py", "scripts/trace_body_compression.py",
                      "scripts/_pytest_history_inventory.py")
@@ -207,7 +208,7 @@ def inspect_package(package: Path, *, staging_dir: Path | None = None, expected_
             raise ValueError("更新清单缺少工作树状态")
         trace_body_declaration(manifest)
         kind = manifest.get("package_kind")
-        if not isinstance(kind, str) or kind not in {"installer", "portable", "linux", "macos"} or kind != (marker.get("package_kind") or marker.get("packageKind")):
+        if not isinstance(kind, str) or kind not in {"installer", "portable", "linux", "linux-portable", "macos"} or kind != (marker.get("package_kind") or marker.get("packageKind")):
             raise ValueError("分发包类型不一致")
         if expected_kind and kind != expected_kind:
             raise ValueError(f"更新包类型不匹配: {kind}; 当前 {expected_kind}")

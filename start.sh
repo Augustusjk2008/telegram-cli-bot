@@ -55,6 +55,20 @@ fi
 
 export PATH="$(build_user_path "${HOME:-}")"
 
+portable_python=""
+if [[ -d "$SCRIPT_DIR/runtime/python/bin" ]]; then
+  portable_python="$SCRIPT_DIR/runtime/python/bin/python3"
+  export TCB_PORTABLE_ROOT="$SCRIPT_DIR"
+  if [[ -f "$SCRIPT_DIR/.tcb/storage.json" ]]; then
+    unset TCB_DATA_DIR
+  else
+    export TCB_DATA_DIR="$SCRIPT_DIR/data/orbit-safe-claw"
+  fi
+  export PATH="$SCRIPT_DIR/tools/git/bin:$SCRIPT_DIR/runtime/node/bin:$SCRIPT_DIR/runtime/python/bin:$PATH"
+  export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TCB_STARTUP_SKIP_DEP_SYNC=1
+  unset PYTHONHOME PYTHONPATH
+fi
+
 if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
   echo "[错误] 未找到 .env，请先运行 install.sh 或 install.bat 生成配置。" >&2
   exit 1
@@ -150,7 +164,10 @@ if [[ -f "$cached_launcher" && -f "$cached_control_file" ]]; then
   fi
 fi
 
-if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+if [[ -n "$portable_python" ]]; then
+  [[ -x "$portable_python" ]] || fail "绿色版 Python 缺失，请重新解压完整发布包。"
+  PYTHON_BIN="$portable_python"
+elif [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
   PYTHON_BIN="python3"
@@ -358,6 +375,10 @@ fi
 if ! run_python_startup_step -c "import bot.main"; then
   echo "[错误] Python 启动检查失败。" >&2
   exit "$last_python_exit_code"
+fi
+if [[ -n "$portable_python" && "${TCB_PORTABLE_SMOKE_IMPORT_ONLY:-}" == "1" ]]; then
+  "$CONTROL_PYTHON" -I -S "$UPDATE_RUNNER" --help >/dev/null
+  exit 0
 fi
 show_tunnel_hint
 raise_nofile_limit

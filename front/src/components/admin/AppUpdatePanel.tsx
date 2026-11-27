@@ -65,7 +65,7 @@ const RUNNING_PHASES = new Set(["preparing", "waiting_restart", "applying", "awa
 const ACTION_SCOPES: Record<string, ActionScope> = {
   check: "overview", prepare: "overview", apply: "job", cancel: "job", retry: "job", offline: "offline", upload: "offline",
 };
-const PACKAGE_LABELS: Record<string, string> = { installer: "Windows 安装版", portable: "Windows 绿色版", linux: "Linux", macos: "macOS" };
+const PACKAGE_LABELS: Record<string, string> = { installer: "Windows 安装版", portable: "Windows 绿色版", linux: "Linux", "linux-portable": "Linux 绿色版", macos: "macOS" };
 const SPIN = " animate-spin motion-reduce:animate-none";
 
 function packageLabel(kind?: string) {
@@ -602,7 +602,7 @@ export function AppUpdatePanel({ client, refreshKey = 0 }: { client: WebBotClien
               value={hostPath}
               onChange={(event) => setHostPath(event.target.value)}
               className="orbit-field"
-              placeholder={"例如 C:\\Downloads\\update.zip"}
+              placeholder={windowsCommand ? "例如 C:\\Downloads\\update.zip" : "例如 /tmp/orbit-safe-claw-update.tgz"}
               spellCheck={false}
               autoComplete="off"
             />

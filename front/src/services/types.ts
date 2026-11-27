@@ -3472,7 +3472,7 @@ export type GitHubCreateRepositoryInput = {
   private: boolean;
 };
 
-export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "macos" | "unknown" | "";
+export type AppUpdatePackageKind = "installer" | "portable" | "linux" | "linux-portable" | "macos" | "unknown" | "";
 
 export type AppUpdatePhase = "preparing" | "ready" | "waiting_restart" | "applying" | "awaiting_health"
   | "succeeded" | "failed" | "cancelled" | "rolling_back" | "rolled_back" | "recovery_required";

@@ -72,7 +72,7 @@ flowchart LR
 > [!TIP]
 > Windows 绿色版内置 Python、Node.js、Git 和前端产物；解压即可启动。使用 Codex、Claude、Antigravity 或 DeepSeek Harness 时，请在本机另行安装并配置对应 CLI。
 
-1. 打开 [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases/latest)。
+1. 在 [GitHub Releases](https://github.com/Augustusjk2008/telegram-cli-bot/releases) 中选择最近提供 Windows 包的版本。
 2. 下载 `orbit-safe-claw-windows-x64-<version>.zip` 并解压到可写目录。
 3. 双击 `start.bat`，或在终端执行：
 
@@ -84,7 +84,23 @@ flowchart LR
 
 需要传统安装流程时，下载 `orbit-safe-claw-windows-x64-installer-<version>.zip`，解压后运行 `install.bat`。安装过程中可传入 `-AdminUsername <用户名>`，安装器会交互式创建管理员账号；非交互安装同时传入 `-AdminPassword <密码>`。
 
-### Linux / macOS
+### Linux x64 离线绿色版
+
+从 Linux 版本的 Release 下载 `orbit-safe-claw-linux-x64-portable-<version>.tgz` 和对应的 `.sha256`。此版本面向 Ubuntu 24.04 x86-64（glibc），内置 Python、后端依赖、Node.js/npm、Git 和与 Windows 绿色版相同的 Web 界面。
+
+```bash
+version=3.2.1
+archive="orbit-safe-claw-linux-x64-portable-${version}.tgz"
+sha256sum -c "${archive}.sha256"
+mkdir -p orbit-safe-claw
+tar -xzf "$archive" -C orbit-safe-claw
+cd orbit-safe-claw
+bash start.sh
+```
+
+在本机浏览器打开 `http://127.0.0.1:8765`。首次启动支持断网和普通用户权限，AI CLI 另行配置。绿色版更新使用 `.tgz`，Linux 源码安装使用 `.tar.gz`。
+
+### Linux / macOS 源码安装包
 
 | 平台 | 安装方式 |
 |---|---|
@@ -109,7 +125,7 @@ bash install.sh --admin-username admin
 
 安装器会交互式读取密码。非交互安装可同时传入 `--admin-password <密码>`，或设置 `TCB_ADMIN_USERNAME` / `TCB_ADMIN_PASSWORD`。
 
-Linux/macOS 需要 Python 3.10+、Git 和 Node.js 22.13+。安装器会检查这些运行时版本。
+Linux/macOS 源码安装需要 Python 3.10+、Git 和 Node.js 22.13+。安装器会检查这些运行时版本。
 
 源码版 `start.bat`、`start.ps1` 和 `start.sh` 启动时直接使用现有的前端产物，不会自动重建前端。修改前端后请在 `front` 目录手动运行 `npm run build`，再重启服务。
 
@@ -335,7 +351,8 @@ WEIXIN_ALLOWED_USER_IDS=<微信私聊用户 ID，逗号分隔>
 |---|---|---|
 | Windows 绿色版 | 最快体验、离线携带 | 内置 Python、Node.js、Git 与前端产物 |
 | Windows 安装版 | 常规本机安装 | 由安装脚本检查并准备依赖 |
-| Linux x64 | Linux 自托管 | 使用本机 Python、Node.js、Git |
+| Linux x64 绿色版 | Ubuntu 24.04 x86-64 离线使用 | 内置 Python、Node.js、Git 与前端产物 |
+| Linux x64 源码版 | Linux 自托管 | 使用本机 Python、Node.js、Git |
 | macOS universal | macOS 源码包 | 使用本机 Python、Node.js、Git |
 
 ### 执行模式
@@ -396,7 +413,7 @@ Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否�
 全局额外参数也按标识独立配置，例如 `CLI_GLOBAL_EXTRA_ARGS={"codex_server":["-c","model_reasoning_effort=high"]}`。
 两种入口复用 Codex 历史格式、模型参数及费用语义。
 
-应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
+应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 和 Linux 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
 
 执行明细列表从工作区数据库读取预览，展开工具结果时读取选中的完整事件。旧历史在首次查看相应回合的明细或统计时按需补齐预览。默认写入 3.2.0 可读的明文。
 

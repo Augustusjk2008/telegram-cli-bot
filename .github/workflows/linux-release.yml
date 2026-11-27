@@ -1,0 +1,50 @@
+name: Publish Linux release
+on:
+  push:
+    branches: [release/linux]
+permissions:
+  contents: write
+concurrency:
+  group: linux-release-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release tag
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          version=$(cat VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]
+          test "$(git rev-list -n 1 "refs/tags/v$version")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.5'
+          package-manager-cache: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y patchelf zstd
+          python3.12 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r .release-local/portable-linux/requirements.lock
+          npm ci --prefix front --no-audit --no-fund
+      - name: Build and verify Linux archives
+        run: bash .release-local/publish-release.sh --version "$(cat VERSION)" --mode BuildOnly --run-checks
+      - name: Publish verified archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(cat VERSION)"
+          files=(.release-local/artifacts/*.tar.gz .release-local/artifacts/*.tgz)
+          .venv/bin/python scripts/update_package.py verify --commit "$GITHUB_SHA" --version "$tag" --require-clean "${files[@]}"
+          git for-each-ref --format='%(contents:body)' "refs/tags/$tag" > "$RUNNER_TEMP/release.md"
+          args=()
+          if grep -q '[^[:space:]]' "$RUNNER_TEMP/release.md"; then args+=(--notes-file "$RUNNER_TEMP/release.md"); fi
+          .venv/bin/python .release-local/publish_assets.py --repo "$GITHUB_REPOSITORY" --tag "$tag" "${args[@]}" "${files[@]}" .release-local/artifacts/*.sha256

@@ -43,12 +43,14 @@ DISTRIBUTION_MARKER_FILE = ".distribution.json"
 WINDOWS_INSTALLER_PACKAGE_KIND = "installer"
 WINDOWS_PORTABLE_PACKAGE_KIND = "portable"
 LINUX_PACKAGE_KIND = "linux"
+LINUX_PORTABLE_PACKAGE_KIND = "linux-portable"
 MACOS_PACKAGE_KIND = "macos"
 UNKNOWN_PACKAGE_KIND = "unknown"
 SUPPORTED_UPDATE_PACKAGE_KINDS = {
     WINDOWS_INSTALLER_PACKAGE_KIND,
     WINDOWS_PORTABLE_PACKAGE_KIND,
     LINUX_PACKAGE_KIND,
+    LINUX_PORTABLE_PACKAGE_KIND,
     MACOS_PACKAGE_KIND,
 }
 
@@ -81,11 +83,13 @@ def detect_update_package_kind(repo_root: Path | None = None) -> str:
 
     if sys.platform == "darwin":
         return MACOS_PACKAGE_KIND
-    if not _is_windows_runtime():
-        return LINUX_PACKAGE_KIND
     root = Path(repo_root or Path.cwd()).resolve()
+    if not _is_windows_runtime():
+        if sys.platform.startswith("linux") and _read_distribution_marker_kind(root) == LINUX_PORTABLE_PACKAGE_KIND:
+            return LINUX_PORTABLE_PACKAGE_KIND
+        return LINUX_PACKAGE_KIND
     marker_kind = _read_distribution_marker_kind(root)
-    if marker_kind:
+    if marker_kind in {WINDOWS_INSTALLER_PACKAGE_KIND, WINDOWS_PORTABLE_PACKAGE_KIND}:
         return marker_kind
     if _looks_like_portable_install(root):
         return WINDOWS_PORTABLE_PACKAGE_KIND
@@ -315,12 +319,15 @@ def _fetch_latest_release() -> dict[str, Any]:
 
 def _select_release_asset(assets: list[dict[str, Any]], package_kind: str | None = None) -> dict[str, Any]:
     normalized_kind = _normalize_update_package_kind(package_kind) or detect_update_package_kind()
-    if normalized_kind == LINUX_PACKAGE_KIND:
+    if normalized_kind in {LINUX_PACKAGE_KIND, LINUX_PORTABLE_PACKAGE_KIND}:
         for asset in assets:
             name = str(asset.get("name") or "").lower()
-            if "linux" in name and name.endswith(".tar.gz"):
+            if normalized_kind == LINUX_PORTABLE_PACKAGE_KIND:
+                if "linux-x64-portable-" in name and name.endswith(".tgz"):
+                    return asset
+            elif "linux" in name and "portable" not in name and name.endswith(".tar.gz"):
                 return asset
-        raise RuntimeError("未找到 Linux release 包")
+        raise RuntimeError(f"未找到 {_format_update_package_kind(normalized_kind)} release 包")
 
     if normalized_kind == MACOS_PACKAGE_KIND:
         for asset in assets:
@@ -350,6 +357,17 @@ def _select_release_checksum_asset(assets: list[dict[str, Any]], package_name: s
         if str(asset.get("name") or "").strip().lower() == expected_name:
             return asset
     raise RuntimeError(f"未找到更新包校验文件: {expected_name}")
+
+
+def release_supports_installation(release: dict, kind: str) -> bool:
+    assets = release.get("assets")
+    if not assets:
+        return True  # Preserve version reporting for metadata-only feeds.
+    try:
+        _select_release_asset(assets, kind)
+    except RuntimeError:
+        return False
+    return True
 
 
 def _download_text_file(url: str, target: Path) -> None:
@@ -409,6 +427,8 @@ def _pending_update_platform(package_kind: str) -> str:
         return "windows-x64-installer"
     if package_kind == WINDOWS_PORTABLE_PACKAGE_KIND:
         return "windows-x64-portable"
+    if package_kind == LINUX_PORTABLE_PACKAGE_KIND:
+        return "linux-x64-portable"
     if package_kind == LINUX_PACKAGE_KIND:
         return "linux-x64"
     if package_kind == MACOS_PACKAGE_KIND:
@@ -421,6 +441,8 @@ def _format_update_package_kind(package_kind: str) -> str:
         return "Windows 安装版"
     if package_kind == WINDOWS_PORTABLE_PACKAGE_KIND:
         return "Windows 绿色版"
+    if package_kind == LINUX_PORTABLE_PACKAGE_KIND:
+        return "Linux 绿色版"
     if package_kind == LINUX_PACKAGE_KIND:
         return "Linux"
     if package_kind == MACOS_PACKAGE_KIND:
@@ -685,7 +707,7 @@ def _read_package_distribution_from_bytes(raw_bytes: bytes, *, package_name: str
 def _expected_distribution_platform(package_kind: str) -> str:
     if package_kind in {WINDOWS_INSTALLER_PACKAGE_KIND, WINDOWS_PORTABLE_PACKAGE_KIND}:
         return "windows-x64"
-    if package_kind == LINUX_PACKAGE_KIND:
+    if package_kind in {LINUX_PACKAGE_KIND, LINUX_PORTABLE_PACKAGE_KIND}:
         return "linux-x64"
     if package_kind == MACOS_PACKAGE_KIND:
         return "macos-universal"
@@ -937,7 +959,7 @@ def _is_zip_package_name(package_name: str) -> bool:
 
 
 def _is_tar_gz_package_name(package_name: str) -> bool:
-    return str(package_name or "").lower().endswith(".tar.gz")
+    return str(package_name or "").lower().endswith((".tar.gz", ".tgz"))
 
 
 def _format_invalid_package_message(

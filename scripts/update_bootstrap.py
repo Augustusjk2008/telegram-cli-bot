@@ -135,13 +135,21 @@ def prepare_new(args, release: Path) -> int:
     for name, value in dotenv_values(args.repo_root / ".env").items():
         if value is not None:
             os.environ.setdefault(name, value)
-    if json.loads((release / ".update-manifest.json").read_text(encoding="utf-8-sig")).get("package_kind") == "portable":
+    from scripts.update_package import PORTABLE_PYTHONS
+    kind = json.loads((release / ".update-manifest.json").read_text(encoding="utf-8-sig")).get("package_kind")
+    if kind in PORTABLE_PYTHONS:
         root = args.repo_root
         os.environ.update(WEB_ENABLED="true", PYTHONUTF8="1", PYTHONNOUSERSITE="1",
-                          TCB_DATA_DIR=str(root / "data/orbit-safe-claw"),
+                          TCB_PORTABLE_ROOT=str(root),
                           TCB_CLUSTER_MCP_CONFIG=str(root / ".tcb/cluster-mcp/config.json"))
-        entries = [root / name for name in ("runtime/node",
-                                            "tools/git/cmd", "tools/git/bin", "tools/git/usr/bin", "tools/git/mingw64/bin")]
+        if (root / ".tcb/storage.json").is_file():
+            os.environ.pop("TCB_DATA_DIR", None)
+        else:
+            os.environ["TCB_DATA_DIR"] = str(root / "data/orbit-safe-claw")
+        paths = ("runtime/node", "tools/git/cmd", "tools/git/bin", "tools/git/usr/bin", "tools/git/mingw64/bin")
+        if kind == "linux-portable":
+            paths = ("tools/git/bin", "runtime/node/bin", "runtime/python/bin")
+        entries = [root / name for name in paths]
         os.environ["PATH"] = os.pathsep.join([*(str(path) for path in entries), os.environ.get("PATH", "")])
     from bot.update_state import UpdateStore
     from bot.updater import prepare_update_payload
@@ -166,7 +174,7 @@ def prepare_new(args, release: Path) -> int:
     runtime = prepare_runtime(args.repo_root, job_dir, prepared)
     candidates = [args.repo_root / ".venv/Scripts/python.exe", args.repo_root / ".venv/bin/python"]
     source_python = next((str(path) for path in candidates if path.is_file()), sys.executable)
-    previous = args.previous_python or str(args.repo_root / "runtime/python/python.exe" if prepared["package_kind"] == "portable" else source_python)
+    previous = args.previous_python or str(args.repo_root / PORTABLE_PYTHONS[kind] if kind in PORTABLE_PYTHONS else source_python)
     job = {**prepared, **runtime}
     job.update(job_id=job_id, phase="ready", revision=0, job_dir=str(job_dir),
                previous_python_executable=os.path.abspath(previous), bootstrap_legacy=True,
@@ -234,7 +242,7 @@ def main(argv=None) -> int:
         if args.verified_release:
             return prepare_new(args, args.verified_release)
         release = extract_verified(args.package, args.work_dir / "release", args.sha256)
-        portable_python = release / "runtime/python/python.exe"
+        portable_python = release / ("runtime/python/python.exe" if os.name == "nt" else "runtime/python/bin/python3")
         python = str(portable_python) if portable_python.is_file() else sys.executable
         command = [python, str(release / "scripts/update_bootstrap.py"), "--verified-release", str(release),
                    "--repo-root", str(args.repo_root), "--work-dir", str(args.work_dir), "--package", str(args.package),

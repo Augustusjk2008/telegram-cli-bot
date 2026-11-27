@@ -132,6 +132,26 @@ def test_updater_rejects_checksum_mismatch_and_archive_traversal(tmp_path: Path)
         updater._list_package_entry_paths(package_path)
 
 
+def test_linux_portable_and_source_select_their_own_archives(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLI_BRIDGE_UPDATE_PACKAGE_KIND", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(updater, "_is_windows_runtime", lambda: False)
+    portable = {"name": "orbit-safe-claw-linux-x64-portable-3.2.1.tgz"}
+    source = {"name": "orbit-safe-claw-linux-x64-3.2.1.tar.gz"}
+    assets = [portable, {"name": portable["name"] + ".sha256"}, source]
+    assert updater.detect_update_package_kind(tmp_path) == "linux"
+    assert updater._select_release_asset(assets, "linux") == source
+    (tmp_path / ".distribution.json").write_text(json.dumps({"packageKind": "linux-portable"}))
+    assert updater.detect_update_package_kind(tmp_path) == "linux-portable"
+    assert updater._select_release_asset(assets[::-1], "linux-portable") == portable
+    assert updater._expected_distribution_platform("linux-portable") == "linux-x64"
+    assert updater._is_tar_gz_package_name(portable["name"])
+    with pytest.raises(RuntimeError):
+        updater._select_release_asset([source], "linux-portable")
+    with pytest.raises(RuntimeError):
+        updater._select_release_asset([portable], "linux")
+
+
 def test_portable_build_uses_account_authentication() -> None:
     portable = Path(".release-local/portable-win/build-portable.ps1").read_text(encoding="utf-8")
 

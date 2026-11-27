@@ -5,7 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 artifacts_dir="$script_dir/artifacts"
 stage_root="$script_dir/stage"
-portable_build_script="$script_dir/portable-win/build-portable.ps1"
+portable_builder="$script_dir/portable-linux/build_portable.py"
 front_dir="$repo_root/front"
 version_file="$repo_root/VERSION"
 package_base_name="orbit-safe-claw"
@@ -20,6 +20,9 @@ required_release_legal_files=(
 )
 
 python_bin="${PYTHON:-python3}"
+if [[ -z "${PYTHON:-}" && -x "$repo_root/.venv/bin/python" ]]; then
+  python_bin="$repo_root/.venv/bin/python"
+fi
 npm_bin="${NPM:-npm}"
 
 version=""
@@ -30,7 +33,9 @@ mode="BuildAndPublish"
 run_checks=0
 allow_dirty_worktree=0
 auto_confirm_dirty_worktree=0
-skip_windows_portable=0
+via_github_actions=0
+release_archives=()
+linux_portable_archive=""
 checksum_archives=()
 
 write_step() {
@@ -61,7 +66,8 @@ usage() {
   --allow-dirty-worktree, -AllowDirtyWorktree   BuildOnly 时允许 tracked dirty
   --auto-confirm-dirty-worktree, -AutoConfirmDirtyWorktree
                                                 发布时自动确认提交当前工作区
-  --skip-windows-portable, -SkipWindowsPortable 跳过 Windows 绿色版包
+  --skip-windows-portable, -SkipWindowsPortable 兼容旧命令；本脚本仅打包当前平台
+  --via-github-actions                            由 GitHub 的 Linux runner 构建并发布到同一标签
   --help, -h                                    显示帮助
 USAGE
 }
@@ -127,7 +133,10 @@ parse_args() {
         auto_confirm_dirty_worktree=1
         ;;
       --skip-windows-portable|-SkipWindowsPortable)
-        skip_windows_portable=1
+        :
+        ;;
+      --via-github-actions)
+        via_github_actions=1
         ;;
       --help|-h)
         usage
@@ -375,12 +384,6 @@ sync_version_file() {
   set_app_version "$normalized_version"
 }
 
-reset_directory() {
-  local path="$1"
-  rm -rf "$path"
-  mkdir -p "$path"
-}
-
 invoke_release_prep_checks() {
   write_step "运行后端发布检查"
   run_checked_command "$repo_root" "后端发布检查失败" "$python_bin" -m pytest tests examples/plugins -q
@@ -392,12 +395,6 @@ invoke_release_prep_checks() {
   run_checked_command "$front_dir" "前端 lint 失败" "$npm_bin" run lint
 }
 
-invoke_front_build() {
-  local step_message="${1:-构建前端}"
-  write_step "$step_message"
-  run_checked_command "$front_dir" "前端构建失败" "$npm_bin" run build
-}
-
 invoke_release_front_build() {
   write_step "构建发布包前端"
   (cd "$front_dir" && TCB_FRONT_BUILD_ROOT_BASE=1 "$npm_bin" run build)
@@ -406,12 +403,6 @@ invoke_release_front_build() {
 invoke_front_dist_asset_check() {
   write_step "校验前端构建资源路径"
   run_checked_command "$front_dir" "前端构建资源路径校验失败" node scripts/verify-build-assets.mjs
-}
-
-restore_front_build_after_portable() {
-  write_info "Windows 绿色版构建会临时使用根路径资源，正在恢复本机前端构建产物。"
-  write_step "恢复本机前端构建产物"
-  (cd "$front_dir" && "$npm_bin" run build)
 }
 
 assert_release_legal_files_in_stage() {
@@ -432,11 +423,8 @@ assert_release_archives_contain_legal_files() {
   if [[ ! -f "$release_legal_verifier" ]]; then
     fail "未找到发布归档法律文件校验器: $release_legal_verifier"
   fi
-  local archives=()
-  [[ -n "${windows_archive:-}" ]] && archives+=("$windows_archive")
-  archives+=("$windows_installer_archive" "$linux_archive" "$macos_archive")
   run_checked_command "$repo_root" "发布归档法律文件校验失败" \
-    "$python_bin" "$release_legal_verifier" "${archives[@]}"
+    "$python_bin" "$release_legal_verifier" "${release_archives[@]}"
 }
 
 copy_tracked_files_to_stage() {
@@ -466,29 +454,13 @@ copy_tracked_files_to_stage() {
   assert_release_legal_files_in_stage "$stage_dir"
 }
 
-new_zip_archive() {
-  local source_dir="$1"
-  local destination_file="$2"
-  rm -f "$destination_file"
-  run_checked_command "$repo_root" "创建 zip 包失败" "$python_bin" - "$source_dir" "$destination_file" <<'PY'
-import pathlib
-import sys
-import zipfile
-
-source = pathlib.Path(sys.argv[1])
-destination = pathlib.Path(sys.argv[2])
-with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-    for path in sorted(source.rglob("*")):
-        if path.is_file():
-            archive.write(path, path.relative_to(source).as_posix())
-PY
-}
-
 new_tar_gz_archive() {
   local source_dir="$1"
   local destination_file="$2"
-  rm -f "$destination_file"
-  run_checked_command "$repo_root" "创建 tar.gz 包失败" tar -C "$source_dir" -czf "$destination_file" .
+  local tar_options=()
+  if [[ "$(uname -s)" == Linux ]]; then tar_options+=(--hard-dereference); fi
+  run_checked_command "$repo_root" "创建 tar.gz 包失败" tar "${tar_options[@]}" -C "$source_dir" -czf "$destination_file.tmp" .
+  mv -f "$destination_file.tmp" "$destination_file"
 }
 
 new_sha256_file() {
@@ -521,7 +493,7 @@ new_archive_checksum_files() {
 
   local archive
   local checksum
-  for archive in "${windows_archive:-}" "${windows_installer_archive:-}" "${linux_archive:-}" "${macos_archive:-}"; do
+  for archive in "${release_archives[@]}"; do
     checksum="$(new_sha256_file "$archive")"
     if [[ -n "${checksum//[[:space:]]/}" ]]; then
       checksum_archives+=("$checksum")
@@ -551,125 +523,51 @@ assert_release_update_payloads() {
   commit="$(git_output "读取待发布提交失败" rev-parse HEAD | head -n 1)"
   local arguments=(verify --version "$normalized_version" --commit "$commit" --source-root "$repo_root")
   [[ "$should_publish" == "1" ]] && arguments+=(--require-clean)
-  [[ -n "${windows_archive:-}" ]] && arguments+=("$windows_archive")
-  arguments+=("$windows_installer_archive" "$linux_archive" "$macos_archive")
+  arguments+=("${release_archives[@]}")
   run_checked_command "$repo_root" "发布产物版本、提交或文件完整性校验失败" \
     "$python_bin" "$repo_root/scripts/update_package.py" "${arguments[@]}"
 }
 
-resolve_powershell_command() {
-  if command -v pwsh >/dev/null 2>&1; then
-    command -v pwsh
-    return
-  fi
-  if command -v powershell.exe >/dev/null 2>&1; then
-    command -v powershell.exe
-    return
-  fi
-  if command -v powershell >/dev/null 2>&1; then
-    command -v powershell
-    return
-  fi
-  printf '\n'
-}
-
-new_release_archives() {
-  local normalized_version="$1"
-  reset_directory "$artifacts_dir"
-  reset_directory "$stage_root"
-
-  local source_identity
-  source_identity="$("$python_bin" "$repo_root/scripts/update_package.py" identity --source-root "$repo_root" --plain)" || fail "无法固定构建源码身份"
-  read -r TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT <<< "$source_identity"
-  export TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT
-
-  local stage_dir="$stage_root/snapshot-$normalized_version"
-  mkdir -p "$stage_dir"
-  copy_tracked_files_to_stage "$stage_dir"
-
-  windows_archive="$artifacts_dir/${package_base_name}-windows-x64-${normalized_version}.zip"
-  windows_installer_archive="$artifacts_dir/${package_base_name}-windows-x64-installer-${normalized_version}.zip"
-  linux_archive="$artifacts_dir/${package_base_name}-linux-x64-${normalized_version}.tar.gz"
-  macos_archive="$artifacts_dir/${package_base_name}-macos-universal-${normalized_version}.tar.gz"
-
-  if [[ "$skip_windows_portable" == "1" ]]; then
-    write_info "已跳过 Windows 绿色版包"
-    windows_archive=""
-  else
-    if [[ ! -f "$portable_build_script" ]]; then
-      fail "未找到 Windows 绿色版构建脚本: $portable_build_script。可使用 --skip-windows-portable 跳过。"
-    fi
-    local powershell_command
-    powershell_command="$(resolve_powershell_command)"
-    if [[ -z "$powershell_command" ]]; then
-      fail "未找到 PowerShell 命令，无法创建 Windows 绿色版包。可使用 --skip-windows-portable 跳过。"
-    fi
-
-    write_step "创建 Windows 绿色版包"
-    set +e
-    (cd "$repo_root" && "$powershell_command" \
-      -NoProfile \
-      -ExecutionPolicy Bypass \
-      -File "$portable_build_script" \
-      -PackageName "${package_base_name}-windows-x64-${normalized_version}" \
-      -ArtifactPath "$windows_archive")
-    local portable_exit=$?
-    set -e
-
-    set +e
-    restore_front_build_after_portable
-    local restore_exit=$?
-    set -e
-    if [[ $restore_exit -ne 0 ]]; then
-      if [[ $portable_exit -ne 0 ]]; then
-        printf '[错误] 创建 Windows 绿色版包失败 (退出码 %s)\n' "$portable_exit" >&2
-      fi
-      fail "恢复本机前端构建产物失败 (退出码 $restore_exit)"
-    fi
-    if [[ $portable_exit -ne 0 ]]; then
-      fail "创建 Windows 绿色版包失败 (退出码 $portable_exit)"
-    fi
-  fi
-
-  write_step "创建 Windows 安装版包"
-  write_distribution_marker "$stage_dir" "installer" "windows-x64" "$normalized_version"
-  new_zip_archive "$stage_dir" "$windows_installer_archive"
-
-  write_step "创建 Linux 更新包"
-  write_distribution_marker "$stage_dir" "linux" "linux-x64" "$normalized_version"
-  new_tar_gz_archive "$stage_dir" "$linux_archive"
-
-  write_step "创建 macOS 更新包"
-  write_distribution_marker "$stage_dir" "macos" "macos-universal" "$normalized_version"
-  new_tar_gz_archive "$stage_dir" "$macos_archive"
-}
-
 set_release_archive_paths() {
-  local normalized_version="$1"
-  windows_archive="$artifacts_dir/${package_base_name}-windows-x64-${normalized_version}.zip"
-  windows_installer_archive="$artifacts_dir/${package_base_name}-windows-x64-installer-${normalized_version}.zip"
-  linux_archive="$artifacts_dir/${package_base_name}-linux-x64-${normalized_version}.tar.gz"
-  macos_archive="$artifacts_dir/${package_base_name}-macos-universal-${normalized_version}.tar.gz"
+  case "$(uname -s)" in
+    Linux)
+      [[ "$(uname -m)" == x86_64 ]] || fail "Linux 绿色版需要 x86-64 构建机。"
+      source_kind="linux"
+      source_platform="linux-x64"
+      linux_portable_archive="$artifacts_dir/${package_base_name}-linux-x64-portable-${1}.tgz"
+      ;;
+    Darwin)
+      source_kind="macos"
+      source_platform="macos-universal"
+      ;;
+    *) fail "请在 Linux/macOS 使用本脚本，Windows 请使用 publish-release.ps1。" ;;
+  esac
+  source_archive="$artifacts_dir/${package_base_name}-${source_platform}-${1}.tar.gz"
+  release_archives=("$source_archive")
+  if [[ -n "$linux_portable_archive" ]]; then release_archives+=("$linux_portable_archive"); fi
 }
+
+new_release_archives() (
+  local normalized_version="$1" stage_dir
+  mkdir -p "$artifacts_dir" "$stage_root"
+  stage_dir="$(mktemp -d "$stage_root/${source_platform}-${normalized_version}.XXXXXX")"
+  trap 'rm -rf -- "$stage_dir"' EXIT
+  copy_tracked_files_to_stage "$stage_dir"
+  write_distribution_marker "$stage_dir" "$source_kind" "$source_platform" "$normalized_version"
+  new_tar_gz_archive "$stage_dir" "$source_archive"
+  if [[ -n "$linux_portable_archive" ]]; then
+    write_step "构建 Linux x64 离线绿色版"
+    run_checked_command "$repo_root" "打包 Linux 离线运行时失败" "$python_bin" -B "$portable_builder" "$stage_dir" "$script_dir/cache/linux-x64"
+    write_distribution_marker "$stage_dir" "linux-portable" "$source_platform" "$normalized_version"
+    new_tar_gz_archive "$stage_dir" "$linux_portable_archive"
+  fi
+)
 
 get_existing_release_archives() {
-  local normalized_version="$1"
-  set_release_archive_paths "$normalized_version"
-
-  if [[ "$skip_windows_portable" == "1" ]]; then
-    windows_archive=""
-  elif [[ ! -f "$windows_archive" ]]; then
-    fail "未找到 Windows 绿色版包: $windows_archive"
-  fi
-  if [[ ! -f "$windows_installer_archive" ]]; then
-    fail "未找到 Windows 安装版包: $windows_installer_archive"
-  fi
-  if [[ ! -f "$linux_archive" ]]; then
-    fail "未找到 Linux 包: $linux_archive"
-  fi
-  if [[ ! -f "$macos_archive" ]]; then
-    fail "未找到 macOS 包: $macos_archive"
-  fi
+  local archive
+  for archive in "${release_archives[@]}"; do
+    [[ -f "$archive" ]] || fail "未找到发布包: $archive"
+  done
 }
 
 commit_release_changes() {
@@ -707,7 +605,11 @@ ensure_tag_at_head() {
   fi
 
   write_step "创建 tag $release_tag"
-  run_checked_command "$repo_root" "创建 tag 失败" git tag -a "$release_tag" HEAD -m "Release $release_tag"
+  if [[ "$via_github_actions" == 1 && -n "$release_notes_path" ]]; then
+    { printf 'Release %s\n\n' "$release_tag"; cat "$release_notes_path"; } | git -C "$repo_root" tag -a "$release_tag" HEAD -F -
+  else
+    run_checked_command "$repo_root" "创建 tag 失败" git tag -a "$release_tag" HEAD -m "Release $release_tag"
+  fi
 }
 
 get_github_token_from_credential_helper() {
@@ -737,6 +639,19 @@ publish_github_release() {
   local release_notes_path="$3"
   local target_branch="$4"
 
+  write_step "推送当前分支到 origin"
+  run_checked_command "$repo_root" "推送分支失败" git push origin "HEAD:refs/heads/$target_branch"
+
+  write_step "推送 tag $release_tag 到 origin"
+  run_checked_command "$repo_root" "推送 tag 失败" git push origin "refs/tags/$release_tag"
+
+  if [[ "$via_github_actions" == 1 ]]; then
+    write_step "提交 Linux 原生发布任务"
+    run_checked_command "$repo_root" "提交 GitHub Actions 发布任务失败" git push origin "HEAD:refs/heads/release/linux"
+    write_info "GitHub Actions 将从已校验的标签重新构建并上传 Linux 发布包。"
+    return
+  fi
+
   local gh_command
   gh_command="$(command -v gh || true)"
   if [[ -z "$gh_command" ]]; then
@@ -752,39 +667,14 @@ publish_github_release() {
     fi
   fi
 
-  write_step "推送当前分支到 origin"
-  run_checked_command "$repo_root" "推送分支失败" git push origin "HEAD:refs/heads/$target_branch"
-
-  write_step "推送 tag $release_tag 到 origin"
-  run_checked_command "$repo_root" "推送 tag 失败" git push origin "refs/tags/$release_tag"
-
-  local release_assets=()
-  if [[ -n "${windows_archive:-}" ]]; then
-    release_assets+=("$windows_archive")
-  fi
-  release_assets+=("$windows_installer_archive" "$linux_archive" "$macos_archive")
+  local release_assets=("${release_archives[@]}")
   if ((${#checksum_archives[@]} > 0)); then
     release_assets+=("${checksum_archives[@]}")
   fi
 
-  write_step "创建 GitHub Release $release_tag"
-  local release_arguments=(
-    release
-    create
-    "$release_tag"
-    "${release_assets[@]}"
-    --repo "$repo"
-    --title "$release_tag"
-    --verify-tag
-  )
-  if [[ -n "$release_notes_path" ]]; then
-    write_info "GitHub Release body: $release_notes_path"
-    release_arguments+=(--notes-file "$release_notes_path")
-  else
-    release_arguments+=(--generate-notes)
-  fi
-
-  run_checked_command "$repo_root" "创建 GitHub Release 失败" "$gh_command" "${release_arguments[@]}"
+  local arguments=(--repo "$repo" --tag "$release_tag")
+  if [[ -n "$release_notes_path" ]]; then arguments+=(--notes-file "$release_notes_path"); fi
+  run_checked_command "$repo_root" "发布 GitHub Release 失败" "$python_bin" "$script_dir/publish_assets.py" "${arguments[@]}" "${release_assets[@]}"
 }
 
 main() {
@@ -810,6 +700,9 @@ main() {
   normalized_release_branch="$(normalize_release_branch "$release_branch")"
   assert_valid_release_branch "$normalized_release_branch"
 
+  if [[ "$via_github_actions" == 1 && ( "$(uname -s)" != Linux || "$mode" == BuildOnly ) ]]; then
+    fail "--via-github-actions 仅用于 Linux 的发布模式。"
+  fi
   local release_tag="v$normalized_version"
   local should_build=1
   local should_publish=1
@@ -849,6 +742,7 @@ main() {
     fi
   fi
 
+  set_release_archive_paths "$normalized_version"
   write_info "当前模式: $mode"
   if [[ "$should_build" == "1" ]]; then
     if [[ "$run_checks" == "1" ]]; then
@@ -869,26 +763,26 @@ main() {
     commit_release_changes "$normalized_version"
   fi
 
+  local source_identity
+  source_identity="$("$python_bin" "$repo_root/scripts/update_package.py" identity --source-root "$repo_root" --plain)" || fail "无法固定发布源码身份"
+  read -r TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT <<< "$source_identity"
+  export TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT
+
   if [[ "$should_build" == "1" ]]; then
     new_release_archives "$normalized_version"
   else
-    local source_identity
-    source_identity="$("$python_bin" "$repo_root/scripts/update_package.py" identity --source-root "$repo_root" --plain)" || fail "无法固定待发布源码身份"
-    read -r TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT <<< "$source_identity"
-    export TCB_RELEASE_SOURCE_COMMIT TCB_RELEASE_SOURCE_FINGERPRINT
-    get_existing_release_archives "$normalized_version"
+    get_existing_release_archives
   fi
   assert_release_archives_contain_legal_files
   assert_release_update_payloads
 
-  if [[ -n "${windows_archive:-}" ]]; then
-    write_info "Windows 绿色版包: $windows_archive"
-  else
-    write_info "Windows 绿色版包: 已跳过"
+  if [[ -n "$linux_portable_archive" ]]; then
+    run_checked_command "$repo_root" "Linux 离线包启动校验失败" "$python_bin" -B "$script_dir/portable-linux/smoke.py" "$linux_portable_archive"
   fi
-  write_info "Windows 安装版包: $windows_installer_archive"
-  write_info "Linux 包: $linux_archive"
-  write_info "macOS 包: $macos_archive"
+  local archive
+  for archive in "${release_archives[@]}"; do
+    write_info "发布包: $archive"
+  done
   new_archive_checksum_files
 
   if [[ "$should_publish" == "1" ]]; then

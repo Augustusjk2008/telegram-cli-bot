@@ -137,12 +137,14 @@ def _prepare_python(repo: Path, job_dir: Path, prepared: dict, log: Path) -> dic
     # Resolving a POSIX venv's python symlink would select the base interpreter
     # and lose the old environment needed for rollback.
     previous = Path(os.path.abspath(sys.executable))
-    if prepared["package_kind"] == "portable":
-        python = staging / "runtime" / "python" / "python.exe"
+    from scripts.update_package import PORTABLE_PYTHONS
+    if prepared["package_kind"] in PORTABLE_PYTHONS:
+        relative = PORTABLE_PYTHONS[prepared["package_kind"]]
+        python = staging / relative
         if not python.is_file():
             raise RuntimeError("绿色版更新包缺少完整的 Python 运行时")
         fingerprint = _check_environment(python, requirements, log)
-        return {"python_executable": str(repo / "runtime" / "python" / "python.exe"),
+        return {"python_executable": str(repo / relative),
                 "previous_python_executable": str(previous), "environment_fingerprint": fingerprint}
     current_requirements = repo / "requirements.txt"
     same_requirements = current_requirements.is_file() and _sha256(current_requirements) == wanted
