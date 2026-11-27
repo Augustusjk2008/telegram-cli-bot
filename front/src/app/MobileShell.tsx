@@ -11,6 +11,8 @@ import {
   SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
+import { useMobileFilePreview, type MobileFilePreviewRequest, type MobilePreviewScope } from "../hooks/useMobileFilePreview";
+import { MobileFilePreviewScreen } from "../screens/MobileFilePreviewScreen";
 import type { ViewMode } from "./layoutMode";
 import type { SessionState } from "../services/types";
 import { isGuest } from "../utils/capabilities";
@@ -33,6 +35,9 @@ type Props = {
   allowedTabs?: AppTab[];
   hideOuterChrome: boolean;
   activeScreen: ReactNode;
+  previewScope: MobilePreviewScope;
+  renderFiles: (open: (request: MobileFilePreviewRequest) => void) => ReactNode;
+  renderChat: (open: (request: MobileFilePreviewRequest) => void, previewOpen: boolean) => ReactNode;
   viewMode: ViewMode;
   hasUnreadOtherBots?: boolean;
   clearUnreadAction?: ReactNode;
@@ -50,6 +55,9 @@ export function MobileShell({
   allowedTabs,
   hideOuterChrome,
   activeScreen,
+  previewScope,
+  renderFiles,
+  renderChat,
   viewMode,
   hasUnreadOtherBots = false,
   clearUnreadAction,
@@ -59,6 +67,12 @@ export function MobileShell({
   onViewModeChange,
   onTabChange,
 }: Props) {
+  const controller = useMobileFilePreview(previewScope, tab => {
+    if (currentTab !== tab) onTabChange(tab);
+  });
+  const origin = controller.preview?.request.origin;
+  const foreground = currentTab === origin;
+  const showChrome = foreground || !hideOuterChrome;
   const [viewModeMenuOpen, setViewModeMenuOpen] = useState(false);
   const viewModeRootRef = useRef<HTMLDivElement>(null);
   const viewModeTriggerRef = useRef<HTMLButtonElement>(null);
@@ -101,13 +115,13 @@ export function MobileShell({
   return (
     <div
       data-layout="mobile"
-      data-chrome={hideOuterChrome ? "hidden" : "visible"}
+      data-chrome={showChrome ? "visible" : "hidden"}
       className="mobile-shell orbit-shell relative flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden text-[var(--text)]"
     >
       <div className="orbit-canvas mobile-shell-canvas" aria-hidden="true">
         <ThemeIllustrationLayer surface="workbench" />
       </div>
-      {!hideOuterChrome ? (
+      {showChrome ? (
         <header className="mobile-shell-topbar">
           <button
             type="button"
@@ -170,10 +184,28 @@ export function MobileShell({
       ) : null}
 
       <div className="mobile-shell-stage">
+        {(["chat", "files"] as const).map(tab => {
+          if (tab !== currentTab && tab !== origin) return null;
+          const hidden = tab !== currentTab || foreground;
+          return (
+            <div key={tab} className={`absolute inset-0 ${hidden ? "invisible" : ""}`} inert={hidden} aria-hidden={hidden}>
+              {tab === "chat" ? renderChat(controller.open, origin === "chat") : renderFiles(controller.open)}
+            </div>
+          );
+        })}
         {activeScreen}
+        {controller.preview ? (
+          <MobileFilePreviewScreen key={controller.preview.id} controller={controller} foreground={foreground}
+            remote={previewScope.remote} canWrite={previewScope.canWrite} />
+        ) : null}
+        {controller.notice ? (
+          <div role="status" className="pointer-events-none absolute inset-x-3 bottom-3 z-10 mx-auto w-fit max-w-full rounded-lg border border-[var(--border)] bg-[var(--island-solid)] px-3 py-2 text-sm shadow-[var(--shadow-raised)]">
+            {controller.notice}
+          </div>
+        ) : null}
       </div>
 
-      {!hideOuterChrome ? (
+      {showChrome ? (
         <nav className="mobile-shell-tabbar" aria-label="主导航">
           {navItems.map(({ tab, label, Icon }) => (
             <button

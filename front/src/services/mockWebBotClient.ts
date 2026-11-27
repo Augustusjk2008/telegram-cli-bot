@@ -119,6 +119,7 @@ import type {
   FileUploadProgress,
   FileEntry,
   FileEntryChainLink,
+  FileReadOptions,
   FileReadResult,
   HtmlPreviewSession,
   GitActionResult,
@@ -3566,6 +3567,14 @@ export class MockWebBotClient implements WebBotClient {
     return this.currentPaths.get(botAlias) || this.getBotSummary(botAlias).workingDir;
   }
 
+  private getFileDirectory(botAlias: string, options: FileReadOptions): string {
+    const directory = this.getBrowserPath(botAlias);
+    if (options.expectedDirectory !== undefined && this.normalizeMockPath(options.expectedDirectory) !== this.normalizeMockPath(directory)) {
+      throw new WebApiClientError("浏览目录已改变，请重新打开文件", { status: 409, code: "browse_directory_changed" });
+    }
+    return options.workspaceRelative ? this.getBotSummary(botAlias).workingDir : directory;
+  }
+
   private resolveTargetDir(botAlias: string, parentPath?: string): string {
     const candidate = parentPath?.trim();
     return candidate && candidate.length > 0 ? candidate : this.getBrowserPath(botAlias);
@@ -3716,12 +3725,16 @@ export class MockWebBotClient implements WebBotClient {
     return { ...agent, cluster: agent.cluster ? { ...agent.cluster } : { ...DEFAULT_AGENT_CLUSTER } };
   }
 
+  private filePath(browserPath: string, filename: string): string {
+    return this.normalizeMockPath(/^(?:\/|[A-Za-z]:[\\/])/.test(filename) ? filename : `${browserPath.replace(/[\\/]+$/, "")}/${filename}`);
+  }
+
   private fileKey(botAlias: string, browserPath: string, filename: string): string {
-    const absolutePath = this.normalizeMockPath(/^(?:\/|[A-Za-z]:[\\/])/.test(filename) ? filename : `${browserPath}/${filename}`);
+    const absolutePath = this.filePath(browserPath, filename);
     if (this.hdlSourcePaths.has(`${botAlias}:${absolutePath}`)) {
       return `${botAlias}:hdl:${absolutePath}`;
     }
-    return `${botAlias}:${browserPath}:${filename}`;
+    return `${botAlias}:${absolutePath}`;
   }
 
   private getFileContent(botAlias: string, browserPath: string, filename: string): string {
@@ -5894,8 +5907,9 @@ export class MockWebBotClient implements WebBotClient {
     }
   }
 
-  async createHtmlPreview(botAlias: string, filename: string): Promise<HtmlPreviewSession> {
+  async createHtmlPreview(botAlias: string, filename: string, options: AgentScopedOptions & FileReadOptions = {}): Promise<HtmlPreviewSession> {
     if ((await this.getBotOverview(botAlias)).remoteWorkspace) throw new Error("远程工作区不支持交互预览");
+    this.getFileDirectory(botAlias, options);
     const sessionId = crypto.randomUUID();
     return {
       sessionId,
@@ -5907,8 +5921,8 @@ export class MockWebBotClient implements WebBotClient {
 
   async closeHtmlPreview(_botAlias: string, _sessionId: string): Promise<void> {}
 
-  async readFile(botAlias: string, filename: string): Promise<FileReadResult> {
-    const browserPath = this.getBrowserPath(botAlias);
+  async readFile(botAlias: string, filename: string, options: FileReadOptions = {}): Promise<FileReadResult> {
+    const browserPath = this.getFileDirectory(botAlias, options);
     const content = this.getFileContent(botAlias, browserPath, filename);
     return {
       content,
@@ -5919,8 +5933,8 @@ export class MockWebBotClient implements WebBotClient {
     };
   }
 
-  async readFileFull(botAlias: string, filename: string): Promise<FileReadResult> {
-    const browserPath = this.getBrowserPath(botAlias);
+  async readFileFull(botAlias: string, filename: string, options: FileReadOptions = {}): Promise<FileReadResult> {
+    const browserPath = this.getFileDirectory(botAlias, options);
     const content = this.getFileContent(botAlias, browserPath, filename);
     return {
       content,
@@ -6542,8 +6556,11 @@ export class MockWebBotClient implements WebBotClient {
     return new Blob([artifact?.content || ""], { type: artifact?.contentType || "application/octet-stream" });
   }
 
-  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult> {
-    const browserPath = this.getBrowserPath(botAlias);
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string, options: FileReadOptions = {}): Promise<FileWriteResult> {
+    const browserPath = this.getFileDirectory(botAlias, options);
+    if (options.workspaceRelative && (/^(?:[\\/]|[A-Za-z]:)/.test(path) || path.split(/[\\/]/).includes(".."))) {
+      throw new WebApiClientError("文件路径不安全", { status: 400, code: "unsafe_write_path" });
+    }
     const currentVersion = this.getFileVersion(botAlias, browserPath, path);
     if (expectedMtimeNs !== undefined && expectedMtimeNs !== String(currentVersion)) {
       throw new Error("文件已被修改，请重新打开后再试");
@@ -6551,9 +6568,9 @@ export class MockWebBotClient implements WebBotClient {
 
     const nextVersion = this.setFileState(botAlias, browserPath, path, content);
     const botFiles = (mockFiles[botAlias] ||= {});
-    const currentEntries = [...(botFiles[browserPath] || [])];
-    botFiles[browserPath] = currentEntries.map((entry) =>
-      entry.name === path
+    const { dir, name } = this.splitMockFilePath(this.filePath(browserPath, path));
+    botFiles[dir] = (botFiles[dir] || []).map((entry) =>
+      entry.name === name
         ? {
             ...entry,
             size: new TextEncoder().encode(content).length,
@@ -6999,8 +7016,10 @@ export class MockWebBotClient implements WebBotClient {
     filename: string,
     onProgress?: (progress: FileDownloadProgress) => void,
     signal?: AbortSignal,
+    options: FileReadOptions = {},
   ): Promise<void> {
     signal?.throwIfAborted();
+    this.getFileDirectory(botAlias, options);
     onProgress?.({ downloadedBytes: 0, totalBytes: 1, percent: 0 });
     onProgress?.({ downloadedBytes: 1, totalBytes: 1, percent: 100 });
     return;

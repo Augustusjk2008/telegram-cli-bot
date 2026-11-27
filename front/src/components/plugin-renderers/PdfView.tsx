@@ -147,25 +147,29 @@ export default function PdfView({ botAlias, client, payload }: {
 
   const buttonClass = "rounded border border-[var(--border)] px-2 py-1 disabled:opacity-40";
   return (
-    <div data-testid="pdf-view" className="flex h-full min-h-0 min-w-0 flex-col text-[var(--text)]">
+    <div data-testid="pdf-view" className="pdf-view flex h-full min-h-0 min-w-0 flex-col text-[var(--text)]">
       <div className="shrink-0 border-b border-[var(--border)] p-3">
         <div className="truncate text-sm font-medium" title={payload.path}>{payload.title || payload.path}</div>
         {payload.statsText ? <div className="mt-1 text-xs text-[var(--muted)]">{payload.statsText}</div> : null}
         <div role="toolbar" aria-label="PDF 阅读工具" className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-          <button className={buttonClass} disabled={!pdf || pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}>上一页</button>
-          <form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); goToPage(Number(pageInput)); }}>
-            <input aria-label="页码" type="number" min={1} max={pdf?.numPages ?? 1} disabled={!pdf}
-              value={pageInput} onChange={(event) => setPageInput(event.target.value)} onBlur={() => goToPage(Number(pageInput))}
-              className="w-16 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-1" />
-            <span>/ {pdf?.numPages ?? "—"}</span>
-          </form>
-          <button className={buttonClass} disabled={!pdf || pageNumber >= pdf.numPages} onClick={() => goToPage(pageNumber + 1)}>下一页</button>
-          <select aria-label="缩放" value={zoom} onChange={(event) => setZoom(event.target.value)} disabled={!pdf}
-            className="rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-1">
-            <option value="fit">适合宽度</option>
-            {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((scale) => <option key={scale} value={scale}>{scale * 100}%</option>)}
-          </select>
-          <ViewerToolToggle tool={tool} onChange={setTool} />
+          <div className="pdf-toolbar-group">
+            <button className={buttonClass} disabled={!pdf || pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}>上一页</button>
+            <form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); goToPage(Number(pageInput)); }}>
+              <input aria-label="页码" type="number" min={1} max={pdf?.numPages ?? 1} disabled={!pdf}
+                value={pageInput} onChange={(event) => setPageInput(event.target.value)} onBlur={() => goToPage(Number(pageInput))}
+                className="w-16 rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-1" />
+              <span>/ {pdf?.numPages ?? "—"}</span>
+            </form>
+            <button className={buttonClass} disabled={!pdf || pageNumber >= pdf.numPages} onClick={() => goToPage(pageNumber + 1)}>下一页</button>
+          </div>
+          <div className="pdf-toolbar-group">
+            <select aria-label="缩放" value={zoom} onChange={(event) => setZoom(event.target.value)} disabled={!pdf}
+              className="rounded border border-[var(--border)] bg-[var(--surface)] px-1 py-1">
+              <option value="fit">适合宽度</option>
+              {[0.5, 0.75, 1, 1.25, 1.5, 2, 3].map((scale) => <option key={scale} value={scale}>{scale * 100}%</option>)}
+            </select>
+            <ViewerToolToggle tool={tool} onChange={setTool} />
+          </div>
         </div>
       </div>
       <div ref={scroller} {...pan.handlers} className={`min-h-0 min-w-0 flex-1 overflow-auto bg-[var(--surface-strong)] ${pan.className}`}>

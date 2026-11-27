@@ -215,6 +215,12 @@ Once connected, you can create an empty repository under your account or an orga
 
 Tokens are encrypted with an installation key under the application data `github/` directory and are never returned to the browser. In local workspaces, fetch, pull, merge, push, and publish against `https://github.com/` use the account's token through the Git child-process environment, never the command line, and disable other credential helpers and interactive prompts for that host; SSH URLs keep using local SSH keys. In SSH remote workspaces, GitHub API calls run on the Orbit host while Git sync keeps using the remote host's own credentials; Orbit never sends the token to the remote host. Disconnecting deletes only the stored token; revoke it in GitHub settings for full removal. GitHub API requests follow the system proxy environment (such as `HTTPS_PROXY`); Git sync uses Git's own proxy configuration.
 
+### Portrait file previews
+
+Files and Chat share one full-page preview in portrait layout. The first tap reserves it immediately, including while it loads or displays an error. Tapping the same file returns to that preview. To open another file, close the preview and tap the new file again. You can visit other tabs and return to the preview. **Back**, including browser Back, takes you to the original folder or chat with its scroll position and draft.
+
+Local files use the installed viewer when your account can run plugins. If several viewers apply, choose one before loading the file. HTML offers the interactive preview alongside a matching conversion plugin. SSH workspaces use the built-in viewer and display HTML as a static page.
+
 ### Local HTML Preview
 
 The desktop workbench, chat file links, and mobile preview support interactive local HTML, including JavaScript, ES Modules, styles, images, fonts, relative JSON requests, project links, and hash routes. Use relative resource URLs; Vite builds need `base: "./"`. Each preview remains bound to its original resource directory. Remote SSH workspaces use a static HTML preview.

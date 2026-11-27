@@ -51,7 +51,7 @@ export function WaveformTimelineNavigator({
         height="34"
         viewBox={`0 0 ${OVERVIEW_WIDTH} 34`}
         preserveAspectRatio="none"
-        className="mt-2 block h-8 w-full cursor-ew-resize rounded bg-[var(--surface-strong)]"
+        className="mt-2 block h-8 w-full cursor-ew-resize touch-pan-y rounded bg-[var(--surface-strong)]"
         data-testid="waveform-overview"
         onPointerDown={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();

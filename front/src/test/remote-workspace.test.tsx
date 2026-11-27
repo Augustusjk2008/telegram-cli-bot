@@ -6,6 +6,7 @@ import { useBotManager } from "../screens/useBotManager";
 import { RemoteConnectionForm } from "../components/RemoteConnectionForm";
 import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { FilesScreen } from "../screens/FilesScreen";
+import type { MobileFilePreviewRequest } from "../hooks/useMobileFilePreview";
 import { MockWebBotClient } from "../services/mockWebBotClient";
 import { RealWebBotClient } from "../services/realWebBotClient";
 import { WebApiClientError, type BotSummary, type RemoteWorkspace } from "../services/types";
@@ -290,7 +291,7 @@ test("shared mobile files screen edits and downloads remote text while hiding un
   const read = vi.spyOn(client, "readFileFull").mockResolvedValue({ mode: "cat", content: "before", isFullContent: true, lastModifiedNs: "123", encoding: "utf-8" });
   const write = vi.spyOn(client, "writeFile").mockResolvedValue({ path: "", fileSizeBytes: 5, lastModifiedNs: "124" });
   const download = vi.spyOn(client, "downloadFile").mockResolvedValue(undefined);
-  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} />);
+  render(<FilesScreen onRequestMobilePreview={vi.fn()} client={client} botAlias="remote" remoteWorkspace={remote} />);
   fireEvent.click(await screen.findByRole("button", { name: "更多操作 Case\\Name.txt" }));
   expect(screen.queryByRole("menuitem", { name: /重命名|删除/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("menuitem", { name: "下载 Case\\Name.txt" }));
@@ -304,6 +305,64 @@ test("shared mobile files screen edits and downloads remote text while hiding un
   // The editor save path retains the remote file's concurrency token.
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(write).toHaveBeenCalledWith("remote", "Case\\Name.txt", "after", "123", "utf-8"));
+});
+
+test("the preview editor saves the pinned copy of a filename after another browser changes directory", async () => {
+  const client = new MockWebBotClient();
+  const workspace = await client.getCurrentPath("main");
+  const first = `${workspace.replace(/\/$/, "")}/first`;
+  const second = `${workspace.replace(/\/$/, "")}/second`;
+  const name = "config.json";
+  await client.createTextFile("main", name, "first file", first);
+  await client.createTextFile("main", name, "second file", second);
+  await client.changeDirectory("main", first);
+  const preview = vi.fn<(request: MobileFilePreviewRequest) => void>();
+  const read = vi.spyOn(client, "readFileFull");
+  const write = vi.spyOn(client, "writeFile");
+  const props = { client, botAlias: "main", onRequestMobilePreview: preview };
+  const view = render(<FilesScreen {...props} />);
+  fireEvent.click(await screen.findByRole("button", { name: "打开 config.json" }));
+  await client.changeDirectory("main", second);
+  const options = { workspaceRelative: true };
+  await act(async () => expect(await preview.mock.calls[0][0].onEdit!("first/config.json", () => true, options)).toBe(true));
+  expect(read).toHaveBeenCalledWith("main", "first/config.json", options);
+  expect(screen.getByRole("heading", { name })).toBeInTheDocument();
+  const editor = screen.getByRole("textbox", { name: "文件内容" });
+  expect(editor).toHaveValue("first file");
+  fireEvent.change(editor, { target: { value: "saved to first" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("已保存");
+  expect(write).toHaveBeenLastCalledWith("main", "first/config.json", "saved to first", expect.any(String), undefined, options);
+  expect((await client.readFileFull("main", "first/config.json", options)).content).toBe("saved to first");
+  expect((await client.readFileFull("main", name)).content).toBe("second file");
+
+  await client.changeDirectory("main", first);
+  await client.createTextFile("main", "definition.py", "definition", first);
+  const range = { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } };
+  vi.spyOn(client, "resolveCodeNavigation").mockResolvedValue({
+    requestId: "definition", message: "",
+    items: [{ targetType: "workspace", path: "definition.py", provider: "test", range, selectionRange: range }],
+  });
+  fireEvent.keyDown(editor, { key: "F12" });
+  await screen.findByRole("heading", { name: "definition.py" });
+  expect(read).toHaveBeenLastCalledWith("main", "definition.py", { expectedDirectory: first });
+  fireEvent.change(screen.getByRole("textbox", { name: "文件内容" }), { target: { value: "new definition" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("已保存");
+  expect(write).toHaveBeenLastCalledWith("main", "definition.py", "new definition", expect.any(String), undefined, { expectedDirectory: first });
+  expect((await client.readFileFull("main", "first/config.json", options)).content).toBe("saved to first");
+
+  await client.changeDirectory("main", second);
+  fireEvent.click(screen.getByRole("button", { name: "返回" }));
+  view.rerender(<FilesScreen {...props} reconnectRevision={1} />);
+  fireEvent.click(await screen.findByRole("button", { name: "更多操作 config.json" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "编辑 config.json" }));
+  const nextEditor = await screen.findByRole("textbox", { name: "文件内容" });
+  expect(nextEditor).toHaveValue("second file");
+  fireEvent.change(nextEditor, { target: { value: "saved to second" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  await screen.findByText("已保存");
+  expect(write).toHaveBeenLastCalledWith("main", name, "saved to second", expect.any(String), undefined);
 });
 
 test("remote files upload into the browsed directory and refresh", async () => {
@@ -321,7 +380,7 @@ test("remote files upload into the browsed directory and refresh", async () => {
     return currentPath;
   });
   const upload = vi.spyOn(client, "uploadFile").mockImplementation(async () => { uploaded = true; });
-  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} />);
+  render(<FilesScreen onRequestMobilePreview={vi.fn()} client={client} botAlias="remote" remoteWorkspace={remote} />);
   fireEvent.click(await screen.findByRole("button", { name: "进入 uploads" }));
   await waitFor(() => expect(changeDirectory).toHaveBeenCalledWith("remote", "uploads"));
   await waitFor(() => expect(screen.queryByRole("button", { name: "进入 uploads" })).not.toBeInTheDocument());
@@ -332,12 +391,56 @@ test("remote files upload into the browsed directory and refresh", async () => {
   expect(currentPath).toBe(`${remote.root}/uploads`);
 });
 
-test.each([{ structureOnly: true }, { canWriteFiles: false }])("remote file upload respects browse permissions (%j)", async (props) => {
+test.each([{ structureOnly: true }, { canWriteFiles: false }])("remote upload and portrait preview respect browse permissions (%j)", async (props) => {
   const client = new MockWebBotClient();
   vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: remote.root, entries: [{ name: "README.md", isDir: false }] });
-  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} {...props} />);
-  await screen.findByText("README.md");
+  const request = vi.fn<(request: MobileFilePreviewRequest) => void>();
+  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} onRequestMobilePreview={request} {...props} />);
+  fireEvent.click(await screen.findByRole("button", { name: "打开 README.md" }));
   expect(screen.queryByLabelText("上传文件")).not.toBeInTheDocument();
+  if (props.structureOnly) {
+    expect(request).not.toHaveBeenCalled();
+  } else {
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0][0].onEdit).toBeUndefined();
+  }
+});
+
+test.each(["close", "write permission revoked"])("drops a late portrait Files editor read after %s", async (change) => {
+  const client = new MockWebBotClient();
+  const directory = `${remote.root}/notes`;
+  const name = "Case\\Name #1.txt";
+  vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: directory, entries: [{ name, isDir: false }] });
+  const read = vi.spyOn(client, "readFile");
+  let finishRead!: () => void;
+  const full = vi.spyOn(client, "readFileFull").mockImplementation(() => new Promise((resolve) => {
+    finishRead = () => resolve({ mode: "cat", content: "stale", isFullContent: true });
+  }));
+  const request = vi.fn<(request: MobileFilePreviewRequest) => void>();
+  const props = { client, botAlias: "remote", remoteWorkspace: remote, onRequestMobilePreview: request };
+  const view = render(<FilesScreen {...props} />);
+  fireEvent.click(await screen.findByRole("button", { name: `打开 ${name}` }));
+  expect(request).toHaveBeenCalledWith({
+    origin: "files", botAlias: "remote", client, directory, path: name, onEdit: expect.any(Function),
+  });
+  expect(read).not.toHaveBeenCalled();
+  expect(full).not.toHaveBeenCalled();
+
+  const path = `${directory}/${name}`;
+  let current = true;
+  const edit = request.mock.calls[0][0].onEdit!;
+  let opened: Promise<boolean>;
+  act(() => { opened = edit(path, () => current); });
+  expect(full).toHaveBeenCalledWith("remote", path);
+  if (change === "close") current = false;
+  else view.rerender(<FilesScreen {...props} canWriteFiles={false} />);
+  await act(async () => {
+    finishRead();
+    expect(await opened).toBe(false);
+    expect(await edit(path, () => current)).toBe(false);
+  });
+  expect(full).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("textbox", { name: "文件内容" })).not.toBeInTheDocument();
 });
 
 test("read-only remote browsing keeps backslashes inside POSIX directory names", async () => {
@@ -347,7 +450,7 @@ test("read-only remote browsing keeps backslashes inside POSIX directory names",
     workingDir: path || remote.root,
     entries: path === remote.root ? [{ name: "dir\\name", isDir: true }] : [],
   }));
-  render(<FilesScreen client={client} botAlias="remote" remoteWorkspace={remote} structureOnly />);
+  render(<FilesScreen onRequestMobilePreview={vi.fn()} client={client} botAlias="remote" remoteWorkspace={remote} structureOnly />);
   fireEvent.click(await screen.findByRole("button", { name: "进入 dir\\name" }));
   await waitFor(() => expect(list).toHaveBeenCalledWith("remote", "/home/dev/dir\\name"));
   fireEvent.click(screen.getByRole("button", { name: "返回上级目录" }));

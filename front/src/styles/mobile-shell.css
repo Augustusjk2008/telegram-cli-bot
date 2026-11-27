@@ -400,3 +400,38 @@
     animation: none;
   }
 }
+
+.mobile-file-preview {
+  color: var(--text);
+  background: var(--workbench-panel-bg);
+}
+.mobile-file-preview-header {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--workbench-hairline);
+}
+.mobile-preview-control {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 4px 8px;
+  font-size: 0.8125rem;
+  background: var(--surface);
+}
+.mobile-preview-control:hover { background: var(--workbench-hover-bg); }
+.mobile-preview-control:disabled { opacity: .55; }
+.mobile-preview-status {
+  flex: none;
+  padding: 8px 12px;
+  border-top: 1px solid var(--workbench-hairline);
+  color: var(--muted);
+  font-size: .75rem;
+}

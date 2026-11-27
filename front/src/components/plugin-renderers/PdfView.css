@@ -50,3 +50,20 @@
 .pdf-text-layer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
 .pdf-text-layer ::selection { background: var(--pdf-selection); }
 .pdf-text-layer br::selection { background: transparent; }
+
+.pdf-view {
+  container: pdf-view / inline-size;
+}
+
+.pdf-toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@container pdf-view (max-width: 32rem) {
+  .pdf-toolbar-group :is(button, input, select) {
+    min-height: 2.25rem;
+  }
+}

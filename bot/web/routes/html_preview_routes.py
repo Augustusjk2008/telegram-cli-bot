@@ -8,7 +8,7 @@ from aiohttp import web
 
 from bot.web.api_common import WebApiError, get_chat_session_for_alias, get_profile_or_raise
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_READ_FILE_CONTENT
-from bot.web.files_service import get_browser_directory, require_real_browser_directory, resolve_safe_path
+from bot.web.files_service import file_operation_directory, resolve_safe_path
 from bot.web.html_preview_service import (
     HTML_EXTENSIONS, directory_identity, entry_url, inject_bridge, read_resource, resource_prefix,
     security_headers, validate_relative_path,
@@ -92,8 +92,11 @@ def register(app: web.Application, server) -> None:
             raise WebApiError(400, "invalid_filename", "请输入 HTML 文件路径")
         agent_id = server._request_agent_id(request)
         identity, workspace, session = _scope(server, alias, auth.user_id, agent_id)
-        browser_dir = require_real_browser_directory(get_browser_directory(session))
-        root, relative = _entry(workspace, browser_dir, filename, CAP_ADMIN_OPS in auth.capabilities)
+        workspace_relative = request.query.get("base") == "workspace"
+        browser_dir = file_operation_directory(
+            session, workspace_relative=workspace_relative, expected_directory=request.query.get("expected_directory"),
+        )
+        root, relative = _entry(workspace, browser_dir, filename, CAP_ADMIN_OPS in auth.capabilities and not workspace_relative)
         # Verify real size and readability before issuing a ticket.
         await asyncio.to_thread(read_resource, root, relative)
         if _scope(server, alias, auth.user_id, agent_id)[0] != identity:

@@ -1,13 +1,12 @@
 import type { WebBotClient } from "../../services/webBotClient";
 import type {
-  HostEffect,
   PluginAction,
   PluginRenderResult,
   WaveformSnapshotRenderResult,
   WaveformViewSummary,
   WaveformWindowPayload,
 } from "../../services/types";
-import { runPluginAction } from "../plugins/pluginActions";
+import { runPluginAction, type ApplyPluginHostEffects } from "../plugins/pluginActions";
 import { DocumentView } from "./DocumentView";
 import { HexView } from "./HexView";
 import { MediaView } from "./MediaView";
@@ -20,7 +19,8 @@ type Props = {
   client: WebBotClient;
   view: PluginRenderResult;
   inputPayload?: Record<string, unknown>;
-  onApplyHostEffects?: (effects: HostEffect[], pluginId?: string) => Promise<void> | void;
+  mediaUrl?: string;
+  onApplyHostEffects?: ApplyPluginHostEffects;
   onClosePluginSession?: (pluginId: string, sessionId: string) => Promise<void> | void;
   onRefreshPluginSession?: (pluginId: string, sessionId: string) => Promise<void> | void;
   onReopenPluginView?: (target: {
@@ -62,6 +62,7 @@ export function PluginViewSurface({
   client,
   view,
   inputPayload = {},
+  mediaUrl,
   onApplyHostEffects,
   onClosePluginSession,
   onRefreshPluginSession,
@@ -83,6 +84,9 @@ export function PluginViewSurface({
       refreshSession: onRefreshPluginSession,
       reopenView: onReopenPluginView,
       pushToast: onNotice,
+    }).catch((error: unknown) => {
+      if (!onNotice) throw error;
+      onNotice(error instanceof Error ? error.message : "插件操作失败");
     });
   }
 
@@ -98,7 +102,7 @@ export function PluginViewSurface({
         sessionId={view.mode === "session" ? view.sessionId : undefined}
         summary={summary}
         initialWindow={initialWindow}
-        onApplyHostEffects={(effects) => onApplyHostEffects?.(effects, view.pluginId)}
+        onApplyHostEffects={async (effects) => { await onApplyHostEffects?.(effects, view.pluginId); }}
       />
     );
   }
@@ -134,7 +138,7 @@ export function PluginViewSurface({
   }
 
   if (view.renderer === "media") {
-    return <MediaView botAlias={botAlias} view={view} inputPayload={inputPayload} />;
+    return <MediaView mediaUrl={mediaUrl} botAlias={botAlias} view={view} inputPayload={inputPayload} />;
   }
 
   return (

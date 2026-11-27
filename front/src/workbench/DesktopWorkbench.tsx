@@ -1,3 +1,4 @@
+import { applyPluginUtilityEffect } from "../components/plugins/pluginActions";
 import { relativeRemotePath } from "../services/remoteWorkspace";
 import { workspaceRelativePath } from "../services/workspacePath";
 import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
@@ -1037,27 +1038,11 @@ export function DesktopWorkbench({
         await fileTree.revealPath(effect.path);
         continue;
       }
-      if (effect.type === "copy_text") {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(effect.text);
-        }
-        continue;
+      if (effect.type === "open_plugin_view") {
+        await openPluginViewTab(effect, effectScopeIdentity);
+      } else {
+        await applyPluginUtilityEffect(effect, client, botAlias, sourcePluginId);
       }
-      if (effect.type === "download_artifact") {
-        await client.downloadPluginArtifact(botAlias, effect.artifactId, effect.filename);
-        continue;
-      }
-      if (effect.type === "install_plugin_runtime") {
-        if (Object.keys(effect).some((key) => key !== "type")) {
-          throw new Error("运行时安装不接受插件提供的运行时参数");
-        }
-        if (!sourcePluginId) {
-          throw new Error("运行时安装缺少插件来源");
-        }
-        await client.installPluginRuntime(botAlias, sourcePluginId);
-        continue;
-      }
-      await openPluginViewTab(effect, effectScopeIdentity);
     }
   }
 

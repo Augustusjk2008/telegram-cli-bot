@@ -31,6 +31,7 @@ export function buildSignalTree(signals: WaveformSignalSummary[]): WaveformSigna
 }
 
 type Props = {
+  id: string;
   signals: WaveformSignalSummary[];
   selectedSignalIds: string[];
   favoriteSignalIds: string[];
@@ -72,6 +73,7 @@ function filterTree(nodes: WaveformSignalTreeNode[], predicate: (signal: Wavefor
 }
 
 export function WaveformSignalNavigator({
+  id,
   signals,
   selectedSignalIds,
   favoriteSignalIds,
@@ -131,7 +133,7 @@ export function WaveformSignalNavigator({
   };
 
   return (
-    <aside className="flex min-h-0 min-w-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] p-2" data-testid="waveform-signal-navigator">
+    <aside id={id} className="flex min-h-0 min-w-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] p-2" data-testid="waveform-signal-navigator">
       <div className="mb-2 flex items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-[var(--text)]">信号 ({signals.length})</h3>
         <button type="button" onClick={() => setFavoritesOnly((value) => !value)} aria-pressed={favoritesOnly} className="text-xs text-[var(--muted)] hover:text-[var(--accent)]">★ 收藏</button>

@@ -214,6 +214,8 @@ async def open_plugin_view(
     plugin_id: str,
     view_id: str,
     input_payload: dict[str, Any],
+    *,
+    isolated_session: bool = False,
 ) -> dict[str, Any]:
     _require_capability(auth, CAP_RUN_PLUGINS)
     get_profile_or_raise(manager, alias)
@@ -224,6 +226,7 @@ async def open_plugin_view(
             plugin_id=plugin_id,
             view_id=view_id,
             input_payload=resolved_input,
+            isolated_session=isolated_session,
             audit_context={"account_id": auth.account_id, "bot_alias": alias},
         )
     except KeyError as exc:

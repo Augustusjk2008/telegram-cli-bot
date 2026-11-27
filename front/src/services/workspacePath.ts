@@ -16,17 +16,27 @@ function absolutePath(path: string, windows: boolean) {
   return { anchor, parts };
 }
 
-export function workspaceRelativePath(path: string, cwd: string, root: string, windows: boolean) {
+function resolveWorkspacePath(path: string, cwd: string, windows: boolean) {
   if (windows) {
     path = path.replace(/\\/g, "/");
     cwd = cwd.replace(/\\/g, "/");
-    root = root.replace(/\\/g, "/");
   }
-  const base = absolutePath(root, windows);
-  if (!base || !path || /^[a-z][\w+.-]*:\/\//i.test(path)) return null;
+  if (!path || /^[a-z][\w+.-]*:\/\//i.test(path)) return null;
   const anchored = path.startsWith("/") || /^\/?[a-z]:/i.test(path);
   if (!anchored && !absolutePath(cwd, windows)) return null;
-  const target = absolutePath(anchored ? path : `${cwd}/${path}`, windows);
+  return absolutePath(anchored ? path : `${cwd}/${path}`, windows);
+}
+
+export function absoluteWorkspacePath(path: string, cwd: string, windows: boolean) {
+  const target = resolveWorkspacePath(path, cwd, windows);
+  if (!target) return null;
+  return (target.anchor === "/" ? "/" : target.anchor + "/") + target.parts.join("/");
+}
+
+export function workspaceRelativePath(path: string, cwd: string, root: string, windows: boolean) {
+  const base = absolutePath(windows ? root.replace(/\\/g, "/") : root, windows);
+  if (!base) return null;
+  const target = resolveWorkspacePath(path, cwd, windows);
   const equal = (a: string, b: string) => windows ? a.toLowerCase() === b.toLowerCase() : a === b;
   if (!target || !equal(base.anchor, target.anchor) || target.parts.length <= base.parts.length
     || !base.parts.every((part, index) => equal(part, target.parts[index]))) return null;

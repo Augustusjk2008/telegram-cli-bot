@@ -1,4 +1,4 @@
-import type { FileReadResult, HtmlPreviewSession } from "../services/types";
+import type { FileReadOptions, FileReadResult, HtmlPreviewSession } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 
 export type HtmlPreviewHandle = {
@@ -13,13 +13,15 @@ export type FilePreviewData = {
 };
 
 export type FilePreviewOptions = {
+  fileOptions?: FileReadOptions;
+  isCurrent?: () => boolean;
   remote?: boolean;
   agentId?: string;
   mode?: "preview" | "full";
 };
 
 // One owner per preview, including sessions whose creation finishes after it closes.
-function createHtmlPreviewHandle(client: WebBotClient, botAlias: string, filename: string, agentId?: string): HtmlPreviewHandle {
+function createHtmlPreviewHandle(client: WebBotClient, botAlias: string, filename: string, agentId?: string, fileOptions?: FileReadOptions): HtmlPreviewHandle {
   let pending: Promise<HtmlPreviewSession> | undefined;
   let session: HtmlPreviewSession | undefined;
   let generation = 0;
@@ -42,7 +44,7 @@ function createHtmlPreviewHandle(client: WebBotClient, botAlias: string, filenam
       if (disposed) return Promise.reject(new Error("预览已关闭"));
       if (!pending) {
         const requestGeneration = generation;
-        pending = client.createHtmlPreview(botAlias, filename, options).then((value) => {
+        pending = client.createHtmlPreview(botAlias, filename, fileOptions ? { ...options, ...fileOptions } : options).then((value) => {
           if (disposed || requestGeneration !== generation) {
             close(value);
             throw new Error("预览已关闭");
@@ -68,10 +70,11 @@ export async function loadFilePreview(
 ): Promise<FilePreviewData> {
   if (options.mode !== "full" && isHtmlPreviewPath(filename)) {
     const remote = options.remote ?? Boolean((await client.getBotOverview(botAlias, options.agentId ? { agentId: options.agentId } : undefined)).remoteWorkspace);
-    if (!remote) return { result: null, htmlPreview: createHtmlPreviewHandle(client, botAlias, filename, options.agentId) };
+    if (!remote) return { result: null, htmlPreview: createHtmlPreviewHandle(client, botAlias, filename, options.agentId, options.fileOptions) };
   }
-  let result = options.mode === "full" ? await client.readFileFull(botAlias, filename) : await client.readFile(botAlias, filename);
-  if (options.mode !== "full" && shouldAutoLoadFullPreview(filename, result)) result = await client.readFileFull(botAlias, filename);
+  const args: [string, string, FileReadOptions?] = options.fileOptions ? [botAlias, filename, options.fileOptions] : [botAlias, filename];
+  let result = options.mode === "full" ? await client.readFileFull(...args) : await client.readFile(...args);
+  if (options.mode !== "full" && options.isCurrent?.() !== false && shouldAutoLoadFullPreview(filename, result)) result = await client.readFileFull(...args);
   return { result: withDetectedPreviewKind(filename, result), htmlPreview: null };
 }
 

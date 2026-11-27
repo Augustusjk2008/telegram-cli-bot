@@ -30,6 +30,7 @@ export function TutorialStage({ src, alt, hotspot, zoom, badge, caption, preload
   // The previous screenshot stays underneath, so the next one fades in over it instead of over an empty frame.
   const [layers, setLayers] = useState({ current: src, previous: "" });
   const [loaded, setLoaded] = useState("");
+  const [aspect, setAspect] = useState(1.6);
   const [failed, setFailed] = useState("");
   if (layers.current !== src) {
     setLayers({ current: src, previous: layers.current });
@@ -88,7 +89,7 @@ export function TutorialStage({ src, alt, hotspot, zoom, badge, caption, preload
 
   return (
     <figure className="tut-stage" data-testid="tutorial-stage">
-      <div ref={frameRef} className="tut-stage-frame" data-zoomed={transform.scale > 1 ? "true" : "false"}>
+      <div ref={frameRef} className="tut-stage-frame" style={{ "--tut-shot-aspect": aspect } as CSSProperties} data-zoomed={transform.scale > 1 ? "true" : "false"}>
         <div className="tut-stage-canvas" style={canvasStyle}>
           {layers.previous ? (
             <img className="tut-stage-image" src={layers.previous} alt="" aria-hidden="true" draggable={false} />
@@ -102,7 +103,10 @@ export function TutorialStage({ src, alt, hotspot, zoom, badge, caption, preload
             src={src}
             alt={alt}
             draggable={false}
-            onLoad={() => setLoaded(src)}
+            onLoad={({ currentTarget }) => {
+              if (currentTarget.naturalHeight) setAspect(currentTarget.naturalWidth / currentTarget.naturalHeight);
+              setLoaded(src);
+            }}
             onError={() => setFailed(src)}
           />
           {hotspot && loaded === src ? (

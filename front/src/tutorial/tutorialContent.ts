@@ -470,6 +470,18 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
         alt: "README.md 的预览标签页显示渲染后的标题、段落和列表",
       },
       {
+        id: "portrait-preview",
+        title: "竖屏文件预览",
+        body: [
+          "在竖屏版点按文件或聊天中的文件链接，就会打开整页预览。加载中或出错时，当前文件仍会占用预览位置。",
+          "可以切换标签，再回到原标签继续查看。点「返回」或使用浏览器返回，会回到刚才的目录或消息，并保留聊天草稿。",
+        ],
+        tip: "要看另一个文件，请先关闭当前预览，再点按目标文件。",
+        shot: "portrait-preview",
+        hotspot: "back",
+        alt: "手机上打开的 README.md，顶部有返回、编辑和下载按钮，底部保留标签导航",
+      },
+      {
         id: "search",
         title: "搜索与大纲",
         body: [

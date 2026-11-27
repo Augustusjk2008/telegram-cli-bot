@@ -1,9 +1,12 @@
 import { clsx } from "clsx";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { HtmlPreviewSession } from "../services/types";
 import type { HtmlPreviewHandle } from "../utils/filePreview";
+import { notifyMobilePreviewFrameBack } from "../hooks/useMobilePreviewHistory";
 
 export function HtmlPreview({ title, preview, desktop = false }: { title: string; preview: HtmlPreviewHandle; desktop?: boolean }) {
+  const container = useRef<HTMLDivElement>(null);
+  const [replaceFrameLinks, setReplaceFrameLinks] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bridgeReportedRef = useRef(false);
   const loadedWithoutBridgeRef = useRef(false);
@@ -14,6 +17,9 @@ export function HtmlPreview({ title, preview, desktop = false }: { title: string
   const [status, setStatus] = useState<"loading" | "ready" | "error" | "expired">("loading");
   const [error, setError] = useState("");
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useLayoutEffect(() => {
+    setReplaceFrameLinks(!("navigation" in window && window.navigation) && Boolean(container.current?.closest(".mobile-file-preview")));
+  }, []);
   const startLoading = () => {
     setStatus("loading");
     clearTimeout(timeoutRef.current);
@@ -49,7 +55,9 @@ export function HtmlPreview({ title, preview, desktop = false }: { title: string
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
       if (event.source !== iframeRef.current?.contentWindow || !data || data.type !== "orbit-html-preview" || data.sessionId !== session.sessionId) return;
-      if (data.event === "ready" || data.event === "path") {
+      if (data.event === "traverse") {
+        if (iframeRef.current) notifyMobilePreviewFrameBack(iframeRef.current);
+      } else if (data.event === "ready" || data.event === "path") {
         if (data.event === "ready") {
           bridgeReportedRef.current = !loadedWithoutBridgeRef.current;
           loadedWithoutBridgeRef.current = false;
@@ -71,7 +79,7 @@ export function HtmlPreview({ title, preview, desktop = false }: { title: string
 
   const buttonClass = "shrink-0 rounded-md border border-[var(--border)] px-2 py-1 text-xs disabled:opacity-50";
   return (
-    <div className={clsx("flex min-h-0 flex-col gap-2", desktop ? "h-full" : "h-[50vh]")}>
+    <div ref={container} className={clsx("flex min-h-0 flex-col gap-2", desktop ? "h-full" : "h-[50vh]")}>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <button type="button" className={buttonClass} disabled={!session || status !== "ready"} onClick={() => {
           bridgeReportedRef.current = false;
@@ -96,6 +104,7 @@ export function HtmlPreview({ title, preview, desktop = false }: { title: string
         key={`${session.sessionId}:${entryRevision}`}
         ref={iframeRef}
         title={title}
+        name={replaceFrameLinks ? `orbit-preview-replace-${session.sessionId}` : undefined}
         src={session.entryUrl}
         sandbox="allow-scripts allow-forms allow-downloads"
         referrerPolicy="no-referrer"

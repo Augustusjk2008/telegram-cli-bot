@@ -36,6 +36,7 @@ class _PluginProcess:
     process: asyncio.subprocess.Process
     request_id: int = 0
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    call_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     pending: dict[int, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
     stderr_task: asyncio.Task[None] | None = None
     reader_task: asyncio.Task[None] | None = None
@@ -335,29 +336,40 @@ class PluginRuntime:
             await self._stop_process(key, wrapped, send_shutdown=False)
             raise
 
-    async def _ensure_process(self, bot_alias: str, manifest: PluginManifest) -> _PluginProcess:
-        key = (bot_alias, manifest.plugin_id)
-        existing = self._processes.get(key)
-        if existing is not None and existing.process.returncode is None:
-            return existing
-        lock = self._process_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            existing = self._processes.get(key)
-            if existing is not None and existing.process.returncode is None:
-                return existing
-            return await self._spawn_process(bot_alias, manifest)
-
     async def _call(self, bot_alias: str, manifest: PluginManifest, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        wrapped = await self._ensure_process(bot_alias, manifest)
+        key = (bot_alias, manifest.plugin_id)
+        async with self._process_locks.setdefault(key, asyncio.Lock()):
+            wrapped = self._processes.get(key)
+            if wrapped is None or wrapped.process.returncode is not None:
+                wrapped = await self._spawn_process(bot_alias, manifest)
+
+        # The stdio SDK reads Host API replies synchronously inside a plugin method.
+        # Commands queued on this process must also fail if it is invalidated while they wait.
         wrapped.active_calls += 1
+        try:
+            async with wrapped.call_lock:
+                if self._processes.get(key) is not wrapped:
+                    raise RuntimeError(f"插件进程已停止: {manifest.plugin_id}")
+                task = asyncio.create_task(self._invoke_with_timeout(key, wrapped, method, params))
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    # Finish reading this reply before the next caller can use the stream.
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise
+        finally:
+            wrapped.active_calls -= 1
+            wrapped.last_used_at = asyncio.get_running_loop().time()
+
+    async def _invoke_with_timeout(
+        self, key: tuple[str, str], wrapped: _PluginProcess, method: str, params: dict[str, Any],
+    ) -> dict[str, Any]:
         try:
             return await asyncio.wait_for(self._invoke(wrapped, method, params), timeout=self._call_timeout_seconds)
         except asyncio.TimeoutError as exc:
-            await self.stop_plugin(bot_alias, manifest.plugin_id)
-            raise RuntimeError(f"插件响应超时: {manifest.plugin_id}") from exc
-        finally:
-            wrapped.active_calls = max(0, wrapped.active_calls - 1)
-            wrapped.last_used_at = asyncio.get_running_loop().time()
+            if self._processes.get(key) is wrapped:
+                await self.stop_plugin(*key)
+            raise RuntimeError(f"插件响应超时: {key[1]}") from exc
 
     async def render_view(self, bot_alias: str, manifest: PluginManifest, view_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         return await self._call(

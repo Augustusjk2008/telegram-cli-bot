@@ -410,8 +410,8 @@
 .tut-stage-frame {
   position: relative;
   flex: none;
-  width: min(100cqw, 100cqh * 1.6);
-  aspect-ratio: 16 / 10;
+  width: min(100cqw, 100cqh * var(--tut-shot-aspect));
+  aspect-ratio: var(--tut-shot-aspect);
   overflow: hidden;
   border: 1px solid var(--hairline-strong);
   border-radius: var(--radius-overlay);
@@ -704,7 +704,7 @@
   }
 
   .tut-stage-frame {
-    width: min(100cqw, 46vh * 1.6);
+    width: min(100cqw, 46vh * var(--tut-shot-aspect));
   }
 
   .tut-steps {

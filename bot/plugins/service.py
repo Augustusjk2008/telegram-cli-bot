@@ -8,6 +8,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .artifacts import ArtifactRecord, ArtifactStore
 from .audit import append_plugin_audit_event
@@ -132,7 +133,7 @@ class PluginService:
         bot_alias: str,
         view_id: str | None = None,
     ) -> PluginViewSessionRecord:
-        record = self.sessions.get_optional(session_id)
+        record = self.sessions.get_optional(bot_alias, plugin_id, session_id)
         if record is None:
             raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
         if record.bot_alias != bot_alias or record.plugin_id != plugin_id:
@@ -585,6 +586,7 @@ class PluginService:
         view_id: str,
         input_payload: dict[str, Any],
         audit_context: dict[str, Any],
+        isolated_session: bool = False,
     ) -> dict[str, Any]:
         manifest, view = self._get_view_spec(plugin_id, view_id)
         if view.view_mode == "snapshot":
@@ -596,11 +598,15 @@ class PluginService:
                 audit_context=audit_context,
             )
         resolved_input = self._resolve_input_payload(bot_alias, input_payload)
-        source_identity = build_source_identity(resolved_input)
-        source_fingerprint = build_source_fingerprint(
-            resolved_input,
-            hash_file_contents=view.data_profile != "heavy",
-        )
+        if isolated_session:
+            # A closing viewer owns this session even if the same source is reopened before it returns.
+            source_identity = source_fingerprint = f"isolated:{uuid4().hex}"
+        else:
+            source_identity = build_source_identity(resolved_input)
+            source_fingerprint = build_source_fingerprint(
+                resolved_input,
+                hash_file_contents=view.data_profile != "heavy",
+            )
         cache_key = self.sessions.build_cache_key(bot_alias, plugin_id, view_id, source_fingerprint)
         cached = self.sessions.get_cached(cache_key)
         if cached is not None:
@@ -683,7 +689,7 @@ class PluginService:
         if not manifest.enabled:
             raise KeyError(f"插件已禁用: {plugin_id}")
         payload = await self.runtime.get_view_window(bot_alias, manifest, session_id, request_payload)
-        self.sessions.remember_window_request(session_id, request_payload)
+        self.sessions.remember_window_request(bot_alias, plugin_id, session_id, request_payload)
         self._record_audit(
             event="query_window",
             plugin_id=plugin_id,
@@ -724,13 +730,13 @@ class PluginService:
         )
         normalized = self._normalize_action_result(result)
         if session_id and normalized.get("closeSession"):
-            self.sessions.remove(session_id)
+            self.sessions.remove(bot_alias, plugin_id, session_id)
             try:
                 await self.runtime.dispose_view(bot_alias, manifest, session_id)
             except Exception:
                 pass
         elif session_id and normalized.get("refresh") == "view":
-            self.sessions.remove(session_id)
+            self.sessions.remove(bot_alias, plugin_id, session_id)
             try:
                 await self.runtime.dispose_view(bot_alias, manifest, session_id)
             except Exception:
@@ -786,7 +792,7 @@ class PluginService:
         session_id: str,
         audit_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        record = self.sessions.remove(session_id)
+        record = self.sessions.remove(bot_alias, plugin_id, session_id)
         if record is None or record.bot_alias != bot_alias or record.plugin_id != plugin_id:
             raise KeyError(f"未知插件会话: {plugin_id}/{session_id}")
         manifest = self.registry.get_manifest(plugin_id)

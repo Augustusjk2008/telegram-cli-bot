@@ -2,3 +2,36 @@
 [data-waveform] canvas {
   color: var(--waveform-line);
 }
+
+[data-waveform] {
+  container: waveform / inline-size;
+}
+
+.waveform-signals-toggle {
+  display: none;
+}
+
+.waveform-workspace {
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
+}
+
+@container waveform (max-width: 40rem) {
+  .waveform-signals-toggle {
+    display: block;
+  }
+
+  .waveform-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 12rem;
+  }
+
+  .waveform-workspace > * {
+    grid-area: 1 / 1;
+    min-width: 0;
+  }
+
+  .waveform-workspace[data-signals-open="false"] > aside,
+  .waveform-workspace[data-signals-open="true"] > div {
+    visibility: hidden;
+  }
+}

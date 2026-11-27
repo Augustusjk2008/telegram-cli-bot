@@ -42,6 +42,26 @@ describe("RealWebBotClient", () => {
     vi.unstubAllGlobals();
   });
 
+  test("uses the same directory guard on file access and retains workspace-base writes", async () => {
+    const client = new RealWebBotClient();
+    const options = { expectedDirectory: "C:/demo/one #2" };
+    fetchMock.mockResolvedValue(jsonOk({ content: "", entry_url: "/frame", last_modified_ns: "11" }));
+    await client.readFile("main", "config.json", options);
+    await client.readFileFull("main", "config.json", options);
+    await client.writeFile("main", "config.json", "edited", "10", "utf-8", options);
+    await client.createHtmlPreview("main", "config.html", options);
+    fetchMock.mockResolvedValueOnce({ ok: false });
+    await expect(client.downloadFile("main", "config.json", undefined, undefined, options)).rejects.toThrow();
+    const urls = fetchMock.mock.calls.map(([url]) => new URL(url, window.location.origin));
+    expect(urls.map(url => url.pathname.split("/").pop())).toEqual(["read", "read", "write", "html-preview", "download"]);
+    for (const url of urls) expect(url.searchParams.get("expected_directory")).toBe(options.expectedDirectory);
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+      path: "config.json", content: "edited", encoding: "utf-8", expected_mtime_ns: "10",
+    });
+    await client.writeFile("main", "one/config.json", "anchored", "11", "utf-8", { workspaceRelative: true });
+    expect(fetchMock.mock.lastCall![0]).toBe("/api/bots/main/files/write?base=workspace");
+  });
+
   test("maps persisted update jobs and check failures without dropping legacy fields", async () => {
     fetchMock.mockResolvedValue(jsonOk({
       current_version: "1.0.0", update_enabled: true, revision: 7,

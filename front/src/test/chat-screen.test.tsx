@@ -353,7 +353,9 @@ test("stopping endless mode terminates the active continuation", async () => {
   });
 });
 
-test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, previews and deletes local attachments", async (platform) => {
+test.each([
+  ["posix", false], ["windows", false], ["posix", true], ["windows", true],
+] as const)("remote %s chat uploads, sends, previews and deletes local attachments (portrait: %s)", async (platform, portrait) => {
   const user = userEvent.setup();
   const attachmentRoot = "C:\\control\\remote\\attachments\\tester";
   const savedPath = `${attachmentRoot}\\report.html`;
@@ -382,7 +384,17 @@ test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, preview
     readFile: read, readFileFull: full, downloadFile: download,
   });
   const htmlSession = vi.spyOn(client, "createHtmlPreview");
-  render(<ChatScreen botAlias="main" client={client} embedded={platform === "windows"} onRequestDesktopPreview={desktopPreview} />);
+  const mobilePreview = vi.fn();
+  render(
+    <ChatScreen
+      botAlias="main"
+      client={client}
+      embedded={!portrait && platform === "windows"}
+      onRequestDesktopPreview={desktopPreview}
+      mobileLayout={portrait}
+      onRequestMobilePreview={portrait ? mobilePreview : undefined}
+    />,
+  );
   await screen.findByText("暂无消息，开始聊天吧");
   const input = screen.getByLabelText("上传附件");
   expect(input).toBeEnabled();
@@ -404,14 +416,24 @@ test.each(["posix", "windows"] as const)("remote %s chat uploads, sends, preview
   expect(screen.queryByRole("button", { name: "移除附件 report.html" })).not.toBeInTheDocument();
 
   await user.click(await screen.findByRole("link", { name: "查看附件" }));
-  const dialog = await screen.findByRole("dialog", { name: previewPath });
-  await waitFor(() => expect(full).toHaveBeenCalledWith("main", previewPath));
-  expect(read).toHaveBeenCalledWith("main", previewPath);
+  if (portrait) {
+    expect(mobilePreview).toHaveBeenCalledWith({
+      origin: "chat", botAlias: "main", client, agentId: "main", sessionId: "main",
+      directory: platform === "windows" ? "/C:/project" : "/srv/project", path: previewPath, hostAttachment: true,
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(full).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: previewPath })).not.toBeInTheDocument();
+  } else {
+    const dialog = await screen.findByRole("dialog", { name: previewPath });
+    await waitFor(() => expect(full).toHaveBeenCalledWith("main", previewPath));
+    expect(read).toHaveBeenCalledWith("main", previewPath);
+    await user.click(within(dialog).getByRole("button", { name: "下载" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith("main", previewPath, expect.any(Function), expect.any(AbortSignal)));
+    await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+  }
   expect(htmlSession).not.toHaveBeenCalled();
   expect(desktopPreview).not.toHaveBeenCalled();
-  await user.click(within(dialog).getByRole("button", { name: "下载" }));
-  await waitFor(() => expect(download).toHaveBeenCalledWith("main", previewPath, expect.any(Function), expect.any(AbortSignal)));
-  await user.click(within(dialog).getByRole("button", { name: "关闭" }));
   await user.click(screen.getByRole("button", { name: "删除附件文件 report.html" }));
   await waitFor(() => expect(remove).toHaveBeenLastCalledWith("main", savedPath));
   expect(await screen.findByText("已删除")).toBeInTheDocument();

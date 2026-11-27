@@ -4772,6 +4772,8 @@ class WebApiServer:
             expected_mtime_ns=body.get("expected_mtime_ns"),
             encoding=body.get("encoding"),
             allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+            workspace_relative=request.query.get("base") == "workspace",
+            expected_directory=request.query.get("expected_directory"),
         )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
@@ -4869,6 +4871,8 @@ class WebApiServer:
             self._chat_user_id(auth),
             filename,
             allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+            workspace_relative=request.query.get("base") == "workspace",
+            expected_directory=request.query.get("expected_directory"),
         )
         content_type = str(metadata.get("content_type") or "application/octet-stream")
         disposition = "inline" if request.query.get("inline") == "1" and content_type.startswith(("audio/", "video/")) else "attachment"
@@ -4895,6 +4899,8 @@ class WebApiServer:
             mode=mode,
             lines=lines,
             allow_external_paths=CAP_ADMIN_OPS in auth.capabilities,
+            workspace_relative=request.query.get("base") == "workspace",
+            expected_directory=request.query.get("expected_directory"),
         )
         return _json({"ok": True, "data": _serialize_file_version_fields(data)})
 
@@ -4922,7 +4928,10 @@ class WebApiServer:
         view_id = request.match_info.get("view_id", "").strip()
         body = await self._parse_json(request)
         input_payload = dict(body.get("input") or {})
-        data = await open_plugin_view(self.manager, alias, auth, plugin_id, view_id, input_payload)
+        data = await open_plugin_view(
+            self.manager, alias, auth, plugin_id, view_id, input_payload,
+            isolated_session=body.get("isolated_session") is True,
+        )
         return _json({"ok": True, "data": data})
 
     async def post_plugin_view_window(self, request: web.Request) -> web.Response:

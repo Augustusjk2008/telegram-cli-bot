@@ -1769,6 +1769,8 @@ export type FileEntry = {
   updatedAt?: string;
 };
 
+export type FileReadOptions = { workspaceRelative?: boolean; expectedDirectory?: string };
+
 export type FileDownloadProgress = {
   downloadedBytes: number;
   totalBytes?: number;

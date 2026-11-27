@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { HostEffect, WaveformBusStyle, WaveformDisplayOptions, WaveformSignalSummary, WaveformTrack, WaveformTrackSegment, WaveformViewSummary, WaveformWindowPayload, WaveformInspectPayload } from "../../services/types";
 import type { WebBotClient } from "../../services/webBotClient";
 import { WaveformCanvas } from "./waveform/WaveformCanvas";
@@ -175,7 +175,7 @@ function TimeAxis({ startTime, endTime, width, height }: { startTime: number; en
 
 function WaveformTrackRow({ track, startTime, endTime, width, display, radix, onRadixChange, formatValue }: { track: WaveformTrack; startTime: number; endTime: number; width: number; display: ResolvedWaveformDisplay; radix: WaveformRadix; onRadixChange: (signalId: string, radix: WaveformRadix) => void; formatValue: (track: WaveformTrack, value: string) => string }) {
   const useCanvas = track.segments.length > 400;
-  return <><div className="sticky left-0 z-10 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2"><div className="min-w-0 truncate text-sm font-medium text-[var(--text)]">{track.label}</div><div className="mt-1 flex items-center gap-2 text-xs text-[var(--muted)]"><span>{track.width} bit</span>{track.width > 1 ? <select aria-label={`${track.label} 显示进制`} value={radix} onChange={(event) => onRadixChange(track.signalId, event.currentTarget.value as WaveformRadix)} className="h-6 rounded border border-[var(--border)] bg-[var(--surface-strong)] px-1 text-xs text-[var(--text)]">{WAVEFORM_RADIX_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : null}</div></div><div className="border-b border-[var(--border)]">{useCanvas ? <WaveformCanvas track={track} width={width} height={display.trackHeight} startTime={startTime} endTime={endTime} formatValue={formatValue} /> : track.width > 1 ? <BusTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} height={display.trackHeight} busStyle={display.busStyle} formatValue={(value) => formatValue(track, value)} /> : <DigitalTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} height={display.trackHeight} />}</div></>;
+  return <><div className="sticky left-0 z-10 border-b border-[var(--border)] bg-[var(--surface)] px-3 py-2"><div className="min-w-0 truncate text-sm font-medium text-[var(--text)]">{track.label}</div><div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--muted)]"><span>{track.width} bit</span>{track.width > 1 ? <select aria-label={`${track.label} 显示进制`} value={radix} onChange={(event) => onRadixChange(track.signalId, event.currentTarget.value as WaveformRadix)} className="h-6 rounded border border-[var(--border)] bg-[var(--surface-strong)] px-1 text-xs text-[var(--text)]">{WAVEFORM_RADIX_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : null}</div></div><div className="border-b border-[var(--border)]">{useCanvas ? <WaveformCanvas track={track} width={width} height={display.trackHeight} startTime={startTime} endTime={endTime} formatValue={formatValue} /> : track.width > 1 ? <BusTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} height={display.trackHeight} busStyle={display.busStyle} formatValue={(value) => formatValue(track, value)} /> : <DigitalTrackSvg track={track} startTime={startTime} endTime={endTime} width={width} height={display.trackHeight} />}</div></>;
 }
 
 function initialExpandedScopes(signals: WaveformSignalSummary[]) {
@@ -192,6 +192,8 @@ function initialExpandedScopes(signals: WaveformSignalSummary[]) {
 
 export function WaveformView({ title, botAlias, client, pluginId, sessionId, summary, initialWindow, onApplyHostEffects }: Props) {
   const display = resolveDisplay(summary.display);
+  const navigatorId = useId();
+  const [signalsOpen, setSignalsOpen] = useState(false);
   const fullRange = useMemo(() => fitAllRange(summary.startTime, summary.endTime), [summary.endTime, summary.startTime]);
   const [viewRange, setViewRange] = useState<TimeRange>(fullRange);
   const [zoomIndex, setZoomIndex] = useState(() => initialZoomIndex(display));
@@ -209,7 +211,7 @@ export function WaveformView({ title, botAlias, client, pluginId, sessionId, sum
   const safeZoomIndex = Math.min(display.zoomLevels.length - 1, Math.max(0, zoomIndex));
   const zoom = display.zoomLevels[safeZoomIndex] || display.defaultZoom;
   const isFullRange = viewRange.startTime === fullRange.startTime && viewRange.endTime === fullRange.endTime;
-  const width = isFullRange ? display.minWaveWidth : rangeToContentWidth(viewRange.startTime, viewRange.endTime, display.pixelsPerTime, zoom, display.minWaveWidth);
+  const contentWidth = isFullRange ? display.minWaveWidth : rangeToContentWidth(viewRange.startTime, viewRange.endTime, display.pixelsPerTime, zoom, display.minWaveWidth);
   const selectedSet = useMemo(() => new Set(selectedSignalIds), [selectedSignalIds]);
   const selectedSignals = useMemo(() => summary.signals.filter((signal) => selectedSet.has(signal.signalId)), [selectedSet, summary.signals]);
   const formatTrackValue = useCallback((track: WaveformTrack, value: string) => formatWaveformValue(value, track.width, radixBySignalId[track.signalId] || (track.width > 1 ? "unsigned-hex" : DEFAULT_WAVEFORM_RADIX)), [radixBySignalId]);
@@ -226,12 +228,12 @@ export function WaveformView({ title, botAlias, client, pluginId, sessionId, sum
     handleRangeChange(next);
     setZoomIndex((current) => factor > 1 ? Math.min(display.zoomLevels.length - 1, current + 1) : Math.max(0, current - 1));
   }, [display.zoomLevels.length, fullRange, handleRangeChange, viewRange]);
-  const { viewportRef, visibleTracks, firstTrackIndex, rowHeight, windowError, totalTrackCount, setScrollLeft, setScrollTop, isLoading } = useWaveformViewport({ botAlias, client, pluginId, sessionId, summary, initialWindow, signals: selectedSignals, viewStartTime: viewRange.startTime, viewEndTime: viewRange.endTime, display, pixelWidth: width });
+  const { viewportRef, pixelWidth: width, labelWidth, visibleTracks, firstTrackIndex, rowHeight, windowError, totalTrackCount, setScrollLeft, setScrollTop, isLoading } = useWaveformViewport({ botAlias, client, pluginId, sessionId, summary, initialWindow, signals: selectedSignals, viewStartTime: viewRange.startTime, viewEndTime: viewRange.endTime, display, contentWidth });
   const beforeSpacerHeight = firstTrackIndex * rowHeight;
   const afterSpacerHeight = Math.max(0, totalTrackCount - firstTrackIndex - visibleTracks.length) * rowHeight;
   const dense = visibleTracks.some((track) => track.segments.some(isDenseSegment));
   const activeTime = cursorTime ?? hoverTime;
-  const delta = measureStartTime != null && measureEndTime != null ? Math.abs(measureEndTime - measureStartTime) : null;
+  const delta = measureStartTime != null && measureEndTime != null ? Math.round(Math.abs(measureEndTime - measureStartTime) * 1000) / 1000 : null;
 
   useEffect(() => {
     setViewRange(fullRange);
@@ -281,16 +283,17 @@ export function WaveformView({ title, botAlias, client, pluginId, sessionId, sum
     setInspect(null);
   }, [fullRange.endTime, fullRange.startTime, viewRange.endTime, viewRange.startTime]);
 
-  const handleStageMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left - display.labelWidth;
-    setHoverTime(x >= 0 ? xToTime(viewRange.startTime, viewRange.endTime, width, x) : null);
-  };
+  function timeAtPointer(clientX: number) {
+    const viewport = viewportRef.current;
+    if (!viewport) return null;
+    const x = clientX - viewport.getBoundingClientRect().left - labelWidth;
+    if (x < 0 || x + viewport.scrollLeft > width) return null;
+    return xToTime(viewRange.startTime, viewRange.endTime, width, x + viewport.scrollLeft);
+  }
+
   const handleStageClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left - display.labelWidth;
-    if (x < 0) return;
-    const time = xToTime(viewRange.startTime, viewRange.endTime, width, x);
+    const time = timeAtPointer(event.clientX);
+    if (time == null) return;
     if (cursorTime == null || measureEndTime != null) {
       setCursorTime(time); setMeasureStartTime(null); setMeasureEndTime(null); setInspect(null);
     } else {
@@ -299,7 +302,7 @@ export function WaveformView({ title, botAlias, client, pluginId, sessionId, sum
   };
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-[var(--surface)]" data-waveform>
+    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-auto bg-[var(--surface)]" data-waveform>
       <header className="border-b border-[var(--border)] px-3 py-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0"><h2 className="truncate text-base font-semibold text-[var(--text)]">{title}</h2><p className="truncate text-xs text-[var(--muted)]">{summary.path} · {summary.timescale} · {summary.startTime} - {summary.endTime}</p></div>
@@ -308,14 +311,23 @@ export function WaveformView({ title, botAlias, client, pluginId, sessionId, sum
         {activeTime != null ? <div className="mt-1 text-xs text-[var(--muted)]">游标 {Math.round(activeTime * 1000) / 1000}{delta != null ? ` · Δt ${delta}` : ""}</div> : null}
       </header>
       <WaveformTimelineNavigator fullRange={fullRange} viewRange={viewRange} overview={summary.overview} onRangeChange={handleRangeChange} onFitAll={() => setViewRange(fullRange)} onFitSelected={() => handleRangeChange(fitSignalsRange(selectedSignals, fullRange))} onStart={() => handleRangeChange({ startTime: fullRange.startTime, endTime: Math.min(fullRange.endTime, fullRange.startTime + Math.max(1, viewRange.endTime - viewRange.startTime)) })} onEnd={() => { const length = Math.max(1, viewRange.endTime - viewRange.startTime); handleRangeChange({ startTime: Math.max(fullRange.startTime, fullRange.endTime - length), endTime: fullRange.endTime }); }} />
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(190px,240px)_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(150px,38vw)_minmax(0,1fr)]">
-        <WaveformSignalNavigator signals={summary.signals} selectedSignalIds={selectedSignalIds} favoriteSignalIds={favoriteSignalIds} expandedScopes={expandedScopes} onToggleSignal={toggleSignal} onToggleFavorite={toggleFavorite} onToggleScope={toggleScope} />
+      <button
+        type="button"
+        className="waveform-signals-toggle shrink-0 border-b border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--accent)]"
+        aria-expanded={signalsOpen}
+        aria-controls={navigatorId}
+        onClick={() => setSignalsOpen((open) => !open)}
+      >
+        {signalsOpen ? "返回波形" : `选择信号 (${selectedSignalIds.length}/${summary.signals.length})`}
+      </button>
+      <div className="waveform-workspace grid min-h-0 flex-1" data-signals-open={signalsOpen}>
+        <WaveformSignalNavigator id={navigatorId} signals={summary.signals} selectedSignalIds={selectedSignalIds} favoriteSignalIds={favoriteSignalIds} expandedScopes={expandedScopes} onToggleSignal={toggleSignal} onToggleFavorite={toggleFavorite} onToggleScope={toggleScope} />
         <div ref={viewportRef} className="relative min-h-0 overflow-auto" data-testid="waveform-scroll" onScroll={(event) => { setScrollLeft(event.currentTarget.scrollLeft); setScrollTop(Math.max(0, event.currentTarget.scrollTop - (display.showTimeAxis ? display.axisHeight : 0))); }}>
           {windowError ? <div className="sticky top-0 z-40 border-b border-[var(--status-danger-border)] bg-[var(--status-danger-bg)] px-3 py-2 text-xs text-[var(--danger)]">{windowError}</div> : null}
-          <div className="relative min-w-max" data-testid="waveform-stage" onMouseMove={handleStageMove} onMouseLeave={() => setHoverTime(null)} onClick={handleStageClick}>
-            {display.showTimeAxis ? <div className="sticky top-0 z-20 grid min-w-max border-b border-[var(--border)]" style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }}><div className="sticky left-0 z-20 bg-[var(--surface)] px-3 py-3 text-xs font-medium text-[var(--muted)]">时间轴</div><TimeAxis startTime={viewRange.startTime} endTime={viewRange.endTime} width={width} height={display.axisHeight} /></div> : null}
-            {selectedSignals.length ? <><div style={{ height: beforeSpacerHeight }} /><div className="grid min-w-max" style={{ gridTemplateColumns: `${display.labelWidth}px ${width}px` }} data-testid="waveform-grid">{visibleTracks.map((track) => <WaveformTrackRow key={track.signalId} track={track} startTime={viewRange.startTime} endTime={viewRange.endTime} width={width} display={display} radix={radixBySignalId[track.signalId] || (track.width > 1 ? "unsigned-hex" : DEFAULT_WAVEFORM_RADIX)} onRadixChange={(signalId, radix) => setRadixBySignalId((current) => ({ ...current, [signalId]: radix }))} formatValue={formatTrackValue} />)}</div><div style={{ height: afterSpacerHeight }} /></> : <div className="p-4 text-sm text-[var(--muted)]">请在左侧选择要加载的信号</div>}
-            {activeTime != null ? <div className="pointer-events-none absolute top-0 z-30 h-full border-l-2 border-[var(--accent)]" style={{ left: display.labelWidth + timeToX(viewRange.startTime, viewRange.endTime, width, activeTime) }} data-testid="waveform-cursor" /> : null}
+          <div className="relative min-w-max" data-testid="waveform-stage" onMouseMove={(event) => setHoverTime(timeAtPointer(event.clientX))} onMouseLeave={() => setHoverTime(null)} onClick={handleStageClick}>
+            {display.showTimeAxis ? <div className="sticky top-0 z-20 grid min-w-max border-b border-[var(--border)]" style={{ gridTemplateColumns: `${labelWidth}px ${width}px` }}><div className="sticky left-0 z-20 bg-[var(--surface)] px-3 py-3 text-xs font-medium text-[var(--muted)]">时间轴</div><TimeAxis startTime={viewRange.startTime} endTime={viewRange.endTime} width={width} height={display.axisHeight} /></div> : null}
+            {selectedSignals.length ? <><div style={{ height: beforeSpacerHeight }} /><div className="grid min-w-max" style={{ gridTemplateColumns: `${labelWidth}px ${width}px` }} data-testid="waveform-grid">{visibleTracks.map((track) => <WaveformTrackRow key={track.signalId} track={track} startTime={viewRange.startTime} endTime={viewRange.endTime} width={width} display={display} radix={radixBySignalId[track.signalId] || (track.width > 1 ? "unsigned-hex" : DEFAULT_WAVEFORM_RADIX)} onRadixChange={(signalId, radix) => setRadixBySignalId((current) => ({ ...current, [signalId]: radix }))} formatValue={formatTrackValue} />)}</div><div style={{ height: afterSpacerHeight }} /></> : <div className="p-4 text-sm text-[var(--muted)]">请选择要加载的信号</div>}
+            {activeTime != null ? <div className="pointer-events-none absolute top-0 z-30 h-full border-l-2 border-[var(--accent)]" style={{ left: labelWidth + timeToX(viewRange.startTime, viewRange.endTime, width, activeTime) }} data-testid="waveform-cursor" /> : null}
           </div>
         </div>
       </div>

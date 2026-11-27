@@ -7,6 +7,7 @@ import { RemoteSshMenu } from "../components/RemoteSshMenu";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatComposerHandle } from "../components/ChatComposer";
 import { clsx } from "clsx";
+import type { MobileFilePreviewRequest } from "../hooks/useMobileFilePreview";
 import { MobileShell, type AppTab } from "./MobileShell";
 import { NotificationCenter } from "./NotificationCenter";
 import { watchChatActivity } from "../services/watchChatActivity";
@@ -1015,42 +1016,48 @@ function AppContent() {
     );
   }
 
-  if (currentTab === "chat") {
-    activeScreen = (
+  function renderMobileChat(open: (request: MobileFilePreviewRequest) => void, previewOpen: boolean) {
+    return (
       <div className="absolute inset-0">
         {mountedChatBots.map((instanceKey) => {
           const alias = chatAliasFromInstanceKey(instanceKey);
           return (
-          <div key={`chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
-            <ChatScreen
-              botAlias={alias}
-              mobileLayout={true}
-              accountId={accountKey}
-              client={client}
-              isVisible={instanceKey === chatInstanceKey}
-              readOnly={chatReadOnly || !canOperateCurrentBot}
-              disabledReason={chatDisabledReason}
-              allowTrace={allowTrace}
-              enterToSend={chatEnterToSend}
-              onOpenBotSettings={() => openBotSettings(alias)}
-              onOpenGlobalPromptSettings={openAdminCenter}
-              isImmersive={instanceKey === chatInstanceKey ? isChatImmersive : false}
-              onToggleImmersive={instanceKey === chatInstanceKey
-                ? () => setIsChatImmersive((prev) => !prev)
-                : undefined}
-              onUnreadResult={recordBotCompletion}
-              onBotActivityChange={handleBotActivityChange}
-            />
-          </div>
+            <div key={`chat-${instanceKey}`} className={clsx("h-full", instanceKey === chatInstanceKey ? "block" : "hidden")}>
+              <ChatScreen
+                botAlias={alias}
+                mobileLayout
+                onRequestMobilePreview={open}
+                mobilePreviewOpen={previewOpen && instanceKey === chatInstanceKey}
+                accountId={accountKey}
+                client={client}
+                isVisible={instanceKey === chatInstanceKey && currentTab === "chat"}
+                readOnly={chatReadOnly || !canOperateCurrentBot}
+                disabledReason={chatDisabledReason}
+                allowTrace={allowTrace}
+                enterToSend={chatEnterToSend}
+                onOpenBotSettings={() => openBotSettings(alias)}
+                onOpenGlobalPromptSettings={openAdminCenter}
+                isImmersive={instanceKey === chatInstanceKey ? isChatImmersive : false}
+                onToggleImmersive={instanceKey === chatInstanceKey
+                  ? () => setIsChatImmersive((prev) => !prev)
+                  : undefined}
+                onUnreadResult={recordBotCompletion}
+                onBotActivityChange={handleBotActivityChange}
+              />
+            </div>
           );
         })}
       </div>
     );
-  } else if (currentTab === "files") {
-    activeScreen = (
+  }
+
+  function renderMobileFiles(open: (request: MobileFilePreviewRequest) => void) {
+    if (!currentBot) return null;
+    return (
       <div className="absolute inset-0">
         <FilesScreen
           key={`files-${currentBot}`}
+          onRequestMobilePreview={open}
           botAlias={currentBot}
           client={client}
           remoteWorkspace={remoteWorkspace}
@@ -1064,7 +1071,9 @@ function AppContent() {
         />
       </div>
     );
-  } else if (currentTab === "debug" && canUseDebug && !remoteWorkspace) {
+  }
+
+  if (currentTab === "debug" && canUseDebug && !remoteWorkspace) {
     activeScreen = (
       <div className="absolute inset-0">
         <MobileDebugScreen
@@ -1245,6 +1254,19 @@ function AppContent() {
           allowedTabs={allowedTabs}
           hideOuterChrome={hideOuterChrome}
           activeScreen={<Suspense fallback={lazyFallback}>{activeScreen}</Suspense>}
+          renderChat={renderMobileChat}
+          renderFiles={(open) => <Suspense fallback={lazyFallback}>{renderMobileFiles(open)}</Suspense>}
+          previewScope={{
+            client,
+            accountId: accountKey,
+            botAlias: currentBot,
+            workspace: remoteWorkspace?.root || currentBotSummary?.workingDir || "",
+            remote: remoteWorkspace,
+            canRead: Boolean(currentBotSummary) && canReadCurrentBotFiles,
+            canWrite: canWriteCurrentBotFiles,
+            canUsePlugins: hasCapability(session, "view_plugins") && hasCapability(session, "run_plugins"),
+            canReadAbsolute: hasCapability(session, "admin_ops"),
+          }}
           viewMode={viewMode}
           hasUnreadOtherBots={hasUnreadOtherBots}
           clearUnreadAction={clearUnreadButton}

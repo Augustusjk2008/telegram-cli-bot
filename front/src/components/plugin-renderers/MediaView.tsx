@@ -5,14 +5,15 @@ type Props = {
   botAlias: string;
   view: Extract<PluginRenderResult, { renderer: "media" }>;
   inputPayload?: Record<string, unknown>;
+  mediaUrl?: string;
 };
 
-export function MediaView({ botAlias, view, inputPayload = {} }: Props) {
+export function MediaView({ botAlias, view, mediaUrl, inputPayload = {} }: Props) {
   const { path, mediaType } = view.payload;
   const sourcePath = typeof inputPayload.path === "string" && inputPayload.path.trim()
     ? inputPayload.path
     : path;
-  const src = buildFileDownloadUrl(botAlias, sourcePath, true);
+  const src = mediaUrl ?? buildFileDownloadUrl(botAlias, sourcePath, true);
 
   return (
     <div data-testid="plugin-media-view" className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4">

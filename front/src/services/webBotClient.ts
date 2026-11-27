@@ -73,6 +73,7 @@ import type {
   FileDownloadProgress,
   FileUploadProgress,
   FileMoveResult,
+  FileReadOptions,
   FileReadResult,
   HtmlPreviewSession,
   FileRenameResult,
@@ -362,16 +363,17 @@ export interface WebBotClient {
   createWorkdirDirectory(botAlias: string, parentPath: string, name: string): Promise<void>;
   deletePath(botAlias: string, path: string, options?: FileDeleteOptions): Promise<void>;
   resolveFileOpenTarget(botAlias: string, path: string): Promise<FileOpenTarget>;
-  createHtmlPreview(botAlias: string, filename: string, options?: AgentScopedOptions): Promise<HtmlPreviewSession>;
+  createHtmlPreview(botAlias: string, filename: string, options?: AgentScopedOptions & FileReadOptions): Promise<HtmlPreviewSession>;
   closeHtmlPreview(botAlias: string, sessionId: string, options?: AgentScopedOptions): Promise<void>;
-  readFile(botAlias: string, filename: string): Promise<FileReadResult>;
-  readFileFull(botAlias: string, filename: string): Promise<FileReadResult>;
+  readFile(botAlias: string, filename: string, options?: FileReadOptions): Promise<FileReadResult>;
+  readFileFull(botAlias: string, filename: string, options?: FileReadOptions): Promise<FileReadResult>;
   readExternalSource(botAlias: string, sourceId: string): Promise<ExternalSourceReadResult>;
   openPluginView(
     botAlias: string,
     pluginId: string,
     viewId: string,
     input: Record<string, unknown>,
+    options?: { isolatedSession?: boolean },
   ): Promise<PluginRenderResult>;
   queryPluginViewWindow(
     botAlias: string,
@@ -385,7 +387,7 @@ export interface WebBotClient {
   installPluginRuntime(botAlias: string, pluginId: string): Promise<PluginRuntimeInstallResult>;
   getPluginArtifactBlob(botAlias: string, artifactId: string): Promise<Blob>;
   downloadPluginArtifact(botAlias: string, artifactId: string, filename: string): Promise<void>;
-  writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult>;
+  writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string, options?: FileReadOptions): Promise<FileWriteResult>;
   createTextFile(botAlias: string, filename: string, content?: string, parentPath?: string): Promise<FileCreateResult>;
   renamePath(botAlias: string, path: string, newName: string): Promise<FileRenameResult>;
   copyPath(botAlias: string, path: string): Promise<FileCopyResult>;
@@ -433,6 +435,7 @@ export interface WebBotClient {
     filename: string,
     onProgress?: (progress: FileDownloadProgress) => void,
     signal?: AbortSignal,
+    options?: FileReadOptions,
   ): Promise<void>;
   resetSession(botAlias: string): Promise<void>;
   killTask(botAlias: string, options?: AgentScopedOptions): Promise<string>;

@@ -7,6 +7,7 @@ import {
   GIT_CAPABILITY_NAMES,
   WebApiClientError,
 } from "./types";
+import { appendFileLocation } from "../utils/fileLinks";
 import { buildWsUrl, withApiBase } from "../utils/publicBase";
 import { ChatStreamIncompleteError } from "./chatStreamError";
 import type {
@@ -204,6 +205,7 @@ import type {
   FileEntryChainLink,
   FileMoveResult,
   FileReadMode,
+  FileReadOptions,
   FileReadResult,
   HtmlPreviewSession,
   FileRenameResult,
@@ -7152,9 +7154,10 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async createHtmlPreview(botAlias: string, filename: string, options: AgentScopedOptions = {}): Promise<HtmlPreviewSession> {
+  async createHtmlPreview(botAlias: string, filename: string, options: AgentScopedOptions & FileReadOptions = {}): Promise<HtmlPreviewSession> {
     const params = new URLSearchParams();
     appendAgentParam(params, options.agentId);
+    appendFileLocation(params, options);
     const query = params.size ? `?${params}` : "";
     const data = await this.requestJson<{ session_id: string; entry_url: string; entry_path: string; expires_at: string }>(
       `/api/bots/${encodeURIComponent(botAlias)}/files/html-preview${query}`,
@@ -7173,12 +7176,13 @@ export class RealWebBotClient implements WebBotClient {
     await this.requestJson(`/api/bots/${encodeURIComponent(botAlias)}/files/html-preview/${encodeURIComponent(sessionId)}${query}`, { method: "DELETE" });
   }
 
-  async readFile(botAlias: string, filename: string): Promise<FileReadResult> {
+  async readFile(botAlias: string, filename: string, options: FileReadOptions = {}): Promise<FileReadResult> {
     const params = new URLSearchParams({
       filename,
       mode: "head",
       lines: "80",
     });
+    appendFileLocation(params, options);
     const data = await this.requestJson<RawFileReadResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
     const result: FileReadResult = {
       content: data.content || "",
@@ -7201,12 +7205,13 @@ export class RealWebBotClient implements WebBotClient {
     return result;
   }
 
-  async readFileFull(botAlias: string, filename: string): Promise<FileReadResult> {
+  async readFileFull(botAlias: string, filename: string, options: FileReadOptions = {}): Promise<FileReadResult> {
     const params = new URLSearchParams({
       filename,
       mode: "cat",
       lines: "0",
     });
+    appendFileLocation(params, options);
     const data = await this.requestJson<RawFileReadResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/read?${params.toString()}`);
     const result: FileReadResult = {
       content: data.content || "",
@@ -7261,6 +7266,7 @@ export class RealWebBotClient implements WebBotClient {
     pluginId: string,
     viewId: string,
     input: Record<string, unknown>,
+    options: { isolatedSession?: boolean } = {},
   ): Promise<PluginRenderResult> {
     return this.requestJson<PluginRenderResult>(
       `/api/bots/${encodeURIComponent(botAlias)}/plugins/${encodeURIComponent(pluginId)}/views/${encodeURIComponent(viewId)}/open`,
@@ -7269,7 +7275,7 @@ export class RealWebBotClient implements WebBotClient {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({ input, ...(options.isolatedSession ? { isolated_session: true } : {}) }),
       },
     );
   }
@@ -7369,8 +7375,11 @@ export class RealWebBotClient implements WebBotClient {
     URL.revokeObjectURL(downloadUrl);
   }
 
-  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string): Promise<FileWriteResult> {
-    const data = await this.requestJson<RawFileWriteResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/write`, {
+  async writeFile(botAlias: string, path: string, content: string, expectedMtimeNs?: string, encoding?: string, options: FileReadOptions = {}): Promise<FileWriteResult> {
+    const params = new URLSearchParams();
+    appendFileLocation(params, options);
+    const query = params.size ? `?${params}` : "";
+    const data = await this.requestJson<RawFileWriteResult>(`/api/bots/${encodeURIComponent(botAlias)}/files/write${query}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -7689,8 +7698,10 @@ export class RealWebBotClient implements WebBotClient {
     filename: string,
     onProgress?: (progress: FileDownloadProgress) => void,
     signal?: AbortSignal,
+    options: FileReadOptions = {},
   ): Promise<void> {
     const params = new URLSearchParams({ filename });
+    appendFileLocation(params, options);
     const response = await fetch(withApiBase(`/api/bots/${encodeURIComponent(botAlias)}/files/download?${params.toString()}`), {
       credentials: "same-origin",
       headers: this.headers(),
@@ -7700,10 +7711,11 @@ export class RealWebBotClient implements WebBotClient {
       throw new Error("下载失败");
     }
     const blob = await readDownloadBlobWithProgress(response as Response, onProgress);
+    signal?.throwIfAborted();
     const downloadUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = downloadUrl;
-    link.download = filename;
+    link.download = filename.split(/[\\/]/).pop() || filename;
     document.body.appendChild(link);
     link.click();
     link.remove();

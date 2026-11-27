@@ -80,6 +80,8 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
   const [windowError, setWindowError] = useState("");
   const deferredQuery = useDeferredValue(query);
   const requestIdRef = useRef(0);
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const scrollRef = useMemo(() => ({ current: scrollElement }), [scrollElement]);
   const pageSize = Math.max(1, Math.min(500, Number(initialWindow.limit || summary.defaultPageSize || 100)));
   const snapshotRows = useMemo<TableRow[]>(() => {
     if (!snapshot) {
@@ -100,6 +102,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
     ));
   }, [deferredQuery, snapshot, sort, summary.columns]);
   const displayRows = session ? windowState.rows : snapshotRows;
+  const virtualColumns = `repeat(${summary.columns.length}, minmax(120px, 1fr)) 6rem`;
   const totalRows = session
     ? Number(windowState.totalRows ?? summary.totalRows ?? 0)
     : snapshotRows.length;
@@ -153,10 +156,10 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
   }, [botAlias, client, deferredQuery, offset, pageSize, session, sort, view.pluginId]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <PluginActionBar actions={summary.actions} onRunAction={(action) => onRunAction?.(action)} />
 
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border)] px-3 py-2">
         <div className="text-sm text-[var(--muted)]">
           {session ? `第 ${pageIndex}/${pageCount} 页 · ` : ""}共 {totalRows} 行
         </div>
@@ -165,7 +168,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
             {windowError}
           </div>
         ) : null}
-        <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+        <label className="flex min-w-0 max-w-full items-center gap-2 whitespace-nowrap text-sm text-[var(--muted)]">
           搜索
           <input
             value={query}
@@ -173,7 +176,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
               setOffset(0);
               setQuery(event.currentTarget.value);
             }}
-            className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)]"
+            className="min-w-0 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-sm text-[var(--text)]"
           />
         </label>
       </div>
@@ -184,13 +187,13 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
         </div>
       ) : null}
 
-      <div className={displayRows.length > 100 ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto"}>
+      <div ref={setScrollElement} className="relative min-h-0 min-w-0 flex-1 overflow-auto">
         {displayRows.length > 100 ? (
-          <div role="table" aria-rowcount={displayRows.length} className="flex h-full min-h-0 min-w-full flex-col text-sm">
+          <div role="table" aria-rowcount={displayRows.length} className="text-sm" style={{ minWidth: `calc(${summary.columns.length * 120}px + 6rem)` }}>
             <div
               role="row"
-              className="z-10 grid flex-none border-b border-[var(--border)] bg-[var(--surface)]"
-              style={{ gridTemplateColumns: `repeat(${summary.columns.length}, minmax(120px, 1fr)) minmax(72px, auto)` }}
+              className="sticky top-0 z-10 grid border-b border-[var(--border)] bg-[var(--surface)]"
+              style={{ gridTemplateColumns: virtualColumns }}
             >
               {summary.columns.map((column) => (
                 <div key={column.id} role="columnheader" className="px-3 py-2 font-medium text-[var(--text)]">
@@ -218,21 +221,21 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
                   role="row"
                   data-testid="plugin-table-row"
                   className="grid border-b border-[var(--border)]/70"
-                  style={{ gridTemplateColumns: `repeat(${summary.columns.length}, minmax(120px, 1fr)) minmax(72px, auto)` }}
+                  style={{ gridTemplateColumns: virtualColumns }}
                 >
                   {summary.columns.map((column) => (
                     <div key={`${row.id}-${column.id}`} role="cell" className="min-w-0 break-words px-3 py-2 text-[var(--text)]">
                       {renderCellValue(row.cells[column.id])}
                     </div>
                   ))}
-                  <div role="cell" className="px-3 py-2 text-right">
+                  <div role="cell" className="flex flex-wrap items-start justify-end gap-1 px-3 py-2 text-right">
                     {(row.actions || []).map((action) => (
                       <button
                         key={`${row.id}-${action.id}`}
                         type="button"
                         disabled={action.disabled}
                         onClick={() => onRunAction?.(action, { rowId: row.id })}
-                        className="ml-2 whitespace-nowrap rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
+                        className="max-w-full break-words rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text)] hover:bg-[var(--surface-strong)] disabled:opacity-60"
                       >
                         {action.label}
                       </button>
@@ -243,7 +246,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
               estimateHeight={40}
               overscan={8}
               dataTestId="virtualized-plugin-table"
-              className="min-h-0 flex-1 overflow-auto"
+              scrollElementRef={scrollRef}
             />
           </div>
         ) : (
@@ -253,7 +256,7 @@ export function TableView({ botAlias, client, view, onRunAction }: Props) {
               {summary.columns.map((column) => (
                 <th
                   key={column.id}
-                  className="px-3 py-2 text-left font-medium text-[var(--text)]"
+                  className="px-3 py-2 text-left font-medium text-[var(--text)] @max-xl:min-w-28"
                   style={{ textAlign: column.align || "left" }}
                 >
                   <button

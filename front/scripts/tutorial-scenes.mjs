@@ -675,6 +675,21 @@ export const SCENES = [
     },
   },
 
+  {
+    chapter: "files",
+    shot: "portrait-preview",
+    async run(page) {
+      await exact(page, "竖屏版").click();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "文件", exact: true }).click();
+      await exact(page, "打开 README.md").click();
+      await page.getByTestId("mobile-file-preview").getByRole("heading", { name: "快速开始" }).waitFor();
+    },
+    hotspots: {
+      back: (page) => page.getByTestId("mobile-file-preview").getByRole("button", { name: "返回", exact: true }),
+    },
+  },
+
   // -------------------------------------------------------------- terminal
   {
     chapter: "terminal",

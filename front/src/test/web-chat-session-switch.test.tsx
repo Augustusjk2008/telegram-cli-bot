@@ -84,6 +84,22 @@ async function openCreateDialog() {
   return within(await screen.findByRole("dialog", { name: "新建聊天会话" }));
 }
 
+test("hands a named chat file link to portrait preview with the session client and draft intact", async () => {
+  const { root, a } = chatDirectory();
+  a.list.mockResolvedValue({ items: [message("[Report](./notes/report.md)")] });
+  const mobilePreview = vi.fn();
+  localStorage.setItem('tcb.webChatSelection.["","main"]', research.id);
+  render(<ChatScreen botAlias="main" client={root.client} mobileLayout onRequestMobilePreview={mobilePreview} />);
+  const link = await screen.findByRole("link", { name: "Report" });
+  typeDraft("finish this later");
+  fireEvent.click(link);
+  expect(mobilePreview).toHaveBeenCalledWith({
+    origin: "chat", botAlias: "main", client: a.client, agentId: "main", sessionId: research.id,
+    directory: (await a.client.getBotOverview("main")).workingDir, path: "notes/report.md", hostAttachment: false,
+  });
+  expect(screen.getByPlaceholderText("输入消息")).toHaveValue("finish this later");
+});
+
 test("preselects the Bot default even when unavailable, retains a failed choice, and focuses the new session", async () => {
   const user = userEvent.setup();
   const client = new MockWebBotClient();

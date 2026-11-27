@@ -127,6 +127,23 @@ def require_real_browser_directory(browser_dir: str) -> str:
     return browser_dir
 
 
+def file_operation_directory(
+    session: UserSession, *, workspace_relative: bool, expected_directory: str | None,
+) -> str:
+    if workspace_relative and expected_directory is None:
+        return session.working_dir
+    browser_dir = require_real_browser_directory(get_browser_directory(session))
+    if expected_directory is not None:
+        # The client echoes a listed directory. Resolve only the server's directory;
+        # a supplied path (including a Windows network share) is never opened here.
+        expected = os.path.normcase(os.path.normpath(expected_directory))
+        actual = os.path.realpath(browser_dir)
+        if expected not in {os.path.normcase(os.path.abspath(browser_dir)), os.path.normcase(actual)}:
+            _raise(409, "browse_directory_changed", "浏览目录已改变，请重新打开文件")
+        browser_dir = actual
+    return session.working_dir if workspace_relative else browser_dir
+
+
 def resolve_browser_target_path(current_dir: str, new_path: str) -> str:
     path = str(new_path or "").strip()
     if not path:
@@ -1101,11 +1118,21 @@ def write_file_content(
     expected_mtime_ns: int | None = None,
     encoding: str | None = None,
     allow_external_paths: bool = False,
+    workspace_relative: bool = False,
+    expected_directory: str | None = None,
 ) -> dict[str, Any]:
     ensure_file_browser_supported(manager, alias)
     session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_safe_write_path(browser_dir, path, allow_external_paths=allow_external_paths)
+    browser_dir = file_operation_directory(session, workspace_relative=workspace_relative, expected_directory=expected_directory)
+    if workspace_relative and not isinstance(path, str):
+        _raise(400, "unsafe_write_path", "文件路径不安全")
+    file_path = resolve_safe_write_path(browser_dir, path, allow_external_paths=allow_external_paths and not workspace_relative)
+    if workspace_relative:
+        # A pinned name must still designate the file at that location, even if
+        # a link now points at a different file inside the workspace.
+        unresolved = os.path.join(os.path.realpath(browser_dir), path)
+        if ".." in Path(path).parts or os.path.normcase(os.path.normpath(unresolved)) != os.path.normcase(file_path):
+            _raise(400, "unsafe_write_path", "文件路径不安全")
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
 
@@ -1132,6 +1159,19 @@ def write_file_content(
     }
 
 
+def _file_read_target(
+    manager: MultiBotManager, alias: str, user_id: int, filename: str, allow_external_paths: bool, workspace_relative: bool,
+    expected_directory: str | None,
+) -> tuple[str, str]:
+    session = get_session_for_alias(manager, alias, user_id)
+    directory = file_operation_directory(session, workspace_relative=workspace_relative, expected_directory=expected_directory)
+    if workspace_relative:
+        return directory, resolve_safe_path(directory, filename)
+    return directory, resolve_readable_file_path(
+        manager, alias, user_id, directory, filename, allow_external_paths=allow_external_paths,
+    )
+
+
 def get_file_metadata(
     manager: MultiBotManager,
     alias: str,
@@ -1139,12 +1179,10 @@ def get_file_metadata(
     filename: str,
     *,
     allow_external_paths: bool = False,
+    workspace_relative: bool = False,
+    expected_directory: str | None = None,
 ) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_readable_file_path(
-        manager, alias, user_id, browser_dir, filename, allow_external_paths=allow_external_paths,
-    )
+    _, file_path = _file_read_target(manager, alias, user_id, filename, allow_external_paths, workspace_relative, expected_directory)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
     return {
@@ -1164,12 +1202,10 @@ def read_file_content(
     lines: int = 20,
     *,
     allow_external_paths: bool = False,
+    workspace_relative: bool = False,
+    expected_directory: str | None = None,
 ) -> dict[str, Any]:
-    session = get_session_for_alias(manager, alias, user_id)
-    browser_dir = require_real_browser_directory(get_browser_directory(session))
-    file_path = resolve_readable_file_path(
-        manager, alias, user_id, browser_dir, filename, allow_external_paths=allow_external_paths,
-    )
+    browser_dir, file_path = _file_read_target(manager, alias, user_id, filename, allow_external_paths, workspace_relative, expected_directory)
     if not os.path.isfile(file_path):
         _raise(404, "file_not_found", "文件不存在")
 

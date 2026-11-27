@@ -233,19 +233,54 @@ def inject_bridge(data: bytes, session: PreviewSession, prefix: str, *, xhtml: b
 const sessionId = SESSION_ID, prefix = RESOURCE_PREFIX;
 const path = () => location.pathname.slice(prefix.length) + location.search + location.hash;
 let failure = "";
+let historyLength = history.length;
+const visited = new Set([location.href]);
+let followingLink = "";
 const send = (event, message) => {
   if (event === "error") failure = message;
-  parent.postMessage({type: "orbit-html-preview", sessionId, event: failure ? "error" : event, path: path(), ...(failure ? {message: failure} : {})}, "*");
+  parent.postMessage({type: "orbit-html-preview", sessionId, event: failure && event !== "traverse" ? "error" : event, path: path(), ...(failure ? {message: failure} : {})}, "*");
 };
 addEventListener("message", event => {
   const data = event.data;
   if (event.source === parent && data && data.type === "orbit-html-preview" && data.sessionId === sessionId && data.command === "refresh") location.reload();
 });
 addEventListener("hashchange", () => send("path"));
-addEventListener("popstate", () => send("path"));
+addEventListener("click", event => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+  const link = event.target?.closest?.("a[href]");
+  if (!(link instanceof HTMLAnchorElement) || link.hasAttribute("download")) return;
+  const target = link.getAttribute("target") ?? document.querySelector("base[target]")?.target;
+  if ((target && target.toLowerCase() !== "_self") || link.origin !== location.origin || !link.pathname.startsWith(prefix)) return;
+  followingLink = link.href;
+  // Older parent browsers cannot target a top-level history entry by key. Keep ordinary
+  // same-frame ticket links usable without adding child-only entries to their Back stack.
+  if (window.name === "orbit-preview-replace-" + sessionId) {
+    event.preventDefault();
+    location.replace(link.href);
+  }
+});
+// A new fragment also emits popstate. Back returns to a previously seen URL
+// without extending the joint session history. The parent validates the ticket.
+addEventListener("popstate", () => {
+  const traversal = followingLink !== location.href && history.length === historyLength && visited.has(location.href);
+  followingLink = "";
+  visited.add(location.href);
+  historyLength = history.length;
+  send("path");
+  if (traversal) send("traverse");
+});
+addEventListener("pageshow", event => {
+  if (event.persisted || performance.getEntriesByType("navigation")[0]?.type === "back_forward") send("traverse");
+});
 for (const name of ["pushState", "replaceState"]) {
   const original = history[name];
-  history[name] = function(...args) { const result = original.apply(this, args); send("path"); return result; };
+  history[name] = function(...args) {
+    const result = original.apply(this, args);
+    visited.add(location.href);
+    historyLength = history.length;
+    send("path");
+    return result;
+  };
 }
 addEventListener("error", event => send("error", event.message || "资源加载失败"), true);
 addEventListener("unhandledrejection", event => send("error", String(event.reason || "页面脚本失败")));

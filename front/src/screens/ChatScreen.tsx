@@ -1,4 +1,5 @@
 import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
+import type { MobileFilePreviewRequest } from "../hooks/useMobileFilePreview";
 import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { ChatTranslationControl } from "../components/ChatTranslationControl";
 import { buildDisplayContextUsage } from "../chat/displayContextUsage";
@@ -135,6 +136,8 @@ type Props = {
   onWorkbenchStatusChange?: (status: ChatWorkbenchStatus) => void;
   onInitialLoadSettled?: () => void;
   onRequestDesktopPreview?: (path: string) => void;
+  mobilePreviewOpen?: boolean;
+  onRequestMobilePreview?: (request: MobileFilePreviewRequest) => void;
   onDraftTargetChange?: (target: ChatComposerHandle | null) => void;
   onOpenGlobalPromptSettings?: () => void;
   onOpenBotSettings?: () => void;
@@ -1822,6 +1825,8 @@ function ChatScreenView({
   onWorkbenchStatusChange,
   onInitialLoadSettled,
   onRequestDesktopPreview,
+  onRequestMobilePreview,
+  mobilePreviewOpen = false,
   onDraftTargetChange,
   onOpenGlobalPromptSettings,
   onOpenBotSettings,
@@ -1933,6 +1938,7 @@ function ChatScreenView({
   const bottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const scrollContentRef = useRef<HTMLDivElement | null>(null);
+  const previewScrollTop = useRef<number | null>(null);
   const messageListRef = useRef<ChatMessageListHandle | null>(null);
   const chatRootRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -2886,7 +2892,7 @@ function ChatScreenView({
     const wasVisible = previousVisibleRef.current;
     previousVisibleRef.current = isVisible;
 
-    if (wasVisible && !isVisible) {
+    if (wasVisible && !isVisible && !mobilePreviewOpen) {
       cancelInactiveChatTransport();
     }
 
@@ -2923,6 +2929,7 @@ function ChatScreenView({
     }
   }, [
     cancelInactiveChatTransport,
+    mobilePreviewOpen,
     isForeground,
     isVisible,
     loading,
@@ -3069,7 +3076,7 @@ function ChatScreenView({
   const lastItem = items[items.length - 1];
 
   const scrollToBottom = useCallback(() => {
-    if (traceInspectionAutoScrollPausedRef.current) {
+    if (previewScrollTop.current !== null || traceInspectionAutoScrollPausedRef.current) {
       return;
     }
     userScrollIntentRef.current = false;
@@ -3092,8 +3099,22 @@ function ChatScreenView({
     return container.scrollHeight - container.scrollTop - container.clientHeight <= REVEAL_SCROLL_BOTTOM_THRESHOLD_PX;
   }, []);
 
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (mobilePreviewOpen) {
+      previewScrollTop.current = container.scrollTop;
+      cancelRevealScroll();
+    } else if (previewScrollTop.current !== null) {
+      container.scrollTop = previewScrollTop.current;
+      previewScrollTop.current = null;
+      forceAutoScrollRef.current = false;
+      shouldStickToBottomRef.current = isNearScrollBottom();
+    }
+  }, [mobilePreviewOpen, cancelRevealScroll, isNearScrollBottom]);
+
   const scheduleRevealScroll = useCallback(() => {
-    if (!isVisibleRef.current || traceInspectionAutoScrollPausedRef.current) {
+    if (!isVisibleRef.current || previewScrollTop.current !== null || traceInspectionAutoScrollPausedRef.current) {
       return;
     }
     if (!forceAutoScrollRef.current && !shouldStickToBottomRef.current) {
@@ -3125,7 +3146,7 @@ function ChatScreenView({
   }, [isNearScrollBottom, scrollToBottom]);
 
   useEffect(() => {
-    if (!isVisible) {
+    if (!isVisible || previewScrollTop.current !== null) {
       cancelRevealScroll();
       return;
     }
@@ -3387,32 +3408,39 @@ function ChatScreenView({
 
   const previewStatusText = getFilePreviewStatusText(previewResult);
   const canLoadFull = !htmlPreview && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
-  const shouldUseInlinePreview = Boolean(previewName) || !(embedded && onRequestDesktopPreview);
 
   const handleFileLinkClick = useCallback((href: string) => {
     const overview = botOverviewRef.current;
     const remote = overview?.remoteWorkspace;
+    const directory = workingDirRef.current;
+    let hostAttachmentPath: string | null = null;
     if (remote && overview.workingDir) {
       const localPath = resolvePreviewFilePath(href, "");
       const attachmentRoot = resolvePreviewFilePath(`${overview.workingDir}/attachments`, "");
       const normalizeCase = (path: string) => /^[A-Za-z]:\//.test(path) ? path.toLowerCase() : path;
       if (localPath && attachmentRoot && normalizeCase(localPath).startsWith(`${normalizeCase(attachmentRoot)}/`)) {
         // Keep control-directory attachments out of remote path normalization.
-        void loadPreview(localPath, "preview");
-        return;
+        hostAttachmentPath = localPath;
       }
     }
-    const nextPath = resolvePreviewFilePath(href, workingDirRef.current, remote ? remote.platform || "posix" : undefined);
+    const nextPath = hostAttachmentPath ?? resolvePreviewFilePath(href, directory, remote ? remote.platform || "posix" : undefined);
     if (!nextPath) {
       setError("暂不支持预览该文件链接");
       return;
     }
-    if (embedded && onRequestDesktopPreview) {
+    if (onRequestMobilePreview) {
+      onRequestMobilePreview({
+        origin: "chat", botAlias, client, directory, path: nextPath,
+        agentId: activeAgentIdRef.current, sessionId, hostAttachment: Boolean(hostAttachmentPath),
+      });
+      return;
+    }
+    if (embedded && onRequestDesktopPreview && !hostAttachmentPath) {
       onRequestDesktopPreview(nextPath);
       return;
     }
     void loadPreview(nextPath, "preview");
-  }, [embedded, loadPreview, onRequestDesktopPreview]);
+  }, [botAlias, client, embedded, loadPreview, onRequestDesktopPreview, onRequestMobilePreview, sessionId]);
 
   const handleTranslationViewChange = useCallback((id: string, view: "original" | "translated") => {
     setItems((current) => updateMessageById(current, id, (item) => ({ ...item, translationView: view })));
@@ -5908,7 +5936,7 @@ function ChatScreenView({
         />
       ) : null}
 
-      {shouldUseInlinePreview && previewName ? (
+      {!onRequestMobilePreview && previewName ? (
         <FilePreviewDialog
           remotePlatform={botOverview?.remoteWorkspace ? botOverview?.remoteWorkspace.platform || "posix" : undefined}
           title={previewName}
@@ -5943,7 +5971,8 @@ function areChatScreenPropsEqual(previous: Props, next: Props): boolean {
     && previous.accountId === next.accountId
     && previous.client === next.client
     && previous.mobileLayout === next.mobileLayout
-    && previous.embedded === next.embedded;
+    && previous.embedded === next.embedded
+    && previous.mobilePreviewOpen === next.mobilePreviewOpen;
 }
 
 function BotChatSessions(props: Props) {

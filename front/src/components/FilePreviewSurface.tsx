@@ -3,7 +3,7 @@ import type { HtmlPreviewHandle } from "../utils/filePreview";
 import { clsx } from "clsx";
 import { LoaderCircle } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import type { FileReadResult, RemoteWorkspace } from "../services/types";
+import type { FileReadOptions, FileReadResult, RemoteWorkspace } from "../services/types";
 import { buildFileDownloadUrl, isExternalHref, isSafeMarkdownHref, resolveMarkdownImagePath } from "../utils/fileLinks";
 import { isFilePreviewFullyLoaded, isJsonPreviewPath } from "../utils/filePreview";
 
@@ -18,6 +18,7 @@ export type FilePreviewSurfaceProps = {
   error?: string;
   onRetry?: () => void;
   botAlias?: string;
+  fileOptions?: FileReadOptions;
   remotePlatform?: RemoteWorkspace["platform"];
   className?: string;
   desktop?: boolean;
@@ -32,6 +33,7 @@ export function FilePreviewSurface({
   error = "",
   onRetry,
   botAlias = "",
+  fileOptions,
   remotePlatform,
   className = "",
   desktop = false,
@@ -77,9 +79,9 @@ export function FilePreviewSurface({
         return "";
       }
       const imagePath = resolveMarkdownImagePath(src, title, remotePlatform);
-      return imagePath ? buildFileDownloadUrl(normalizedBotAlias, imagePath) : "";
+      return imagePath ? buildFileDownloadUrl(normalizedBotAlias, imagePath, false, fileOptions) : "";
     };
-  }, [botAlias, title, remotePlatform]);
+  }, [botAlias, title, remotePlatform, fileOptions]);
 
   function renderContent() {
     if (htmlPreview) return <HtmlPreview key={title} title={title} preview={htmlPreview} desktop={desktop} />;

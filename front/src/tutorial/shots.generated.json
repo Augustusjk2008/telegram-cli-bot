@@ -173,6 +173,16 @@
       }
     }
   },
+  "files/portrait-preview": {
+    "hotspots": {
+      "back": {
+        "x": 2.3,
+        "y": 6.5,
+        "w": 19.5,
+        "h": 5.7
+      }
+    }
+  },
   "files/preview": {
     "hotspots": {
       "preview": {

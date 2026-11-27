@@ -137,6 +137,7 @@ async function openWorkbench(browser, distDir, { user = "demo", loggedOut = fals
 const round1 = (value) => Math.round(value * 10) / 10;
 
 async function measureHotspot(page, name, resolve) {
+  const viewport = page.viewportSize();
   const resolved = await resolve(page);
   const locators = Array.isArray(resolved) ? resolved : [resolved];
   let left = Infinity;
@@ -155,16 +156,16 @@ async function measureHotspot(page, name, resolve) {
   }
   left = Math.max(0, left - HOTSPOT_PADDING);
   top = Math.max(0, top - HOTSPOT_PADDING);
-  right = Math.min(VIEWPORT.width, right + HOTSPOT_PADDING);
-  bottom = Math.min(VIEWPORT.height, bottom + HOTSPOT_PADDING);
+  right = Math.min(viewport.width, right + HOTSPOT_PADDING);
+  bottom = Math.min(viewport.height, bottom + HOTSPOT_PADDING);
   if (right <= left || bottom <= top) {
     throw new Error(`hotspot "${name}" is outside the viewport`);
   }
   return {
-    x: round1((left / VIEWPORT.width) * 100),
-    y: round1((top / VIEWPORT.height) * 100),
-    w: round1(((right - left) / VIEWPORT.width) * 100),
-    h: round1(((bottom - top) / VIEWPORT.height) * 100),
+    x: round1((left / viewport.width) * 100),
+    y: round1((top / viewport.height) * 100),
+    w: round1(((right - left) / viewport.width) * 100),
+    h: round1(((bottom - top) / viewport.height) * 100),
   };
 }
 

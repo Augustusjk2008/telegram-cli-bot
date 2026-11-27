@@ -24,7 +24,7 @@ type Props = {
   viewStartTime: number;
   viewEndTime: number;
   display: DisplayShape;
-  pixelWidth: number;
+  contentWidth: number;
 };
 
 export function useWaveformViewport({
@@ -38,7 +38,7 @@ export function useWaveformViewport({
   viewStartTime,
   viewEndTime,
   display,
-  pixelWidth,
+  contentWidth,
 }: Props) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [windowData, setWindowData] = useState(initialWindow);
@@ -88,11 +88,15 @@ export function useWaveformViewport({
     [visibleSignals],
   );
   const visibleSignalsKey = visibleSignalIds.join("|");
-  const visibleWaveWidth = Math.max(1, viewportWidth - display.labelWidth);
+  // Leave room to tap the trace beside its sticky label in a narrow pane.
+  const labelWidth = Math.min(display.labelWidth, Math.floor(viewportWidth * 0.4));
+  const visibleWaveWidth = Math.max(1, viewportWidth - labelWidth);
+  const isFitAll = viewStartTime === summary.startTime && viewEndTime === summary.endTime;
+  const pixelWidth = isFitAll && viewportWidth <= 520 ? visibleWaveWidth : contentWidth;
   const timelineStart = Number(viewStartTime);
   const timelineEnd = Number(viewEndTime);
   const timelineRange = Math.max(1, timelineEnd - timelineStart);
-  const waveScrollLeft = Math.max(0, Math.min(pixelWidth, scrollLeft - display.labelWidth));
+  const waveScrollLeft = Math.max(0, Math.min(pixelWidth, scrollLeft));
   const quantizedPixelWidth = Math.max(64, Math.ceil(visibleWaveWidth / 8) * 8);
   const quantizedWindowStart = Math.round(
     (timelineStart + (Math.min(pixelWidth, waveScrollLeft) / Math.max(1, pixelWidth)) * timelineRange) * 1000,
@@ -102,7 +106,6 @@ export function useWaveformViewport({
   ) / 1000;
   const requestWindowStart = Math.min(quantizedWindowStart, quantizedWindowEnd);
   const requestWindowEnd = Math.max(quantizedWindowStart, quantizedWindowEnd);
-  const isFitAll = viewStartTime === summary.startTime && viewEndTime === summary.endTime;
 
   useEffect(() => {
     if (!sessionId) {
@@ -172,6 +175,8 @@ export function useWaveformViewport({
 
   return {
     viewportRef,
+    labelWidth,
+    pixelWidth,
     windowData,
     visibleTracks,
     firstTrackIndex,

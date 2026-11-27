@@ -30,7 +30,7 @@ test("mobile files screen shows upload progress, blocks another upload and cance
     onProgress?.({ uploadedBytes: 2 * 1024 * 1024, totalBytes: 5 * 1024 * 1024, percent: 40 });
     return pendingUntilAborted(signal);
   }) as typeof client.uploadFile);
-  render(<FilesScreen botAlias="main" client={client} />);
+  render(<FilesScreen onRequestMobilePreview={vi.fn()} botAlias="main" client={client} />);
   await screen.findByText("README.md");
   list.mockClear();
 
@@ -54,7 +54,7 @@ test("asks for Chinese confirmation before uploading a file larger than 20MB", a
   vi.spyOn(client, "listFiles").mockResolvedValue({ workingDir: "C:\\workspace", entries: [] });
   const upload = vi.spyOn(client, "uploadFile").mockResolvedValue(undefined);
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-  render(<FilesScreen botAlias="main" client={client} />);
+  render(<FilesScreen onRequestMobilePreview={vi.fn()} botAlias="main" client={client} />);
   await waitFor(() => expect(screen.getByLabelText("上传文件")).toBeEnabled());
 
   const file = new File(["x"], "large.bin");

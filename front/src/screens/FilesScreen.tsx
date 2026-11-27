@@ -1,12 +1,10 @@
-import { useFilePreviewLoader } from "../hooks/useFilePreviewLoader";
-import type { HtmlPreviewHandle } from "../utils/filePreview";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { MobileFilePreviewRequest } from "../hooks/useMobileFilePreview";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { ChevronLeft, FilePlus, FolderOpen, FolderPlus, House, Upload } from "lucide-react";
 import { FileEditorSurface } from "../components/FileEditorSurface";
 import { FileList } from "../components/FileList";
 import { FileNameDialog } from "../components/FileNameDialog";
-import { FilePreviewDialog } from "../components/FilePreviewDialog";
 import { SurfacePanel } from "../components/SurfacePanel";
 import { ToolbarButton } from "../components/ToolbarButton";
 import { TransferProgressBar } from "../components/TransferProgressBar";
@@ -16,7 +14,7 @@ import type {
   CodeNavigationIntent,
   FileDownloadProgress,
   FileEntry,
-  FileReadResult,
+  FileReadOptions,
   FileUploadProgress,
   InlineCompletionConfig,
   RemoteWorkspace,
@@ -24,11 +22,6 @@ import type {
 } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { joinRemotePath, parentRemotePath } from "../services/remoteWorkspace";
-import {
-  getFilePreviewStatusText,
-  isFilePreviewFullyLoaded,
-  isFilePreviewTooLarge,
-} from "../utils/filePreview";
 import { inferFileEditorLanguageId } from "../utils/fileEditorLanguage";
 import { isAbortError } from "../utils/errorMessage";
 import { isAbsolutePathInput } from "../utils/pathInput";
@@ -48,11 +41,19 @@ type Props = {
   remoteWorkspace?: RemoteWorkspace;
   reconnectRevision?: number;
   onDirtyChange?: (dirty: boolean) => void;
+  onRequestMobilePreview: (request: MobileFilePreviewRequest) => void;
 };
 
 type EditorDocumentSnapshot = {
   version: number;
   content: string;
+};
+
+type EditorFile = {
+  name: string;
+  filename: string;
+  options?: FileReadOptions;
+  directory?: string;
 };
 
 type ActiveEditorDocument = {
@@ -283,6 +284,7 @@ export function FilesScreen({
   remoteWorkspace,
   reconnectRevision = 0,
   onDirtyChange,
+  onRequestMobilePreview,
 }: Props) {
   const [currentPath, setCurrentPath] = useState("");
   const [externalPath, setExternalPath] = useState("");
@@ -290,12 +292,8 @@ export function FilesScreen({
   const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [previewName, setPreviewName] = useState("");
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewResult, setPreviewResult] = useState<FileReadResult | null>(null);
-  const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewHandle | null>(null);
-  const [previewError, setPreviewError] = useState("");
-  const [editorPath, setEditorPath] = useState("");
+  const [editorFile, setEditorFile] = useState<EditorFile | null>(null);
+  const editorPath = editorFile?.name || "";
   const [editorContent, setEditorContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [editorLoading, setEditorLoading] = useState(false);
@@ -324,23 +322,6 @@ export function FilesScreen({
   const [compressingName, setCompressingName] = useState("");
   const [inlineCompletionConfig, setInlineCompletionConfig] = useState<InlineCompletionConfig | null>(null);
   const listingRequestSeqRef = useRef(0);
-  const previewRequestSeqRef = useRef(0);
-  const previewLoader = useFilePreviewLoader(client, botAlias, `${currentPath}\n${JSON.stringify(remoteWorkspace || null)}`);
-  useEffect(() => {
-    previewRequestSeqRef.current += 1;
-    setPreviewName("");
-    setPreviewResult(null);
-    setHtmlPreview(null);
-    setPreviewLoading(false);
-  }, [previewLoader]);
-  const closePreview = () => {
-    previewRequestSeqRef.current += 1;
-    previewLoader.clear();
-    setPreviewName("");
-    setPreviewResult(null);
-    setHtmlPreview(null);
-    setPreviewLoading(false);
-  };
   const codeNavigationRequestSeqRef = useRef(0);
   const codeNavigationHoverRequestSeqRef = useRef(0);
   const codeNavigationAbortControllerRef = useRef<AbortController | null>(null);
@@ -526,6 +507,11 @@ export function FilesScreen({
 
   const isEditorOpen = Boolean(editorPath);
   const isDirty = isEditorOpen && editorContent !== savedContent;
+  // The preview can retain its edit callback across permission changes and editor reads.
+  const editorStateRef = useRef({ canMutateFiles, editorFile, isDirty });
+  useLayoutEffect(() => {
+    editorStateRef.current = { canMutateFiles, editorFile, isDirty };
+  }, [canMutateFiles, editorFile, isDirty]);
   useEffect(() => { onDirtyChange?.(isDirty); return () => onDirtyChange?.(false); }, [isDirty, onDirtyChange]);
   useEffect(() => {
     if (!remoteWorkspace || !isDirty) return;
@@ -650,9 +636,6 @@ export function FilesScreen({
       if (!await deletePathWithReadonlyConfirmation((options) => client.deletePath(botAlias, file.name, options))) {
         return;
       }
-      if (previewName === file.name) {
-        closePreview();
-      }
       await loadListing();
     } catch (err) {
       setError(err instanceof Error ? err.message : file.isDir ? "删除文件夹失败" : "删除文件失败");
@@ -776,46 +759,14 @@ export function FilesScreen({
     setUploadProgress(null);
   };
 
-  const loadPreview = async (name: string, mode: "preview" | "full") => {
-    if (!canPreviewFiles) {
-      return;
-    }
-    const requestSeq = previewRequestSeqRef.current + 1;
-    previewRequestSeqRef.current = requestSeq;
-    previewLoader.clear();
-    setPreviewName(name);
-    setPreviewResult(null);
-    setHtmlPreview(null);
-    setPreviewLoading(true);
-    setPreviewError("");
-    try {
-      const data = await previewLoader.load(name, { mode, remote: remoteWorkspace ? true : undefined });
-      if (!data || requestSeq !== previewRequestSeqRef.current) { data?.htmlPreview?.dispose(); return; }
-      setPreviewResult(data.result);
-      setHtmlPreview(data.htmlPreview);
-    } catch (err) {
-      if (requestSeq === previewRequestSeqRef.current) {
-        setPreviewError(err instanceof Error ? err.message : "预览文件失败");
-        setError(err instanceof Error ? err.message : mode === "full" ? "读取全文失败" : "预览文件失败");
-        setStatusText("");
-      }
-    } finally {
-      if (requestSeq === previewRequestSeqRef.current) {
-        setPreviewLoading(false);
-      }
-    }
-  };
-
-  const previewStatusText = getFilePreviewStatusText(previewResult);
-  const canLoadFull = !htmlPreview && canPreviewFiles && !isFilePreviewFullyLoaded(previewResult) && !isFilePreviewTooLarge(previewResult);
-  const canEditPreview = canMutateFiles && previewResult?.previewKind !== "image";
-  const previewDownloadProgress = downloadProgress?.filename === previewName ? downloadProgress : null;
-
-  const handleFileClick = async (name: string) => {
-    if (!canPreviewFiles) {
-      return;
-    }
-    await loadPreview(name, "preview");
+  const handleFileClick = (name: string) => {
+    if (!canPreviewFiles) return;
+    onRequestMobilePreview({
+      origin: "files", botAlias, client, path: name, directory: currentPath,
+      onEdit: canMutateFiles ? (filename, isCurrent, options) => handleOpenEditor(name, {
+        target: { name, filename, options, directory: currentPath }, isPreviewCurrent: isCurrent,
+      }) : undefined,
+    });
   };
 
   const handleOpenWorkdir = async () => {
@@ -831,7 +782,7 @@ export function FilesScreen({
 
   const clearEditor = () => {
     abortExplicitCodeNavigation();
-    setEditorPath("");
+    setEditorFile(null);
     setEditorContent("");
     setSavedContent("");
     setEditorLoading(false);
@@ -848,19 +799,25 @@ export function FilesScreen({
 
   const handleOpenEditor = async (
     name: string,
-    reveal?: { line: number; column: number; requestId: string },
-    navigationSequence?: number,
+    { reveal, navigationSequence, isPreviewCurrent, target = { name, filename: name } }: {
+      reveal?: { line: number; column: number; requestId: string };
+      navigationSequence?: number;
+      isPreviewCurrent?: () => boolean;
+      target?: EditorFile;
+    } = {},
   ) => {
-    if (!canMutateFiles) {
+    if (isPreviewCurrent && !isPreviewCurrent()) return false;
+    const editor = editorStateRef.current;
+    if (!editor.canMutateFiles) {
       setError("无文件写入权限");
       setStatusText("");
       return false;
     }
-    if (editorPath === name && reveal) {
-      setEditorReveal(reveal);
+    if (editor.editorFile?.name === name && editor.editorFile.directory === target.directory && (reveal || editor.isDirty)) {
+      if (reveal) setEditorReveal(reveal);
       return true;
     }
-    if (editorPath && editorPath !== name && isDirty) {
+    if (editor.isDirty) {
       setEditorError("当前文件有未保存修改，请先保存后再跳转到其他文件");
       return false;
     }
@@ -868,20 +825,24 @@ export function FilesScreen({
     setStatusText("");
     setEditorError("");
     setEditorStatusText("");
-    setEditorLoading(true);
+    if (!isPreviewCurrent) setEditorLoading(true);
     const binding = getCurrentEditorDocumentScope();
+    const canApplyRead = () => (
+      (!isPreviewCurrent || isPreviewCurrent())
+      && editorStateRef.current.canMutateFiles
+      && !editorStateRef.current.isDirty
+      && (navigationSequence === undefined || codeNavigationRequestSeqRef.current === navigationSequence)
+      && (!binding || editorDocumentScopeRef.current === binding)
+    );
     try {
-      const result = await client.readFileFull(botAlias, name);
-      if (
-        (navigationSequence !== undefined && codeNavigationRequestSeqRef.current !== navigationSequence)
-        || (binding && editorDocumentScopeRef.current !== binding)
-      ) {
-        return false;
-      }
+      const result = target.options
+        ? await client.readFileFull(botAlias, target.filename, target.options)
+        : await client.readFileFull(botAlias, target.filename);
+      if (!canApplyRead()) return false;
       const content = result.content || "";
-      closePreview();
       syncCurrentEditorDocumentSnapshot(name, content, binding);
-      setEditorPath(name);
+      setEditorFile(target);
+      setEditorSaving(false);
       setEditorContent(content);
       setSavedContent(content);
       setEditorLastModifiedNs(result.lastModifiedNs);
@@ -889,16 +850,14 @@ export function FilesScreen({
       setEditorReveal(reveal || null);
       return true;
     } catch (err) {
+      if (!canApplyRead()) return false;
       const message = err instanceof Error ? err.message : "读取文件失败";
       setEditorError(message);
       setError(message);
       setStatusText("");
-      if (previewName === name) {
-        closePreview();
-      }
       return false;
     } finally {
-      setEditorLoading(false);
+      if (!isPreviewCurrent) setEditorLoading(false);
     }
   };
 
@@ -913,10 +872,13 @@ export function FilesScreen({
       return false;
     }
     return handleOpenEditor(location.path, {
-      line: location.selectionRange.start.line,
-      column: location.selectionRange.start.column,
-      requestId,
-    }, navigationSequence);
+      target: editorFile?.directory ? {
+        name: location.path, filename: location.path, directory: editorFile.directory,
+        options: { expectedDirectory: editorFile.directory },
+      } : undefined,
+      reveal: { line: location.selectionRange.start.line, column: location.selectionRange.start.column, requestId },
+      navigationSequence,
+    });
   };
 
   const handleResolveCodeNavigation = async (input: CodeNavigationIntent) => {
@@ -1025,7 +987,7 @@ export function FilesScreen({
   };
 
   const handleSaveEditor = async () => {
-    if (!editorPath) {
+    if (!editorFile) {
       return;
     }
     if (!canMutateFiles) {
@@ -1037,28 +999,20 @@ export function FilesScreen({
     setEditorSaving(true);
     setEditorError("");
     try {
-      const result = await client.writeFile(botAlias, editorPath, editorContent, editorLastModifiedNs, editorEncoding);
+      const result = await client.writeFile(
+        botAlias, editorFile.filename, editorContent, editorLastModifiedNs, editorEncoding,
+        ...(editorFile.options ? [editorFile.options] : []),
+      );
+      if (editorStateRef.current.editorFile !== editorFile) return;
       setSavedContent(editorContent);
       setEditorLastModifiedNs(result.lastModifiedNs);
       setEditorEncoding(result.encoding || editorEncoding);
       setEditorStatusText("已保存");
-      if (previewName === editorPath) {
-        setPreviewResult((current) => current
-          ? {
-              ...current,
-              content: editorContent,
-              mode: "cat",
-              isFullContent: true,
-              fileSizeBytes: result.fileSizeBytes,
-              lastModifiedNs: result.lastModifiedNs,
-            }
-          : current);
-      }
       await loadListing();
     } catch (err) {
-      setEditorError(err instanceof Error ? err.message : "保存失败");
+      if (editorStateRef.current.editorFile === editorFile) setEditorError(err instanceof Error ? err.message : "保存失败");
     } finally {
-      setEditorSaving(false);
+      if (editorStateRef.current.editorFile === editorFile) setEditorSaving(false);
     }
   };
 
@@ -1097,7 +1051,7 @@ export function FilesScreen({
       } else {
         const result = await client.createTextFile(botAlias, pendingName.trim(), "");
         syncCurrentEditorDocumentSnapshot(result.path, "");
-        setEditorPath(result.path);
+        setEditorFile({ name: result.path, filename: result.path });
         setEditorContent("");
         setSavedContent("");
         setEditorError("");
@@ -1174,12 +1128,9 @@ export function FilesScreen({
       setRenameTargetPath("");
       setRenameTargetIsDir(false);
       setRenameValue("");
-      if (previewName === result.oldPath) {
-        void loadPreview(result.path, "preview");
-      }
       if (editorPath === result.oldPath) {
         syncCurrentEditorDocumentSnapshot(result.path, editorContent, binding);
-        setEditorPath(result.path);
+        setEditorFile({ name: result.path, filename: result.path });
       }
       await loadListing();
     } catch (err) {
@@ -1371,7 +1322,7 @@ export function FilesScreen({
             <FileList
               files={files}
               onDirClick={(name) => void handleDirClick(name)}
-              onFileClick={(name) => void handleFileClick(name)}
+              onFileClick={handleFileClick}
               onEdit={canMutateFiles ? (file) => void handleOpenEditor(file.name) : undefined}
               onRename={canManageFiles ? (file) => void handleOpenRenameDialog(file.name, file.isDir) : undefined}
               onCompress={canManageFiles && !isVirtualRoot ? (file) => void handleCompressEntry(file) : undefined}
@@ -1437,30 +1388,6 @@ export function FilesScreen({
         </div>
       ) : null}
 
-      {canPreviewFiles && previewName ? (
-        <FilePreviewDialog
-          remotePlatform={remoteWorkspace ? remoteWorkspace.platform || "posix" : undefined}
-          title={previewName}
-          result={previewResult}
-          htmlPreview={htmlPreview}
-          error={previewError}
-          onRetry={() => void loadPreview(previewName, "preview")}
-          botAlias={botAlias}
-          loading={previewLoading}
-          onClose={() => {
-            closePreview();
-          }}
-          statusText={previewStatusText}
-          onLoadFull={canLoadFull ? () => void loadPreview(previewName, "full") : undefined}
-          onEdit={canEditPreview ? () => void handleOpenEditor(previewName) : undefined}
-          onDownload={canPreviewFiles ? () => void handleDownloadEntry({ name: previewName, isDir: false }) : undefined}
-          onCancelDownload={previewDownloadProgress ? handleCancelDownload : undefined}
-          downloadProgressText={previewDownloadProgress
-            ? formatTransferDetail(previewDownloadProgress.downloadedBytes, previewDownloadProgress.totalBytes)
-            : ""}
-          downloadPercent={previewDownloadProgress?.percent}
-        />
-      ) : null}
       {canMutateFiles && createKind ? (
         <FileNameDialog
           title={createKind === "directory" ? "新建文件夹" : "新建文件"}

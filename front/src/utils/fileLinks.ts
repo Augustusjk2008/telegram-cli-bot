@@ -1,5 +1,5 @@
 import { withApiBase } from "./publicBase";
-import type { RemoteWorkspace } from "../services/types";
+import type { FileReadOptions, RemoteWorkspace } from "../services/types";
 import { normalizeRemotePath, relativeRemotePath } from "../services/remoteWorkspace";
 
 const EXTERNAL_PROTOCOL_RE = /^(https?:|mailto:|tel:)/i;
@@ -17,7 +17,7 @@ function unwrapLocalFileUrl(href: string) {
 
   try {
     const url = new URL(href);
-    const pathname = decodeURIComponent(url.pathname || "");
+    const pathname = url.pathname || "";
 
     if (pathname.startsWith(ABS_PATH_PREFIX)) {
       return pathname.slice(ABS_PATH_PREFIX.length) || "";
@@ -49,16 +49,9 @@ function safeDecodeURIComponent(value: string) {
 }
 
 function cleanHref(href: string) {
-  const decoded = safeDecodeURIComponent((href || "").trim());
-  if (!decoded) {
-    return "";
-  }
-  const unwrapped = unwrapLocalFileUrl(decoded);
-  return unwrapped
-    .replace(/^file:\/\/\/?/i, "")
-    .split("#")[0]
-    .split("?")[0]
-    .trim();
+  // Drop URL decorations before decoding so an encoded # or ? remains part of the filename.
+  const pathname = (href || "").trim().split(/[?#]/, 1)[0];
+  return safeDecodeURIComponent(unwrapLocalFileUrl(pathname)).replace(/^file:\/\//i, "").trim();
 }
 
 function normalizePath(path: string) {
@@ -87,9 +80,14 @@ export function isSafeMarkdownHref(href: string) {
   return !BLOCKED_PROTOCOL_RE.test(cleaned);
 }
 
-export function isLikelyLocalFileHref(href: string) {
+function localFileHref(href: string) {
   const cleaned = cleanHref(href);
-  if (!cleaned || cleaned.startsWith("#") || !isSafeMarkdownHref(cleaned) || isExternalHref(cleaned)) {
+  return BLOCKED_PROTOCOL_RE.test(cleaned) || EXTERNAL_PROTOCOL_RE.test(cleaned) ? "" : cleaned;
+}
+
+export function isLikelyLocalFileHref(href: string) {
+  const cleaned = localFileHref(href);
+  if (!cleaned) {
     return false;
   }
 
@@ -105,12 +103,12 @@ export function isLikelyLocalFileHref(href: string) {
 }
 
 export function resolvePreviewFilePath(href: string, workingDir: string, platform?: RemoteWorkspace["platform"]) {
-  const cleaned = cleanHref(href);
-  if (!cleaned || cleaned.startsWith("#") || !isSafeMarkdownHref(cleaned) || isExternalHref(cleaned)) {
+  const cleaned = localFileHref(href);
+  if (!cleaned) {
     return null;
   }
 
-  if (platform) {
+  if (platform || (workingDir.startsWith("/") && !/^\/(?:[A-Za-z]:\/|\/)/.test(workingDir))) {
     const candidate = stripTrailingLocation(normalizeRemotePath(cleaned, platform));
     return !candidate || candidate === "." ? null : relativeRemotePath(candidate, workingDir, platform).replace(/^\.\//, "");
   }
@@ -133,7 +131,7 @@ export function resolvePreviewFilePath(href: string, workingDir: string, platfor
     return normalizedCandidate;
   }
 
-  if (normalizedWorkingDir && normalizedCandidate.toLowerCase().startsWith(`${normalizedWorkingDir.toLowerCase()}/`)) {
+  if (normalizedWorkingDir && normalizedCandidate.startsWith(`${normalizedWorkingDir}/`)) {
     return normalizedCandidate.slice(normalizedWorkingDir.length + 1);
   }
 
@@ -141,8 +139,8 @@ export function resolvePreviewFilePath(href: string, workingDir: string, platfor
 }
 
 export function resolveMarkdownImagePath(src: string, markdownPath: string, platform?: RemoteWorkspace["platform"]) {
-  const cleaned = cleanHref(src);
-  if (!cleaned || cleaned.startsWith("#") || !isSafeMarkdownHref(cleaned) || isExternalHref(cleaned)) {
+  const cleaned = localFileHref(src);
+  if (!cleaned) {
     return null;
   }
 
@@ -167,17 +165,18 @@ export function resolveMarkdownImagePath(src: string, markdownPath: string, plat
   }
 
   const normalizedMarkdownPath = normalizePath(markdownPath || "");
-  const pathParts = normalizedMarkdownPath.split("/").filter(Boolean);
-  if (pathParts.length > 0) {
-    pathParts.pop();
-  }
-  const baseDir = pathParts.join("/");
-  const joinedPath = baseDir ? `${baseDir}/${normalizedSrc}` : normalizedSrc;
-  return normalizePath(joinedPath).replace(/^\.\//, "");
+  const slash = normalizedMarkdownPath.lastIndexOf("/");
+  return `${normalizedMarkdownPath.slice(0, slash + 1)}${normalizedSrc}`.replace(/^\.\//, "");
 }
 
-export function buildFileDownloadUrl(botAlias: string, filename: string, inline = false) {
+export function appendFileLocation(params: URLSearchParams, options: FileReadOptions = {}) {
+  if (options.workspaceRelative) params.set("base", "workspace");
+  if (options.expectedDirectory !== undefined) params.set("expected_directory", options.expectedDirectory);
+}
+
+export function buildFileDownloadUrl(botAlias: string, filename: string, inline = false, options?: FileReadOptions) {
   const params = new URLSearchParams({ filename });
+  appendFileLocation(params, options);
   if (inline) {
     params.set("inline", "1");
   }
