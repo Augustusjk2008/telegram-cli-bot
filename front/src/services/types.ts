@@ -2990,6 +2990,7 @@ export type DebugState = {
 
 export type DirectoryListing = {
   workingDir: string;
+  supportsWorkspaceFileBase?: boolean;
   entries: FileEntry[];
   isVirtualRoot?: boolean;
 };

@@ -17,6 +17,7 @@ export type MobileFilePreviewRequest = {
   agentId?: string;
   sessionId?: string;
   hostAttachment?: boolean;
+  supportsWorkspaceFileBase?: boolean;
   onEdit?: (filename: string, isCurrent: () => boolean, options?: FileReadOptions) => Promise<boolean>;
 };
 
@@ -38,6 +39,7 @@ type Preview = {
   request: MobileFilePreviewRequest;
   path: string;
   filename: string;
+  isWorkspaceFile: boolean;
   fileOptions?: FileReadOptions;
   operation: Operation;
   choices?: PluginOpenTarget[];
@@ -76,12 +78,18 @@ function locateFile(request: MobileFilePreviewRequest, scope: MobilePreviewScope
   const path = absolutePath(request.path, directory, platform);
   const windows = platform === "windows" || (!platform && windowsPath(path));
   const relative = !scope.remote && !request.hostAttachment ? workspaceRelativePath(path, directory, scope.workspace, windows) : null;
-  const filename = relative ?? (scope.remote || scope.canReadAbsolute ? path : request.path);
+  let filename = path;
   let fileOptions: FileReadOptions | undefined;
-  if (relative) fileOptions = { workspaceRelative: true };
-  else if (!scope.remote && !scope.canReadAbsolute && request.directory) fileOptions = { expectedDirectory: request.directory };
+  if (relative !== null && (request.origin === "chat" || request.supportsWorkspaceFileBase === true)) {
+    filename = relative;
+    fileOptions = { workspaceRelative: true };
+  } else if (!scope.remote && !scope.canReadAbsolute) {
+    // Files has already changed the server's browse directory to the folder containing this row.
+    filename = request.path;
+    if (request.directory) fileOptions = { expectedDirectory: request.directory };
+  }
   const identity = JSON.stringify([Boolean(request.hostAttachment), windows ? path.toLowerCase() : path]);
-  return { path, filename, fileOptions, identity };
+  return { path, filename, isWorkspaceFile: relative !== null, fileOptions, identity };
 }
 
 function disposeView(request: MobileFilePreviewRequest, view?: PluginRenderResult) {
@@ -145,7 +153,7 @@ export function useMobileFilePreview(scope: MobilePreviewScope, showTab: (tab: M
     if (!slot) return;
     const { fileOptions, choices, operation } = slot.page;
     const usesPlugin = operation.kind === "plugin" || Boolean(choices)
-      || (operation.kind === "resolve" && fileOptions?.workspaceRelative && slot.scope.canUsePlugins);
+      || (operation.kind === "resolve" && slot.page.isWorkspaceFile && slot.scope.canUsePlugins);
     const usesAbsoluteAccess = !slot.scope.remote && !fileOptions && slot.scope.canReadAbsolute;
     if (!scope.canRead || (usesPlugin && !scope.canUsePlugins) || (usesAbsoluteAccess && !scope.canReadAbsolute)) close();
   }, [scope, close]);
@@ -166,7 +174,7 @@ export function useMobileFilePreview(scope: MobilePreviewScope, showTab: (tab: M
     update(slot, { operation, data: undefined, view: undefined, choices: undefined, error: "", loading: true });
     try {
       if (operation.kind === "resolve") {
-        if (fileOptions?.workspaceRelative && slot.scope.canUsePlugins) {
+        if (slot.page.isWorkspaceFile && slot.scope.canUsePlugins) {
           // Plugin input is resolved against the server's browse directory; pin it to this file.
           const target = await client.resolveFileOpenTarget(botAlias, path);
           if (!current()) return;

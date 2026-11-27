@@ -13,6 +13,7 @@ import type {
   CodeLocation,
   CodeNavigationIntent,
   FileDownloadProgress,
+  DirectoryListing,
   FileEntry,
   FileReadOptions,
   FileUploadProgress,
@@ -286,10 +287,9 @@ export function FilesScreen({
   onDirtyChange,
   onRequestMobilePreview,
 }: Props) {
-  const [currentPath, setCurrentPath] = useState("");
+  const [listing, setListing] = useState<DirectoryListing>({ workingDir: "", entries: [] });
+  const { workingDir: currentPath, entries: files, isVirtualRoot = false } = listing;
   const [externalPath, setExternalPath] = useState("");
-  const [files, setFiles] = useState<FileEntry[]>([]);
-  const [isVirtualRoot, setIsVirtualRoot] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editorFile, setEditorFile] = useState<EditorFile | null>(null);
@@ -480,16 +480,14 @@ export function FilesScreen({
     setError("");
     setStatusText("");
     try {
-      const listing = structureOnly
+      const nextListing = structureOnly
         ? await client.listFiles(botAlias, targetPath || currentPath || await client.getCurrentPath(botAlias))
         : await client.listFiles(botAlias);
       if (requestSeq !== listingRequestSeqRef.current) {
         return;
       }
-      bindEditorDocumentScope(listing.workingDir);
-      setCurrentPath(listing.workingDir);
-      setFiles(listing.entries);
-      setIsVirtualRoot(Boolean(listing.isVirtualRoot));
+      bindEditorDocumentScope(nextListing.workingDir);
+      setListing(nextListing);
     } catch (err) {
       if (requestSeq === listingRequestSeqRef.current) {
         setError(err instanceof Error ? err.message : "加载目录失败");
@@ -763,6 +761,7 @@ export function FilesScreen({
     if (!canPreviewFiles) return;
     onRequestMobilePreview({
       origin: "files", botAlias, client, path: name, directory: currentPath,
+      ...(!remoteWorkspace ? { supportsWorkspaceFileBase: listing.supportsWorkspaceFileBase === true } : {}),
       onEdit: canMutateFiles ? (filename, isCurrent, options) => handleOpenEditor(name, {
         target: { name, filename, options, directory: currentPath }, isPreviewCurrent: isCurrent,
       }) : undefined,

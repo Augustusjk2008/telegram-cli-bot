@@ -5764,6 +5764,7 @@ export class MockWebBotClient implements WebBotClient {
     const botFiles = this.mockFilesWithHdl(botAlias);
     return {
       workingDir: currentPath,
+      supportsWorkspaceFileBase: true,
       entries: (botFiles[currentPath] || []).map((entry) => {
         if (!entry.isDir || !options?.includeChildCounts) {
           return entry;

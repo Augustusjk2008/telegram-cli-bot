@@ -103,6 +103,7 @@ def build_directory_listing_response(
 ) -> dict[str, Any]:
     return {
         "working_dir": display_browser_directory(working_dir),
+        "supports_workspace_file_base": True,
         "entries": entries,
         "is_virtual_root": is_virtual_root,
     }

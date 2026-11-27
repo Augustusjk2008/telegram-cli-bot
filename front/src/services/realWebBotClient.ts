@@ -7055,12 +7055,16 @@ export class RealWebBotClient implements WebBotClient {
     }
     const query = params.toString();
     const suffix = query ? `?${query}` : "";
-    const data = await this.requestJson<{ working_dir: string; entries: RawFileEntry[]; is_virtual_root?: boolean }>(
-      `/api/bots/${encodeURIComponent(botAlias)}/ls${suffix}`,
-    );
+    const data = await this.requestJson<{
+      working_dir: string;
+      entries: RawFileEntry[];
+      is_virtual_root?: boolean;
+      supports_workspace_file_base?: boolean;
+    }>(`/api/bots/${encodeURIComponent(botAlias)}/ls${suffix}`);
     return {
       workingDir: data.working_dir,
       entries: data.entries.map(mapFileEntry),
+      ...(data.supports_workspace_file_base === true ? { supportsWorkspaceFileBase: true } : {}),
       ...(data.is_virtual_root ? { isVirtualRoot: true } : {}),
     };
   }

@@ -112,7 +112,7 @@ async function snapshot(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { path, contentType: "image/png" });
 }
 
-async function openPhone(page: Page, width: number) {
+async function openPhone(page: Page, width: number, supportsWorkspaceFileBase = true) {
   const bot = { alias: "main", cli_type: "codex", status: "running", working_dir: root, can_operate: true };
   const agents = [{ id: "main", name: "main" }];
   let cwd = root;
@@ -169,14 +169,17 @@ async function openPhone(page: Page, width: number) {
       const names = location === directory
         ? [...Array.from({ length: 60 }, (_, i) => "record-" + i + ".txt"), note, other]
         : ["reports", ...filenames];
-      data = { working_dir: location, entries: names.map((name) => ({ name, is_dir: name === "reports" })) };
+      data = {
+        working_dir: location, entries: names.map((name) => ({ name, is_dir: name === "reports" })),
+        ...(supportsWorkspaceFileBase ? { supports_workspace_file_base: true } : {}),
+      };
     } else if (path.endsWith("/plugins/resolve-file-target")) {
       const filename: string = req.postDataJSON().path;
       fileCalls.push({ operation: "resolve", path: filename });
       data = fileTarget(filename);
     } else if (path.endsWith("/files/read")) {
       const filename = url.searchParams.get("filename")!;
-      const filePath = posix.resolve(url.searchParams.get("base") === "workspace" ? root : cwd, filename);
+      const filePath = posix.resolve(supportsWorkspaceFileBase && url.searchParams.get("base") === "workspace" ? root : cwd, filename);
       fileCalls.push({ operation: "read", path: filePath });
       if (filePath !== directory + "/" + note && filePath !== directory + "/" + other) {
         return route.fulfill({ status: 404, json: { ok: false, error: { code: "file_not_found", message: filePath } } });
@@ -206,7 +209,7 @@ async function openPhone(page: Page, width: number) {
   if (width === 390) await page.addInitScript(() => localStorage.setItem("web-view-mode", "mobile"));
   await page.goto("./");
   await expect(tab(page, "文件")).toBeInViewport();
-  return { fileCalls, disposals, streams, kills };
+  return { fileCalls, disposals, streams, kills, resetBrowseDirectory: () => { cwd = root; } };
 }
 
 async function checkLayout(page: Page, preview: Locator) {
@@ -360,6 +363,24 @@ for (const width of [360, 390]) {
     await expect(preview.getByText(/^Δt [1-9]/)).toBeVisible();
     await checkLayout(page, preview);
     await snapshot(page, info, `mobile-waveform-${width}`);
+  });
+}
+
+for (const workspaceBase of [false, true]) {
+  const scenario = workspaceBase ? "after the shared directory changes" : "on a browse-relative host";
+  test(`opens the selected nested file ${scenario}`, async ({ page }) => {
+    const { fileCalls, resetBrowseDirectory } = await openPhone(page, 390, workspaceBase);
+    await tab(page, "文件").tap();
+    await page.getByRole("button", { name: "进入 reports" }).tap();
+    const row = fileRow(page, note);
+    await expect(row).toBeVisible();
+    if (workspaceBase) resetBrowseDirectory();
+    await row.tap();
+    await expect(page.getByTestId("mobile-file-preview").getByRole("heading", { name: noteTitle })).toBeVisible();
+    expect(fileCalls).toEqual([
+      { operation: "resolve", path: directory + "/" + note },
+      { operation: "read", path: directory + "/" + note },
+    ]);
   });
 }
 

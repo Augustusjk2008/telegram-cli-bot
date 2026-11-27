@@ -12,6 +12,7 @@ from bot.manager import MultiBotManager
 from bot.models import BotProfile
 from bot.web.api_common import AuthContext, WebApiError, get_session_for_alias
 from bot.web.auth_store import CAP_ADMIN_OPS, CAP_READ_FILE_CONTENT, CAP_WRITE_FILES
+from bot.web.files_service import get_directory_listing
 from bot.web.html_preview_service import HtmlPreviewStore
 from bot.web.routes import files_routes, html_preview_routes
 from bot.web.server import WebApiServer
@@ -61,7 +62,10 @@ def preview_routes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_preview_reads_downloads_and_html_use_the_same_workspace_file(preview_routes):
-    request, server, _, root = preview_routes
+    request, server, auth, root = preview_routes
+    listing = get_directory_listing(server.manager, "main", auth.user_id)
+    assert listing["working_dir"] == str(root / "other")
+    assert listing["supports_workspace_file_base"] is True
     for anchored, expected in [(True, root), (False, root / "other")]:
         path = expected / "index.html"
         read = await request("read", path.name, anchored=anchored)

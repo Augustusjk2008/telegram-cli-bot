@@ -50,7 +50,7 @@ function setup(overrides: Partial<MobilePreviewScope> = {}) {
   const showTab = vi.fn();
   const hook = renderHook((props: MobilePreviewScope) => useMobileFilePreview(props, showTab), { initialProps: scope });
   function file(path: string, extra: Partial<MobileFilePreviewRequest> = {}): MobileFilePreviewRequest {
-    return { origin: "files", botAlias: scope.botAlias, directory: scope.workspace, path, client, ...extra };
+    return { origin: "files", botAlias: scope.botAlias, directory: scope.workspace, path, client, supportsWorkspaceFileBase: true, ...extra };
   }
   return { ...hook, scope, client, file, showTab };
 }
@@ -271,6 +271,26 @@ test("SSH HTML and host-local attachments use static reads from their own client
     expect(reader.openPluginView).not.toHaveBeenCalled();
     expect(reader.createHtmlPreview).not.toHaveBeenCalled();
   }
+});
+
+test.each([false, true])("nested Files reads, downloads and edits use the originating row on older hosts (absolute access %s)", async canReadAbsolute => {
+  const { result, client, file } = setup({ workspace: "C:\\work", canReadAbsolute });
+  const directory = "C:\\work\\notes";
+  const path = "C:/work/notes/log.txt";
+  const filename = canReadAbsolute ? path : "log.txt";
+  const options = canReadAbsolute ? undefined : { expectedDirectory: directory };
+  const onEdit = vi.fn().mockResolvedValue(true);
+  await act(async () => result.current.open(file("log.txt", { directory, supportsWorkspaceFileBase: false, onEdit })));
+  expect(result.current.preview?.path).toBe(path);
+  expect(client.resolveFileOpenTarget).toHaveBeenCalledWith("dev", path);
+  expect(client.readFile.mock.calls[0]).toEqual(options ? ["dev", filename, options] : ["dev", filename]);
+
+  await act(async () => result.current.readFile("full"));
+  expect(client.readFileFull.mock.calls).toEqual(client.readFile.mock.calls);
+  await act(async () => result.current.download());
+  expect(client.downloadFile).toHaveBeenCalledWith("dev", filename, expect.any(Function), expect.any(AbortSignal), options);
+  await act(async () => result.current.edit(() => true));
+  expect(onEdit).toHaveBeenCalledWith(filename, expect.any(Function), options);
 });
 
 test("full reads and downloads stay anchored to the captured directory, and closing aborts the active download", async () => {
