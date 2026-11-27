@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from bot.cluster.config import TIER_EDITOR_ENV
 from bot.runtime_paths import get_tcb_home_root
 
 CLUSTER_MCP_SERVER_NAME = "tcb-cluster"
@@ -22,6 +23,8 @@ DEEPSEEK_MCP_PATCH_FILENAME = "dsh-cluster-mcp.patch.json"
 CLUSTER_MCP_TOOL_NAMES = (
     "configure_team",
     "cluster_status",
+    "get_agent_tiers",
+    "update_agent_tier",
     "list_agents",
     "new_agent_session",
     "ask_agent",
@@ -138,6 +141,13 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def write_claude_cluster_mcp_config(path: Path, launcher_path: Path) -> None:
+    # Main and child processes share this file. Claude expands the reference
+    # using the launching process's environment.
+    server = {"command": str(launcher_path), "env": {TIER_EDITOR_ENV: "${" + TIER_EDITOR_ENV + ":-}"}}
+    _write_json_atomic(path, {"mcpServers": {CLUSTER_MCP_SERVER_NAME: server}})
 
 
 def _load_antigravity_mcp_json(path: Path) -> dict[str, Any]:

@@ -10,7 +10,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from bot.cluster.config import MODEL_TIER_KEYS
+from bot.cluster.config import CLUSTER_CLI_TYPES, MODEL_TIER_KEYS
 from bot.cluster.mcp_client import load_mcp_bridge_config, post_mcp_tool
 
 
@@ -29,6 +29,12 @@ def _tool_annotations(*, read_only: bool, idempotent: bool) -> dict[str, bool]:
 
 
 def _tools_for_environment() -> list[dict[str, Any]]:
+    tier_fields = {
+        "run_id": {"type": "string"},
+        "model_tier": {"type": "string", "enum": list(MODEL_TIER_KEYS)},
+        "cli_type": {"type": "string", "enum": ["", *sorted(CLUSTER_CLI_TYPES)],
+                     "description": "An empty string inherits the Bot CLI."},
+    }
     return [
         {
             "name": "configure_team",
@@ -75,6 +81,31 @@ def _tools_for_environment() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "get_agent_tiers",
+            "annotations": _tool_annotations(read_only=True, idempotent=True),
+            "description": "Read the Bot's four child-agent tiers, their configured and effective settings, and revisions. Supply model_tier for executable availability, models and reasoning efforts. Add cli_type to preview switching that tier. Use the returned choices and revision for update_agent_tier.",
+            "inputSchema": {
+                "type": "object", "required": ["run_id"], "additionalProperties": False,
+                "properties": tier_fields,
+            },
+        },
+        {
+            "name": "update_agent_tier",
+            "annotations": _tool_annotations(read_only=False, idempotent=False),
+            "description": "As the main agent, persist a requested edit to one Bot-wide child tier. Read get_agent_tiers for the target CLI first. Supply its revision and the fields to change. Empty strings restore inheritance. Switching backends clears the old backend's overrides. Edits apply to future tasks. Use the professional tier only on explicit user request.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["run_id", "model_tier", "expected_revision"],
+                "minProperties": 4,
+                "properties": {
+                    **tier_fields,
+                    "expected_revision": {"type": "string", "minLength": 1},
+                    "model": {"type": "string", "description": "A listed model ID, or an empty string to inherit."},
+                    "reasoning_effort": {"type": "string", "description": "A listed effort for this model, or an empty string to inherit."},
+                },
+            },
+        },
+        {
             "name": "new_agent_session",
             "annotations": _tool_annotations(read_only=False, idempotent=False),
             "description": "Start a new session for a child agent whose current session is idle and has no queued/running cluster tasks. Always pass run_id. Previous session history is preserved.",
@@ -90,14 +121,16 @@ def _tools_for_environment() -> list[dict[str, Any]]:
         {
             "name": "ask_agent",
             "annotations": _tool_annotations(read_only=False, idempotent=False),
-            "description": "Start an asynchronous TCB child agent task and immediately return task_id. Always pass run_id. The Bot's low/medium/high/professional tier configuration selects the actual CLI, CLI path, provider, model, and reasoning effort; the child agent chooses only model_tier. The main agent may continue calling poll_agent_tasks to wait for and summarize results, or end its turn while the task runs in the background; completion will automatically notify the main session. When the cluster completion prompt arrives, call poll_agent_tasks for the result or error details. timeout_seconds is a soft deadline and defaults to the Bot setting when omitted; exceeding it does not forcibly interrupt the child agent, and poll_agent_tasks reports deadline_exceeded. Do not call wait_agent_messages just to wait for a child agent.",
+            "description": "Queue a child task and return its task_id and execution settings. Pass run_id and choose a model_tier from get_agent_tiers (default medium). Use professional only on explicit user request. Poll for the result or let completion notify the main session. timeout_seconds is a soft deadline and defaults to the Bot setting.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": False,
                 "required": ["run_id", "agent_id", "message"],
                 "properties": {
                     "agent_id": {"type": "string"},
                     "message": {"type": "string"},
                     "model_tier": {"type": "string", "enum": list(MODEL_TIER_KEYS)},
+                    "expected_revision": {"type": "string", "description": "Use the inspected tier revision to reject a change before enqueue."},
                     "timeout_seconds": {"type": "integer"},
                     "allow_write": {"type": "boolean"},
                     "run_id": {"type": "string"},
@@ -194,7 +227,8 @@ def handle_request(config_path: Path, request: dict[str, Any]) -> dict[str, Any]
                 ensure_ascii=False,
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(message)}
-        return {"jsonrpc": "2.0", "id": request_id, "result": _content_text(json.dumps(result, ensure_ascii=False))}
+        content = _tool_error if result.get("ok") is False else _content_text
+        return {"jsonrpc": "2.0", "id": request_id, "result": content(json.dumps(result, ensure_ascii=False))}
     if method == "notifications/initialized":
         return None
     return {

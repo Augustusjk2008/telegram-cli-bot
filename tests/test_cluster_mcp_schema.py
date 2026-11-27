@@ -4,11 +4,14 @@ import json
 from pathlib import Path
 
 from bot.cluster import mcp_stdio
+from bot.cluster.setup import CLUSTER_MCP_TOOL_NAMES
 
 
 _CLUSTER_TOOL_NAMES = {
     "configure_team",
     "cluster_status",
+    "get_agent_tiers",
+    "update_agent_tier",
     "list_agents",
     "new_agent_session",
     "ask_agent",
@@ -22,6 +25,7 @@ def test_python_mcp_registers_tools_with_required_run_id() -> None:
     tools = {tool["name"]: tool for tool in mcp_stdio._tools_for_environment()}
 
     assert set(tools) == _CLUSTER_TOOL_NAMES
+    assert set(CLUSTER_MCP_TOOL_NAMES) == set(tools)
     for tool in tools.values():
         assert "run_id" in tool["inputSchema"]["required"]
 
@@ -40,6 +44,13 @@ def test_python_mcp_registers_explicit_tool_safety_annotations() -> None:
     assert tools["cancel_agent_task"]["annotations"]["readOnlyHint"] is False
     assert tools["cancel_agent_task"]["annotations"]["idempotentHint"] is True
     assert tools["cancel_agent_task"]["inputSchema"]["required"] == ["run_id", "task_id"]
+    assert tools["get_agent_tiers"]["annotations"]["readOnlyHint"] is True
+    edit = tools["update_agent_tier"]
+    assert edit["annotations"]["readOnlyHint"] is False
+    assert set(edit["inputSchema"]["properties"]) == {
+        "run_id", "model_tier", "expected_revision", "cli_type", "model", "reasoning_effort",
+    }
+    assert edit["inputSchema"]["additionalProperties"] is False
 
 
 def test_ask_agent_selects_cli_by_bot_tier_only() -> None:

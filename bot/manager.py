@@ -25,7 +25,9 @@ from bot.cli_params import (
     normalize_deepseek_selection,
     normalize_deepseek_value,
 )
-from bot.cluster.config import normalize_bot_cluster_config
+from bot.cluster import ClusterToolError
+from bot.cluster.config import ClusterTierConfig, normalize_bot_cluster_config, with_cluster_tier
+from bot.cluster.tier_selection import check_tier_revision
 from bot.config import BOT_ALIAS_RE, CLI_TYPE, RESERVED_ALIASES, WORKING_DIR, _DOTENV_VALUES
 from bot.models import (
     AgentProfile,
@@ -375,6 +377,31 @@ class MultiBotManager:
             else:
                 self._save_profiles()
             return profile.cluster.to_dict()
+
+    async def update_cluster_tier(
+        self, alias: str, tier: str, selection: ClusterTierConfig, expected_revision: str,
+        *, require_current_turn: Callable[[], None],
+    ) -> bool:
+        async with self._lock:
+            require_current_turn()
+            profile = self._get_profile_for_update(alias)
+            if not profile.cluster.enabled:
+                raise ClusterToolError("cluster_not_enabled", "Cluster is disabled for this Bot.")
+            check_tier_revision(profile, tier, expected_revision, selection.cli_type)
+            previous = profile.cluster
+            updated = with_cluster_tier(previous, tier, selection)
+            if updated == previous:
+                return False
+            profile.cluster = updated
+            try:
+                if profile is self.main_profile:
+                    self._persist_main_profile()
+                else:
+                    self._save_profiles()
+            except Exception:
+                profile.cluster = previous
+                raise
+            return True
 
     async def add_bot(
         self,

@@ -15,7 +15,7 @@
 
 - `bot/web/api_service.py:_cluster_mcp_injected_params()` calls `write_deepseek_mcp_patch()` and appends `--patch <path>` to the DeepSeek parameter block. `bot/cluster/setup.py` generates a patch containing `@deepseek-ai/dsh-mcp-client` that runs the project's `bot/cluster/mcp_stdio.py --config <bridge-config>` with the current Python, passes the workspace cwd, and sets `failOnStartupError=true`.
 - The patch is managed by the host and lives in the cluster MCP configuration directory; the admin page prepares that file, and DeepSeek's MCP install, verify and remove command lists are all empty. The integration does not modify the user's global Harness configuration.
-- Tools, the explicit `run_id` and the team rules follow the shared MCP contract in [cli-agent.md](cli-agent.md). The model tier of a CLI child task maps to DeepSeek's `model` and `reasoning_effort`.
+- DeepSeek child-tier edits use the catalog of that tier's trusted executable and provider. A model's advertised reasoning efforts take precedence over provider-wide choices. The explicit `run_id`, tier tools and team rules follow the [shared cluster contract](cli-agent.md).
 
 ## Execution protocol
 

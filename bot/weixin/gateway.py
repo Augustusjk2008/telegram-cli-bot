@@ -493,6 +493,7 @@ class WeixinGateway:
             "include_trace": False,
             "actor": {"user_id": peer_id, "username": peer_id, "channel": "weixin"},
             "source_channel": "weixin",
+            "allow_cluster_tier_edit": True,
             "source_external_id": peer_id,
         }
         if expected:

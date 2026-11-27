@@ -644,7 +644,7 @@ def _build_antigravity_args(
     configured_effort = str(params.get("effort") or "").strip().lower()
     if model:
         cmd.extend(["--model", model])
-    model_effort = _infer_antigravity_model_effort(model)
+    model_effort = antigravity_model_effort(model)
     effective_effort = model_effort if model else configured_effort
     if effective_effort:
         cmd.extend(["--effort", effective_effort])
@@ -662,7 +662,7 @@ def _build_antigravity_args(
     return cmd, False
 
 
-def _infer_antigravity_model_effort(model: Any) -> Optional[str]:
+def antigravity_model_effort(model: Any) -> Optional[str]:
     value = str(model or "").strip().lower()
     if not value:
         return None

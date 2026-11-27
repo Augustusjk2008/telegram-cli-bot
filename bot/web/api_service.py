@@ -37,6 +37,7 @@ from bot.chat_identity import chat_session_user_id
 from bot.cli_params import (
     CliParamsConfig,
     DEEPSEEK_MODEL_OPTIONS,
+    antigravity_model_effort,
     clamp_unsafe_cli_params,
     get_cli_output_limits,
     get_cli_model_options,
@@ -50,8 +51,12 @@ from bot.cli_params import (
 from bot.cluster.config import (
     CLUSTER_CLI_TYPES,
     MODEL_TIER_KEYS,
+    TIER_EDITOR_ENV,
     ClusterExecutionSnapshot,
-    normalize_bot_cluster_config,
+    ClusterTierConfig,
+    configured_cluster_tier,
+    patch_bot_cluster_config,
+    resolve_cluster_cli,
     resolve_cluster_execution,
 )
 from bot.cluster.runtime import (
@@ -62,6 +67,9 @@ from bot.cluster.runtime import (
     set_task_change_listener,
 )
 from bot.cluster.team_service import ClusterTeamService
+from bot.cluster.tier_selection import (
+    check_tier_revision, patched_tier, public_tier_settings, read_tier_request, tier_summary, validate_tier_selection,
+)
 from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
     build_cli_install_command,
@@ -74,6 +82,7 @@ from bot.cluster.setup import (
     inspect_antigravity_mcp_config,
     prepare_cluster_mcp_launcher,
     remove_antigravity_mcp_config,
+    write_claude_cluster_mcp_config,
     write_deepseek_mcp_patch,
 )
 from bot.git_runtime import apply_git_fsmonitor_disabled_env
@@ -1172,8 +1181,7 @@ def _validate_cluster_deepseek_tiers(
         if not provider and not model and not reasoning_effort:
             continue
         candidate = copy.copy(profile)
-        candidate.cli_type = "deepseek"
-        candidate.cli_path = _cluster_cli_path(profile, "deepseek")
+        candidate.cli_type, candidate.cli_path = resolve_cluster_cli(profile, tier_config)
         base_params = candidate.cli_params.get_params("deepseek")
         catalog = _get_deepseek_catalog(candidate, base_params)
         allowed_providers = {
@@ -1183,11 +1191,12 @@ def _validate_cluster_deepseek_tiers(
         }
         if provider and allowed_providers and provider not in allowed_providers:
             raise ValueError(f"DeepSeek provider 无效: {provider}")
-        provider_key = provider or str(base_params.get("provider") or "").strip()
+        provider_key = provider or catalog.get("selected_provider") or str(base_params.get("provider") or "").strip()
         allowed_models = catalog.get("_allowed_models_by_provider", {}).get(provider_key, [])
         if model and allowed_models and model not in {str(item or "").strip() for item in allowed_models}:
             raise ValueError(f"DeepSeek 模型不属于 provider {provider_key or '当前 provider'}: {model}")
-        allowed_efforts = catalog.get("_allowed_reasoning_efforts_by_provider", {}).get(provider_key, [])
+        model_efforts = catalog.get("_model_efforts_by_provider", {}).get(provider_key, {})
+        allowed_efforts = model_efforts.get(model, catalog.get("_allowed_reasoning_efforts_by_provider", {}).get(provider_key, []))
         if reasoning_effort and reasoning_effort != "none" and allowed_efforts:
             if reasoning_effort not in {str(item or "").strip().lower() for item in allowed_efforts}:
                 raise ValueError(f"DeepSeek provider {provider_key or '当前 provider'} 不支持思考深度: {reasoning_effort}")
@@ -1198,32 +1207,7 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
         async with _CLUSTER_TEAM_SERVICE.bot_lock(alias):
             source = data.get("cluster") if isinstance(data.get("cluster"), dict) else data
             profile = get_profile_or_raise(manager, alias)
-            merged_source = profile.cluster.to_dict()
-            if isinstance(source, dict):
-                merged_source.update(source)
-                raw_tiers = source.get("tier_configs", source.get("tierConfigs"))
-                if isinstance(raw_tiers, dict):
-                    merged_tiers = dict(merged_source.get("tier_configs") or {})
-                    for tier, value in raw_tiers.items():
-                        if isinstance(value, dict):
-                            merged_tier = dict(merged_tiers.get(tier) or {})
-                            merged_tier.update(value)
-                            merged_tiers[tier] = merged_tier
-                    merged_source["tier_configs"] = merged_tiers
-                else:
-                    legacy_models = source.get("model_tiers")
-                    legacy_efforts = source.get("reasoning_efforts", source.get("reasoningEfforts"))
-                    merged_tiers = dict(merged_source.get("tier_configs") or {})
-                    if isinstance(legacy_models, dict) or isinstance(legacy_efforts, dict):
-                        for tier in MODEL_TIER_KEYS:
-                            merged_tier = dict(merged_tiers.get(tier) or {})
-                            if isinstance(legacy_models, dict) and tier in legacy_models:
-                                merged_tier["model"] = legacy_models.get(tier)
-                            if isinstance(legacy_efforts, dict) and tier in legacy_efforts:
-                                merged_tier["reasoning_effort"] = legacy_efforts.get(tier)
-                            merged_tiers[tier] = merged_tier
-                        merged_source["tier_configs"] = merged_tiers
-            next_config = normalize_bot_cluster_config(merged_source)
+            next_config = patch_bot_cluster_config(profile.cluster, source)
             validation_profile = copy.copy(profile)
             validation_profile.cluster = next_config
             validation_mode = EXECUTION_MODE_CLI
@@ -1235,7 +1219,7 @@ async def update_cluster_config(manager: MultiBotManager, alias: str, data: dict
                     tier,
                     execution_mode=validation_mode,
                 )
-            _validate_cluster_deepseek_tiers(profile, next_config)
+            _validate_cluster_deepseek_tiers(validation_profile, next_config)
             current_uses_antigravity = (
                 normalize_cli_type(profile.cli_type) == "antigravity"
                 or any(
@@ -1420,13 +1404,143 @@ def _require_current_cluster_team(manager: MultiBotManager, run: Any) -> None:
         )
 
 
+def _cluster_tier_options(
+    profile: BotProfile, tier: str, selection: ClusterTierConfig, *, validate: bool,
+) -> dict[str, Any]:
+    cli_type = selection.cli_type or profile.cli_type
+    options: dict[str, Any] = {
+        "cli_type": cli_type, "availability": "available", "provider": "",
+        "default_model": "", "default_reasoning_effort": "",
+        "models": [], "reasoning_efforts": [], "reasoning_efforts_by_model": {},
+    }
+    try:
+        cli_type, cli_path = resolve_cluster_cli(profile, selection)
+    except ValueError as exc:
+        if validate:
+            raise ClusterToolError("cluster_tier_invalid", str(exc)) from exc
+        return {**options, "availability": "unsupported", "reason": str(exc)}
+    if not resolve_cli_executable(cli_path, profile.working_dir):
+        options["availability"] = "missing"
+    else:
+        # Discover using the trusted executable and Bot parameters. Feeding the
+        # proposed model into discovery would add it to some fallback catalogs.
+        target = copy.copy(profile)
+        target.cli_type, target.cli_path = cli_type, cli_path
+        params = profile.cli_params.get_params(cli_type)
+        schema, catalog = _cli_selection_schema(target, params)
+        models = _deepseek_catalog_list(schema["model"]["enum"])
+        efforts = _deepseek_catalog_list((schema.get("reasoning_effort") or schema["effort"])["enum"])
+        provider = normalize_deepseek_value(selection.provider) or catalog.get("selected_provider") or ""
+        default_model = normalize_deepseek_value(params.get("model")) or ""
+        if cli_type == "antigravity":
+            options["reasoning_efforts_by_model"] = {
+                name: [effort] if (effort := antigravity_model_effort(name)) else []
+                for name in dict.fromkeys([*models, default_model]) if name
+            }
+        if catalog:
+            options["catalog_status"] = catalog["catalog_status"]
+            if catalog["catalog_status"] == _DEEPSEEK_CATALOG_AVAILABLE:
+                if provider and provider not in catalog["_catalog_provider_ids"]:
+                    options.update(availability="unsupported", reason="The configured DeepSeek provider is unavailable.")
+                models = catalog["model_options_by_provider"].get(provider, [])
+                provider_efforts = catalog["reasoning_efforts_by_provider"].get(provider) or efforts
+                options["reasoning_efforts_by_model"] = {
+                    model: [effort for effort in efforts if effort in supported]
+                    for model, supported in catalog["_model_efforts_by_provider"].get(provider, {}).items()
+                }
+                efforts = [effort for effort in efforts if effort in provider_efforts]
+                if not default_model and provider == catalog.get("selected_provider"):
+                    default_model = catalog.get("selected_model") or ""
+                default_model = default_model or catalog["_default_models_by_provider"].get(provider, "")
+            else:
+                # A failed Harness lookup can label its built-in model suggestions
+                # with the current provider. Those names need not exist there.
+                base_provider = normalize_deepseek_value(params.get("provider")) or ""
+                known_models = [default_model] if provider == base_provider else []
+                if not provider and isinstance(CLI_MODEL_OPTIONS, Mapping):
+                    known_models.extend(get_cli_model_options(CLI_MODEL_OPTIONS, cli_type) or [])
+                saved = configured_cluster_tier(profile.cluster, tier)
+                if ((saved.cli_type or profile.cli_type) == cli_type and saved.cli_path == selection.cli_path
+                        and (normalize_deepseek_value(saved.provider) or base_provider) == provider):
+                    known_models.append(saved.model)
+                models = _deepseek_catalog_list(known_models)
+        options.update(provider=provider, default_model=default_model, models=models, reasoning_efforts=efforts)
+        default_effort = params.get("reasoning_effort") if "reasoning_effort" in schema else params.get("effort")
+        options["default_reasoning_effort"] = normalize_deepseek_value(default_effort) or ""
+        if cli_type == "antigravity" and default_model:
+            options["default_reasoning_effort"] = antigravity_model_effort(default_model) or ""
+    if validate:
+        try:
+            execution = resolve_cluster_execution(profile, tier, selection=selection)
+        except ValueError as exc:
+            raise ClusterToolError("cluster_tier_invalid", str(exc), options) from exc
+        validate_tier_selection(selection, execution, options)
+    return options
+
+
+def _require_cluster_tier_editor(
+    manager: MultiBotManager, run: Any, run_id: str, editor: str, *, expected_execution: str = "",
+) -> str:
+    if run.run_id != run_id:
+        _raise(409, "cluster_run_changed", "Use the current run_id.", {"run_id": run.run_id})
+    expected = _CLUSTER_RUNTIME.tier_editor(run_id)
+    if not expected or not editor.isascii() or not hmac.compare_digest(editor, expected):
+        _raise(403, "cluster_tier_edit_forbidden", "Only the active main agent can edit the Bot's child tiers.")
+    _require_update_admission()
+    _require_cluster_run_control_ready(run_id)
+    _require_current_cluster_team(manager, run)
+    _, _, session = get_chat_session_for_alias(manager, run.bot_alias, run.user_id, "main")
+    with session._lock:
+        execution_id = session._execution_id
+        active = session.is_processing and not session.stop_requested and execution_id
+    if run.status != "running" or not active or (expected_execution and execution_id != expected_execution):
+        _raise(409, "cluster_tier_edit_inactive", "The main agent's turn has ended.")
+    return execution_id
+
+
+async def _cluster_tier_tool(
+    manager: MultiBotManager, run: Any, run_id: str, payload: dict[str, Any], *, editing: bool, editor: str,
+) -> dict[str, Any]:
+    execution_id = _require_cluster_tier_editor(manager, run, run_id, editor) if editing else ""
+    tier, patch = read_tier_request(payload, editing=editing)
+    profile = copy.deepcopy(get_profile_or_raise(manager, run.bot_alias))
+    data = {"run_id": run_id, "scope": "bot", "cli_types": sorted(CLUSTER_CLI_TYPES)}
+    if not tier:
+        tiers = await asyncio.to_thread(lambda: {key: tier_summary(profile, key) for key in MODEL_TIER_KEYS})
+        return {**data, "tiers": tiers}
+    if editing:
+        check_tier_revision(profile, tier, payload["expected_revision"], patch.get("cli_type"))
+    selection = patched_tier(profile, tier, patch)
+    options = await asyncio.to_thread(_cluster_tier_options, profile, tier, selection, validate=editing)
+    if editing:
+        def require_current_turn() -> None:
+            _require_cluster_tier_editor(manager, run, run_id, editor, expected_execution=execution_id)
+
+        async with (
+            _CLUSTER_TEAM_SERVICE.bot_lock(run.bot_alias),
+            _CLUSTER_TEAM_SERVICE.conversation_lock(run.bot_alias, run.user_id, run.main_conversation_id),
+        ):
+            try:
+                data["changed"] = await manager.update_cluster_tier(
+                    run.bot_alias, tier, selection, payload["expected_revision"], require_current_turn=require_current_turn,
+                )
+            except OSError:
+                logger.exception("Could not save cluster tier %s for %s", tier, run.bot_alias)
+                _raise(500, "cluster_tier_save_failed", "The host could not save the tier settings.")
+            profile = copy.deepcopy(get_profile_or_raise(manager, run.bot_alias))
+    summary = await asyncio.to_thread(tier_summary, profile, tier, selection.cli_type)
+    return {**data, "model_tier": tier, **summary, "options": options}
+
+
 async def handle_cluster_mcp_tool(
     manager: MultiBotManager,
     run_id: str,
     tool_name: str,
     payload: dict[str, Any],
+    *,
+    tier_editor: str = "",
 ) -> dict[str, Any]:
-    if tool_name in {"ask_agent", "configure_team", "new_agent_session"}:
+    if tool_name in {"ask_agent", "configure_team", "new_agent_session", "update_agent_tier"}:
         _require_update_admission()
     try:
         run = _CLUSTER_RUNTIME.get_run(run_id)
@@ -1438,7 +1552,7 @@ async def handle_cluster_mcp_tool(
         requested_run_id = str(run_id or "").strip()
         if run.run_id != requested_run_id:
             # extend re-keyed this run; reads follow it, side effects need the current run_id.
-            if tool_name in {"ask_agent", "cancel_agent_task", "new_agent_session"}:
+            if tool_name in {"ask_agent", "cancel_agent_task", "new_agent_session", "update_agent_tier"}:
                 _raise(409, "cluster_run_changed", "编组已更新，请改用当前 run_id 后重试", {"run_id": run.run_id})
             if tool_name != "configure_team":
                 run_id = run.run_id
@@ -1447,6 +1561,11 @@ async def handle_cluster_mcp_tool(
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
         if tool_name == "list_agents":
             return {"ok": True, "data": _CLUSTER_RUNTIME.build_status(run_id)}
+        if tool_name in {"get_agent_tiers", "update_agent_tier"}:
+            result = await _cluster_tier_tool(
+                manager, run, run_id, payload, editing=tool_name == "update_agent_tier", editor=tier_editor,
+            )
+            return {"ok": True, "data": result}
         if tool_name == "configure_team":
             configured = await _CLUSTER_TEAM_SERVICE.configure(
                 runtime=_CLUSTER_RUNTIME,
@@ -1543,35 +1662,24 @@ async def handle_cluster_mcp_tool(
         if tool_name != "ask_agent":
             _raise(404, "cluster_tool_not_found", "未知集群工具")
 
-        parent_conversation_id = str(run.main_conversation_id or "").strip()
-        if parent_conversation_id:
-            async with _CLUSTER_TEAM_SERVICE.conversation_lock(
-                run.bot_alias,
-                run.user_id,
-                parent_conversation_id,
-            ):
-                _require_update_admission()
-                _require_cluster_run_control_ready(run_id)
-                _require_current_cluster_team(manager, run)
-                request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
-                parent_conversation_id, parent_turn_id = _cluster_parent_turn_snapshot(manager, run)
-                task = _CLUSTER_RUNTIME.create_agent_task(
-                    run_id,
-                    request,
-                    parent_conversation_id=parent_conversation_id,
-                    parent_turn_id=parent_turn_id,
-                )
-        else:
+        lock = (
+            _CLUSTER_TEAM_SERVICE.conversation_lock(run.bot_alias, run.user_id, run.main_conversation_id)
+            if run.main_conversation_id else nullcontext()
+        )
+        async with lock:
             _require_update_admission()
             _require_cluster_run_control_ready(run_id)
+            if run.run_id != run_id:
+                _raise(409, "cluster_run_changed", "Use the current run_id.", {"run_id": run.run_id})
             _require_current_cluster_team(manager, run)
-            request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload)
+            current_profile = get_profile_or_raise(manager, run.bot_alias)
+            if not current_profile.cluster.enabled:
+                _raise(409, "cluster_not_enabled", "该 Bot 未启用集群模式")
+            request = _CLUSTER_RUNTIME.validate_ask_agent(run_id, payload, execution_profile=current_profile)
             parent_conversation_id, parent_turn_id = _cluster_parent_turn_snapshot(manager, run)
             task = _CLUSTER_RUNTIME.create_agent_task(
-                run_id,
-                request,
-                parent_conversation_id=parent_conversation_id,
-                parent_turn_id=parent_turn_id,
+                run_id, request, execution_profile=current_profile,
+                parent_conversation_id=parent_conversation_id, parent_turn_id=parent_turn_id,
             )
         control = _cluster_run_control(run_id, run.profile.cluster.max_parallel_agents)
         background_task = asyncio.create_task(_run_cluster_agent_task(manager, run_id, task.task_id))
@@ -1592,6 +1700,7 @@ async def handle_cluster_mcp_tool(
                 "agent_id": task.agent_id,
                 "status": task.status,
                 "model_tier": task.model_tier,
+                **public_tier_settings(task.execution),
                 "timeout_seconds": task.timeout_seconds,
                 "created_at": task.created_at,
             },
@@ -1605,6 +1714,8 @@ async def handle_cluster_mcp_tool(
             "cluster_team_busy",
             "cluster_team_changed",
             "cluster_team_sync_failed",
+            "cluster_tier_changed",
+            "cluster_not_enabled",
         }
         _raise(409 if exc.code in conflict_codes else 400, exc.code, exc.message, exc.data)
 
@@ -1720,6 +1831,7 @@ def _normalize_deepseek_catalog(
     provider_items: list[dict[str, Any]] = []
     provider_by_id: dict[str, dict[str, Any]] = {}
     model_options_by_provider: dict[str, list[str]] = {}
+    model_efforts_by_provider: dict[str, dict[str, list[str]]] = {}
     reasoning_efforts_by_provider: dict[str, list[str]] = {}
     default_models_by_provider: dict[str, str] = {}
     default_reasoning_by_provider: dict[str, str] = {}
@@ -1744,6 +1856,15 @@ def _normalize_deepseek_catalog(
             record["label"] = _deepseek_catalog_text(name, record["id"])
         return record
 
+    def catalog_models(provider_id: str, values: Any) -> list[str]:
+        for item in values if isinstance(values, (list, tuple)) else []:
+            if isinstance(item, Mapping):
+                model_id = _deepseek_catalog_text(item.get("id") or item.get("model") or item.get("value"))
+                efforts = _deepseek_catalog_list(_deepseek_catalog_mapping_value(item, "reasoning_efforts", "reasoningEfforts"))
+                if model_id and efforts:
+                    model_efforts_by_provider.setdefault(provider_id, {})[model_id] = efforts
+        return _deepseek_catalog_list(values)
+
     raw_provider_items = _deepseek_catalog_mapping_value(source, "providers", "provider_options", "providerOptions")
     if isinstance(raw_provider_items, Mapping):
         raw_provider_items = [
@@ -1763,7 +1884,7 @@ def _normalize_deepseek_catalog(
                 "reasoning_efforts",
                 "reasoningEfforts",
             )
-            models = _deepseek_catalog_list(model_values)
+            models = catalog_models(record["id"], model_values)
             efforts = _deepseek_catalog_list(effort_values)
             if models:
                 model_options_by_provider[record["id"]] = models
@@ -1792,7 +1913,7 @@ def _normalize_deepseek_catalog(
             record = ensure_provider(provider_id)
             if record is None:
                 continue
-            models = _deepseek_catalog_list(values)
+            models = catalog_models(record["id"], values)
             if models:
                 model_options_by_provider[record["id"]] = models
 
@@ -1832,6 +1953,7 @@ def _normalize_deepseek_catalog(
                 _deepseek_catalog_mapping_value(item, "reasoning_efforts", "reasoningEfforts")
             )
             if efforts:
+                model_efforts_by_provider.setdefault(record["id"], {})[model] = efforts
                 reasoning_efforts_by_provider.setdefault(record["id"], [])
                 for effort in efforts:
                     if effort not in reasoning_efforts_by_provider[record["id"]]:
@@ -1880,7 +2002,7 @@ def _normalize_deepseek_catalog(
     selected_provider = current_provider or selected_provider
     if selected_provider is None and len(provider_items) == 1:
         selected_provider = provider_items[0]["id"]
-    actual_catalog_provider_count = len(provider_items)
+    catalog_provider_ids = list(provider_by_id)
     if selected_provider and selected_provider not in provider_by_id:
         ensure_provider(selected_provider)
         model_options_by_provider.setdefault(selected_provider, [])
@@ -1889,8 +2011,8 @@ def _normalize_deepseek_catalog(
         ensure_provider(current_provider)
         model_options_by_provider.setdefault(current_provider, [])
         reasoning_efforts_by_provider.setdefault(current_provider, [])
-    if global_reasoning_efforts and selected_provider:
-        reasoning_efforts_by_provider.setdefault(selected_provider, list(global_reasoning_efforts))
+    if global_reasoning_efforts and selected_provider and not reasoning_efforts_by_provider.get(selected_provider):
+        reasoning_efforts_by_provider[selected_provider] = list(global_reasoning_efforts)
 
     selected_model = normalize_deepseek_selection(
         model=_deepseek_catalog_mapping_value(source, "selected_model", "selectedModel")
@@ -1900,7 +2022,7 @@ def _normalize_deepseek_catalog(
         selected_model = default_models_by_provider.get(selected_provider)
 
     raw_status = _deepseek_catalog_text(_deepseek_catalog_mapping_value(source, "catalog_status", "status"))
-    has_catalog = actual_catalog_provider_count > 0
+    has_catalog = bool(catalog_provider_ids)
     status = _DEEPSEEK_CATALOG_AVAILABLE if has_catalog else _DEEPSEEK_CATALOG_FALLBACK
     if raw_status.casefold() in {"fallback", "unavailable", "error"}:
         status = _DEEPSEEK_CATALOG_FALLBACK
@@ -1916,6 +2038,8 @@ def _normalize_deepseek_catalog(
         "provider_options": provider_items,
         "model_options_by_provider": model_options_by_provider,
         "reasoning_efforts_by_provider": reasoning_efforts_by_provider,
+        "_model_efforts_by_provider": model_efforts_by_provider,
+        "_catalog_provider_ids": catalog_provider_ids,
         "selected_provider": selected_provider,
         "selected_model": selected_model,
         "catalog_status": status,
@@ -2024,6 +2148,46 @@ def _settings_cli_type(profile: BotProfile, requested: str | None, target: ChatT
     return kind
 
 
+def _cli_selection_schema(
+    profile: BotProfile, params: dict[str, Any], deepseek_catalog: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    cli_type = profile.cli_type
+    schema = get_params_schema(cli_type)
+    if cli_type == "antigravity":
+        configured_options = (
+            get_cli_model_options(CLI_MODEL_OPTIONS, cli_type)
+            if isinstance(CLI_MODEL_OPTIONS, Mapping)
+            else None
+        )
+        if configured_options is None:
+            configured_options = _get_antigravity_model_options(profile)
+        else:
+            configured_options = [
+                *configured_options,
+                str(params.get("model") or ""),
+            ]
+        schema = _apply_cli_model_options(schema, configured_options)
+    elif cli_type == "deepseek":
+        table_options = (
+            get_cli_model_options(CLI_MODEL_OPTIONS, cli_type)
+            if isinstance(CLI_MODEL_OPTIONS, Mapping)
+            else None
+        )
+        static_options = DEEPSEEK_MODEL_OPTIONS if table_options is None else table_options
+        deepseek_catalog = deepseek_catalog or _get_deepseek_catalog(profile, params)
+        selected_provider = deepseek_catalog.get("selected_provider")
+        catalog_options = deepseek_catalog.get("model_options_by_provider", {}).get(selected_provider or "")
+        configured_options = catalog_options or static_options
+        schema = _apply_cli_model_options(
+            schema,
+            [*configured_options, str(params.get("model") or "")],
+        )
+    else:
+        configured_options = get_cli_model_options(CLI_MODEL_OPTIONS, cli_type) or []
+        schema = _apply_cli_model_options(schema, configured_options)
+    return schema, deepseek_catalog or {}
+
+
 @with_chat_target
 def get_cli_params_payload(
     manager: MultiBotManager,
@@ -2045,39 +2209,7 @@ def get_cli_params_payload(
             target_profile.cli_path = _cluster_cli_path(profile, resolved_cli_type)
         target_profile.cli_params = CliParamsConfig.from_dict(profile.cli_params.to_dict())
         params = target_profile.cli_params.get_params(resolved_cli_type)
-        schema = get_params_schema(resolved_cli_type)
-        if resolved_cli_type == "antigravity":
-            configured_options = (
-                get_cli_model_options(CLI_MODEL_OPTIONS, resolved_cli_type)
-                if isinstance(CLI_MODEL_OPTIONS, Mapping)
-                else None
-            )
-            if configured_options is None:
-                configured_options = _get_antigravity_model_options(target_profile)
-            else:
-                configured_options = [
-                    *configured_options,
-                    str(params.get("model") or ""),
-                ]
-            schema = _apply_cli_model_options(schema, configured_options)
-        elif resolved_cli_type == "deepseek":
-            table_options = (
-                get_cli_model_options(CLI_MODEL_OPTIONS, resolved_cli_type)
-                if isinstance(CLI_MODEL_OPTIONS, Mapping)
-                else None
-            )
-            static_options = DEEPSEEK_MODEL_OPTIONS if table_options is None else table_options
-            deepseek_catalog = deepseek_catalog or _get_deepseek_catalog(target_profile, params)
-            selected_provider = deepseek_catalog.get("selected_provider")
-            catalog_options = deepseek_catalog.get("model_options_by_provider", {}).get(selected_provider or "")
-            configured_options = catalog_options or static_options
-            schema = _apply_cli_model_options(
-                schema,
-                [*configured_options, str(params.get("model") or "")],
-            )
-        else:
-            configured_options = get_cli_model_options(CLI_MODEL_OPTIONS, resolved_cli_type) or []
-            schema = _apply_cli_model_options(schema, configured_options)
+        schema, deepseek_catalog = _cli_selection_schema(target_profile, params, deepseek_catalog)
         defaults = get_default_params(resolved_cli_type)
     except ValueError as exc:
         _raise(400, "invalid_cli_type", str(exc))
@@ -3726,6 +3858,7 @@ async def kill_user_process(
 
 def _build_cli_env(cli_type: str) -> dict[str, str]:
     env = config.build_cli_environment()
+    env.pop(TIER_EDITOR_ENV, None)
     env["PYTHONUNBUFFERED"] = "1"
     if sys.platform == "win32":
         env["PYTHONIOENCODING"] = "utf-8"
@@ -3837,6 +3970,7 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
                     "-c",
                     f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.default_tools_approval_mode={_quote_toml_string('approve')}",
                 ),
+                ("-c", f"mcp_servers.{CLUSTER_MCP_SERVER_NAME}.env_vars={json.dumps([TIER_EDITOR_ENV])}"),
             ],
         )
         if extra_args != original_extra_args:
@@ -3844,10 +3978,8 @@ def _cluster_mcp_injected_params(profile: BotProfile, params_config: CliParamsCo
         injection = []
     elif cli_type == "claude":
         extra_args = _filter_claude_host_cluster_extra_args(extra_args)
-        config = {"mcpServers": {CLUSTER_MCP_SERVER_NAME: {"command": str(launcher_path)}}}
         config_path = _cluster_mcp_config_path().with_name("mcp_config.json")
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_claude_cluster_mcp_config(config_path, launcher_path)
         injection = ["--mcp-config", str(config_path), "--strict-mcp-config"]
     elif cli_type == "antigravity":
         launcher = prepare_cluster_mcp_launcher(
@@ -4302,6 +4434,7 @@ def _start_cluster_run_if_requested(
     execution_mode: str,
     mentions: list[dict[str, Any]] | None,
     allow_unsafe_cli: bool,
+    allow_cluster_tier_edit: bool = False,
     agent_id: str = "main",
     internal_continuation: bool = False,
     main_conversation_id: str = "",
@@ -4336,7 +4469,9 @@ def _start_cluster_run_if_requested(
         request,
         derive_cluster_run_id(request.main_conversation_id, request.team_revision),
     )
-    _CLUSTER_RUNTIME.begin_parent_request(run.main_conversation_id, parent_request_id)
+    _CLUSTER_RUNTIME.begin_parent_request(
+        run.main_conversation_id, parent_request_id, allow_tier_edit=allow_cluster_tier_edit,
+    )
     return run
 
 
@@ -6421,6 +6556,9 @@ async def _stream_cli_chat(
         env["TCB_CLUSTER_ACTIVE"] = "1"
         env["TCB_CLUSTER_BOT_ALIAS"] = alias
         env["TCB_CLUSTER_USER_ID"] = str(user_id)
+        env[TIER_EDITOR_ENV] = (
+            _CLUSTER_RUNTIME.tier_editor(cluster_run_id) if session.storage_scope == "main" else ""
+        )
     public_cli = cli_type if session.web_session_id else profile.cli_path
     named_failure = f"{cli_type} 执行失败，请检查该工具的配置和运行状态"
     separate_stderr = bool(session.web_session_id) or cli_type in {"antigravity", "deepseek"}
@@ -8305,6 +8443,7 @@ async def run_chat(
     execution_mode: str = "",
     actor: dict[str, Any] | None = None,
     allow_unsafe_cli: bool = False,
+    allow_cluster_tier_edit: bool = False,
     internal_continuation: bool = False,
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
     cluster_run_id: str = "",
@@ -8348,6 +8487,7 @@ async def run_chat(
             internal_continuation=internal_continuation,
             main_conversation_id=main_conversation_id,
             team_state=cluster_team_state,
+            allow_cluster_tier_edit=allow_cluster_tier_edit and not session.web_session_id,
             parent_request_id=str(session._execution_id or ""),
             cost_user=_cost_stats_user_from_actor(actor),
         )
@@ -8402,6 +8542,7 @@ async def stream_chat(
     expected_conversation_id: Any = _UNSPECIFIED_CONVERSATION,
     actor: dict[str, Any] | None = None,
     allow_unsafe_cli: bool = False,
+    allow_cluster_tier_edit: bool = False,
     include_trace: bool = True,
     stream_protocol_version: int = 1,
     telegram_origin_chat_id: int | None = None,
@@ -8462,6 +8603,7 @@ async def stream_chat(
                 internal_continuation=internal_continuation,
                 main_conversation_id=main_conversation_id,
                 team_state=cluster_team_state,
+                allow_cluster_tier_edit=allow_cluster_tier_edit and not session.web_session_id,
                 parent_request_id=str(session._execution_id or ""),
                 cost_user=_cost_stats_user_from_actor(actor),
             )

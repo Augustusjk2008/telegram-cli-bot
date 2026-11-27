@@ -2064,6 +2064,43 @@ async def test_stream_cli_chat_continue_button_skips_only_input_translation(
 
 
 @pytest.mark.asyncio
+async def test_only_authorized_main_cli_receives_cluster_tier_editor(usage_manager, monkeypatch):
+    from bot.cluster.config import TIER_EDITOR_ENV
+    from bot.cluster.runtime import ClusterRuntime
+    from bot.models import AgentProfile
+
+    profile = usage_manager.main_profile
+    profile.cluster = replace(profile.cluster, enabled=True)
+    profile.agents = [AgentProfile(id="worker", name="Worker")]
+    runtime = ClusterRuntime()
+    monkeypatch.setattr(api_service, "_CLUSTER_RUNTIME", runtime)
+    monkeypatch.setenv(TIER_EDITOR_ENV, "unrelated-parent")
+    monkeypatch.setattr(api_service, "_start_codex_rate_limit_capture", AsyncMock(return_value=_UsageCapture()))
+    monkeypatch.setattr(api_service, "resolve_cli_executable", lambda *_args: "codex")
+    monkeypatch.setattr(api_service, "resolve_cli_context_usage", lambda *_args, **_kwargs: None)
+    editors = []
+    def spawn(command, **kwargs):
+        editor = kwargs["env"].get(TIER_EDITOR_ENV)
+        editors.append(editor)
+        if editor:
+            assert all(editor not in arg for arg in command)
+        return _UsageProcess()
+    monkeypatch.setattr(api_service, "build_cli_command", lambda **_kwargs: (["codex"], False))
+    monkeypatch.setattr(api_service.subprocess, "Popen", spawn)
+
+    result = await api_service.run_chat(usage_manager, "main", 1, "inspect", allow_cluster_tier_edit=True)
+    session = api_service.get_chat_session_for_alias(usage_manager, "main", 1, "main")[2]
+    [run] = runtime.conversation_runs(session.active_conversation_id)
+    editor = runtime.tier_editor(run.run_id)
+    assert editor and editor != "unrelated-parent" and editor not in json.dumps(result)
+    await _collect_stream_events(api_service._stream_cli_chat(
+        usage_manager, "main", 1, "work", agent_id="worker", cluster_run_id=run.run_id,
+    ))
+    await _collect_stream_events(api_service.stream_chat(usage_manager, "main", 1, "inspect"))
+    assert editors == [editor, "", ""]
+
+
+@pytest.mark.asyncio
 async def test_stream_cli_chat_reuses_cluster_guidance_but_refreshes_run_id(
     usage_manager: MultiBotManager,
     monkeypatch: pytest.MonkeyPatch,

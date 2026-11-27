@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import secrets
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
+from bot.cluster import ClusterToolError
 from bot.cluster.config import MODEL_TIER_KEYS, ClusterExecutionSnapshot, resolve_cluster_execution
+from bot.cluster.tier_selection import check_tier_revision
 from bot.models import BotProfile
 
 
@@ -96,6 +99,7 @@ class ClusterParentState:
 
     generation: int = 0
     request_id: str = ""
+    tier_editor: str = field(default="", repr=False)
 
 
 @dataclass
@@ -123,15 +127,6 @@ class ClusterRun:
     cost_user: str = ""
 
 
-class ClusterToolError(RuntimeError):
-    def __init__(self, code: str, message: str, data: dict[str, Any] | None = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.data = dict(data or {})
-        self.current_run_id = str(self.data.get("run_id") or "").strip()
-
-
 def derive_cluster_run_id(main_conversation_id: str, team_revision: int) -> str:
     conversation_id = str(main_conversation_id or "").strip()
     if not conversation_id:
@@ -151,11 +146,6 @@ def _int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         number = default
     return max(minimum, min(maximum, number))
-
-
-def _model_tier(value: Any) -> str:
-    candidate = str(value or "").strip().lower()
-    return candidate if candidate in MODEL_TIER_KEYS else "medium"
 
 
 _task_change_listener: Callable[[str], None] | None = None
@@ -426,7 +416,14 @@ class ClusterRuntime:
         state = self._parents.get(str(main_conversation_id or "").strip())
         return state.generation if state is not None else 0
 
-    def begin_parent_request(self, main_conversation_id: str, request_id: str = "") -> int:
+    def tier_editor(self, run_id: str) -> str:
+        run = self.get_run(run_id)
+        parent = self._parents.get(run.main_conversation_id) if run else None
+        return parent.tier_editor if parent else ""
+
+    def begin_parent_request(
+        self, main_conversation_id: str, request_id: str = "", *, allow_tier_edit: bool = False,
+    ) -> int:
         """Start a new user request; children from earlier requests no longer wake the main agent.
 
         Endless-mode attempts share one request_id, so they stay in the same request.
@@ -435,6 +432,10 @@ class ClusterRuntime:
         if not conversation_id:
             return 0
         state = self._parents.setdefault(conversation_id, ClusterParentState())
+        if not allow_tier_edit:
+            state.tier_editor = ""
+        elif not state.tier_editor:
+            state.tier_editor = secrets.token_urlsafe(32)
         normalized_request_id = str(request_id or "").strip()
         if normalized_request_id and normalized_request_id == state.request_id:
             return state.generation
@@ -480,13 +481,15 @@ class ClusterRuntime:
         run_id: str,
         request: AskAgentRequest,
         *,
+        execution_profile: BotProfile | None = None,
         parent_conversation_id: str = "",
         parent_turn_id: str = "",
     ) -> ClusterAgentTask:
         run = self._run(run_id)
         now = self._now_iso()
+        profile = execution_profile or run.profile
         execution = request.execution or resolve_cluster_execution(
-            run.profile,
+            profile,
             request.model_tier,
             execution_mode=run.execution_mode,
         )
@@ -503,7 +506,7 @@ class ClusterRuntime:
             assignment_revision=request.assignment_revision,
             execution_mode=execution.execution_mode,
             allow_unsafe_cli=run.allow_unsafe_cli,
-            profile=copy.deepcopy(run.profile),
+            profile=copy.deepcopy(profile),
             status="queued",
             created_at=now,
             execution=copy.deepcopy(execution),
@@ -721,6 +724,7 @@ class ClusterRuntime:
             "cli_type": task.execution.cli_type if task.execution is not None else "",
             "execution_mode": task.execution.execution_mode if task.execution is not None else task.execution_mode,
             "model": task.execution.model if task.execution is not None else "",
+            "provider": task.execution.provider if task.execution is not None else "",
             "reasoning_effort": task.execution.reasoning_effort if task.execution is not None else "",
             "timeout_seconds": task.timeout_seconds,
             "deadline_exceeded": self._task_deadline_exceeded(task),
@@ -955,7 +959,9 @@ class ClusterRuntime:
             raise ClusterToolError("cluster_agent_busy", "子 agent 正在运行，请等待完成后再新开会话")
         return agent_id
 
-    def validate_ask_agent(self, run_id: str, payload: dict[str, Any]) -> AskAgentRequest:
+    def validate_ask_agent(
+        self, run_id: str, payload: dict[str, Any], *, execution_profile: BotProfile | None = None,
+    ) -> AskAgentRequest:
         run = self._run(run_id)
         agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip().lower()
         message = str(payload.get("message") or "").strip()
@@ -973,7 +979,14 @@ class ClusterRuntime:
         except KeyError as exc:
             raise ClusterToolError("cluster_agent_not_found", "未找到子 agent") from exc
         allow_write = _bool(payload.get("allow_write", payload.get("allowWrite")))
-        model_tier = _model_tier(payload.get("model_tier", payload.get("modelTier")))
+        if payload.keys() - {"agent_id", "agentId", "message", "model_tier", "modelTier",
+                             "timeout_seconds", "timeoutSeconds", "allow_write", "allowWrite", "expected_revision"}:
+            raise ClusterToolError("cluster_task_invalid", "ask_agent takes a model_tier. Use update_agent_tier to edit its settings.")
+        model_tier = payload.get("model_tier", payload.get("modelTier", "medium"))
+        if not isinstance(model_tier, str) or model_tier not in MODEL_TIER_KEYS:
+            raise ClusterToolError("cluster_tier_invalid", f"model_tier must be one of {', '.join(MODEL_TIER_KEYS)}.")
+        if "expected_revision" in payload:
+            check_tier_revision(execution_profile or run.profile, model_tier, payload["expected_revision"])
         if "timeout_seconds" in payload:
             timeout_source = payload.get("timeout_seconds")
         elif "timeoutSeconds" in payload:
@@ -999,7 +1012,7 @@ class ClusterRuntime:
             raise ClusterToolError("cluster_agent_busy", "子 agent 正在另一轮任务中，请等待完成后重试")
         try:
             execution = resolve_cluster_execution(
-                run.profile,
+                execution_profile or run.profile,
                 model_tier,
                 execution_mode=run.execution_mode,
             )

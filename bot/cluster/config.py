@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 BOT_WRITE_POLICIES = {"main_only", "all_agents"}
 AGENT_SESSION_POLICIES = {"persistent", "ephemeral", "fork"}
 MODEL_TIER_KEYS = ("low", "medium", "high", "professional")
 CLUSTER_CLI_TYPES = frozenset({"codex", "codex_server", "claude", "antigravity", "deepseek"})
+TIER_EDITOR_ENV = "TCB_CLUSTER_TIER_EDITOR"
+TIER_EDITOR_HEADER = "X-TCB-Cluster-Tier-Editor"
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -206,31 +208,56 @@ def _tier_value(value: Any) -> str:
     return "" if candidate.casefold() == "none" else candidate
 
 
-def resolve_cluster_execution(
-    profile: Any,
-    model_tier: str,
-    *,
-    execution_mode: str = "",
-) -> ClusterExecutionSnapshot:
-    """Resolve a tier against a Bot profile and copy its CLI namespace.
+def configured_cluster_tier(cluster: BotClusterConfig, tier: str) -> ClusterTierConfig:
+    selection = cluster.tier_configs.get(tier, ClusterTierConfig())
+    if not isinstance(selection, ClusterTierConfig):
+        selection = ClusterTierConfig.from_value(selection)
+    return replace(
+        selection,
+        model=_tier_value(selection.model) or _tier_value(cluster.model_tiers.get(tier)),
+        reasoning_effort=_tier_value(selection.reasoning_effort) or _tier_value(cluster.reasoning_efforts.get(tier)),
+    )
 
-    The returned params object is a detached copy.  Callers can therefore
-    enqueue it as a task snapshot without observing later profile changes.
-    """
 
-    from bot.cli_params import CliParamsConfig
+def with_cluster_tier(cluster: BotClusterConfig, tier: str, selection: ClusterTierConfig) -> BotClusterConfig:
+    """Keep modern and legacy readers in sync, including when an override is cleared."""
+    return replace(
+        cluster,
+        tier_configs={**cluster.tier_configs, tier: selection},
+        model_tiers={**cluster.model_tiers, tier: selection.model},
+        reasoning_efforts={**cluster.reasoning_efforts, tier: selection.reasoning_effort},
+    )
+
+
+def patch_bot_cluster_config(current: BotClusterConfig, patch: dict[str, Any]) -> BotClusterConfig:
+    """Merge both generations of the settings API without dropping sibling tiers."""
+    data = {**current.to_dict(), **patch}
+    tier_patches = patch.get("tier_configs", patch.get("tierConfigs"))
+    legacy_models = patch.get("model_tiers")
+    legacy_efforts = patch.get("reasoning_efforts", patch.get("reasoningEfforts"))
+    tiers = {}
+    for tier in MODEL_TIER_KEYS:
+        row = configured_cluster_tier(current, tier).to_dict()
+        if isinstance(legacy_models, dict) and tier in legacy_models:
+            row["model"] = legacy_models[tier]
+        if isinstance(legacy_efforts, dict) and tier in legacy_efforts:
+            row["reasoning_effort"] = legacy_efforts[tier]
+        changes = tier_patches.get(tier) if isinstance(tier_patches, dict) else None
+        if isinstance(changes, dict):
+            row.update(changes)
+            for old, name in (("cliType", "cli_type"), ("cliPath", "cli_path"), ("reasoningEffort", "reasoning_effort")):
+                if old in changes and name not in changes:
+                    row[name] = changes[old]
+        tiers[tier] = row
+    data.update(tier_configs=tiers, model_tiers={}, reasoning_efforts={})
+    return normalize_bot_cluster_config(data)
+
+
+def resolve_cluster_cli(profile: Any, selection: ClusterTierConfig) -> tuple[str, str]:
     from bot.config import default_cli_path
-    from bot.models import EXECUTION_MODE_CLI, normalize_cli_type_config
+    from bot.models import normalize_cli_type_config
 
-    tier = _string(model_tier).lower()
-    if tier not in MODEL_TIER_KEYS:
-        tier = "medium"
-    cluster = getattr(profile, "cluster", None) or BotClusterConfig()
-    tier_config = (getattr(cluster, "tier_configs", {}) or {}).get(tier, ClusterTierConfig())
-    if not isinstance(tier_config, ClusterTierConfig):
-        tier_config = ClusterTierConfig.from_value(tier_config)
-
-    configured_cli_type = _string(tier_config.cli_type).lower()
+    configured_cli_type = _string(selection.cli_type).lower()
 
     main_cli_type = normalize_cli_type_config(getattr(profile, "cli_type", "codex"))
     cli_type = configured_cli_type or main_cli_type
@@ -240,18 +267,51 @@ def resolve_cluster_execution(
         label = "Antigravity" if cli_type == "antigravity" else "DeepSeek Harness"
         raise ValueError(f"远程工作区暂不支持 {label} 集群编排")
 
+    configured_path = _string(selection.cli_path)
+    if configured_path:
+        cli_path = configured_path
+    elif cli_type == main_cli_type and _string(getattr(profile, "cli_path", "")):
+        cli_path = _string(profile.cli_path)
+    else:
+        cli_path = default_cli_path(cli_type)
+    return cli_type, cli_path
+
+
+def resolve_cluster_execution(
+    profile: Any,
+    model_tier: str,
+    *,
+    execution_mode: str = "",
+    selection: ClusterTierConfig | None = None,
+) -> ClusterExecutionSnapshot:
+    """Resolve a tier against a Bot profile and copy its CLI namespace.
+
+    The returned params object is a detached copy.  Callers can therefore
+    enqueue it as a task snapshot without observing later profile changes.
+    """
+
+    from bot.cli_params import CliParamsConfig, antigravity_model_effort
+    from bot.models import EXECUTION_MODE_CLI
+
+    tier = _string(model_tier).lower()
+    if tier not in MODEL_TIER_KEYS:
+        raise ValueError(f"Unknown model_tier. Choose one of {', '.join(MODEL_TIER_KEYS)}.")
+    cluster = getattr(profile, "cluster", None) or BotClusterConfig()
+    tier_config = selection or configured_cluster_tier(cluster, tier)
+
+    cli_type, cli_path = resolve_cluster_cli(profile, tier_config)
+
     profile_params = getattr(profile, "cli_params", None)
     params = CliParamsConfig.from_dict(profile_params.to_dict() if profile_params is not None else None)
     target_params = params.get_params(cli_type)
-    legacy_model = _tier_value((getattr(cluster, "model_tiers", {}) or {}).get(tier))
-    legacy_reasoning_effort = _tier_value((getattr(cluster, "reasoning_efforts", {}) or {}).get(tier))
-    model = _tier_value(tier_config.model) or legacy_model or _tier_value(target_params.get("model"))
+    model = _tier_value(tier_config.model) or _tier_value(target_params.get("model"))
     reasoning_key = "reasoning_effort" if cli_type in {"codex", "codex_server", "deepseek"} else "effort"
     reasoning_effort = (
         _tier_value(tier_config.reasoning_effort)
-        or legacy_reasoning_effort
         or _tier_value(target_params.get(reasoning_key))
     )
+    if cli_type == "antigravity" and model:
+        reasoning_effort = antigravity_model_effort(model) or ""
     if cli_type == "deepseek" and reasoning_effort not in {"", "off", "low", "high", "max"}:
         raise ValueError("DeepSeek reasoning_effort 无效")
     configured_provider = _tier_value(tier_config.provider)
@@ -261,18 +321,9 @@ def resolve_cluster_execution(
     if cli_type == "deepseek" and configured_provider:
         provider = configured_provider
         target_params["provider"] = provider
-    if model:
-        target_params["model"] = model
-    if reasoning_effort:
-        target_params[reasoning_key] = reasoning_effort
+    target_params["model"] = model or None
+    target_params[reasoning_key] = reasoning_effort or None
 
-    configured_path = _string(tier_config.cli_path)
-    if configured_path:
-        cli_path = configured_path
-    elif cli_type == main_cli_type and _string(getattr(profile, "cli_path", "")):
-        cli_path = _string(profile.cli_path)
-    else:
-        cli_path = default_cli_path(cli_type)
     return ClusterExecutionSnapshot(
         execution_mode=EXECUTION_MODE_CLI,
         cli_type=cli_type,

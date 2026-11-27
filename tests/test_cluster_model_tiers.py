@@ -7,6 +7,7 @@ from bot.cluster.config import (
     MODEL_TIER_KEYS,
     resolve_cluster_execution,
     normalize_bot_cluster_config,
+    patch_bot_cluster_config,
 )
 from bot.cli_params import CliParamsConfig
 from bot.cluster.runtime import ClusterRunRequest, ClusterRuntime
@@ -65,6 +66,17 @@ def test_cluster_config_normalizes_per_tier_cli_and_rejects_invalid_cli_provider
         normalize_bot_cluster_config({"tier_configs": {"low": {"cli_type": "unknown"}}})
     with pytest.raises(ValueError, match="provider"):
         normalize_bot_cluster_config({"tier_configs": {"low": {"cli_type": "claude", "provider": "account"}}})
+
+
+def test_partial_settings_save_preserves_other_tools_and_can_clear_legacy_values() -> None:
+    before = normalize_bot_cluster_config({
+        "tier_configs": {"low": {"cli_type": "claude", "cli_path": "/trusted/claude", "model": "fast"}},
+        "model_tiers": {"high": "legacy"},
+    })
+    after = patch_bot_cluster_config(before, {"tierConfigs": {"high": {"reasoningEffort": "high", "model": ""}}})
+    assert after.tier_configs["low"] == before.tier_configs["low"]
+    assert after.model_tiers["high"] == after.tier_configs["high"].model == ""
+    assert after.reasoning_efforts["high"] == "high"
 
 
 def test_cluster_execution_snapshot_uses_target_cli_namespace_and_path() -> None:

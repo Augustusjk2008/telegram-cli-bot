@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from bot.cluster.config import TIER_EDITOR_ENV
 from bot.cluster.setup import (
     CLUSTER_MCP_SERVER_NAME,
     build_cli_install_command,
@@ -53,6 +54,17 @@ def test_codex_server_mcp_injection_keeps_codex_params_isolated(tmp_path, monkey
     assert args[:2] == ["-c", "server_only=true"]
     assert any(arg.startswith("mcp_servers.tcb-cluster.command=") for arg in args)
     assert 'mcp_servers.tcb-cluster.default_tools_approval_mode="approve"' in args
+    assert f'mcp_servers.tcb-cluster.env_vars=["{TIER_EDITOR_ENV}"]' in args
+
+
+def test_claude_shared_config_contains_only_a_reference_to_the_main_edit_credential(tmp_path, monkeypatch):
+    from bot.cluster.setup import write_claude_cluster_mcp_config
+
+    monkeypatch.setenv(TIER_EDITOR_ENV, "private-main-value")
+    path = tmp_path / "mcp.json"
+    write_claude_cluster_mcp_config(path, tmp_path / "launcher")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert config["mcpServers"]["tcb-cluster"]["env"] == {TIER_EDITOR_ENV: "${" + TIER_EDITOR_ENV + ":-}"}
 
 
 def test_deepseek_mcp_patch_uses_project_bridge_without_global_harness_changes(tmp_path):

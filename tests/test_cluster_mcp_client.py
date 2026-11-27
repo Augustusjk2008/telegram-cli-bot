@@ -60,7 +60,7 @@ def test_post_mcp_tool_reports_context_when_bad_gateway_persists(monkeypatch) ->
     assert "poll_agent_tasks" in str(result["error"])
 
 
-@pytest.mark.parametrize("tool_name", ["configure_team", "ask_agent", "cancel_agent_task", "new_agent_session"])
+@pytest.mark.parametrize("tool_name", ["configure_team", "ask_agent", "cancel_agent_task", "new_agent_session", "update_agent_tier"])
 def test_post_mcp_tool_does_not_retry_side_effecting_tools(monkeypatch, tool_name: str) -> None:
     config = McpBridgeConfig(bridge_url="http://bridge.test", token="token")
     attempts: list[str] = []
@@ -76,3 +76,19 @@ def test_post_mcp_tool_does_not_retry_side_effecting_tools(monkeypatch, tool_nam
 
     assert result["ok"] is False
     assert len(attempts) == 1
+
+
+def test_tier_edit_authority_travels_only_in_the_update_header(monkeypatch) -> None:
+    from bot.cluster.config import TIER_EDITOR_ENV, TIER_EDITOR_HEADER
+
+    monkeypatch.setenv(TIER_EDITOR_ENV, "main-only")
+    headers = []
+    def inspect_request(request, timeout):
+        headers.append(dict((k.lower(), v) for k, v in request.header_items()))
+        assert b"main-only" not in request.data
+        return _Response({"ok": True})
+    monkeypatch.setattr("bot.cluster.mcp_client.urllib.request.urlopen", inspect_request)
+    for name in ["update_agent_tier", "get_agent_tiers"]:
+        post_mcp_tool(McpBridgeConfig("http://bridge.test", "bridge"), name, {}, run_id="test-run")
+    assert headers[0][TIER_EDITOR_HEADER.lower()] == "main-only"
+    assert TIER_EDITOR_HEADER.lower() not in headers[1]

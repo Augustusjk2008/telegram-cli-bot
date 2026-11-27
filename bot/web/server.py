@@ -32,6 +32,7 @@ from aiohttp.http import WSCloseCode, WSMsgType
 from aiohttp import web
 
 from bot import config
+from bot.cluster.config import TIER_EDITOR_HEADER
 from bot.chat_identity import chat_session_user_id
 from bot.codex_usage import close_codex_usage_service_sync, get_codex_usage_service
 from bot.cost_stats import close_cost_stats_service_sync, get_cost_stats_service
@@ -1338,9 +1339,12 @@ class WebApiServer:
             return auth
         raise WebApiError(403, "forbidden", "权限不足")
 
+    def _can_configure_bot(self, auth: AuthContext) -> bool:
+        return self._is_local_admin(auth) or auth.role == "member"
+
     async def _with_bot_config_access(self, request: web.Request) -> AuthContext:
         auth = await self._with_auth(request)
-        if not self._is_local_admin(auth) and auth.role != "member":
+        if not self._can_configure_bot(auth):
             raise WebApiError(403, "forbidden", "权限不足")
         raw_alias = request.match_info.get("alias")
         alias = str(raw_alias or "").strip().lower() if isinstance(raw_alias, str) else ""
@@ -2530,7 +2534,9 @@ class WebApiServer:
         run_id = request.headers.get("X-TCB-Cluster-Run-Id", "")
         tool_name = request.match_info.get("tool_name", "")
         body = await self._parse_json(request)
-        data = await handle_cluster_mcp_tool(self.manager, run_id, tool_name, dict(body or {}))
+        data = await handle_cluster_mcp_tool(
+            self.manager, run_id, tool_name, dict(body or {}), tier_editor=request.headers.get(TIER_EDITOR_HEADER, ""),
+        )
         return _json({"ok": True, "data": data})
 
     async def post_chat(self, request: web.Request) -> web.Response:
@@ -2563,6 +2569,7 @@ class WebApiServer:
                     execution_mode=execution_mode,
                     actor=actor,
                     allow_unsafe_cli=allow_unsafe_cli,
+                    allow_cluster_tier_edit=self._can_configure_bot(auth),
                 )
             else:
                 data = await run_chat(
@@ -2576,6 +2583,7 @@ class WebApiServer:
                     execution_mode=execution_mode,
                     actor=actor,
                     allow_unsafe_cli=allow_unsafe_cli,
+                    allow_cluster_tier_edit=self._can_configure_bot(auth),
                 )
         except Exception as exc:
             if "target" not in scope:
@@ -2666,6 +2674,7 @@ class WebApiServer:
 
         stream_kwargs: dict[str, Any] = {
             "allow_unsafe_cli": allow_unsafe_cli,
+            "allow_cluster_tier_edit": self._can_configure_bot(auth),
             "include_trace": include_trace,
             "stream_protocol_version": stream_protocol_version,
         }

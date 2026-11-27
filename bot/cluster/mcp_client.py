@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from bot.cluster.config import TIER_EDITOR_ENV, TIER_EDITOR_HEADER
 
 
 @dataclass(frozen=True)
@@ -18,7 +21,7 @@ class McpBridgeConfig:
 _TRANSIENT_HTTP_STATUSES = {502, 503, 504}
 _MAX_TRANSIENT_HTTP_ATTEMPTS = 3
 _TRANSIENT_RETRY_DELAY_SECONDS = 0.2
-_SIDE_EFFECTING_TOOLS = {"configure_team", "ask_agent", "cancel_agent_task", "new_agent_session"}
+_SIDE_EFFECTING_TOOLS = {"configure_team", "ask_agent", "cancel_agent_task", "new_agent_session", "update_agent_tier"}
 
 
 def load_mcp_bridge_config(path: Path) -> McpBridgeConfig:
@@ -32,6 +35,12 @@ def load_mcp_bridge_config(path: Path) -> McpBridgeConfig:
 
 def _http_error_result(exc: urllib.error.HTTPError, *, tool_name: str) -> dict[str, Any]:
     text = exc.read().decode("utf-8", errors="replace")
+    try:
+        detail = json.loads(text)
+    except ValueError:
+        detail = None
+    if tool_name in {"get_agent_tiers", "update_agent_tier"} and isinstance(detail, dict) and detail.get("ok") is False:
+        return {**detail, "status": exc.code}
     error = text.strip()
     if not error:
         error = f"HTTP {exc.code} from TCB cluster bridge while calling {tool_name}: empty response body"
@@ -41,16 +50,19 @@ def _http_error_result(exc: urllib.error.HTTPError, *, tool_name: str) -> dict[s
 def post_mcp_tool(config: McpBridgeConfig, tool_name: str, payload: dict[str, Any], *, run_id: str) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     url = f"{config.bridge_url}/api/internal/cluster/mcp/tools/{tool_name}"
+    headers = {
+        "Authorization": f"Bearer {config.token}",
+        "Content-Type": "application/json",
+        "X-TCB-Cluster-Run-Id": run_id,
+    }
+    if tool_name == "update_agent_tier" and (editor := os.environ.get(TIER_EDITOR_ENV)):
+        headers[TIER_EDITOR_HEADER] = editor
     max_attempts = 1 if tool_name in _SIDE_EFFECTING_TOOLS else _MAX_TRANSIENT_HTTP_ATTEMPTS
     for attempt in range(1, max_attempts + 1):
         request = urllib.request.Request(
             url,
             data=body,
-            headers={
-                "Authorization": f"Bearer {config.token}",
-                "Content-Type": "application/json",
-                "X-TCB-Cluster-Run-Id": run_id,
-            },
+            headers=headers,
             method="POST",
         )
         try:

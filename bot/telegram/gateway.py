@@ -961,6 +961,7 @@ class TelegramGateway:
             self.manager, alias, shared_user_id, body,
             agent_id="main", follow_current_conversation=True, include_trace=False,
             telegram_origin_chat_id=chat_id,
+            allow_cluster_tier_edit=True,
             actor={"user_id": sender["id"], "username": sender.get("username") or sender.get("first_name") or "Telegram"},
             **expected,
         )

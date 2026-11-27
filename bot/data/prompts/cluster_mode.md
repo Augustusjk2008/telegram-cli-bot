@@ -1,6 +1,7 @@
 <tcb_cluster_mode>
 TCB cluster mode is enabled, but availability does not require delegation. When delegation is needed, use only tcb-cluster MCP; do not use Claude Code/Codex built-in agents, Task, or other delegation mechanisms.
 The main agent should use the professional tier only when the user explicitly asks to use the professional tier. Reserve it for special work.
+Use get_agent_tiers to inspect the configured and effective CLI, model, and thinking depth when selecting a tier for a requested setting. Pass model_tier and the intended cli_type to see its available choices. An empty effective value leaves the choice to the CLI. Edit Bot-wide tiers only when the user requests a settings change. For update_agent_tier, use the inspected revision and exact listed values. An empty string restores inheritance. Check reasoning_efforts_by_model first, including empty lists. If the requested combination is unavailable, report the available choices. Pass expected_revision to ask_agent when the delegation depends on that selection. A tier edit applies to future tasks and keeps the same run_id.
 Current run_id: {run_id}. Explicitly pass this run_id to every cluster tool call.
 Continue using the current run_id for ordinary turns. After configure_team succeeds, check changed in the response: if changed=true, immediately use the new run_id from the response for all subsequent cluster tool calls in this turn; if changed=false, continue using the original run_id. The adapter does not cache or automatically switch run_id.
 {write_guidance}

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -21,7 +24,7 @@ from bot.models import (
 from bot.runtime_paths import get_app_settings_path
 
 APP_SETTINGS_FILE = get_app_settings_path()
-_SETTINGS_LOCK = threading.Lock()
+_SETTINGS_LOCK = threading.RLock()
 _DEFAULT_SETTINGS = {
     "main_bot_profile": {},
     "global_prompt_presets": [],
@@ -210,10 +213,19 @@ def _save_settings(settings: dict[str, Any], settings_file: str | Path | None = 
     settings_path = _resolve_settings_file(settings_file)
     with _SETTINGS_LOCK:
         settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(
-            json.dumps(_serialize_settings(settings), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=settings_path.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(_serialize_settings(settings), stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if settings_path.exists():
+                shutil.copymode(settings_path, temporary)
+            temporary.replace(settings_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 def get_main_bot_profile(settings_file: str | Path | None = None) -> dict[str, Any]:
@@ -228,9 +240,10 @@ def get_global_prompt_presets(settings_file: str | Path | None = None) -> list[d
 
 def update_main_bot_profile(profile: dict[str, Any], settings_file: str | Path | None = None) -> dict[str, Any]:
     normalized_profile = _normalize_main_bot_profile(profile)
-    settings = _load_settings(settings_file)
-    settings["main_bot_profile"] = normalized_profile
-    _save_settings(settings, settings_file)
+    with _SETTINGS_LOCK:
+        settings = _load_settings(settings_file)
+        settings["main_bot_profile"] = normalized_profile
+        _save_settings(settings, settings_file)
     return copy.deepcopy(normalized_profile)
 
 
@@ -239,7 +252,8 @@ def update_global_prompt_presets(
     settings_file: str | Path | None = None,
 ) -> list[dict[str, str]]:
     normalized = normalize_prompt_presets(presets, strict=True)
-    settings = _load_settings(settings_file)
-    settings["global_prompt_presets"] = normalized
-    _save_settings(settings, settings_file)
+    with _SETTINGS_LOCK:
+        settings = _load_settings(settings_file)
+        settings["global_prompt_presets"] = normalized
+        _save_settings(settings, settings_file)
     return [dict(item) for item in normalized]
