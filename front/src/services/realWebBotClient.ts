@@ -7732,13 +7732,12 @@ export class RealWebBotClient implements WebBotClient {
     });
   }
 
-  async killTask(botAlias: string, options: AgentScopedOptions = {}): Promise<string> {
-    const data = await this.requestJson<{ message?: string }>(`${this.chatBasePath(botAlias)}/kill`, {
+  async killTask(botAlias: string, options: AgentScopedOptions = {}) {
+    return this.requestJson<{ killed: boolean; message: string }>(`${this.chatBasePath(botAlias)}/kill`, {
       method: "POST",
       headers: this.headers({ "Content-Type": "application/json" }),
       body: JSON.stringify(scopedRequestBody(options)),
     });
-    return data.message || "已发送终止任务请求";
   }
 
   async restartService(): Promise<void> {

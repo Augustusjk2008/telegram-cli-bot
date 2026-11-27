@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CheckCheck, ClipboardList, Copy, FastForward, Gauge, Play, Star } from "lucide-react";
+import { CheckCheck, CircleStop, ClipboardList, Copy, FastForward, Gauge, Play, Star } from "lucide-react";
 import type { ChatMessageContextUsage } from "../services/types";
 import { copyDeferredText, copyText } from "../utils/clipboard";
 import { ChatContextUsageBadge, formatContextUsageDetails } from "./ChatContextUsageBadge";
 import { ChatReadAloudButton } from "./ChatReadAloudButton";
+import { TouchHint } from "./TouchHint";
 
 type Props = {
   translationControl?: ReactNode;
   canContinue?: boolean;
+  manuallyStopped?: boolean;
   contextUsage?: ChatMessageContextUsage;
   endlessContinueCount?: number;
   favorite?: boolean;
@@ -25,6 +27,7 @@ type Props = {
 export function ChatFinalAnswerActions({
   translationControl,
   canContinue = false,
+  manuallyStopped = false,
   contextUsage,
   endlessContinueCount,
   favorite = false,
@@ -59,7 +62,7 @@ export function ChatFinalAnswerActions({
     }
   }, []);
 
-  if (!readAloudText && !translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && (onContinue || onFastForward))) {
+  if (!manuallyStopped && !readAloudText && !translationControl && !onCopyFinalAnswer && !contextDetails && !fullAnswer && !canBuildFullAnswer && !onToggleFavorite && !(canContinue && (onContinue || onFastForward))) {
     return null;
   }
 
@@ -140,6 +143,17 @@ export function ChatFinalAnswerActions({
 
   return (
     <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+      {manuallyStopped && (
+        <TouchHint content="已手动停止">
+          <button
+            type="button"
+            aria-label="已手动停止"
+            className="inline-flex h-6 w-5 cursor-help items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--workbench-focus-ring)]"
+          >
+            <CircleStop aria-hidden="true" className="h-4 w-4 text-[var(--status-warning)]" />
+          </button>
+        </TouchHint>
+      )}
       <ChatContextUsageBadge
         contextUsage={contextUsage}
         endlessContinueCount={endlessContinueCount}

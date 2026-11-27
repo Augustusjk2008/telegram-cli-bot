@@ -1402,6 +1402,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const isStreamingAssistant = item.role === "assistant" && item.state === "streaming";
   const trace = item.meta?.trace;
   const isAssistant = item.role === "assistant";
+  const manuallyStopped = isAssistant && !isStreamingAssistant && isCancelledChatCompletion(item);
   const endlessEvents = item.meta?.endlessEvents;
   const endlessContinueCount = item.meta?.endlessContinueCount;
   const traceCount = typeof item.meta?.traceCount === "number" ? item.meta.traceCount : trace?.length ?? 0;
@@ -1415,7 +1416,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
   const isEndlessStreamingAssistant = isStreamingAssistant && (endlessModeActive || Boolean(endlessEvents?.length));
   const hasTranscript = isAssistant && (hasCliTraceTranscript || Boolean(endlessEvents?.length) || isEndlessStreamingAssistant);
   const hasFinalAnswerText = item.role === "assistant" && item.state !== "streaming" && Boolean(item.text.trim());
-  const usesAssistantAnswerLayout = hasTranscript || (
+  const usesAssistantAnswerLayout = hasTranscript || (manuallyStopped && !hasFinalAnswerText) || (
     isAssistant
     && item.state !== "streaming"
     && item.state !== "error"
@@ -1469,6 +1470,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 originalResultText={item.text}
                 translationControl={translationControl}
                 state={item.state}
+                manuallyStopped={manuallyStopped}
                 traceCount={traceCount}
                 toolCallCount={item.meta?.toolCallCount}
                 processCount={item.meta?.processCount}
@@ -1599,6 +1601,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
           </div>
         ) : !hasTranscript && !isStreamingAssistant ? (
           <ChatFinalAnswerActions
+            manuallyStopped={manuallyStopped}
             readAloudText={item.state === "done" ? displayText : undefined}
             translationControl={translationControl}
             canContinue={canContinue}
@@ -4689,10 +4692,11 @@ function ChatScreenView({
         });
       } else {
         const message = err instanceof Error ? err.message : "发送失败";
-        if (findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
+        const cancelled = err instanceof WebApiClientError && (err.code === "cancelled" || err.code === "canceled");
+        if (cancelled || findActiveAssistantIndex(itemsRef.current, activeAssistantTarget()) >= 0) {
           setItems((prev) => updateActiveAssistantMessage(prev, activeAssistantTarget(), (item) => ({
             ...item,
-            text: message,
+            ...(cancelled ? { meta: { ...item.meta, completionState: "cancelled" } } : { text: message }),
             state: "error",
           })));
         } else {
@@ -5039,10 +5043,12 @@ function ChatScreenView({
     setActionLoading("kill");
     setError("");
     try {
-      const message = await client.killTask(botAlias, {
+      const result = await client.killTask(botAlias, {
         ...(activeAgentIdRef.current !== "main" ? { agentId: activeAgentIdRef.current } : {}),
       });
-      appendSystemMessage(message || "已发送终止任务请求");
+      if (result.killed === false && result.message) {
+        appendSystemMessage(result.message);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "终止任务失败");
     } finally {

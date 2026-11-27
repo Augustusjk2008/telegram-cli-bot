@@ -5,7 +5,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import * as mermaidRenderer from "../markdown/mermaidRenderer";
 import { ChatStreamIncompleteError } from "../services/chatStreamError";
 import { MockWebBotClient } from "../services/mockWebBotClient";
-import type { BotOverview, ChatMessage, ConversationListResult } from "../services/types";
+import { WebApiClientError, type BotOverview, type ChatMessage, type ConversationListResult } from "../services/types";
 import type { WebBotClient } from "../services/webBotClient";
 import { CONVERSATION_CREATED_EVENT } from "../utils/conversationEvents";
 
@@ -313,7 +313,7 @@ test("restores backend endless mode after the chat screen is rebuilt", async () 
 test("stopping endless mode terminates the active continuation", async () => {
   const activeAttempt = deferred<ChatMessage>();
   const sendMessage = vi.fn<WebBotClient["sendMessage"]>(async () => activeAttempt.promise);
-  const killTask = vi.fn<WebBotClient["killTask"]>(async () => "已发送终止任务请求");
+  const killTask = vi.fn<WebBotClient["killTask"]>(async () => ({ killed: true, message: "已请求停止" }));
   const client = createClient({
     listMessages: async () => ({ items: [{
       id: "assistant-endless-active",
@@ -344,13 +344,18 @@ test("stopping endless mode terminates the active continuation", async () => {
   await waitFor(() => expect(killTask).toHaveBeenCalledTimes(1));
   expect(screen.queryByRole("dialog", { name: "确认终止任务" })).not.toBeInTheDocument();
 
+  expect(screen.queryByRole("button", { name: "已手动停止" })).not.toBeInTheDocument();
   activeAttempt.resolve({
     id: "assistant-endless-stopped",
     role: "assistant",
-    text: "已停止",
+    text: "停止前的回复",
     createdAt: "2026-10-23T00:00:02Z",
-    state: "done",
+    state: "error",
+    meta: { completionState: "cancelled", contextUsage: { contextLeftPercent: 72 } },
   });
+  expect(await screen.findByRole("button", { name: "已手动停止" })).toBeInTheDocument();
+  expect(screen.getByText("停止前的回复")).toBeInTheDocument();
+  expect(screen.queryByText("已请求停止")).not.toBeInTheDocument();
 });
 
 test.each([
@@ -540,19 +545,25 @@ test("shows a Claude-reported cost that has a total but no price breakdown", asy
   expect(screen.getByRole("tooltip")).toHaveTextContent("cost: USD 2.75");
 });
 
-test("does not report a hidden cancelled reply as unread", async () => {
+test.each(["done", "error"])("marks a hidden cancellation from a %s event without reporting it as unread", async (event) => {
   const user = userEvent.setup();
   const onUnreadResult = vi.fn();
   const client = createClient({
-    sendMessage: vi.fn<WebBotClient["sendMessage"]>(async () => ({
-      id: "assistant-cancelled",
-      role: "assistant",
-      text: "已停止",
-      createdAt: "2026-08-27T01:10:00Z",
-      updatedAt: "2026-08-27T01:10:01Z",
-      state: "error",
-      meta: { completionState: "cancelled" },
-    })),
+    sendMessage: vi.fn<WebBotClient["sendMessage"]>(async (_alias, _text, onChunk) => {
+      if (event === "error") {
+        onChunk("停止前的回复");
+        throw new WebApiClientError("用户终止输出", { code: "cancelled" });
+      }
+      return {
+        id: "assistant-cancelled",
+        role: "assistant",
+        text: "停止前的回复",
+        createdAt: "2026-08-27T01:10:00Z",
+        updatedAt: "2026-08-27T01:10:01Z",
+        state: "error",
+        meta: { completionState: "cancelled" },
+      };
+    }),
   });
   let visibilityState: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
@@ -563,7 +574,8 @@ test("does not report a hidden cancelled reply as unread", async () => {
   visibilityState = "hidden";
   await user.click(screen.getByRole("button", { name: "发送" }));
 
-  expect(await screen.findByText("已停止")).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "已手动停止" })).toBeInTheDocument();
+  expect(screen.getByText("停止前的回复")).toBeInTheDocument();
   expect(onUnreadResult).not.toHaveBeenCalled();
 });
 

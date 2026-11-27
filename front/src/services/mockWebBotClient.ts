@@ -5587,14 +5587,12 @@ export class MockWebBotClient implements WebBotClient {
     options: ChatSendOptions | undefined,
     signal: AbortSignal,
   ): Promise<ChatMessage> {
-    signal.throwIfAborted();
     options?.signal?.throwIfAborted();
     const agentId = options?.agentId || "main";
     const createdAt = new Date().toISOString();
     const userText = options?.visibleText || text;
     if (this.namedConversationMessages && !this.activeConversationByBot.get(this.getConversationKey(botAlias, agentId))) {
       await this.createConversation(botAlias, userText.split(/\r?\n/)[0].slice(0, 32), options);
-      signal.throwIfAborted();
     }
     this.appendAgentChatMessage(botAlias, agentId, {
       id: `user-${Date.now()}`,
@@ -5604,7 +5602,7 @@ export class MockWebBotClient implements WebBotClient {
       state: "done",
     });
 
-    if (options?.taskMode === "plan") {
+    if (options?.taskMode === "plan" && !signal.aborted) {
       const summary = [
         "<PLAN_TITLE>",
         text.trim().split(/\r?\n/)[0].slice(0, 48) || "当前任务",
@@ -5637,15 +5635,15 @@ export class MockWebBotClient implements WebBotClient {
 
     // Opt-in scripted turn (see mocks/chatScript.ts); without it the stock reply below is unchanged.
     const script = readMockChatScript();
-    const scriptedTrace = script?.trace ?? [];
-    for (const event of scriptedTrace) {
+    const trace: ChatTraceEvent[] = [];
+    for (const event of script?.trace ?? []) {
       await new Promise((resolve) => setTimeout(resolve, 120));
-      signal.throwIfAborted();
+      if (signal.aborted) break;
+      trace.push(event);
       onTrace?.(event);
     }
     let streamed = "";
     const emitChunk = (chunk: string) => {
-      signal.throwIfAborted();
       streamed += chunk;
       onChunk(chunk);
       onStatus?.({
@@ -5653,28 +5651,24 @@ export class MockWebBotClient implements WebBotClient {
         ...(script?.contextUsage ? { contextUsage: script.contextUsage } : {}),
       });
     };
-    if (script) {
-      for (const chunk of script.chunks) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        emitChunk(chunk);
-      }
-    } else {
-      await streamAssistantReply(emitChunk);
+    if (!signal.aborted) {
+      await streamAssistantReply(emitChunk, script?.chunks, signal);
     }
     const assistantMessage: ChatMessage = {
       id: Date.now().toString(),
       role: "assistant",
-      text: streamed || "Mock response",
+      text: streamed || (signal.aborted ? "" : "Mock response"),
       createdAt: new Date().toISOString(),
       elapsedSeconds: 1,
-      state: "done",
-      ...(script ? {
+      state: signal.aborted ? "error" : "done",
+      ...(script || signal.aborted ? {
         meta: {
-          trace: scriptedTrace,
-          traceCount: scriptedTrace.length,
-          toolCallCount: scriptedTrace.filter((event) => event.kind === "tool_call").length,
-          processCount: scriptedTrace.filter((event) => ["commentary", "reasoning", "status"].includes(event.kind)).length,
-          ...(script.contextUsage ? { contextUsage: script.contextUsage } : {}),
+          ...(signal.aborted ? { completionState: "cancelled" } : {}),
+          trace,
+          traceCount: trace.length,
+          toolCallCount: trace.filter((event) => event.kind === "tool_call").length,
+          processCount: trace.filter((event) => ["commentary", "reasoning", "status"].includes(event.kind)).length,
+          ...(script?.contextUsage ? { contextUsage: script.contextUsage } : {}),
         },
       } : {}),
     };
@@ -7048,9 +7042,10 @@ export class MockWebBotClient implements WebBotClient {
     return;
   }
 
-  async killTask(botAlias: string, options: AgentScopedOptions = {}): Promise<string> {
-    this.chatRuns.get(botAlias)?.get(this.chatRunKey(options.agentId))?.abort();
-    return "已发送终止任务请求";
+  async killTask(botAlias: string, options: AgentScopedOptions = {}) {
+    const run = this.chatRuns.get(botAlias)?.get(this.chatRunKey(options.agentId));
+    run?.abort();
+    return { killed: !!run, message: run ? "已请求停止" : "当前没有正在运行的任务" };
   }
 
   async restartService(): Promise<void> {
@@ -8985,10 +8980,14 @@ export class MockWebBotClient implements WebBotClient {
   }
 }
 
-export async function streamAssistantReply(onChunk: (chunk: string) => void) {
-  const chunks = ["我先看一下问题。", "已经定位到可能原因。", "建议先检查 session 与工作目录。"];
+export async function streamAssistantReply(
+  onChunk: (chunk: string) => void,
+  chunks = ["我先看一下问题。", "已经定位到可能原因。", "建议先检查 session 与工作目录。"],
+  signal?: AbortSignal,
+) {
   for (const chunk of chunks) {
     await new Promise((resolve) => setTimeout(resolve, 250));
+    if (signal?.aborted) break;
     onChunk(chunk);
   }
 }

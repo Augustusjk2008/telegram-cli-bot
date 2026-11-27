@@ -24,6 +24,7 @@ type Props = {
   originalResultText?: string;
   translationControl?: ReactNode;
   state?: ChatMessage["state"];
+  manuallyStopped?: boolean;
   traceCount?: number;
   toolCallCount?: number;
   processCount?: number;
@@ -590,6 +591,7 @@ export function CliTranscript({
   originalResultText = resultText,
   translationControl,
   state,
+  manuallyStopped = false,
   traceCount,
   toolCallCount,
   processCount,
@@ -748,7 +750,8 @@ export function CliTranscript({
   const showFinalResult = state !== "streaming" && Boolean(visibleResultText);
   const showCopyFinalAnswer = state !== "streaming" && Boolean(visibleResultText.trim()) && Boolean(onCopyFinalAnswer);
   const showFinalActions = state !== "streaming" && (
-    showFinalResult
+    manuallyStopped
+    || showFinalResult
     || showCopyFinalAnswer
     || Boolean(contextUsage)
     || typeof endlessContinueCount === "number"
@@ -821,6 +824,7 @@ export function CliTranscript({
           ))}
           {showFinalActions ? (
             <ChatFinalAnswerActions
+              manuallyStopped={manuallyStopped}
               readAloudText={state === "done" ? visibleResultText : undefined}
               translationControl={translationControl}
               canContinue={canContinue}

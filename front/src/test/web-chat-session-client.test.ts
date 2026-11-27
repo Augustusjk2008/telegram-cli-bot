@@ -373,18 +373,19 @@ describe("named Web chat client", () => {
     }));
     const traceEvent = { id: "event-1", kind: "tool_call", summary: "List files" };
     vi.stubGlobal("__ORBIT_MOCK_CHAT_SCRIPT__", { chunks: ["finished"], trace: [traceEvent] });
-    const cancelled = expect(clients[0].sendMessage("main", "a", vi.fn())).rejects.toMatchObject({ name: "AbortError" });
+    const cancelled = clients[0].sendMessage("main", "a", vi.fn());
     const finished = clients[1].sendMessage("main", "b", vi.fn());
     await expect(clients[2].sendMessage("main", "c", vi.fn())).rejects.toMatchObject({ status: 409, code: "bot_chat_capacity" });
     expect((await clients[0].getBotOverview("main")).isProcessing).toBe(true);
     await clients[0].killTask("main");
     await vi.runAllTimersAsync();
-    await cancelled;
+    const stopped = await cancelled;
+    expect(stopped).toMatchObject({ text: "", state: "error", meta: { completionState: "cancelled", traceCount: 0 } });
     const answer = await finished;
     expect((await clients[1].listMessages("main")).items.at(-1)?.id).toBe(answer.id);
     expect(await clients[1].getMessageTraceEvent!("main", answer.id, { id: traceEvent.id })).toEqual(traceEvent);
     expect(await clients[0].getMessageTraceEvent!("main", answer.id, { id: traceEvent.id })).toBeNull();
-    expect((await clients[0].listMessages("main")).items.some((item) => item.role === "assistant")).toBe(false);
+    expect((await clients[0].listMessages("main")).items.at(-1)?.id).toBe(stopped.id);
     expect((await clients[0].getBotOverview("main")).isProcessing).toBe(false);
   });
 

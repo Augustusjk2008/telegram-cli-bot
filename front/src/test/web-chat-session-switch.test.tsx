@@ -36,7 +36,7 @@ function sessionClient(history: string) {
   }));
   const list = vi.spyOn(client, "listMessages").mockResolvedValue({ items: [message(history)] });
   vi.spyOn(client, "listConversations").mockResolvedValue({ activeConversationId: "", items: [] });
-  const kill = vi.spyOn(client, "killTask").mockResolvedValue("已终止");
+  const kill = vi.spyOn(client, "killTask").mockResolvedValue({ killed: true, message: "已请求停止" });
   return { client, send, list, kill, turn, finish: () => { busy = false; turn.resolve(message("过期的 SSE 回答")); } };
 }
 

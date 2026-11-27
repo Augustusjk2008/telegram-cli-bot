@@ -438,7 +438,7 @@ export interface WebBotClient {
     options?: FileReadOptions,
   ): Promise<void>;
   resetSession(botAlias: string): Promise<void>;
-  killTask(botAlias: string, options?: AgentScopedOptions): Promise<string>;
+  killTask(botAlias: string, options?: AgentScopedOptions): Promise<{ killed: boolean; message: string }>;
   restartService(): Promise<void>;
   getUpdateStatus(): Promise<AppUpdateStatus>;
   getCurrentUpdateJob(): Promise<AppUpdateStatus>;
