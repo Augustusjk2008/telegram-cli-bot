@@ -70,8 +70,10 @@ async function openWorkbench(page: Page, width: number, legacy = false, named: S
     } else if (operation === "cli-params") {
       settingsRequests.push(sessionId ?? "main");
       const kind = sessions.find((item) => item.id === sessionId)?.effective_cli_type ?? bot.cli_type;
-      data = { cli_type: kind, params: { model: "none" }, defaults: { model: "none" },
-        schema: { model: { type: "string", description: "模型", enum: ["none"] } } };
+      const effort = kind === "claude" ? "effort" : "reasoning_effort";
+      data = { cli_type: kind, params: { model: "none", [effort]: "high" }, defaults: { model: "none" },
+        schema: { model: { type: "string", description: "模型", enum: ["none"] },
+          [effort]: { type: "string", description: "思考深度", enum: ["low", "high"] } } };
     } else if (operation === "kill") {
       stops.push(sessionId ?? "main");
     } else if (operation === "ls" || operation === "pwd") {
@@ -89,13 +91,49 @@ async function openWorkbench(page: Page, width: number, legacy = false, named: S
   return { posts, sends, stops, settingsRequests, setRunning };
 }
 
+async function openSessionSelector(page: Page, width: number) {
+  if (width < 700) {
+    const trigger = page.getByRole("button", { name: "聊天选项", exact: true });
+    if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click();
+    return page.getByRole("dialog", { name: "聊天选项" }).getByRole("combobox", { name: "当前聊天会话" });
+  }
+  return page.getByTestId("chat-action-bar").getByRole("combobox", { name: "当前聊天会话" });
+}
+
+test("mobile Chat options groups the session, model and effort controls and handles nested Escape", async ({ page }) => {
+  await openWorkbench(page, 320, false, ["00000001", "00000002"].map((suffix) => ({
+    id: `ses_${suffix}`, title: "Review", selected_cli_type: "claude", effective_cli_type: "claude",
+  })));
+  const trigger = page.getByRole("button", { name: "聊天选项", exact: true });
+  await expect(page.getByRole("combobox", { name: "当前聊天会话" })).toHaveCount(0);
+  await trigger.press("Enter");
+  const options = page.getByRole("dialog", { name: "聊天选项" });
+  const selector = options.getByRole("combobox", { name: "当前聊天会话" });
+  await expect(selector).toBeVisible();
+  await expect(options.getByRole("combobox", { name: "模型", exact: true })).toBeVisible();
+  await expect(options.getByRole("combobox", { name: "思考深度" })).toBeVisible();
+  expect(await options.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("mobile-chat-options.png") });
+  await selector.selectOption("");
+  const create = page.getByRole("dialog", { name: "新建聊天会话" });
+  await create.getByLabel("聊天会话名称").press("Escape");
+  await expect(create).toBeHidden();
+  await expect(selector).toBeFocused();
+  await selector.press("Escape");
+  await expect(options).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await selector.selectOption("ses_00000002");
+  await expect(trigger).toContainText("Review · 00000002 · claude");
+});
+
 for (const width of [1440, 390]) {
   test(`identifies running default and named chats in open lists at ${width}px`, async ({ page }) => {
     const { setRunning } = await openWorkbench(page, width, false, [
       { id: "ses_a", title: "Implementation", selected_cli_type: "codex", effective_cli_type: "codex" },
       { id: "ses_b", title: "Review", selected_cli_type: "claude", effective_cli_type: "claude" },
     ]);
-    const selector = page.getByRole("combobox", { name: "当前聊天会话" });
+    const selector = await openSessionSelector(page, width);
     await expect(selector.locator('option[value="ses_b"]')).toContainText("空闲");
     setRunning(["ses_b"], true, true);
     await expect(selector.locator('option[value="ses_b"]')).toContainText("处理中");
@@ -126,8 +164,10 @@ for (const width of [1440, 390]) {
 
   test(`creates, switches and reopens pinned chats at ${width}px`, async ({ page }) => {
     const { posts, sends, stops, settingsRequests } = await openWorkbench(page, width);
-    const selector = page.getByRole("combobox", { name: "当前聊天会话" });
+    const mobile = width < 700;
+    const trigger = page.getByRole("button", { name: "聊天选项", exact: true });
     for (const [title, cli] of [["Implementation", "codex"], ["Review", "claude"]]) {
+      const selector = await openSessionSelector(page, width);
       await selector.selectOption("");
       const dialog = page.getByRole("dialog", { name: "新建聊天会话" });
       const name = dialog.getByLabel("聊天会话名称");
@@ -144,21 +184,27 @@ for (const width of [1440, 390]) {
         await page.screenshot({ path: test.info().outputPath(`new-chat-${width}.png`) });
       }
       await dialog.getByRole("button", { name: "创建", exact: true }).press("Enter");
-      await expect(selector).toHaveAttribute("title", `${title} · ${cli}`);
-      await expect(selector).toBeFocused();
-      // The native control supplies the menu. Its closed text must not overlap the two visible labels.
-      await expect(selector).toHaveCSS("color", "rgba(0, 0, 0, 0)");
+      if (mobile) {
+        await expect(trigger).toHaveAttribute("aria-expanded", "false");
+        await expect(trigger).toContainText(`${title} · ${cli}`);
+        await expect(trigger).toBeFocused();
+      } else {
+        await expect(selector).toHaveAttribute("title", `${title} · ${cli}`);
+        await expect(selector).toBeFocused();
+        // The native control supplies the menu. Its closed text must not overlap the two visible labels.
+        await expect(selector).toHaveCSS("color", "rgba(0, 0, 0, 0)");
+      }
     }
     expect(posts).toEqual([{ title: "Implementation", cli_type: "codex" }, { title: "Review", cli_type: "claude" }]);
-    await selector.selectOption("ses_1");
+    await (await openSessionSelector(page, width)).selectOption("ses_1");
     await page.getByPlaceholder("输入消息").fill("Run implementation");
     await page.getByRole("button", { name: "发送", exact: true }).click();
     await expect.poll(() => [...sends.keys()]).toEqual(["ses_1"]);
-    await selector.selectOption("ses_2");
-    await expect(selector).toHaveAttribute("title", "Review · claude");
+    await (await openSessionSelector(page, width)).selectOption("ses_2");
     await expect.poll(() => settingsRequests.includes("ses_2")).toBe(true);
     await sends.get("ses_1")!.abort();
     await page.reload();
+    const selector = await openSessionSelector(page, width);
     await expect(selector).toHaveValue("ses_2");
     await expect(selector).toHaveAttribute("title", "Review · claude");
     expect(stops).toEqual([]);

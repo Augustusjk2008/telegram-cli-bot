@@ -24,7 +24,6 @@ import {
 import { clsx } from "clsx";
 import { CheckCheck, ChevronDown, ChevronUp, Copy, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
-import { ChatSessionSelector } from "../components/ChatSessionSelector";
 import { ChatActionBar } from "../components/ChatActionBar";
 import { CodexVoiceBar } from "../components/CodexVoiceBar";
 import { ChatComposer, type ChatComposerHandle, type ChatComposerModelOption, type ChatComposerUploadProgress } from "../components/ChatComposer";
@@ -5597,21 +5596,19 @@ function ChatScreenView({
           clusterDisabled={loading || clusterSaving || !botOverview?.cluster || botOverview?.canOperate === false}
           clusterSaving={clusterSaving}
           onToggleClusterMode={isMainSession ? () => void handleToggleClusterMode() : undefined}
-          sessionSelector={isVisible && sessionOptions.length > 0 && !botOverview?.remoteWorkspace ? (
-            <ChatSessionSelector
-              items={sessionOptions}
-              cliOptions={cliOptions}
-              selectedId={sessionId}
-              activeCliType={botOverview?.cliType}
-              activeTurnRunning={activeAgentId === "main" && isStreaming}
-              focusOnMount={focusSessionSelector}
-              onSelect={(item) => onSelectSession(item, childAgentReadOnly ? undefined : {
-                text: composerRef.current?.getDraft() || "",
-                attachments: pendingAttachments,
-              })}
-              onCreate={canCreateChatSession ? onCreateSession : undefined}
-            />
-          ) : undefined}
+          sessionSelector={isVisible && sessionOptions.length > 0 && !botOverview?.remoteWorkspace ? {
+            items: sessionOptions,
+            cliOptions,
+            selectedId: sessionId,
+            activeCliType: botOverview?.cliType,
+            activeTurnRunning: activeAgentId === "main" && isStreaming,
+            focusOnMount: focusSessionSelector,
+            onSelect: (item) => onSelectSession(item, childAgentReadOnly ? undefined : {
+              text: composerRef.current?.getDraft() || "",
+              attachments: pendingAttachments,
+            }),
+            onCreate: canCreateChatSession ? onCreateSession : undefined,
+          } : undefined}
           embedded={embedded}
           focused={focused}
           onToggleFocus={onToggleFocus}

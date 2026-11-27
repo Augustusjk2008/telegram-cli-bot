@@ -127,6 +127,8 @@ test("creates with only the title on a phase-one host and returns focus after ca
   const { root } = chatDirectory();
   const create = vi.spyOn(root.client, "createChatSession").mockResolvedValue(review);
   render(<ChatScreen botAlias="main" client={root.client} mobileLayout />);
+  expect(screen.queryByRole("combobox", { name: "当前聊天会话" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "聊天选项" }));
   const first = await openCreateDialog();
   expect(first.queryByRole("combobox", { name: "AI 工具" })).not.toBeInTheDocument();
   fireEvent.click(first.getByRole("button", { name: "取消" }));
@@ -135,6 +137,7 @@ test("creates with only the title on a phase-one host and returns focus after ca
   fireEvent.change(dialog.getByRole("textbox"), { target: { value: review.title } });
   fireEvent.click(dialog.getByRole("button", { name: "创建" }));
   await screen.findByText("复核历史");
+  expect(screen.getByRole("button", { name: "聊天选项" })).toHaveFocus();
   expect(create.mock.calls).toEqual([["main", review.title]]);
 });
 
@@ -223,8 +226,11 @@ test("restores the selected session per account, rejects missing saved sessions 
   const { root, list, bind } = chatDirectory();
   const chat = (accountId: string) => <ChatScreen botAlias="main" accountId={accountId} client={root.client} mobileLayout readOnly />;
   const first = render(chat("alice"));
+  fireEvent.click(screen.getByRole("button", { name: "聊天选项" }));
   await choose(review);
   await screen.findByText("复核历史");
+  fireEvent.click(screen.getByRole("button", { name: "聊天选项" }));
+  expect(screen.getByRole("combobox", { name: "当前聊天会话" })).toHaveValue(review.id);
   expect(screen.queryByRole("option", { name: /新建聊天会话/ })).not.toBeInTheDocument();
   first.rerender(chat("bob"));
   await screen.findByText("主会话历史");
@@ -240,6 +246,7 @@ test("restores the selected session per account, rejects missing saved sessions 
   render(chat("alice"));
   await screen.findByText("主会话历史");
   expect(bind).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "聊天选项" }));
   expect(screen.getByRole("combobox", { name: "当前聊天会话" })).toHaveValue("main");
 });
 
@@ -359,6 +366,7 @@ test("shows a retryable catalog error on the default chat without interrupting i
   await screen.findByText("服务暂时不可用");
   typeDraft("主会话草稿");
   fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  fireEvent.click(screen.getByRole("button", { name: "聊天选项" }));
   expect(await screen.findByRole("combobox", { name: "当前聊天会话" })).toHaveValue("main");
   expect(screen.getByPlaceholderText("输入消息")).toHaveValue("主会话草稿");
   expect(screen.queryByText("服务暂时不可用")).not.toBeInTheDocument();
