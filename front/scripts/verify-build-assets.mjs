@@ -4,9 +4,10 @@ import {fileURLToPath} from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontRoot = path.resolve(scriptDir, '..');
-const indexPath = path.join(frontRoot, 'dist', 'index.html');
-const thirdPartyLicensesPath = path.join(frontRoot, 'dist', 'THIRD_PARTY_LICENSES.txt');
-const manifestPath = path.join(frontRoot, 'dist', '.vite', 'manifest.json');
+const distRoot = path.resolve(frontRoot, process.env.TCB_FRONT_DIST_DIR || 'dist');
+const indexPath = path.join(distRoot, 'index.html');
+const thirdPartyLicensesPath = path.join(distRoot, 'THIRD_PARTY_LICENSES.txt');
+const manifestPath = path.join(distRoot, '.vite', 'manifest.json');
 
 if (!fs.existsSync(indexPath)) {
   console.error('缺少 front/dist/index.html，请先构建前端。');
@@ -40,7 +41,7 @@ if (compressedAssets.size === 0) {
   process.exit(1);
 }
 for (const relativePath of compressedAssets) {
-  const assetPath = path.resolve(frontRoot, 'dist', relativePath);
+  const assetPath = path.resolve(distRoot, relativePath);
   for (const candidatePath of [assetPath, `${assetPath}.br`, `${assetPath}.gz`]) {
     if (!fs.existsSync(candidatePath) || !fs.statSync(candidatePath).isFile()) {
       console.error(`缺少 Vite 构建资源或预压缩副本: ${path.relative(frontRoot, candidatePath)}`);

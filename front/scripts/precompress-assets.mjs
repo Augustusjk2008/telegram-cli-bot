@@ -7,7 +7,7 @@ import {brotliCompress, constants, gzip} from 'node:zlib';
 const brotliCompressAsync = promisify(brotliCompress);
 const gzipAsync = promisify(gzip);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const distRoot = path.resolve(scriptDir, '..', 'dist');
+const distRoot = path.resolve(scriptDir, '..', process.env.TCB_FRONT_DIST_DIR || 'dist');
 const manifestPath = path.join(distRoot, '.vite', 'manifest.json');
 
 function collectCompressibleAssets(manifest) {

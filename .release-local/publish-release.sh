@@ -397,12 +397,12 @@ invoke_release_prep_checks() {
 
 invoke_release_front_build() {
   write_step "构建发布包前端"
-  (cd "$front_dir" && TCB_FRONT_BUILD_ROOT_BASE=1 "$npm_bin" run build)
+  (cd "$front_dir" && TCB_FRONT_BUILD_ROOT_BASE=1 TCB_FRONT_DIST_DIR="$release_dist" "$npm_bin" run build)
 }
 
 invoke_front_dist_asset_check() {
   write_step "校验前端构建资源路径"
-  run_checked_command "$front_dir" "前端构建资源路径校验失败" node scripts/verify-build-assets.mjs
+  run_checked_command "$front_dir" "前端构建资源路径校验失败" env TCB_FRONT_DIST_DIR="$release_dist" node scripts/verify-build-assets.mjs
 }
 
 assert_release_legal_files_in_stage() {
@@ -441,7 +441,7 @@ copy_tracked_files_to_stage() {
     cp -p "$source_path" "$destination_path"
   done < <(cd "$repo_root" && git ls-files -z -- ':(exclude).web_announcements.json' ':(exclude).web_announcement_reads.json')
 
-  local front_dist="$front_dir/dist"
+  local front_dist="$release_dist"
   if [[ ! -d "$front_dist" ]]; then
     fail "未找到 front/dist，请先完成前端构建。"
   fi
@@ -751,6 +751,9 @@ main() {
       write_info "已跳过发布前测试检查。"
     fi
 
+    mkdir -p "$stage_root"
+    release_dist="$(mktemp -d "$stage_root/frontend.XXXXXX")"
+    trap 'rm -rf -- "$release_dist"' EXIT
     invoke_release_front_build
     invoke_front_dist_asset_check
   else

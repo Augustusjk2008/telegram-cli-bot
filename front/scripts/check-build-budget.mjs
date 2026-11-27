@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const dist = path.resolve(root, 'dist');
+const dist = path.resolve(root, process.env.TCB_FRONT_DIST_DIR || 'dist');
 const manifestPath = path.resolve(dist, '.vite', 'manifest.json');
 const limits = {
     // Chat provider catalogs add a small amount of always-loaded selection UI.

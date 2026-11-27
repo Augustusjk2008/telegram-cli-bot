@@ -25,9 +25,11 @@ def smoke(root: Path, work: Path) -> None:
     run(control, "-I", "-S", "-c", "import json, ssl, sqlite3, sys; assert sys.prefix == sys.argv[1]", str(control.parent.parent))
     run(root / "runtime/python/bin/python3", "-B", "-c", """
 from pathlib import Path
-import json, aiohttp, dotenv, paramiko, pypdf, psutil, qrcode
+import asyncio, json, aiohttp, dotenv, paramiko, pypdf, psutil, qrcode
+from aiohttp.test_utils import make_mocked_request
 from bot.updater import detect_update_package_kind
 from bot.update_preparation import _prepare_python
+from bot.web.server import WebApiServer
 root = Path.cwd()
 manifest = json.loads((root / '.update-manifest.json').read_text())
 assert detect_update_package_kind(root) == manifest['package_kind'] == 'linux-portable'
@@ -35,6 +37,19 @@ assert manifest['frontend']['files']['front/dist/index.html']
 prepared = dict(package_kind='linux-portable', staging_dir=str(root), manifest=manifest)
 result = _prepare_python(root, root, prepared, root / '.tcb/smoke-environment.log')
 assert result['python_executable'] == str(root / 'runtime/python/bin/python3')
+async def verify_ui():
+    server = WebApiServer(object(), host='127.0.0.1')
+    app = server._build_app()
+    async def get(path):
+        request = make_mocked_request('GET', path, app=app)
+        route = await app.router.resolve(request)
+        response = await route.handler(request)
+        assert response.status == 200, path
+        return response.text
+    assert 'id="root"' in await get('/')
+    health = json.loads(await get('/api/health'))
+    assert health['version'] == manifest['version'] and health['readiness']['frontend']
+asyncio.run(verify_ui())
 """)
     run(root / "runtime/node/bin/node", "--version")
     run(root / "runtime/node/bin/npm", "--version")

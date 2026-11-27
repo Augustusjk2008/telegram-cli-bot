@@ -343,6 +343,7 @@ export default defineConfig(({mode}) => {
       },
     },
     build: {
+      outDir: process.env.TCB_FRONT_DIST_DIR || 'dist',
       manifest: true,
       chunkSizeWarningLimit: 650,
       modulePreload: {
