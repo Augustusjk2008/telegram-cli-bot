@@ -1,4 +1,5 @@
 import type { BotSummary } from "../services/types";
+import { cliTypeLabel } from "../utils/cliType";
 
 export type BotActivityChange = Pick<BotSummary, "activityStatus" | "busyAgentIds" | "busyAgentNames" | "busyAgentCount"> & {
   agentId?: string;
@@ -14,6 +15,29 @@ export type BotAgentActivityOverride = {
 export type BotAgentActivityOverrides = Record<string, Record<string, BotAgentActivityOverride>>;
 
 const BOT_AGENT_ACTIVITY_TTL_MS = 2 * 60 * 1000;
+
+export function isBotBusy(bot: BotSummary) {
+  return bot.activityStatus === "busy" || bot.status === "busy" || Boolean(
+    bot.busyAgentCount || bot.busyAgentIds?.length || bot.busyAgentNames?.length || bot.busyChatSessions?.length,
+  );
+}
+
+export function getBusyActivityNames(bot: BotSummary): string[] {
+  if (bot.canOperate === false) return [];
+  const names = bot.busyAgentNames || [];
+  const chats = bot.busyChatSessions;
+  if (!chats) return names.filter(Boolean);
+  const labels = chats.map((chat) => {
+    const repeated = chats.some((other) => other.id !== chat.id && other.title === chat.title);
+    const name = chat.id === "main" ? "主会话" : `会话「${chat.title}」${repeated ? ` · ${chat.id.slice(-8)}` : ""}`;
+    const tool = chat.effectiveCliType === "unknown" ? "未知工具" : cliTypeLabel(chat.effectiveCliType || "");
+    return tool ? `${name}（${tool}）` : name;
+  });
+  for (const [index, id] of (bot.busyAgentIds || []).entries()) {
+    if (id !== "main") labels.push(`子 Agent「${names[index] || id}」`);
+  }
+  return labels;
+}
 
 function isOffline(bot: BotSummary) {
   return bot.serviceStatus === "offline" || bot.status === "offline";
@@ -85,6 +109,8 @@ export function mergeBotActivity(
   overrides: Record<string, BotAgentActivityOverride> | undefined,
   now = Date.now(),
 ): BotSummary {
+  // The session-aware snapshot identifies every running chat, including turns in other tabs.
+  if (bot.busyChatSessions !== undefined) return bot;
   const busyById = collectBackendBusyAgents(bot);
 
   Object.entries(overrides || {}).forEach(([agentId, activity]) => {

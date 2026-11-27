@@ -18,7 +18,7 @@ from bot.cli_params import CliParamsConfig
 from bot.manager import MultiBotManager
 from bot.models import AgentProfile, BotProfile, UserSession
 from bot.platform.executables import resolve_cli_executable
-from bot.sessions import create_web_chat_session, get_web_chat_session, list_web_chat_sessions
+from bot.sessions import create_web_chat_session, get_bot_session_runtime, get_web_chat_session, list_web_chat_sessions
 from bot.web.api_common import WebApiError, get_profile_or_raise, resolve_session_bot_id
 
 
@@ -133,13 +133,15 @@ def _session_cli(profile: BotProfile, session: UserSession) -> tuple[str, str]:
     return selected, path or config.CLI_COMMANDS[selected]
 
 
-def _summary(session_id: str, title: str, selected: str | None, profile: BotProfile) -> dict:
+def chat_session_summary(
+    session_id: str, title: str, selected: str | None, profile: BotProfile, *, is_processing: bool = False,
+) -> dict:
     if selected is not None and (not isinstance(selected, str) or selected not in config.CLI_COMMANDS):
         # Keep other chats accessible without echoing arbitrary corrupt snapshot data.
         selected = "unknown"
     return {
         "id": session_id, "title": title, "selected_cli_type": selected,
-        "effective_cli_type": selected or profile.cli_type,
+        "effective_cli_type": selected or profile.cli_type, "is_processing": is_processing,
     }
 
 
@@ -147,11 +149,18 @@ def list_chat_sessions(manager: MultiBotManager, alias: str, user_id: int) -> di
     with reserve_chat_catalog(manager, alias):
         profile = get_profile_or_raise(manager, alias)
         enabled = not (profile.remote_workspace or profile.archived)
-        items = [_summary("main", "主会话", None, profile)]
+        bot_id = resolve_session_bot_id(manager, alias)
+        runtime = get_bot_session_runtime(bot_id, alias) if not profile.archived else {}
+        items = [chat_session_summary(
+            "main", "主会话", None, profile, is_processing=runtime.get("main", {}).get("is_processing", False),
+        )]
         options = []
         if enabled:
-            for item in list_web_chat_sessions(resolve_session_bot_id(manager, alias), alias, user_id):
-                items.append(_summary(item["id"], item["title"], item.get("selected_cli_type"), profile))
+            for item in list_web_chat_sessions(bot_id, alias, user_id):
+                items.append(chat_session_summary(
+                    item["id"], item["title"], item.get("selected_cli_type"), profile,
+                    is_processing=runtime.get("@" + item["id"], {}).get("is_processing", False),
+                ))
             for cli_type in config.CLI_COMMANDS:
                 command = _creation_cli_path(profile, cli_type)
                 available = resolve_cli_executable(command, profile.working_dir) is not None
@@ -182,7 +191,7 @@ def create_chat_session(
             resolve_session_bot_id(manager, alias), alias, user_id, profile.working_dir, title.strip(),
             selected_cli_type=cli_type, selected_cli_path=custom_path,
         )
-        return _summary(session.web_session_id, session.web_session_title, cli_type, profile)
+        return chat_session_summary(session.web_session_id, session.web_session_title, cli_type, profile)
 
 
 def resolve_named_chat_target(

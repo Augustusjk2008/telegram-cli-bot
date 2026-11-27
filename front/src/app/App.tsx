@@ -9,6 +9,7 @@ import type { ChatComposerHandle } from "../components/ChatComposer";
 import { clsx } from "clsx";
 import { MobileShell, type AppTab } from "./MobileShell";
 import { NotificationCenter } from "./NotificationCenter";
+import { watchChatActivity } from "../services/watchChatActivity";
 import {
   chatUnreadStoragePrefix,
   markAllStoredChatsRead,
@@ -372,16 +373,24 @@ function AppContent() {
     return true;
   }
 
-  async function openBotSwitcher(anchorRect?: DOMRect) {
+  function openBotSwitcher(anchorRect?: DOMRect) {
     setBotSwitcherAnchorRect(anchorRect || null);
     setShowSwitcher(true);
-    try {
-      const nextBots = await client.listBots({ includeArchived: canManageBots });
-      setBots(nextBots);
-    } catch {
-      // Keep the current list so the switcher can open immediately even if refresh fails.
-    }
   }
+
+  useEffect(() => {
+    if (!showSwitcher || !isLoggedIn) return;
+    let active = true;
+    const stop = watchChatActivity(client, async () => {
+      try {
+        const next = await client.listBots({ includeArchived: canManageBots });
+        if (active) setBots(next);
+      } catch {
+        // Keep the previous snapshot until the next refresh.
+      }
+    });
+    return () => { active = false; stop(); };
+  }, [showSwitcher, isLoggedIn, accountKey, canManageBots, client]);
 
   function closeBotSwitcher() {
     setShowSwitcher(false);
@@ -825,6 +834,7 @@ function AppContent() {
   }
 
   function handleBotActivityChange(alias: string, activity: BotActivityChange) {
+    if (botSummaryByAlias.get(alias)?.busyChatSessions !== undefined) return;
     setBotActivityOverrides((prev) => updateBotAgentActivityOverrides(prev, alias, activity));
   }
 

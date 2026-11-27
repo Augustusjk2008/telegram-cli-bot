@@ -411,6 +411,7 @@ type RawBotSummary = {
   serviceStatus?: string;
   activity_status?: string;
   activityStatus?: string;
+  busy_chat_sessions?: RawChatSession[];
   busy_agent_ids?: string[];
   busyAgentIds?: string[];
   busy_agent_names?: string[];
@@ -1860,6 +1861,7 @@ function sessionCliType(raw: unknown): CliType {
 type RawChatSession = {
   id: string;
   title: string;
+  is_processing?: boolean;
   selected_cli_type?: string | null;
   effective_cli_type?: string;
 };
@@ -1869,6 +1871,7 @@ function mapChatSession(raw: RawChatSession): ChatSessionSummary {
     throw new Error("服务返回了无效的聊天会话");
   }
   const item: ChatSessionSummary = { id: raw.id, title: raw.title };
+  if (typeof raw.is_processing === "boolean") item.isProcessing = raw.is_processing;
   // A damaged saved choice has a public "unknown" marker. Other chats remain usable.
   const displayType = (value: string) => value === "unknown" ? "unknown" : sessionCliType(value);
   if (raw.selected_cli_type !== undefined) {
@@ -1937,10 +1940,11 @@ function mapRemoteWorkspaceMcpStatus(value: unknown): RemoteWorkspaceMcpStatus |
 }
 
 function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
+  const busyChatSessions = Array.isArray(raw.busy_chat_sessions) ? raw.busy_chat_sessions.map(mapChatSession) : undefined;
   const busyAgentIds = (raw.busy_agent_ids ?? raw.busyAgentIds ?? []).map((item) => String(item));
   const busyAgentNames = (raw.busy_agent_names ?? raw.busyAgentNames ?? []).map((item) => String(item));
   const hasExplicitBusyAgentCount = typeof raw.busy_agent_count !== "undefined" || typeof raw.busyAgentCount !== "undefined";
-  const legacyProcessing = busyAgentIds.length === 0 && isProcessing;
+  const legacyProcessing = !busyChatSessions && busyAgentIds.length === 0 && isProcessing;
   const resolvedBusyAgentIds = legacyProcessing ? ["main"] : busyAgentIds;
   const resolvedBusyAgentNames = legacyProcessing ? ["主 agent"] : busyAgentNames;
   const busyAgentCount = legacyProcessing
@@ -1949,7 +1953,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
   const serviceStatus = (raw.service_status ?? raw.serviceStatus) === "offline" || raw.status === "stopped" || raw.status === "offline"
     ? "offline"
     : "online";
-  const activityStatus = (raw.activity_status ?? raw.activityStatus) === "busy" || busyAgentCount > 0 || isProcessing
+  const activityStatus = (raw.activity_status ?? raw.activityStatus) === "busy" || busyAgentCount > 0 || busyChatSessions?.length || isProcessing
     ? "busy"
     : "idle";
   const status = mapStatus(raw.status, activityStatus === "busy");
@@ -1961,6 +1965,7 @@ function mapBotSummary(raw: RawBotSummary, isProcessing = false): BotSummary {
     status,
     serviceStatus,
     activityStatus,
+    ...(busyChatSessions ? { busyChatSessions } : {}),
     busyAgentIds: resolvedBusyAgentIds,
     busyAgentNames: resolvedBusyAgentNames,
     busyAgentCount: hasExplicitBusyAgentCount || resolvedBusyAgentIds.length > 0 ? busyAgentCount : 0,

@@ -156,7 +156,7 @@ export function BotSwitcherSheet({
                     <StatusPill status={isOffline ? "offline" : "online"} className="px-1.5 text-[10px] leading-4" />
                   </span>
                 </div>
-                <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--muted)]">
+                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--muted)]">
                   <span
                     className={clsx(
                       "shrink-0 font-medium",
@@ -174,7 +174,7 @@ export function BotSwitcherSheet({
                   >
                     {workspaceLabel(bot) || "未设置"}
                   </span>
-                  {!isOffline ? <BotActivitySummary bot={bot} className="min-h-0 shrink-0" showLatestAnswerTime /> : null}
+                  {!isOffline ? <BotActivitySummary bot={bot} className={bot.activityStatus === "busy" ? "basis-full" : "min-h-0"} showLatestAnswerTime /> : null}
                 </div>
               </button>
             );

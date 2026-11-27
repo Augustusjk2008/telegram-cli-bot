@@ -5,7 +5,8 @@ import { CheckCircle2, Copy, LogIn, Search, Settings, ShieldCheck, X } from "luc
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { BotStatus, BotSummary } from "../services/types";
 import { premiumMotion, resolveMotionProps } from "../motion/premiumMotion";
-import { BotActivitySummary, getBotActivityText } from "./BotActivitySummary";
+import { BotActivitySummary } from "./BotActivitySummary";
+import { getBusyActivityNames, isBotBusy } from "../app/botActivity";
 import { BotSwitcherCounts } from "./BotSwitcherCounts";
 import { RemoteWorkspaceStatusPill } from "./RemoteWorkspaceStatusPill";
 import { StatusPill } from "./StatusPill";
@@ -31,7 +32,7 @@ type Props = {
 const STATUS_FILTERS: Array<{ id: StatusFilter; label: string }> = [
   { id: "all", label: "全部" },
   { id: "unread", label: "未读" },
-  { id: "running", label: "运行中" },
+  { id: "running", label: "空闲" },
   { id: "busy", label: "处理中" },
   { id: "offline", label: "离线" },
 ];
@@ -47,7 +48,7 @@ function effectiveStatus(bot: BotSummary): BotStatus {
   if (bot.status === "unread") {
     return "unread";
   }
-  if (bot.status === "busy" || bot.activityStatus === "busy" || (bot.busyAgentCount || 0) > 0) {
+  if (isBotBusy(bot)) {
     return "busy";
   }
   return "running";
@@ -62,7 +63,7 @@ function botMatchesQuery(bot: BotSummary, query: string) {
     bot.alias,
     workspaceLabel(bot),
     bot.cliType,
-    ...(bot.busyAgentNames || []),
+    ...getBusyActivityNames(bot),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);
 }
@@ -82,17 +83,6 @@ function resolvePopoverStyle(anchorRect?: DOMRect | null): CSSProperties {
     width,
     maxHeight: "min(72vh, 680px)",
   };
-}
-
-function busyNames(bot: BotSummary) {
-  const names = bot.busyAgentNames || [];
-  if (names.length > 0) {
-    return names;
-  }
-  if ((bot.busyAgentCount || 0) > 0 || bot.activityStatus === "busy" || bot.status === "busy") {
-    return ["主 agent"];
-  }
-  return [];
 }
 
 export function DesktopBotSwitcherPopover({
@@ -360,21 +350,7 @@ export function DesktopBotSwitcherPopover({
 
                     <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] p-2">
                       <div className="text-xs font-medium text-[var(--muted)]">状态</div>
-                      <div className="mt-1 text-sm text-[var(--text)]">{getBotActivityText(focusedBot, true)}</div>
-                      {busyNames(focusedBot).length > 0 ? (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {busyNames(focusedBot).slice(0, 3).map((name) => (
-                            <span key={name} className="rounded border border-[var(--feedback-warning-border-light)] bg-[var(--feedback-warning-background-subtle)] px-1.5 py-0.5 text-xs text-[var(--feedback-warning-text-deep)]">
-                              {name}
-                            </span>
-                          ))}
-                          {busyNames(focusedBot).length > 3 ? (
-                            <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs text-[var(--muted)]">
-                              +{busyNames(focusedBot).length - 3}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
+                      <BotActivitySummary bot={focusedBot} className="mt-1" showLatestAnswerTime />
                     </div>
 
                     {isOffline(focusedBot) ? (

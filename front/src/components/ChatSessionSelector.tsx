@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, LoaderCircle } from "lucide-react";
 import type { ChatSessionList, ChatSessionSummary, CliType } from "../services/types";
 import { cliTypeLabel } from "../utils/cliType";
 
@@ -8,12 +8,13 @@ type Props = {
   cliOptions?: ChatSessionList["cliOptions"];
   selectedId: string;
   activeCliType?: CliType;
+  activeTurnRunning?: boolean;
   focusOnMount: boolean;
   onSelect: (session: ChatSessionSummary) => void;
   onCreate?: (title: string, cliType?: CliType) => Promise<ChatSessionSummary>;
 };
 
-export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliType, focusOnMount, onSelect, onCreate }: Props) {
+export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliType, activeTurnRunning, focusOnMount, onSelect, onCreate }: Props) {
   const selectRef = useRef<HTMLSelectElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const toolRef = useRef<HTMLSelectElement>(null);
@@ -41,6 +42,11 @@ export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliTy
   }
   const active = items.find((item) => item.id === selectedId);
   const activeTool = active && toolLabel(active);
+  function activityLabel(item: ChatSessionSummary) {
+    if (item.isProcessing || (item.id === selectedId && activeTurnRunning)) return "处理中";
+    return item.isProcessing === false ? "空闲" : "";
+  }
+  const activeBusy = active && activityLabel(active) === "处理中";
   const canCreate = Boolean(title.trim()) && !saving
     && (!choices || choices.some((item) => item.cliType === cliType && item.available));
   const hasUnavailable = choices && (!choices.length || choices.some((item) => !item.available));
@@ -91,7 +97,7 @@ export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliTy
           autoFocus={focusOnMount}
           aria-label="当前聊天会话"
           value={selectedId}
-          title={activeTool ? `${sessionTitle(active)} · ${activeTool}` : undefined}
+          title={activeTool ? [sessionTitle(active), activeTool, activeBusy ? "处理中" : ""].filter(Boolean).join(" · ") : undefined}
           className={`h-8 max-w-full truncate rounded-md border border-[var(--workbench-hairline)] bg-[var(--workbench-panel-bg)] px-1 text-xs ${activeTool ? "appearance-none pr-5 text-transparent!" : "text-[var(--text)]"}`}
           onChange={(event) => {
             const selected = items.find((item) => item.id === event.target.value);
@@ -110,7 +116,7 @@ export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliTy
         >
           {items.map((item) => (
             <option key={item.id} value={item.id} className="text-[var(--text)]">
-              {[sessionTitle(item), toolLabel(item)].filter(Boolean).join(" · ")}
+              {[sessionTitle(item), toolLabel(item), activityLabel(item)].filter(Boolean).join(" · ")}
             </option>
           ))}
           {onCreate ? <option value="" className="text-[var(--text)]">新建聊天会话…</option> : null}
@@ -118,7 +124,10 @@ export function ChatSessionSelector({ items, cliOptions, selectedId, activeCliTy
         {activeTool ? (
           <span aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center gap-1 px-1.5 text-[var(--text)]">
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-xs leading-tight">{sessionTitle(active)}</span>
+              <span className="flex min-w-0 items-center gap-1 text-xs leading-tight">
+                {activeBusy && <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-[var(--feedback-warning-text-deep)]" />}
+                <span className="truncate">{sessionTitle(active)}</span>
+              </span>
               <span className="truncate text-[10px] leading-tight text-[var(--muted)]">{activeTool}</span>
             </span>
             <ChevronDown className="h-3 w-3 shrink-0" />

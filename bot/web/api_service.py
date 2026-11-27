@@ -134,6 +134,7 @@ from bot.remote_workspace import get_remote_workspace_service
 from bot.sessions import (
     align_session_paths,
     clear_bot_sessions,
+    get_bot_session_runtime,
     get_bot_sessions,
     get_or_create_session,
     get_web_chat_session,
@@ -154,7 +155,7 @@ from bot.web.chat_sync_events import (
     publish_chat_sync,
 )
 from bot.web.chat_targets import (
-    ChatTarget, after_chat_catalog_change, check_named_chat_owner, require_chat_cli_executable,
+    ChatTarget, after_chat_catalog_change, chat_session_summary, check_named_chat_owner, require_chat_cli_executable,
     reserve_chat_catalog, with_chat_target,
 )
 from bot.web.chat_favorite_store import ChatFavoriteStore, FavoriteScope, build_favorite_item
@@ -661,26 +662,6 @@ def _build_run_status(manager: MultiBotManager, alias: str, profile: BotProfile)
     return "configured" if profile.enabled and not profile.archived else "stopped"
 
 
-def _build_agent_runtime_map(bot_id: int, user_id: int | None, bot_alias: str) -> dict[str, dict[str, Any]]:
-    _ = user_id
-    result: dict[str, dict[str, Any]] = {}
-    with sessions_lock:
-        for (session_bot_id, session_user_id, session_agent_id), session in sessions.items():
-            if session_bot_id != bot_id or session_user_id != chat_session_user_id(session_user_id):
-                continue
-            if session.bot_alias != bot_alias:
-                continue
-            with session._lock:
-                result[session_agent_id] = {
-                    "is_processing": bool(session.is_processing or session.endless_mode),
-                    "web_session_id": session.web_session_id,
-                    "endless_group_id": session.endless_group_id if session.endless_mode else "",
-                    "message_count": max(0, int(session.message_count or 0)),
-                    "active_conversation_id": session.active_conversation_id or "",
-                }
-    return result
-
-
 def _agent_summary_with_runtime(
     profile: BotProfile,
     agent: AgentProfile,
@@ -749,6 +730,7 @@ def build_bot_summary(
     *,
     profile: Optional[BotProfile] = None,
     session: Optional[UserSession] = None,
+    runtime_map: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     profile = profile or get_profile_or_raise(manager, alias)
     run_status = _build_run_status(manager, alias, profile)
@@ -774,10 +756,19 @@ def build_bot_summary(
         except Exception:
             # 如果获取 session 失败，使用 profile 的工作目录
             pass
-    runtime_map = {} if profile.archived else _build_agent_runtime_map(bot_id, user_id, alias)
+    if runtime_map is None:
+        runtime_map = {} if profile.archived else get_bot_session_runtime(bot_id, alias)
     agent_items = _build_agent_status_items(profile, runtime_map)
-    if any(item["is_processing"] and item.get("web_session_id") for item in runtime_map.values()):
-        # The Bot list counts busy agent profiles. All named Web chats run as its main agent.
+    busy_chat_sessions = [
+        chat_session_summary(
+            item["web_session_id"], item["web_session_title"], item["selected_cli_type"], profile, is_processing=True,
+        )
+        for item in runtime_map.values() if item.get("web_session_id") and item["is_processing"]
+    ]
+    if runtime_map.get("main", {}).get("is_processing"):
+        busy_chat_sessions.insert(0, chat_session_summary("main", "主会话", None, profile, is_processing=True))
+    if busy_chat_sessions:
+        # Older clients count the physical main agent once, even when several chats are busy.
         agent_items[0]["is_processing"] = True
     active_cluster_run = None
     if user_id is not None and current_session is not None and profile.cluster.enabled:
@@ -820,6 +811,7 @@ def build_bot_summary(
         "last_answer_completed_at": latest_answer_completed_at,
         "last_answer_terminal_at": latest_answer_terminal_at,
         **activity,
+        "busy_chat_sessions": busy_chat_sessions,
         "capabilities": _build_capabilities(alias == manager.main_profile.alias),
     }
 
@@ -873,18 +865,17 @@ def get_overview(
     history_service = _history_service_for_execution_mode(session, resolved_execution_mode)
     session_snapshot = history_service.build_session_snapshot(profile, session)
     session_snapshot["session_epoch"] = max(0, int(getattr(session, "session_epoch", 0) or 0))
-    runtime_map = _build_agent_runtime_map(bot_id, user_id, alias)
-    if session.web_session_id:
-        runtime_map = {"main": runtime_map.get(session.storage_scope, {})}
+    runtime_map = get_bot_session_runtime(bot_id, alias)
+    agent_runtime = {"main": runtime_map.get(session.storage_scope, {})} if session.web_session_id else runtime_map
     return {
         "bot": {
-            **build_bot_summary(manager, alias, user_id, session=session),
+            **build_bot_summary(manager, alias, user_id, session=session, runtime_map=runtime_map),
             "execution_mode": resolved_execution_mode,
             "voice": voice,
         },
         "voice": voice,
         "session": session_snapshot,
-        "agents": _build_agent_status_items(profile, runtime_map),
+        "agents": _build_agent_status_items(profile, agent_runtime),
         "active_agent_id": session.agent_id,
         "active_cluster_run": (
             {
@@ -908,7 +899,7 @@ def get_overview(
 def list_agents(manager: MultiBotManager, alias: str, user_id: int | None = None) -> dict[str, Any]:
     profile = get_profile_or_raise(manager, alias)
     bot_id = resolve_session_bot_id(manager, alias)
-    return {"items": _build_agent_status_items(profile, _build_agent_runtime_map(bot_id, user_id, alias))}
+    return {"items": _build_agent_status_items(profile, get_bot_session_runtime(bot_id, alias))}
 
 
 def _cluster_token_path() -> Path:

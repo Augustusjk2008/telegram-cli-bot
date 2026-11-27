@@ -1,4 +1,5 @@
 import { defaultCliPathForType } from "../utils/cliType";
+import { getBusyActivityNames, isBotBusy } from "../app/botActivity";
 import type {
   BotStatus,
   BotSummary,
@@ -74,9 +75,7 @@ export function isMainBot(bot: BotSummary) {
   return bot.alias === "main" || Boolean(bot.isMain);
 }
 
-export function isBotBusy(bot: BotSummary) {
-  return bot.activityStatus === "busy" || bot.status === "busy" || (bot.busyAgentCount || 0) > 0;
-}
+export { isBotBusy };
 
 export function getBotManagerStatus(bot: BotSummary): BotStatus {
   if (isBotOffline(bot)) {
@@ -91,17 +90,6 @@ export function getBotManagerStatus(bot: BotSummary): BotStatus {
   return "running";
 }
 
-export function getBusyAgentNames(bot: BotSummary) {
-  const names = (bot.busyAgentNames || []).filter(Boolean);
-  if (names.length > 0) {
-    return names;
-  }
-  if (isBotBusy(bot)) {
-    return ["主 agent"];
-  }
-  return [];
-}
-
 export function botMatchesManagerQuery(bot: BotSummary, query: string) {
   const normalized = query.trim().toLowerCase();
   if (!normalized) {
@@ -111,7 +99,7 @@ export function botMatchesManagerQuery(bot: BotSummary, query: string) {
     bot.alias,
     bot.workingDir,
     bot.cliType,
-    ...(bot.busyAgentNames || []),
+    ...getBusyActivityNames(bot),
   ].join(" ").toLowerCase();
   return haystack.includes(normalized);
 }
@@ -162,7 +150,7 @@ export function detectBotIssues(bot: BotSummary, allBots: BotSummary[]): BotIssu
     issues.push({ code: "offline", severity: "warning", label: "离线" });
   }
   if (isBotBusy(bot)) {
-    issues.push({ code: "busy", severity: "info", label: "处理中", names: getBusyAgentNames(bot) });
+    issues.push({ code: "busy", severity: "info", label: "处理中", names: getBusyActivityNames(bot) });
   }
   if (bot.status === "unread") {
     issues.push({ code: "unread", severity: "info", label: "未读" });
