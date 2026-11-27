@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from docx_parser import inspect_docx_document, parse_docx_document, parse_docx_section
+from legacy_doc import MAX_DOCX_BYTES, convert_doc
 from plugin_sdk import PluginServer
 
 SESSION_COUNTER = 0
@@ -18,7 +19,10 @@ def host_limits() -> dict[str, int]:
 
 
 def read_docx_bytes(path: str) -> bytes:
-    return server.read_bytes(path, error_message="读取 DOCX 失败")
+    content = server.read_bytes(path, error_message="读取 Word 文档失败")
+    if Path(path).suffix.lower() == ".doc":
+        return convert_doc(content, max_bytes=host_limits().get("readBytes", MAX_DOCX_BYTES))
+    return content
 
 
 def write_artifact(filename: str, content: bytes, content_type: str) -> dict[str, Any]:
@@ -33,7 +37,7 @@ def write_artifact(filename: str, content: bytes, content_type: str) -> dict[str
 def render_view(input_payload: dict[str, Any]) -> dict[str, Any]:
     path = str(input_payload.get("path") or "").strip()
     if not path:
-        raise RuntimeError("缺少 DOCX 路径")
+        raise RuntimeError("缺少 Word 文档路径")
     payload = parse_docx_document(
         path,
         read_docx_bytes(path),
@@ -68,20 +72,13 @@ def open_view(input_payload: dict[str, Any]) -> dict[str, Any]:
     global SESSION_COUNTER
     path = str(input_payload.get("path") or "").strip()
     if not path:
-        raise RuntimeError("缺少 DOCX 路径")
+        raise RuntimeError("缺少 Word 文档路径")
     temporary_path = _write_temp_docx(read_docx_bytes(path))
     try:
         metadata = inspect_docx_document(path, temporary_path, artifact_limits=host_limits())
         sections = list(metadata.get("_sections") or [])
         if not sections:
-            raise RuntimeError("DOCX 没有可预览章节")
-        SESSION_COUNTER += 1
-        session_id = f"docx-preview-{SESSION_COUNTER}"
-        SESSIONS[session_id] = {
-            "temporaryPath": temporary_path,
-            "path": path,
-            "sections": {str(section["id"]): section for section in sections},
-        }
+            raise RuntimeError("Word 文档没有可预览章节")
         first = sections[0]
         initial = parse_docx_section(
             path,
@@ -94,7 +91,15 @@ def open_view(input_payload: dict[str, Any]) -> dict[str, Any]:
             "path": path,
             "title": metadata.get("title") or Path(path).name,
             "statsText": metadata.get("statsText") or "",
+            "formatting": initial["formatting"],
             "sections": metadata.get("sections") or [],
+        }
+        SESSION_COUNTER += 1
+        session_id = f"docx-preview-{SESSION_COUNTER}"
+        SESSIONS[session_id] = {
+            "temporaryPath": temporary_path,
+            "path": path,
+            "sections": {str(section["id"]): section for section in sections},
         }
         return {
             "renderer": "document",

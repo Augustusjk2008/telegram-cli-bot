@@ -5,7 +5,6 @@ import type {
   DocumentBorder,
   DocumentBorders,
   DocumentParagraphBlock,
-  DocumentSectionSummary,
   DocumentParagraphFormat,
   DocumentSlideImageRef,
   DocumentSlideItem,
@@ -16,6 +15,7 @@ import type {
   DocumentWidth,
   PluginRenderResult,
 } from "../../services/types";
+import { DocumentOutline, sectionId } from "./DocumentOutline";
 import { PluginActionBar } from "./PluginActionBar";
 import { useViewerPan, ViewerToolToggle } from "./viewerTools";
 import type { ViewerTool } from "./viewerTools";
@@ -521,13 +521,7 @@ function renderBlock(block: DocumentBlock, index: number, botAlias: string, clie
   );
 }
 
-function sectionId(section: DocumentSectionSummary | undefined, index: number) {
-  return section?.sectionId || section?.id || `section-${index}`;
-}
-
-function sectionTitle(section: DocumentSectionSummary, index: number) {
-  return section.title || section.label || `第 ${index + 1} 节`;
-}
+const SECTION_SCROLL_INSET = 12;
 
 function snapshotSummary(view: Extract<PluginRenderResult, { renderer: "document"; mode: "snapshot" }>): DocumentViewSummary {
   return {
@@ -566,9 +560,9 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
   const [windowError, setWindowError] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const navigationRef = useRef<HTMLElement>(null);
   const sectionRefs = useRef(new Map<string, HTMLDivElement>());
   const pendingSectionRef = useRef<string | null>(null);
+  const jumpScrollTop = useRef<number | null>(null);
   const sectionIds = summary.sections.map(sectionId);
   const nextSectionId = session ? sectionIds.find((id) => !windows.has(id)) : undefined;
 
@@ -613,9 +607,12 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
     }
     container.scrollTo({
       top: container.scrollTop + target.getBoundingClientRect().top - container.getBoundingClientRect().top
-        - (navigationRef.current?.offsetHeight || 0) - 12,
+        - SECTION_SCROLL_INSET,
       behavior: "auto",
     });
+    // A short section near the end can be visible without reaching the top.
+    // Keep the clicked heading current until the reader scrolls again.
+    jumpScrollTop.current = container.scrollTop;
     return true;
   }
 
@@ -633,10 +630,11 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
 
   function updateCurrentSection() {
     const container = scrollRef.current;
-    if (!container || pendingSectionRef.current) {
+    if (!container || pendingSectionRef.current || container.scrollTop === jumpScrollTop.current) {
       return;
     }
-    const top = container.getBoundingClientRect().top + (navigationRef.current?.offsetHeight || 0) + 16;
+    jumpScrollTop.current = null;
+    const top = container.getBoundingClientRect().top + SECTION_SCROLL_INSET + 1;
     let current = initialSectionId;
     for (const id of sectionIds) {
       const target = sectionRefs.current.get(id);
@@ -660,8 +658,8 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
     ? (sectionIds.length ? sectionIds : [initialSectionId]).flatMap((id) => windows.has(id) ? [windows.get(id)!] : [])
     : [initialWindow];
   const hasBlocks = visibleWindows.some((window) => window.blocks.length);
-  return (
-    <div ref={scrollRef} onScroll={updateCurrentSection} data-testid="document-view" className="flex h-full min-h-0 flex-col overflow-y-auto px-5 pb-5">
+  const reader = (
+    <div ref={scrollRef} onScroll={updateCurrentSection} data-testid="document-view" className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-auto px-5 pb-5">
       <div className="mb-4 shrink-0 pt-5">
         <PluginActionBar actions={actions} onRunAction={(action) => onRunAction?.(action)} />
         <div className="text-lg font-semibold text-[var(--text)]">{summary.title || view.title}</div>
@@ -686,32 +684,6 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
           </div>
         ) : null}
       </div>
-
-      {session && summary.sections.length ? (
-        <nav ref={navigationRef} data-testid="document-section-list" aria-label="文档章节" className="sticky top-0 z-10 mb-3 flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)]">
-          <span className="shrink-0 text-xs text-[var(--muted)]">目录</span>
-          <div className="flex min-w-0 gap-4 overflow-x-auto">
-            {summary.sections.map((section, index) => {
-              const currentSectionId = sectionId(section, index);
-              const active = currentSectionId === selectedSectionId;
-              return (
-                <button
-                  key={currentSectionId}
-                  type="button"
-                  aria-current={active ? "location" : undefined}
-                  title={sectionTitle(section, index)}
-                  onClick={() => selectSection(currentSectionId)}
-                  className={`max-w-56 shrink-0 truncate border-b-2 py-2 text-sm ${active
-                    ? "border-[var(--accent)] text-[var(--accent)]"
-                    : "border-transparent text-[var(--muted)] hover:text-[var(--text)]"}`}
-                >
-                  {sectionTitle(section, index)}
-                </button>
-              );
-            })}
-          </div>
-        </nav>
-      ) : null}
 
       {hasBlocks || nextSectionId ? (
         <div
@@ -757,4 +729,9 @@ function DocumentContent({ botAlias, client, view, onRunAction }: Props) {
       ) : null}
     </div>
   );
+  return session && summary.sections.length > 0 ? (
+    <DocumentOutline sections={summary.sections} selectedId={selectedSectionId} onSelect={selectSection}>
+      {reader}
+    </DocumentOutline>
+  ) : reader;
 }

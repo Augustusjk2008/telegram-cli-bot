@@ -216,6 +216,7 @@ import type {
   WorkspaceQuickOpenResult,
   WorkspaceSearchResult,
   DocumentViewPayload,
+  DocumentWindowPayload,
   HexViewPayload,
   TableColumn,
   TableRow,
@@ -1576,16 +1577,19 @@ function buildMockTreeSummary(): TreeViewSummary {
   };
 }
 
-function buildMockDocumentPayload(sourcePath: string): DocumentViewPayload {
-  return {
-    path: sourcePath,
-    title: "项目路线图",
-    statsText: "5 段 · 1 表格 · 1 图片",
+function buildMockWordSections(): Array<DocumentWindowPayload & { title: string; headingLevel: number }> {
+  return [{
+    sectionId: "section-1", title: "项目路线图", headingLevel: 1,
     blocks: [
       { type: "heading", level: 1, runs: [{ text: "项目路线图" }] },
       { type: "paragraph", runs: [{ text: "目标：" }, { text: "先打通 document renderer", bold: true }] },
       { type: "list_item", ordered: false, depth: 0, marker: "•", runs: [{ text: "支持标题和段落" }] },
       { type: "list_item", ordered: false, depth: 0, marker: "•", runs: [{ text: "支持列表和表格" }] },
+    ],
+  }, {
+    sectionId: "section-2", title: "交付物", headingLevel: 2,
+    blocks: [
+      { type: "heading", level: 2, runs: [{ text: "交付物" }] },
       {
         type: "image",
         artifactId: "artifact-docx-image-1",
@@ -1604,7 +1608,7 @@ function buildMockDocumentPayload(sourcePath: string): DocumentViewPayload {
         ],
       },
     ],
-  };
+  }];
 }
 
 function buildMockPdfDocumentPayload(sourcePath: string): DocumentViewPayload {
@@ -2271,6 +2275,7 @@ export class MockWebBotClient implements WebBotClient {
     string,
     | { pluginId: string; renderer: "waveform"; summary: WaveformViewSummary; window: WaveformWindowPayload }
     | { pluginId: string; renderer: "table"; summary: TableViewSummary; window: TableWindowPayload }
+    | { pluginId: string; renderer: "document"; windows: DocumentWindowPayload[] }
     | { pluginId: string; renderer: "tree"; summary: TreeViewSummary; window: TreeWindowPayload; rootPath?: string; childrenByNodeId?: Map<string | null, TreeNode[]> }
   >();
   private pluginSessionCounter = 0;
@@ -5710,7 +5715,7 @@ export class MockWebBotClient implements WebBotClient {
         input: { path },
       };
     }
-    if (lower.endsWith(".docx")) {
+    if (lower.endsWith(".docx") || lower.endsWith(".doc")) {
       return {
         kind: "plugin_view",
         pluginId: "docx-preview",
@@ -6025,13 +6030,21 @@ export class MockWebBotClient implements WebBotClient {
     }
     if (pluginId === "docx-preview") {
       const sourcePath = typeof input.path === "string" ? input.path : "docs/roadmap.docx";
+      const windows = buildMockWordSections();
+      const sessionId = `word-session-${++this.pluginSessionCounter}`;
+      this.pluginSessions.set(sessionId, { pluginId, renderer: "document", windows });
       return {
         pluginId,
         viewId,
         title: sourcePath.split(/[\\/]/).pop() || "roadmap.docx",
         renderer: "document",
-        mode: "snapshot",
-        payload: buildMockDocumentPayload(sourcePath),
+        mode: "session",
+        sessionId,
+        summary: {
+          path: sourcePath, title: windows[0].title, formatting: "document", statsText: "5 段 · 1 表格 · 1 图片",
+          sections: windows.map(({ sectionId, title, headingLevel }) => ({ id: sectionId, title, headingLevel })),
+        },
+        initialWindow: windows[0],
       };
     }
     if (pluginId === "pdf-preview") {
@@ -6205,7 +6218,7 @@ export class MockWebBotClient implements WebBotClient {
     if (existing) {
       return existing.pluginId === pluginId ? existing : null;
     }
-    if (pluginId === "zip-preview" || sessionId.startsWith("zip-session-")) {
+    if (pluginId === "zip-preview" || pluginId === "docx-preview" || sessionId.startsWith("zip-session-")) {
       return null;
     }
     if (!/^session-\d+$/.test(sessionId)) {
@@ -6297,6 +6310,11 @@ export class MockWebBotClient implements WebBotClient {
     const session = this.ensurePluginSession(sessionId, pluginId);
     if (!session) {
       throw new Error("插件会话不存在");
+    }
+    if (session.renderer === "document") {
+      const section = session.windows.find((item) => item.sectionId === request.sectionId);
+      if (!section) throw new Error("文档章节不存在");
+      return structuredClone(section);
     }
     if (session.renderer === "table") {
       const offset = Number(request.offset || 0);

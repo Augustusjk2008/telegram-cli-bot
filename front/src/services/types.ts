@@ -2409,6 +2409,7 @@ export type DocumentSectionSummary = {
   title?: string;
   label?: string;
   level?: number;
+  headingLevel?: number | null;
   blockCount?: number;
 };
 

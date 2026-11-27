@@ -196,7 +196,7 @@ Windows text saves preserve UTF-8 BOM / CRLF, check for content conflicts, and r
 - **Git** supports repository status, diffs, commit history, workspace operations, remote management, and GitHub linking. Open a side-by-side diff from Git or the file tree, drag across the code, then click **引用到聊天** (Quote to chat). The current bot’s draft gains the repository-relative path, line numbers for the selected sides, and the complete patch lines. Add your question and send it when ready.
 - **Terminal** provides persistent tabs, each with its own shell and owner. In a local or SSH terminal, hold Ctrl and left-click `src/app.ts:42:7` to jump to line 42, column 7. The column defaults to 1. Relative paths resolve from the tab’s launch directory. After a manual `cd`, use an absolute path inside the workspace.
 - **Debug**: debugging entry points for Python, C/C++, Godot, and generic DAP adapters.
-- **Plugins**: extensible viewers for PDF, DOCX, PPTX, CSV, Vivado waveforms, and more.
+- **Plugins** provide viewers for PDF, Word, PPTX, CSV, Vivado waveforms, and more. The Word preview has a left-hand heading pane. DOCX opens directly, and Word 97–2003 `.doc` files open when LibreOffice Writer is installed on the host.
 - **Layout**: the header's layout menu offers Classic, Bottom panel, Four columns and Side stack presets; panes can be swapped by dragging, and the arrangement is saved per browser.
 - **Tutorial**: click the logo in the upper-left corner of the desktop workbench to open the in-app usage tutorial, which explains each feature chapter by chapter with screenshots (content is in Chinese).
 
