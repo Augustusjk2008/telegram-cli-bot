@@ -272,13 +272,14 @@ class RemoteConnection:
             self._password = self._passphrase = None
 
     def is_connected(self) -> bool:
-        with self._lock:
-            if self._closed:
-                return False
-            if self._client is None:
-                return True
-            transport = self._client.get_transport()
-            return bool(transport and transport.is_active() and transport.is_authenticated())
+        # Chat overviews read this local snapshot while an SFTP operation can hold _lock.
+        client = self._client
+        if self._closed:
+            return False
+        if client is None:
+            return True
+        transport = client.get_transport()
+        return bool(transport and transport.is_active() and transport.is_authenticated())
 
     def _new_client(self) -> paramiko.SSHClient:
         client = paramiko.SSHClient()

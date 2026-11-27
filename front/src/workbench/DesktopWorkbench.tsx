@@ -148,7 +148,10 @@ type Props = {
   chatPaneContent?: ReactNode | ((actions: {
     requestPreview: (path: string) => void;
     onDraftTargetChange: (target: ChatComposerHandle | null) => void;
+    currentVisible: boolean;
+    onInitialLoadSettled?: () => void;
   }) => ReactNode);
+  deferRemoteFileTreeUntilChat?: boolean;
   chatStatus?: ChatWorkbenchStatus;
   onUnreadResult?: (botAlias: string, completedAt?: string, unread?: boolean) => void;
   onViewModeChange?: (viewMode: ViewMode) => void;
@@ -163,7 +166,7 @@ type Props = {
 export function DesktopWorkbench({
   authToken = "",
   accountId,
-  client = new MockWebBotClient(),
+  client: suppliedClient,
   botAlias,
   remoteWorkspace,
   gitWorkspaceIdentity,
@@ -191,6 +194,7 @@ export function DesktopWorkbench({
   onLanChatUnreadChange,
   announcementAction,
   chatPaneContent,
+  deferRemoteFileTreeUntilChat = !chatPaneContent,
   chatStatus: externalChatStatus,
   onUnreadResult,
   onViewModeChange,
@@ -201,6 +205,7 @@ export function DesktopWorkbench({
   onChatPaneVisibilityChange,
   onRemoteReconnect,
 }: Props) {
+  const client = useMemo(() => suppliedClient ?? new MockWebBotClient(), [suppliedClient]);
   const {
     paneState,
     toggleSidebar,
@@ -216,7 +221,17 @@ export function DesktopWorkbench({
     swapLayoutPanes,
     resetLayoutTemplate,
   } = useWorkbenchState();
-  const fileTree = useFileTree(botAlias, client, { structureOnly, remote: Boolean(remoteWorkspace), platform: remoteWorkspace?.platform });
+  const chatScope = useMemo(() => ({ botAlias, accountId, client }), [botAlias, accountId, client]);
+  const [fileTreeEnabledFor, setFileTreeEnabledFor] = useState<typeof chatScope | null>(null);
+  const enableFileTree = useCallback(() => setFileTreeEnabledFor(chatScope), [chatScope]);
+  const deferFileTree = Boolean(remoteWorkspace) && deferRemoteFileTreeUntilChat && fileTreeEnabledFor !== chatScope;
+  const onInitialLoadSettled = deferFileTree ? enableFileTree : undefined;
+  const fileTree = useFileTree(botAlias, client, {
+    structureOnly,
+    remote: Boolean(remoteWorkspace),
+    platform: remoteWorkspace?.platform,
+    deferInitialLoad: deferFileTree,
+  });
   const workspaceUserScope = JSON.stringify([accountId, fileTree.rootPath, remoteWorkspace?.connectionId, remoteWorkspace?.root, remoteWorkspace?.hostKeyFingerprint]);
   const codeNavigationScope = `${accountId || ""}\n${botAlias}\n${fileTree.rootPath}`;
   const tabs = useEditorTabs({ botAlias, client, scopeKey: workspaceUserScope, structureOnly, canWriteFiles, enableDocumentSync: !remoteWorkspace, remoteWorkspace });
@@ -491,6 +506,9 @@ export function DesktopWorkbench({
   }, [previewLoader, tabs.tabs, tabs.groups, showEditorPane]);
   const showTerminalPane = terminalPlacement.displayed;
   const showChatPane = chatPlacement.displayed;
+  useEffect(() => {
+    if (!showChatPane) onInitialLoadSettled?.();
+  }, [onInitialLoadSettled, showChatPane]);
   const workspaceName = fileTree.rootPath.split(/[\\/]+/).filter(Boolean).pop() || fileTree.rootPath || "/";
   const showSidebarContent = focusedPane === "sidebar" || !layoutState.sidebarCollapsed;
   const sidebarRailAtEnd = sidebarPlacement.railSide === "end";
@@ -876,6 +894,8 @@ export function DesktopWorkbench({
     ? chatPaneContent({
         requestPreview: handleRequestPreview,
         onDraftTargetChange: setDraftTarget,
+        currentVisible: showChatPane,
+        onInitialLoadSettled,
       })
     : chatPaneContent;
 
@@ -1886,6 +1906,7 @@ export function DesktopWorkbench({
                   onToggleFocus={() => toggleFocusedPane("chat")}
                   onUnreadResult={onUnreadResult}
                   onWorkbenchStatusChange={setLocalChatStatus}
+                  onInitialLoadSettled={onInitialLoadSettled}
                   onRequestDesktopPreview={handleRequestPreview}
                   onDraftTargetChange={setDraftTarget}
                 />

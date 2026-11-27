@@ -309,6 +309,37 @@ test("guest session exposes browsing but withholds member and admin entry points
   expect(screen.queryByRole("button", { name: "智能体管理" })).not.toBeInTheDocument();
 });
 
+test("a remote desktop opens chat history before requesting the file tree", async () => {
+  localStorage.setItem("web-view-mode", "desktop");
+  const remoteWorkspace = { connectionId: "ssh-1", host: "linux.test", port: 22, username: "dev", root: "/srv/project", hostKeyFingerprint: "SHA256:test" };
+  vi.spyOn(MockWebBotClient.prototype, "listBots").mockResolvedValue([{
+    alias: "main", cliType: "codex", status: "running", workingDir: "C:/control", lastActiveText: "", remoteWorkspace,
+  }]);
+  let finishHistory!: () => void;
+  const history = vi.spyOn(MockWebBotClient.prototype, "listMessages").mockImplementation(() => new Promise((resolve) => {
+    finishHistory = () => resolve({ items: [{
+      id: "saved-reply", role: "assistant", text: "上次远程会话的回复", createdAt: "2026-08-27T01:10:00Z", state: "done",
+    }] });
+  }));
+  let finishListing!: () => void;
+  const files = vi.spyOn(MockWebBotClient.prototype, "listFiles").mockImplementation(() => new Promise((resolve) => {
+    finishListing = () => resolve({ workingDir: remoteWorkspace.root, entries: [{ name: "remote.txt", isDir: false }] });
+  }));
+  const user = userEvent.setup();
+  render(<App />);
+  await user.type(screen.getByLabelText("访问口令"), "member");
+  await user.type(screen.getByLabelText("密码"), "password");
+  await user.click(screen.getByRole("button", { name: "登录" }));
+
+  await waitFor(() => expect(history).toHaveBeenCalledWith("main"));
+  expect(files).not.toHaveBeenCalled();
+  await act(async () => finishHistory());
+  await waitFor(() => expect(screen.getByText("上次远程会话的回复")).toBeVisible());
+  await waitFor(() => expect(files).toHaveBeenCalledTimes(1));
+  await act(async () => finishListing());
+  expect(await screen.findByRole("button", { name: "打开 remote.txt" })).toBeVisible();
+});
+
 test("mobile remote workspace exposes Files and Git with the remote Git request boundary", async () => {
   localStorage.setItem("web-view-mode", "mobile");
   const user = userEvent.setup();

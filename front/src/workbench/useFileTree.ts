@@ -168,9 +168,15 @@ function ancestorPathsForPath(path: string) {
   return ancestors;
 }
 
-export function useFileTree(botAlias: string, client: WebBotClient, options?: { structureOnly?: boolean; remote?: boolean; platform?: RemoteWorkspace["platform"] }): UseFileTreeResult {
+export function useFileTree(botAlias: string, client: WebBotClient, options?: {
+  structureOnly?: boolean;
+  remote?: boolean;
+  platform?: RemoteWorkspace["platform"];
+  deferInitialLoad?: boolean;
+}): UseFileTreeResult {
   const remote = options?.remote === true;
   const platform = options?.platform;
+  const deferInitialLoad = options?.deferInitialLoad === true;
   const [loadedRoot, setLoadedRoot] = useState<{ botAlias: string; client: WebBotClient; path: string } | null>(null);
   const rootPath = loadedRoot?.botAlias === botAlias && loadedRoot.client === client ? loadedRoot.path : "";
   const [loading, setLoading] = useState(true);
@@ -476,8 +482,17 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
   }, [botAlias, client, startBackgroundRestoreExpandedPaths]);
 
   useEffect(() => {
-    void refreshRoot();
-  }, [refreshRoot]);
+    if (deferInitialLoad) {
+      setLoadedRoot(null);
+      setLoading(true);
+    } else {
+      void refreshRoot();
+    }
+    return () => {
+      // Discard the old Bot's pending listing even while the next Bot is waiting for chat.
+      loadGenerationRef.current += 1;
+    };
+  }, [deferInitialLoad, refreshRoot]);
 
   useEffect(() => {
     return () => {
@@ -807,7 +822,7 @@ export function useFileTree(botAlias: string, client: WebBotClient, options?: { 
 
   return {
     rootPath,
-    loading,
+    loading: loading || (deferInitialLoad && !rootPath),
     error,
     rootEntries: branches[""]?.entries || [],
     branches,
