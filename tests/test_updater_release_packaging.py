@@ -504,8 +504,23 @@ def test_release_manifest_records_build_identity_and_excludes_user_data(monkeypa
     update_package.inspect_package(package, staging_dir=stage)
     (stage / "data").mkdir()
     (stage / "data/settings.json").write_text("private")
+    (stage / "bot/web").mkdir(parents=True, exist_ok=True)
+    for name in update_package.TRACE_PILOT_FILES:
+        (stage / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path(__file__).resolve().parents[1] / name, stage / name)
     monkeypatch.setattr(update_package, "_git", lambda root, *args: "c" * 40 if args[0] == "rev-parse" else " M bot/main.py")
     manifest = update_package.create_manifest(stage, tmp_path)
+    from bot.update_migration_gate import reads_trace_v1
+    formats = manifest["migrations"]["trace_bodies"]
+    assert formats["default_write"] == "plaintext" and formats["requires_rollback_reader"] == "zlib-v1"
+    assert reads_trace_v1(stage, manifest)
+    incomplete = dict(manifest["files"])
+    del incomplete["scripts/trace_body_compression.py"]
+    with pytest.raises(ValueError, match="还原工具"):
+        update_package.trace_body_declaration({**manifest, "files": incomplete})
+    (stage / update_package.TRACE_READER_FILES[0]).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="清单不一致"):
+        reads_trace_v1(stage, manifest)
     assert manifest["commit"] == "c" * 40 and manifest["dirty"] is True
     assert "data/settings.json" not in manifest["files"]
     assert manifest["frontend"]["files"]["front/dist/index.html"] == update_package.file_hash(stage / "front/dist/index.html")

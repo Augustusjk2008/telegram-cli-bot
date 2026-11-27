@@ -160,6 +160,7 @@ class UpdateService:
         if public_job is not None:
             public_job.update(self._log_paths(job))
         latest = str(release.get("tag_name") or "").lstrip("v")
+        state.pop("trace_rollback_origin", None)
         return {**state, "job": public_job, "launcher": launcher_capability(self.repo_root), "current_version": APP_VERSION,
                 "current_package_kind": updater.detect_update_package_kind(self.repo_root), "update_channel": "release",
                 # Recomputed on every read: the stored check result goes stale after an upgrade.
@@ -226,6 +227,11 @@ class UpdateService:
                         return
                     raise UpdateServiceError("本安装已有更新任务，请先完成或取消")
                 job_id = uuid.uuid4().hex
+                from bot.update_migration_gate import trace_rollback_origin
+                origin = trace_rollback_origin(old)
+                if origin:
+                    # Keep the installed predecessor's reader hashes across later downloads.
+                    state["trace_rollback_origin"] = origin
                 state.pop("legacy_notice", None)
                 state["job"] = self._new_job(job_id, source)
                 predecessor = _resumable_predecessor(old, source)

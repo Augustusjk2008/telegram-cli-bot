@@ -363,6 +363,57 @@ Desktop execution temporarily bridges the Desktop profile's `agent-default-model
 
 Application data defaults to `~/.tcb/orbit-safe-claw`; `TCB_DATA_DIR` overrides that directory. Plugins and chat history use their own directories under `~/.tcb`. After a storage migration, the locator at `~/.tcb/storage.json` determines the active roots, and a conflicting `TCB_DATA_DIR` prevents startup for source installations. Windows portable packages use a separate `.tcb` storage root inside the package, so a host user's migrated locator is not imported. Portable packages place application data under the package's `data/` directory; after a portable migration, the package locator determines the application data directory.
 
+The execution details list reads previews from the workspace database. Expanding a tool result reads the selected event in full. Older turns build their previews on the first request that needs them for a list or its counts. The default write format is 3.2.0 plaintext.
+
+<details>
+<summary>Enable large tool-result compression for all sessions and restore plaintext</summary>
+
+Run these commands from the installation directory with the host's storage configuration. Use a project directory or a 64-character history key for `$workspace`. Point `--rollback-install` at the separately retained program that will actually serve as the rollback installation. Before enabling writes the command runs that program's reader against a temporary database with plaintext and v1 zlib events. Managed updates also check the actual pre-update reader hashes. The same check applies when skipping releases.
+
+```powershell
+$rollback = 'D:\Orbit\rollback'
+python -m scripts.trace_body_compression enable --all --rollback-install $rollback
+python -m scripts.trace_body_compression status
+```
+
+`--all` synchronizes the setting to existing workspace databases for their default chats, named chats and gateways that share history. Backends with global-setting support automatically apply it to future workspaces as well. The `all_sessions` field in `status` reports the deployment setting. Use `enable --workspace $workspace --rollback-install $rollback` for a single workspace or `disable --workspace $workspace` to exclude it. Reapplying `enable --all` selects every workspace.
+
+Compression covers live `tool_result` events appended after activation, including later updates to those events. A summary and its original JSON must total at least **64 KiB in UTF-8** and save space including framing and SHA-256. Previews are stored separately. A changed writer or rollback-reader fingerprint returns subsequent writes to plaintext until re-enabled. Disabling stops new compression and leaves existing encoded bodies readable.
+
+The tested compatible reader (`0c412028`) can read mixed history and continue writing plaintext. Before reverting to original 3.2.0 (`395c3d850115`), disable all compression, expand existing encoded bodies in each affected workspace, then check the entire active history directory.
+
+```powershell
+python -m scripts.trace_body_compression disable --all
+$workspace = 'D:\Projects\example'
+python -m scripts.trace_body_compression verify --workspace $workspace
+python -m scripts.trace_body_compression restore --workspace $workspace --batch-size 8
+python -m scripts.trace_body_compression check-legacy
+```
+
+`restore` decodes, verifies, writes and reads back each batch in one SQLite transaction. Pass `--max-batches 1` to process one batch. Repeating the command resumes the remaining records. `check-legacy` includes archived Bots and unlisted workspaces. Exit code 0 confirms that every switch is off, all databases were checked and the compressed count is zero. You can then switch to original 3.2.0 with the history written during the upgrade intact.
+
+</details>
+
+<details>
+<summary>Archive chat history from temporary pytest workspaces</summary>
+
+Run these commands from the installation directory. Choose a new batch directory on the same volume as chat history, outside the storage roots and repository. The local date passed to `--before` is exclusive. The scan checks the workspace hash and the `pytest-of-*/pytest-<number>/test_*` path. It protects workspaces referenced by the main Bot, every managed profile and persisted sessions.
+
+```powershell
+$batch = 'H:\orbit-safe-claw-archives\pytest-history\batch-01'
+python -m scripts.archive_pytest_history scan --batch-dir $batch --before 2026-10-30
+python -m scripts.archive_pytest_history archive --batch-dir $batch
+python -m scripts.archive_pytest_history verify --batch-dir $batch
+python -m scripts.archive_pytest_history detach --batch-dir $batch
+python -m scripts.archive_pytest_history report --batch-dir $batch
+```
+
+`verify` reads back the ZIPs and restores sample SQLite databases. On Windows, `detach` rechecks references and file fingerprints, then atomically moves exclusively accessible directories into the batch's `quarantine/`. Rerun the command to resume an interrupted move. Retaining the quarantine copies frees zero bytes on the volume. The `workspaces` table in `manifest.sqlite3` records workspace keys, file inventories, outcomes and skip reasons.
+
+Run `python -m scripts.archive_pytest_history restore --batch-dir $batch --workspace <key>` to restore one workspace from its ZIP. An existing destination reports a conflict. Add `--to <isolated-directory>` to restore and verify an independent copy.
+
+</details>
+
 <details>
 <summary><strong>Manage multiple bots</strong></summary>
 

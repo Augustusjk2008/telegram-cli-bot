@@ -964,10 +964,9 @@ class ChatHistoryService:
         try:
             context = self.store.get_trace_recovery_context(
                 message_id, owner=(session.bot_id, session.user_id, session.storage_scope),
+                accept_provider=self._matches_native_provider,
             )
         except KeyError:
-            return None
-        if not self._matches_native_provider(context.get("native_provider")):
             return None
         self._recover_trace_for_context(context)
         try:
@@ -992,14 +991,14 @@ class ChatHistoryService:
             data = self.store.get_message_trace_event(
                 message_id,
                 owner=(session.bot_id, session.user_id, session.storage_scope),
+                accept_provider=self._matches_native_provider,
                 event_id=event_id,
                 kind=kind,
                 call_id=call_id,
             )
         except KeyError:
             return None
-        if not self._matches_native_provider(data.pop("native_provider", "")):
-            return None
+        data.pop("native_provider", None)
         return data
 
     async def get_message_trace_async(
@@ -1007,12 +1006,15 @@ class ChatHistoryService:
         profile: BotProfile,
         session: UserSession,
         message_id: str,
+        *,
+        compact: bool = False,
     ) -> dict[str, Any] | None:
         return await self.async_store.run_write(
             self.get_message_trace,
             profile,
             session,
             message_id,
+            compact=compact,
         )
 
     def reconcile_turn_trace(
@@ -1039,7 +1041,6 @@ class ChatHistoryService:
             return False
 
         try:
-            current_trace = self.store.get_message_trace(handle.assistant_message_id)
             user_message = self.store.get_message(handle.user_message_id)
         except KeyError:
             return False
@@ -1052,7 +1053,7 @@ class ChatHistoryService:
             assistant_text=assistant_text,
             cwd_hint=session.working_dir,
         )
-        if not self._should_replace_trace(current_trace, recovered):
+        if not self._should_replace_trace(context, recovered):
             return False
         self.store.replace_trace_events(handle.turn_id, recovered["trace"])
         return True

@@ -8,6 +8,43 @@ from pathlib import Path
 import re
 
 
+def trace_rollback_origin(job):
+    if job.get("phase") != "succeeded" or not (job.get("manifest") or {}).get("commit"):
+        return None
+    from scripts.update_package import TRACE_READER_FILES
+    originals = job.get("original_hashes") or {}
+    origin = {"target_commit": job["manifest"]["commit"], "files": {name: originals.get(name) for name in TRACE_READER_FILES}}
+    if job.get("job_id"):
+        origin["job_id"] = job["job_id"]
+    expected_manifest = (job.get("prepared_hashes") or {}).get(".update-manifest.json")
+    if expected_manifest:
+        origin["target_manifest_sha256"] = expected_manifest
+    return origin
+
+
+def reads_trace_v1(staging, manifest):
+    """Check the verified staged files without executing candidate code."""
+    from scripts.update_package import TRACE_READER_FILES, trace_body_declaration
+    staging = Path(staging)
+    declaration = trace_body_declaration(manifest)
+    if declaration is not None:
+        if "zlib-v1" not in declaration["read"]:
+            return False
+        for name in TRACE_READER_FILES:
+            path = staging / name
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != (manifest.get("files") or {}).get(name):
+                raise ValueError(f"执行明细读取器与更新清单不一致: {name}")
+        return True
+    # The verified reader at 0c412028 predates the package capability field.
+    digest = hashlib.sha256()
+    for name in TRACE_READER_FILES:
+        path = staging / name
+        if not path.is_file():
+            return False
+        digest.update(hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).digest())
+    return digest.hexdigest() == "9538101cf332bb83e05e2911989eb9a02ba16fa78cf5a3cf752267f311fc8e9b"
+
+
 def _migration_ids(root):
     path = Path(root) / "bot" / "migrations" / "runner.py"
     if not path.is_file():
@@ -59,6 +96,10 @@ def validate_update_migrations(repo_root, prepared):
         if (name in deleted or not current.is_file() or not target.is_file()
                 or hashlib.sha256(current.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest()):
             raise ValueError(f"数据迁移实现变更尚未确认恢复边界: {name}")
+    if migrations.get("trace_bodies") is not None or (Path(repo_root) / "bot/web/trace_body_policy.py").is_file():
+        if not reads_trace_v1(staging, manifest):
+            from scripts.trace_body_compression import require_legacy_ready
+            require_legacy_ready()
 
 
 def frontend_readiness(repo_root, static_dir, base_path=""):

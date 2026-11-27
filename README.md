@@ -397,6 +397,57 @@ Desktop 集群轮次会在启动前检查 `@deepseek-ai/dsh-mcp-client` 是否�
 
 应用数据默认位于 `~/.tcb/orbit-safe-claw`，`TCB_DATA_DIR` 可覆盖该目录；插件、聊天历史等使用 `~/.tcb` 下各自的存储目录。完成存储迁移后，以 `~/.tcb/storage.json` 定位器为准，冲突的 `TCB_DATA_DIR` 会阻止源码安装启动。Windows 绿色版使用包根下的 `.tcb` 作为独立存储根，包内迁移定位器不会读取宿主用户的迁移状态；绿色版默认把应用数据放在包内 `data/`，绿色版完成迁移后由包内定位器决定应用数据目录。
 
+执行明细列表从工作区数据库读取预览，展开工具结果时读取选中的完整事件。旧历史在首次查看相应回合的明细或统计时按需补齐预览。默认写入 3.2.0 可读的明文。
+
+<details>
+<summary>为所有会话启用大工具结果压缩，以及还原明文</summary>
+
+从安装目录用宿主的存储配置运行以下命令。`$workspace` 可用项目工作目录或 64 位历史库键。`--rollback-install` 指向实际保留、可单独用于回退的程序目录。启用前工具会用该目录的代码在临时库中读回明文和 v1 zlib 正文。受管更新还会核对实际升级前的读取器指纹。跨版本升级同样需要通过核验。
+
+```powershell
+$rollback = 'D:\Orbit\rollback'
+python -m scripts.trace_body_compression enable --all --rollback-install $rollback
+python -m scripts.trace_body_compression status
+```
+
+`--all` 将设置同步到现有工作区历史库，对其中的默认会话、命名会话及共用这些历史库的网关会话立即生效。支持全局设置的后端会让以后创建的工作区自动继承。覆盖范围可在 `status` 的 `all_sessions` 中查看。也可以用 `enable --workspace $workspace --rollback-install $rollback` 单独启用，或用 `disable --workspace $workspace` 将该工作区排除。再次 `enable --all` 会覆盖全部工作区。
+
+压缩作用于启用后实时追加的 `tool_result` 及其后续更新。摘要和原始 JSON 合计达到 **64 KiB UTF-8**，且计入格式头和 SHA-256 后仍有节省时，才写入压缩正文。列表预览独立保存。写入程序或回退读取器的指纹变化后，后续写入使用明文，重新启用会再次核验。关闭开关会停止新增压缩，已有压缩记录仍可正常展开。
+
+退回能读取 v1 的兼容版（已验证源码提交 `0c412028`）可直接读取混合历史并继续写明文。退回原版 3.2.0（`395c3d850115`）前，先关闭全部开关，再逐库还原已有压缩记录。切换前对整个活动历史目录运行一次检查。
+
+```powershell
+python -m scripts.trace_body_compression disable --all
+$workspace = 'D:\Projects\example'
+python -m scripts.trace_body_compression verify --workspace $workspace
+python -m scripts.trace_body_compression restore --workspace $workspace --batch-size 8
+python -m scripts.trace_body_compression check-legacy
+```
+
+`restore` 在同一 SQLite 事务中解码、核验、写回并回读每批数据。可用 `--max-batches 1` 处理一批，再次执行会继续处理剩余记录。`check-legacy` 也检查已归档 Bot 和未登记的工作区。所有开关已关闭、压缩记录为零且各库均可检查时，命令返回 0，此时可切换到原版 3.2.0。程序回滚保留升级期间新增的历史。
+
+</details>
+
+<details>
+<summary>归档 pytest 临时工作区的聊天历史</summary>
+
+在安装目录运行以下命令。为批次选择与活动历史库同卷、位于存储根和仓库外的新目录。`--before` 使用本地日期，排除当天。扫描核对工作区哈希与 `pytest-of-*/pytest-数字/test_*` 路径，并保护主 Bot、所有托管配置和持久化会话引用的工作区。
+
+```powershell
+$batch = 'H:\orbit-safe-claw-archives\pytest-history\batch-01'
+python -m scripts.archive_pytest_history scan --batch-dir $batch --before 2026-10-30
+python -m scripts.archive_pytest_history archive --batch-dir $batch
+python -m scripts.archive_pytest_history verify --batch-dir $batch
+python -m scripts.archive_pytest_history detach --batch-dir $batch
+python -m scripts.archive_pytest_history report --batch-dir $batch
+```
+
+`verify` 回读 ZIP 并抽样恢复 SQLite。Windows 上的 `detach` 重新检查引用和文件指纹，将可独占的目录原子移到批次的 `quarantine/`，中断后可重复执行。保留隔离副本时，移出活动目录释放的磁盘空间为零。`manifest.sqlite3` 的 `workspaces` 表记录工作区键、文件清单、处理结果和跳过原因。
+
+按工作区键运行 `python -m scripts.archive_pytest_history restore --batch-dir $batch --workspace <key>` 可从 ZIP 恢复单库。同名目录会报告冲突。添加 `--to <隔离目录>` 可独立恢复和核验一份副本。
+
+</details>
+
 <details>
 <summary><strong>托管多个 Bot</strong></summary>
 

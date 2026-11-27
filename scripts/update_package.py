@@ -20,6 +20,11 @@ import zipfile
 
 MANIFEST = ".update-manifest.json"
 MARKER = ".distribution.json"
+TRACE_READER_FILES = ("bot/web/trace_previews.py", "bot/web/chat_store.py", "bot/web/trace_compaction.py")
+TRACE_PILOT_FILES = (*TRACE_READER_FILES, "bot/web/trace_body_policy.py", "scripts/trace_body_compression.py",
+                     "scripts/_pytest_history_inventory.py")
+TRACE_BODY_FORMATS = {"read": ["plaintext", "zlib-v1"], "default_write": "plaintext",
+                      "opt_in_write": "zlib-v1", "requires_rollback_reader": "zlib-v1"}
 PROTECTED = {
     ".env", "managed_bots.json", ".git", ".tcb", ".updates", ".plugins", "plugins",
     "data", "history", "attachments", ".venv", "venv", "node_modules", ".claude",
@@ -154,6 +159,24 @@ def _json_bytes(raw: bytes, name: str) -> dict:
     return value
 
 
+def trace_body_declaration(manifest: dict) -> dict | None:
+    migrations = manifest.get("migrations") or {}
+    if not isinstance(migrations, dict):
+        raise ValueError("更新包的数据迁移声明无效")
+    declaration = migrations.get("trace_bodies")
+    if declaration is None:
+        return None
+    if (not isinstance(declaration, dict) or not isinstance(declaration.get("read"), list)
+            or "plaintext" not in declaration["read"] or declaration.get("default_write") != "plaintext"):
+        raise ValueError("更新包的执行明细正文兼容声明无效")
+    opt_in = declaration.get("opt_in_write")
+    if opt_in and (opt_in not in declaration["read"] or declaration.get("requires_rollback_reader") != opt_in):
+        raise ValueError("更新包未约束执行明细试点的回退读取能力")
+    if opt_in == "zlib-v1" and not set(TRACE_PILOT_FILES).issubset(manifest.get("files") or {}):
+        raise ValueError("执行明细压缩试点缺少读取器或还原工具")
+    return declaration
+
+
 def inspect_package(package: Path, *, staging_dir: Path | None = None, expected_version="",
                     current_version="", expected_kind="", expected_platform="", progress_callback=None) -> dict:
     with archive_entries(Path(package)) as entries:
@@ -182,6 +205,7 @@ def inspect_package(package: Path, *, staging_dir: Path | None = None, expected_
             raise ValueError("更新清单缺少有效源码提交标识")
         if type(manifest.get("dirty")) is not bool:
             raise ValueError("更新清单缺少工作树状态")
+        trace_body_declaration(manifest)
         kind = manifest.get("package_kind")
         if not isinstance(kind, str) or kind not in {"installer", "portable", "linux", "macos"} or kind != (marker.get("package_kind") or marker.get("packageKind")):
             raise ValueError("分发包类型不一致")
@@ -388,6 +412,9 @@ def create_manifest(root: Path, source_root: Path) -> dict:
         "migrations": {"backward_compatible": True,
                        "files": {p: digest for p, digest in files.items() if p.startswith("bot/migrations/")}},
     }
+    if "bot/web/trace_body_policy.py" in files:
+        value["migrations"]["trace_bodies"] = {**TRACE_BODY_FORMATS, "read": list(TRACE_BODY_FORMATS["read"])}
+        trace_body_declaration(value)
     if source_identity(source_root) != identity:
         raise ValueError("生成清单期间源码发生变化，请重新构建")
     (root / MANIFEST).write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
