@@ -894,14 +894,6 @@
   background: transparent;
 }
 
-:root[data-style-profile="paper"] .desktop-file-tree-pane :is([data-icon="folder-open"], [data-icon="folder-closed"])[data-folder-kind="default"] {
-  color: var(--file-tree-folder);
-}
-
-:root[data-style-profile="paper"] .desktop-file-tree-pane [data-icon="file-code"] {
-  color: var(--file-tree-code-icon);
-}
-
 :root[data-style-profile="paper"] .desktop-workbench-root .file-tree-header {
   padding-inline: 12px;
   border-color: var(--hairline);

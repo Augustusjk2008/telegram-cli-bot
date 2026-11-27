@@ -91,7 +91,7 @@ export type FileIconKind =
   | "binary";
 
 function namesToKind<K extends string>(groups: Array<[K, string]>): Record<string, K> {
-  const map: Record<string, K> = {};
+  const map: Record<string, K> = Object.create(null);
   for (const [kind, names] of groups) {
     for (const name of names.split(" ")) {
       map[name] = kind;
@@ -618,7 +618,7 @@ export function FolderIcon({ kind, open }: { kind: FolderIconKind; open: boolean
       aria-hidden="true"
       data-icon={open ? "folder-open" : "folder-closed"}
       data-folder-kind={kind}
-      className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--status-warning)]"
+      className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-[var(--file-tree-folder,var(--status-warning))]"
       style={style ? { color: style.color } : undefined}
     >
       <Svg>
@@ -641,11 +641,14 @@ export function FolderIcon({ kind, open }: { kind: FolderIconKind; open: boolean
 }
 
 export function FileIcon({ kind }: { kind: FileIconKind }) {
+  const colorClass = kind === "code"
+    ? "text-[var(--file-tree-code-icon,var(--muted))]"
+    : "text-[var(--file-tree-muted,var(--muted))]";
   return (
     <span
       aria-hidden="true"
       data-icon={`file-${kind}`}
-      className="inline-flex h-4 w-4 shrink-0 select-none items-center justify-center text-[var(--muted)]"
+      className={`inline-flex h-4 w-4 shrink-0 select-none items-center justify-center ${colorClass}`}
     >
       {FILE_ICONS[kind]()}
     </span>
